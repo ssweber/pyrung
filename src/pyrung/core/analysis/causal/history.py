@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.state import value_changed
+
 from .models import Transition
 
 if TYPE_CHECKING:
@@ -10,11 +12,6 @@ if TYPE_CHECKING:
     from pyrung.core.history import History
     from pyrung.core.rung_firings import RungFiringTimelines
     from pyrung.core.scan_log import ScanLog
-
-
-def _scan_ids_descending(history: History) -> list[int]:
-    """Return addressable scan ids newest-first."""
-    return list(reversed(list(history.scan_ids())))
 
 
 def _scan_index(ids: Sequence[int], scan_id: int) -> int | None:
@@ -49,7 +46,7 @@ def _boundary_transition_at_scan(
         return None
     to_value = history.at(scan_id).tags.get(tag_name)
     from_value = history.at(ids[idx - 1]).tags.get(tag_name) if idx > 0 else None
-    if from_value == to_value:
+    if not value_changed(from_value, to_value):
         return None
     return Transition(tag_name, scan_id, from_value, to_value)
 
@@ -167,7 +164,7 @@ def _find_transition(
         prev_state = history.at(ids[i - 1])
         cur_val = cur_state.tags.get(tag_name)
         prev_val = prev_state.tags.get(tag_name)
-        if cur_val != prev_val:
+        if value_changed(prev_val, cur_val):
             return Transition(tag_name, ids[i], prev_val, cur_val)
     return None
 
@@ -272,7 +269,7 @@ def _find_last_transition_scan(
             continue
         cur_val = history.at(ids[i]).tags.get(tag_name)
         prev_val = history.at(ids[i - 1]).tags.get(tag_name)
-        if cur_val != prev_val:
+        if value_changed(prev_val, cur_val):
             return ids[i]
     return None
 
@@ -375,56 +372,6 @@ def _later_transition(a: Transition | None, b: Transition | None) -> Transition 
     if b is None:
         return a
     return a if a.scan_id >= b.scan_id else b
-
-
-def _find_recent_transition(
-    history: History,
-    tag_name: str,
-    scan_id: int,
-    *,
-    timelines: RungFiringTimelines | None = None,
-    pdg: ProgramGraph | None = None,
-    scan_log: ScanLog | None = None,
-    initial_tags: Mapping[str, Any] | None = None,
-) -> Transition | None:
-    """Find a transition of *tag_name* at *scan_id* or the immediately preceding scan.
-
-    PLC effects propagate one scan at a time: a contact that transitioned at
-    scan N may not affect a downstream rung until scan N+1 (if the reading
-    rung comes before the writing rung in program order).  Checking both the
-    current and previous scan captures this one-scan propagation delay.
-    """
-    # Check exact scan first
-    t = _find_transition_at_scan(
-        history,
-        tag_name,
-        scan_id,
-        timelines=timelines,
-        pdg=pdg,
-        scan_log=scan_log,
-        initial_tags=initial_tags,
-    )
-    if t is not None:
-        return t
-
-    # Check immediately preceding scan
-    ids = history.scan_ids()
-    idx = _scan_index(ids, scan_id)
-    if idx is not None and idx > 0:
-        prev_scan = ids[idx - 1]
-        t = _find_transition_at_scan(
-            history,
-            tag_name,
-            prev_scan,
-            timelines=timelines,
-            pdg=pdg,
-            scan_log=scan_log,
-            initial_tags=initial_tags,
-        )
-        if t is not None:
-            return t
-
-    return None
 
 
 def _writer_indices(pdg: ProgramGraph, tag_name: str) -> frozenset[int]:

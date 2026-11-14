@@ -5,16 +5,20 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 from collections.abc import Callable, Generator
+from dataclasses import replace
 from typing import Any, BinaryIO, ClassVar, TypeVar
 
 ParsedArgs = TypeVar("ParsedArgs")
 
 from pyrung.core import PLC
 from pyrung.core.context import ScanContext
+from pyrung.core.debug_trace import RungTraceEvent, TraceEvent, TraceRegion
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
 from pyrung.core.state import SystemState
+from pyrung.core.storage import REAL_MAX
 from pyrung.dap import execution_flow
 from pyrung.dap.args import parse_args
 from pyrung.dap.breakpoints import BreakpointManager, SourceBreakpoint
@@ -27,9 +31,13 @@ from pyrung.dap.handlers import (
     graph_slice,
     history_seek,
     lifecycle_launch,
+    link_requests,
     monitor_data_breakpoints,
+    reload_request,
+    simulation,
     stack_variables_evaluate,
 )
+from pyrung.dap.internal_tags import visible_tags
 from pyrung.dap.protocol import (
     MessageSequencer,
     make_event,
@@ -45,6 +53,40 @@ class DAPAdapterError(Exception):
 
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
+
+
+def _settled_rung_event(events: tuple[RungTraceEvent, ...]) -> RungTraceEvent:
+    """The rung's first event (its own step) with every region as the scan left them.
+
+    A rung or branch step's trace holds a region for that rung or branch, then
+    one for each of its direct branches, in order; so does each step of an
+    instruction on it.  A branch reads its conditions when the scan reaches
+    it, so its region is final only from then on: a later event has it.
+
+    Regions are matched by the event's place in the rung's tree
+    (``branch_path``), not by their source span, which two branches built by
+    one helper share.  Nested branches are kept too, including those under an
+    unpowered branch, which have no step of their own but whose instructions
+    do.  Steps of a called subroutine or a loop body are not this rung's and
+    are skipped.
+    """
+    first = events[0]
+    if first.trace is None or len(events) == 1:
+        return first
+    settled: dict[tuple[int, ...], TraceRegion] = {}
+    for event in events:
+        path = event.branch_path
+        if event.trace is None or path is None or event.call_stack != first.call_stack:
+            continue
+        regions = event.trace.regions
+        if not regions or regions[0].kind == "instruction":
+            continue
+        settled[path] = regions[0]
+        for ordinal, region in enumerate(regions[1:]):
+            settled[(*path, ordinal)] = region
+    if not settled:
+        return first
+    return replace(first, trace=TraceEvent(regions=[settled[path] for path in sorted(settled)]))
 
 
 class DAPAdapter:
@@ -92,6 +134,13 @@ class DAPAdapter:
         self._capture = CaptureBuffer()
         self._live_server: Any = None
         self._harness: Any = None
+        # The runner on which a history panel refresh last ran out of what it may step again.
+        self._tag_changes_ran_out_on: Any = None
+        # Bench links (pyrung.dap.links): session wiring over the program's
+        # declared links, kept across reloads.
+        self._bench_links: dict[str, Any] = {}
+        self._bench_links_on = True
+        self._links_revision = 0
         self._bounds_accumulator: dict[str, Any] = {}
         self._notes: dict[int, list[str]] = {}
         self._action_log: list[tuple[int | None, str, str]] = []
@@ -100,8 +149,30 @@ class DAPAdapter:
         self._miner_accepted: list[Any] = []
         self._miner_suppressed: set[str] = set()
 
+        # Simulator controls: real-time pacing, STOP requests from Modbus,
+        # Click address resolution, and the optional Modbus TCP server.
+        self._speed: float = 0.0
+        self._clock: Callable[[], float] = time.monotonic
+        self._pace_wait: Callable[[float], object] = self._pause_event.wait
+        self._pending_stop = False
+        # launch.keepForcesOnRun; None leaves the program's own setting.
+        self._keep_forces_on_run: bool | None = None
+        self._click_provider: Any = None
+        self._modbus_fallback: Any = None
+        self._has_tag_map = False
+        self._tag_map: Any = None
+        self._modbus: Any = None
+        self._actual_speed: float | None = None
+        self._state_frame_lock = threading.Lock()
+        self._state_frame_queued = False
+        self._state_frame_source: dict[str, Any] | None = None
+        # Whether the client's latest trace is a step ``pyrungTrace`` (True)
+        # or a merged scan from a continue frame (False).
+        self._last_trace_was_step = False
+
         import pyrung.dap.bounds_console  # noqa: F401
         import pyrung.dap.harness_console  # noqa: F401
+        import pyrung.dap.links  # noqa: F401
         import pyrung.dap.miner_console  # noqa: F401
         import pyrung.dap.reload_console  # noqa: F401
         import pyrung.dap.spec_console  # noqa: F401
@@ -206,6 +277,9 @@ class DAPAdapter:
             if kind == "internal_event":
                 self._send_event(item["event"], item.get("body"))
                 continue
+            if kind == "state_frame":
+                self._send_state_frame()
+                continue
             if kind == "eof":
                 self._stop_event.set()
 
@@ -239,6 +313,10 @@ class DAPAdapter:
             self._send_response(request, success=False, message=f"Unsupported command: {command}")
             return
 
+        check_state = command not in simulation.LOCK_FREE_COMMANDS
+        if check_state:
+            with self._state_lock:
+                before = self._state_fingerprint_locked()
         try:
             body, events = handler(request.get("arguments") or {})
             self._send_response(request, success=True, body=body)
@@ -250,6 +328,12 @@ class DAPAdapter:
             self._send_response(request, success=False, message=str(exc))
         except Exception as exc:  # pragma: no cover - defensive fail-safe path
             self._send_response(request, success=False, message=f"Internal adapter error: {exc}")
+        if not check_state:
+            return
+        with self._state_lock:
+            changed = self._state_fingerprint_locked() != before
+        if changed:
+            self._send_state_frame(simulation.request_source(command, request.get("arguments")))
 
     def _send_response(
         self,
@@ -275,11 +359,52 @@ class DAPAdapter:
     def _enqueue_internal_event(self, event: str, body: dict[str, Any] | None = None) -> None:
         self._queue.put({"kind": "internal_event", "event": event, "body": body})
 
+    def _state_fingerprint_locked(self) -> tuple[Any, ...] | None:
+        return simulation.state_fingerprint_locked(self)
+
+    def _send_state_frame(self, source: dict[str, Any] | None = None) -> None:
+        """Send a ``pyrungScanFrame`` describing the current state now.
+
+        Without *source*, sends the queued frame with its latest source.
+        """
+        if source is None:
+            with self._state_frame_lock:
+                self._state_frame_queued = False
+                source = self._state_frame_source
+                self._state_frame_source = None
+        with self._state_lock:
+            body = simulation.state_frame_body_locked(self, source)
+        if body is not None:
+            self._send_event("pyrungScanFrame", body)
+
+    def _request_state_frame(self, source: dict[str, Any]) -> None:
+        """Queue one ``pyrungScanFrame`` from any thread.
+
+        Requests coalesce until the frame is sent; the last *source* wins.
+        """
+        with self._state_frame_lock:
+            self._state_frame_source = source
+            if self._state_frame_queued:
+                return
+            self._state_frame_queued = True
+        self._queue.put({"kind": "state_frame"})
+
+    def _pause_executor(self) -> None:
+        simulation.pause_executor(self)
+
+    def _executor_running_locked(self) -> bool:
+        """True while the continue worker runs and no pause is pending."""
+        return self._thread_running_locked() and not self._pause_event.is_set()
+
+    def _resolve_target_locked(self, target: str) -> str:
+        return simulation.resolve_target_locked(self, target)
+
     def _emit_trace_event(self) -> None:
         with self._state_lock:
             body = self._current_trace_body_locked()
-        if body is None:
-            return
+            if body is None:
+                return
+            self._last_trace_was_step = True
         self._send_event("pyrungTrace", body)
 
     def _parse_request_args(self, model: type[ParsedArgs], args: Any) -> ParsedArgs:
@@ -346,11 +471,6 @@ class DAPAdapter:
     def _on_evaluate(self, args: dict[str, Any]) -> HandlerResult:
         return stack_variables_evaluate.on_evaluate(self, args)
 
-    def _evaluate_repl_command_locked(self, expression: str) -> str:
-        from pyrung.dap.console import dispatch
-
-        return dispatch(self, expression).text
-
     def _evaluate_watch_expression_locked(self, expression: str) -> Any:
         return stack_variables_evaluate.evaluate_watch_expression_locked(self, expression)
 
@@ -410,6 +530,33 @@ class DAPAdapter:
 
     def _on_pyrungListForces(self, _args: dict[str, Any]) -> HandlerResult:
         return force_patch.on_pyrung_list_forces(self, _args)
+
+    def _on_pyrungLink(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_link(self, args)
+
+    def _on_pyrungUnlink(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_unlink(self, args)
+
+    def _on_pyrungRestoreLink(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_restore_link(self, args)
+
+    def _on_pyrungSetLinks(self, args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_set_links(self, args)
+
+    def _on_pyrungListLinks(self, _args: dict[str, Any]) -> HandlerResult:
+        return link_requests.on_pyrung_list_links(self, _args)
+
+    def _on_pyrungReload(self, args: dict[str, Any]) -> HandlerResult:
+        return reload_request.on_pyrung_reload(self, args)
+
+    def _on_pyrungSetMode(self, args: dict[str, Any]) -> HandlerResult:
+        return simulation.on_pyrung_set_mode(self, args)
+
+    def _on_pyrungSetSpeed(self, args: dict[str, Any]) -> HandlerResult:
+        return simulation.on_pyrung_set_speed(self, args)
+
+    def _on_pyrungModbusInfo(self, _args: dict[str, Any]) -> HandlerResult:
+        return simulation.on_pyrung_modbus_info(self, _args)
 
     def _on_pyrungGraph(self, _args: dict[str, Any]) -> HandlerResult:
         return graph_slice.on_pyrung_graph(self, _args)
@@ -576,16 +723,18 @@ class DAPAdapter:
         )
         if body is not None:
             body["forces"] = force_patch.json_safe_forces(runner.forces)
-            body["tagValues"] = {
-                name: self._format_value(value) for name, value in runner.current_state.tags.items()
-            }
+            body["tagValues"] = self._tag_values_body(runner.current_state.tags)
             body["tagTypes"] = self._tag_types_locked(runner)
             body["tagHints"] = self._tag_hints_locked(runner)
             body["tagGroups"] = self._tag_groups_locked(runner)
         return body
 
-    def _live_trace_body_locked(self) -> dict[str, Any] | None:
-        """Build a single merged trace body from the last committed scan."""
+    def _live_trace_body_locked(self, *, allow_empty: bool = False) -> dict[str, Any] | None:
+        """Build a single merged trace body from the last committed scan.
+
+        Returns ``None`` when no rung has a trace yet, unless *allow_empty*,
+        which returns a body with no regions so values and forces still flow.
+        """
         runner = self._runner
         if runner is None:
             return None
@@ -598,11 +747,8 @@ class DAPAdapter:
                 continue
             if not trace.events:
                 continue
-            # Use the first event (parent rung step) which contains regions
-            # for the rung itself and all its branches.  The later events are
-            # individual branch steps that duplicate subsets of the same regions.
             body = self._formatter.current_trace_body(
-                event_result=(scan_id, rung_id, trace.events[0]),
+                event_result=(scan_id, rung_id, _settled_rung_event(trace.events)),
                 current_scan_id=scan_id,
                 trace_version=self.TRACE_VERSION,
                 canonical_path=self._canonical_path,
@@ -610,7 +756,7 @@ class DAPAdapter:
             )
             if body is not None:
                 all_regions.extend(body.get("regions", []))
-        if not all_regions:
+        if not all_regions and not allow_empty:
             return None
         return {
             "traceVersion": self.TRACE_VERSION,
@@ -620,9 +766,7 @@ class DAPAdapter:
             "step": None,
             "regions": all_regions,
             "forces": force_patch.json_safe_forces(runner.forces),
-            "tagValues": {
-                name: self._format_value(value) for name, value in runner.current_state.tags.items()
-            },
+            "tagValues": self._tag_values_body(runner.current_state.tags),
             "tagTypes": self._tag_types_locked(runner),
             "tagHints": self._tag_hints_locked(runner),
             "tagGroups": self._tag_groups_locked(runner),
@@ -645,6 +789,10 @@ class DAPAdapter:
             )
         return variables
 
+    def _tag_values_body(self, tags: Any) -> dict[str, str]:
+        """Formatted values of the program's tags, without pyrung's internal ones."""
+        return {name: self._format_value(value) for name, value in visible_tags(tags).items()}
+
     def _format_value(self, value: Any) -> str:
         if isinstance(value, str):
             if value == "\x00":
@@ -659,7 +807,7 @@ class DAPAdapter:
     _TYPE_RANGE_DEFAULTS: ClassVar[dict[str, tuple[int | float, int | float]]] = {
         "int": (-32768, 32767),
         "dint": (-2147483648, 2147483647),
-        "real": (-3.4e38, 3.4e38),
+        "real": (-REAL_MAX, REAL_MAX),
         "word": (0, 65535),
     }
 
@@ -747,6 +895,10 @@ class DAPAdapter:
                 break
             if item.get("kind") == "internal_event":
                 self._send_event(item["event"], item.get("body"))
+                processed += 1
+                continue
+            if item.get("kind") == "state_frame":
+                self._send_state_frame()
                 processed += 1
                 continue
             pending.append(item)

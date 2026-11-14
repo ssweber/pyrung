@@ -1,10 +1,10 @@
 # CircuitPython Modbus TCP
 
-`pyrung.circuitpy` can generate a Modbus TCP server, client, or both for the P1AM-200 via the P1AM-ETH shield. The register layout matches a real CLICK PLC — C-more HMIs, pyclickplc, and SCADA systems connect without translation. See [CircuitPython Dialect](circuitpy.md) for the base hardware model and code generation.
+`pyrung.circuitpy` can generate a Modbus TCP server, client, or both for the P1AM-200 via the P1AM-ETH shield. The register layout matches a real CLICK PLC. C-more HMIs, pyclickplc, and SCADA systems connect without translation. See [CircuitPython Dialect](circuitpy.md) for the base hardware model and code generation.
 
 ## Hardware requirements
 
-The [P1AM-ETH](https://facts-engineering.github.io/modules/P1AM-ETH/P1AM-ETH.html) shield provides a W5500 Ethernet controller on SPI with chip-select on `board.D5`. Static IPv4 only — no DHCP. The `adafruit_wiznet5k` library must be installed on the CIRCUITPY drive alongside the CircuitPython P1AM library.
+The [P1AM-ETH](https://facts-engineering.github.io/modules/P1AM-ETH/P1AM-ETH.html) shield provides a W5500 Ethernet controller on SPI with chip-select on `board.D5`. The generated code uses static IPv4 only. It does not use DHCP. The `adafruit_wiznet5k` library must be installed on the CIRCUITPY drive alongside the CircuitPython P1AM library.
 
 ## Server
 
@@ -45,7 +45,7 @@ source = generate_circuitpy(
 )
 ```
 
-The generated code starts a Modbus TCP listener on the configured IP and port. Any Modbus client reading DS1 gets the current value of `Setpoint`; writing DS1 updates it. Reading coil C1 returns the state of `Light`. The register layout is identical to a real CLICK PLC — same Modbus addresses, same data encoding.
+The generated code starts a Modbus TCP listener on the configured IP and port. Any Modbus client reading DS1 gets the current value of `Setpoint`. Writing DS1 updates it. Reading coil C1 returns the state of `Light`. The register layout is identical to a real CLICK PLC, with the same Modbus addresses and the same data encoding.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -56,7 +56,16 @@ The generated code starts a Modbus TCP listener on the configured IP and port. A
 | `port` | `int` | `502` | 1–65535 |
 | `max_clients` | `int` | `2` | 1–7 concurrent connections (W5500 has 8 sockets, 1 reserved for listener) |
 
-Supported function codes: FC 1 (read coils), FC 2 (read discrete inputs), FC 3 (read holding registers), FC 4 (read input registers), FC 5 (write single coil), FC 6 (write single register), FC 15 (write multiple coils), FC 16 (write multiple registers).
+Supported function codes:
+
+- FC 1 (read coils)
+- FC 2 (read discrete inputs)
+- FC 3 (read holding registers)
+- FC 4 (read input registers)
+- FC 5 (write single coil)
+- FC 6 (write single register)
+- FC 15 (write multiple coils)
+- FC 16 (write multiple registers)
 
 ## Client — send and receive
 
@@ -149,7 +158,7 @@ with Program() as logic:
         )
 ```
 
-`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input) or raw register offsets (0–0xFFFE). Hex strings with an `h` suffix (e.g. `"0h"`) are also supported — these require an explicit `register_type` since the offset alone is ambiguous.
+`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input) or raw register offsets (0–0xFFFE). Hex strings with an `h` suffix (e.g. `"0h"`) are also supported. These require an explicit `register_type`, because the offset alone is ambiguous.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -165,9 +174,9 @@ The codegen maps `register_type` to the correct Modbus function code:
 | `COIL` | FC 5 (single) / FC 15 (multiple) | FC 1 |
 | `DISCRETE_INPUT` | — | FC 2 |
 
-`word_swap` on `send()`/`receive()` controls how 32-bit values (DINT, REAL) are split across register pairs. `False` (default) = high word first (big-endian, common in VFDs and power meters). `True` = low word first.
+`word_swap` on `send()`/`receive()` controls how 32-bit values (DINT, REAL) are split across register pairs. `False` (the default) puts the high word first (big-endian, common in VFDs and power meters). `True` puts the low word first.
 
-RTU (serial) targets are not yet supported for CircuitPython code generation.
+CircuitPython code generation supports Modbus TCP only, not RTU (serial).
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -177,20 +186,22 @@ RTU (serial) targets are not yet supported for CircuitPython code generation.
 | `device_id` | `int` | `1` | Modbus unit ID (0–255) |
 | `timeout_ms` | `int` | `1000` | Per-transaction timeout |
 
-Unlike the CLICK dialect's threaded `send`/`receive`, the CircuitPython versions generate a non-blocking state machine. Each transaction advances one step per scan (connect → send request → wait for response → apply result). The scan loop is never blocked. Status tags (`sending`/`receiving`, `success`, `error`, `exception_response`) update as the transaction progresses. When the rung condition goes false, status tags reset to defaults.
+Unlike the CLICK dialect's threaded `send`/`receive`, the CircuitPython versions generate a non-blocking state machine. Each transaction advances one step per scan (connect, send request, wait for response, apply result). The scan loop is never blocked. Status tags (`sending`/`receiving`, `success`, `error`, `exception_response`) update as the transaction progresses. When the rung condition goes false, status tags reset to defaults.
 
-## TagMap and mapped_tag_scope
+## Which registers the server serves
 
-`tag_map` is required when `modbus_server` or `modbus_client` is set. It determines which tags are visible over Modbus — the TagMap maps semantic tags to CLICK hardware addresses, and the codegen uses those addresses as Modbus register addresses.
+`tag_map` is required when `modbus_server` or `modbus_client` is set. The TagMap maps semantic tags to CLICK hardware addresses, and the codegen uses those addresses as Modbus register addresses.
 
-`mapped_tag_scope` controls how many TagMap entries get backing variables in the generated code:
+The generated server serves:
 
-| Value | Behavior |
-|-------|----------|
-| `"referenced_only"` (default) | Tags used in logic and tags with non-default initial values |
-| `"all_mapped"` | Every entry in the TagMap gets a backing variable |
+- every register the TagMap maps, whether a rung uses it or not, so an HMI or SCADA system can write a value no ladder rung touches
+- every raw CLICK register a rung uses directly (`ds[3901]`, `c[1801]`), at its own address
+- the whole bank, when a rung reaches it by pointer or block instruction (`ds[ptr]`, `fill(0, c.select(1, 3))`)
+- XD and YD in CLICK's layout, built from the X and Y bits the TagMap maps. A write to YD sets those Y bits.
 
-The default avoids allocating RAM for tags that no rung references and start with type-default values. Use `"all_mapped"` when an HMI or SCADA system needs to write values via Modbus even though no ladder rung touches them.
+A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there answers with Modbus exception 2 (illegal data address), because the P1AM has nowhere to keep it (a CLICK stores it). To keep such a value on the P1AM, map it in the TagMap.
+
+A write to an SC or SD that CLICK's Data View shows as Read Only answers with exception 2. So does a coil write to X, T or CT, which a client can only read. An FC 15 or FC 16 write that reaches one refused address stores nothing.
 
 ## Scan cycle with Modbus
 
@@ -201,7 +212,7 @@ The default avoids allocating RAM for tags that no rung references and start wit
 5. Service Modbus client
 6. Edge snapshots, watchdog pet, scan sleep
 
-The server and client service calls run unconditionally — including in STOP mode. This matches CLICK behavior: an HMI can still read tag state and see `sys.mode_run` as `False` while the PLC is stopped.
+The server and client service calls run unconditionally, including in STOP mode. This matches CLICK behavior. An HMI can still read tag state and see `sys.mode_run` as `False` while the PLC is stopped.
 
 ## Both server and client
 

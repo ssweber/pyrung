@@ -1,11 +1,17 @@
 # Makefile for easy development workflows.
 # See development.md for docs.
-# Note GitHub Actions call uv directly, not this Makefile.
+# Note GitHub Actions call uv directly for setup and lint, but run `make test`
+# so CI and local test selection stay identical.
 
 .DEFAULT_GOAL := default
 DOCS_ADDR ?= localhost:8000
+# Workers for the long pytest targets. 6 of 8 cores leaves room for builders; 0 is one process.
+# loadfile keeps a file's tests together, on one worker and in order. No worker restarts: xdist
+# would otherwise rerun the test that killed one (by the memory cap, say) up to 4 times per worker.
+PYTEST_WORKERS ?= 6
+PYTEST_PARALLEL = -n $(PYTEST_WORKERS) --dist=loadfile --max-worker-restart=0
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-conformance conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -16,16 +22,40 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler" --ignore=tests/fuzz --runner-backend=both
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both $(PYTEST_PARALLEL)
+
+test-fold:
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q $(PYTEST_PARALLEL)
+
+# The test files this branch adds, under --fold-check: the mergeq `fold-new` stage, so a new file
+# cannot first meet the lockstep in the full `test-fold` run.
+test-fold-new:
+	uv run python devtools/fold_new_tests.py
 
 test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
 
 test-pilot:
-	uv run pytest tests/core/analysis/ -k "pilot" -q
+	uv run pytest tests/core/analysis/ -k "pilot" -q $(PYTEST_PARALLEL)
 
 test-tumbler:
 	uv run pytest tests/tumbler/ -q
+
+# Conformance cases over Modbus TCP against pyrung's local soft PLC.
+# Point at a real CLICK running the exported program with PLC=host[:port];
+# run some groups only with GROUP=name[,name...].
+test-conformance:
+	uv run pytest -m conformance tests/conformance/ -q -rP $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(TARGET),--conformance-target=$(TARGET))
+
+# Write the conformance CLICK project (main, one subroutine per group, nicknames).
+# PART=coils, copy, math, drum1, drum2, drum3, control, system or boot writes one part: the whole suite is over CLICK's 8000 steps.
+# PART=units, fixed_scan, text_flasher, follow_flags, follow_values, follow_timing, follow_extra or a follow2_* part writes a part on memory of its own; fixed_scan runs with fixed scan on, at 100 ms.
+conformance-export:
+	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) $(or $(OUT),build/conformance$(if $(PART),-$(PART)))
+
+# Regenerate src/plc/ in the conformance ClickNick workspace, for Preview Changes.
+conformance-workspace:
+	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) --workspace $(or $(WORKSPACE),tests/conformance/workspace)
 
 watch-pilot-burner:
 	uv run python devtools/watch_pilot_decisions.py --target y_BurnerLoop --no-avoid --max-scans 20000 --wall-budget 240 --stall-budget 30 --output-budget 30 --memory-budget-mb 4096
@@ -45,7 +75,7 @@ test-soundness:
 test-fuzz:
 	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/fuzz/
 
-verify: lint test test-hypothesis docs-check
+verify: lint test test-conformance test-hypothesis docs-check
 
 upgrade:
 	uv lock --upgrade

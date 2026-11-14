@@ -1,0 +1,8 @@
+# ClickNick regenerates or seeds everything else in this folder after each CLICK
+# save (src/plc/, csv/, nicknames.csv, run.py, project_to_csv.py, csv_output/,
+# backup/, simulator.toml, pyproject.toml, tests/, AGENTS*.md, README.pyrung.md,
+# ...). It is per-PLC state, so only the link and the notes are tracked.
+/*
+!/.gitignore
+!/.clicknick.toml
+!/README.md

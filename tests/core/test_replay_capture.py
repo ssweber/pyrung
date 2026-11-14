@@ -10,9 +10,9 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
-    calc,
     call,
     copy,
+    math,
     on_delay,
     out,
     reset,
@@ -28,6 +28,7 @@ from pyrung.core.executor import (
     WriteOccurrence,
 )
 from pyrung.core.instruction import Instruction
+from pyrung.core.state import SystemState
 
 
 def test_execution_capture_is_opt_in_and_preserves_zero_net_reassertion() -> None:
@@ -150,7 +151,7 @@ def test_replay_capture_uses_shared_state_slab_and_restores_force_map(
     assert views[RungId(None, 0)].get_tag("Enable") is True
 
 
-def test_sparse_replay_seek_folds_to_exact_endpoint_across_recorded_events() -> None:
+def test_sparse_replay_lands_as_stepped_across_recorded_events() -> None:
     enable = Bool("Enable", external=True)
     marker = Bool("Marker", external=True)
     timer = Timer.clone("ReplayFoldTmr")
@@ -164,34 +165,25 @@ def test_sparse_replay_seek_folds_to_exact_endpoint_across_recorded_events() -> 
 
     source = PLC(program, dt=0.01, checkpoint_interval=10_000)
     source.force(enable, True)
+    expected = source.current_state
     for scan_id in range(1, 3001):
         if scan_id == 421:
             source.patch({marker.name: True})
         source.step()
+        if source.current_state.scan_id == 2999:
+            expected = source.current_state
 
-    # Force both reconstructions to start at the initial state.  Checkpoint
-    # force snapshots remain in the scan log and must not become false
-    # boundaries when the effective force map is unchanged.
+    # Start the replay at the initial state.  Checkpoint force snapshots remain in the scan
+    # log and must not become false boundaries when the effective force map is unchanged.
     source._checkpoints.clear()
-    kernel = source._compiled_replay_supported_kernel()
-    assert kernel is not None
+    assert source._compiled_replay_supported_kernel() is not None
 
-    expected = source._replay_to_compiled(2999, kernel).state
-    actual = source._replay_seek(2999).state
+    actual = source.replay_to(2999).state
 
     assert actual.scan_id == expected.scan_id
-    assert actual.timestamp == pytest.approx(expected.timestamp)
+    assert actual.timestamp == expected.timestamp
     assert dict(actual.tags) == dict(expected.tags)
     assert dict(actual.memory) == dict(expected.memory)
-    assert source._last_replay_seek_stats["logical_scans"] == 2999
-    assert source._last_replay_seek_stats["folded_scans"] > 2950
-    assert source._last_replay_seek_stats["kernel_scans"] < 30
-    assert (
-        source._last_replay_seek_stats["ordinary_folded_scans"]
-        + source._last_replay_seek_stats["cycle_folded_scans"]
-        + source._last_replay_seek_stats["residual_scans"]
-        == source._last_replay_seek_stats["logical_scans"]
-    )
     assert not source._replay_slabs
 
     source._recent_state_cache.clear()
@@ -204,10 +196,6 @@ def test_sparse_replay_seek_folds_to_exact_endpoint_across_recorded_events() -> 
     assert source._last_replay_slab_stats == {
         "runup_scans": 1399,
         "materialized_states": 1600,
-        "folded_runup": 1,
-        "ordinary_folded_scans": source._last_replay_seek_stats["ordinary_folded_scans"],
-        "cycle_folded_scans": 0,
-        "residual_scans": source._last_replay_seek_stats["residual_scans"] + 1600,
     }
     assert source._state_at(2998).scan_id == 2998
 
@@ -235,34 +223,143 @@ def test_causal_slab_spans_intermediate_checkpoints_as_one_contiguous_window() -
     assert source._last_replay_slab_stats == {
         "runup_scans": 199,
         "materialized_states": 1600,
-        "folded_runup": 1,
-        "ordinary_folded_scans": source._last_replay_seek_stats["ordinary_folded_scans"],
-        "cycle_folded_scans": 0,
-        "residual_scans": source._last_replay_seek_stats["residual_scans"] + 1600,
     }
     assert source._state_at(601) is slab[601]
 
 
-def test_sparse_replay_seek_preserves_clock_edge_memory() -> None:
+def _cold_history_with_edits() -> tuple[PLC, dict[int, SystemState]]:
+    """Return a PLC with 5,000 scans of history to replay, and each state as it was stepped."""
+    enable = Bool("SlabWalkEnable", external=True)
+    count = Int("SlabWalkCount")
+    held = Int("SlabWalkHeld")
+    timer = Timer.clone("SlabWalkTmr")
+
+    with Program(strict=False) as program:
+        with Rung():
+            math(count + 1, count)
+        with Rung(enable):
+            on_delay(timer, 50_000, "ms")
+            copy(count, held)
+
+    plc = PLC(program, dt=0.01, cache=20)
+    truth: dict[int, SystemState] = {}
+    for scan_id in range(1, 5001):
+        if scan_id == 1500:
+            plc.patch({enable.name: True})
+        if scan_id == 2700:
+            plc.force(enable, False)
+        if scan_id == 3300:
+            plc.unforce(enable)
+        plc.step()
+        if scan_id == 2100:
+            plc._edit_tip_tags({count.name: 10_000})
+        truth[plc.state.scan_id] = plc.state
+    plc._recent_state_cache.clear()
+    plc._recent_state_cache_bytes = 0
+    plc._cache_state(plc.current_state)
+    return plc, truth
+
+
+def _read(
+    plc: PLC, truth: dict[int, SystemState], scans: list[int], monkeypatch: pytest.MonkeyPatch
+) -> list[int]:
+    """Read *scans* through ``history.at()``, check each against stepping, and return the misses."""
+    misses: list[int] = []
+    fill = plc._replay_slab_fill
+
+    def _counted_fill(scan_id: int):
+        misses.append(scan_id)
+        return fill(scan_id)
+
+    monkeypatch.setattr(plc, "_replay_slab_fill", _counted_fill)
+    for scan_id in scans:
+        state = plc.history.at(scan_id)
+        expected = truth[scan_id]
+        assert state.timestamp == expected.timestamp
+        assert dict(state.tags) == dict(expected.tags), scan_id
+        assert dict(state.memory) == dict(expected.memory), scan_id
+        assert all(len(slab) <= 1600 for slab in plc._replay_slabs.values())
+    return misses
+
+
+def test_a_forward_walk_extends_the_slab_instead_of_refilling_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plc, truth = _cold_history_with_edits()
+
+    misses = _read(plc, truth, list(range(1001, 4001)), monkeypatch)
+
+    # The first miss fills the scans up to it.  Each later miss replays the 800 scans
+    # from it and keeps the old slab's last 800 states.  3,000 scans take 5 fills (they took
+    # one per scan that is not a checkpoint).
+    assert misses == [1001, 1002, 1802, 2602, 3402]
+    slab = next(iter(plc._replay_slabs.values()))
+    assert (min(slab), max(slab), len(slab)) == (2602, 4201, 1600)
+    assert plc._last_replay_slab_stats == {"runup_scans": 1, "materialized_states": 800}
+
+
+def test_ascending_pairs_share_one_slab(monkeypatch: pytest.MonkeyPatch) -> None:
+    plc, truth = _cold_history_with_edits()
+    scans = [at for t in range(1101, 4900, 300) for at in (t - 1, t)]
+
+    misses = _read(plc, truth, scans, monkeypatch)
+
+    # 13 pairs take 6 fills (they took 20, one per read of a scan that is not a checkpoint).
+    assert misses == [1100, 1101, 2001, 2900, 3801, 4700]
+
+
+def test_far_apart_ascending_pairs_fill_twice_per_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    plc, truth = _cold_history_with_edits()
+    scans = [at for t in range(1101, 4900, 1700) for at in (t - 1, t)]
+
+    misses = _read(plc, truth, scans, monkeypatch)
+
+    # A pair more than 800 scans past the slab fills the scans up to its first read, then
+    # 800 scans from its second.  Scan 2800 is a checkpoint.
+    assert misses == [1100, 1101, 2801, 4500, 4501]
+
+
+def test_a_backward_walk_fills_once_per_slab(monkeypatch: pytest.MonkeyPatch) -> None:
+    plc, truth = _cold_history_with_edits()
+
+    misses = _read(plc, truth, list(range(4001, 1000, -1)), monkeypatch)
+
+    # The first miss fills scans 2402..4001, and scan 2400 is a checkpoint.
+    assert misses == [4001, 2401]
+
+
+def test_a_backward_walk_above_an_old_slab_fills_once_per_slab(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plc, truth = _cold_history_with_edits()
+
+    misses = _read(plc, truth, [1001, *range(4001, 2401, -1)], monkeypatch)
+
+    # Scan 4001 is far past the old slab, so its fill holds scans 2402..4001.
+    assert misses == [1001, 4001]
+
+
+def test_sparse_replay_preserves_clock_edge_memory() -> None:
     pulses = Int("ClockPulses")
 
     with Program(strict=False) as program:
         with Rung(rise(system.sys.clock_1s)):
-            calc(pulses + 1, pulses)
+            math(pulses + 1, pulses)
 
     source = PLC(program, dt=0.01)
     source.run(333)
     source._checkpoints.clear()
-    kernel = source._compiled_replay_supported_kernel()
-    assert kernel is not None
+    assert source._compiled_replay_supported_kernel() is not None
 
-    expected = source._replay_to_compiled(332, kernel).state
-    actual = source._replay_seek(332).state
+    twin = PLC(program, dt=0.01)
+    twin.run(332)
+    expected = twin.current_state
+    actual = source.replay_to(332).state
 
-    assert actual.timestamp == pytest.approx(expected.timestamp)
+    assert actual.scan_id == expected.scan_id
+    assert actual.timestamp == expected.timestamp
     assert dict(actual.tags) == dict(expected.tags)
     assert dict(actual.memory) == dict(expected.memory)
-    assert source._last_replay_seek_stats["folded_scans"] > 250
 
 
 def test_replay_capture_reuses_source_pdg(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -394,7 +491,8 @@ def test_replay_capture_orders_multiple_instructions_and_their_events() -> None:
     assert run.writes == ((source.name, 1), (result.name, 1))
 
 
-def test_replay_capture_freezes_entry_definition_for_continued_view() -> None:
+def test_replay_capture_sources_a_continued_read_from_the_write_above() -> None:
+    """A continued rung reads live, so its read comes from the last write above it."""
     state = Int("State")
     observed = Bool("Observed")
 
@@ -409,13 +507,15 @@ def test_replay_capture_freezes_entry_definition_for_continued_view() -> None:
     plc.step()
     first, continued = plc._replay_rung_runs_at(plc.state.scan_id)
 
-    assert [write.after for write in first.write_occurrences if write.name == state.name] == [1, 0]
+    state_writes = [write for write in first.write_occurrences if write.name == state.name]
+    assert [write.after for write in state_writes] == [1, 0]
     state_read = next(read for read in continued.direct_read_occurrences if read.name == state.name)
     assert state_read.value == 0
-    assert state_read.source == "entry"
+    assert state_read.source is state_writes[-1]
 
 
-def test_replay_capture_freezes_pending_definition_for_continued_view() -> None:
+def test_replay_capture_sources_a_continued_read_from_the_rung_above() -> None:
+    """The continued read comes from the rung above's last write, not an earlier one."""
     state = Int("State")
     observed = Bool("Observed")
 
@@ -433,15 +533,14 @@ def test_replay_capture_freezes_pending_definition_for_continued_view() -> None:
     source_run, mutating_run, continued = plc._replay_rung_runs_at(plc.state.scan_id)
 
     source_write = next(write for write in source_run.write_occurrences if write.name == state.name)
-    assert [
-        write.after for write in mutating_run.write_occurrences if write.name == state.name
-    ] == [
-        6,
-        5,
+    mutating_writes = [
+        write for write in mutating_run.write_occurrences if write.name == state.name
     ]
+    assert [write.after for write in mutating_writes] == [6, 5]
     state_read = next(read for read in continued.direct_read_occurrences if read.name == state.name)
     assert state_read.value == 5
-    assert state_read.source is source_write
+    assert state_read.source is mutating_writes[-1]
+    assert state_read.source is not source_write
 
 
 def test_replay_capture_links_memory_read_to_exact_memory_write() -> None:

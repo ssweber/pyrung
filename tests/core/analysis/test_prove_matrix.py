@@ -1,9 +1,8 @@
 """BFS model checker soundness coverage matrix.
 
 Tests organized by subsystem interaction.  Each section header names the
-primary optimizations under test.  Numbering in docstrings maps back to
-the audit document (scratchpad/bfs-soundness-tests.md) and the original
-gap analysis (scratchpad/adversarial-bfs-plan.md).
+primary optimizations under test.  "Gap N" in docstrings numbers the
+original gap analysis.
 
 Every test should ideally pass in 3-way oracle mode (interpreted,
 compiled, BFS all agree).  Concrete-PLC validation tests are included
@@ -26,15 +25,18 @@ from pyrung.core import (
     TagType,
     Timer,
     blockcopy,
-    calc,
     copy,
     count_down,
     count_up,
     fill,
+    forloop,
     latch,
+    math,
     on_delay,
     out,
     rise,
+    search,
+    system,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -136,10 +138,11 @@ class TestThresholdAbsorptionIntermediateValues:
             with Rung(c.Done):
                 latch(trip)
 
-        result = always(logic, ~trip, depth_budget=10)
+        # Counted edge by edge, two scans a count: the budget covers ten.
+        result = always(logic, ~trip, depth_budget=25)
         assert isinstance(result, Counterexample), "trip at Done should be reachable"
         _assert_trace_replays(logic, result, "Trip100")
-        result2 = always(logic, ~warning, depth_budget=10)
+        result2 = always(logic, ~warning, depth_budget=25)
         assert isinstance(result2, Counterexample), "warning at Acc>=8 should be reachable"
         _assert_trace_replays(logic, result2, "Warning80")
 
@@ -196,14 +199,14 @@ class TestThresholdAbsorptionConditionalResets:
     hidden by threshold absorption."""
 
     def test_sawtooth_counter_stopped_reachable(self):
-        """calc(C + 1, C) resets at C>=50 — Stopped must be reachable."""
+        """math(C + 1, C) resets at C>=50 — Stopped must be reachable."""
         enable = Bool("Enable", external=True)
         c = Int("SawtoothC")
         stopped = Bool("Stopped")
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 1, c)
+                math(c + 1, c)
             with Rung(c >= 50):
                 copy(0, c)
                 latch(stopped)
@@ -231,7 +234,7 @@ class TestThresholdAbsorptionConditionalResets:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 1, c)
+                math(c + 1, c)
             with Rung(c > 0):
                 latch(counting)
             with Rung(c >= 10):
@@ -262,7 +265,7 @@ class TestThresholdAbsorptionConditionalResets:
 
         with Program(strict=False) as logic:
             with Rung(tick):
-                calc(c + 1, c)
+                math(c + 1, c)
             with Rung(pet):
                 copy(0, c)
             with Rung(c >= 20):
@@ -287,8 +290,8 @@ class TestThresholdAbsorptionConditionalResets:
                 latch(alarm)
 
         plc = PLC(logic, dt=0.010)
-        plc.force("Enable", True)
-        for _ in range(10):
+        for scan in range(12):  # a counter counts rising edges: pulse Enable
+            plc.force("Enable", scan % 2 == 0)
             plc.step()
         assert plc.current_state.tags["Alarm"] is True
 
@@ -317,8 +320,8 @@ class TestThresholdAbsorptionConditionalResets:
                 latch(below_after_above)
 
         plc = PLC(logic, dt=0.010)
-        plc.force("Enable", True)
-        for _ in range(10):
+        for scan in range(12):  # a counter counts rising edges: pulse Enable
+            plc.force("Enable", scan % 2 == 0)
             plc.step()
         assert plc.current_state.tags["BelowAfterAbove"] is True
 
@@ -329,21 +332,24 @@ class TestThresholdAbsorptionConditionalResets:
         _assert_trace_replays(logic, result, "BelowAfterAbove")
 
     def test_count_down_self_reset_done_reachable(self):
-        """count_down(C, 5).reset(C.Done) — same cycle for count-down."""
+        """count_down(C, -5).reset(C.Done) — same cycle for count-down."""
         enable = Bool("Enable", external=True)
         c = Counter.clone("SelfRstDn")
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                count_down(c, preset=5).reset(c.Done)
+                # Done at Acc <= preset: a negative preset takes five counts.
+                count_down(c, preset=-5).reset(c.Done)
             with Rung(c.Done):
                 latch(alarm)
 
         plc = PLC(logic, dt=0.010)
-        plc.force("Enable", True)
-        for _ in range(10):
+        for scan in range(12):  # a counter counts rising edges: pulse Enable
+            plc.force("Enable", scan % 2 == 0)
             plc.step()
+            if scan < 8:
+                assert plc.current_state.tags["Alarm"] is False
         assert plc.current_state.tags["Alarm"] is True
 
         result = always(logic, ~alarm, depth_budget=20)
@@ -384,7 +390,7 @@ class TestThresholdAbsorptionRealAccumulator:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(x + 0.1, x)
+                math(x + 0.1, x)
             with Rung(x >= 1.0):
                 out(alarm)
 
@@ -476,7 +482,7 @@ class TestBackwardPropagationNonInvertible:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sensor * sensor, squared)
+                math(sensor * sensor, squared)
             with Rung(squared >= 100):
                 out(alarm)
 
@@ -493,7 +499,7 @@ class TestBackwardPropagationNonInvertible:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sensor * sensor, squared)
+                math(sensor * sensor, squared)
             with Rung(squared >= 100):
                 out(alarm)
 
@@ -517,7 +523,7 @@ class TestBackwardPropagationMultiHop:
             with Rung():
                 copy(level, stored)
             with Rung():
-                calc(stored + 10, shifted)
+                math(stored + 10, shifted)
             with Rung(shifted >= 85):
                 out(high)
 
@@ -537,7 +543,7 @@ class TestBackwardPropagationMultiHop:
             with Rung():
                 copy(level, stored)
             with Rung():
-                calc(stored + 10, shifted)
+                math(stored + 10, shifted)
             with Rung(shifted >= 85):
                 out(high)
 
@@ -624,7 +630,7 @@ class TestBackwardPropagationWordBitwise:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(mask & 0x00FF, masked)
+                math(mask & 0x00FF, masked)
             with Rung(masked >= 16):
                 out(flag)
 
@@ -643,7 +649,7 @@ class TestBackwardPropagationWordBitwise:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(mask & 0x00FF, masked)
+                math(mask & 0x00FF, masked)
             with Rung(masked >= 16):
                 out(flag)
 
@@ -782,7 +788,7 @@ class TestFastForwardElisionTimerPath:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(sensor + 10, temp)
+                math(sensor + 10, temp)
             with Rung(run):
                 on_delay(t1, preset=50)
             with Rung(t1.Done):
@@ -865,7 +871,7 @@ class TestElisionNonBool:
             with Rung(mode == 7):
                 copy(temp, result_tag)
             with Rung():
-                calc(sensor + 10, temp)
+                math(sensor + 10, temp)
 
         plc = PLC(logic, dt=0.010)
         plc.patch({"Mode": 7, "Sensor": 5})
@@ -892,7 +898,7 @@ class TestElisionNonBool:
 
         with Program(strict=False) as logic:
             with Rung(step == 2):
-                calc(acc + 1, acc)
+                math(acc + 1, acc)
             with Rung(step == 3):
                 copy(0, acc)
             with Rung(acc >= 5):
@@ -960,14 +966,14 @@ class TestIntegerOverflowWraparound:
     """Gap 3: calc-based int progress must respect PLC integer wrapping."""
 
     def test_int_wraparound_negative_reachable(self):
-        """calc(C + 100, C) on Int — C < 0 must be reachable via wraparound."""
+        """math(C + 100, C) on Int — C < 0 must be reachable via wraparound."""
         enable = Bool("Enable", external=True)
         c = Int("Counter")
         fault = Bool("Fault")
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 100, c)
+                math(c + 100, c)
             with Rung(c < 0):
                 latch(fault)
 
@@ -986,7 +992,8 @@ class TestIntegerOverflowWraparound:
         _assert_trace_replays(logic, result, "Fault")
 
     def test_dint_large_stride_wraparound(self):
-        """calc(C + 1_000_000, C) on Dint — verify wraparound is findable."""
+        """math(C + 1_000_000, C) on Dint wraps after ~2148 scans: past the
+        budget, the result is a Proven that says it was cut short."""
         from pyrung.core import Dint
 
         enable = Bool("Enable", external=True)
@@ -995,7 +1002,7 @@ class TestIntegerOverflowWraparound:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(c + 1_000_000, c)
+                math(c + 1_000_000, c)
             with Rung(c < 0):
                 latch(wrapped)
 
@@ -1008,10 +1015,8 @@ class TestIntegerOverflowWraparound:
             pytest.skip("Dint wraparound needs more scans than test budget")
 
         result = always(logic, ~wrapped, depth_budget=500)
-        assert isinstance(result, Counterexample), (
-            f"Dint wraparound must be reachable, got {type(result).__name__}"
-        )
-        _assert_trace_replays(logic, result, "Wrapped")
+        assert isinstance(result, Intractable), "a search short of the wrap proves nothing"
+        assert "depth_budget=500" in result.reason
 
 
 class TestCompiledKernelOverflowParity:
@@ -1026,7 +1031,7 @@ class TestCompiledKernelOverflowParity:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(c + 10, c)
+                math(c + 10, c)
 
         plc = PLC(logic, dt=0.010)
         plc.step()
@@ -1056,7 +1061,7 @@ class TestRealFloatStateKeys:
     non-termination."""
 
     def test_real_feedback_loop_is_intractable(self):
-        """calc(X + 0.1, X) with Real tag — unbounded, should be Intractable."""
+        """math(X + 0.1, X) with Real tag — unbounded, should be Intractable."""
         from pyrung.core import Real
 
         enable = Bool("Enable", external=True)
@@ -1065,7 +1070,7 @@ class TestRealFloatStateKeys:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(x + 0.1, x)
+                math(x + 0.1, x)
             with Rung(x > 10.0):
                 out(alarm)
 
@@ -1089,7 +1094,7 @@ class TestRealFloatStateKeys:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(temp + 0.5, temp)
+                math(temp + 0.5, temp)
             with Rung(temp > 50.0):
                 out(high)
             with Rung(temp < 10.0):
@@ -1306,19 +1311,19 @@ class TestReceiveDomainCompleteness:
 
 
 # ===================================================================
-# OTE inside ForLoop with dynamic count
+# OTE inside ForLoop
 #
-# When an out() is nested inside a ForLoop whose count tag resolves to 0,
-# the loop still executes once. That keeps OTE behavior aligned with a
-# positive-count loop instead of creating a zero-iteration retention case.
+# As on CLICK, a false loop rung skips the body, so an out() there holds
+# its value, and a count tag that resolves to 0 runs no iteration (the
+# coil holds then too).  Such a coil is stateful, not combinational.
 # ===================================================================
 
 
 class TestOteInForLoopClassification:
-    """Test 10: OTE inside dynamic-count ForLoop uses minimum-one execution."""
+    """Test 10: an OTE inside a ForLoop holds while the loop does not run."""
 
-    def test_ote_in_dynamic_forloop_remains_combinational(self):
-        """An out() inside ForLoop(count_tag) still executes when count is 0."""
+    def test_ote_in_dynamic_forloop_is_stateful(self):
+        """An out() inside ForLoop(count_tag) holds when the count is 0."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1337,14 +1342,13 @@ class TestOteInForLoopClassification:
         if isinstance(result, Intractable):
             pytest.skip(f"intractable: {result.reason}")
 
-        stateful, nondeterministic, _comb, *_ = result
-        assert "Light" not in stateful and "Light" not in nondeterministic, (
-            "Light should be combinational because dynamic forloop counts execute "
-            "at least once when the rung is enabled"
+        stateful, _nondeterministic, _comb, *_ = result
+        assert "Light" in stateful, (
+            "Light holds across scans: a false loop rung or a count of 0 skips its out()"
         )
 
     def test_ote_in_dynamic_forloop_prove_finds_counterexample(self):
-        """always() must find that Alarm is reachable when Count=0 still executes."""
+        """always() must find that Alarm is reachable once a count of 1 or 2 sets Light."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1362,13 +1366,36 @@ class TestOteInForLoopClassification:
 
         result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            f"Alarm should be reachable: Enable=True + Count=0 still sets Light, "
+            f"Alarm should be reachable: Enable=True + Count>0 sets Light, "
             f"Active=False fires Alarm. Got {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
 
+    def test_ote_held_after_the_loop_stops_is_found(self):
+        """Light set by the loop stays on once the loop stops; always() must see it."""
+        from pyrung.core import ForLoop
+
+        enable = Bool("Enable", external=True)
+        count_tag = Int("Count", external=True, min=0, max=2)
+        light = Bool("Light")
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                with ForLoop(count_tag):
+                    out(light)
+            with Rung(light, ~enable):
+                out(stale)
+
+        result = always(logic, ~stale, depth_budget=10)
+        assert isinstance(result, Counterexample), (
+            f"Stale should be reachable: the loop sets Light, then Enable=False "
+            f"skips the body and Light holds. Got {type(result).__name__}"
+        )
+        _assert_trace_replays(logic, result, "Stale")
+
     def test_ote_in_dynamic_forloop_concrete_agrees(self):
-        """Concrete PLC confirms: count 0 executes one iteration."""
+        """Concrete PLC confirms: count 0 runs no iteration, a false rung skips the body."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
@@ -1381,43 +1408,200 @@ class TestOteInForLoopClassification:
                     out(light)
 
         plc = PLC(logic, dt=0.010)
-        plc.patch({"Enable": False, "Count": 0})
+        plc.patch({"Enable": True, "Count": 0})
         plc.step()
         assert plc.current_state.tags["Light"] is False
 
-        plc.patch({"Enable": True, "Count": 0})
+        plc.patch({"Count": 1})
         plc.step()
         assert plc.current_state.tags["Light"] is True
 
-    def test_ote_in_static_forloop_remains_combinational(self):
-        """A ForLoop with a positive literal count always executes,
-        so the OTE is still combinational."""
+        plc.patch({"Enable": False})
+        plc.step()
+        assert plc.current_state.tags["Light"] is True
+
+    def test_ote_in_static_forloop_is_stateful_behind_a_condition(self):
+        """A ForLoop(3) behind a contact skips its out() when the contact opens."""
         from pyrung.core import ForLoop
 
         enable = Bool("Enable", external=True)
         light = Bool("Light")
+        alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
             with Rung(enable):
                 with ForLoop(3):
                     out(light)
+            with Rung(light):
+                out(alarm)
 
         result = _classify_dimensions(logic)
         if isinstance(result, Intractable):
             pytest.skip(f"intractable: {result.reason}")
 
-        stateful, nondeterministic, _comb, *_ = result
-        assert "Light" not in stateful and "Light" not in nondeterministic, (
-            "Light should be combinational — ForLoop(3) always executes"
-        )
+        stateful, _nondeterministic, _comb, *_ = result
+        assert "Light" in stateful, "Light holds while Enable is false"
+
+
+# ===================================================================
+# Writes an unconditional rung does not run every scan
+#
+# Functional-dependency projection (Y = X + k) and slice elision drop Y
+# from the state key when Y is recomputed whenever X moves.  A write on a
+# rung with no contacts still may not run: a ForLoop with a tag count of 0
+# runs no iteration, a oneshot ForLoop runs its body on the first scan
+# only, a oneshot math() fires once, a branch has its own contacts.  Y
+# then holds a stale value the projection cannot represent.
+# ===================================================================
+
+
+def _stale_projection_program(writer: str, *, check_first: bool):
+    """X moves on Inc (to V); Y = X + 1 is written by *writer*.
+
+    Stale reads X == 1 with Y == 1, which needs Y left over from X == 0.
+    *check_first* puts the Stale rung above the writes, so it sees the
+    previous scan's values (the violation lands one scan after the merge).
+    """
+    from pyrung.core import ForLoop, branch
+
+    inc = Bool("Inc", external=True)
+    pick = Bool("Pick", external=True)
+    v = Int("V", external=True, min=0, max=1)
+    n = Int("N", external=True, min=0, max=1)
+    x = Int("X", min=0, max=1)
+    y = Int("Y", min=0, max=3)
+    stale = Bool("Stale")
+
+    with Program(strict=False) as logic:
+        if check_first:
+            with Rung(x == 1, y == 1):
+                out(stale)
+        if writer == "contained_tag_count":
+            with Rung(inc):
+                copy(v, x)
+                with ForLoop(n):
+                    math(x + 1, y)
+        else:
+            with Rung(inc):
+                copy(v, x)
+            with Rung():
+                if writer == "tag_count":
+                    with ForLoop(n):
+                        math(x + 1, y)
+                elif writer == "oneshot_loop":
+                    with ForLoop(1, oneshot=True):
+                        math(x + 1, y)
+                elif writer == "oneshot_calc":
+                    math(x + 1, y, oneshot=True)
+                elif writer == "branch":
+                    with branch(pick):
+                        math(x + 1, y)
+                else:
+                    raise AssertionError(writer)
+        if not check_first:
+            with Rung(x == 1, y == 1):
+                out(stale)
+    return logic, stale
+
+
+class TestSkippableWriteProjection:
+    """Y = X + 1 written by a write the rung's power alone does not decide."""
+
+    def test_zero_tag_count_loop_holds_y(self):
+        """The reviewer's case: forloop(N) with N == 0 skips math(), Y holds.
+
+        Before the fix the sequential-unconditional gate projected Y onto X
+        and always() returned Proven(states_explored=2).
+        """
+        from pyrung.core import ForLoop
+
+        inc = Bool("Inc", external=True)
+        x = Int("X", min=0, max=1)
+        y = Int("Y", min=0, max=3)
+        n = Int("N", external=True, min=0, max=1)
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung(inc):
+                copy(1, x)
+            with Rung():
+                with ForLoop(n):
+                    math(x + 1, y)
+            with Rung(x == 1, y == 1):
+                out(stale)
+
+        result = always(logic, ~stale)
+        assert isinstance(result, Counterexample), type(result).__name__
+        assert result.caveats == ()
+        _assert_trace_replays(logic, result, "Stale")
+
+    @pytest.mark.parametrize(
+        "writer",
+        ["tag_count", "contained_tag_count", "oneshot_loop", "oneshot_calc", "branch"],
+    )
+    @pytest.mark.parametrize("check_first", [False, True])
+    def test_stale_y_is_found(self, writer, check_first):
+        logic, stale = _stale_projection_program(writer, check_first=check_first)
+        result = always(logic, ~stale)
+        assert isinstance(result, Counterexample), type(result).__name__
+        assert result.caveats == ()
+        _assert_trace_replays(logic, result, "Stale")
+
+    def test_oneshot_loop_write_is_not_slice_elided(self):
+        """A oneshot ForLoop writes Y on the first scan only; later reads see it held.
+
+        Slice elision paired the loop's one-shot key with its index alone, so
+        it took Y as written before read and merged In == 0 with In == 1.
+        """
+        from pyrung.core import ForLoop, latch
+
+        inc = Bool("Inc", external=True)
+        source = Int("In", external=True, min=0, max=1)
+        y = Int("Y", min=0, max=3)
+        arm = Bool("Arm")
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                with ForLoop(1, oneshot=True):
+                    copy(source, y)
+            with Rung(arm, y == 1):
+                out(stale)
+            with Rung(inc):
+                latch(arm)
+
+        result = always(logic, ~stale)
+        assert isinstance(result, Counterexample), type(result).__name__
+        assert result.caveats == ()
+        _assert_trace_replays(logic, result, "Stale")
+
+    def test_literal_count_loop_still_proves(self):
+        """forloop(2) on a contactless rung runs every scan: Y == X + 1 holds."""
+        from pyrung.core import ForLoop
+
+        inc = Bool("Inc", external=True)
+        x = Int("X", min=0, max=1)
+        y = Int("Y", min=0, max=3)
+        stale = Bool("Stale")
+
+        with Program(strict=False) as logic:
+            with Rung(inc):
+                copy(1, x)
+            with Rung():
+                with ForLoop(2):
+                    math(x + 1, y)
+            with Rung(x == 1, y == 1):
+                out(stale)
+
+        assert isinstance(always(logic, ~stale), Proven)
 
 
 # ===================================================================
 # Classifier boundary back-propagation gaps
 #
 # The classifier currently propagates downstream comparison boundaries
-# back through copy() and calc(source +/- k), but not through more
-# general calc() shapes or structural writers like fill() and
+# back through copy() and math(source +/- k), but not through more
+# general math() shapes or structural writers like fill() and
 # blockcopy(). That can shrink ND domains below the values required to
 # reach a downstream comparison.
 # ===================================================================
@@ -1436,7 +1620,7 @@ class TestClassifierBackPropagationGaps:
             with Rung(level > 100):
                 latch(alarm_a)
             with Rung():
-                calc(level * 2, stored)
+                math(level * 2, stored)
             with Rung(stored == 150):
                 latch(alarm_b)
 
@@ -1448,7 +1632,7 @@ class TestClassifierBackPropagationGaps:
 
         result = always(logic, ~alarm_b, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            "Level=75 should flow through calc(level * 2) to Stored=150, "
+            "Level=75 should flow through math(level * 2) to Stored=150, "
             f"but prove returned {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "AlarmB")
@@ -1509,7 +1693,7 @@ class TestClassifierBackPropagationGaps:
         _assert_trace_replays(logic, result, "AlarmB")
 
     def test_transitive_copy_then_calc_multiplication(self):
-        """copy(Level, Stored) then calc(Stored * 2, Shifted) with Shifted == 150
+        """copy(Level, Stored) then math(Stored * 2, Shifted) with Shifted == 150
         must propagate 75 back through both hops to Level."""
         level = Int("Level", external=True)
         stored = Int("Stored")
@@ -1522,7 +1706,7 @@ class TestClassifierBackPropagationGaps:
             with Rung():
                 copy(level, stored)
             with Rung():
-                calc(stored * 2, shifted)
+                math(stored * 2, shifted)
             with Rung(shifted == 150):
                 latch(alarm)
 
@@ -1534,7 +1718,7 @@ class TestClassifierBackPropagationGaps:
 
         result = always(logic, ~alarm, depth_budget=10)
         assert isinstance(result, Counterexample), (
-            "Level=75 should flow through copy+calc(*2) to Shifted=150, "
+            "Level=75 should flow through copy+math(*2) to Shifted=150, "
             f"but prove returned {type(result).__name__}"
         )
         _assert_trace_replays(logic, result, "Alarm")
@@ -1693,3 +1877,759 @@ class TestJournalSoundness:
         assert expl is not None
         disabled_notes = [n for n in expl.notes if "disabled" in n]
         assert len(disabled_notes) >= 3
+
+
+# ===================================================================
+# Property tags outside the program
+#
+# A property may read a tag no rung reads or writes.  The kernel has no
+# slot for it, and a tag missing from the state left the predicate
+# undecided, which read as holding: a wrong Proven.
+# ===================================================================
+
+
+def _replayed_value(program, result, tag):
+    plc = _replay_trace(program, result.trace)
+    return plc.current_state.tags.get(tag.name, tag.default)
+
+
+class TestPropertyTagsOutsideProgram:
+    def _rail_program(self, coil):
+        with Program(strict=False) as logic:
+            with Rung():
+                out(coil)
+        return logic
+
+    def test_unwritten_tag_in_property_is_not_assumed_true(self):
+        """Or(~M2, M0) with M2 on the rail and M0 untouched fails on scan 1."""
+        m0, m2 = Bool("M0"), Bool("M2")
+        logic = self._rail_program(m2)
+
+        result = always(logic, Or(~m2, m0))
+        assert isinstance(result, Counterexample)
+        assert _replayed_value(logic, result, m2) is True
+        assert _replayed_value(logic, result, m0) is False
+
+    def test_property_only_bool_is_an_input(self):
+        """Nothing writes M0, so it may be set from outside."""
+        m0 = Bool("M0")
+        logic = self._rail_program(Bool("M2"))
+
+        result = always(logic, ~m0)
+        assert isinstance(result, Counterexample)
+        assert _replayed_value(logic, result, m0) is True
+        assert isinstance(never(logic, m0), Counterexample)
+
+    def test_property_only_int_is_an_input(self):
+        n = Int("N")
+        logic = self._rail_program(Bool("M2"))
+
+        result = always(logic, n == 5)
+        assert isinstance(result, Counterexample)
+        assert _replayed_value(logic, result, n) != 5
+
+    def test_property_only_readonly_tag_is_constant(self):
+        ro = Int("RO", default=3, readonly=True)
+        logic = self._rail_program(Bool("M2"))
+
+        assert isinstance(always(logic, ro == 3), Proven)
+        assert isinstance(always(logic, ro == 4), Counterexample)
+
+    def test_batch_property_reads_outside_tag(self):
+        m0, m2 = Bool("M0"), Bool("M2")
+        ro = Bool("ROB", readonly=True)
+        logic = self._rail_program(m2)
+
+        results = always(logic, [Or(~m2, m0), ~ro])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Proven)
+
+    def test_unlowerable_condition_is_intractable(self):
+        """A condition the verifier cannot lower is named, not assumed true."""
+        from pyrung.core.condition import Condition
+
+        class Opaque(Condition):
+            def evaluate(self, ctx):
+                return False
+
+        logic = self._rail_program(Bool("M2"))
+
+        result = always(logic, Opaque())
+        assert isinstance(result, Intractable)
+        assert result.tags == ["Opaque"]
+
+
+class TestEqNeOtherValue:
+    """An input read only through ==/!= gets one real value standing for the rest."""
+
+    def test_ordered_read_outside_the_cone_steps(self):
+        """The property's cone sees N == 0 only; the N > 3 rung still runs."""
+        n = Int("N")
+        m3 = Bool("M3")
+        with Program(strict=False) as logic:
+            with Rung(n > 3):
+                out(m3)
+
+        result = always(logic, n == 0)
+        assert isinstance(result, Counterexample)
+        value = _replayed_value(logic, result, n)
+        assert isinstance(value, int) and value != 0
+
+
+# ===================================================================
+# Timer races started at different times
+#
+# A hidden-event jump leaps from a node to the next crossing, so an input
+# flip was tried only there and at the node.  When the flip starts another
+# timer, when it comes decides which timer crosses first.  The jump now
+# also stops where the started timer would tie a running one.
+# ===================================================================
+
+
+def _three_timer_race(p1, p2, p3):
+    """H needs B pressed while T1 is between p1 - p2 and p3 - p2."""
+    a = Bool("A", external=True)
+    b = Bool("B", external=True)
+    l1, l2, x, y, h = (Bool(name) for name in ("L1", "L2", "X", "Y", "H"))
+    t1, t2, t3 = (Timer.clone(name) for name in ("T1", "T2", "T3"))
+    with Program(strict=False) as logic:
+        with Rung(a):
+            latch(l1)
+        with Rung(b):
+            latch(l2)
+        with Rung(l1):
+            on_delay(t1, preset=p1)
+        with Rung(l1):
+            on_delay(t3, preset=p3)
+        with Rung(l2):
+            on_delay(t2, preset=p2)
+        with Rung(t1.Done, ~t2.Done):
+            latch(x)
+        with Rung(t2.Done, ~t3.Done):
+            latch(y)
+        with Rung(x, y):
+            out(h)
+    return logic, h
+
+
+class TestTimerRace:
+    """H needs B pressed while T1 is partway through its run (see
+    ``_three_timer_race``).  Whether a press time exists is pure timing: the
+    black-box search lets every timer finish on any scan, so it always finds
+    H, and replay at a fixed scan time decides.  Neither set is ever Proven."""
+
+    @pytest.mark.parametrize(
+        "presets",
+        [(100, 50, 120), (60, 30, 80), (80, 40, 100), (100, 90, 120)],
+    )
+    def test_window_partway_through_a_running_timer_is_unconfirmed(self, presets):
+        """A press time exists, but the replay's guided splits do not find it:
+        unconfirmed, naming the timers (the timing is a run_for() test)."""
+        logic, h = _three_timer_race(*presets)
+        result = always(logic, ~h)
+        assert not isinstance(result, Proven)
+        if isinstance(result, Counterexample):
+            _assert_trace_replays(logic, result, "H")
+        else:
+            assert isinstance(result, Intractable)
+            assert result.kind == "timing"
+            assert {"T1_Done", "T2_Done"} <= set(result.tags)
+
+    @pytest.mark.parametrize("presets", [(100, 50, 110), (100, 50, 100), (70, 20, 80)])
+    def test_window_too_narrow_or_closed_is_unconfirmed(self, presets):
+        """No press time puts T2 strictly between T1 and T3 (brute force
+        agrees), but only exact timing shows it: unconfirmed, not Proven."""
+        logic, h = _three_timer_race(*presets)
+        result = always(logic, ~h)
+        assert isinstance(result, Intractable)
+        assert result.kind == "timing"
+        assert result.trace
+
+
+# ===================================================================
+# Indexed access: block[ptr], block[ptr + k], block[k - ptr]
+#
+# The address is the pointer mapped through the affine index, not the
+# pointer itself; an unwritten pointer whose element feeds a comparison
+# is an input, not constant storage pinned to its default; an index that
+# is not affine in one pointer may touch any element.
+# ===================================================================
+
+
+def _indexed_program(index, *, fill_range=(3, 4), write=None):
+    """Start fills block elements with 7; Hit latches when block[index] reads 7."""
+    start = Bool("Start")
+    hit = Bool("Hit")
+    n = Int("N")
+    ds = Block("DS", TagType.INT, 1, 6)
+
+    with Program(strict=False) as logic:
+        with Rung(start):
+            if write is None:
+                fill(7, ds.select(*fill_range))
+            else:
+                copy(7, write(ds))
+        with Rung():
+            copy(index(ds), n)
+        with Rung(n == 7):
+            latch(hit)
+    return logic, hit
+
+
+class TestIndexedAccess:
+    def test_bounded_pointer_is_an_input(self):
+        """An unwritten Ptr in 3..4 reaches DS3 even though its default is 0."""
+        ptr = Int("Ptr", min=3, max=4)
+        logic, hit = _indexed_program(lambda ds: ds[ptr])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize(
+        ("index", "fill_range", "expected"),
+        [
+            # Ptr in 1..2 reads DS3..4 through the +2 offset.
+            (lambda ds, p: ds[p + 2], (3, 4), Counterexample),
+            (lambda ds, p: ds[p + 2], (1, 2), Proven),
+            # 6 - Ptr reads DS4..5.
+            (lambda ds, p: ds[6 - p], (5, 5), Counterexample),
+            (lambda ds, p: ds[6 - p], (1, 3), Proven),
+        ],
+    )
+    def test_affine_index_maps_the_pointer_range(self, index, fill_range, expected):
+        ptr = Int("Ptr", min=1, max=2)
+        logic, hit = _indexed_program(lambda ds: index(ds, ptr), fill_range=fill_range)
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    def test_affine_write_reaches_the_offset_element(self):
+        """copy(7, DS[Ptr + 3]) with Ptr in 0..1 writes DS4, read by name."""
+        ptr = Int("Ptr", min=0, max=1)
+        logic, hit = _indexed_program(lambda ds: ds[4], write=lambda ds: ds[ptr + 3])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_same_pointer_at_two_offsets(self):
+        ptr = Int("Ptr", min=1, max=2)
+        start, hit = Bool("Start"), Bool("Hit")
+        n, m = Int("N"), Int("M")
+        ds = Block("DS", TagType.INT, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                fill(7, ds.select(3, 4))
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung():
+                copy(ds[ptr + 2], m)
+            with Rung(m == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_non_affine_index_reads_any_element(self):
+        """DS[Ptr * 2] with Ptr in 1..2 reads DS2 and DS4, outside Ptr's range."""
+        ptr = Int("Ptr", min=1, max=2)
+        logic, hit = _indexed_program(lambda ds: ds[ptr * 2])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_past_the_block_reaches_zero(self):
+        """Ptr 9 past DS1..4 reads 0: the dest's domain holds it, whatever the elements hold."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domains,
+        )
+
+        ptr = Int("Ptr", external=True, choices={1: "inside", 9: "past"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 5)
+        n, hit = Int("N", default=5), Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 0):
+                latch(hit)
+
+        graph = build_program_graph(logic)
+        domains = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
+        assert 0 in domains["N"]
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_past_the_block_can_feed_another_pointer(self):
+        """The 0 a past read returns addresses T0, a slot only that read can reach."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.value_sets import _ValueSets
+        from pyrung.core.validation._common import walk_instructions
+
+        start, hit = Bool("Start", external=True), Bool("Hit")
+        ptr = Int("Ptr", external=True, choices={1: "inside", 9: "past"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 2)
+        table = Block("T", TagType.INT, 0, 3)
+        n, m = Int("N", default=2), Int("M")
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, table[0])
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung():
+                copy(table[n], m)
+            with Rung(m == 7):
+                latch(hit)
+
+        graph = build_program_graph(logic)
+        values = _ValueSets(
+            list(walk_instructions(logic)),
+            graph.tags,
+            frozenset({ptr.name}),
+            None,
+            follow_indirect_reads=True,
+            declared_inputs=True,
+        )
+        assert 0 in (values.values(n.name) or ())
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_read_below_the_block_keeps_the_dest(self):
+        """Ptr 0 below DS1..4 faults and stores nothing: N never reads 0."""
+        ptr = Int("Ptr", external=True, choices={1: "inside", 0: "below"})
+        ds = Block("DS", TagType.INT, 1, 4, default_factory=lambda _addr: 5)
+        n, hit = Int("N", default=5), Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 0):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Proven)
+
+    def test_a_window_past_the_block_is_an_address_error(self):
+        """Ptr 20 puts U.select(Ptr, Ptr + 1) past U1..10: SC44, so Hit latches."""
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 20: "past"})
+        u = Block("U", TagType.INT, 1, 10)
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                fill(5, u.select(ptr, ptr + 1))
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_search_window_across_a_gap_is_explored_as_the_plc_runs_it(self):
+        """P 5 reaches SP11 across the gap: the window skips it, so Hit latches."""
+        sp = Block("SP", TagType.INT, 1, 20, valid_ranges=((1, 5), (11, 20)))
+        ptr = Int("P5", default=1, external=True, choices={1: "in", 5: "across gap"})
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                search(sp.select(ptr, ptr + 6) == 7, result=Int("Res"), found=hit)
+            with Rung():
+                fill(7, sp.select(11, 12))
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_fill_window_across_a_gap_is_explored_as_the_plc_runs_it(self):
+        sp = Block("SP", TagType.INT, 1, 20, valid_ranges=((1, 5), (11, 20)))
+        ptr = Int("P5", default=1, external=True, choices={1: "in", 5: "across gap"})
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                fill(5, sp.select(ptr, ptr + 6))
+            with Rung(sp[11] == 5):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            pytest.param(lambda tbl, u, ptr: fill(tbl[ptr], u.select(1, 2)), id="fill_value"),
+            pytest.param(
+                lambda tbl, u, ptr: search(
+                    u.select(1, 2) == tbl[ptr], result=Int("Result"), found=Bool("Found")
+                ),
+                id="search_value",
+            ),
+            pytest.param(
+                lambda tbl, u, ptr: search(
+                    u.select(ptr, 2) == 0, result=Int("Result"), found=Bool("Found")
+                ),
+                id="search_window",
+            ),
+        ],
+    )
+    def test_a_read_below_the_block_is_seen_as_an_address_error(self, op):
+        """Each confirms on the interpreter, which sets the flag rather than raising."""
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 0: "below"})
+        tbl = Block("Tbl", TagType.INT, 1, 4)
+        u = Block("U", TagType.INT, 1, 4)
+        hit = Bool("Hit")
+        with Program(strict=False) as logic:
+            with Rung():
+                op(tbl, u, ptr)
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_a_for_count_below_the_block_is_seen_as_an_address_error(self):
+        ptr = Int("Ptr", default=1, external=True, choices={1: "inside", 0: "below"})
+        tbl = Block("Tbl", TagType.INT, 1, 4)
+        hit, coil = Bool("Hit"), Bool("Coil")
+        with Program(strict=False) as logic:
+            with Rung():
+                with forloop(tbl[ptr]):
+                    out(coil)
+            with Rung(system.fault.address_error):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_unbounded_pointer_hint_names_the_offset_range(self):
+        """The suggested bounds are pointer values: DS[Ptr + 2] into DS1..2000 is -1..1998."""
+        start, hit = Bool("Start"), Bool("Hit")
+        ptr = Int("Ptr", external=True)
+        n = Int("N")
+        ds = Block("DS", TagType.INT, 1, 2000)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, ds[3])
+            with Rung():
+                copy(ds[ptr + 2], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert any("min=-1/max=1998" in hint for hint in result.hints), result.hints
+
+
+class TestUnboundedIndexReads:
+    """An index with no bounds reads every element that can change."""
+
+    def test_written_element_through_unbounded_pointer(self):
+        ptr = Int("Ptr")
+        logic, hit = _indexed_program(lambda ds: ds[ptr], write=lambda ds: ds[1])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_written_element_through_unbounded_offset(self):
+        """DS[Ptr + 3] reaches DS1 at Ptr = -2, outside DS's own address range."""
+        ptr = Int("Ptr")
+        logic, hit = _indexed_program(lambda ds: ds[ptr + 3], write=lambda ds: ds[1])
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_pointer_rewritten_every_scan(self):
+        start, hit = Bool("Start"), Bool("Hit")
+        inp = Int("In", min=0, max=1)
+        ptr, n = Int("Ptr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                fill(7, ds.select(3, 4))
+            with Rung():
+                math(inp + 3, ptr)
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_external_element_nothing_writes(self):
+        hit = Bool("Hit")
+        ptr, n = Int("Ptr", external=True), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4)
+        ds.slot(2, external=True, choices={0: "off", 7: "on"})
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize(
+        ("bounds", "expected"),
+        [({}, Intractable), ({"min": 0, "max": 5}, Proven)],
+        ids=["undeclared", "declared"],
+    )
+    def test_unwritten_elements_still_prove(self, bounds, expected):
+        """Elements nothing writes keep their power-on 0, whichever one Ptr picks.
+
+        An index is no comparison with a literal: an undeclared Ptr is tried at the
+        values its blocks give it, and that answers for nothing.
+        """
+        hit = Bool("Hit")
+        ptr, n = Int("Ptr", external=True, **bounds), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if isinstance(result, Intractable):
+            assert result.tags == ["Ptr"]
+
+    @pytest.mark.parametrize(("written", "expected"), [(110, Counterexample), (5, Proven)])
+    def test_pointer_bounded_by_its_writers(self, written, expected):
+        """Ptr = Sel * 10 + 100 reaches DS100 and DS110 only, so DS5 stays out of reach."""
+        start, hit = Bool("Start"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        ptr, n = Int("Ptr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 200)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, ds[written])
+            with Rung():
+                math(sel * 10 + 100, ptr)
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    def test_jump_table_state_machine_is_bounded(self):
+        """State steps through a literal table at DS[State + 10]; a write at DS3 is unreachable."""
+        idle = Int("S_IDLE", default=1, readonly=True)
+        run = Int("S_RUN", default=2, readonly=True)
+        go, hit = Bool("Go", external=True), Bool("Hit")
+        init = Bool("Init")
+        state, idx, n = Int("State"), Int("Idx"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 20)
+
+        with Program(strict=False) as logic:
+            with Rung(~init):
+                copy(run, ds[11])
+                copy(idle, ds[12])
+                copy(7, ds[3])
+                latch(init)
+            with Rung(go):
+                math(state + 10, idx)
+                copy(ds[idx], state)
+            with Rung():
+                copy(ds[state], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Proven)
+
+    @pytest.mark.parametrize(("read_base", "expected"), [(500, Counterexample), (600, Proven)])
+    def test_write_through_unbounded_pointer_past_block_cap(self, read_base, expected):
+        """DS1..4500 is past the 1000-element cap, so the write's value set names its elements."""
+        start, hit = Bool("Start"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        wptr, rptr, n = Int("WPtr"), Int("RPtr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                math(sel * 10 + 500, wptr)
+            with Rung(start):
+                copy(7, ds[wptr])
+            with Rung():
+                math(sel * 10 + read_base, rptr)
+            with Rung():
+                copy(ds[rptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    def test_write_past_block_cap_read_by_name(self):
+        start, hit = Bool("Start"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        wptr = Int("WPtr")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                math(sel * 10 + 500, wptr)
+            with Rung(start):
+                copy(7, ds[wptr])
+            with Rung(ds[510] == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_write_past_block_cap_with_unbounded_address(self):
+        """A write pointer nothing bounds may hit any element: no verdict."""
+        start, hit = Bool("Start"), Bool("Hit")
+        wptr = Int("WPtr", external=True)
+        rptr, n = Int("RPtr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung(start):
+                copy(7, ds[wptr])
+            with Rung():
+                copy(500, rptr)
+            with Rung():
+                copy(ds[rptr], n)
+            with Rung(n == 7):
+                latch(hit)
+
+        assert isinstance(always(logic, ~hit), Intractable)
+
+    @pytest.mark.parametrize(("guarded", "expected"), [(False, Proven), (True, Counterexample)])
+    def test_pointer_default_past_block_cap(self, guarded, expected):
+        """Ptr's default 0 puts DS[Ptr + 5] on DS5 only when its calc can be skipped."""
+        start, go, clear, hit = Bool("Start"), Bool("Go"), Bool("Clear"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        ptr, dest = Int("Ptr"), Int("Dest")
+        ds = Block("DS", TagType.INT, 1, 4500)
+
+        with Program(strict=False) as logic:
+            with Rung(go) if guarded else Rung():
+                math(sel * 10 + 500, ptr)
+            with Rung():
+                math(ptr + 5, dest)
+            with Rung(start):
+                copy(7, ds[dest])
+            with Rung(clear):
+                copy(1, ds[5])
+            with Rung(ds[5] == 7):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize("size", [10, 4500])
+    def test_counter_in_a_block_read_through_unbounded_pointer(self, size):
+        """DS7 counts to 5; abstracting it to below/at 5 would lose the 3 that DS[Ptr] reads."""
+        tick, hit = Bool("Tick", external=True), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        ptr, n = Int("Ptr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, size)
+        loop = ds[7]
+
+        with Program(strict=False) as logic:
+            with Rung(rise(tick)):
+                math(loop + 1, loop)
+            with Rung(loop >= 5):
+                copy(0, loop)
+            with Rung():
+                math(sel + 6, ptr)
+            with Rung():
+                copy(ds[ptr], n)
+            with Rung(n == 3):
+                latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    def test_counter_in_a_block_jumped_past_block_cap_is_not_absorbed(self):
+        """copy(4, DS[WPtr]) can jump DS7 past 3: it is no counter that only steps and resets."""
+        from pyrung.core.analysis.prove import _build_explore_context
+
+        tick, clr = Bool("Tick", external=True), Bool("Clr", external=True)
+        seen3, hit = Bool("Seen3"), Bool("Hit")
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        wptr = Int("WPtr")
+        ds = Block("DS", TagType.INT, 1, 4500)
+        loop = ds[7]
+
+        with Program(strict=False) as logic:
+            with Rung(loop == 3):
+                latch(seen3)
+            with Rung(loop == 4, ~seen3):
+                latch(hit)
+            with Rung(rise(tick)):
+                math(loop + 1, loop)
+            with Rung(loop >= 5):
+                copy(0, loop)
+            with Rung():
+                math(sel + 6, wptr)
+            with Rung(clr):
+                copy(4, ds[wptr])
+
+        ctx = _build_explore_context(logic, project=("Hit",), scope=["Hit"])
+        assert "DS7" not in [spec.acc_name for spec in ctx.threshold_vector_specs]
+        result = always(logic, ~hit)
+        assert isinstance(result, Counterexample)
+        _assert_trace_replays(logic, result, "Hit")
+
+    @pytest.mark.parametrize("size", [40, 4500])
+    @pytest.mark.parametrize(
+        ("read", "expected"),
+        [("index", Counterexample), ("name", Counterexample), ("out_of_window", Proven)],
+    )
+    def test_blockcopy_into_an_indexed_window(self, size, read, expected):
+        """DS.select(WPtr, WPtr + 1) with WPtr in 6..7 covers DS6..DS8, never DS20."""
+        go, put, hit = Bool("Go", external=True), Bool("Put", external=True), Bool("Hit")
+        clr = Bool("Clr", external=True)
+        sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+        src = Block("SRC", TagType.INT, 1, 2)
+        wptr, n = Int("WPtr"), Int("N")
+        ds = Block("DS", TagType.INT, 1, size)
+
+        with Program(strict=False) as logic:
+            with Rung(go):
+                copy(9, src[2])
+            with Rung():
+                math(sel + 6, wptr)
+            with Rung(put):
+                blockcopy(src.select(1, 2), ds.select(wptr, wptr + 1))
+            with Rung(clr):
+                copy(1, ds[20])
+            if read == "index":
+                with Rung():
+                    copy(ds[wptr + 1], n)
+                with Rung(n == 9):
+                    latch(hit)
+            else:
+                with Rung(ds[8 if read == "name" else 20] == 9):
+                    latch(hit)
+
+        result = always(logic, ~hit)
+        assert isinstance(result, expected)
+        if expected is Counterexample:
+            _assert_trace_replays(logic, result, "Hit")

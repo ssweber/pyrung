@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyclickplc.banks import BANKS
 
+from pyrung.core.instruction.conversions import _float_to_int_bits
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag, TagType
 
@@ -26,10 +27,6 @@ def _is_valid_index(bank: str, index: int) -> bool:
     if cfg.valid_ranges is None:
         return cfg.min_addr <= index <= cfg.max_addr
     return any(lo <= index <= hi for lo, hi in cfg.valid_ranges)
-
-
-def _range_end_for_count(bank: str, start: int, count: int) -> int:
-    return _addresses_for_count(bank, start, count)[-1]
 
 
 def _addresses_for_count(bank: str, start: int, count: int) -> tuple[int, ...]:
@@ -161,7 +158,7 @@ def _pack_values_to_registers(
             else:
                 registers.extend([lo, hi])
         elif tag.type == TagType.REAL:
-            hi, lo = struct.unpack(">HH", struct.pack(">f", float(value)))
+            hi, lo = struct.unpack(">HH", struct.pack(">I", _float_to_int_bits(value)))
             if word_order == WordOrder.HIGH_LOW:
                 registers.extend([hi, lo])
             else:

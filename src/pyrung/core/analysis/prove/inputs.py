@@ -28,6 +28,28 @@ def _thin_domain(domain: tuple[Any, ...], max_values: int) -> tuple[Any, ...]:
     return tuple(domain[i] for i in sorted(indices))
 
 
+class _FreeComboOverflow(Exception):
+    """The free inputs live at one state have more joint values than the cap.
+
+    Free inputs are enumerated jointly from every state, so their domain
+    product is the per-state branching factor.  Past ``_FREE_COMBO_CAP`` each
+    domain is thinned to evenly spaced representatives, a sample that could
+    miss the one combination that breaks the property: the BFS raises this
+    and either stops (``reachable_states``) or keeps searching the sample for
+    counterexamples and reports ``Intractable`` instead of ``Proven``.
+    Domains already at the per-input target (two-valued Bools) are not
+    thinned, and the full product is enumerated as before.
+    """
+
+    def __init__(self, domain_sizes: dict[str, int]) -> None:
+        combos = 1
+        for size in domain_sizes.values():
+            combos *= size
+        super().__init__(f"{combos} joint free-input values")
+        self.domain_sizes = domain_sizes
+        self.combos = combos
+
+
 @dataclass(frozen=True, slots=True)
 class _ExclusiveInputGroup:
     """A Bool input family whose multi-hot combinations are observationally redundant."""
@@ -88,18 +110,19 @@ def _walk_scoped_instructions(program: Program) -> list[_ScopedInstruction]:
                     instruction_depth=instruction_depth,
                 )
             )
-            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
-                _walk_instruction_list(
-                    instr.instructions,
-                    scope=scope,
-                    subroutine=subroutine,
-                    rung_index=rung_index,
-                    branch_path=branch_path,
-                    conditions=conditions,
-                    rung_instruction_count=rung_instruction_count,
-                    has_branches=has_branches,
-                    instruction_depth=instruction_depth + 1,
-                )
+            if isinstance(instr, ForLoopInstruction):
+                for child, local in instr.iter_body():
+                    _walk_instruction_list(
+                        [child],
+                        scope=scope,
+                        subroutine=subroutine,
+                        rung_index=rung_index,
+                        branch_path=branch_path,
+                        conditions=conditions + local,
+                        rung_instruction_count=rung_instruction_count,
+                        has_branches=has_branches,
+                        instruction_depth=instruction_depth + 1,
+                    )
 
     def _walk_rung(
         rung: Rung,
@@ -418,6 +441,7 @@ def _iter_input_assignments(
     joint_inputs: tuple[tuple[str, ...], ...] = (),
     free_inputs: frozenset[str] = frozenset(),
     factored_free: frozenset[str] = frozenset(),
+    sample: bool = False,
 ) -> Any:
     """Yield single-dimension interleaved input assignments for one BFS state.
 
@@ -475,17 +499,18 @@ def _iter_input_assignments(
     )
     free_combos: list[dict[str, Any]] = [{}]
     if live_free:
-        free_domains_raw = [nondeterministic_dims[n] for n in live_free]
         combo_estimate = 1
-        for d in free_domains_raw:
-            combo_estimate *= len(d)
-            if combo_estimate > _FREE_COMBO_CAP:
-                break
-        if combo_estimate > _FREE_COMBO_CAP:
-            target_per = max(2, int(_FREE_COMBO_CAP ** (1.0 / len(live_free))))
+        for n in live_free:
+            combo_estimate *= len(nondeterministic_dims[n])
+        target_per = max(2, int(_FREE_COMBO_CAP ** (1.0 / len(live_free))))
+        if combo_estimate > _FREE_COMBO_CAP and any(
+            len(nondeterministic_dims[n]) > target_per for n in live_free
+        ):
+            if not sample:
+                raise _FreeComboOverflow({n: len(nondeterministic_dims[n]) for n in live_free})
             free_domains = [
-                [(n, v) for v in _thin_domain(d, target_per)]
-                for n, d in zip(live_free, free_domains_raw, strict=True)
+                [(n, v) for v in _thin_domain(nondeterministic_dims[n], target_per)]
+                for n in live_free
             ]
         else:
             free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]

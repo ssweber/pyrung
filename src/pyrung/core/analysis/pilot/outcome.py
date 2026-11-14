@@ -222,7 +222,13 @@ def assess_outcome(
         # need not finish the broader channel heading in the same pulse: exact
         # target-relative trace improvement is itself productive conductivity.
         # Empty program coasts retain the stronger owner/earned-work rule below.
-        if applied_actions and progress is ProgressEffect.FORWARD:
+        # A coast that ran out of time with its channel unmoved found no such edge:
+        # the trend can drop only because what it holds took a need off the frontier.
+        if (
+            applied_actions
+            and progress is ProgressEffect.FORWARD
+            and channel_motion.stop_reason != "timeout"
+        ):
             return TrialAssessment(
                 agency,
                 BearingEffect.UNCHANGED,

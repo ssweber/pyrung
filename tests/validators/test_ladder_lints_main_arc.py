@@ -5,14 +5,16 @@ from __future__ import annotations
 from pyrung import (
     And,
     Bool,
+    Dint,
     Int,
     Or,
     Real,
     Rung,
+    Word,
     branch,
-    calc,
     call,
     copy,
+    math,
     out,
     return_early,
     subroutine,
@@ -155,7 +157,8 @@ def test_self_comparison_punts_on_open_domain() -> None:
 
 def test_closed_nan_self_comparison_preserves_ieee_behavior() -> None:
     nan = float("nan")
-    value = Real("Value", default=nan, choices={nan: "not-a-number"}, external=True)
+    # NaN is no REAL default (out of range), but raw bits (pack_bits) can make one.
+    value = Real("Value", choices={nan: "not-a-number"}, external=True)
     with Program() as program:
         with Rung(value == value):
             out(Bool("Same"))
@@ -257,9 +260,31 @@ def test_divisor_proved_zero_under_rung_guard() -> None:
     result = Int("Result")
     with Program() as program:
         with Rung(divisor == 0):
-            calc(numerator / divisor, result)
+            math(numerator / divisor, result)
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
+
+
+def test_a_decimal_math_divides_by_65536_as_written() -> None:
+    wide = Dint("Wide", external=True)
+    with Program() as program:
+        with Rung():
+            math(wide / 65536, Int("Out16"))
+
+    assert not _codes(program, MATH_DIV_ZERO)
+
+
+def test_divisor_a_hex_math_cuts_to_zero_shows_the_constant_as_written() -> None:
+    wide = Word("Wide", external=True)
+    with Program() as program:
+        with Rung():
+            math(wide / 65536, Word("Out16"))
+
+    assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
+    (message,) = _messages(program, MATH_DIV_ZERO)
+    assert "(Wide / 65536)" in message
+    assert "65536 is cut to 0 in a CLICK Math" in message
+    assert "/ 0)" not in message
 
 
 def test_divisor_merely_may_be_zero_punts() -> None:
@@ -267,7 +292,7 @@ def test_divisor_merely_may_be_zero_punts() -> None:
     numerator = Int("Numerator", external=True)
     with Program() as program:
         with Rung():
-            calc(numerator / divisor, Int("Result"))
+            math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -280,7 +305,7 @@ def test_caller_guards_participate_in_zero_proof() -> None:
             call("divide")
         with subroutine("divide"):
             with Rung():
-                calc(numerator / divisor, Int("Result"))
+                math(numerator / divisor, Int("Result"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
 
@@ -295,7 +320,7 @@ def test_intrascan_divisor_write_invalidates_caller_guard_proof() -> None:
             with Rung():
                 copy(1, divisor)
             with Rung():
-                calc(numerator / divisor, Int("Result"))
+                math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -304,7 +329,7 @@ def test_literal_zero_divisor_is_reported() -> None:
     numerator = Int("Numerator", external=True)
     with Program() as program:
         with Rung():
-            calc(numerator / 0, Int("Result"))
+            math(numerator / 0, Int("Result"))
 
     assert _codes(program, MATH_DIV_ZERO) == [MATH_DIV_ZERO]
 
@@ -319,7 +344,7 @@ def test_prior_early_return_prevents_false_div_zero_finding() -> None:
             with Rung(divisor == 0):
                 return_early()
             with Rung():
-                calc(numerator / divisor, Int("Result"))
+                math(numerator / divisor, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -331,7 +356,7 @@ def test_later_early_return_does_not_hide_div_zero_finding() -> None:
             call("divide")
         with subroutine("divide"):
             with Rung():
-                calc(numerator / 0, Int("Result"))
+                math(numerator / 0, Int("Result"))
             with Rung():
                 return_early()
 
@@ -348,7 +373,7 @@ def test_same_rung_branch_return_conservatively_hides_div_zero_finding() -> None
             with Rung():
                 with branch(stop):
                     return_early()
-                calc(numerator / 0, Int("Result"))
+                math(numerator / 0, Int("Result"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 
@@ -385,7 +410,7 @@ def test_return_sensitive_nonzero_call_path_blocks_guard_only_div_zero_proof() -
                 call("divide")
         with subroutine("divide"):
             with Rung():
-                calc(numerator / divisor, Int("PathResult"))
+                math(numerator / divisor, Int("PathResult"))
 
     assert not _codes(program, MATH_DIV_ZERO)
 

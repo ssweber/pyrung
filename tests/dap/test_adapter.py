@@ -1648,7 +1648,8 @@ def test_next_trace_collapses_right_pointer_expression_to_resolved_tag(tmp_path:
     traces = _trace_events(messages)
     assert traces
     condition = traces[0]["body"]["regions"][0]["conditions"][0]
-    assert condition["status"] == "false"
+    # DebugStep=5, Step[CurStep + 1 = 5]=5 -> 5 == 5 -> true
+    assert condition["status"] == "true"
 
     details = {item["name"]: item["value"] for item in condition["details"]}
     assert details["right"] == "Step[5]"
@@ -3278,7 +3279,7 @@ def test_continue_scan_frame_requires_configuration_done(tmp_path: Path):
     assert frames == [], "No scan frames should emit without configurationDone"
 
 
-def test_scan_frame_not_emitted_during_step(tmp_path: Path):
+def test_step_frames_carry_the_step_trace(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3296,7 +3297,13 @@ def test_scan_frame_not_emitted_during_step(tmp_path: Path):
             assert trace["body"]["step"] is not None, (
                 "Step commands should never emit traces with step=None"
             )
-        assert _scan_frame_events(messages) == [], "Step commands should never emit pyrungScanFrame"
+        # The state frame after a step must not replace the step trace (editor
+        # decorations follow the latest trace of either event).
+        frames = _scan_frame_events(messages)
+        assert len(frames) == 1
+        assert frames[0]["body"]["trace"] == traces[-1]["body"]
+        assert frames[0]["body"]["changes"] == []
+        assert frames[0]["body"]["running"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -3508,7 +3515,22 @@ def test_pyrung_force_accepts_string_value(tmp_path: Path):
     assert adapter._runner.forces["Mode"] == "Z"
 
 
-def test_pyrung_unforce_unknown_tag_succeeds_idempotent(tmp_path: Path):
+def test_pyrung_unforce_unforced_tag_succeeds_idempotent(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungUnforce", arguments={"tag": "Button"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+
+def test_pyrung_unforce_unknown_tag_returns_error(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3520,7 +3542,8 @@ def test_pyrung_unforce_unknown_tag_succeeds_idempotent(tmp_path: Path):
         adapter, out_stream, seq=2, command="pyrungUnforce", arguments={"tag": "Nonexistent"}
     )
     response = _single_response(messages)
-    assert response["success"] is True
+    assert response["success"] is False
+    assert response["message"] == "unknown tag: Nonexistent"
 
 
 def test_pyrung_unforce_requires_tag(tmp_path: Path):
@@ -3791,6 +3814,109 @@ def test_live_trace_body_includes_tag_hints(tmp_path: Path):
     assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
 
 
+#: Tags pyrung adds itself (a bracket's rule bit, a harness coupling's timer)
+#: and user tags that only look like them.
+_INTERNAL_TAGS = ("__on1__N", "__cpl_ond__Fb")
+_LOOKALIKE_TAGS = ("N", "__Mine", "__a__b", "__spare__1", "__init__")
+
+
+def _internal_tags_script() -> str:
+    lines = [
+        "from pyrung.core import Int, PLC, Program, Rung, math",
+        "",
+        "with Program(strict=False) as prog:",
+    ]
+    for name in _INTERNAL_TAGS + _LOOKALIKE_TAGS:
+        lines += ["    with Rung():", f"        math(Int({name!r}) + 1, Int({name!r}))"]
+    lines += ["", "runner = PLC(prog)", ""]
+    return "\n".join(lines)
+
+
+def _assert_only_program_tags(names: Any) -> None:
+    shown = set(names)
+    assert set(_LOOKALIKE_TAGS) <= shown, sorted(shown)
+    assert not shown & set(_INTERNAL_TAGS), sorted(shown)
+
+
+def test_trace_and_seek_tag_values_leave_out_internal_tags(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _internal_tags_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="pyrungStepScan")
+    _drain_messages(out_stream)
+
+    with adapter._state_lock:
+        live = adapter._live_trace_body_locked()
+        current = adapter._current_trace_body_locked()
+    seek = _single_response(
+        _send_request(adapter, out_stream, seq=4, command="pyrungSeek", arguments={"scanId": 1})
+    )
+    assert live is not None
+    assert current is not None
+    for values in (live["tagValues"], current["tagValues"], seek["body"]["tags"]):
+        _assert_only_program_tags(values)
+        assert values["N"] == "1"
+
+
+def test_variables_and_changes_leave_out_internal_tags(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _internal_tags_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    for seq in (3, 4):
+        _send_request(adapter, out_stream, seq=seq, command="pyrungStepScan")
+        _drain_messages(out_stream)
+
+    variables = _single_response(
+        _send_request(
+            adapter,
+            out_stream,
+            seq=5,
+            command="variables",
+            arguments={"variablesReference": adapter.TAGS_SCOPE_REF},
+        )
+    )["body"]["variables"]
+    _assert_only_program_tags(item["name"] for item in variables)
+
+    entries = _single_response(
+        _send_request(
+            adapter,
+            out_stream,
+            seq=6,
+            command="pyrungTagChanges",
+            arguments={"tags": [*_INTERNAL_TAGS, *_LOOKALIKE_TAGS], "count": 10},
+        )
+    )["body"]["entries"]
+    assert entries
+    for entry in entries:
+        _assert_only_program_tags(entry["changes"])
+
+    # The changes a scan frame carries during Continue.
+    _send_request(adapter, out_stream, seq=7, command="continue")
+    _drain_messages(out_stream)
+    time.sleep(0.05)
+    _send_request(adapter, out_stream, seq=8, command="pause")
+    _drain_messages(out_stream)
+    frames: list[dict[str, Any]] = []
+    for _ in range(200):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        frames.extend(_scan_frame_events(flushed))
+        if _stopped_events(flushed):
+            break
+    changed = [frame["body"]["changes"] for frame in frames if frame["body"]["changes"]]
+    assert changed, "Expected a scan frame with changes"
+    for changes in changed:
+        _assert_only_program_tags(change["tag"] for change in changes)
+
+
 def _tag_range_hints_script() -> str:
     return (
         "from pyrung.core import Bool, Char, Dint, Int, Real, Word, PLC, Program, Rung, copy\n"
@@ -4044,7 +4170,7 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     assert response["success"] is True
     assert adapter._runner.forces["Counter"] == 99
 
-    # Force with float
+    # Force with float: Counter is an Int, so it holds what a copy() of 3.14 stores
     messages = _send_request(
         adapter,
         out_stream,
@@ -4054,7 +4180,31 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     )
     response = _single_response(messages)
     assert response["success"] is True
-    assert adapter._runner.forces["Counter"] == 3.14
+    assert adapter._runner.forces["Counter"] == 3
+    assert type(adapter._runner.forces["Counter"]) is int
+
+    # A word is nothing an Int can hold, and the session says so
+    for seq, command in ((6, "pyrungForce"), (7, "pyrungPatch")):
+        messages = _send_request(
+            adapter,
+            out_stream,
+            seq=seq,
+            command=command,
+            arguments={"tag": "Counter", "value": "hello"},
+        )
+        response = _single_response(messages)
+        assert response["success"] is False
+        assert "INT holds a number" in response["message"]
+    assert adapter._runner.forces["Counter"] == 3
+
+    # The console's patch and force take the same road, zero of another type included
+    for seq, line in ((8, "patch Counter 0.0"), (9, "force Counter 0.0")):
+        messages = _send_request(
+            adapter, out_stream, seq=seq, command="evaluate", arguments={"expression": line}
+        )
+        assert _single_response(messages)["success"] is True
+    assert type(adapter._runner.forces["Counter"]) is int
+    assert type(adapter._runner._input_overrides.pending_patches["Counter"]) is int
 
 
 # ------------------------------------------------------------------
@@ -4411,6 +4561,59 @@ def test_pyrung_causal_recorded_effect(tmp_path: Path):
     assert chain["mode"] == "recorded"
     chain_tags = {chain["effect"]["tag"]} | {s["transition"]["tag"] for s in chain["steps"]}
     assert {"Relay", "Light"} <= chain_tags
+
+
+def test_pyrung_causal_branch_reads_trunk_contact_on_trunk_row(tmp_path: Path):
+    """A trunk contact written above a branch: the branch held the trunk's power,
+    so cause() names the trunk contact as the trigger it read, not its reset."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "logic.py",
+        "from pyrung.core import Bool, PLC, Program, Rung, branch, out, reset\n"
+        "\n"
+        "a = Bool('A')\n"
+        "b = Bool('B')\n"
+        "y = Bool('Y')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(a):\n"
+        "        reset(a)\n"
+        "        with branch(b):\n"
+        "            out(y)\n"
+        "\n"
+        "runner = PLC(prog)\n",
+    )
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    for seq, tag in ((3, "A"), (4, "B")):
+        _send_request(
+            adapter,
+            out_stream,
+            seq=seq,
+            command="pyrungPatch",
+            arguments={"tag": tag, "value": True},
+        )
+        _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=5, command="pyrungStepScan")
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "cause:Y"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    chain = response["body"]["chain"]
+    assert chain["mode"] == "recorded"
+    (step,) = chain["steps"]
+    assert {(t["tag"], t["from"], t["to"]) for t in step["triggers"]} == {
+        ("A", False, True),
+        ("B", False, True),
+    }
+    assert step["enablers"] == []
 
 
 def test_pyrung_causal_cause_at_scan(tmp_path: Path):

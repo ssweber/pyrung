@@ -19,7 +19,7 @@ PressCount = Int(retentive=True)
 
 `hw.slot()` returns typed blocks matching the physical module. Slot numbers must be contiguous from 1, matching the wiring order on the DIN rail.
 
-`PressCount` is marked `retentive=True` — its value persists to SD card across power cycles.
+`PressCount` is marked `retentive=True`, so its value persists to the SD card across power cycles.
 
 ## Write logic
 
@@ -32,7 +32,7 @@ with Program() as logic:
         copy(PressCount + 1, PressCount)
 ```
 
-Button held → Light on. Each rising edge of Button increments the press counter. Same DSL as any pyrung program — nothing CircuitPython-specific here.
+Button held → Light on. Each rising edge of Button increments the press counter. This is the same DSL as any pyrung program. Nothing here is CircuitPython-specific.
 
 ## Test locally
 
@@ -91,7 +91,7 @@ For faster boot and lower memory use, replace `pyrung_rt.py` with the pre-compil
 
 Copy `code.py` to the P1AM-200's `CIRCUITPY` drive. It runs automatically on boot.
 
-The board switch works as RUN/STOP out of the box — switch down to stop execution (outputs go off), switch up to resume. Retentive tags are saved automatically on RUN→STOP and every 30 seconds when values change.
+The board switch works as RUN/STOP out of the box. Switch down stops execution (outputs go off). Switch up resumes it. Retentive tags are saved automatically on RUN→STOP and every 30 seconds when values change.
 
 ## What you get for free
 

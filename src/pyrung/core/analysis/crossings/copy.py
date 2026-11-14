@@ -12,7 +12,7 @@ the over-range preimages) — unsound.
 
 It also inverts the two **bijective** conversions:
 
-- ``to_ascii`` (Char->Int, ``ord``) — exact for codes 0..127.
+- ``to_ascii`` (Char->Int, ``ord``) — exact for codes 0..255 (a TXT is a whole byte).
 - ``to_binary`` (Int->Char, ``chr(src & 0xFF)``) — exact only when the source
   range fits one byte (else ``& 0xFF`` aliasing -> fallthrough).
 
@@ -60,7 +60,9 @@ from pyrung.core.crossing import (
 )
 from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
 from pyrung.core.instruction.conversions import (
+    LITERAL,
     _store_copy_value_to_tag_type,
+    copy_source_kind,
     copy_store_transform,
 )
 from pyrung.core.instruction.data_transfer import (
@@ -71,7 +73,7 @@ from pyrung.core.instruction.data_transfer import (
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import TagType
 
-_ASCII_MAX = 127  # _ascii_char_from_code / to_ascii cap (instruction/conversions.py)
+_ASCII_MAX = 255  # a TXT is one whole byte (CLICK), so to_ascii/to_binary span 0..255
 _INEQ_OPS = frozenset({"<", "<=", ">", ">="})  # ordering ops a copy passes through
 _NO_STORED_VALUE = object()
 
@@ -162,8 +164,13 @@ def _dest_tag(instr: Any, dest_name: str, ctx: CrossingContext) -> Any | None:
     return ctx.tags_by_name.get(dest_name)
 
 
-def _stored_literal(instr: Any, dest_name: str, value: Any, ctx: CrossingContext) -> Any:
-    """Apply the instruction's concrete destination-storage semantics."""
+def _stored_literal(
+    instr: Any, dest_name: str, value: Any, ctx: CrossingContext, source: Any = LITERAL
+) -> Any:
+    """Apply the instruction's concrete destination-storage semantics.
+
+    *source* is the store's ``copy_source_kind``: a constant, or a readonly tag's type.
+    """
     dest = _dest_tag(instr, dest_name, ctx)
     if dest is None:
         return _NO_STORED_VALUE
@@ -171,7 +178,7 @@ def _stored_literal(instr: Any, dest_name: str, value: Any, ctx: CrossingContext
     if getattr(dest, "type", None) is TagType.CHAR and isinstance(value, str) and len(value) > 1:
         return _NO_STORED_VALUE
     try:
-        return _store_copy_value_to_tag_type(value, dest)
+        return _store_copy_value_to_tag_type(value, dest, source)
     except (TypeError, ValueError, OverflowError):
         return _NO_STORED_VALUE
 
@@ -197,6 +204,10 @@ def _value_preserving(
     """
     if dest_type is not None and not stored_value_possible(dest_type, value):
         return unsatisfiable(src_name)
+
+    # A Word into an Int keeps its bits: one Word for each Int.
+    if src_type is TagType.WORD and dest_type is TagType.INT:
+        return single(Eq(src_name, frozenset({int(value) & 0xFFFF})), exact=True)
 
     # Source can never overflow the destination -> the copy never clamps.
     if range_subset(src_type, dest_type):
@@ -230,13 +241,13 @@ class CopyCrossing(BaseCrossing):
         if getattr(instr, "convert", None) is not None:
             return UNKNOWN
         src = instr.source if isinstance(instr, CopyInstruction) else instr.value
-        storage = copy_store_transform(_dest_type(instr, target_tag, ctx))
+        storage = copy_store_transform(_dest_type(instr, target_tag, ctx), copy_source_kind(src))
         if storage is None:
             return UNKNOWN
         named = _named_source(src)
         if named is not None:
             if getattr(named, "readonly", False):
-                stored = _stored_literal(instr, target_tag, named.default, ctx)
+                stored = _stored_literal(instr, target_tag, named.default, ctx, named.type)
                 return Literal(stored) if stored is not _NO_STORED_VALUE else UNKNOWN
             return Affine(source=named.name, scale=1, offset=0, storage=storage)
         if isinstance(src, (bool, int, float, str)):
@@ -272,7 +283,7 @@ class CopyCrossing(BaseCrossing):
         named = _named_source(src)
         if named is not None:
             if getattr(named, "readonly", False):  # constant ref: dest is fixed
-                stored = _stored_literal(instr, dest_name, named.default, ctx)
+                stored = _stored_literal(instr, dest_name, named.default, ctx, named.type)
                 if stored is _NO_STORED_VALUE:
                     return REVERSE_FALLTHROUGH
                 return satisfied() if stored == value else unsatisfiable(dest_name)
@@ -394,13 +405,13 @@ class CopyCrossing(BaseCrossing):
             if isinstance(value, int) and not isinstance(value, bool):
                 if 0 <= value <= _ASCII_MAX:
                     return single(Eq(named.name, frozenset({chr(value)})), exact=True)
-                return unsatisfiable(dest_name)  # int outside producible 0..127
+                return unsatisfiable(dest_name)  # int outside producible 0..255
             return REVERSE_FALLTHROUGH  # non-int target -> unsure, defer
         if conv.mode == "binary":  # Int -> Char: dest == chr(src & 0xFF)
             if not (isinstance(value, str) and len(value) == 1):
                 return REVERSE_FALLTHROUGH  # not a single CHAR target -> unsure, defer
             code = ord(value)
-            if code > _ASCII_MAX:  # writer faults above ASCII -> never produced
+            if code > _ASCII_MAX:  # beyond one byte -> never produced
                 return unsatisfiable(dest_name)
             if _source_fits_one_byte(named, ctx):
                 return single(Eq(named.name, frozenset({code})), exact=True)

@@ -12,4 +12,4 @@ pyrung's analysis tools answer five questions, each requiring different inputs. 
 
 5. **[Test Coverage](analysis-coverage.md)** — program + test suite. Cold/hot rungs, stranded bits, pytest plugin, CI gating. "Is my testing complete?"
 
-The five pages escalate by what you need to bring — and map to the lifecycle: write → deploy → debug → verify.
+The five pages escalate by what you need to bring. They also map to the lifecycle: write → deploy → debug → verify.

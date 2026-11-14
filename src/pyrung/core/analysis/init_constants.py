@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 def find_instruction_at_site(program: Program, site: Any) -> Any:
     """Retrieve the instruction object at a WriteSite's location."""
+    # A forloop child's index counts within the loop body, not the rung, so
+    # the site's own instruction is the only reliable answer.
+    recorded = getattr(site, "instruction", None)
+    if recorded is not None:
+        return recorded
     if site.subroutine is not None:
         rungs = program.subroutines.get(site.subroutine, [])
     else:
@@ -50,15 +55,21 @@ _NO_LITERAL_WRITE = object()
 def _normalize_literal_write_value(raw_value: Any, target: Any) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
     from pyrung.core.expression import Expression
-    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+    from pyrung.core.instruction.conversions import (
+        _store_copy_value_to_tag_type,
+        copy_source_kind,
+    )
     from pyrung.core.tag import ImmediateRef, Tag
 
     value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
+    source = copy_source_kind(value)
+    if isinstance(value, Tag) and value.readonly:
+        value = value.default  # a readonly tag is a named constant
     if isinstance(value, (Tag, Expression)):
         return _NO_LITERAL_WRITE
     if not isinstance(value, (bool, int, float)):
         return _NO_LITERAL_WRITE
-    return _store_copy_value_to_tag_type(value, target)
+    return _store_copy_value_to_tag_type(value, target, source)
 
 
 def _check_literal_write(

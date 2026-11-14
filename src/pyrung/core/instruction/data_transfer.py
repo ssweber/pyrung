@@ -5,16 +5,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.memory_block import PastBankError
+from pyrung.core.storage import check_real_literal
 from pyrung.core.tag import Tag
 
 from .base import Instruction, OneShotMixin
 from .conversions import (
+    _NUMBER_TYPES,
     _as_single_ascii_char,
     _ascii_char_from_code,
+    _copy_clamps,
     _render_text_from_numeric,
     _store_copy_value_to_tag_type,
     _store_numeric_text_digits,
     _text_from_source_value,
+    copy_source_kind,
 )
 from .resolvers import (
     _sequential_tags,
@@ -22,6 +27,7 @@ from .resolvers import (
     _set_fault_out_of_range,
     _termination_char,
     resolve_block_range_tags_ctx,
+    resolve_source_type_tag_ctx,
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
@@ -32,6 +38,43 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 
+def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
+    """The conversion a Copy with no ``convert=`` makes across text, as CLICK's does.
+
+    A Real into a TXT writes its text, as ``to_text()`` does; a TXT into a number reads
+    its digit, as ``to_value`` does.  ``None`` for any other Copy.
+    """
+    from pyrung.core.copy_converters import to_text, to_value
+    from pyrung.core.tag import TagType
+
+    source_type = copy_source_kind(source)
+    dest_type = copy_source_kind(dest)
+    if source_type is TagType.REAL and dest_type is TagType.CHAR:
+        return to_text()
+    if source_type is TagType.CHAR and dest_type in _NUMBER_TYPES:
+        return to_value
+    return None
+
+
+def _source_past_end_keeps(source: Any, ctx: ScanContext) -> bool:
+    """True for a pointer *source* past the end of a bank whose Copy then writes nothing.
+
+    CLICK leaves the destination of a Copy from past DS, DH, DF or TXT, with no flag
+    (``Block._past_end_keeps``); past any other bank the read is the type's zero.
+    """
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    if not isinstance(source, (IndirectRef, IndirectExprRef)) or not source.block._past_end_keeps:
+        return False
+    try:
+        source.resolve_ctx(ctx)
+    except PastBankError:
+        return True
+    except (IndexError, TypeError):
+        return False
+    return False
+
+
 class CopyInstruction(OneShotMixin, Instruction):
     """Copy a single value from source to destination (CPY/MOV).
 
@@ -39,14 +82,32 @@ class CopyInstruction(OneShotMixin, Instruction):
     a string literal.  Destination may be a `Tag` or `IndirectRef`.
 
     Pass ``convert=`` to enable text/numeric conversion (see
-    :mod:`pyrung.core.copy_converters`).
+    :mod:`pyrung.core.copy_converters`).  With none, a REAL into a CHAR writes its
+    text (``to_text()``) and a CHAR into a number reads its digit (``to_value``), as
+    CLICK's plain Copy does; ``convert`` holds that converter and ``authored_convert``
+    what was written.
 
     **Clamping semantics:** Out-of-range values are clamped to the
     destination type's min/max (e.g. copying 40 000 into an INT tag produces
-    32 767). This differs from `CalcInstruction`, which wraps.
+    32 767) and the out-of-range flag (``system.fault.out_of_range``, CLICK's
+    SC43) is set; +/-Inf into an INT clamps the same way, and NaN stores 0 with
+    no flag.  A REAL into a DINT clamps with no flag (read on a CLICK for a Copy
+    of DF 1.0E+10 into a DD; Inf, Block copy and Fill into a DINT follow it, not
+    yet measured).  This differs from `CalcInstruction`, which wraps.  A WORD
+    into an INT keeps its bits (0xFFFF is -1); into a WORD a constant keeps its
+    low 16 bits, and a DINT or REAL clamps past 65535 and below 0 keeps its low
+    16 bits, with no flag (see ``copy_store_transform``).
 
-    **Pointer errors:** If the pointer resolves to an out-of-range address,
-    the address-error fault flag is set and the copy is skipped.
+    **Pointer errors:** A pointer below its bank sets the address-error fault
+    flag and skips the copy. A pointer past its bank raises no flag: a
+    destination there drops the write, and a source there reads as 0, or, past a
+    bank marked ``_past_end_keeps`` (CLICK's DS, DH, DF and TXT), leaves the
+    destination as it was.  A text or its digits written over several elements
+    writes the ones the destination's block holds and drops the rest, with no flag.
+
+    **Fault flags:** A copy clears the out-of-range and address-error flags as it
+    starts, before it reads its source, and sets each it raises.  A one-shot copy
+    that does not fire leaves them.
 
     Args:
         source: Value to copy from.
@@ -58,6 +119,8 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("dest",)
+    _fault_writes = ("fault.address_error", "fault.out_of_range")
+    _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ("convert",)
 
@@ -70,9 +133,11 @@ class CopyInstruction(OneShotMixin, Instruction):
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
+        check_real_literal(source, dest, "copy() source")
         self.source = source
         self.dest = dest
-        self.convert = convert
+        self.authored_convert = convert
+        self.convert = convert if convert is not None else _plain_text_converter(source, dest)
 
     @property
     def target(self):
@@ -84,8 +149,12 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        resolved_target: Tag | None
         try:
             resolved_target = resolve_tag_ctx(self.dest, ctx)
+        except PastBankError:
+            # The write is dropped, with no flag. The source is still read.
+            resolved_target = None
         except IndexError:
             _set_fault_address_error(ctx)
             return
@@ -97,10 +166,14 @@ class CopyInstruction(OneShotMixin, Instruction):
                 return
             raise
 
-        if self.convert is not None:
-            self._execute_converter_copy(ctx, resolved_target, self.convert)
+        convert = self.convert
+        if convert is not None:
+            if resolved_target is not None and not _source_past_end_keeps(self.source, ctx):
+                self._execute_converter_copy(ctx, resolved_target, convert)
             return
 
+        if _source_past_end_keeps(self.source, ctx):
+            return
         try:
             value = resolve_tag_or_value_ctx(self.source, ctx)
         except IndexError:
@@ -114,23 +187,28 @@ class CopyInstruction(OneShotMixin, Instruction):
                 return
             raise
 
-        # String literal fan-out: "00026" → sequential CHAR tags
+        if resolved_target is None:
+            return
+
+        # String literal fan-out: "00026" → sequential CHAR tags, as many as the block holds
         from pyrung.core.tag import TagType
 
         if isinstance(value, str) and len(value) > 1 and resolved_target.type == TagType.CHAR:
             try:
-                targets = _sequential_tags(resolved_target, len(value))
-                updates = {
-                    t.name: _as_single_ascii_char(ch) for t, ch in zip(targets, value, strict=True)
-                }
+                chars = [_as_single_ascii_char(ch) for ch in value]
+                targets = _sequential_tags(resolved_target, len(chars))
+                updates = {t.name: ch for t, ch in zip(targets, chars, strict=False)}
             except (TypeError, ValueError):
                 _set_fault_out_of_range(ctx)
                 return
             ctx.set_tags(updates)
             return
 
-        value = _store_copy_value_to_tag_type(value, resolved_target)
-        ctx.set_tag(resolved_target.name, value)
+        source = copy_source_kind(self.source)
+        stored = _store_copy_value_to_tag_type(value, resolved_target, source)
+        ctx.set_tag(resolved_target.name, stored)
+        if _copy_clamps(value, resolved_target, source):
+            _set_fault_out_of_range(ctx)
 
     def _execute_converter_copy(
         self, ctx: ScanContext, resolved_target: Tag, converter: CopyConverter
@@ -196,7 +274,7 @@ class CopyInstruction(OneShotMixin, Instruction):
             if isinstance(self.source, Tag):
                 source_tag = self.source
             elif isinstance(self.source, (IndirectRef, IndirectExprRef)):
-                source_tag = resolve_tag_ctx(self.source, ctx)
+                source_tag = resolve_source_type_tag_ctx(self.source, ctx)
             value = resolve_tag_or_value_ctx(self.source, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
@@ -220,11 +298,9 @@ class CopyInstruction(OneShotMixin, Instruction):
                 exponential=converter.exponential,
             )
             rendered += _termination_char(converter.termination_code)
-            targets = _sequential_tags(resolved_target, len(rendered))
-            updates = {
-                target.name: _as_single_ascii_char(char)
-                for target, char in zip(targets, rendered, strict=True)
-            }
+            chars = [_as_single_ascii_char(char) for char in rendered]
+            targets = _sequential_tags(resolved_target, len(chars))
+            updates = {target.name: char for target, char in zip(targets, chars, strict=False)}
         except (TypeError, ValueError, OverflowError):
             _set_fault_out_of_range(ctx)
             return
@@ -253,7 +329,8 @@ class CopyInstruction(OneShotMixin, Instruction):
             else:
                 _set_fault_out_of_range(ctx)
             return
-        except ValueError:
+        except (ValueError, OverflowError):
+            # int() of NaN raises the first, of +/-Inf the second.
             _set_fault_out_of_range(ctx)
             return
 
@@ -281,6 +358,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
 
     _reads = ("source",)
     _writes = ("dest",)
+    _fault_writes = ("fault.address_error", "fault.out_of_range")
+    _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ("convert",)
 
@@ -328,7 +407,9 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         updates = {}
         for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
             value = ctx.get_tag(src_tag.name, src_tag.default)
-            updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
+            updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag, src_tag.type)
+            if _copy_clamps(value, dst_tag, src_tag.type):
+                _set_fault_out_of_range(ctx)
         ctx.set_tags(updates)
 
     def _execute_converter_block_copy(
@@ -345,18 +426,18 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 f"dest has {len(dst_tags)} elements"
             )
 
-        try:
-            updates = {}
-            for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
+        # A character that does not convert leaves its own element and faults; the
+        # others are written (CLICK: "1A2" over 99s is 1, 99, 2).
+        updates = {}
+        for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
+            try:
                 char = _as_single_ascii_char(ctx.get_tag(src_tag.name, src_tag.default))
-                if char == "":
-                    raise ValueError("empty CHAR cannot be converted to numeric")
                 updates[dst_tag.name] = _store_numeric_text_digits(
                     char, [dst_tag], mode=converter.mode
                 )[dst_tag.name]
-            ctx.set_tags(updates)
-        except (IndexError, TypeError, ValueError, OverflowError):
-            _set_fault_out_of_range(ctx)
+            except (IndexError, TypeError, ValueError, OverflowError):
+                _set_fault_out_of_range(ctx)
+        ctx.set_tags(updates)
 
 
 class FillInstruction(OneShotMixin, Instruction):
@@ -370,11 +451,14 @@ class FillInstruction(OneShotMixin, Instruction):
 
     _reads = ("value",)
     _writes = ("dest",)
+    _fault_writes = ("fault.address_error", "fault.out_of_range")
+    _fault_follows = _fault_writes
     _conditions = ()
     _structural_fields = ()
 
     def __init__(self, value: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
+        check_real_literal(value, dest, "fill() value")
         self.value = value
         self.dest = dest
 
@@ -382,16 +466,18 @@ class FillInstruction(OneShotMixin, Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         try:
             dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+            value = resolve_tag_or_value_ctx(self.value, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
 
-        value = resolve_tag_or_value_ctx(self.value, ctx)
-
+        source = copy_source_kind(self.value)
         updates = {}
         for dst_tag in dst_tags:
-            if dst_tag.type.name == "CHAR":
+            if dst_tag.type.name == "CHAR" and isinstance(value, str):
                 updates[dst_tag.name] = _as_single_ascii_char(value)
             else:
-                updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
+                updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag, source)
         ctx.set_tags(updates)
+        if dst_tags and _copy_clamps(value, dst_tags[0], source):
+            _set_fault_out_of_range(ctx)

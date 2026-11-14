@@ -1,4 +1,10 @@
-"""Tests for Rung.continued() — condition snapshot reuse across rungs."""
+"""Tests for Rung.continued() -- a continued rung reads its contacts live.
+
+A continued rung is a row of the CLICK rung above it: its trunk is the rail and
+its contacts read when the solve reaches it, so they see every write above it
+(the live row solve).  Before it, a continued rung read the rung above's
+snapshot, taken at that rung's entry.
+"""
 
 import pytest
 
@@ -19,11 +25,10 @@ from tests.conftest import evaluate_program
 
 
 class TestContinueBasic:
-    """Basic continued() behavior: snapshot reuse across rungs."""
+    """Basic continued() behavior: contacts read live, after the rows above."""
 
-    def test_continue_sees_pre_instruction_state(self):
-        """Second rung with continued() evaluates conditions against snapshot
-        taken before the first rung's instructions executed."""
+    def test_continue_sees_the_write_above(self):
+        """A continued rung reads its contacts after the rung above has written."""
         A = Bool("A")
         X = Bool("X")
         Y = Bool("Y")
@@ -33,18 +38,17 @@ class TestContinueBasic:
                 # This sets X = True during rung 1's execution
                 out(X)
             with Rung(X).continued():
-                # X was False at snapshot time (before rung 1 ran),
-                # so this rung's condition should be False
+                # X is True by the time the solve reaches this row
                 out(Y)
 
         state = SystemState().with_tags({"A": True, "B": False, "X": False, "Y": False})
         result = evaluate_program(logic, state)
 
         assert result.tags["X"] is True  # rung 1 instruction executed
-        assert result.tags["Y"] is False  # continue rung saw X=False in snapshot
+        assert result.tags["Y"] is True  # continued rung read X live
 
     def test_continue_without_mutation_both_execute(self):
-        """Two rungs sharing a snapshot both execute when conditions hold."""
+        """A rung and its continued rung both execute when their conditions hold."""
         A = Bool("A")
         B = Bool("B")
         X = Bool("X")
@@ -62,8 +66,8 @@ class TestContinueBasic:
         assert result.tags["X"] is True
         assert result.tags["Y"] is True
 
-    def test_continue_chain_all_share_original_snapshot(self):
-        """Multiple consecutive continued() rungs all share the same snapshot."""
+    def test_continue_chain_reads_each_row_live(self):
+        """Each rung of a continued() chain reads live, after the rows above it."""
         A = Bool("A")
         X = Bool("X")
         Y = Bool("Y")
@@ -74,13 +78,11 @@ class TestContinueBasic:
             with Rung(A):
                 copy(10, Counter)
             with Rung(Counter == 10).continued():
-                # Counter was 0 at snapshot time, not 10
+                # Counter is 10 by the time the solve reaches this row
                 out(X)
             with Rung(Counter == 0).continued():
-                # Counter was 0 at snapshot time
                 out(Y)
             with Rung(A).continued():
-                # A was True at snapshot time
                 out(Z)
 
         state = SystemState().with_tags(
@@ -89,12 +91,12 @@ class TestContinueBasic:
         result = evaluate_program(logic, state)
 
         assert result.tags["Counter"] == 10
-        assert result.tags["X"] is False  # Counter was 0, not 10
-        assert result.tags["Y"] is True  # Counter was 0
-        assert result.tags["Z"] is True  # A was True
+        assert result.tags["X"] is True  # read Counter=10 live
+        assert result.tags["Y"] is False  # read Counter=10 live
+        assert result.tags["Z"] is True
 
-    def test_normal_rung_after_continue_takes_fresh_snapshot(self):
-        """A normal (non-continue) rung after a continue chain takes a fresh snapshot."""
+    def test_normal_rung_after_continue_reads_live(self):
+        """A normal rung after a continue chain reads live, like the chain."""
         A = Bool("A")
         X = Bool("X")
         Y = Bool("Y")
@@ -104,14 +106,14 @@ class TestContinueBasic:
             with Rung(A):
                 copy(10, Counter)
             with Rung(Counter == 10).continued():
-                out(X)  # False: Counter was 0 at snapshot
+                out(X)  # True: reads Counter=10 live
             with Rung(Counter == 10):
-                out(Y)  # True: fresh snapshot sees Counter=10
+                out(Y)  # True: reads Counter=10
 
         state = SystemState().with_tags({"A": True, "Counter": 0, "X": False, "Y": False})
         result = evaluate_program(logic, state)
 
-        assert result.tags["X"] is False
+        assert result.tags["X"] is True
         assert result.tags["Y"] is True
 
 
@@ -119,7 +121,7 @@ class TestContinueWithBranch:
     """continued() combined with branch() inside the continue rung."""
 
     def test_continue_rung_with_branch(self):
-        """Branches within a continue rung share the same snapshot."""
+        """A branch within a continued rung reads live too."""
         A = Bool("A")
         X = Bool("X")
         Y = Bool("Y")
@@ -131,15 +133,15 @@ class TestContinueWithBranch:
             with Rung(A).continued():
                 out(Y)
                 with branch(X):
-                    # X was False in the snapshot, so branch is unpowered
+                    # X is True by the time the solve reaches this branch
                     out(Z)
 
         state = SystemState().with_tags({"A": True, "X": False, "Y": False, "Z": False})
         result = evaluate_program(logic, state)
 
         assert result.tags["X"] is True  # rung 1 set it
-        assert result.tags["Y"] is True  # A was True in snapshot
-        assert result.tags["Z"] is False  # X was False in snapshot
+        assert result.tags["Y"] is True
+        assert result.tags["Z"] is True  # the branch read X live
 
 
 class TestContinueStaticValidation:
@@ -172,46 +174,8 @@ class TestContinueStaticValidation:
                         out(Y)
 
 
-class TestContinueRuntimeValidation:
-    """Runtime errors for snapshot misuse (belt-and-suspenders with static checks)."""
-
-    def test_continue_with_no_prior_snapshot_raises_at_runtime(self):
-        """continued() rung evaluated without any prior snapshot raises at runtime."""
-        from pyrung.core.context import ScanContext
-        from pyrung.core.rung import Rung as RungLogic
-
-        A = Bool("A")
-
-        rung = RungLogic(A)
-        rung._use_prior_snapshot = True
-
-        state = SystemState().with_tags({"A": True})
-        ctx = ScanContext(state)
-
-        with pytest.raises(RuntimeError, match="no prior condition snapshot exists"):
-            rung.evaluate(ctx)
-
-    def test_continue_rejects_snapshot_from_different_execution_scope(self):
-        """continued() requires the prior snapshot to come from the same scope."""
-        from pyrung.core.context import ConditionView, ScanContext
-        from pyrung.core.rung import Rung as RungLogic
-
-        A = Bool("A")
-
-        rung = RungLogic(A)
-        rung._use_prior_snapshot = True
-
-        state = SystemState().with_tags({"A": True})
-        ctx = ScanContext(state)
-        ctx._condition_snapshot = ConditionView(ctx)
-        ctx._condition_scope_token = object()
-
-        with pytest.raises(RuntimeError, match="same execution scope"):
-            rung.evaluate(ctx)
-
-
 class TestContinueSubroutineBoundary:
-    """Subroutine boundaries fence the condition snapshot."""
+    """continued() inside a subroutine."""
 
     def test_subroutine_does_not_leak_snapshot(self, runner_factory):
         """A continued() rung in a subroutine cannot see the caller's snapshot."""
@@ -240,8 +204,8 @@ class TestContinueSubroutineBoundary:
         assert runner.current_state.tags["X"] is True
         assert runner.current_state.tags["Y"] is True
 
-    def test_continue_in_subroutine_uses_subroutine_snapshot(self, runner_factory):
-        """continued() in a subroutine reuses the subroutine's own prior rung snapshot."""
+    def test_continue_in_subroutine_reads_live(self, runner_factory):
+        """continued() in a subroutine reads live, after the subroutine's rows above."""
         from pyrung.core import call, subroutine
 
         A = Bool("A")
@@ -257,7 +221,7 @@ class TestContinueSubroutineBoundary:
                 with Rung():
                     copy(10, Counter)
                 with Rung(Counter == 10).continued():
-                    # Counter was 0 at the subroutine's first rung snapshot
+                    # Counter is 10 by the time the solve reaches this row
                     out(X)
                 with Rung(Counter == 0).continued():
                     out(Y)
@@ -267,14 +231,14 @@ class TestContinueSubroutineBoundary:
         runner.step()
 
         assert runner.current_state.tags["Counter"] == 10
-        assert runner.current_state.tags["X"] is False  # saw Counter=0
-        assert runner.current_state.tags["Y"] is True  # saw Counter=0
+        assert runner.current_state.tags["X"] is True  # read Counter=10 live
+        assert runner.current_state.tags["Y"] is False
 
 
 class TestContinueInstructionConditions:
-    """Instruction helper conditions inherit the continued snapshot too."""
+    """A box pin on a continued rung reads at box entry, after the rows above."""
 
-    def test_continued_rung_instruction_helper_uses_original_snapshot(self, runner_factory):
+    def test_continued_rung_box_pin_reads_at_box_entry(self, runner_factory):
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
 
@@ -289,7 +253,8 @@ class TestContinueInstructionConditions:
         runner.step()
 
         assert runner.current_state.tags["ResetBtn"] is True
-        assert runner.current_state.tags["Timer_Acc"] == 10
+        # The reset pin read ResetBtn=True (latched a row above) at box entry.
+        assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
 

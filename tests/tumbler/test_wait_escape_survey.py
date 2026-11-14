@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC
 from pyrung.core.analysis.query import wait_edges_without_escape
+from tests.tumbler.bench import tumbler_plc
 
 pytestmark = pytest.mark.tumbler
 
@@ -46,6 +46,6 @@ def test_blower_step_is_not_flagged(tumbler_logic) -> None:
 
 
 def test_query_namespace_exposes_the_survey(tumbler_logic) -> None:
-    plc = PLC(tumbler_logic)
+    plc = tumbler_plc(tumbler_logic)
     findings = plc.query.wait_edges_without_escape()
     assert [f.subroutine for f in findings] == ["Rotate"]

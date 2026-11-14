@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import RouteTaken
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names
 from pyrung.core.analysis.pilot.compass import Compass, NavigationCatalog
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
@@ -56,6 +58,12 @@ class DriveSetup:
     compass: Compass
     opaque_loop: frozenset[str]
     configured_inputs: frozenset[str]
+    # Forced or patched on the PLC how() was asked of.  The fork has them too.
+    session_overrides: frozenset[str] = frozenset()
+    # The session's own forces and pending patches, which are not the plan's steps.
+    session_inputs: Mapping[str, Any] = field(default_factory=dict)
+    # Those of them a scan still had to apply, which the drive's first scan did.
+    waiting_overrides: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,7 +143,7 @@ def _make_pilot_context(
     # kept off prerequisite holds and off preferred init/reset writer selection.
     clear_only = compute_clear_only(
         setup.pdg,
-        work._known_tags_by_name,
+        work.tags,
         setup.program,
     )
     return _PilotContext(
@@ -173,19 +181,23 @@ def prepare_drive(
     from pyrung.core.analysis.pdg import build_program_graph
 
     configured_inputs = _configured_input_names(plc)
-    work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
+    work = start_fork(plc)
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program, work._known_tags_by_name)
-    steerable = compute_steerable(pdg, work._known_tags_by_name, program) - harness_fb - ref_consts
+    # What the session already has waiting decides the next scan.  Until a scan applies it the
+    # tags say nothing of it, so that scan comes before anything reads them.
+    waiting = _waiting_overrides(plc)
+    if waiting:
+        work.step()
+    ref_consts = compute_reference_constants(pdg, program, work.tags)
+    steerable = compute_steerable(pdg, work.tags, program)
+    steerable |= {name for name in modbus_levers(program) or () if pdg.readers_of.get(name)}
+    steerable -= harness_fb | ref_consts
     edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
+    resting = compute_resting_values(steerable, work.tags, pdg, program)
     diag_snapshot = dict(work.state.tags)
-    prover = build_prover_context(
-        program,
-        diag_snapshot,
-    )
+    prover = build_prover_context(program)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
     return DriveSetup(
         work=work,
@@ -194,7 +206,7 @@ def prepare_drive(
         steerable=steerable,
         edge_tags=edge_tags,
         resting=resting,
-        anchor_scan=work.state.scan_id,
+        anchor_scan=plc.state.scan_id,
         diag_snapshot=diag_snapshot,
         nd_domains=prover.nd_domains,
         stateful_domains=prover.stateful_domains,
@@ -203,7 +215,72 @@ def prepare_drive(
         compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
         opaque_loop=detect_opaque_loop(pdg, program),
         configured_inputs=configured_inputs,
+        session_overrides=frozenset(plc._forces) | frozenset(plc._pending_patches),
+        session_inputs={**plc._pending_patches, **plc._forces},
+        waiting_overrides=waiting,
     )
+
+
+def start_fork(plc: PLC) -> PLC:
+    """The unstepped fork how() starts from, with the defaults of the slots the rungs reach."""
+    work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
+    # Seed before the first scan. A seed after it adds an edit checkpoint to every how().
+    _seed_reached_slots(work)
+    return work
+
+
+def _seed_reached_slots(work: PLC) -> None:
+    """Give each slot the rungs reach that the start state lacks its default.
+
+    A state holds a slot only once a scan writes it or the user's code indexes it.
+    Seeding the rest here gives how() the same snapshot on every PLC of the program.
+    A slot read with no value reads its default, so no scan sees a difference.
+    """
+    reach = work._tags_rungs_reach
+    missing = reach.names() - set(work.state.tags) - reach.refused()
+    seed = {}
+    for name in sorted(missing):
+        tag = reach.get(name)
+        if tag is not None:
+            seed[name] = tag.default
+    if seed:
+        work._edit_tip_tags(seed)
+
+
+def modbus_levers(program: Any) -> frozenset[str] | None:
+    """The tags a Modbus device supplies, or None when *program* has no send() or receive().
+
+    how() does no Modbus I/O, so it sets these like inputs.  A receive() reads its
+    destination from the device, and the device's answer sets success or error.
+    """
+    from pyrung.core.instruction.send_receive._core import (
+        ModbusReceiveInstruction,
+        ModbusSendInstruction,
+    )
+    from pyrung.core.validation._common import walk_instructions
+
+    levers: set[str] = set()
+    found = False
+    for instr in walk_instructions(program):
+        if isinstance(instr, ModbusReceiveInstruction):
+            levers.update(instr.external_payload_names)
+        elif not isinstance(instr, ModbusSendInstruction):
+            continue
+        found = True
+        levers.update((instr.success.name, instr.error.name))
+    return frozenset(levers) if found else None
+
+
+def _waiting_overrides(plc: PLC) -> tuple[str, ...]:
+    """Tags whose pending patch or force no scan has applied, in the order a person set them."""
+    tags = plc.state.tags
+    names = dict.fromkeys(plc._pending_patches)
+    for name, value in plc._forces.items():
+        tag = plc._tag_known_or_reached(name)
+        current = tags.get(name, None if tag is None else tag.default)
+        if current != value:
+            names[name] = None
+    return tuple(names)
 
 
 def prepare_target_context(
@@ -216,10 +293,16 @@ def prepare_target_context(
     avoid_pred: Any,
     compass: Compass | None = None,
     work: PLC | None = None,
+    start_had_a_scan: bool = True,
 ) -> tuple[_PilotContext, RouteTaken | None]:
     """Bind one target and its initial route report to a prepared drive."""
 
     target_work = setup.work if work is None else work
+    # The state how() starts from is real, and it may be the one state the search never asks
+    # as real: a goal already true runs no trial.  The state a restart lands on is the
+    # exception: how() chose it, and a check may have no answer before its first scan.
+    if start_had_a_scan:
+        _avoid_scan_names(avoid_pred, dict(target_work.state.tags))
     route_taken = _target_route.prepare_target_route(
         target_work,
         target_tag,
@@ -293,33 +376,56 @@ def _build_static_transition_graphs(
 # ---------------------------------------------------------------------------
 
 
-def build_prover_context(
-    program: Any,
-    snapshot: dict[str, Any],
-) -> ProverContext:
+def build_prover_context(program: Any) -> ProverContext:
     """Build prover context for value domains and state key projection.
 
     Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
     pivot-tag state keys, and local static evidence.
-    """
-    try:
-        from dataclasses import replace as _replace
 
+    The answer comes from the program and its tags' settings.
+    A Program keeps the answer until its graph cache is dropped.
+    A change to a tag's settings drops that cache too, so each how() on an unchanged program skips the prover's passes.
+    """
+    from pyrung.core.tag import metadata_edits
+
+    edits = metadata_edits()
+    cached = getattr(program, "_cached_prover_context", None)
+    if cached is not None:
+        graph, context = cached
+        if graph is getattr(program, "_cached_graph", None):
+            return _copy_prover_context(context)
+    context = _compute_prover_context(program)
+    if context is None:
+        return ProverContext()
+    graph = getattr(program, "_cached_graph", None)
+    if graph is not None and metadata_edits() == edits:
+        program._cached_prover_context = (graph, context)
+    return _copy_prover_context(context)
+
+
+def _copy_prover_context(context: ProverContext) -> ProverContext:
+    """A copy whose dicts a caller may change without changing the cached one."""
+    from dataclasses import replace
+
+    return replace(
+        context,
+        nd_domains=None if context.nd_domains is None else dict(context.nd_domains),
+        stateful_domains=(
+            None if context.stateful_domains is None else dict(context.stateful_domains)
+        ),
+    )
+
+
+def _compute_prover_context(program: Any) -> ProverContext | None:
+    """The prover's facts for *program*, or ``None`` when building them raised."""
+    try:
         from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
         from pyrung.core.analysis.pilot.evidence import build_transition_evidence
-        from pyrung.core.analysis.prove import _build_explore_context
-        from pyrung.core.analysis.prove.passes import _OptConfig
+        from pyrung.core.analysis.prove import _build_prior_facts
         from pyrung.core.analysis.prove.results import Intractable
 
-        opt = _replace(_OptConfig(), domains_only=True)
         compiled = _compile_kernel(program, blockless=True, proof_metadata=True)
-        ctx = _build_explore_context(
-            program,
-            _opt_config=opt,
-            compiled=compiled,
-            initial_state=snapshot,
-            allow_partial=True,
-        )
+        ctx = _build_prior_facts(program, compiled=compiled)
         if isinstance(ctx, Intractable):
             return ProverContext()
         nd = getattr(ctx, "nondeterministic_dims", None)
@@ -382,4 +488,4 @@ def build_prover_context(
         )
     except Exception:  # noqa: BLE001
         logger.debug("pilot: context build failed", exc_info=True)
-        return ProverContext()
+        return None

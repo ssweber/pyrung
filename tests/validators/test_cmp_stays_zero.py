@@ -1,4 +1,4 @@
-"""Specification tests for comparison sources and zero timer/counter presets."""
+"""Specification tests for comparison sources and zero timer, counter and drum presets."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from pyrung.core import (
     copy,
     count_up,
     on_delay,
+    time_drum,
+    time_event_drum,
 )
 from pyrung.core.system_points import system
 from pyrung.core.validation import (
@@ -182,3 +184,49 @@ class TestPresetStaysZero:
             CMP_PRESET_STAYS_ZERO,
         )
         assert [finding.code for finding in findings] == [CMP_PRESET_STAYS_ZERO]
+
+
+class TestDrumPresetStaysZero:
+    """A drum step whose tag preset stays 0 ends on its first timing scan."""
+
+    @staticmethod
+    def _drums(first: Tag, second: Tag) -> Program:
+        enable = Bool("Enable", external=True)
+        reset = Bool("Reset", external=True)
+        args = {
+            "outputs": [Bool("A"), Bool("B")],
+            "pattern": [[1, 0], [0, 1]],
+            "unit": "ms",
+        }
+        with Program(strict=False) as program:
+            with Rung(system.sys.first_scan):
+                copy(500, Int("Written"))
+            with Rung(enable):
+                time_drum(
+                    presets=[first, 100],
+                    current_step=Int("Step1"),
+                    accumulator=Int("Acc1"),
+                    completion_flag=Bool("Done1"),
+                    **args,
+                ).reset(reset)
+            with Rung(enable):
+                time_event_drum(
+                    presets=[None, second],
+                    events=[Bool("Go", external=True), None],
+                    current_step=Int("Step2"),
+                    accumulator=Int("Acc2"),
+                    completion_flag=Bool("Done2"),
+                    **args,
+                ).reset(reset)
+        return program
+
+    def test_unwritten_step_presets_are_reported(self) -> None:
+        findings = _codes(self._drums(Int("StepTime"), Int("OtherTime")), CMP_PRESET_STAYS_ZERO)
+        assert sorted(finding.target_name for finding in findings) == ["OtherTime", "StepTime"]
+        assert all(finding.severity == "warning" for finding in findings)
+        assert all("the step ends at once" in finding.message for finding in findings)
+        assert all(finding.message.isascii() for finding in findings)
+
+    def test_written_and_external_step_presets_are_clean(self) -> None:
+        program = self._drums(Int("Written"), Int("FromHmi", external=True))
+        assert not _codes(program, CMP_PRESET_STAYS_ZERO)

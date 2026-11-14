@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from .base import (
     _EXECUTOR_CALL,
     _EXECUTOR_FOR_LOOP,
+    _EXECUTOR_LOOP_EXIT,
     _EXECUTOR_RETURN,
     Instruction,
+    LoopBreakSignal,
+    LoopContinueSignal,
     OneShotMixin,
     SubroutineReturnSignal,
 )
@@ -20,6 +24,9 @@ from .conversions import (
 )
 from .resolvers import (
     _fn_name,
+    _set_fault_address_error,
+    _set_fault_out_of_range,
+    reads_indexed_element,
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
@@ -29,6 +36,7 @@ if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.rung import Rung
 
 
 class FunctionCallInstruction(OneShotMixin, Instruction):
@@ -55,7 +63,7 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
-        result = self._fn(**kwargs)
+        result = ctx.call_user_function(self._fn, **kwargs)
         if not self._outs:
             return
         if result is None:
@@ -96,7 +104,7 @@ class EnabledFunctionCallInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
-        result = self._fn(enabled, **kwargs)
+        result = ctx.call_user_function(self._fn, enabled, **kwargs)
         if not self._outs:
             return
         if result is None:
@@ -113,10 +121,90 @@ class EnabledFunctionCallInstruction(Instruction):
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 
 
+# What a For does with a count of 0.  CLICK reads a 16-bit count as unsigned:
+# a DS of -1 runs 65535 iterations (hardware 2026-10-29).  It reads a 32-bit
+# count whole and signed.  A DD of 65536 runs 65536 (hardware 2026-11-05).  A
+# DD of -1, -65535 or -2 and a CTD of -1 run none (hardware 2026-11-06,
+# 2026-11-10).  It reads a constant whole, so 70000 runs 70000
+# (hardware 2026-11-10).  A count of 0 runs none.  The runtime, the debugger
+# and the generated P1AM-200 code all read this one switch.
+FOR_ZERO_COUNT_ITERATIONS = 0
+
+#: The mask of a 16-bit count (DS, TD, SD) and of a 32-bit one (DD, CTD, a constant).
+FOR_COUNT_MASK_16 = 0xFFFF
+FOR_COUNT_MASK_32 = 0xFFFFFFFF
+#: The most a 32-bit count runs: past it, its bits are a negative count, which runs none.
+FOR_COUNT_MAX_32 = 0x7FFFFFFF
+
+
+def for_count_mask(count: Any) -> int:
+    """The mask a For reads *count* through: a Dint register or a constant is read whole.
+
+    A Dint tag, a Dint block element (a DD, a CTD) and an integer constant are
+    read as signed 32-bit.  Anything else (an Int, a Word, an expression, a
+    REAL) is read as unsigned 16-bit.
+    """
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    if isinstance(count, int) and not isinstance(count, bool):
+        return FOR_COUNT_MASK_32
+    if isinstance(count, Tag):
+        return FOR_COUNT_MASK_32 if count.type == TagType.DINT else FOR_COUNT_MASK_16
+    if isinstance(count, (IndirectRef, IndirectExprRef)):
+        if getattr(count.block, "type", None) == TagType.DINT:
+            return FOR_COUNT_MASK_32
+    return FOR_COUNT_MASK_16
+
+
+def for_loop_iterations(count_value: Any, mask: int = FOR_COUNT_MASK_16) -> int:
+    """How many times a For runs its body for a resolved count, as on CLICK.
+
+    The count is read through *mask* (:func:`for_count_mask`): a 16-bit one as
+    unsigned, ``count & 0xFFFF``, and a Dint whole and signed, so a negative
+    one runs none.  A count of 0 runs :data:`FOR_ZERO_COUNT_ITERATIONS`
+    iterations.  A REAL count holding Inf or NaN runs none (pyrung's choice:
+    CLICK's editor refuses a REAL count, and a pasted one stops the PLC on its
+    watchdog; :meth:`ForLoopInstruction.iterations` also sets SC43 for it).
+    """
+    if not _finite_count(count_value):
+        return 0
+    iterations = int(count_value) & mask
+    if mask == FOR_COUNT_MASK_32 and iterations > FOR_COUNT_MAX_32:
+        return 0
+    return iterations if iterations else FOR_ZERO_COUNT_ITERATIONS
+
+
+def _finite_count(count_value: Any) -> bool:
+    return not isinstance(count_value, float) or math.isfinite(count_value)
+
+
+def _count_may_be_non_finite(count: Any) -> bool:
+    """Whether a For count can resolve to Inf or NaN (a REAL source)."""
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    if isinstance(count, Tag):
+        return count.type == TagType.REAL
+    if isinstance(count, (IndirectRef, IndirectExprRef)):
+        return count.block.type == TagType.REAL
+    if isinstance(count, Expression):
+        return True
+    return isinstance(count, float) and not math.isfinite(count)
+
+
 class ForLoopInstruction(OneShotMixin, Instruction):
     """For-loop instruction.
 
-    Executes a captured instruction list N times within one scan.
+    Executes its body N times within one scan.  The body is an ordered mix of
+    bare instructions (implicit always-true body rungs) and body rungs, which
+    evaluate their own contacts afresh on every iteration.  ``instructions``
+    is the flat view: every body instruction in source order, body-rung
+    instructions included, nested loops as single items.
+
+    When the loop's rung is false the body is skipped, as on CLICK: its
+    ``out()`` coils keep their values and its one-shots do not re-arm.  Only
+    the For's own one-shot re-arms.  The count is read once, when the loop
+    starts (:func:`for_loop_iterations`).
     """
 
     _reads = ("count",)
@@ -129,32 +217,99 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         self,
         count: Tag | IndirectRef | IndirectExprRef | Any,
         idx_tag: Tag,
-        instructions: list[Instruction],
+        instructions: list[Instruction] | None = None,
         oneshot: bool = False,
+        *,
+        body: list[Instruction | Rung] | None = None,
     ):
         OneShotMixin.__init__(self, oneshot)
         self.count = count
         self.idx_tag = idx_tag
-        self.instructions = instructions
+        # Only a For whose count can be Inf or NaN sets SC43, and only one whose
+        # count reads an indexed element can set SC44: the analyses (PDG, prover)
+        # see a flag written where it can be.
+        fault_writes: tuple[str, ...] = ()
+        if _count_may_be_non_finite(count):
+            fault_writes = ("fault.out_of_range",)
+        if reads_indexed_element(count):
+            fault_writes = (*fault_writes, "fault.address_error")
+        if fault_writes:
+            self._fault_writes = fault_writes
+        self.body: tuple[Instruction | Rung, ...] = tuple(
+            body if body is not None else (instructions or ())
+        )
+        flat: list[Instruction] = []
+        for item in self.body:
+            if isinstance(item, Instruction):
+                flat.append(item)
+            else:
+                flat.extend(item._instructions)
+        self.instructions = flat
+
+    def iterations(self, ctx: ScanContext) -> int:
+        """How many times the body runs this scan, reading the count now.
+
+        A count that is Inf or NaN (a REAL source) runs no iteration and sets
+        SC43 (``system.fault.out_of_range``), pyrung's choice.  One that reads an
+        element below its block runs no iteration and sets SC44.
+        """
+        try:
+            count_value = resolve_tag_or_value_ctx(self.count, ctx)
+            if _finite_count(count_value):
+                return for_loop_iterations(count_value, for_count_mask(self.count))
+        except OverflowError:  # an expression count hit Inf or NaN on the way
+            pass
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return 0
+        _set_fault_out_of_range(ctx)
+        return 0
+
+    @property
+    def body_rungs(self) -> tuple[Rung, ...]:
+        """The conditioned body rungs, in source order."""
+        return tuple(item for item in self.body if not isinstance(item, Instruction))
+
+    def iter_body(self) -> Iterator[tuple[Instruction, tuple[Condition, ...]]]:
+        """Each direct body instruction, in ``instructions`` order, with the
+        local contacts of the body rung it sits in (empty for a bare item).
+
+        A walker that threads rung conditions down to instructions appends
+        these to the loop rung's own.
+        """
+        for item in self.body:
+            if isinstance(item, Instruction):
+                yield item, ()
+            else:
+                local = tuple(item._conditions[item._branch_condition_start :])
+                for instruction in item._instructions:
+                    yield instruction, local
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
-            for instruction in self.instructions:
-                instruction.execute(ctx, False)
             self._reset_oneshot_state(ctx)
             return
 
         if not self._should_execute(ctx):
             return
 
-        count_value = resolve_tag_or_value_ctx(self.count, ctx)
-        iterations = max(1, int(count_value))
+        iterations = self.iterations(ctx)
 
         for i in range(iterations):
             # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().
             ctx.set_tag(self.idx_tag.name, i)
-            for instruction in self.instructions:
-                instruction.execute(ctx, True)
+            try:
+                for item in self.body:
+                    if isinstance(item, Instruction):
+                        # A bare body box is a row of its own: it reads its
+                        # pins as it starts (instruction_condition_view).
+                        item.execute(ctx, True)
+                    else:
+                        item._execute_in_loop(ctx)
+            except LoopContinueSignal:
+                continue
+            except LoopBreakSignal:
+                break
 
     def _should_execute(self, ctx: ScanContext) -> bool:
         """Return whether this loop should execute, using memory-backed oneshot state."""
@@ -168,17 +323,17 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         return True
 
     def _reset_oneshot_state(self, ctx: ScanContext) -> None:
-        self.reset_oneshot()
+        """Re-arm the For's own one-shot (the rung is false); children keep theirs."""
         if self._oneshot:
             ctx.set_memory(self.memory_key("_oneshot"), False)
 
-    def reset_oneshot(self) -> None:
-        """Reset own oneshot state and propagate reset to captured children."""
-        OneShotMixin.reset_oneshot(self)
-        for instruction in self.instructions:
-            reset_fn = getattr(instruction, "reset_oneshot", None)
-            if callable(reset_fn):
-                reset_fn()
+
+def iter_loop_body_rungs(instructions: Any) -> Iterator[Rung]:
+    """Every forloop body rung among *instructions*, nested loops included."""
+    for instruction in instructions:
+        if isinstance(instruction, ForLoopInstruction):
+            yield from instruction.body_rungs
+            yield from iter_loop_body_rungs(instruction.instructions)
 
 
 class CallInstruction(Instruction):
@@ -221,3 +376,33 @@ class ReturnInstruction(Instruction):
         if not enabled:
             return
         raise SubroutineReturnSignal
+
+
+class BreakInstruction(Instruction):
+    """Leave the innermost forloop immediately (CLICK Break)."""
+
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ()
+    _executor_kind = _EXECUTOR_LOOP_EXIT
+
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:  # noqa: ARG002
+        if not enabled:
+            return
+        raise LoopBreakSignal
+
+
+class ContinueInstruction(Instruction):
+    """Skip the rest of the current forloop iteration (CLICK Continue)."""
+
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ()
+    _executor_kind = _EXECUTOR_LOOP_EXIT
+
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:  # noqa: ARG002
+        if not enabled:
+            return
+        raise LoopContinueSignal

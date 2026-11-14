@@ -7,8 +7,12 @@ last-writer-wins stomping at runtime.
 Covered instruction types:
   OutInstruction, OnDelayInstruction, OffDelayInstruction,
   CountUpInstruction, CountDownInstruction, ShiftInstruction,
-  EventDrumInstruction, TimeDrumInstruction,
+  EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction,
+  ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction,
   ModbusSendInstruction, ModbusReceiveInstruction.
+
+The Out coil variants claim their Timers too, so ``on_delay(Timer[1], ...)``
+beside ``debounce(..., on=(Timer[1], ...))`` is a conflict (CLICK's C0112).
 """
 
 from __future__ import annotations
@@ -83,15 +87,18 @@ def _sites_mutually_exclusive(
 ) -> bool:
     """Check if two output sites are provably mutually exclusive.
 
-    INERT_WHEN_DISABLED=False instructions always execute (set or reset) every
-    scan.  The only way two such instructions can safely share a target is if
+    INERT_WHEN_DISABLED=False instructions execute every scan, rung true or
+    false.  The only way two such instructions can safely share a target is if
     they are in **different subroutines** whose callers are mutually exclusive —
     because a disabled call() skips the entire subroutine so its instructions
     never run.
 
     Within the same execution scope (main rungs, same subroutine, branches)
     mutually-exclusive rung conditions do NOT help: both instructions still
-    execute every scan, and the disabled one resets the target.
+    execute, and the disabled one can still write the target.  An out resets
+    it every scan.  A drum writes less often, on a move or as its rung comes
+    back, but its reset turns its outputs off with the rung false, and each
+    drum's row overwrites the other's, so the two still contend.
     """
     # An uncalled subroutine's instructions never execute — no conflict
     if (

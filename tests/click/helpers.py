@@ -41,21 +41,27 @@ from pyrung.core import (
     Word,
     fall,
     immediate,
+    randint,
     rise,
+    to_text,
 )
 from pyrung.core.program import (
     blockcopy,
     branch,
-    calc,
+    break_loop,
     call,
     comment,
+    continue_loop,
     copy,
     count_down,
     count_up,
+    debounce,
     event_drum,
     fill,
+    flasher,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -68,6 +74,9 @@ from pyrung.core.program import (
     shift,
     subroutine,
     time_drum,
+    time_event_drum,
+    timed,
+    toggle,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -123,6 +132,10 @@ _CLICK_BLOCKS: dict[str, _AddressableBlock] = {
 }
 
 # Everything a test snippet might reference — pre-loaded into the exec namespace
+# A pool for tests that need more than one timer (the Out coil variants own
+# one or two each); mapped to T1..T10 / TD1..TD10 only when a source uses it.
+Timers = Timer.clone("Timers", count=10)
+
 _EXEC_NAMESPACE: dict[str, object] = {
     # Core types
     "Program": Program,
@@ -137,6 +150,7 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "Block": Block,
     "TagType": TagType,
     "Timer": Timer,
+    "Timers": Timers,
     "Counter": Counter,
     # Condition combinators
     "Or": Or,
@@ -149,7 +163,9 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "latch": latch,
     "reset": reset,
     "copy": copy,
-    "calc": calc,
+    "math": math,
+    "randint": randint,
+    "to_text": to_text,
     "on_delay": on_delay,
     "off_delay": off_delay,
     "count_up": count_up,
@@ -167,9 +183,16 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "unpack_to_words": unpack_to_words,
     "event_drum": event_drum,
     "time_drum": time_drum,
+    "time_event_drum": time_event_drum,
+    "toggle": toggle,
+    "debounce": debounce,
+    "flasher": flasher,
+    "timed": timed,
     "call": call,
     "subroutine": subroutine,
     "return_early": return_early,
+    "break_loop": break_loop,
+    "continue_loop": continue_loop,
     "comment": comment,
     # Click-specific
     "send": __import__("pyrung.click", fromlist=["send"]).send,
@@ -366,8 +389,12 @@ def build_program(source: str) -> tuple[Program, TagMap]:
         mapping_entries.append(ns[spec.name].map_to(block_obj.select(spec.start, spec.end)))
 
     # Map built-in Timer/Counter blocks to Click hardware banks.
-    mapping_entries.append(Timer._blocks["Done"].map_to(t.select(1, 1)))
-    mapping_entries.append(Timer._blocks["Acc"].map_to(td.select(1, 1)))
+    if "Timers[" in source:
+        mapping_entries.append(Timers._blocks["Done"].map_to(t.select(1, 10)))
+        mapping_entries.append(Timers._blocks["Acc"].map_to(td.select(1, 10)))
+    else:
+        mapping_entries.append(Timer._blocks["Done"].map_to(t.select(1, 1)))
+        mapping_entries.append(Timer._blocks["Acc"].map_to(td.select(1, 1)))
     mapping_entries.append(Counter._blocks["Done"].map_to(ct.select(1, 1)))
     mapping_entries.append(Counter._blocks["Acc"].map_to(ctd.select(1, 1)))
 
@@ -394,6 +421,124 @@ def exec_with_source(
     finally:
         linecache.cache.pop(exec_filename, None)
     return namespace
+
+
+def rows_logic(rows) -> list[tuple]:
+    """Per-output (AF, full condition, pins) of ladder rows, NOPs included.
+
+    Compares logic, not shape: continued rows and branches that read the same
+    contacts give the same entries.
+    """
+    from pyrung.click._topology import Series, make_compound
+    from pyrung.click.codegen.analyzer import _analyze_rungs
+    from pyrung.click.codegen.parser import _parse_rows
+    from pyrung.click.codegen.shaping import _tree_key
+
+    outputs = []
+    for rung in _analyze_rungs(_parse_rows(rows)):
+        for instr in rung.instructions:
+            parts = [p for p in (rung.condition_tree, instr.branch_tree) if p is not None]
+            tree = make_compound(parts, Series) if parts else None
+            outputs.append(
+                (
+                    instr.af_token,
+                    _tree_key(tree, cells=False),
+                    tuple(
+                        (p.name, p.arg, _tree_key(p.condition_tree, cells=False))
+                        for p in instr.pins
+                    ),
+                )
+            )
+    return outputs
+
+
+def bundle_logic(bundle) -> dict[str, list[tuple]]:
+    """:func:`rows_logic` for the main scope and every subroutine."""
+    scopes = {"main": rows_logic(bundle.main_rows)}
+    for name, rows in bundle.subroutine_rows:
+        scopes[name] = rows_logic(rows)
+    return scopes
+
+
+def round_trip_logic(program: Program, tag_map: TagMap) -> tuple[str, dict, dict]:
+    """Export, import, exec and re-export; return (code, logic before, logic after)."""
+    from pyrung.click import ladder_to_pyrung, pyrung_to_ladder
+
+    original = pyrung_to_ladder(program, tag_map)
+    code = ladder_to_pyrung(original)
+    ns: dict[str, object] = {}
+    exec_with_source(code, ns)
+    reproduced = pyrung_to_ladder(ns["logic"], ns["mapping"])
+    return code, bundle_logic(original), bundle_logic(reproduced)
+
+
+def _join_scope(rows, rungs) -> tuple[tuple[str, ...], ...]:
+    rows = [tuple(row) for row in rows]
+    starts = [index for index, row in enumerate(rows) if row and row[0].startswith("R")]
+    # The closing end() or return() rung is the exporter's, not the program's.
+    if len(starts) == len(rungs) + 1:
+        starts = starts[:-1]
+    if len(starts) != len(rungs):
+        raise AssertionError(f"{len(starts)} CLICK rungs for {len(rungs)} program rungs")
+    for start, rung in zip(starts, rungs, strict=True):
+        if rung._use_prior_snapshot:
+            rows[start] = ("", *rows[start][1:])
+    return tuple(rows)
+
+
+def join_continued(bundle, program: Program):
+    """*bundle* with each continued rung drawn as one more wire of the CLICK rung above it.
+
+    A CLICK program saved before a syntax check can hold such a rung, and the importer reads its
+    wires back as ``.continued()`` rungs.  Each program rung must export as one CLICK rung.
+    """
+    import dataclasses
+
+    subroutines = tuple(
+        (name, _join_scope(rows, program.subroutines[name]))
+        for name, rows in bundle.subroutine_rows
+    )
+    return dataclasses.replace(
+        bundle,
+        main_rows=_join_scope(bundle.main_rows, program.rungs),
+        subroutine_rows=subroutines,
+    )
+
+
+def rung_drawing(rungs, *, as_exported: bool = False) -> list[tuple]:
+    """Each rung as written, as a tuple of (continued, contact count, items).
+
+    With *as_exported*, the rungs are listed as the export draws them.  Each continued rung is a
+    rung of its own, and so is each item of a rung or branch that has no contact, at any depth
+    (``layout._click_rungs``).
+    """
+
+    def items(rung) -> tuple:
+        return tuple(
+            ("branch", len(item._conditions) - item._branch_condition_start, items(item))
+            if isinstance(item, type(rung))
+            else type(item).__name__
+            for item in rung._execution_items
+        )
+
+    def split(contacts: int, parts: tuple) -> list[tuple]:
+        if contacts or len(parts) < 2:
+            return [(False, contacts, parts)]
+        pieces = []
+        for part in parts:
+            if isinstance(part, tuple):
+                pieces.extend(split(part[1], part[2]))
+            else:
+                pieces.append((False, 0, (part,)))
+        return pieces
+
+    drawing = []
+    for rung in rungs:
+        if as_exported:
+            drawing.extend(split(len(rung._conditions), items(rung)))
+        else:
+            drawing.append((rung._use_prior_snapshot, len(rung._conditions), items(rung)))
+    return drawing
 
 
 # ---------------------------------------------------------------------------

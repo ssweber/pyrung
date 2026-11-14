@@ -6,6 +6,7 @@ from pyrung.core import (
     Block,
     Bool,
     Counter,
+    Dint,
     Int,
     Program,
     Rung,
@@ -20,6 +21,7 @@ from pyrung.core import (
     rise,
     shift,
     time_drum,
+    time_event_drum,
 )
 from pyrung.core.crossing import Cmp, Eq
 from pyrung.core.instruction.advance import AdvanceProfile
@@ -120,10 +122,29 @@ def test_edge_counter_requests_a_pulse_and_keeps_one_bounded_frontier() -> None:
     assert step.holds == ()
     assert profile.linear is not None
     assert profile.linear.direction == 1
-    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 5
+    # Five more counts, each a rising edge: an on scan and an off scan.
+    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 10
 
 
-def test_count_down_uses_a_negative_boundary() -> None:
+def test_level_counter_requests_a_pulse() -> None:
+    # A counter counts the rising edges of its rung (as a CLICK does), so a
+    # plain contact must be pulsed too: holding it counts once.
+    reset = Bool("reset", external=True)
+    clock = Bool("clock", external=True)
+    with Program() as program:
+        with Rung(clock):
+            count_up(Counter[1], preset=7).reset(reset)
+
+    profile = _only_profile(program)
+    assert profile is not None
+    target = Eq(Counter[1].Done.name, frozenset((True,)))
+    step = profile.plan(target, {Counter[1].Done.name: False, Counter[1].Acc.name: 2})
+    assert step is not None
+    assert step.pulse is not None
+    assert step.holds == ()
+
+
+def test_count_down_is_done_at_its_preset() -> None:
     reset = Bool("reset", external=True)
     clock = Bool("clock", external=True)
     with Program() as program:
@@ -133,14 +154,32 @@ def test_count_down_uses_a_negative_boundary() -> None:
     profile = _only_profile(program)
     assert profile is not None
     target = Eq(Counter[1].Done.name, frozenset((True,)))
-    snapshot = {Counter[1].Done.name: False, Counter[1].Acc.name: -1}
+    # Staged above its preset: done once it counts down to 4.
+    snapshot = {Counter[1].Done.name: False, Counter[1].Acc.name: 6}
     step = profile.plan(target, snapshot)
 
     assert step is not None
-    assert step.until == Cmp(Counter[1].Acc.name, "<=", -4)
+    assert step.until == Cmp(Counter[1].Acc.name, "<=", 4)
+    assert step.pulse is not None
     assert profile.linear is not None
     assert profile.linear.direction == -1
-    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 3
+    assert profile.linear.estimate_scans(target, snapshot, 0.010) == 4
+
+
+def test_count_down_tag_preset_boundary_reads_the_tag() -> None:
+    reset = Bool("reset", external=True)
+    clock = Bool("clock", external=True)
+    preset = Dint("Preset", external=True)
+    with Program() as program:
+        with Rung(clock):
+            count_down(Counter[1], preset=preset).reset(reset)
+
+    profile = _only_profile(program)
+    assert profile is not None
+    assert profile.completion_boundary is not None
+    assert profile.completion_boundary({}) == Cmp(
+        Counter[1].Acc.name, "<=", "Preset", bound_is_tag=True
+    )
 
 
 def test_plain_output_has_no_advance_profile() -> None:
@@ -225,6 +264,57 @@ def test_time_drum_retraces_at_each_step_boundary() -> None:
     assert operation.pulse is None
     assert operation.holds[0].value is True
     assert operation.progress == operation.holds[0]
+
+
+def test_a_drum_with_its_flag_on_waits_for_the_reset_that_frees_it() -> None:
+    """The flag on stops the drum's own time and events, so holding them does nothing."""
+    enable = Bool("Enable", external=True)
+    reset = Bool("Reset", external=True)
+    event = Bool("Event", external=True)
+    step = Int("Step")
+    acc = Int("DrumAcc")
+    done = Bool("Done")
+    drums = (
+        lambda: event_drum(
+            outputs=[Bool("Y1")],
+            events=[event, event],
+            pattern=[[1], [0]],
+            current_step=step,
+            completion_flag=done,
+        ),
+        lambda: time_drum(
+            outputs=[Bool("Y1")],
+            presets=[50, 60],
+            pattern=[[1], [0]],
+            current_step=step,
+            accumulator=acc,
+            completion_flag=done,
+        ),
+        lambda: time_event_drum(
+            outputs=[Bool("Y1")],
+            presets=[50, None],
+            events=[None, event],
+            pattern=[[1], [0]],
+            current_step=step,
+            accumulator=acc,
+            completion_flag=done,
+        ),
+    )
+    for drum in drums:
+        with Program() as program:
+            with Rung(enable):
+                drum().reset(reset)
+        profile = _only_profile(program)
+        assert profile is not None
+        snapshot = {step.name: 1, acc.name: 0, done.name: True}
+        operation = profile.plan(Eq(step.name, frozenset((2,))), snapshot)
+        assert operation is not None
+        assert operation.until == Eq(done.name, frozenset((False,)))
+        assert operation.holds[0].condition.tag is reset
+        # With the flag off the same target asks for the drum's own step end.
+        freed = profile.plan(Eq(step.name, frozenset((2,))), {**snapshot, done.name: False})
+        assert freed is not None
+        assert freed.until == Cmp(step.name, ">=", 2)
 
 
 def test_time_drum_uses_the_step_boundary_when_acc_will_reset() -> None:

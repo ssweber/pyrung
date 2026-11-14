@@ -8,6 +8,7 @@ from typing import Any
 from pyrung.core._source import _capture_source, _capture_with_call_arg_lines
 from pyrung.core.condition import ConditionTerm
 from pyrung.core.instruction import ForLoopInstruction
+from pyrung.core.instruction.control import FOR_COUNT_MAX_32
 from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.tag import Tag, TagType
 
@@ -97,9 +98,18 @@ class SubroutineFunc:
 
     def _register(self, prog: Program) -> None:
         """Register this subroutine's rungs with a Program."""
+        # call() may register a subroutine from inside a rung, a forloop body
+        # or another subroutine; its rungs must not join any of them.
+        saved_subroutine = prog._current_subroutine
+        saved_loops = _state._building.forloops[:]
+        _state._building.forloops.clear()
         prog._start_subroutine(self._name)
-        self._fn()
-        prog._end_subroutine()
+        try:
+            self._fn()
+        finally:
+            prog._end_subroutine()
+            prog._current_subroutine = saved_subroutine
+            _state._building.forloops[:] = saved_loops
 
 
 def subroutine(name: str, *, strict: bool = True) -> Subroutine:
@@ -121,7 +131,7 @@ def subroutine(name: str, *, strict: bool = True) -> Subroutine:
 
 
 class ForLoop:
-    """Context manager for a repeated instruction block within a rung."""
+    """Context manager for a repeated block of body rungs within a rung."""
 
     def __init__(
         self,
@@ -130,38 +140,69 @@ class ForLoop:
         source_file: str | None = None,
         source_line: int | None = None,
     ) -> None:
-        if isinstance(count, int) and count <= 0:
-            raise ValueError(f"forloop count must be >= 1, got {count}")
+        if isinstance(count, int) and not 1 <= count <= FOR_COUNT_MAX_32:
+            # CLICK reads a constant as signed 32-bit, so one past this would run none.
+            raise ValueError(f"forloop count must be 1..{FOR_COUNT_MAX_32}, got {count}")
         self.count = count
         self.oneshot = oneshot
-        self.idx = Tag("_forloop_idx", TagType.DINT)
+        # Nested loops each need their own index; the outermost keeps the
+        # historical name.
+        depth = len(_state._building.forloops) + 1
+        idx_name = "_forloop_idx" if depth == 1 else f"_forloop_idx{depth}"
+        self.idx = Tag(idx_name, TagType.DINT)
         self._parent_ctx: Rung | None = None
         self._capture_rung: RungLogic | None = None
         self._capture_ctx: Rung | None = None
+        # Body rungs, each with the count of bare instructions before it.
+        self._body_rungs: list[tuple[int, RungLogic]] = []
         self._source_file = source_file
         self._source_line = source_line
 
     def __enter__(self) -> ForLoop:
-        if _state._forloop_active:
-            raise RuntimeError("Nested forloop is not permitted")
+        if len(_state._building.forloops) >= _state._MAX_FORLOOP_DEPTH:
+            raise RuntimeError(f"forloop nesting is limited to {_state._MAX_FORLOOP_DEPTH} levels")
 
         self._parent_ctx = _require_rung_context("forloop")
         self._parent_ctx._assert_no_pending_required_builder("forloop")
-        _state._forloop_active = True
 
         # Capture body instructions to a temporary rung (like Branch capture).
+        # It carries the loop rung's conditions so instructions that capture
+        # their rung's enable condition (timers, counters) see the full chain.
+        parent_conditions = self._parent_ctx._rung._conditions
         self._capture_rung = RungLogic(
+            *parent_conditions,
             source_file=self._source_file,
             source_line=self._source_line,
         )
+        self._capture_rung._branch_condition_start = len(parent_conditions)
+        # Its bare instructions are each a body rung of their own (a box too).
+        self._capture_rung._loop_capture = True
         self._capture_ctx = _new_capture_context(self._capture_rung)
         _push_rung_context(self._capture_ctx)
+        _state._building.forloops.append(self)
 
         return self
 
+    def _add_body_rung(self, rung: RungLogic) -> None:
+        """Attach a ``with Rung(...)`` written directly in this loop's body."""
+        assert self._capture_rung is not None
+        self._body_rungs.append((len(self._capture_rung._instructions), rung))
+
+    def _ordered_body(self) -> list[Any]:
+        assert self._capture_rung is not None
+        bare = self._capture_rung._instructions
+        body: list[Any] = []
+        position = 0
+        for count, rung in self._body_rungs:
+            body.extend(bare[position:count])
+            position = count
+            body.append(rung)
+        body.extend(bare[position:])
+        return body
+
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         _pop_rung_context()
-        _state._forloop_active = False
+        _state._building.forloops.pop()
 
         if exc_type is None and self._capture_ctx is not None:
             self._capture_ctx._assert_required_builders_resolved("forloop")
@@ -176,23 +217,73 @@ class ForLoop:
             context_name="forloop",
         )
 
+        body = self._ordered_body()
+        if _contains_randint(body, set()):
+            # Every iteration would read the scan's one draw; CLICK draws per execution.
+            raise ValueError("randint() is not supported inside a forloop body")
         instruction = ForLoopInstruction(
             count=self.count,
             idx_tag=self.idx,
-            instructions=self._capture_rung._instructions,
             oneshot=self.oneshot,
+            body=body,
         )
         instruction.source_file, instruction.source_line = self._source_file, self._source_line
         self._parent_ctx._rung.add_instruction(instruction)
 
 
+def _contains_randint(value: Any, seen: set[int], seen_calls: set[str] | None = None) -> bool:
+    """Whether a ``randint`` expression is reachable from *value*'s fields."""
+    from pyrung.core.expression import RandIntExpr
+    from pyrung.core.instruction.control import CallInstruction
+
+    if seen_calls is None:
+        seen_calls = set()
+    if isinstance(value, RandIntExpr):
+        return True
+    if isinstance(value, CallInstruction):
+        # Its fields reach the whole Program: scan the subroutines it calls, not
+        # every one, following calls from them in turn.
+        program = value._program
+        name = value.subroutine_name
+        if name in seen_calls or program is None:
+            return False
+        seen_calls.add(name)
+        rungs = getattr(program, "subroutines", {}).get(name, ())
+        return any(_contains_randint(r, seen, seen_calls) for r in rungs)
+    if value is None or isinstance(value, (str, bytes, int, float, bool, Tag)):
+        return False
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    if isinstance(value, dict):
+        return any(_contains_randint(v, seen, seen_calls) for v in value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_randint(v, seen, seen_calls) for v in value)
+    if hasattr(value, "__dict__"):
+        return any(_contains_randint(v, seen, seen_calls) for v in vars(value).values())
+    return False
+
+
 def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
-    """Create a repeated instruction block context.
+    """Create a repeated block context.
+
+    A bare instruction in the body is an always-true body rung.  A body rung
+    with contacts is written as ``with Rung(...)`` inside the loop; its
+    contacts are evaluated on every iteration.  Loops nest up to three deep,
+    each with its own ``loop.idx``.
+
+    As on CLICK, a false loop rung skips the body (its coils hold, its
+    one-shots do not re-arm), and a tag count is read once: an Int as unsigned
+    16-bit, so -1 runs 65535 iterations, and a Dint whole and signed, so 65536
+    runs 65536 and 0 or below runs none.  A constant is read whole, so
+    ``forloop(70000)`` runs 70000.
 
     Example:
         with Rung(Enable):
             with forloop(10) as loop:
                 copy(Source[loop.idx + 1], Dest[loop.idx + 1])
+                with Rung(Fault):
+                    break_loop()
     """
     source_file, source_line = _capture_source(depth=2)
     return ForLoop(count, oneshot=oneshot, source_file=source_file, source_line=source_line)
@@ -232,7 +323,7 @@ class Branch:
         self._source_line = source_line
 
     def __enter__(self) -> Branch:
-        if _state._forloop_active:
+        if _state._building.forloops:
             raise RuntimeError("branch() is not permitted inside forloop()")
 
         # Get parent rung context

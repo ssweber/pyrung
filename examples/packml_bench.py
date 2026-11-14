@@ -3,6 +3,9 @@
 This example is intentionally pointer-heavy. It mirrors the real template's
 state-machine lookup patterns so ``pyrung lock`` profiles spend meaningful time
 in block synchronization for indirect ``dh[]`` / ``ds[]`` access.
+
+Uses X001-X008 (8 inputs, built in or in Slot 0) and X101-X110 (a 16-point
+input module at expansion module 1).
 """
 
 from pyrung import (
@@ -14,7 +17,7 @@ from pyrung import (
     Or,
     Timer,
     Word,
-    calc,
+    math,
     call,
     comment,
     copy,
@@ -272,7 +275,7 @@ def sm_map_cmd2_val():
 @subroutine("sm_is_cmd_valid")
 def sm_is_cmd_valid():
     with rung():
-        calc(100 + CtrlCmd, CmdValidIdx)
+        math(100 + CtrlCmd, CmdValidIdx)
 
     with rung():
         copy(dh[CmdValidIdx], CmdMask)
@@ -281,7 +284,7 @@ def sm_is_cmd_valid():
         copy(dh[StateCurrent], StateAllowMask)
 
     with rung():
-        calc(CmdMask & StateAllowMask, CmdValidResult)
+        math(CmdMask & StateAllowMask, CmdValidResult)
 
     with rung(CmdValidResult == 0):
         out(CmdValidYes)
@@ -413,10 +416,10 @@ def sm_state_complete2_request():
 @subroutine("sm_copy_or_jump_state")
 def sm_copy_or_jump_state():
     with rung():
-        calc(LoopIndex + 1, LoopIndex)
+        math(LoopIndex + 1, LoopIndex)
         copy(0, StateEnableYes)
 
-    comment("Runaway guard — force abort after 10 iterations")
+    comment("Runaway guard - force abort after 10 iterations")
     with rung(LoopIndex > 10):
         copy(S.ABORTED, StateRequested)
 
@@ -433,21 +436,21 @@ def sm_copy_or_jump_state():
 
     comment("Check if requested state is blocked by disabled-state mask")
     with rung():
-        calc(300 + StateRequested, StateMaskIdx)
+        math(300 + StateRequested, StateMaskIdx)
     with rung():
         copy(dh[StateMaskIdx], StateMask)
     with rung():
-        calc(StateMask & DisabledStates, StateMaskResult)
+        math(StateMask & DisabledStates, StateMaskResult)
     with rung(StateMaskResult == 0):
         copy(1, StateEnableYes)
 
     comment("Pre-compute jump target before transition check")
     with rung():
-        calc(StateRequested + 150, StateJumpIdx)
+        math(StateRequested + 150, StateJumpIdx)
     with rung():
         copy(ds[StateJumpIdx], StateJumpTarget)
 
-    comment("Transition enabled — apply and exit")
+    comment("Transition enabled - apply and exit")
     with rung(StateEnableYes == 1):
         copy(StateRequested, StateCurrent)
         copy(0, StateCompleteBool)
@@ -456,7 +459,7 @@ def sm_copy_or_jump_state():
         copy(0, StateTimer.Acc)
         return_early()
 
-    comment("Not enabled — follow jump chain")
+    comment("Not enabled - follow jump chain")
     with rung(StateJumpTarget != 0):
         copy(StateJumpTarget, StateRequested)
 
@@ -479,7 +482,7 @@ def mode_change():
         copy(0, StateTimer.Acc)
 
     with rung():
-        calc(200 + UnitModeCurrent, ModeConfigIdx)
+        math(200 + UnitModeCurrent, ModeConfigIdx)
 
     with rung():
         copy(dh[ModeConfigIdx], DisabledStates)
@@ -502,13 +505,13 @@ def alm_historian():
         return_early()
 
     with rung():
-        calc((HistorianId * 10) + 2991, HistIdIdx)
+        math((HistorianId * 10) + 2991, HistIdIdx)
     with rung():
-        calc(HistIdIdx + 5, HistDateIdx)
+        math(HistIdIdx + 5, HistDateIdx)
     with rung():
-        calc(HistIdIdx + 6, HistTimeIdx)
+        math(HistIdIdx + 6, HistTimeIdx)
     with rung():
-        calc(HistIdIdx + 9, HistStatusIdx)
+        math(HistIdIdx + 9, HistStatusIdx)
 
     with rung():
         copy(HistorianId, ds[HistIdIdx])
@@ -571,11 +574,11 @@ def task_sequencer():
     # The modulo wrap keeps the step count bounded to [0, 5] (six-state cycle)
     # so the value domain stays finite for static analysis.
     with rung(Task1._CurStep % 2 == 0):
-        calc((Task1._CurStep + 1) % 6, Task1._CurStep)
+        math((Task1._CurStep + 1) % 6, Task1._CurStep)
         copy(0, TaskTimer.Acc)
 
     with rung(Task1.Trans == 1):
-        calc((Task1._CurStep + 1) % 6, Task1._CurStep)
+        math((Task1._CurStep + 1) % 6, Task1._CurStep)
         copy(0, Task1.Trans)
         copy(0, TaskTimer.Acc)
 
@@ -786,7 +789,7 @@ def logic():
         call(alm_historian)
 
     with rung():
-        calc(AlarmStatus.select(1, 4).sum(), AlarmExtent)
+        math(AlarmStatus.select(1, 4).sum(), AlarmExtent)
 
     with rung(StateCurrent == S.CLEARING):
         fill(0, AlarmCoil.select(1, 8))
@@ -855,13 +858,13 @@ mapping = TagMap(
         CmdReset.map_to(x[6]),
         CmdStart.map_to(x[7]),
         CmdStop.map_to(x[8]),
-        CmdHold.map_to(x[9]),
-        CmdUnhold.map_to(x[10]),
-        CmdSuspend.map_to(x[11]),
-        CmdUnsuspend.map_to(x[12]),
-        CmdAbort.map_to(x[13]),
-        CmdClear.map_to(x[14]),
-        CmdComplete.map_to(x[15]),
+        CmdHold.map_to(x[104]),
+        CmdUnhold.map_to(x[105]),
+        CmdSuspend.map_to(x[106]),
+        CmdUnsuspend.map_to(x[107]),
+        CmdAbort.map_to(x[108]),
+        CmdClear.map_to(x[109]),
+        CmdComplete.map_to(x[110]),
         ModeProduction.map_to(x[101]),
         ModeMaintenance.map_to(x[102]),
         ModeManual.map_to(x[103]),

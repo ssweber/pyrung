@@ -14,9 +14,27 @@ from dataclasses import replace
 
 import pytest
 
-from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
+from pyrung.core import (
+    PLC,
+    And,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    Timer,
+    copy,
+    latch,
+    math,
+    on_delay,
+    out,
+    reset,
+    rise,
+)
+from pyrung.core import runner as runner_module
 from pyrung.core.analysis.causal.projected import projected_cause
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.rung_firings import UnrecordedScansError
 
 # ---------------------------------------------------------------------------
 # Worked example from spec (projected cause)
@@ -514,7 +532,7 @@ class TestProjectedOraclePinning:
         """A self-referential affine step counter resolves through the
         transition rung, not the parity-gated even-step rung.
 
-        Mirrors the Blower SFC engine: both ``calc(CurStep+1, CurStep)`` writers
+        Mirrors the Blower SFC engine: both ``math(CurStep+1, CurStep)`` writers
         can produce ``CurStep+1``, but the even-step rung (gated
         ``valstepisodd != 1``) is counterfactual for ``CurStep == 2`` — its
         source ``CurStep == 1`` is odd.  The projected oracle pins the affine
@@ -531,11 +549,11 @@ class TestProjectedOraclePinning:
             with Rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
                 copy(1, Trans)
             with Rung():  # parity (derived from CurStep)
-                calc(CurStep % 2, valstepisodd)
+                math(CurStep % 2, valstepisodd)
             with Rung(valstepisodd != 1, xPause == 0):  # even-step advance
-                calc(CurStep + 1, CurStep)
+                math(CurStep + 1, CurStep)
             with Rung(Trans == 1):  # transition advance
-                calc(CurStep + 1, CurStep)
+                math(CurStep + 1, CurStep)
 
         runner = PLC(logic)
         runner.step()  # CurStep == 0
@@ -776,6 +794,30 @@ class TestProjectedEffect:
         effect_tags = [s.transition.tag_name for s in chain.steps]
         assert "X" in effect_tags
         assert "Y" not in effect_tags
+
+    def test_edge_contacts_see_the_hypothetical_transition(self) -> None:
+        """rise() contacts on the trigger and on its effect fire in the projection,
+        whatever their memory held."""
+        from pyrung.core.state import SystemState
+
+        Button = Bool("Button")
+        Pulse = Bool("Pulse")
+        Latched = Bool("Latched")
+
+        with Program() as logic:
+            with Rung(rise(Button)):
+                out(Pulse)
+            with Rung(rise(Pulse)):
+                latch(Latched)
+
+        # Both contacts' memory on (as a contact left unscanned keeps it).
+        state = SystemState().with_memory({"_edge:e1": True, "_edge:e2": True})
+        runner = PLC(logic, initial_state=state)
+
+        chain = runner.effect("Button", from_=False)
+        assert chain.mode == "projected"
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert effect_tags == ["Pulse", "Latched"]
 
 
 class TestProjectedEffectEdgeCases:
@@ -1653,7 +1695,7 @@ class TestSimulateScan:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + B, Result)
+                math(A + B, Result)
 
         state = SystemState().with_tags({"Enable": True, "A": 10, "B": 20})
         sim = _simulate_scan(logic.rungs, state)
@@ -1772,7 +1814,7 @@ class TestRungProducesValue:
 
         with Program() as logic:
             with Rung(Gate):
-                calc(A + 10, Result)
+                math(A + 10, Result)
 
         state = SystemState().with_tags({"A": 5})
         assert _rung_produces_value(logic.rungs[0], 0, "Result", 15, state) is True
@@ -1837,7 +1879,7 @@ class TestProjectedCauseCopyCalc:
 
         with Program() as logic:
             with Rung(Gate):
-                calc(A + 10, Result)
+                math(A + 10, Result)
 
         runner = PLC(logic)
         runner.patch({"A": 5})
@@ -1919,7 +1961,7 @@ class TestProjectedEffectCopyCalc:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A * 2, Result)
+                math(A * 2, Result)
 
         runner = PLC(logic)
         runner.patch({"A": 5})
@@ -1938,7 +1980,7 @@ class TestProjectedEffectCopyCalc:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A * 2, Result)
+                math(A * 2, Result)
 
         runner = PLC(logic)
         runner.patch({"A": 5})
@@ -1962,3 +2004,54 @@ class TestProjectedEffectCopyCalc:
 
         chain = runner.effect("Src", from_=0, to_value=42)
         assert chain.mode == "projected"
+
+
+# ---------------------------------------------------------------------------
+# After a compiled run: the answer is the stepped run's
+# ---------------------------------------------------------------------------
+
+
+class TestProjectedAfterACompiledRun:
+    """A compiled run leaves its scans without records.  A projected chain records them first."""
+
+    @staticmethod
+    def _run(*, jit: bool) -> PLC:
+        Start, Gate, Lamp, Horn = Bool("PcStart"), Bool("PcGate"), Bool("PcLamp"), Bool("PcHorn")
+        Wait = Timer.clone("PcWait")
+        with Program() as logic:
+            with Rung(Start):
+                on_delay(Wait, 15000)
+            with Rung(Wait.Done, Gate):
+                out(Lamp)
+            with Rung(Lamp):
+                out(Horn)
+        runner = PLC(logic, dt=0.01)
+        runner.patch({Start.name: True})
+        # PcWait_Done turns on at scan 1500, inside the part a compiled run leaves unrecorded.
+        runner.run_for(20.0, jit=jit)
+        return runner
+
+    def test_cause_says_since_when_an_enabler_held(self) -> None:
+        compiled, stepped = self._run(jit=True), self._run(jit=False)
+        assert compiled._unrecorded_scans
+        chain = compiled.cause("PcLamp", to=True)
+        assert chain.steps == stepped.cause("PcLamp", to=True).steps
+        assert chain.steps[0].enablers[0].held_since_scan == 1500
+
+    def test_effect_says_since_when_an_enabler_held(self) -> None:
+        compiled, stepped = self._run(jit=True), self._run(jit=False)
+        chain = compiled.effect("PcGate", from_=False)
+        assert chain.steps == stepped.effect("PcGate", from_=False).steps
+        assert chain.steps[0].enablers[0].held_since_scan == 1500
+
+    def test_too_many_scans_to_record_refuses_as_a_recorded_chain_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        compiled = self._run(jit=True)
+        monkeypatch.setattr(runner_module, "SETTLE_SCAN_LIMIT", 10)
+        with pytest.raises(UnrecordedScansError):
+            compiled.cause("PcLamp")
+        with pytest.raises(UnrecordedScansError):
+            compiled.cause("PcLamp", to=True)
+        with pytest.raises(UnrecordedScansError):
+            compiled.effect("PcGate", from_=False)

@@ -86,7 +86,7 @@ class TraceEvent:
 class RungTraceEvent:
     """One debug event captured for a rung during scan execution."""
 
-    kind: Literal["rung", "branch", "subroutine", "instruction"]
+    kind: Literal["rung", "branch", "subroutine", "loop_body", "instruction"]
     source_file: str | None
     source_line: int | None
     end_line: int | None
@@ -96,6 +96,9 @@ class RungTraceEvent:
     enabled_state: EnabledState | None
     instruction_kind: str | None
     trace: TraceEvent | None
+    #: Place in the top-level rung's tree (``()`` for the rung, ``(k,)`` for its
+    #: k-th branch); ``None`` in a called subroutine or a loop body.
+    branch_path: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

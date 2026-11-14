@@ -32,7 +32,7 @@ needs rework), and named-reason failures.
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, calc, copy, out, rise, rung
+from pyrung import PLC, Bool, Int, Program, copy, math, out, rise, rung
 from pyrung.core.analysis.pilot import pilot_how
 
 
@@ -84,11 +84,11 @@ def _live_mask_program(cfg_choices=None):
             copy(6, StateRequested)
         # The constant half: per-state mask from a declared-constant table.
         with rung():
-            calc(300 + StateRequested, StateMaskIdx)
+            math(300 + StateRequested, StateMaskIdx)
         with rung():
             copy(ds[StateMaskIdx], StateMask)
         with rung():
-            calc(StateMask & DisabledMask, MaskResult)
+            math(StateMask & DisabledMask, MaskResult)
         with rung(StateRequested != 0, MaskResult == 0, DisabledMask != 0):
             copy(StateRequested, StateCurrent)
             copy(0, StateRequested)
@@ -185,11 +185,11 @@ def _command_mask_program():
         with rung(CmdStart, StateCurrent == 1):
             copy(6, StateRequested)
         with rung():
-            calc(300 + StateRequested, StateMaskIdx)
+            math(300 + StateRequested, StateMaskIdx)
         with rung():
             copy(ds[StateMaskIdx], StateMask)
         with rung():
-            calc(StateMask & DisabledMask, MaskResult)
+            math(StateMask & DisabledMask, MaskResult)
         with rung(StateRequested != 0, MaskResult == 0, DisabledMask != 0):
             copy(StateRequested, StateCurrent)
             copy(0, StateRequested)
@@ -235,19 +235,24 @@ def test_skiff_gate_command_selected_mask():
 
 
 def test_undeclared_word_stops_without_guessing_at_a_cause():
-    """No sound probe value means stop, not a speculative diagnosis."""
-    from pyrung.core.analysis.graph import PlanStatus
+    """No sound probe value means the pilot stops, not a speculative diagnosis."""
+    from pyrung.core.analysis.pilot import pilot_events
 
     prog, output = _live_mask_program()
-    plc = PLC(prog)
-    path = pilot_how(plc, output, max_scans=600)
-    assert not path.reachable, "an undeclared free word has no complete domain to probe"
-    assert path.status is PlanStatus.STOPPED
+    finished = list(pilot_events(PLC(prog), output, max_scans=600))[-1].data
+    assert finished["reached"] is False, "an undeclared free word has no complete domain to probe"
     assert (
-        path.reason
+        finished["reason"]
         == "No productive next action was found; still waiting on Output=True (have False)"
     )
-    assert "CfgWord" not in path.reason
+
+    # The last resort may try the word with no reason.  Only its scans keep the move, and the
+    # plan says nothing in the trace pointed there.
+    path = pilot_how(PLC(prog), output, max_scans=600)
+    assert path.reachable
+    assert path.last_resort.tag == "CfgWord"
+    assert "Nothing in the trace pointed to this." in str(path)
+    assert path.replay().state.tags["Output"] is True
 
 
 def test_free_word_solves_under_declared_choices():

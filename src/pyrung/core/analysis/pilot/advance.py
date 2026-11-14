@@ -19,6 +19,7 @@ from pyrung.core.instruction.advance import (
     AdvanceProfile,
     ConditionDemand,
 )
+from pyrung.core.tag import metadata_edits
 from pyrung.core.validation._common import walk_instructions
 
 
@@ -59,8 +60,12 @@ class AdvanceIndex:
         return f"advance ownership for {name!r} is ambiguous: {kinds}"
 
 
-@functools.lru_cache(maxsize=16)
 def _program_owners(program: Any) -> tuple[AdvanceOwner, ...]:
+    return _program_owners_as_of(program, metadata_edits())
+
+
+@functools.lru_cache(maxsize=16)
+def _program_owners_as_of(program: Any, _edits: int) -> tuple[AdvanceOwner, ...]:
     """Build program-owned profiles once per immutable program."""
 
     result: list[AdvanceOwner] = []

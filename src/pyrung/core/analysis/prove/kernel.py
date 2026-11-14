@@ -3,9 +3,9 @@
 State key
 ---------
 The BFS visited set uses a tuple key extracted by ``_extract_state_key``:
-``(stateful_tag_values..., threshold_vectors..., nd_input_values...,
-edge_prevs..., memory_keys...)``.  Two kernel snapshots with the same
-key are treated as equivalent.
+``(stateful_tag_values..., nd_input_values..., edge_prevs...,
+memory_keys...)``.  Two kernel snapshots with the same key are treated as
+equivalent.
 
 Only **edge-bearing** ND inputs appear in the key
 (``nondeterministic_names``).  Free inputs — those without rise()/fall()
@@ -14,14 +14,15 @@ excluded (``free_input_names``).  Their current value doesn't constrain
 future behavior, so states differing only in free inputs are equivalent.
 Free inputs are still fully enumerated at each BFS state.
 
-Done bits use three-valued abstraction: ``False`` / ``PENDING`` /
-``True`` (derived from Done + Acc via ``_done_acc_state``).  Threshold
-vectors replace concrete accumulator values with a tuple of
-crossed/uncrossed booleans per comparison threshold.
+Timers are black boxes (``blackbox.py``): a Done bit is a plain Bool and
+an accumulator something reads is a plain value, both concrete in the key.
+A counter whose accumulator nothing reads is keyed no further than its
+preset (``count_clamps``).
 
-Edge compression: rise/fall prev values are only included when "live" —
-when partial evaluation of their containing expression doesn't resolve
-to a constant under the current stateful configuration.
+Edge memory: each rise()/fall() contact keeps its own bit in site memory
+(``_edge:e{N}``), which is one of the memory keys.  Edge compression (per-tag
+prev values, included only when "live") is inert: compiled kernels keep no
+per-tag prev, so ``edge_tag_names`` is empty.
 """
 
 from __future__ import annotations
@@ -33,21 +34,13 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
 
-from .absorb import (
-    _DONE_KIND_COUNT_DOWN,
-    _PROGRESS_KIND_INT_DOWN,
-    _PROGRESS_KIND_REAL_DOWN,
-    _THRESHOLD_FORM_GT,
-    _done_acc_state,
-)
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
 
     from . import _ExploreContext
-    from .absorb import _ThresholdVectorSpec
-    from .events import _StateKeyDoneSpec
+    from .system_points import SystemPointModel
 
 _EDGE_DEAD: Any = object()
 _INPUT_DEAD: Any = object()
@@ -63,18 +56,30 @@ def _step_compiled_kernel(
     kernel: ReplayKernel,
     *,
     dt: float,
+    system: SystemPointModel | None = None,
 ) -> None:
-    """Execute one compiled scan, syncing legacy block arrays only when needed."""
+    """Execute one compiled scan, syncing legacy block arrays only when needed.
+
+    *system* applies the runner's per-scan system-point hooks around the step
+    function (scan-start resets before, ``first_scan`` clear after).
+    """
+    tags = kernel.tags
+    if system is not None:
+        for name, value in system.scan_start:
+            tags[name] = value
     if not compiled.blockless:
         for spec in compiled.block_specs.values():
             kernel.load_block_from_tags(spec)
-    compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
+    compiled.step_fn(tags, kernel.blocks, kernel.memory, kernel.prev, dt)
     if not compiled.blockless:
         for spec in compiled.block_specs.values():
             kernel.flush_block_to_tags(spec)
     for name in compiled.edge_tags:
-        if name in kernel.tags:
-            kernel.prev[name] = kernel.tags[name]
+        if name in tags:
+            kernel.prev[name] = tags[name]
+    if system is not None:
+        for name, value in system.after_scan:
+            tags[name] = value
     kernel.advance(dt)
 
 
@@ -105,7 +110,48 @@ def _collect_edge_tag_exprs(
             if _has_edge_atom(expr, name) and rung_idx not in seen[name]:
                 seen[name].add(rung_idx)
                 result[name].append(expr)
+    # An edge read anywhere else (a branch, a subroutine rung, an
+    # instruction's own condition such as ``count_up(...).down(rise(Y))`` or
+    # ``.reset(rise(R))``) is read under conditions this pass does not
+    # resolve: it stays live in every state.  With no expression found it
+    # would read as dead everywhere, and the key would merge the scans
+    # before and after its rise.
+    for expr in _off_rail_edge_exprs(program):
+        for name in edge_set:
+            if _has_edge_atom(expr, name):
+                result[name].append(Atom(name, "rise"))
     return result
+
+
+def _off_rail_edge_exprs(program: Program) -> list[Expr]:
+    """Conditions other than main rung conditions that can hold an edge atom."""
+    exprs: list[Expr] = []
+
+    def instructions(instrs: Any) -> None:
+        for instr in instrs:
+            for field_name in getattr(instr, "_conditions", ()):
+                cond = getattr(instr, field_name, None)
+                if cond is not None:
+                    exprs.append(_condition_to_expr(cond))
+            for body_rung in getattr(instr, "body_rungs", ()):
+                exprs.extend(_condition_to_expr(c) for c in body_rung._conditions)
+            body = getattr(instr, "instructions", None)
+            if isinstance(body, list):
+                instructions(body)
+
+    def rung_tree(rung: Any, *, main: bool) -> None:
+        if not main:
+            exprs.extend(_condition_to_expr(c) for c in rung._conditions)
+        instructions(rung._instructions)
+        for branch in rung._branches:
+            rung_tree(branch, main=False)
+
+    for rung in program.rungs:
+        rung_tree(rung, main=True)
+    for sub_rungs in program.subroutines.values():
+        for rung in sub_rungs:
+            rung_tree(rung, main=False)
+    return exprs
 
 
 def _live_edge_prevs(
@@ -135,18 +181,27 @@ def _live_edge_prevs(
 def _abstracted_hidden_tags(context: _ExploreContext) -> frozenset[str]:
     """Tags whose concrete values are intentionally hidden from the BFS state."""
     exact_stateful = set(context.stateful_names)
-    hidden = {name for name in context.synthetic_preset_tags if name not in exact_stateful}
-    hidden.update(
-        spec.acc_name
-        for spec in context.state_key_done_specs
-        if spec.acc_name not in exact_stateful
-    )
-    for vector in context.threshold_vector_specs:
-        if vector.acc_name not in exact_stateful:
-            hidden.add(vector.acc_name)
-        for atom in vector.atoms:
-            if isinstance(atom.threshold, str) and atom.threshold not in exact_stateful:
-                hidden.add(atom.threshold)
+    hidden: set[str] = set()
+    # An elided tag is recomputed every scan from this scan's inputs; the value
+    # left in a restored snapshot is stale, so it must not resolve an atom.
+    # Demoted edge sources are elided the same way (only their prev is
+    # forwarded), so their current value is just as stale.
+    hidden.update(name for name in context.elided_tags if name not in exact_stateful)
+    hidden.update(name for name in context.demoted_edge_names if name not in exact_stateful)
+    # The runtime resets these before each scan, so the snapshot holds the
+    # previous scan's value, not the one the next scan starts from.
+    if context.system_points is not None:
+        hidden.update(context.system_points.hidden)
+    # A tag read after an in-scan write is stale at that reader even when it is
+    # tracked exactly: `Rung(J): latch(K)`, `Rung(And(K, I))`, `Rung(): reset(K)`
+    # leaves K False in every snapshot although the middle rung sees it True.
+    # The snapshot value only stands for reads of the scan-entry version.
+    nd_names = context.nondeterministic_dims
+    for name, versions in context.graph.def_use_chains.items():
+        if name in nd_names or name in hidden:
+            continue
+        if any(version.defined_at is not None and version.read_by for version in versions):
+            hidden.add(name)
     return frozenset(hidden)
 
 
@@ -187,7 +242,7 @@ def _step_kernel(
         static_keys = context.compiled._tag_template
         simulation_status = context.simulation_status_tag_names
         before = dict(kernel.tags)
-        _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
+        _step_compiled_kernel(context.compiled, kernel, dt=context.dt, system=context.system_points)
         leaked = [
             name
             for name, value in kernel.tags.items()
@@ -203,13 +258,7 @@ def _step_kernel(
                 f"would drop them): {sorted(leaked)[:20]}"
             )
         return
-    _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
-
-
-def _seed_synthetic_presets(context: _ExploreContext, kernel: ReplayKernel) -> None:
-    """Seed absorbed dynamic presets away from their default zero value."""
-    for name in context.synthetic_preset_tags:
-        kernel.tags[name] = 1
+    _step_compiled_kernel(context.compiled, kernel, dt=context.dt, system=context.system_points)
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,19 +358,12 @@ class _EdgeCompressor:
         self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
         self._hidden_tags = _abstracted_hidden_tags(context)
 
-    def live_edges(
-        self,
-        kernel: ReplayKernel,
-        threshold_vector: tuple[Any, ...] | None = None,
-    ) -> frozenset[str] | None:
+    def live_edges(self, kernel: ReplayKernel) -> frozenset[str] | None:
         """Return the set of live edge tags, or None if no compression."""
         if not self._compressible:
             return None
         ctx = self._context
         stateful_prefix = tuple(map(kernel.tags.get, ctx.stateful_names))
-        if threshold_vector is None:
-            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
-        stateful_prefix = stateful_prefix + threshold_vector
         cached = self._cache.get(stateful_prefix)
         if cached is not None:
             return cached
@@ -337,22 +379,18 @@ class _EdgeCompressor:
         self,
         kernel: ReplayKernel,
         live_inputs: frozenset[str] | None = None,
-        threshold_vector: tuple[Any, ...] | None = None,
     ) -> tuple[Any, ...]:
         ctx = self._context
-        if threshold_vector is None:
-            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
         return _extract_state_key(
             kernel,
             ctx.stateful_names,
             ctx.edge_tag_names,
             ctx.memory_key_names,
-            ctx.state_key_done_specs,
-            ctx.threshold_vector_specs,
-            self.live_edges(kernel, threshold_vector),
+            self.live_edges(kernel),
             nondeterministic_names=ctx.nondeterministic_names,
             live_inputs=live_inputs,
-            threshold_vector=threshold_vector,
+            memory_key_defaults=ctx.memory_key_defaults,
+            count_clamps=ctx.count_clamps,
         )
 
 
@@ -360,8 +398,8 @@ class _LiveInputCache:
     """Cached live-input results per stateful-key prefix.
 
     Same cache-key strategy as _EdgeCompressor: states sharing a stateful
-    prefix + threshold vector produce identical _partial_eval results for
-    non-ND tags, yielding the same live-input set.
+    prefix produce identical _partial_eval results for non-ND tags, yielding
+    the same live-input set.
     """
 
     __slots__ = ("_context", "_cache", "_hidden_tags", "_hidden_input_deps")
@@ -377,17 +415,17 @@ class _LiveInputCache:
             )
             for tag_name in self._hidden_tags
         }
+        # An indirect comparison's or an unsupported condition's atom names no
+        # tag the state holds, so it never folds away; while it stands, the
+        # inputs it may read are live.
+        for atom_name, deps in context.opaque_atom_deps.items():
+            self._hidden_input_deps[atom_name] = (
+                self._hidden_input_deps.get(atom_name, frozenset()) | deps
+            )
 
-    def live_inputs(
-        self,
-        kernel: ReplayKernel,
-        threshold_vector: tuple[Any, ...] | None = None,
-    ) -> frozenset[str]:
+    def live_inputs(self, kernel: ReplayKernel) -> frozenset[str]:
         ctx = self._context
-        stateful_prefix = tuple(map(kernel.tags.get, ctx.stateful_names))
-        if threshold_vector is None:
-            threshold_vector = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
-        cache_key = stateful_prefix + threshold_vector
+        cache_key = tuple(map(kernel.tags.get, ctx.stateful_names))
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
@@ -403,93 +441,16 @@ class _LiveInputCache:
         return result
 
 
-def _threshold_value(kernel: ReplayKernel, threshold: int | float | str) -> Any:
-    if isinstance(threshold, str):
-        return kernel.tags.get(threshold)
-    return threshold
-
-
-# Kinds whose accumulator path is negated before comparison (see docstring
-# below). Hoisted to a module-level frozenset so the membership test in the
-# hot path doesn't rebuild a set literal on every call.
-_THRESHOLD_DOWN_KINDS = frozenset(
-    (_DONE_KIND_COUNT_DOWN, _PROGRESS_KIND_INT_DOWN, _PROGRESS_KIND_REAL_DOWN)
-)
-
-
-def _threshold_crossed(
-    kernel: ReplayKernel,
-    kind: str,
-    acc_name: str,
-    threshold: int | float | str,
-    form: str,
-) -> bool:
-    """Return the threshold-vector bit for one progress comparison.
-
-    The vector bit and the hidden-event scheduler must use the same
-    coordinate system:
-
-    Kind         Raw Acc path         Normalized current   Compare against
-    count_up     0, 1, 2, 3, ...      Acc                  T
-    count_down   0, -1, -2, -3, ...   -Acc                 -T
-    on_delay     0, dt, 2dt, ...      Acc / elapsed        T
-    off_delay    0, dt, 2dt, ...      Acc / elapsed        T
-
-    Example: ``count_down`` with ``Acc < -3`` stays uncrossed at
-    ``0, -1, -2, -3`` and becomes crossed at ``-4``.  If this function
-    ever drifts from ``events._progress_delta_and_current()``, hidden-event
-    jumps can stop scheduling reachable intermediate states.
-    """
-    acc_value = kernel.tags.get(acc_name)
-    threshold_value = kernel.tags.get(threshold) if isinstance(threshold, str) else threshold
-    # Inlined _is_numeric_literal: exact-type int/float only. The explicit bool
-    # rejection preserves that exact-type semantics (bool is a subclass of int,
-    # so isinstance alone would let it through); isinstance enables narrowing.
-    if (
-        type(acc_value) is bool
-        or type(threshold_value) is bool
-        or not isinstance(acc_value, (int, float))
-        or not isinstance(threshold_value, (int, float))
-    ):
-        return False
-    if kind in _THRESHOLD_DOWN_KINDS:
-        acc_value = -acc_value
-        threshold_value = -threshold_value
-    if form == _THRESHOLD_FORM_GT:
-        return acc_value > threshold_value
-    return acc_value >= threshold_value
-
-
-def _threshold_vector_key(
-    kernel: ReplayKernel,
-    specs: tuple[_ThresholdVectorSpec, ...],
-) -> tuple[Any, ...]:
-    # List comps (not genexprs) run in optimized bytecode without per-item
-    # generator resumption — measurably faster on this very hot path.
-    return tuple(
-        [
-            tuple(
-                [
-                    _threshold_crossed(kernel, spec.kind, spec.acc_name, atom.threshold, atom.form)
-                    for atom in spec.atoms
-                ]
-            )
-            for spec in specs
-        ]
-    )
-
-
 def _extract_state_key(
     kernel: ReplayKernel,
     stateful_names: tuple[str, ...],
     edge_tag_names: tuple[str, ...],
     memory_key_names: tuple[str, ...] = (),
-    done_specs: tuple[_StateKeyDoneSpec, ...] = (),
-    threshold_vector_specs: tuple[_ThresholdVectorSpec, ...] = (),
     live_edges: frozenset[str] | None = None,
     nondeterministic_names: tuple[str, ...] = (),
     live_inputs: frozenset[str] | None = None,
-    threshold_vector: tuple[Any, ...] | None = None,
+    memory_key_defaults: tuple[Any, ...] = (),
+    count_clamps: tuple[tuple[int, bool, int], ...] = (),
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful + input + edge prev values.
 
@@ -498,22 +459,17 @@ def _extract_state_key(
     current stateful configuration) are masked to a sentinel, collapsing
     states that differ only in irrelevant input values.
 
-    Timer/counter Done bits use three-valued abstraction
-    ``(False, PENDING, True)`` derived from Done + Acc.
-
     When *live_edges* is provided, edge tags not in the set use a sentinel
     value, collapsing states that differ only in irrelevant prev values.
+
+    *count_clamps* ``(index, up, preset)`` keys a counter accumulator past
+    its preset as the preset (``blackbox.count_clamps``).
     """
     parts = list(map(kernel.tags.get, stateful_names))
-    for spec in done_specs:
-        parts[spec.index] = _done_acc_state(
-            spec.kind,
-            parts[spec.index],
-            kernel.tags.get(spec.acc_name),
-        )
-    if threshold_vector is None:
-        threshold_vector = _threshold_vector_key(kernel, threshold_vector_specs)
-    parts.extend(threshold_vector)
+    for index, up, preset in count_clamps:
+        value = parts[index]
+        if type(value) is int:
+            parts[index] = min(value, preset) if up else max(value, preset)
     for n in nondeterministic_names:
         if live_inputs is not None and n not in live_inputs:
             parts.append(_INPUT_DEAD)
@@ -524,6 +480,12 @@ def _extract_state_key(
             parts.append(_EDGE_DEAD)
         else:
             parts.append(kernel.prev.get(n))
-    for mk in memory_key_names:
-        parts.append(kernel.memory.get(mk))
+    if memory_key_defaults:
+        memory = kernel.memory
+        parts.extend(
+            [memory.get(mk, d) for mk, d in zip(memory_key_names, memory_key_defaults, strict=True)]
+        )
+    else:
+        for mk in memory_key_names:
+            parts.append(kernel.memory.get(mk))
     return tuple(parts)

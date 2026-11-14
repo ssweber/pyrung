@@ -44,7 +44,7 @@ with Program() as logic:
         copy("g", State)
 ```
 
-Read it like a ladder diagram: `with rung(State == "g")` is the condition on the left rail. If it's true, power flows into the body — `on_delay` starts accumulating. When the timer hits its preset, `GreenTimer.Done` goes true, and the next rung copies a new state.
+Read it like a ladder diagram: `with rung(State == "g")` is the condition on the left rail. If it's true, power flows into the body, and `on_delay` starts accumulating. When the timer hits its preset, `GreenTimer.Done` goes true, and the next rung copies a new state.
 
 ## Run it
 
@@ -89,13 +89,13 @@ def test_traffic_light_cycle():
         assert State.value == "g"  # Full cycle, back to green
 ```
 
-Same logic, deterministic timing, real assertions. If this passes, the logic is correct — before it ever touches hardware.
+Same logic, deterministic timing, real assertions. If this passes, the logic is correct before it ever touches hardware.
 
 ## What's happening under the hood
 
 Each call to `plc.step()` executes one complete scan cycle: evaluate every rung top to bottom, update all outputs, produce an immutable state snapshot. `plc.run(cycles=N)` just calls `step()` N times.
 
-State snapshots are immutable — the runner keeps a history you can inspect, diff, or rewind to. Tags like `State.value` read from the runner's current state when inside the `with PLC(...) as plc:` block.
+State snapshots are immutable. The runner keeps a history you can inspect, diff, or rewind to. Tags like `State.value` read from the runner's current state when inside the `with PLC(...) as plc:` block.
 
 Timers accumulate across scans. `on_delay` with a 3000 ms preset and a 10 ms scan step needs 300 scans to fire. That's why the math is exact and the tests are deterministic.
 

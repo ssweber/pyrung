@@ -16,15 +16,14 @@ _TYPE_DEFAULTS: dict[TagType, Any] = {
     TagType.DINT: 0,
     TagType.REAL: 0.0,
     TagType.WORD: 0,
-    TagType.CHAR: "",
+    # An unwritten TXT holds NUL, as in the core engine's Tag default.
+    TagType.CHAR: "\x00",
 }
 
 
 _HELPER_ORDER = (
     "_clamp_int",
     "_wrap_int",
-    "_rise",
-    "_fall",
     "_int_to_float_bits",
     "_float_to_int_bits",
     "_ascii_char_from_code",
@@ -39,8 +38,27 @@ _HELPER_ORDER = (
     "_store_int",
     "_store_dint",
     "_store_word",
+    "_store_word_clamped",
     "_store_real",
     "_store_bool",
+    "_math_func",
+    "_permissive_math",
+    "_bit_int",
+    "_shift_count",
+    "_term_fail",
+    "_calc_div",
+    "_calc_floordiv",
+    "_rand_term",
+    "_rand_draw",
+    "_mod",
+    "_dbl",
+    "_addr_int",
+    "_abs_int",
+    "_pow",
+    "_pow_calc",
+    "_permissive_op",
+    "_cond_elem",
+    "_cond_tag_elem",
 )
 
 _STORE_TYPE_HELPERS: dict[str, str] = {
@@ -89,6 +107,9 @@ _FAULT_OUT_OF_RANGE_TAG = "fault.out_of_range"
 
 
 _FAULT_ADDRESS_ERROR_TAG = "fault.address_error"
+
+
+_FAULT_MATH_OPERATION_ERROR_TAG = "fault.math_operation_error"
 
 
 _SYS_MODE_RUN_TAG = "sys.mode_run"

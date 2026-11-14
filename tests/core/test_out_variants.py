@@ -1,0 +1,538 @@
+"""Tests for the CLICK v4 Out coil variants: toggle, debounce, flasher, timed.
+
+Hardware round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an
+Out coil never sets its Timer's done bit T<n>
+(``tests/conformance/coils/test_out.py``).  Round 2 (2026-10-30) read O4: a
+flasher with its rung false keeps both TDs frozen, then restarts with an on
+phase.  The round of 2026-11-05 read the TDs after the rung falls: a timed
+coil's and a debounce's on side are kept, a flasher's restart clears its off
+TD, and a preset of 0 or below gives a flasher or a timed coil no pulse
+(``tests/conformance/coils/test_out_more.py``, ``test_flasher_td.py``).
+"""
+
+import pytest
+
+from pyrung.core import (
+    PLC,
+    Bool,
+    Int,
+    Program,
+    Rung,
+    Timer,
+    debounce,
+    flasher,
+    immediate,
+    timed,
+    toggle,
+)
+
+T = Timer.clone("OT", count=8)
+In = Bool("In")
+
+
+def _trace(runner, inputs, *names):
+    rows = []
+    for value in inputs:
+        runner.patch({In: bool(value)})
+        runner.step()
+        tags = runner.current_state.tags
+        rows.append(tuple(tags.get(name) for name in names))
+    return rows
+
+
+class TestToggle:
+    def test_flips_on_each_rising_edge_and_holds_while_false(self, runner_factory):
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(In):
+                toggle(Light)
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [0, 1, 1, 0, 0, 1, 0, 1, 1], "Light")
+        assert [r[0] for r in rows] == [
+            False,
+            True,
+            True,
+            True,
+            True,
+            False,
+            False,
+            True,
+            True,
+        ]
+
+    def test_rung_true_on_first_scan_toggles(self, runner_factory):
+        """O1, pyrung's answer: the previous rung state starts false."""
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(In):
+                toggle(Light)
+
+        runner = runner_factory(logic, dt=0.010)
+        assert _trace(runner, [1], "Light") == [(True,)]
+
+    def test_immediate_target(self, runner_factory):
+        Light = Bool("Light")
+        with Program() as logic:
+            with Rung(In):
+                toggle(immediate(Light))
+
+        runner = runner_factory(logic, dt=0.010)
+        assert _trace(runner, [1, 0, 1], "Light") == [(True,), (True,), (False,)]
+
+    def test_rejects_non_bool_and_ranges(self):
+        Count = Int("Count")
+        with Program():
+            with Rung(In):
+                with pytest.raises(TypeError, match="one Bool tag"):
+                    toggle(Count)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda lamp: debounce(immediate(lamp), on=(T[1], 10), off=(T[2], 10)),
+        lambda lamp: flasher(immediate(lamp), on=(T[1], 10), off=(T[2], 10)),
+        lambda lamp: timed(immediate(lamp), T[1], 10),
+    ],
+    ids=["debounce", "flasher", "timed"],
+)
+def test_only_toggle_takes_an_immediate_target(build):
+    lamp = Bool("Lamp")
+    with Program():
+        with Rung(In):
+            with pytest.raises(TypeError, match="takes no immediate"):
+                build(lamp)
+
+
+class TestDebounce:
+    def test_each_side_times_from_0_and_keeps_its_td(self, runner_factory):
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 30), off=(T[2], 20))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(
+            runner,
+            [1, 1, 1, 1, 0, 0, 0, 1],
+            "Valve",
+            "OT1_Acc",
+            "OT1_Done",
+            "OT2_Acc",
+            "OT2_Done",
+        )
+        # O6: neither Timer's Done ever turns on.
+        assert rows == [
+            (False, 10, False, 0, False),
+            (False, 20, False, 0, False),
+            (True, 30, False, 0, False),
+            (True, 40, False, 0, False),  # O2: the TD keeps counting, as on_delay's does
+            (True, 40, False, 10, False),  # the on side's TD is kept; the fall compares nothing
+            (True, 40, False, 20, False),  # 10 short of 20 before this scan's tick
+            (False, 40, False, 30, False),  # 20 reached a scan ago: off
+            (False, 10, False, 0, False),  # a rise: the on side from 0, the off side 0
+        ]
+
+    def test_off_td_is_0_while_the_rung_is_true(self, runner_factory):
+        """``coil_timing/off_td_held``: the rise clears the off TD, a TD written stays 0."""
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 0), off=(T[2], 500))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"OT2_Acc": 700})
+        rows = _trace(runner, [1, 0, 1], "Valve", "OT2_Acc")
+        assert rows == [(True, 0), (True, 10), (True, 0)]
+        runner.patch({"OT2_Acc": 700})
+        assert _trace(runner, [1], "Valve", "OT2_Acc") == [(True, 0)]
+
+    def test_zero_presets_filter_a_one_scan_dropout(self, runner_factory):
+        """``deb_zero/off_side_lag``: the off side drops the coil a scan after the fall."""
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 0), off=(T[2], 0))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1, 0, 1, 1, 0, 0, 1], "Valve")
+        assert [r[0] for r in rows] == [True, True, True, True, True, False, True]
+
+    def test_off_side_from_power_up(self, runner_factory):
+        """A coil on at power-up counts its off side with no rise or fall, and holds once off."""
+        Valve = Bool("Valve", default=True)
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 50), off=(T[2], 20))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [0, 0, 0, 0], "Valve", "OT2_Acc")
+        assert rows == [(True, 10), (True, 20), (False, 30), (False, 30)]
+
+    def test_off_td_holds_a_write_while_the_coil_is_off(self, runner_factory):
+        """``deb_off/off_td_with_coil_off``: a CLICK kept the 50 the ladder wrote."""
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 300), off=(T[2], 1000))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"OT2_Acc": 50})
+        assert _trace(runner, [0, 0, 0], "Valve", "OT2_Acc") == [(False, 50)] * 3
+
+    def test_off_td_stays_0_after_a_pulse_too_short_for_the_on_side(self, runner_factory):
+        """The rise clears the off TD.  The fall does not start it, since the coil never came on."""
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 30), off=(T[2], 20))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"OT2_Acc": 50})
+        rows = _trace(runner, [1, 1, 0, 0, 0], "Valve", "OT1_Acc", "OT2_Acc")
+        assert rows == [
+            (False, 10, 0),
+            (False, 20, 0),
+            (False, 20, 0),
+            (False, 20, 0),
+            (False, 20, 0),
+        ]
+
+    def test_off_td_counts_once_the_coil_is_on_and_the_rung_falls(self, runner_factory):
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 0), off=(T[2], 20))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [0, 1, 0, 0, 0, 0, 0], "Valve", "OT2_Acc")
+        assert rows == [
+            (False, 0),  # no count with the coil off
+            (True, 0),
+            (True, 10),  # the fall
+            (True, 20),
+            (False, 30),  # 20 reached a scan ago, so off.  This scan still ticks
+            (False, 30),  # the coil is off, so the off TD holds
+            (False, 30),
+        ]
+
+    def test_both_sides_a_bounce_resets_the_side_timing(self, runner_factory):
+        """O3, pyrung's answer: the side that was timing starts over."""
+        Valve = Bool("Valve")
+        with Program() as logic:
+            with Rung(In):
+                debounce(Valve, on=(T[1], 30), off=(T[2], 30))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0], "Valve")
+        assert [r[0] for r in rows] == [
+            False,
+            False,
+            False,  # bounce: the on side restarts
+            False,
+            False,
+            True,
+            True,
+            True,
+            True,  # bounce back on: the off side restarts, the output holds
+            True,
+            True,
+            True,
+            False,  # a scan after the off TD reached 30
+        ]
+
+    def test_needs_both_sides(self):
+        """CLICK's Debounce dialog requires an on and an off side."""
+        Valve = Bool("Valve")
+        with Program():
+            with Rung(In):
+                with pytest.raises(TypeError, match="off"):
+                    debounce(Valve, on=(T[1], 10))  # ty: ignore[missing-argument]
+
+    def test_half_written_phase_fails_at_call_time(self):
+        Valve = Bool("Valve")
+        with Program():
+            with Rung(In):
+                with pytest.raises(TypeError, match=r"on= takes \(timer, preset\)"):
+                    debounce(Valve, on=T[1], off=(T[2], 10))  # type: ignore[arg-type]
+
+    def test_sides_need_two_timers(self):
+        Valve = Bool("Valve")
+        with Program():
+            with Rung(In):
+                with pytest.raises(ValueError, match="two different timers"):
+                    debounce(Valve, on=(T[1], 10), off=(T[1], 10))
+
+
+class TestFlasher:
+    def test_alternates_starting_on_and_freezes_when_the_rung_drops(self, runner_factory):
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 30), off=(T[4], 20))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(
+            runner,
+            [1] * 11 + [0, 1, 1, 1, 1],
+            "Beacon",
+            "OT3_Done",
+            "OT3_Acc",
+            "OT4_Done",
+            "OT4_Acc",
+        )
+        # Neither Timer's Done turns on (O6).
+        assert rows == [
+            # A phase shows through the scan its TD reaches the preset.  The other TD holds
+            # until its own phase starts on the next scan.
+            (True, False, 10, False, 0),
+            (True, False, 20, False, 0),
+            (True, False, 30, False, 0),
+            (False, False, 30, False, 10),
+            (False, False, 30, False, 20),
+            (True, False, 10, False, 20),
+            (True, False, 20, False, 20),
+            (True, False, 30, False, 20),
+            (False, False, 30, False, 10),
+            (False, False, 30, False, 20),
+            (True, False, 10, False, 20),
+            (False, False, 10, False, 20),  # O4: both TDs freeze
+            (True, False, 10, False, 0),  # a full on phase again, both TDs from 0
+            (True, False, 20, False, 0),
+            (True, False, 30, False, 0),
+            (False, False, 30, False, 10),
+        ]
+
+    def test_a_td_written_past_its_preset_ends_its_phase(self, runner_factory):
+        """``td_write``: the running phase ends on its next tick; the other TD holds."""
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 50), off=(T[4], 50))
+
+        runner = runner_factory(logic, dt=0.010)
+        assert _trace(runner, [1], "Beacon", "OT3_Acc", "OT4_Acc") == [(True, 10, 0)]
+        runner.patch({"OT3_Acc": 60})
+        rows = _trace(runner, [1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
+        assert rows == [(True, 70, 0), (False, 70, 10)]
+        runner.patch({"OT4_Acc": 60})
+        rows = _trace(runner, [1, 1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
+        assert rows == [(False, 70, 70), (True, 10, 70), (True, 20, 70)]
+
+    @staticmethod
+    def _assert_other_td_holds(rows, preset):
+        """After the first on phase, the TD of the phase not shown is at its preset or past it."""
+        first_off = next(i for i, (lit, _on, _off) in enumerate(rows) if not lit)
+        for lit, on_td, off_td in rows[first_off:]:
+            assert (off_td if lit else on_td) >= preset, rows
+
+    @pytest.mark.parametrize("dt", [0.020, 0.030, 0.035, 0.040])
+    def test_the_other_td_holds_through_the_scan_a_phase_ends(self, runner_factory, dt):
+        """``out_more/preset_mid_phase`` reads the off TD on the on phase.  At scans of 20..40 ms
+        a 100 ms phase ends on its third to fifth scan, and the off TD must hold on that scan."""
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 100), off=(T[4], 100))
+
+        runner = runner_factory(logic, dt=dt)
+        self._assert_other_td_holds(_trace(runner, [1] * 40, "Beacon", "OT3_Acc", "OT4_Acc"), 100)
+
+    def test_the_other_td_holds_at_uneven_scans(self):
+        """The soft PLC's scans vary from scan to scan (``SimServer``)."""
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 100), off=(T[4], 100))
+
+        plc = PLC(logic, dt=0.010)
+        plc.patch({In: True})
+        dts = [0.031, 0.040, 0.012, 0.037, 0.040, 0.019, 0.026, 0.040, 0.008]
+        rows = []
+        for n in range(90):
+            plc._dt_override_for_next_scan = dts[n % len(dts)]
+            plc.step()
+            tags = plc.current_state.tags
+            rows.append((tags["Beacon"], tags["OT3_Acc"], tags["OT4_Acc"]))
+        self._assert_other_td_holds(rows, 100)
+
+    @pytest.mark.parametrize("off_preset", [0, -5])
+    def test_off_preset_of_0_or_below_holds_it_reset(self, runner_factory, off_preset):
+        """``flash_zero``: the flasher is dark with both TDs frozen.
+
+        A positive preset starts an on phase.
+        """
+        Beacon = Bool("Beacon")
+        OffTime = Int("OffTime", default=off_preset)
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 30), off=(T[4], OffTime))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({"OT3_Acc": 7, "OT4_Acc": 9})
+        rows = _trace(runner, [1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
+        assert rows == [(False, 7, 9)] * 2
+        runner.patch({OffTime: 20})
+        rows = _trace(runner, [1, 1, 1, 1], "Beacon", "OT3_Acc", "OT4_Acc")
+        assert rows == [(True, 10, 0), (True, 20, 0), (True, 30, 0), (False, 30, 10)]
+
+    def test_needs_both_phases(self):
+        Beacon = Bool("Beacon")
+        with Program():
+            with Rung(In):
+                with pytest.raises(TypeError):
+                    flasher(Beacon, on=(T[3], 30))  # ty: ignore[missing-argument]
+
+    def test_seconds_unit_keeps_its_remainder(self, runner_factory):
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 1), off=(T[4], 1), unit="sec")
+
+        runner = runner_factory(logic, dt=0.250)
+        rows = _trace(runner, [1] * 12, "Beacon")
+        assert [r[0] for r in rows] == [True] * 4 + [False] * 4 + [True] * 4
+
+
+class TestShortPhases:
+    """A ``timed`` pulse counts the rung's first scan, as on_delay does, so one no longer than
+    a scan does not show.  A flasher phase shows through the scan it ends on, so one no
+    longer than a scan shows for that scan (hardware, ``flash_zero/short_first_phase``).
+    A preset of 0 or below gives no pulse (hardware, ``out_more/zero_and_below``)."""
+
+    def test_flasher_shows_an_on_time_under_a_scan_for_one_scan(self, runner_factory):
+        Beacon = Bool("Beacon")
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], 5), off=(T[4], 30))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1] * 8, "Beacon")
+        assert [r[0] for r in rows] == [True, False, False, False, True, False, False, False]
+
+    @pytest.mark.parametrize("on_preset", [0, -5])
+    def test_flasher_with_no_on_time_never_shows(self, runner_factory, on_preset):
+        Beacon = Bool("Beacon")
+        OnTime = Int("OnTime", default=on_preset)
+        with Program() as logic:
+            with Rung(In):
+                flasher(Beacon, on=(T[3], OnTime), off=(T[4], 20))
+            with Rung(In):
+                flasher(Bool("Both"), on=(T[5], 0), off=(T[6], 0))
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1] * 8 + [0] + [1] * 4, "Beacon", "Both")
+        assert rows == [(False, False)] * 13
+
+    @pytest.mark.parametrize("maintained", [False, True])
+    def test_timed_pulse_under_a_scan_does_not_show(self, runner_factory, maintained):
+        Horn = Bool("Horn")
+        with Program() as logic:
+            with Rung(In):
+                timed(Horn, T[5], 10, maintained=maintained)
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1, 0, 0, 1, 1], "Horn", "OT5_Acc", "OT5_Done")
+        # Maintained, it follows the rung once its (spent) on time is up.
+        assert rows == [
+            (maintained, 10, False),
+            (False, 10, False),
+            (False, 10, False),
+            (maintained, 10, False),
+            (maintained, 10, False),
+        ]
+
+    @pytest.mark.parametrize("preset", [0, -5])
+    def test_timed_preset_of_0_or_below_gives_no_pulse(self, runner_factory, preset):
+        Horn = Bool("Horn")
+        OnTime = Int("OnTime", default=preset)
+        with Program() as logic:
+            with Rung(In):
+                timed(Horn, T[5], OnTime)
+
+        runner = runner_factory(logic, dt=0.010)
+        assert _trace(runner, [1, 1, 0, 1, 0], "Horn") == [(False,)] * 5
+
+
+class TestTimed:
+    def test_pulse_ignores_the_rung_once_started(self, runner_factory):
+        Horn = Bool("Horn")
+        with Program() as logic:
+            with Rung(In):
+                timed(Horn, T[5], 40)
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1, 0, 1, 0, 0, 0, 0], "Horn", "OT5_Done", "OT5_Acc")
+        assert rows == [
+            (True, False, 10),
+            (True, False, 20),
+            (True, False, 30),  # O5: an edge during the on time does not restart it
+            (False, False, 40),  # O6: timed out, and the Done stays off
+            (False, False, 40),  # the TD is kept with the rung false
+            (False, False, 40),
+            (False, False, 40),
+        ]
+
+    def test_not_maintained_needs_a_fresh_edge(self, runner_factory):
+        Horn = Bool("Horn")
+        with Program() as logic:
+            with Rung(In):
+                timed(Horn, T[5], 20)
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1, 1, 1, 1, 0, 1], "Horn", "OT5_Acc", "OT5_Done")
+        # The TD holds at the preset while the rung stays true: that is the
+        # timed-out state, not the Done bit.
+        assert rows == [
+            (True, 10, False),
+            (False, 20, False),
+            (False, 20, False),
+            (False, 20, False),
+            (False, 20, False),  # kept with the rung false
+            (True, 10, False),  # a new edge starts from 0
+        ]
+
+    def test_maintained_follows_the_rung_after_the_on_time(self, runner_factory):
+        Lamp = Bool("Lamp")
+        with Program() as logic:
+            with Rung(In):
+                timed(Lamp, T[6], 30, maintained=True)
+
+        runner = runner_factory(logic, dt=0.010)
+        rows = _trace(runner, [1, 0, 0, 0, 1, 1, 1, 1, 0], "Lamp")
+        assert [r[0] for r in rows] == [
+            True,
+            True,  # on for the on time though the rung dropped
+            False,
+            False,
+            True,
+            True,
+            True,
+            True,  # then it follows the rung
+            False,
+        ]
+
+    def test_tag_preset(self, runner_factory):
+        Horn = Bool("Horn")
+        OnTime = Int("OnTime", default=20)
+        with Program() as logic:
+            with Rung(In):
+                timed(Horn, T[5], OnTime)
+
+        runner = runner_factory(logic, dt=0.010)
+        assert [r[0] for r in _trace(runner, [1, 1, 1], "Horn")] == [True, False, False]
+
+
+def test_all_variants_in_one_rung_agree_across_backends(runner_factory):
+    Light, Valve, Beacon, Horn = Bool("Light"), Bool("Valve"), Bool("Beacon"), Bool("Horn")
+    with Program() as logic:
+        with Rung(In):
+            toggle(Light)
+            debounce(Valve, on=(T[1], 25), off=(T[2], 15), unit="ms")
+            flasher(Beacon, on=(T[3], 30), off=(T[4], 20))
+            timed(Horn, T[5], 40, maintained=True)
+
+    runner = runner_factory(logic, dt=0.007)
+    pattern = [0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1]
+    _trace(runner, pattern * 3, "Light")

@@ -1,13 +1,13 @@
 """Measure PILOT's residual replay work without changing its executor.
 
 The default drive is the exact Tumbler completion route that excludes
-``Cmd_State_Complete``.  Instrumentation wraps existing replay/fold boundaries
+``Cmd_State_Complete``.  Instrumentation wraps existing replay/coast boundaries
 and retains only aggregate counters and exact call intervals -- never a
 per-scan log.
 
-Run the checked benchmark and write its machine-readable artifact::
+Run the benchmark and write its machine-readable report::
 
-    uv run python -u devtools/profile_pilot_replay.py --write
+    uv run python -u devtools/profile_pilot_replay.py --write PATH
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ import pyrung.core.runner as runner_module
 from pyrung import PLC
 from pyrung.core.analysis.pilot import causal as causal_module
 from pyrung.core.analysis.pilot import coast as coast_module
-from pyrung.core.analysis.pilot import cyclefold as cyclefold_module
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.runner import _compile_avoid
@@ -41,7 +40,6 @@ sys.path.insert(0, str(_ROOT))
 
 from tests.tumbler.skeleton import dump_skeleton, extract_skeleton  # noqa: E402
 
-DEFAULT_JSON = _ROOT / "scratchpad" / "pilot-docs" / "E1_RESIDUAL_REPLAY_DATA.json"
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
 
 
@@ -58,22 +56,19 @@ class TimeCount:
 @dataclass
 class Partition:
     logical: int = 0
-    ordinary_folded: int = 0
-    cycle_folded: int = 0
+    stretched: int = 0
     residual: int = 0
 
     def add(self, stats: Mapping[str, int]) -> None:
         logical = int(stats.get("logical_scans", 0))
-        ordinary = int(stats.get("ordinary_folded_scans", 0))
-        cycle = int(stats.get("cycle_folded_scans", 0))
-        residual = int(stats.get("residual_scans", stats.get("kernel_scans", logical)))
-        if ordinary + cycle + residual != logical:
+        stretched = int(stats.get("stretched_scans", 0))
+        residual = int(stats.get("kernel_scans", logical))
+        if stretched + residual != logical:
             raise AssertionError(
-                f"fold partition is not exhaustive: {ordinary} + {cycle} + {residual} != {logical}"
+                f"coast partition is not exhaustive: {stretched} + {residual} != {logical}"
             )
         self.logical += logical
-        self.ordinary_folded += ordinary
-        self.cycle_folded += cycle
+        self.stretched += stretched
         self.residual += residual
 
 
@@ -106,8 +101,7 @@ class CoastCall:
     start_scan: int
     end_scan: int
     logical: int
-    ordinary_folded: int
-    cycle_folded: int
+    stretched: int
     residual: int
 
 
@@ -173,7 +167,7 @@ def observe(profile: Profile) -> Iterator[None]:
     coast_stack: list[str] = []
     shadow_active = [False]
     original_seek = coast_module.CoastSession.seek
-    original_cycle = cyclefold_module.cycle_fold_until
+    original_coast = coast_module.coast_until
     original_compiled_step = CompiledPLC.step
     original_compiled_step_replay = CompiledPLC.step_replay
     original_capture = PLC._replay_capture_at
@@ -190,7 +184,7 @@ def observe(profile: Profile) -> Iterator[None]:
         finally:
             coast_stack.pop()
 
-    def cycle(
+    def coast(
         plc: PLC,
         predicate: Callable[[Any], bool],
         *args: Any,
@@ -201,7 +195,7 @@ def observe(profile: Profile) -> Iterator[None]:
         kwargs["stats"] = local_stats
         start_scan = plc.state.scan_id
         try:
-            return original_cycle(plc, predicate, *args, **kwargs)
+            return original_coast(plc, predicate, *args, **kwargs)
         finally:
             kind = coast_stack[-1] if coast_stack else "unscoped"
             profile.coast_partitions[kind].add(local_stats)
@@ -211,14 +205,8 @@ def observe(profile: Profile) -> Iterator[None]:
                 start_scan=start_scan,
                 end_scan=plc.state.scan_id,
                 logical=int(local_stats.get("logical_scans", 0)),
-                ordinary_folded=int(local_stats.get("ordinary_folded_scans", 0)),
-                cycle_folded=int(local_stats.get("cycle_folded_scans", 0)),
-                residual=int(
-                    local_stats.get(
-                        "residual_scans",
-                        local_stats.get("kernel_scans", 0),
-                    )
-                ),
+                stretched=int(local_stats.get("stretched_scans", 0)),
+                residual=int(local_stats.get("kernel_scans", 0)),
             )
             profile.coast_calls.append(call)
             profile.coast_owners.append(plc)
@@ -332,7 +320,7 @@ def observe(profile: Profile) -> Iterator[None]:
                 profile.witness_time.add(started)
 
     coast_module.CoastSession.seek = seek
-    cyclefold_module.cycle_fold_until = cycle  # ty: ignore[invalid-assignment]
+    coast_module.coast_until = coast  # ty: ignore[invalid-assignment]
     CompiledPLC.step = compiled_step
     CompiledPLC.step_replay = compiled_step_replay
     PLC._replay_capture_at = capture
@@ -345,7 +333,7 @@ def observe(profile: Profile) -> Iterator[None]:
         yield
     finally:
         coast_module.CoastSession.seek = original_seek
-        cyclefold_module.cycle_fold_until = original_cycle
+        coast_module.coast_until = original_coast
         CompiledPLC.step = original_compiled_step
         CompiledPLC.step_replay = original_compiled_step_replay
         PLC._replay_capture_at = original_capture
@@ -744,10 +732,8 @@ def main() -> None:
     parser.add_argument("--wall-seconds", type=float, default=300.0)
     parser.add_argument(
         "--write",
-        nargs="?",
-        const=str(DEFAULT_JSON),
         metavar="PATH",
-        help="write JSON as well as printing it (default: checked report artifact)",
+        help="write JSON as well as printing it",
     )
     args = parser.parse_args()
     report = run_exact_route(max_scans=args.max_scans, wall_seconds=args.wall_seconds)

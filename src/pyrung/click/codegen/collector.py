@@ -13,8 +13,10 @@ from pyrung.click.codegen.constants import (
     _COPY_CONVERTERS,
     _FUNC_RE,
     _INSTRUCTION_NAMES,
-    _OPERAND_RE,
+    _OUT_VARIANT_TIMER_INSTRUCTIONS,
     _RANGE_RE,
+    _ascending_range_str,
+    _operand_matches,
 )
 from pyrung.click.codegen.models import (
     RungRole,
@@ -34,9 +36,16 @@ from pyrung.click.codegen.models import (
     _TimerCounterCloneDecl,
 )
 from pyrung.click.codegen.utils import (
+    _CLICK_FUNC_RE,
+    _CLICK_FUNC_TO_PYTHON,
+    _CLICK_PI_RE,
+    _EXPR_FUNC_IMPORT_NAMES,
+    _MODBUS_ADDRESS_RE,
     _POINTER_RE,
     _PREFIX_TO_BLOCK,
+    _RANGE_AGG_RE,
     _make_safe_identifier,
+    _parse_modbus_address,
     _parse_operand_prefix,
     _strip_quoted_strings,
 )
@@ -239,9 +248,9 @@ def _enrich_with_ownership(
         for logical_addr, hardware_addr in zip(
             entry.logical_addresses, entry.hardware_addresses, strict=True
         ):
-            choices = entry.logical[logical_addr].choices
+            choices = entry.logical._tag_at(logical_addr).choices
             if choices is not None:
-                hardware = entry.hardware.block[hardware_addr]
+                hardware = entry.hardware.block._tag_at(hardware_addr)
                 collection.choice_maps[_hw_address_name(hardware)] = choices
 
     seen_structures: dict[str, _StructureDecl] = {}
@@ -288,9 +297,7 @@ def _enrich_with_ownership(
             return None
         return _PhysicalSpec(
             name=name,
-            on_delay=getattr(physical, "on_delay", None),
-            off_delay=getattr(physical, "off_delay", None),
-            profile=getattr(physical, "profile", None),
+            keywords=tuple(physical.keywords().items()),
             system=getattr(physical, "system", None),
         )
 
@@ -402,8 +409,8 @@ def _enrich_with_ownership(
         per_field_hw: dict[str, _FieldHw] = {}
         for fn in field_names:
             fblock = runtime._blocks[fn]
-            first_hw = _resolve_hw_tag(fblock[1])
-            last_hw = _resolve_hw_tag(fblock[si.count])
+            first_hw = _resolve_hw_tag(fblock._tag_at(1))
+            last_hw = _resolve_hw_tag(fblock._tag_at(si.count))
             if first_hw is not None and last_hw is not None:
                 mem_type, fstart = parse_address(_hw_address_name(first_hw))
                 _, fend = parse_address(_hw_address_name(last_hw))
@@ -412,7 +419,7 @@ def _enrich_with_ownership(
                 collection.used_blocks.add(bvar)
 
         first_field_block = runtime._blocks[field_names[0]]
-        first_slot = first_field_block[1]
+        first_slot = first_field_block._tag_at(1)
         hw_tag = _resolve_hw_tag(first_slot)
         if hw_tag is not None:
             mem_type, addr = parse_address(_hw_address_name(hw_tag))
@@ -427,7 +434,7 @@ def _enrich_with_ownership(
             _, hw_end = runtime.hardware_span(hw_start)
         else:
             last_field_block = runtime._blocks[field_names[-1]]
-            last_slot = last_field_block[si.count]
+            last_slot = last_field_block._tag_at(si.count)
             last_hw_tag = _resolve_hw_tag(last_slot)
             if last_hw_tag is not None:
                 _, hw_end = parse_address(_hw_address_name(last_hw_tag))
@@ -477,8 +484,8 @@ def _enrich_with_ownership(
         if getattr(logical_block, "_pyrung_structure_kind", None) in ("named_array", "udt"):
             return None
 
-        first_hw = entry.hardware.block[entry.hardware_addresses[0]]
-        last_hw = entry.hardware.block[entry.hardware_addresses[-1]]
+        first_hw = entry.hardware.block._tag_at(entry.hardware_addresses[0])
+        last_hw = entry.hardware.block._tag_at(entry.hardware_addresses[-1])
         mem_type, hw_start = parse_address(_hw_address_name(first_hw))
         _, hw_end = parse_address(_hw_address_name(last_hw))
         var_name = _make_safe_identifier(
@@ -685,6 +692,15 @@ def _enrich_with_ownership(
     tag_by_hardware = {
         _hw_address_name(entry.hardware): entry.logical for entry in structured_map.tags()
     }
+
+    # A Timer/Counter clone conforms to the retentive policy and comments its
+    # addresses carry.
+    _conform_clone_to_addresses(collection, structured_map, tag_by_hardware)
+    clone_operands = {
+        operand
+        for decl in collection.timer_counter_clones
+        for operand in (decl.done_operand, decl.acc_operand)
+    }
     for operand, decl in collection.tags.items():
         if operand in collection.semantic_operands or operand in collection.timer_counter_operands:
             continue
@@ -749,7 +765,10 @@ def _enrich_with_ownership(
         collection.used_blocks.add(block_var)
 
     for (memory_type, index), comment in structured_map._source_unmapped_comments.items():
-        parsed = _parse_operand_prefix(format_address_display(memory_type, index))
+        operand = format_address_display(memory_type, index)
+        if operand in clone_operands:
+            continue  # carried by the clone's comments=
+        parsed = _parse_operand_prefix(operand)
         if parsed is None:
             continue
         _, _tag_type, block_var, _index = parsed
@@ -817,6 +836,37 @@ def _scan_token_for_operands(
 _TC_NICK_SUFFIXES = ("_Done", "_Acc")
 
 
+def _conform_clone_to_addresses(
+    collection: _OperandCollection,
+    structured_map: TagMap,
+    tag_by_hardware: dict[str, Any],
+) -> None:
+    """Record each clone field whose address retentive differs from the built-in's,
+    and each field whose address has a comment."""
+    from pyclickplc.addresses import parse_address
+    from pyclickplc.banks import DEFAULT_RETENTIVE
+
+    from pyrung.core.structure import Counter, Timer
+
+    for decl in collection.timer_counter_clones:
+        builtin = Timer if decl.kind == "Timer" else Counter
+        for field_name, operand in (("Done", decl.done_operand), ("Acc", decl.acc_operand)):
+            memory_type, index = parse_address(operand)
+            logical = tag_by_hardware.get(operand)
+            if logical is not None:
+                retentive = bool(logical.retentive)
+                comment = logical.comment or ""
+            else:
+                retentive = structured_map._source_unmapped_retentive.get(
+                    (memory_type, index), DEFAULT_RETENTIVE[memory_type]
+                )
+                comment = structured_map._source_unmapped_comments.get((memory_type, index), "")
+            if retentive != builtin._blocks[field_name]._tag_at(1).retentive:
+                decl.retentive[field_name] = retentive
+            if comment:
+                decl.comments[field_name] = comment
+
+
 def _register_timer_counter_clone(
     done_operand: str,
     acc_operand: str,
@@ -855,18 +905,9 @@ def _register_timer_counter_clone(
     )
     var_name = _make_safe_identifier(raw_name, used_names=used_var_names)
 
-    field_nicknames: dict[str, str] = {}
-    if done_nick:
-        field_nicknames["Done"] = done_nick
-    if acc_nick:
-        field_nicknames["Acc"] = acc_nick
-    if not field_nicknames:
-        # With no user naming intent, make both physical CLICK addresses
-        # visible instead of deriving T1_Acc / CT1_Acc from the clone base.
-        field_nicknames = {
-            "Done": f"{done_operand}_Done",
-            "Acc": f"{acc_operand}_Acc",
-        }
+    # A field the project left un-nicknamed is named after its own address, which
+    # exports back as no nickname: codegen never invents one (T1_Done, OvenTimer_Acc).
+    field_nicknames = {"Done": done_nick or done_operand, "Acc": acc_nick or acc_operand}
 
     collection.timer_counter_clones.append(
         _TimerCounterCloneDecl(
@@ -943,13 +984,31 @@ def _scan_af_token(
                 collection,
             )
 
+    if func_name in _OUT_VARIANT_TIMER_INSTRUCTIONS:
+        from pyrung.click.codegen.utils import _out_variant_timer_pairs, _parse_af_args
+
+        _, phase_kwargs = _parse_af_args(args_str)
+        for _side, done_operand, acc_operand in _out_variant_timer_pairs(phase_kwargs):
+            collection.timer_counter_operands.add(done_operand)
+            collection.timer_counter_operands.add(acc_operand)
+            _register_timer_counter_clone(
+                done_operand,
+                acc_operand,
+                nicknames.get(done_operand) if nicknames else None,
+                nicknames.get(acc_operand) if nicknames else None,
+                func_name,
+                collection,
+            )
+
     if func_name in {"send", "receive"}:
         if "ModbusTcpTarget(" in args_str:
             collection.has_modbus_target = True
         if "ModbusRtuTarget(" in args_str:
             collection.has_modbus_rtu_target = True
-        if "ModbusAddress(" in args_str:
+        for match in _MODBUS_ADDRESS_RE.finditer(args_str):
             collection.has_modbus_address = True
+            if _parse_modbus_address(match.group(1))[1] is not None:
+                collection.has_register_type = True
 
     if func_name == "call":
         collection.has_subroutine = True
@@ -1000,7 +1059,10 @@ def _register_operands_from_text(
         prefix2 = range_match.group(3)
         num2 = int(range_match.group(4))
         if prefix1 == prefix2:
-            range_str = range_match.group(0)
+            # A descending range (shift(C1018..C1011)) is the ascending window
+            # reversed; register the ascending one (see _render_range_expr).
+            num1, num2 = min(num1, num2), max(num1, num2)
+            range_str = _ascending_range_str(range_match.group(0))
             if range_str not in collection.ranges:
                 parsed = _parse_operand_prefix(f"{prefix1}{num1}")
                 if parsed:
@@ -1018,7 +1080,6 @@ def _register_operands_from_text(
                         prefix=prefix1,
                         start=num1,
                         end=num2,
-                        operand_str=range_str,
                     )
                     collection.used_blocks.add(block_var)
             # Mark all addresses in this range to suppress individual tags
@@ -1046,7 +1107,7 @@ def _register_operands_from_text(
                     collection.range_comments[range_str] = f"# {start_label}..{end_label}"
 
     # Find individual operands (skip those covered by a range)
-    for op_match in _OPERAND_RE.finditer(text):
+    for op_match in _operand_matches(text):
         operand = op_match.group(0)
         if operand in collection.tags:
             continue
@@ -1199,8 +1260,10 @@ def _ref_af_token(
             refs.has_modbus_target = True
         if "ModbusRtuTarget(" in args_str:
             refs.has_modbus_rtu_target = True
-        if "ModbusAddress(" in args_str:
+        for match in _MODBUS_ADDRESS_RE.finditer(args_str):
             refs.has_modbus_address = True
+            if _parse_modbus_address(match.group(1))[1] is not None:
+                refs.has_register_type = True
 
     if func_name == "call":
         # Extract subroutine name for cross-file import tracking
@@ -1232,6 +1295,18 @@ def _ref_af_token(
             # Rebuild args_str without the first two positional args
             remaining = [f"{k}={v}" for k, v in tc_kwargs]
             args_str = ",".join(remaining)
+
+    # Out coil variants: each phase's Done/Acc renders as its Timer clone.
+    if func_name in _OUT_VARIANT_TIMER_INSTRUCTIONS:
+        from pyrung.click.codegen.utils import _out_variant_timer_pairs, _parse_af_args
+
+        ov_args, ov_kwargs = _parse_af_args(args_str)
+        for _side, done_operand, _acc in _out_variant_timer_pairs(ov_kwargs):
+            render = collection.semantic_operands.get(done_operand)
+            if render is not None and render.import_kind == "tc_clone":
+                refs.tc_clone_var_names.add(render.import_name)
+        timer_keys = {f"{side}_acc" for side in ("on", "off")}
+        args_str = ",".join([*ov_args, *(f"{k}={v}" for k, v in ov_kwargs if k not in timer_keys)])
 
     clean_args = _strip_quoted_strings(args_str)
 
@@ -1265,7 +1340,7 @@ def _ref_operands_in_text(
 
     # Check ranges
     for range_match in _RANGE_RE.finditer(text):
-        range_str = range_match.group(0)
+        range_str = _ascending_range_str(range_match.group(0))
         render = collection.semantic_ranges.get(range_str)
         if render is not None:
             _record_semantic_ref(render)
@@ -1281,6 +1356,28 @@ def _ref_operands_in_text(
             if parsed is not None:
                 refs.used_click_blocks.add(parsed[2])
 
+    # Range aggregates: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum(); same
+    # semantic-or-block rendering as _render_range_expr in utils.
+    for agg_match in _RANGE_AGG_RE.finditer(text):
+        prefix = agg_match.group(2)
+        start_num = int(agg_match.group(3))
+        end_num = int(agg_match.group(5))
+        render = collection.semantic_ranges.get(f"{prefix}{start_num}..{prefix}{end_num}")
+        if render is not None:
+            _record_semantic_ref(render)
+            continue
+        parsed = _parse_operand_prefix(f"{prefix}{start_num}")
+        if parsed is not None:
+            refs.used_click_blocks.add(parsed[2])
+
+    # Expression functions (SQRT → sqrt, ...) are imported by the file that uses them.
+    for func_match in _CLICK_FUNC_RE.finditer(text):
+        py_name = _CLICK_FUNC_TO_PYTHON[func_match.group(1)]
+        if py_name in _EXPR_FUNC_IMPORT_NAMES:
+            refs.used_expr_funcs.add(py_name)
+    if _CLICK_PI_RE.search(text):
+        refs.used_expr_funcs.add("PI")
+
     # Pointer/indirect addressing: DH[DS134] → need to import dh
     for ptr_match in _POINTER_RE.finditer(text):
         prefix = ptr_match.group(1)
@@ -1289,7 +1386,7 @@ def _ref_operands_in_text(
         _ref_operands_in_text(ptr_match.group(2), collection, refs)
 
     # Check individual operands
-    for op_match in _OPERAND_RE.finditer(text):
+    for op_match in _operand_matches(text):
         operand = op_match.group(0)
         if operand in SYSTEM_OPERAND_PATHS:
             refs.has_system_import = True

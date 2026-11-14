@@ -16,10 +16,10 @@ from pyrung.core import (
     TagType,
     Timer,
     branch,
-    calc,
     call,
     copy,
     latch,
+    math,
     on_delay,
     out,
     return_early,
@@ -64,24 +64,29 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
 
     with Program() as prog:
         with Rung(enable):
-            calc(scale + 1, result)
             on_delay(pdg_timer, preset=preset, unit="Ts").reset(reset)
+        with Rung(enable):
+            math(scale + 1, result)
 
     graph = build_program_graph(prog)
-    node = graph.rung_nodes[0]
+    timer_node, math_node = graph.rung_nodes[0], graph.rung_nodes[1]
 
-    assert node.condition_reads == frozenset({"Enable", "Reset"})
-    assert node.data_reads == frozenset({"Preset", "Scale"})
-    assert node.writes == frozenset(
+    assert timer_node.condition_reads == frozenset({"Enable", "Reset"})
+    assert timer_node.data_reads == frozenset({"Preset"})
+    assert timer_node.writes == frozenset(
+        {"PdgTimer_Acc", "PdgTimer_Done", "PdgTimer_EN", "PdgTimer_TT"}
+    )
+    assert math_node.condition_reads == frozenset({"Enable"})
+    assert math_node.data_reads == frozenset({"Scale"})
+    assert math_node.writes == frozenset({"Result"})
+    assert math_node.implicit_writes == frozenset(
         {
-            "PdgTimer_Acc",
-            "PdgTimer_Done",
-            "PdgTimer_EN",
-            "PdgTimer_TT",
-            "Result",
+            "fault.division_error",
+            "fault.out_of_range",
+            "fault.address_error",
+            "fault.math_operation_error",
         }
     )
-    assert node.implicit_writes == frozenset({"fault.division_error", "fault.out_of_range"})
 
 
 def test_indirect_ref_unbounded_pointer_expands_full_block() -> None:
@@ -214,7 +219,8 @@ def test_execution_items_preserve_instruction_branch_interleaving() -> None:
     )
 
 
-def test_branch_local_conditions_are_precomputed_before_sibling_instructions() -> None:
+def test_branch_local_conditions_read_after_the_rows_above() -> None:
+    """A branch reads its contacts when the solve reaches it (the live row solve)."""
     gate = Bool("Gate")
     light = Bool("Light")
 
@@ -227,12 +233,12 @@ def test_branch_local_conditions_are_precomputed_before_sibling_instructions() -
     graph = build_program_graph(prog)
 
     assert graph.def_use_chains["Gate"] == (
-        TagVersion(tag="Gate", defined_at=None, read_by=frozenset({1})),
-        TagVersion(tag="Gate", defined_at=0, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=None, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=0, read_by=frozenset({1})),
     )
 
 
-def test_nested_branch_conditions_also_read_preinstruction_snapshot() -> None:
+def test_nested_branch_conditions_read_after_the_rows_above() -> None:
     gate = Bool("Gate")
     middle = Bool("Middle")
     light = Bool("Light")
@@ -248,9 +254,28 @@ def test_nested_branch_conditions_also_read_preinstruction_snapshot() -> None:
     graph = build_program_graph(prog)
 
     assert graph.def_use_chains["Gate"] == (
-        TagVersion(tag="Gate", defined_at=None, read_by=frozenset({2})),
-        TagVersion(tag="Gate", defined_at=0, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=None, read_by=frozenset()),
+        TagVersion(tag="Gate", defined_at=0, read_by=frozenset({2})),
     )
+
+
+def test_synthesis_bracket_rules_read_the_starting_state() -> None:
+    """A bracket's rules read the state it starts from: a guard on a write of
+    the bracket reads a bit the bracket solved before that write."""
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    gate = Bool("Gate")
+    light = Bool("Light")
+    rung = guarded_copy_rung([(gate, True, ~light), (light, True, gate)])
+    prog = Program()
+    prog.rungs.append(rung)
+
+    graph = build_program_graph(prog)
+
+    gate_versions = graph.def_use_chains["Gate"]
+    assert gate_versions[0].defined_at is None
+    assert gate_versions[0].read_by
+    assert all(not version.read_by for version in gate_versions[1:])
 
 
 def test_isolated_role_prefers_same_rung_read_write_cycles() -> None:
@@ -260,7 +285,7 @@ def test_isolated_role_prefers_same_rung_read_write_cycles() -> None:
     with Program() as prog:
         with Rung():
             copy(1, temp)
-            calc(temp + 1, dest)
+            math(temp + 1, dest)
 
     graph = build_program_graph(prog)
 
@@ -342,6 +367,19 @@ def test_build_program_graph_caches_on_program() -> None:
     assert prog._cached_graph is graph_a
 
 
+def test_a_later_change_to_a_pointers_bounds_rebuilds_the_cached_graph() -> None:
+    values = Block("GcValues", TagType.INT, 1, 10)
+    pointers = Block("GcPointers", TagType.INT, 1, 10)
+    with Program(strict=False) as prog:
+        with Rung(Bool("GcGo")):
+            copy(values[pointers[1]], pointers[2])
+    assert "GcValues3" not in prog.dataview().upstream("GcPointers2").tags
+
+    pointers.slot(1, min=3, max=4)
+
+    assert {"GcValues3", "GcValues4"} <= prog.dataview().upstream("GcPointers2").tags
+
+
 def test_collect_program_tags_matches_graph_extraction() -> None:
     values = Block("Value", TagType.INT, 1, 20)
     enable = Bool("Enable")
@@ -352,7 +390,7 @@ def test_collect_program_tags_matches_graph_extraction() -> None:
 
     with Program() as prog:
         with Rung(enable):
-            calc(source + values[1], result)
+            math(source + values[1], result)
             copy(values[pointer], result)
             with branch():
                 copy(values.select(6, 8), values.select(9, 11))
@@ -404,6 +442,44 @@ def test_pointer_tag_scan_does_not_walk_program_backrefs() -> None:
     graph = build_program_graph(prog)
 
     assert graph.pointer_tags == {"Index": ("DS", 1, 10)}
+
+
+def test_affine_index_maps_pointer_range_to_addresses() -> None:
+    from pyrung.core.analysis.pdg import PointerUse
+
+    ds = Block("DS", TagType.INT, 1, 10)
+    ptr = Int("Ptr", min=1, max=3)
+    other = Int("Other")
+    a, b, c = Int("A"), Int("B"), Int("C")
+
+    with Program() as prog:
+        with Rung():
+            copy(ds[ptr + 2], a)
+        with Rung():
+            copy(ds[9 - ptr], b)
+        with Rung():
+            copy(ds[ptr * 2], c)
+        with Rung():
+            copy(1, ds[ptr + other])
+
+    graph = build_program_graph(prog)
+
+    def readers(name: str) -> set[int]:
+        return set(graph.readers_of.get(name, ()))
+
+    # Ptr + 2 reads DS3..5, 9 - Ptr reads DS6..8; neither reads DS1..2.
+    assert {n for n in range(1, 11) if 0 in readers(f"DS{n}")} == {3, 4, 5}
+    assert {n for n in range(1, 11) if 1 in readers(f"DS{n}")} == {6, 7, 8}
+    # A non-affine index may read or write any element.
+    assert {n for n in range(1, 11) if 2 in readers(f"DS{n}")} == set(range(1, 11))
+    assert all(3 in graph.writers_of[f"DS{n}"] for n in range(1, 11))
+    assert set(graph.pointer_uses) == {
+        PointerUse("Ptr", "DS", 1, 10, 1, 2),
+        PointerUse("Ptr", "DS", 1, 10, -1, 9),
+    }
+    assert graph.opaque_index_blocks == frozenset({"DS"})
+    assert graph.index_tags == frozenset({"Ptr", "Other"})
+    assert PointerUse("Ptr", "DS", 1, 10, -1, 9).pointer_span() == (-1, 8)
 
 
 def test_walker_uses_declared_instruction_fields_without_unknowns() -> None:

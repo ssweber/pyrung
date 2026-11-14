@@ -492,7 +492,7 @@ def investigate_excursion(
     from pyrung.core.condition import CompareEq
 
     preserved_tag = reverted[0]
-    preserved = replay_fork._known_tags_by_name[preserved_tag]
+    preserved = replay_fork.tags[preserved_tag]
     scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
     confirmed_pilot_rungs = tuple(_pilot_rungs_from_proposals(candidate_holds, scope))
     replay_pilot_rungs.extend(confirmed_pilot_rungs)
@@ -503,7 +503,7 @@ def investigate_excursion(
         for tag, value in candidate_holds
         if tag not in {action_tag for action_tag, _ in applied_actions}
     )
-    session = CoastSession(replay_fork, kind="excursion-replay")
+    session = CoastSession(replay_fork, kind="excursion-replay", waits_on_work=False)
     if ctx.program is not None:
         session.arm_pens(
             owner.profile.done.name

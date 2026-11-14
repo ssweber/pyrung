@@ -266,3 +266,75 @@ def test_mapped_runtime_validation_matches_fallback_behavior():
         provider.write("DS1", True)
 
     assert str(mapped_error.value) == str(expected_error.value)
+
+
+def test_runner_getter_follows_the_current_runner():
+    valve = Tag("Valve", TagType.BOOL)
+    current = {"runner": PLC(logic=[], initial_state=SystemState().with_tags({"Valve": True}))}
+    provider = ClickDataProvider(lambda: current["runner"], TagMap({valve: c[1]}))
+    assert provider.read("C1") is True
+
+    current["runner"] = PLC(logic=[])
+    provider.write("C1", True)
+    assert dict(current["runner"].pending_patches) == {"Valve": True}
+
+
+def test_blocks_serve_bank_slots_without_tag_map_entries():
+    bx, by, bc, bt, bct, bsc, bds, *_rest = blocks = ClickBlocks()
+    bx.slot(3, name="Start_PB")
+    runner = PLC(logic=[], initial_state=SystemState().with_tags({"Start_PB": True, "DS7": 12}))
+    provider = ClickDataProvider(runner, TagMap(), blocks=blocks)
+
+    assert provider.read("X003") is True
+    assert provider.read("DS7") == 12
+    assert provider.tag_name("x3") == "Start_PB"
+    assert provider.tag_name("DS7") == "DS7"
+    assert provider.tag_name("TD1") is None  # timer banks need TagMap entries
+    assert provider.tag_name("XD0") is None  # word image, not a tag
+
+    provider.write("X003", False)
+    assert dict(runner.pending_patches) == {"Start_PB": False}
+
+
+def test_stop_command_calls_on_stop_hook_instead_of_runner_stop():
+    runner = PLC(logic=[])
+    calls: list[str] = []
+    provider = ClickDataProvider(runner, TagMap(), on_stop=lambda: calls.append("stop"))
+
+    provider.write("SC50", True)
+
+    assert calls == ["stop"]
+    assert runner.mode == "run"
+
+
+def test_a_real_holding_inf_reads_as_inf_and_a_nan_write_is_accepted():
+    import math
+
+    level = Tag("Level", TagType.REAL)
+    mapping = TagMap({level: df[1]})
+    runner = PLC(logic=[])
+    provider = ClickDataProvider(runner, mapping)
+    runner.patch({"Level": math.inf})
+    runner.step()
+
+    assert provider.read("DF1") == math.inf
+    provider.write("DF1", math.nan)
+    runner.step()
+    assert math.isnan(provider.read("DF1"))
+
+
+@pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+def test_a_real_holding_any_nan_serves_as_a_click_serves_it(bits):
+    import struct
+
+    from pyclickplc.banks import DataType
+    from pyclickplc.modbus import pack_value
+
+    level = Tag("Level", TagType.REAL)
+    mapping = TagMap({level: df[1]})
+    runner = PLC(logic=[])
+    provider = ClickDataProvider(runner, mapping)
+    runner.patch({"Level": struct.unpack("<f", struct.pack("<I", bits))[0]})
+    runner.step()
+
+    assert pack_value(provider.read("DF1"), DataType.FLOAT) == [0xFFFF, 0xFFFF]

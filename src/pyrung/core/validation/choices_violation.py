@@ -130,10 +130,11 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
                     instruction=instr,
                 )
                 literal_sites.append((site, value))
-            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
-                _walk_instructions(
-                    instr.instructions, scope, subroutine, rung_index, branch_path, conditions
-                )
+            if isinstance(instr, ForLoopInstruction):
+                for child, local in instr.iter_body():
+                    _walk_instructions(
+                        [child], scope, subroutine, rung_index, branch_path, conditions + local
+                    )
 
     def _walk_rung(
         rung: Any,

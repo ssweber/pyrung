@@ -15,31 +15,62 @@ from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
-    CLK_CALC_FLOOR_DIV,
-    CLK_CALC_FUNC_MODE_MISMATCH,
-    CLK_CALC_MODE_MIXED,
-    CLK_CALC_NESTING_DEPTH,
+    CLK_COMPARE_HEX_MIX,
     CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-    CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
-    CLK_EXPR_ONLY_IN_CALC,
+    CLK_EXPR_ONLY_IN_MATH,
+    CLK_FORLOOP_COUNT_BANK,
+    CLK_FORLOOP_INNER_ONESHOT,
+    CLK_FORLOOP_NESTING_DEPTH,
+    CLK_FORLOOP_RETURN_INSIDE,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+    CLK_IMMEDIATE_CONTACT_MUST_BE_X,
     CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
     CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
     CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+    CLK_MATH_ARG_NOT_PLAIN,
+    CLK_MATH_BIT_OPERAND,
+    CLK_MATH_BIT_RANGE_AGGREGATE,
+    CLK_MATH_DEST_BANK,
+    CLK_MATH_FLOOR_DIV,
+    CLK_MATH_FUNC_MODE_MISMATCH,
+    CLK_MATH_MEDIAN_RANGE_TOO_LARGE,
+    CLK_MATH_MODE_MIXED,
+    CLK_MATH_NESTING_DEPTH,
+    CLK_MATH_RANGE_MIXED_BANKS,
+    CLK_MATH_RANGE_NOT_CONTIGUOUS,
+    CLK_MATH_SUM_BANK_NOT_AVAILABLE,
+    CLK_MATH_WIDE_CONSTANT,
+    CLK_NESTED_CALL,
+    CLK_NICKNAME_TOO_LONG,
+    CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
+    CLK_PTR_BLOCK_OFFSET,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
+    CLK_PTR_PAST_BANK,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_RAND_BOUND_TYPE,
+    CLK_RAND_EQUAL_BOUNDS,
+    CLK_SEARCH_RANGE_BANK,
+    CLK_SEARCH_RESULT_NOT_DS,
     CLK_STATUS_BIT_NOT_PORTABLE,
+    CLK_STEP_LIMIT,
+    CLK_TEXT_ORDER_COMPARE,
+    CLK_TEXT_PAST_BANK,
+    CLK_TEXT_PAST_BLOCK,
+    CLK_TEXT_WINDOW_NOT_CONTIGUOUS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
+    CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
+    CLK_TIMER_PRESET_TOO_LOW,
     ClickFinding,
     ClickValidationReport,
     FindingSeverity,
@@ -47,10 +78,18 @@ from .findings import (
     _route_severity,
 )
 from .hardware import (
+    _evaluate_coil_targets,
     _evaluate_copy_compatibility,
     _evaluate_drums,
+    _evaluate_math_dest_bank,
+    _evaluate_modbus_banks,
+    _evaluate_out_variant_unit,
     _evaluate_pack_text,
     _evaluate_role_assignments,
+    _evaluate_search_banks,
+    _evaluate_text_past_bank,
+    _evaluate_timer_pairs,
+    _evaluate_timer_preset_floor,
     _evaluate_timer_preset_overflow,
     _evaluate_write_targets,
 )
@@ -58,11 +97,28 @@ from .hardware import (
     _load_default_profile as _hardware_load_default_profile,
 )
 from .identity import _evaluate_address_identity_conflicts
+from .nicknames import _evaluate_nickname_lengths
+from .pointer_range import (
+    _evaluate_condition_pointer_past_bank,
+    _evaluate_pointer_past_bank,
+    _PointerBounds,
+)
 from .portability import (
+    _evaluate_compare_hex_mix,
     _evaluate_fact,
+    _evaluate_forloop_count,
+    _evaluate_forloop_structure,
+    _evaluate_immediate_contacts,
     _evaluate_immediate_usage,
     _evaluate_instruction_portability,
+    _evaluate_math_bit_operands,
+    _evaluate_nested_calls,
+    _evaluate_rand_bounds,
+    _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
+    _evaluate_text_order_compares,
+    _evaluate_text_windows,
+    _evaluate_wide_constants,
 )
 from .resolve import _ResolutionCache
 
@@ -135,6 +191,46 @@ def _iter_instruction_sites(program: Program) -> list[tuple[Any, ProgramLocation
     return sites
 
 
+#: Above this share of CLICK's limit, an estimate within its error may not fit.
+_STEP_LIMIT_NEAR = 0.95
+
+
+def _evaluate_step_limit(
+    program: Program, tag_map: TagMap, mode: ValidationMode
+) -> list[ClickFinding]:
+    """CLK_STEP_LIMIT: the estimated program steps exceed, or come near, CLICK's 8000."""
+    from pyrung.click.ladder import LadderExportError, pyrung_to_ladder
+    from pyrung.click.ladder.steps import CLICK_STEP_LIMIT, estimate_steps
+
+    try:
+        bundle = pyrung_to_ladder(program, tag_map, validate=False)
+    except LadderExportError:
+        return []  # Not exportable: other findings say why.
+    estimate = estimate_steps(bundle)
+    if estimate.total <= CLICK_STEP_LIMIT * _STEP_LIMIT_NEAR:
+        return []
+    over = estimate.total > CLICK_STEP_LIMIT
+    largest = sorted(estimate.subroutines.items(), key=lambda kv: -kv[1])[:3]
+    parts = [f"main {estimate.main}", *(f"{name} {steps}" for name, steps in largest)]
+    verb = "exceeds" if over else "is near"
+    severity: FindingSeverity = "error" if mode == "strict" else ("warning" if over else "hint")
+    return [
+        ClickFinding(
+            code=CLK_STEP_LIMIT,
+            severity=severity,
+            message=(
+                f"Estimated {estimate.total} program steps {verb} CLICK's {CLICK_STEP_LIMIT} "
+                f"({', '.join(parts)})."
+            ),
+            location="program",
+            suggestion=(
+                "Split the program into separate CLICK projects, or trim rungs; "
+                "the estimate is within about 1% of CLICK's count."
+            ),
+        )
+    ]
+
+
 def validate_click_program(
     program: Program,
     tag_map: TagMap,
@@ -148,17 +244,38 @@ def validate_click_program(
 
     findings: list[ClickFinding] = []
     findings.extend(_evaluate_address_identity_conflicts(program, facts, tag_map, mode))
+    findings.extend(_evaluate_nickname_lengths(program, facts, tag_map, mode))
     for fact in facts.operands:
         findings.extend(_evaluate_fact(fact, tag_map, mode, resolver))
 
     findings.extend(
         _evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode, resolver)
     )
+    findings.extend(_evaluate_immediate_contacts(program, tag_map, mode, resolver))
     findings.extend(_evaluate_status_bit_usage(program, mode))
+    findings.extend(_evaluate_text_order_compares(program, mode))
+    findings.extend(_evaluate_compare_hex_mix(program, mode, resolver))
+    findings.extend(_evaluate_text_windows(program, mode, resolver))
+    findings.extend(_evaluate_forloop_structure(program, mode))
+    findings.extend(_evaluate_nested_calls(program, mode))
+    findings.extend(_evaluate_step_limit(program, tag_map, mode))
 
+    bounds = _PointerBounds(program)
+    findings.extend(_evaluate_condition_pointer_past_bank(program, tag_map, bounds, mode, resolver))
     for instruction, base_location in instruction_sites:
+        findings.extend(
+            _evaluate_pointer_past_bank(instruction, base_location, tag_map, bounds, mode, resolver)
+        )
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
+        findings.extend(_evaluate_range_aggregates(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
+        findings.extend(_evaluate_timer_preset_floor(instruction, base_location, mode))
+        findings.extend(_evaluate_out_variant_unit(instruction, base_location, mode))
+        findings.extend(_evaluate_forloop_count(instruction, base_location, mode, resolver))
+        findings.extend(_evaluate_rand_bounds(instruction, base_location, mode))
+        findings.extend(_evaluate_math_bit_operands(instruction, base_location, mode))
+        findings.extend(_evaluate_wide_constants(instruction, base_location, mode))
+        findings.extend(_evaluate_text_past_bank(instruction, base_location, mode, resolver))
 
     active_profile = profile if profile is not None else _load_default_profile()
 
@@ -184,6 +301,9 @@ def validate_click_program(
                 )
             )
             findings.extend(
+                _evaluate_coil_targets(instruction, base_location, active_profile, mode, resolver)
+            )
+            findings.extend(
                 _evaluate_copy_compatibility(
                     instruction, base_location, tag_map, active_profile, mode, resolver
                 )
@@ -194,6 +314,10 @@ def validate_click_program(
             findings.extend(
                 _evaluate_drums(instruction, base_location, tag_map, active_profile, mode, resolver)
             )
+            findings.extend(_evaluate_timer_pairs(instruction, base_location, mode, resolver))
+            findings.extend(_evaluate_modbus_banks(instruction, base_location, mode, resolver))
+            findings.extend(_evaluate_search_banks(instruction, base_location, mode, resolver))
+            findings.extend(_evaluate_math_dest_bank(instruction, base_location, mode, resolver))
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []
@@ -217,35 +341,66 @@ def validate_click_program(
 __all__ = [
     "ValidationMode",
     "FindingSeverity",
+    "CLK_PTR_BLOCK_OFFSET",
     "CLK_PTR_CONTEXT_ONLY_COPY",
     "CLK_PTR_POINTER_MUST_BE_DS",
     "CLK_PTR_EXPR_NOT_ALLOWED",
-    "CLK_EXPR_ONLY_IN_CALC",
+    "CLK_EXPR_ONLY_IN_MATH",
     "CLK_TILDE_BOOL_CONTACT_ONLY",
     "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED",
     "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED",
     "CLK_PTR_DS_UNVERIFIED",
     "CLK_FUNCTION_CALL_NOT_PORTABLE",
-    "CLK_CALC_MODE_MIXED",
-    "CLK_CALC_FLOOR_DIV",
-    "CLK_CALC_FUNC_MODE_MISMATCH",
-    "CLK_CALC_NESTING_DEPTH",
+    "CLK_MATH_MODE_MIXED",
+    "CLK_MATH_FLOOR_DIV",
+    "CLK_MATH_FUNC_MODE_MISMATCH",
+    "CLK_MATH_NESTING_DEPTH",
+    "CLK_MATH_RANGE_MIXED_BANKS",
+    "CLK_MATH_RANGE_NOT_CONTIGUOUS",
+    "CLK_MATH_MEDIAN_RANGE_TOO_LARGE",
+    "CLK_MATH_BIT_RANGE_AGGREGATE",
+    "CLK_MATH_SUM_BANK_NOT_AVAILABLE",
     "CLK_PROFILE_UNAVAILABLE",
     "CLK_ADDRESS_IDENTITY_CONFLICT",
+    "CLK_NICKNAME_TOO_LONG",
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
+    "CLK_COMPARE_HEX_MIX",
     "CLK_BANK_WRONG_ROLE",
     "CLK_COPY_BANK_INCOMPATIBLE",
     "CLK_COPY_CONVERTER_INCOMPATIBLE",
     "CLK_PACK_TEXT_BANK_INCOMPATIBLE",
     "CLK_DRUM_JUMP_STEP_TAG_REQUIRED",
-    "CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED",
     "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
+    "CLK_IMMEDIATE_CONTACT_MUST_BE_X",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
+    "CLK_OUT_UNIT_UNSUPPORTED",
+    "CLK_TIMER_PAIR_MISMATCH",
+    "CLK_FORLOOP_INNER_ONESHOT",
+    "CLK_FORLOOP_NESTING_DEPTH",
+    "CLK_STEP_LIMIT",
+    "CLK_FORLOOP_RETURN_INSIDE",
+    "CLK_NESTED_CALL",
     "CLK_STATUS_BIT_NOT_PORTABLE",
+    "CLK_FORLOOP_COUNT_BANK",
+    "CLK_RAND_BOUND_TYPE",
+    "CLK_RAND_EQUAL_BOUNDS",
+    "CLK_MATH_ARG_NOT_PLAIN",
+    "CLK_MATH_WIDE_CONSTANT",
+    "CLK_TEXT_ORDER_COMPARE",
+    "CLK_TEXT_PAST_BANK",
+    "CLK_TEXT_PAST_BLOCK",
+    "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
+    "CLK_COPY_CONSTANT_INTO_BIT",
+    "CLK_MATH_BIT_OPERAND",
+    "CLK_MATH_DEST_BANK",
+    "CLK_SEARCH_RANGE_BANK",
+    "CLK_SEARCH_RESULT_NOT_DS",
+    "CLK_TIMER_PRESET_TOO_LOW",
+    "CLK_PTR_PAST_BANK",
     "ClickFinding",
     "ClickValidationReport",
 ]

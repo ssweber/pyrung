@@ -13,7 +13,7 @@ shift(C.select(1, 8)) \
 - **rung condition** is the data bit inserted at position 1
 - **Clock** — shift occurs on the rising edge of the clock condition
 - **Reset** — level-sensitive: clears all bits in range while True
-- Terminal after `.clock(...).reset(...)`.
+- With `.clock(...).reset(...)`, `shift` is a box with pins and ends its rung.
 
 Direction is determined by the range order:
 - `C.select(1, 8)` → shifts low-to-high (data enters at C1, exits at C8)
@@ -63,7 +63,45 @@ with rung(Running):
         .jog(Start)
 ```
 
-`event_drum(...)` and `time_drum(...)` are terminal builders. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
+A tag preset (`DS[1]`) needs CLICK v4 firmware. Earlier firmware takes literal durations only, and Click validation leaves a hint.
+
+## Time & event drum
+
+```python
+with rung(Running):
+    time_event_drum(
+        outputs=[Clamp, Drill, Eject],
+        presets=[500, None, 2000],
+        events=[None, PartPresent, DrillHome],
+        unit="ms",
+        pattern=[
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 0, 1],
+        ],
+        current_step=DrumStep,
+        accumulator=DrumAcc,
+        completion_flag=DrumDone,
+    ).reset(ShiftReset)
+```
+
+A step ends when its time is up **and** its event is on. `None` leaves out either half. Step 1 is time-only. Step 2 waits for `PartPresent` alone. Step 3 needs 2 s and `DrillHome`. Each step needs at least one of the two.
+
+Events are levels, unlike `event_drum`'s rising edges. An event already on when the time comes up ends the step on that scan. A step with no preset does not time.
+
+`event_drum(...)`, `time_drum(...)` and `time_event_drum(...)` end their rung. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
+
+### What a drum does each scan
+
+All three drums run the same routine:
+
+- **Reset** is a level, and it wins. While it is on, the drum sits on step 1, with its completion flag off and **every output off**.
+- **Jump and jog** act on their rising edges, even while the rung is false. A jump beats a jog. A jog on the last step completes the drum.
+- **A step's own end** needs the rung true and the completion flag off. A false rung pauses the drum and the outputs stay as they were.
+- **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then.
+- **The completion flag is the drum's state.** Completing sets it and turns every output off. While it is on, the drum's own time and events do nothing. A reset clears the flag, and so can any other rung.
+- **The step register** out of range sends the drum to step 1 on the next true scan. Writing it is not a move. The outputs stay, and the next event or jog acts on the new step.
+- **A tag preset is read on every scan** the step times. A preset of 0 or less ends the step on its first timing scan.
 
 ### Variadic condition chaining
 
@@ -86,11 +124,12 @@ search(
 )
 ```
 
-The first argument is a comparison expression built from a `.select()` range — the same operator syntax tags use elsewhere in the DSL.
+The first argument is a comparison expression built from a `.select()` range. It uses the same operator syntax as tags elsewhere in the DSL.
 
 - On success: `result = matched_address` (1-based), `found = True`
 - On miss: `result = -1`, `found = False`
-- `result` must be INT or DINT; `found` must be BOOL
+- `result` must be INT or DINT, and `found` must be BOOL
+- For CLICK, `result` must be a `DS` and the range in `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT`. The export refuses anything else
 
 ### Continuous search (resume from last position)
 
@@ -103,7 +142,7 @@ search(
 ```
 
 - `result == 0` → restart at first address
-- `result == -1` → already exhausted; return miss without rescanning
+- `result == -1` → already exhausted, so return miss without rescanning
 - otherwise → resume at first address after current result
 
 ### Text search
@@ -115,4 +154,4 @@ search(
 )
 ```
 
-Only `==` and `!=` are valid for CHAR ranges. Matches windowed substrings of length equal to the value string.
+Only `==` and `!=` are valid for CHAR ranges. The search matches substrings as long as the value string.

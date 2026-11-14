@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.trace_read as _trace_read
+from pyrung.core.analysis.crossings._ranges import stored_value_possible
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
     _heuristic_inequality_target,
     _resolve_inequality_target,
+    _resolved_atom_operand,
 )
 from pyrung.core.analysis.pilot.trace_tree import _FORM_TO_OP, _OP_TO_FORM
 from pyrung.core.analysis.pilot.writer_selection import _sole_write_instr
 from pyrung.core.analysis.reverse_semantics import normalize_reverse_result
 from pyrung.core.analysis.simplified import Atom
-from pyrung.core.analysis.sp_values import _FLIP_FORM
-from pyrung.core.crossing import AffineCmp, Cmp, Constraint, Eq
+from pyrung.core.analysis.sp_values import (
+    _CMP_OPS,
+    _FLIP_FORM,
+    _satisfying_value,
+    _values_match,
+    _written_value_for_tag,
+)
+from pyrung.core.crossing import Affine, AffineCmp, Cmp, Constraint, Eq, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -131,6 +141,76 @@ def _lever_note(requirement: Atom, original: Atom, tag: str, value: Any, marker:
     return note + ")"
 
 
+def _written_value_satisfying(
+    atom: Atom,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> Any | None:
+    """The value a writer of this tag writes that satisfies the comparison, if any.
+
+    A writer that adds a constant to the tag itself also qualifies.  Its candidate is the first
+    value that repeated adds from the current value reach and that meets the comparison.
+    """
+
+    if program is None:
+        return None
+    threshold = _resolved_atom_operand(atom, snapshot)
+    if threshold is None:
+        return None
+    written = []
+    for index in sorted(pdg.writers_of.get(atom.tag, ())):
+        rung = resolve_rung(program, pdg.rung_nodes[index])
+        value = _written_value_for_tag(rung, atom.tag) if rung is not None else None
+        if isinstance(value, Literal):
+            written.append(value.value)
+        elif isinstance(value, Affine) and value.source == atom.tag and value.scale == 1:
+            counted = _counted_value_satisfying(atom, threshold, snapshot, value.offset, pdg)
+            if counted is not None:
+                written.append(counted)
+    if atom.form == "ne":
+        return next((value for value in written if not _values_match(value, threshold)), None)
+    return _satisfying_value(atom.form, threshold, tuple(written)) if written else None
+
+
+_HOLDS = {**_CMP_OPS, "ne": lambda value, bound: value != bound}
+
+
+def _counted_value_satisfying(
+    atom: Atom, threshold: Any, snapshot: dict[str, Any], step: Any, pdg: ProgramGraph
+) -> Any | None:
+    """The first value of ``now + n * step`` (n >= 1) that satisfies *atom*, if one is in range."""
+
+    now: Any = snapshot.get(atom.tag)
+    numbers = (now, threshold, step)
+    if any(not isinstance(x, (int, float)) or isinstance(x, bool) for x in numbers) or not step:
+        return None
+    holds = _HOLDS.get(atom.form)
+    if holds is None:
+        return None
+    # A Real at inf or NaN has no next value to count to. math.ceil() would raise on it.
+    try:
+        ratio = (threshold - now) / step
+        finite = all(math.isfinite(x) for x in (*numbers, ratio))
+    except (OverflowError, ZeroDivisionError):
+        return None
+    if not finite:
+        return None
+    if atom.form == "ne":
+        n = 1
+    elif (step > 0) != (atom.form in ("gt", "ge")):
+        return None
+    else:
+        n = max(1, math.ceil(ratio))
+    # Float rounding can leave the first guess one step short.
+    for count in (n, n + 1, n + 2):
+        value = now + count * step
+        if holds(value, threshold):
+            tag = pdg.tags.get(atom.tag)
+            return value if stored_value_possible(getattr(tag, "type", None), value) else None
+    return None
+
+
 def _inequality_levers(
     atom: Atom,
     snapshot: dict[str, Any],
@@ -138,8 +218,15 @@ def _inequality_levers(
     pdg: ProgramGraph,
     prior: _trace_read.DomainPrior | None,
     program: Any = None,
+    *,
+    goal: bool = False,
 ) -> list[_Lever]:
-    """Return actionable left/right levers for one scalar inequality."""
+    """Return actionable left/right levers for one scalar inequality.
+
+    *goal* says the caller asked how() for this comparison.  A ``!=`` takes a lever from
+    what the tag's writers write only then.  Nearly any write meets a ``!=`` gate.  A lever
+    for a prerequisite would steer the tag to an arbitrary write.
+    """
 
     levers: list[_Lever] = []
     seen: set[str] = set()
@@ -153,11 +240,19 @@ def _inequality_levers(
         target = _resolve_inequality_target(requirement, snapshot, prior, pdg)
         if target is None:
             hit = _heuristic_inequality_target(requirement, snapshot, steerable, pdg)
-            if hit is None:
-                return
-            value, marker = hit
-            target = (requirement.tag, value)
-            heuristic = True
+            if hit is not None:
+                value, marker = hit
+                target = (requirement.tag, value)
+                heuristic = True
+            else:
+                # The domain prior only keeps what the program reads, and a goal can name a
+                # tag nothing reads.  What its writers write says the same thing.
+                if requirement.form == "ne" and not goal:
+                    return
+                value = _written_value_satisfying(requirement, snapshot, pdg, program)
+                if value is None:
+                    return
+                target = (requirement.tag, value)
         tag, value = target
         if tag in seen or not actionable(tag):
             return

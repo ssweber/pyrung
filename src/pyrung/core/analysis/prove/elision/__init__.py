@@ -22,10 +22,12 @@ def _elide_scan_local_stateful_dims(
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
     projected_observers: frozenset[str] = frozenset(),
+    observed_tags: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     unclassified_tags: frozenset[str] = frozenset(),
     infeasible_out: set[str] | None = None,
+    black_box_timers: bool = True,
 ) -> tuple[
     dict[str, tuple[Any, ...]],
     dict[str, str],
@@ -44,8 +46,10 @@ def _elide_scan_local_stateful_dims(
         observer_exprs=observer_exprs,
         observer_tag_names=observer_tag_names,
         projected_observers=projected_observers,
+        observed_tags=observed_tags,
         progress=progress,
         progress_prefix=progress_prefix,
         unclassified_tags=unclassified_tags,
         infeasible_out=infeasible_out,
+        black_box_timers=black_box_timers,
     )

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from pyrung.click import ClickBlocks, TagMap
+import re
+
+import pytest
+
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 from pyrung.click import validation as click_validation
+from pyrung.click.ladder.types import LadderExportError
 from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
@@ -13,14 +18,14 @@ from pyrung.click.validation import (
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-    CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
-    CLK_EXPR_ONLY_IN_CALC,
+    CLK_EXPR_ONLY_IN_MATH,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
 from pyrung.click.validation import resolve as click_resolve
 from pyrung.core import Bool, Char, Dint, Int, Timer, to_ascii, to_binary, to_text, to_value
+from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send
 from pyrung.core.program import (
     Program,
     Rung,
@@ -28,9 +33,11 @@ from pyrung.core.program import (
     copy,
     event_drum,
     forloop,
+    latch,
     on_delay,
     out,
     pack_text,
+    reset,
     time_drum,
 )
 
@@ -46,6 +53,106 @@ def _build_program(fn):
 
 def _codes(report) -> list[str]:
     return [f.code for f in (*report.errors, *report.warnings, *report.hints)]
+
+
+_TARGET = ModbusTcpTarget("plc2", "127.0.0.1", port=502, device_id=1)
+
+
+def _modbus_codes(verb: str, *, dest="ds", flag="c", exception="ds", **instruction_kwargs) -> list:
+    """Findings for a send or receive with its operands in the named banks."""
+    x, y, c, _t, _ct, sc, ds, dd, _dh, _df, _xd, _yd, _xd0u, _yd0u, td, _ctd, sd, txt = (
+        ClickBlocks()
+    )
+    banks = {"x": x, "y": y, "c": c, "sc": sc, "ds": ds, "dd": dd, "td": td, "sd": sd, "txt": txt}
+    tag_type = {"x": Bool, "y": Bool, "c": Bool, "sc": Bool, "dd": Dint, "txt": Char}
+    data = tag_type.get(dest, Int)("Data")
+    code = tag_type.get(exception, Int)("Code")
+    busy, success, error = Bool("Busy"), Bool("Success"), Bool("Error")
+    pairs = [
+        data.map_to(banks[dest][5]),
+        busy.map_to(banks[flag][1]),
+        success.map_to(c[2]),
+        error.map_to(c[3]),
+        code.map_to(banks[exception][1]),
+    ]
+
+    def logic():
+        with Rung():
+            if verb == "receive":
+                receive(
+                    target=_TARGET,
+                    remote_start="DS1",
+                    dest=data,
+                    receiving=busy,
+                    success=success,
+                    error=error,
+                    exception_response=code,
+                    **instruction_kwargs,
+                )
+            else:
+                send(
+                    target=_TARGET,
+                    remote_start="DS1",
+                    source=data,
+                    sending=busy,
+                    success=success,
+                    error=error,
+                    exception_response=code,
+                    **instruction_kwargs,
+                )
+
+    report = validate_click_program(
+        _build_program(logic), TagMap(pairs, include_system=False), mode="warn"
+    )
+    return _codes(report)
+
+
+@pytest.mark.parametrize("verb", ["send", "receive"])
+def test_modbus_operands_in_the_banks_click_lists_are_clean(verb):
+    assert CLK_BANK_WRONG_ROLE not in _modbus_codes(verb)
+    assert CLK_BANK_WRONG_ROLE not in _modbus_codes(verb, exception="dd")
+
+
+@pytest.mark.parametrize("verb", ["send", "receive"])
+@pytest.mark.parametrize("flag", ["x", "y", "sc"])
+def test_modbus_status_flag_must_be_a_c_bit(verb, flag):
+    assert CLK_BANK_WRONG_ROLE in _modbus_codes(verb, flag=flag)
+
+
+@pytest.mark.parametrize("verb", ["send", "receive"])
+@pytest.mark.parametrize("bank", ["td", "sd"])
+def test_modbus_exception_response_must_be_ds_or_dd(verb, bank):
+    assert CLK_BANK_WRONG_ROLE in _modbus_codes(verb, exception=bank)
+
+
+@pytest.mark.parametrize("bank", ["y", "c", "dd", "td", "sd", "txt"])
+def test_receive_dest_takes_the_banks_click_lists(bank):
+    # SD is listed whole, so this is not copy()'s writable subset.
+    assert CLK_BANK_WRONG_ROLE not in _modbus_codes("receive", dest=bank)
+
+
+@pytest.mark.parametrize("bank", ["x", "sc"])
+def test_receive_dest_refuses_other_banks(bank):
+    assert CLK_BANK_WRONG_ROLE in _modbus_codes("receive", dest=bank)
+
+
+def test_send_source_is_read_so_x_is_fine():
+    assert CLK_BANK_WRONG_ROLE not in _modbus_codes("send", dest="x")
+
+
+def test_a_status_bit_left_off_is_not_reported():
+    _x, _y, c, _t, _ct, _sc, ds, *_rest = ClickBlocks()
+    data = Int("Data")
+
+    def logic():
+        with Rung():
+            receive(target=_TARGET, remote_start="DS1", dest=data)
+
+    report = validate_click_program(
+        _build_program(logic), TagMap([data.map_to(ds[100])], include_system=False), mode="warn"
+    )
+    assert CLK_BANK_WRONG_ROLE not in _codes(report)
+    assert CLK_BANK_UNRESOLVED not in _codes(report)
 
 
 def test_r6_non_writable_target_bank():
@@ -229,7 +336,7 @@ def test_profile_unavailable_still_reports_stage2_findings(monkeypatch):
     report = validate_click_program(prog, tag_map, mode="warn")
 
     assert CLK_PROFILE_UNAVAILABLE in _codes(report)
-    assert CLK_EXPR_ONLY_IN_CALC in _codes(report)
+    assert CLK_EXPR_ONLY_IN_MATH in _codes(report)
 
 
 def test_program_and_tagmap_validation_facades_match_direct():
@@ -353,7 +460,6 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
     report = validate_click_program(prog, tag_map, mode="warn")
     codes = _codes(report)
     assert CLK_BANK_WRONG_ROLE not in codes
-    assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED not in codes
     assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED not in codes
 
 
@@ -407,7 +513,8 @@ def test_drum_stage3_wrong_role_failures_are_reported():
     assert len(wrong_role_locations) == len(set(wrong_role_locations))
 
 
-def test_time_drum_non_literal_preset_reports_literal_required():
+def test_time_drum_register_preset_validates_and_exports():
+    """CLICK v4 takes register durations; version checks belong to whoever pastes into CLICK."""
     enable = Bool("Enable")
     reset = Bool("Reset")
     step = Int("Step")
@@ -441,8 +548,10 @@ def test_time_drum_non_literal_preset_reports_literal_required():
         include_system=False,
     )
 
-    report = validate_click_program(prog, tag_map, mode="warn")
-    assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED in _codes(report)
+    report = validate_click_program(prog, tag_map, mode="strict")
+    assert not (*report.errors, *report.warnings, *report.hints)
+    tokens = [row[-1] for row in pyrung_to_ladder(prog, tag_map).main_rows]
+    assert any("presets=[DS2]" in token for token in tokens)
 
 
 def test_event_drum_literal_jump_step_reports_tag_required():
@@ -735,3 +844,187 @@ class TestConverterBankCompatibility:
             f.code == CLK_COPY_CONVERTER_INCOMPATIBLE and f.severity == "error"
             for f in report.errors
         )
+
+
+class TestOutVariants:
+    """Each phase of a debounce/flasher/timed coil claims a whole Timer (T + TD),
+    a register preset must be DS, and the units follow CLICK v4's Out dialog."""
+
+    Timers = Timer.clone("OutTimers", count=4)
+
+    def _map(self, *, bad_acc: bool = False, extra=()) -> TagMap:
+        timers = self.Timers
+        return TagMap(
+            [
+                Bool("Coil").map_to(y[1]),
+                Bool("Lamp").map_to(c[1]),
+                timers._blocks["Done"].map_to(t.select(1, 4)),
+                timers._blocks["Acc"].map_to((ds if bad_acc else td).select(1, 4)),
+                *extra,
+            ],
+            include_system=False,
+        )
+
+    def _report(self, body, tag_map: TagMap, mode="strict"):
+        return validate_click_program(_build_program(body), tag_map, mode=mode)
+
+    def test_valid_mapping_passes(self) -> None:
+        timers = self.Timers
+        preset = Int("OnTime")
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce, flasher, timed, toggle
+
+                toggle(Bool("Lamp"))
+                debounce(Bool("Coil"), on=(timers[1], preset), off=(timers[2], 10))
+                flasher(Bool("Coil"), on=(timers[3], 10), off=(timers[4], 10), unit="sec")
+                timed(Bool("Coil"), timers[1], 3, "min")
+
+        tag_map = self._map(extra=[preset.map_to(ds[1]), Bool("In").map_to(x[1])])
+        assert _codes(self._report(body, tag_map)) == []
+
+    def test_timer_accumulator_must_be_td(self) -> None:
+        timers = self.Timers
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce
+
+                debounce(Bool("Coil"), on=(timers[1], 10), off=(timers[2], 10))
+
+        tag_map = self._map(bad_acc=True, extra=[Bool("In").map_to(x[1])])
+        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+
+    def test_preset_register_must_be_ds(self) -> None:
+        timers = self.Timers
+        preset = Dint("OnTime")
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import timed
+
+                timed(Bool("Coil"), timers[1], preset)
+
+        tag_map = self._map(extra=[preset.map_to(dd[1]), Bool("In").map_to(x[1])])
+        assert CLK_BANK_WRONG_ROLE in _codes(self._report(body, tag_map))
+
+    def test_units_follow_the_out_dialog(self) -> None:
+        from pyrung.click.validation import CLK_OUT_UNIT_UNSUPPORTED
+
+        timers = self.Timers
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce, flasher, timed
+
+                debounce(Bool("Coil"), on=(timers[1], 1), off=(timers[2], 1), unit="min")
+                flasher(Bool("Coil"), on=(timers[3], 1), off=(timers[4], 1), unit="hour")
+                timed(Bool("Coil"), timers[1], 1, "day")
+
+        tag_map = self._map(extra=[Bool("In").map_to(x[1])])
+        report = self._report(body, tag_map)
+        assert _codes(report).count(CLK_OUT_UNIT_UNSUPPORTED) == 3
+        messages = [f.message for f in report.errors if f.code == CLK_OUT_UNIT_UNSUPPORTED]
+        assert "debounce coil times in ms/sec, not min" in messages[0]
+        assert "timed coil times in ms/sec/min, not day" in messages[2]
+
+    def test_preset_overflow(self) -> None:
+        from pyrung.click.validation import CLK_TIMER_PRESET_OVERFLOW
+
+        timers = self.Timers
+
+        def body():
+            with Rung(Bool("In")):
+                from pyrung import debounce
+
+                debounce(Bool("Coil"), on=(timers[1], 40_000), off=(timers[2], 50_000))
+
+        tag_map = self._map(extra=[Bool("In").map_to(x[1])])
+        assert _codes(self._report(body, tag_map)).count(CLK_TIMER_PRESET_OVERFLOW) == 2
+
+    def test_immediate_toggle_needs_y(self) -> None:
+        from pyrung import immediate, toggle
+        from pyrung.click.validation import CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y
+
+        def body():
+            with Rung(Bool("In")):
+                toggle(immediate(Bool("Lamp")))
+
+        tag_map = self._map(extra=[Bool("In").map_to(x[1])])
+        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y in _codes(self._report(body, tag_map))
+
+
+def test_timer_done_and_acc_must_share_one_number():
+    """CLICK names one timer (or counter) number; T5 with TD7 cannot be stored."""
+    from pyrung import debounce
+    from pyrung.click.validation import CLK_TIMER_PAIR_MISMATCH
+
+    split, other = Timer.clone("SplitTimer"), Timer.clone("OtherTimer")
+    paired = Timer.clone("PairedTimer")
+
+    def logic():
+        with Rung(Bool("In")):
+            debounce(Bool("Coil"), on=(split, 10), off=(paired, 10))
+            on_delay(other, preset=10)
+
+    tag_map = TagMap(
+        [
+            Bool("In").map_to(x[1]),
+            Bool("Coil").map_to(y[1]),
+            split.Done.map_to(t[5]),
+            split.Acc.map_to(td[7]),
+            paired.Done.map_to(t[6]),
+            paired.Acc.map_to(td[6]),
+            other.Done.map_to(t[7]),
+            other.Acc.map_to(td[5]),
+        ],
+        include_system=False,
+    )
+    report = validate_click_program(_build_program(logic), tag_map, mode="strict")
+    mismatches = [f for f in report.errors if f.code == CLK_TIMER_PAIR_MISMATCH]
+    assert len(mismatches) == 2
+    assert "T5 and TD7" in mismatches[0].message
+    assert "T7 and TD5" in mismatches[1].message
+
+
+@pytest.mark.parametrize(
+    ("instruction", "target", "expected"),
+    [
+        (reset, txt[1], "reset(TXT1) at main.rung[0]"),
+        (reset, ds[1], "reset(DS1) at main.rung[0]"),
+        (reset, ds.select(1, 3), "reset(DS1..DS3) at main.rung[0]"),
+        (latch, dd[1], "latch(DD1) at main.rung[0]"),
+        (out, df[1], "out(DF1) at main.rung[0]"),
+    ],
+)
+def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):
+    """CLICK's Out, Set and Reset coils take bit memory only (X, Y, C, T, CT, SC)."""
+    coil = {reset: "Reset", latch: "Set", out: "Out"}[instruction]
+
+    def logic():
+        with Rung(c[1]):
+            instruction(target)
+
+    prog = _build_program(logic)
+    report = validate_click_program(prog, TagMap(), mode="strict")
+    wrong = [f for f in report.errors if f.code == CLK_BANK_WRONG_ROLE]
+    assert len(wrong) == 1, _codes(report)
+    message = wrong[0].message
+    assert message.startswith(expected), message
+    assert f"CLICK's {coil} coil takes bit memory only" in message
+    assert message.isascii()
+    with pytest.raises(LadderExportError, match=re.escape(expected)):
+        pyrung_to_ladder(prog, TagMap())
+
+
+def test_coil_on_bit_memory_passes():
+    def logic():
+        with Rung(x[1]):
+            out(y[1])
+            latch(c[1])
+            reset(c.select(2, 4))
+            reset(sc[50])
+
+    report = validate_click_program(_build_program(logic), TagMap(), mode="strict")
+    assert CLK_BANK_WRONG_ROLE not in _codes(report)

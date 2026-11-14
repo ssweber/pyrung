@@ -7,7 +7,7 @@ pyrung Click validation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pyclickplc.banks import BANKS
 
@@ -25,6 +25,7 @@ InstructionRole = Literal[
     "drum_jump_step",
     "drum_event_condition",
     "copy_pointer",
+    "coil_target",
 ]
 
 CopyOperation = Literal[
@@ -120,6 +121,8 @@ INSTRUCTION_ROLE_COMPATIBILITY: dict[InstructionRole, frozenset[str]] = {
     "drum_jump_step": frozenset({"DS"}),
     "drum_event_condition": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
     "copy_pointer": frozenset({"DS"}),
+    # CLICK's Out, Set and Reset coils take bit memory only.
+    "coil_target": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
 }
 
 _BIT_SOURCES: frozenset[str] = frozenset({"X", "Y", "C", "T", "CT", "SC"})
@@ -230,6 +233,27 @@ COMPARE_CONSTANT_COMPATIBILITY: dict[str, frozenset[CompareConstantKind]] = {
     "TXT": _constant_kinds("text"),
 }
 
+# Banks whose constants CLICK writes in hex (``FFh``): compares against them,
+# and copy/fill/search constants that land in them.
+HEX_CONSTANT_BANKS: frozenset[str] = frozenset(
+    bank for bank, kinds in COMPARE_CONSTANT_COMPATIBILITY.items() if kinds == {"hex"}
+)
+
+
+def single_register_fill_dest(dest: Any) -> Any | None:
+    """The one tag a ``fill()`` destination covers, or ``None``.
+
+    CLICK's Fill dialog needs at least two registers, so a Fill of one register
+    exports as a Copy.  Only a range known when the program is written counts. A
+    pointer range can be one register long at run time, and it stays a Fill.
+    """
+    from pyrung.core.memory_block import BlockRange
+
+    if not isinstance(dest, BlockRange):
+        return None
+    tags = dest.tags()
+    return tags[0] if len(tags) == 1 else None
+
 
 class ClickHardwareProfile:
     """Capability lookup API for Click portability validation."""
@@ -306,6 +330,7 @@ __all__ = [
     "COPY_COMPATIBILITY",
     "COMPARE_COMPATIBILITY",
     "COMPARE_CONSTANT_COMPATIBILITY",
+    "HEX_CONSTANT_BANKS",
     "ClickHardwareProfile",
     "CLICK_HARDWARE_PROFILE",
 ]

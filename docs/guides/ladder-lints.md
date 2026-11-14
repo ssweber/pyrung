@@ -27,7 +27,7 @@ for finding in report:
   = hint: did you mean Or(ModeCommand < 1, ModeCommand > 3)?
 ```
 
-This is an easy mistake when transcribing a drawn ladder. Contacts placed in series mean AND; contacts on parallel branches mean OR. Multiple `rung(...)` arguments preserve the series relationship, while `Or(...)` preserves the parallel one.
+Contacts placed in series mean AND, and contacts on parallel branches mean OR. Multiple `rung(...)` arguments preserve the series relationship, while `Or(...)` preserves the parallel one.
 
 The corrected guard uses parallel logic:
 
@@ -36,7 +36,7 @@ with rung(Or(ModeCommand < 1, ModeCommand > 3)):
     out(InvalidMode)
 ```
 
-`logic.check()` runs a core set across the whole ladder: contradictory rungs, always-true OR conditions, always-false comparisons, timer/counter equality hazards, conflicting outputs, invalid tag writes, overwritten writes, invalid pointer addresses, recursive calls, and definite division by zero. Broader checks such as stuck coils and comparison style are opt-in.
+`logic.check()` runs a core set of rules across the whole ladder. Broader checks such as stuck coils and comparison style are opt-in.
 
 For a CI gate that fails on errors:
 
@@ -67,17 +67,9 @@ The four severities are:
 
 The report is truthy when it contains any finding. Use `assert not report` when every severity must be clean.
 
-### Diagnostic frames
-
-The opening diagnostic shows the standard single-site frame: a source location, the ladder as written, a caret carrying the short explanation, and a concrete repair when the lint can name one. The underline follows the offending span, so it may cover one value, one instruction target, one comparison, or all contradictory rung terms.
-
-Findings involving several sites lead with the shared problem and then show one frame per site. This is how conflicting outputs, multiple writers, repeated comparisons, and same-scan physical toggles show the relationship rather than blaming one line. Tag-level findings with no instruction to underline show the tag location without a source frame.
-
-`str(finding)` is the complete terminal diagnostic shown above. For integrations, `finding.display` exposes the structured `.problem`, `.frames`, and `.hint`; `finding.message` contains the frame-and-hint body without the code and severity header. Consumers do not need to parse terminal text.
-
 ## Selecting rules
 
-The fourteen core rules run when `select` is omitted. `select` replaces that set, `extend_select` adds to it, and `ignore` excludes rules. Selectors accept complete codes, prefixes, or `ALL`:
+The core rules run when `select` is omitted. `select` replaces that set. `extend_select` adds to it. `ignore` excludes rules. Selectors accept complete codes, prefixes, or `ALL`:
 
 ```python
 logic.check(select={"RUNG"})
@@ -102,9 +94,9 @@ Categories are the prefixes before the first underscore:
 | `PHYS` | Physical-link completeness and realism |
 | `STEP` | State-machine steps with no available escape |
 
-The most specific matching selector wins; `ignore` wins a tie. Unknown selectors raise `ValueError`. `report.checked_rules` records the actual selection, including checks that produced no findings.
+The most specific matching selector wins, and `ignore` wins a tie. `report.checked_rules` records the actual selection, including checks that produced no findings.
 
-The core set is `TAG_READONLY_WRITE`, `TAG_CHOICES_VIOLATION`, `TAG_RANGE_VIOLATION`, `TAG_FINAL_MULTIPLE_WRITERS`, `TAG_DEAD_WRITE`, `COIL_CONFLICTING_OUTPUT`, `PTR_DEFAULT_BEFORE_BLOCK_START`, `PTR_MAY_ESCAPE_BLOCK`, `RUNG_CONTRADICTION`, `RUNG_TAUTOLOGY`, `CMP_ALWAYS_FALSE`, `CMP_EQ_ON_MONOTONE`, `CALL_RECURSION`, and `MATH_DIV_ZERO`. Registry entries expose `default_on` for integrations.
+The core set is `TAG_READONLY_WRITE`, `TAG_CHOICES_VIOLATION`, `TAG_RANGE_VIOLATION`, `TAG_FINAL_MULTIPLE_WRITERS`, `TAG_DEAD_WRITE`, `COIL_CONFLICTING_OUTPUT`, `PTR_DEFAULT_BEFORE_BLOCK_START`, `PTR_MAY_ESCAPE_BLOCK`, `RUNG_CONTRADICTION`, `RUNG_TAUTOLOGY`, `RUNG_ORDER_DEPENDENT`, `CMP_ALWAYS_FALSE`, `CMP_EQ_ON_MONOTONE`, `CALL_RECURSION`, and `MATH_DIV_ZERO`.
 
 ### Project settings
 
@@ -116,9 +108,9 @@ ignore = ["CMP_STATIC_ON_LEFT", "CMP_REPEATED_STATE_VALUE"]
 
 Omit `select` to retain core defaults, or use `select = ["ALL"]` to enable everything. Prefixes also select matching checks added in later versions.
 
-`pyrung check` reads the nearest ancestor `pyproject.toml` containing this section, starting from the current directory. `--config path/to/pyproject.toml` chooses a file explicitly. Command-line `--select` and `--ignore` replace their project values; `--extend-select` adds to the project extensions.
+`pyrung check` starts in the current directory and reads the nearest ancestor `pyproject.toml` that contains this section. `--config path/to/pyproject.toml` chooses a file explicitly. Command-line `--select` and `--ignore` replace their project values. `--extend-select` adds to the project's `extend-select` list.
 
-The Python API never reads a working-directory configuration implicitly. Integrations can share the same policy through `pyrung.core.validation.CheckConfig`, `load_check_config`, and `save_check_config`; saving preserves unrelated TOML settings and comments.
+`logic.check()` does not read `[tool.pyrung.check]`. Pass `select` and `ignore` to it.
 
 ## Command line
 
@@ -130,7 +122,7 @@ pyrung check my_program --select RUNG CMP
 pyrung check my_program --ignore CMP_STATIC_ON_LEFT
 ```
 
-Use `module:variable` when a module contains more than one program. The command prints every finding and exits with status 1 when the report contains an error. Warnings, information, and advisories are shown without failing the command.
+Use `module:variable` when a module contains more than one program. The command prints every finding and exits with status 1 when the report contains an error.
 
 Against a program already loaded by the debugger:
 
@@ -145,39 +137,39 @@ pyrung live check RUNG
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `RUNG_CONTRADICTION` | Error | A rung condition conjunction that is provably unsatisfiable, so the rung can never fire. A bare `Rung()` is intentionally always on and is not reported. |
-| `RUNG_TAUTOLOGY` | Warning | A top-level `Or(...)` term that is provably always true and therefore gates nothing. The finding shows the residual condition that actually controls the rung. |
-| `RUNG_REDUNDANT_TERM` | Info | An exact duplicate or provably subsumed Boolean/range term. Contradictions and tautologies take precedence over this lower-severity finding. |
+| `RUNG_CONTRADICTION` | Error | A rung condition conjunction that is provably unsatisfiable, so the rung can never fire. |
+| `RUNG_TAUTOLOGY` | Warning | A top-level `Or(...)` term that is provably always true and therefore gates nothing. |
+| `RUNG_REDUNDANT_TERM` | Info | An exact duplicate or provably subsumed Boolean/range term. |
+| `RUNG_ORDER_DEPENDENT` | Warning | A branch, a `.continued()` rung, or a box's pin (`.reset()`, `.jump()`, `.jog()`, `.clock()`, `.down()`, a drum event) reads a tag written by an instruction above it in the same rung (or chain of continued rungs), so it sees the new value ([how a rung evaluates](../instructions/rungs.md)). |
+
+The check ignores instruction operands, because they always see every write above them. Move the read to a rung of its own below the write, or the write to a rung above, so the order no longer matters.
 
 ### Coils
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `COIL_CONFLICTING_OUTPUT` | Error | Multiple `out`/timer/counter/drum/shift instructions target the same tag from paths that are not provably mutually exclusive. The last writer wins every scan. |
+| `COIL_CONFLICTING_OUTPUT` | Error | Multiple `out`/timer/counter/drum/shift instructions target the same tag from paths that are not provably mutually exclusive. Whichever wrote last wins. |
 | `COIL_STUCK_HIGH` | Warning | A tag is latched but never reset. An `out` inside a skippable subroutine counts as a latch; see [Outputs in skippable subroutines](#outputs-in-skippable-subroutines). |
 | `COIL_STUCK_LOW` | Warning | A tag is reset but never latched anywhere in the program. |
+
+For conflicting outputs, the lint proves mutual exclusivity for different-constant equality comparisons, complementary Boolean contacts, and complementary ranges such as `<`/`>=` or `<=`/`>`. Different subroutines are safe when their caller conditions are provably exclusive. When exclusivity cannot be established statically, the lint keeps the finding.
 
 ### Comparisons
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `CMP_ALWAYS_FALSE` | Warning | A comparison that is false for every value in its complete Bool, choices, bounded-integer, or fully understood producer domain. The finding names the operand's values and whether they come from a declaration or from its writer rungs. Open domains are left alone. |
-| `CMP_ALWAYS_TRUE` | Info | An equality or inequality comparison that is true for every value in a complete domain. Ordered range comparisons are retained as defensive guards. |
+| `CMP_ALWAYS_FALSE` | Warning | A comparison that is false for every value its operand can hold, as set by its Bool type, its `choices=`, its integer bounds, or the values the rungs that write it produce. |
+| `CMP_ALWAYS_TRUE` | Info | An equality or inequality comparison that is true for every value in a complete domain. |
 | `CMP_EQ_ON_MONOTONE` | Warning | Equality against a timer or counter accumulator that can step past the exact value. |
-| `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. Configured defaults, external and physical inputs, read-only constants, and numeric `0`/`1` Boolean conventions are left alone. |
-| `CMP_PRESET_STAYS_ZERO` | Warning | A tag-valued timer or counter preset has an implicit zero start and no ladder writer, so completion is immediate. Configured and literal zero presets are left alone. |
-| `CMP_STEPPER_VALUE_NOT_SET` | Warning | A discrete stepping tag is compared with a value that none of its understood producers can establish. Dynamic, external, and unresolved producer paths are left alone. |
-| `CMP_REPEATED_STATE_VALUE` | Advisory | Literal equality comparisons against the same discrete values are repeated heavily or spread across the program. Numeric `0`/`1`-only conventions are left alone. |
+| `CMP_EQ_ON_COMPUTED_REAL` | Advisory | `==` or `!=` on a REAL the ladder computes with `math()` (or copies from one), where rounding can step over the exact value. Use a range or a tolerance. |
+| `CMP_OPERAND_NO_WRITER` | Advisory | A numeric comparison operand has no ladder writer or declared outside source. |
+| `CMP_PRESET_STAYS_ZERO` | Warning | A timer, counter or drum step preset is a tag that starts at 0 and no rung writes, so the timer, counter or step finishes at once. |
+| `CMP_STEPPER_VALUE_NOT_SET` | Warning | A step tag (one the program moves through a set of values) is compared with a value no rung sets it to. |
+| `CMP_REPEATED_STATE_VALUE` | Advisory | Literal equality comparisons against the same discrete values are repeated heavily or spread across the program. |
 | `CMP_TRUE_AT_RESET` | Warning | A timer or counter completion comparison is already true when the accumulator resets. |
-| `CMP_STATIC_ON_LEFT` | Advisory | An ordered comparison may read backwards because the changing value is on the right. Equality and inequality comparisons are left alone. |
-
-Writable numeric flags compared with `0` or `1` are not treated as constant merely
-because they start at zero and have no ladder writer. Readonly constants, declared
-choices or bounds, and known ladder writes can still establish an impossible
-comparison. A default is initialization, not a declaration that a flag cannot change.
+| `CMP_STATIC_ON_LEFT` | Advisory | An ordered comparison may read backwards because the changing value is on the right. |
 
 ### Tags
-
 
 | Code | Severity | What it detects |
 |---|---|---|
@@ -185,39 +177,40 @@ comparison. A default is initialization, not a declaration that a flag cannot ch
 | `TAG_CHOICES_VIOLATION` | Error | A literal write is not present in the target tag's `choices` keys. |
 | `TAG_RANGE_VIOLATION` | Error | A literal write falls outside the target tag's declared `min`/`max` limits. |
 | `TAG_FINAL_MULTIPLE_WRITERS` | Error | More than one write site targets a tag declared with `final=True`. Mutual exclusivity does not exempt the writers. |
-| `TAG_DEAD_WRITE` | Warning | A resolved direct scalar write that ordered scan analysis proves is overwritten before any read. The first implementation deliberately punts on loops, branches, calls, subroutine returns, indirect targets, one-shots, and conditional overwrites. |
+| `TAG_DEAD_WRITE` | Warning | A write that a later write in the same scan always overwrites before anything reads it. |
 
 ### Pointers
 
 | Code | Severity | What it detects |
 |---|---|---|
 | `PTR_DEFAULT_BEFORE_BLOCK_START` | Warning | An exact indirect dereference such as `DS[Ptr]` uses a pointer whose default is below the block start. This usually means a 1-based block is indexed by a tag with the implicit `default=0`. |
-| `PTR_MAY_ESCAPE_BLOCK` | Warning | Possible values at an access include invalid addresses compatible with its still-valid guards. Merely writing the pointer does not establish safety: the assigned value must be in bounds. |
-| `PTR_UNGUARDED_ACCESS` | Advisory | The pointer domain is open and its guards do not establish both block bounds. This optional check reports missing evidence, rather than claiming an invalid address is certain. |
+| `PTR_MAY_ESCAPE_BLOCK` | Warning | A pointer can still point outside its block where it is used, even with the conditions that guard that use. |
+| `PTR_UNGUARDED_ACCESS` | Advisory | Nothing limits the pointer's values, and its guards don't check both ends of the block. |
 
-These checks cover scalar `Block[Ptr]` accesses. Direct copies and simple affine calculations propagate known values; unknown writes, calls, and loops invalidate local evidence. This is conservative static analysis, not a complete reachability proof.
+These checks cover scalar `Block[Ptr]` accesses.
 
 ```python
 with rung(Ptr >= 1, Ptr <= 100):
     copy(Data[Ptr], Result)
 ```
 
-Conditions on a rung, its branches, and its `.continued()` rungs share the pre-instruction snapshot. Writing `Ptr` before the access invalidates a guard evaluated against that snapshot. An indirect read inside a condition can only use earlier short-circuit AND terms as guards. Declared or inferred bounds alone do not make a defensive range guard redundant.
+A guard covers the access only if nothing writes `Ptr` between the guard's read and the access.
 
 ### Calls and arithmetic
 
 | Code | Severity | What it detects |
 |---|---|---|
 | `CALL_NEVER_CALLED` | Info | A program-owned subroutine with no call path from Main. |
-| `CALL_RECURSION` | Error | A direct or indirect recursive subroutine component. One concrete closed call path is shown for each recursive component. |
-| `MATH_DIV_ZERO` | Error | A `/`, `//`, or `%` divisor in `calc` that is proved zero whenever the instruction can execute. Literal/constant zero, solely-zero closed domains, and guard-proved scan-stable tags are covered; possible-zero and control-flow-ambiguous cases are left alone. |
+| `CALL_RECURSION` | Error | A subroutine that calls itself, directly or through other subroutines. |
+| `MATH_DIV_ZERO` | Error | A `/`, `//`, or `%` divisor in `math` that is proved zero whenever the instruction can execute. |
 
 ### Physical behavior
 
 | Code | Severity | What it detects |
 |---|---|---|
-| `PHYS_MISSING_PROFILE` | Info | A tag has a `Physical` relationship through `link`, but the linked tag has no physical profile. |
+| `PHYS_MISSING_PROFILE` | Info | A tag has a `Physical` relationship through `link`, but the linked analog tag has no `ramp_on` or `approach_to` response. |
 | `PHYS_ANTITOGGLE` | Warning | A feedback-linked command can pulse or change state faster than its declared feedback timing. |
+| `PHYS_LINK_UNKNOWN` | Warning | A tag's `link` names an enable the program never reads or writes, so the harness has nothing to drive its feedback from. |
 
 The physical checks, including `TAG_RANGE_VIOLATION`, use the scan interval passed as `dt`:
 
@@ -261,12 +254,6 @@ with rung(Mode == 3):
 
 The state tag needs a closed domain through `choices=` or `min`/`max`. Without one, `Mode == 7` remains possible and the lint reports the coil. A `Bool` discriminator such as `Enable`/`~Enable` already has a closed domain. An edge-gated call such as `rise(Request)` never provides full coverage because the edge is false on nearly every scan.
 
-## Structural checks and reachability
-
-`COIL_STUCK_HIGH` and `COIL_STUCK_LOW` ask whether the program contains the required opposing write. [`plc.query.stranded_bits()`](analysis-coverage.md#stranded-bits) asks whether that write can actually be reached.
-
-For conflicting outputs, the lint proves mutual exclusivity for different-constant equality comparisons, complementary Boolean contacts, and complementary ranges such as `<`/`>=` or `<=`/`>`. Different subroutines are safe when their caller conditions are provably exclusive. When exclusivity cannot be established statically, the lint keeps the finding.
-
 ## Target validation
 
 Core ladder lints and target portability checks run separately:
@@ -277,4 +264,4 @@ logic.validate("click", tag_map=mapping, mode="strict")
 logic.validate("circuitpy", hw=hw, mode="strict")
 ```
 
-`logic.validate()` without a dialect remains a compatibility alias for `logic.check()`. The dialect forms check whether a program can run on that target; they do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.
+The dialect forms check whether a program can run on that target. They do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.

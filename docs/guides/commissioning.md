@@ -1,6 +1,6 @@
 # The Commissioning Workflow
 
-You wrote logic and tested it. Now close the loop: declare what your program talks to, prove it's correct, and commission it with confidence.
+You wrote logic and tested it. Now close the loop. Declare what your program talks to, prove it's correct, and commission it.
 
 pyrung's commissioning workflow has four stages. Each builds on the last.
 
@@ -19,7 +19,7 @@ class ConveyorIO:
     )
 ```
 
-`physical=` describes timing — how long the real device takes to respond. `link=` tells the harness which command drives this feedback. Tag flags (`public`, `external`, `readonly`, `final`) declare intent and are enforced by ladder lints. Standalone tags can use `link=` too — useful for process-level physics like "diverter fires → box arrives at sensor."
+`physical=` describes timing, which is how long the real device takes to respond. `link=` tells the harness which command drives this feedback. Tag flags (`public`, `external`, `readonly`, `final`) declare intent and are enforced by ladder lints. Standalone tags can use `link=` too. This is useful for process-level physics like "diverter fires → box arrives at sensor."
 
 See [Physical Annotations and Autoharness](physical-harness.md) for the full guide: standalone tags, value triggers, profile functions, validation, and forces override behavior.
 
@@ -41,7 +41,7 @@ with PLC(logic) as plc:
 - **`plc.cause()` / `plc.effect()`** — causal chain analysis. What caused a transition, what it caused downstream, and what-if projections with `assume=`.
 - **`plc.query`** — test coverage surveys. Cold rungs, hot rungs, stranded bits with blocker diagnostics. Merge across a test suite with the pytest plugin.
 
-[Ladder lints](ladder-lints.md) run at build time via `logic.check()` — contradictory rungs, conflicting outputs, stuck bits, readonly writes, suspicious comparisons, and physical realism checks.
+[Ladder lints](ladder-lints.md) run when you call `logic.check()`. By default they cover contradictory rungs, conflicting outputs, readonly writes and suspicious comparisons. The stuck-coil checks (`COIL_STUCK_*`) and the `PHYS_*` checks are opt-in (`extend_select=`).
 
 See [Analysis](analysis.md) for the full guide — program structure, diagnosis, cause/effect, and test coverage.
 
@@ -56,7 +56,7 @@ result = never(logic, Running, ~EstopOK)
 assert isinstance(result, Proven)
 ```
 
-`never()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage — batch all conditions into a single `never()` call to share work across properties:
+`never()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage. Batch all conditions into a single `never()` call to share work across properties:
 
 ```python
 couplings = list(harness.couplings())
@@ -67,7 +67,7 @@ conditions = [
 results = never(logic, conditions)
 ```
 
-Lock files capture reachable behavior as a committed artifact. `pyrung lock` writes it; `pyrung lock --check` diffs against it in CI. Behavioral changes show up in PRs.
+A lock file captures reachable behavior as a committed artifact. `pyrung lock` writes it. `pyrung lock --check` diffs against it in CI. Behavioral changes show up in PRs.
 
 See [Verification](verification.md) for the full guide: condition syntax, result types, fault coverage workflows, lock file configuration, and CLI reference.
 
@@ -76,8 +76,8 @@ See [Verification](verification.md) for the full guide: condition syntax, result
 With physical annotations in place, the VS Code debugger auto-installs the harness. Step through scans, force tags, and watch values live.
 
 - **[VS Code Debugger](dap-vscode.md)** — breakpoints, monitors, Data View, Graph View, history scrubber with Chain tab for causal queries.
-- **[pyrung live](dap-vscode.md#pyrung-live)** — attach to a running debug session from another terminal. Chain commands, force tags, run causal queries. Pair VS Code (human stepping through scans) with `pyrung live` (an LLM or script running causal queries and forcing tags) for assisted commissioning.
-- **[Session capture](dap-vscode.md#session-capture)** — record a debug session as a replayable transcript. Condense to a minimal reproducer, mine invariants, generate pytest files.
+- **[pyrung live](console.md#pyrung-live)** — attach to a running debug session from another terminal. Chain commands, force tags, run causal queries. Pair VS Code (human stepping through scans) with `pyrung live` (an LLM or script running causal queries and forcing tags) for assisted commissioning.
+- **[Session capture](console.md#session-capture)** — record a debug session as a replayable transcript. Condense to a minimal reproducer, mine invariants, generate pytest files.
 
 For hardware deployment, see [CLICK PLC](../dialects/click.md) (TagMap, validation, soft-PLC) or [CircuitPython](../dialects/circuitpy.md) (P1AM code generation).
 

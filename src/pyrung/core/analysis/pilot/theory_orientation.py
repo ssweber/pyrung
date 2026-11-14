@@ -77,6 +77,16 @@ from pyrung.core.instruction.advance import constraint_holds
 from pyrung.core.intrascan_counterfactual import CounterfactualPatch, OccurrenceBoundary
 
 
+def _program_tag(work: Any, name: str) -> Any:
+    """The tag named *name* that *work* knows or its rungs reach, or None.
+
+    A slot a pointer or a range reaches is found here whether or not an earlier analysis
+    asked its block for it.
+    """
+    lookup = getattr(work, "_tag_known_or_reached", None)
+    return None if lookup is None else lookup(name)
+
+
 def _act_preserves_requirements(world: OrientationWorld, act: Any) -> bool:
     """Admit only acts whose declared atomic inputs preserve live constraints."""
 
@@ -1129,7 +1139,7 @@ def _theory_correction_composition(
                 )
                 assert boundary is not None
                 prevented_write = _requirement_obstruction(parent)
-                tag = getattr(world.state.work, "_known_tags_by_name", {}).get(rung.dest)
+                tag = _program_tag(world.state.work, rung.dest)
                 patch = CounterfactualPatch(
                     dest=rung.dest,
                     value=rung.value,
@@ -1426,7 +1436,7 @@ def _theory_intrascan_frontier_bearing(
                 for atom in missing:
                     if atom.tag in ctx.steerable and not atom.operand_is_tag:
                         direct_values: tuple[Any, ...] = ()
-                        tag = getattr(world.state.work, "_known_tags_by_name", {}).get(atom.tag)
+                        tag = _program_tag(world.state.work, atom.tag)
                         if atom.form in {"xic", "rise", "truthy"}:
                             direct_values = (True,)
                         elif atom.form in {"xio", "fall"}:
@@ -1595,6 +1605,10 @@ def _counterfactual_boundary(
 
     if occurrence.kind != "read":
         return None
+    if occurrence.execution_kind == "loop_body":
+        # Every body rung of a loop, on every iteration, shares one boundary;
+        # a patch there cannot name the one occurrence it means.
+        return None
     subroutine, rung_index = occurrence.rung
     return OccurrenceBoundary(
         rung_id=RungId(subroutine, rung_index),
@@ -1757,7 +1771,7 @@ def _theory_setup_traceback(
                 or constraint_holds(condition, {condition.tag: occurrence.values[0]}) is not False
             ):
                 continue
-            tag = getattr(world.state.work, "_known_tags_by_name", {}).get(condition.tag)
+            tag = _program_tag(world.state.work, condition.tag)
             if tag is None:
                 continue
             values = satisfying_values(tag, (condition,), dict(world.snapshot))
@@ -1923,7 +1937,7 @@ def _theory_intrascan_continuation_traceback(
         obstruction_occurrences = demand.obstruction_occurrences
         if len(obstruction_occurrences) > 1:
             continue
-        tag = getattr(world.state.work, "_known_tags_by_name", {}).get(condition.tag)
+        tag = _program_tag(world.state.work, condition.tag)
         boundary = _counterfactual_boundary(
             occurrence,
             demand.selected_writers[0] if len(demand.selected_writers) == 1 else None,
@@ -2213,12 +2227,6 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
     anchors = _tree_work_anchors(frame.tree, route)
     anchor_tags = {tag for tag, _value in anchors}
     reasons: list[str] = []
-
-    def _matches_anchor(tag: str, value: Any) -> bool:
-        return any(
-            anchor_tag == tag and _values_match(anchor_value, value)
-            for anchor_tag, anchor_value in anchors
-        )
 
     pending = getattr(state, "pending_departure", None)
     if pending is not None and pending.opening.channel_tag in anchor_tags:

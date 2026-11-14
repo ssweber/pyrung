@@ -111,6 +111,16 @@ def _compile_pack_words_instruction(
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
+def _clamp_fault(dest_type: str, fault_body: list[str], spaces: int) -> list[str]:
+    """Lines raising the out-of-range fault when an INT or DINT pack clamped."""
+    if dest_type not in {"INT", "DINT"}:
+        return []
+    return [
+        " " * spaces + "if _packed_value != _parsed:",
+        *_indent_body(fault_body, spaces + 4),
+    ]
+
+
 def _compile_pack_text_instruction(
     instr: PackTextInstruction,
     enabled_expr: str,
@@ -147,6 +157,7 @@ def _compile_pack_text_instruction(
                 *_indent_body(
                     _compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 8
                 ),
+                *_clamp_fault(dest_type, fault_body, 8),
                 "    except (TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 8),
             ]
@@ -158,6 +169,7 @@ def _compile_pack_text_instruction(
             f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
             f"    _packed_value = {_store_coerce_expr('_parsed', dest_type, ctx)}",
             *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
+            *_clamp_fault(dest_type, fault_body, 4),
             "except (TypeError, ValueError, OverflowError):",
             *_indent_body(fault_body, 4),
         ]

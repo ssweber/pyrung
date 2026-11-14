@@ -1,16 +1,11 @@
-"""Selection, reporting, and obstruction diagnosis for a target route."""
+"""Selection and reporting for a target route."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import RouteAlt, RoutePivot, RouteTaken
-from pyrung.core.analysis.pilot.trace import trace_back
-from pyrung.core.analysis.pilot.trace_read import (
-    TraceChoice,
-    TraceReadConstraints,
-    UnsupportedConstruct,
-)
+from pyrung.core.analysis.pilot.trace_read import TraceChoice, TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_routes import rank_trace_choices
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only
@@ -18,68 +13,6 @@ from pyrung.core.analysis.steerable import compute_clear_only
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.runner import PLC
-
-
-# ---------------------------------------------------------------------------
-# Failure diagnostics
-# ---------------------------------------------------------------------------
-
-
-def harness_couplings(plc: PLC) -> tuple[tuple[str, str], ...]:
-    """The ``(en, fb)`` pairs the Harness still synthesizes on *plc*, for the
-    linked-feedback diagnostic.  Empty when there is no harness (no couplings)
-    or every coupling was ``unlink``-ed away."""
-    harness = getattr(plc, "_harness", None)
-    if harness is None:
-        return ()
-    return tuple((c.en_name, c.fb_name) for c in harness.couplings())
-
-
-def linked_feedback_block(
-    target_tag: str,
-    target_value: Any,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    couplings: tuple[tuple[str, str], ...],
-) -> str | None:
-    """Honest diagnostic for an unreachable target gated by a harness link.
-
-    When the target's backward-trace route contains both a synthesized feedback
-    tag ``fb`` *and* its driver ``en`` (the ``link=`` source), the Harness holds
-    ``fb`` lockstep with ``en`` — so the moment the route drives ``en`` to its
-    active value, the link drives ``fb`` to the opposite of what the route needs
-    (valve open ⇒ flow sensor reads active, defeating the "no flow" watchdog).
-    PILOT may not steer ``fb`` (the Harness owns it), so the target is
-    unreachable until the link is defeated.  Returns a message naming the
-    offending link(s) and the ``unlink=`` override, or ``None`` if no link gates
-    the route (then the caller falls back to the generic budget reason).
-    """
-    if not couplings:
-        return None
-    try:
-        tree = trace_back(target_tag, target_value, snapshot, pdg, program, steerable)
-    except UnsupportedConstruct:
-        raise
-    except Exception:  # noqa: BLE001 — diagnostic only; never mask the real failure
-        return None
-    route_tags = {n.tag for n in tree.iter_nodes()}
-    blockers = [
-        (en, fb)
-        for en, fb in couplings
-        if fb in route_tags and en in route_tags and fb not in steerable
-    ]
-    if not blockers:
-        return None
-    links = ", ".join(f"{fb}<-{en}" for en, fb in blockers)
-    names = ", ".join(repr(fb) for _en, fb in blockers)
-    return (
-        f"pilot: {target_tag}={target_value!r} is blocked by physical link(s) "
-        f"{links}; the harness holds the sensor lockstep with its driver, so it "
-        f"cannot rest at the value this route needs. Retry with unlink=[{names}] "
-        f"to model a dead sensor (fault injection)."
-    )
 
 
 def target_is_value_route(target_predicate: Any) -> bool:
@@ -215,7 +148,7 @@ def prepare_target_route(
         and not _values_match(snapshot.get(target_tag), target_value)
     ):
         return None
-    clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
+    clear_only = compute_clear_only(pdg, plc.tags, program)
     choices, traced = rank_trace_choices(
         target_tag,
         target_value,

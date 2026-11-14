@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, calc
+from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, math, out, system
 
 
 class TestCalcInstruction:
@@ -16,7 +16,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + B, Result)
+                math(A + B, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 100, "B": 200})
@@ -31,7 +31,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + 1, Result)
+                math(A + 1, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 32767})
@@ -46,13 +46,46 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A / B, Result)
+                math(A / B, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 100, "B": 0})
         runner.step()
         assert runner.current_state.tags["Result"] == 0
         assert runner.current_state.tags["fault.division_error"] is True
+
+    def test_a_decimal_math_keeps_its_constants_whole(self, runner_factory):
+        """A decimal Math keeps each constant whole whatever the destination, as a
+        CLICK does (2026-11-11).  -2147483648 / 65536 is -32768 by the constant and
+        by a Dint holding 65536, and a constant past a Dint is cut to 32 bits."""
+        Enable = Bool("Enable")
+        Num = Dint("Num")
+        Den = Dint("Den")
+        ByConstant = Int("ByConstant")
+        ByTag = Int("ByTag")
+        IntoDint = Dint("IntoDint")
+        Low = Dint("Low")
+        Flagged = Bool("Flagged")
+
+        with Program() as logic:
+            with Rung(Enable):
+                math(Num / 65536, ByConstant)
+            with Rung(system.fault.division_error):
+                out(Flagged)
+            with Rung(Enable):
+                math(Num / Den, ByTag)
+                math(Num / 65536, IntoDint)
+                math(Den * 0 + 4294967303, Low)
+
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "Num": -2147483648, "Den": 65536, "ByConstant": 99})
+        runner.step()
+        tags = runner.current_state.tags
+        assert tags["ByConstant"] == -32768
+        assert tags["Flagged"] is False
+        assert tags["ByTag"] == -32768
+        assert tags["IntoDint"] == -32768
+        assert tags["Low"] == 7
 
     def test_real_result(self, runner_factory):
         Enable = Bool("Enable")
@@ -62,7 +95,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A * B, Result)
+                math(A * B, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 2.5, "B": 4.0})
@@ -70,20 +103,21 @@ class TestCalcInstruction:
         assert runner.current_state.tags["Result"] == 10.0
 
     @pytest.mark.parametrize("runner_cls", [PLC, CompiledPLC])
-    def test_expression_overflow_sets_out_of_range_and_stores_zero(self, runner_cls):
+    def test_expression_overflow_sets_out_of_range_and_stores_inf(self, runner_cls):
         Enable = Bool("Enable")
         Source = Real("Source")
         Result = Real("Result")
 
         with Program() as logic:
             with Rung(Enable):
-                calc(Source**2, Result)
+                # 3.0E+38 ** 10 overflows a float: +Inf, as 3.0E+38 * 3.0E+38 is.
+                math(Source**10, Result)
 
         runner = runner_cls(logic)
-        runner.patch({"Enable": True, "Source": 1.0e200, "Result": 123.0})
+        runner.patch({"Enable": True, "Source": 3.0e38, "Result": 123.0})
         runner.step()
 
-        assert runner.current_state.tags["Result"] == 0.0
+        assert runner.current_state.tags["Result"] == float("inf")
         assert runner.current_state.tags["fault.out_of_range"] is True
 
     def test_complex_expression(self, runner_factory):
@@ -95,7 +129,7 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc((A + B) * C, Result)
+                math((A + B) * C, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "A": 10, "B": 20, "C": 3})
@@ -109,9 +143,172 @@ class TestCalcInstruction:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(A + 1, Result)
+                math(A + 1, Result)
 
         runner = runner_factory(logic)
         runner.patch({"Enable": False, "A": 10, "Result": 0})
         runner.step()
         assert runner.current_state.tags["Result"] == 0
+
+
+class TestCutIntConstants:
+    def test_cuts_each_integer_constant_past_a_dint_to_32_bits_signed(self):
+        from pyrung.core.expression import LiteralExpr, sqrt
+        from pyrung.core.instruction.calc import cut_int_constants
+
+        A = Int("A")
+        assert cut_int_constants(65536) == 65536
+        assert cut_int_constants(40000) == 40000
+        assert cut_int_constants(2147483647) == 2147483647
+        assert cut_int_constants(-2147483648) == -2147483648
+        assert cut_int_constants(2147483648) == -2147483648
+        assert cut_int_constants(3000000000) == -1294967296
+        assert cut_int_constants(4294967303) == 7
+        assert cut_int_constants(1.5) == 1.5
+        assert cut_int_constants(True) is True
+        cut = cut_int_constants(sqrt(A + 4294967296) * 2)
+        assert repr(cut) == "(sqrt((TagExpr(A) + LiteralExpr(0))) * LiteralExpr(2))"
+        assert isinstance(cut.right, LiteralExpr)
+
+    def test_returns_the_expression_itself_when_no_constant_changes(self):
+        from pyrung.core.expression import BinaryExpr, CalcBinaryExpr
+        from pyrung.core.instruction.calc import CalcInstruction, cut_int_constants
+
+        A = Int("A")
+        expr = (A + 65536) * -40000
+        assert cut_int_constants(expr) is expr
+        instr = CalcInstruction(expr, Int("Dest"))
+        assert instr.source_expression is expr
+        # The calc runs the same formula, its steps doubles; the written one is untouched.
+        assert repr(instr.expression) == repr(expr)
+        assert isinstance(instr.expression, CalcBinaryExpr)
+        assert isinstance(instr.expression.left, CalcBinaryExpr)
+        assert type(expr) is BinaryExpr and type(expr.left) is BinaryExpr
+
+    def test_no_decimal_destination_cuts_a_constant_inside_a_dint(self):
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        A = Dint("A")
+        expr = A / 65536
+        for dest in (Int("I"), Dint("D"), Real("R")):
+            instr = CalcInstruction(expr, dest)
+            assert instr.source_expression is expr
+            assert repr(instr.expression) == "(TagExpr(A) / LiteralExpr(65536))"
+
+    def test_no_decimal_destination_cuts_randint_bounds_inside_a_dint(self):
+        from pyrung.core.expression import randint
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        roll = randint(70000, 70002)
+        for dest in (Int("I"), Dint("D"), Real("R")):
+            assert CalcInstruction(roll, dest).expression is roll
+
+    def test_a_hex_word_draw_reads_its_own_site_where_the_cuts_differ(self):
+        from pyrung.core import Word
+        from pyrung.core.expression import randint
+        from pyrung.core.instruction.calc import CalcInstruction
+
+        whole = randint(1, 6)
+        assert whole.ucut_tag.name == whole.tag.name == whole.cut_tag.name
+        same = randint(2**32 + 5, 2**32 + 7)  # 5..7 either way
+        assert same.ucut_tag.name == same.cut_tag.name != same.tag.name
+        unsigned_whole = randint(40000, 40002)  # whole in both modes
+        assert unsigned_whole.ucut_tag is unsigned_whole.tag
+        assert unsigned_whole.cut_tag is unsigned_whole.tag
+        decimal_whole = randint(70000, 70002)  # whole in decimal, 4464.. in hex
+        assert decimal_whole.cut_tag.name == decimal_whole.tag.name
+        assert decimal_whole.ucut_tag.name.endswith(".ucut")
+        assert (decimal_whole.ucut_tag.min, decimal_whole.ucut_tag.max) == (4464, 4466)
+        hex_calc = CalcInstruction(decimal_whole | Word("Mask"), Word("W"))
+        assert hex_calc.mode == "hex"
+        assert hex_calc.expression.left.tag.name == decimal_whole.ucut_tag.name
+
+
+class TestCalcRangeAggregates:
+    """max/min/median/mean through calc's destination conversion, both backends."""
+
+    def _run(self, runner_factory, expression_for, dest, values):
+        from pyrung.core import Block, TagType
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 6)
+        with Program() as logic:
+            with Rung(Enable):
+                math(expression_for(DS), dest)
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, **{f"DS{i}": v for i, v in enumerate(values, start=1)}})
+        runner.step()
+        return runner.current_state.tags[dest.name]
+
+    @pytest.mark.parametrize(
+        ("method", "expected"),
+        [("max", 10), ("min", -7), ("median", 3), ("mean", 2)],
+    )
+    def test_int_dest_truncates(self, runner_factory, method, expected):
+        # values 3, -7, 10, 4: median (3 + 4) / 2 = 3.5 -> 3, mean 10 / 4 = 2.5 -> 2
+        result = self._run(
+            runner_factory,
+            lambda ds: getattr(ds.select(1, 4), method)(),
+            Int("Out"),
+            [3, -7, 10, 4],
+        )
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        ("method", "expected"),
+        # An integer range's even-count MDN is already an integer (CLICK): 3.5 -> 3.
+        [("median", 3.0), ("mean", 2.5)],
+    )
+    def test_real_dest_keeps_fraction(self, runner_factory, method, expected):
+        result = self._run(
+            runner_factory,
+            lambda ds: getattr(ds.select(1, 4), method)(),
+            Real("Out"),
+            [3, -7, 10, 4],
+        )
+        assert result == pytest.approx(expected)
+
+    def test_negative_mean_truncates_toward_zero(self, runner_factory):
+        # -7, -2 -> -4.5 -> -4 (calc's integer store truncates toward zero)
+        result = self._run(runner_factory, lambda ds: ds.select(1, 2).mean(), Int("Out"), [-7, -2])
+        assert result == -4
+
+    def test_composed_with_abs(self, runner_factory):
+        result = self._run(
+            runner_factory,
+            lambda ds: ds.select(1, 4).max() + abs(ds[5]),
+            Int("Out"),
+            [3, -7, 10, 4, -20],
+        )
+        assert result == 30
+
+    def test_word_range_is_unsigned_hex_mode(self, runner_factory):
+        """MAX over WORD treats values as unsigned 16-bit, like the rest of hex mode."""
+        from pyrung.core import Block, TagType, Word
+
+        Enable = Bool("Enable")
+        DH = Block("DH", TagType.WORD, 1, 3)
+        Out = Word("Out")
+        with Program() as logic:
+            with Rung(Enable):
+                math(DH.select(1, 3).max(), Out)
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "DH1": 0x0001, "DH2": 0xFFFF, "DH3": 0x8000})
+        runner.step()
+        assert runner.current_state.tags["Out"] == 0xFFFF
+
+    def test_bool_range_sum_counts_true_bits(self, runner_factory):
+        from pyrung.core import Block, TagType
+
+        Enable = Bool("Enable")
+        C = Block("C", TagType.BOOL, 1, 5)
+        Count = Int("Count")
+        with Program() as logic:
+            with Rung(Enable):
+                math(C.select(1, 5).sum(), Count)
+                math(C.select(1, 1).sum(), Int("One"))
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "C1": True, "C3": True, "C4": True})
+        runner.step()
+        assert runner.current_state.tags["Count"] == 3
+        assert runner.current_state.tags["One"] == 1

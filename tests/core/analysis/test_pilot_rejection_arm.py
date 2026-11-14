@@ -19,7 +19,7 @@ with ``live_guard=True`` for the sandbox skiff to consume.
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, calc, copy, rise, rung
+from pyrung import PLC, Bool, Int, Program, copy, math, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_SAT
 from pyrung.core.analysis.pilot.trace import (
@@ -52,7 +52,7 @@ def _leaf_pairs(node: TraceNode) -> set[tuple[str, object]]:
 
 # --- Test 1: a guard that contradicts the writer's own fire pin ---------------
 #
-# ``calc(Cmd + 5, State)`` producing ``State == 7`` forces ``Cmd == 2`` (the calc
+# ``math(Cmd + 5, State)`` producing ``State == 7`` forces ``Cmd == 2`` (the calc
 # fire pin), while the same rung is gated ``Cmd == 1``.  The two can never hold at
 # once, so the writer is provably dead. The selected writer's reverse receipt
 # carries that fire pin to the oracle, which skips the impossible writer.
@@ -64,7 +64,7 @@ def _calc_contradiction_program():
     State = Int("State")
     with Program() as logic:
         with rung(Cmd == 1):  # rung 0 — dead: fire pin Cmd==2 vs guard Cmd==1
-            calc(Cmd + 5, State)
+            math(Cmd + 5, State)
         with rung(Go):  # rung 1 — viable: copy(Cmd, State) forces Cmd==7
             copy(Cmd, State)
     return logic
@@ -153,7 +153,7 @@ def test_choices_dead_writer_kept_without_domain_prior():
 
 # --- Test 3: an undecidable / genuinely-live guard punts (behavior unchanged) --
 #
-# ``St`` is written under ``Mask == 0`` where ``Mask = calc(Live & 0x40)`` is a
+# ``St`` is written under ``Mask == 0`` where ``Mask = math(Live & 0x40)`` is a
 # bitwise function of a runtime-loaded word — un-invertible and with no finite
 # domain.  The oracle can neither prove the guard satisfiable nor dead, so it
 # PUNTS: the writer is admitted, and because the ``Mask`` gate
@@ -171,7 +171,7 @@ def _live_guard_program():
         with rung(rise(Load)):
             copy(Cfg, Live)  # Live is rewritten at runtime — no finite domain
         with rung():
-            calc(Live & 0x40, Mask)  # bitwise: un-invertible, genuinely live
+            math(Live & 0x40, Mask)  # bitwise: un-invertible, genuinely live
         with rung(Trig, Mask == 0):
             copy(7, St)
     return logic

@@ -146,7 +146,6 @@ class TestStructureFlags:
         assert status.fields["Mode"].external is True
 
     def test_clone_preserves_flags(self):
-
         @udt(external=True, public=True)
         class Cmd:
             Speed: Int

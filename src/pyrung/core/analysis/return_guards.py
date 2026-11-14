@@ -37,24 +37,51 @@ class ReachChain:
         return self.complete and not self.return_guards
 
 
-def _instructions_have_return(instructions: list[Any]) -> bool:
+def _instructions_have_return(instructions: list[Any] | tuple[Any, ...]) -> bool:
+    """Whether a return sits among these instructions or in bare loop-body items."""
     from pyrung.core.instruction.control import ForLoopInstruction, ReturnInstruction
 
     for instruction in instructions:
         if isinstance(instruction, ReturnInstruction):
             return True
         if isinstance(instruction, ForLoopInstruction) and _instructions_have_return(
-            instruction.instructions
+            [item for item in instruction.body if not _is_rung(item)]
         ):
             return True
     return False
 
 
+def _is_rung(item: Any) -> bool:
+    from pyrung.core.rung import Rung as RungClass
+
+    return isinstance(item, RungClass)
+
+
+def _negated_rung_guard(rung: Rung) -> Any:
+    sp = rung.sp_tree()
+    return _negate(_sp_to_expr(sp)) if sp is not None else Const(False)
+
+
 def _return_guard_exprs_in_rung(rung: Rung) -> tuple[Any, ...]:
+    from pyrung.core.instruction.control import ForLoopInstruction
+
     guards: list[Any] = []
     if _instructions_have_return(rung._instructions):
-        sp = rung.sp_tree()
-        guards.append(_negate(_sp_to_expr(sp)) if sp is not None else Const(False))
+        guards.append(_negated_rung_guard(rung))
+
+    # A forloop body rung carries the loop rung's conditions first, so its own
+    # SP tree is the full path to a return inside it.
+    def _body_rung_guards(instructions: list[Any]) -> None:
+        for instruction in instructions:
+            if not isinstance(instruction, ForLoopInstruction):
+                continue
+            for item in instruction.body:
+                if _is_rung(item):
+                    guards.extend(_return_guard_exprs_in_rung(item))
+                elif isinstance(item, ForLoopInstruction):
+                    _body_rung_guards([item])
+
+    _body_rung_guards(rung._instructions)
     for branch in rung._branches:
         guards.extend(_return_guard_exprs_in_rung(branch))
     return tuple(guards)

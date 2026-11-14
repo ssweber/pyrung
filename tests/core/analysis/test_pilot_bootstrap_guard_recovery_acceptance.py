@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pyrung import PLC, Bool, Int, Program, branch, copy, out, rung, system
+from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.requirements import GuardRequirementAtom, OperandAuthority
 from tests.fixtures import pilot_bootstrap_guard_overwrite as fixture
@@ -135,7 +136,8 @@ def test_forced_false_guard_is_authoritative_and_not_assigned() -> None:
     assert events[-1].data["reached"] is False
 
 
-def test_pending_false_guard_is_authoritative_and_not_assigned() -> None:
+def test_pending_false_guard_gets_its_scan_and_is_not_assigned() -> None:
+    """The patch decides the first scan, so the overwrite has happened before the search reads."""
     plc = PLC(fixture.logic, dt=0.010)
     plc.patch({fixture.OverwriteInterlock.name: False})
     events = tuple(
@@ -145,13 +147,8 @@ def test_pending_false_guard_is_authoritative_and_not_assigned() -> None:
             max_scans=20,
         )
     )
-    requirement = next(
-        event.data["requirement"] for event in events if event.kind == "requirement_activated"
-    )
 
-    assert isinstance(requirement.condition, GuardRequirementAtom)
-    assert requirement.condition.operand_authority is OperandAuthority.CONFIGURED
-    assert requirement.operand_authority is OperandAuthority.CONFIGURED
+    assert events[-1].data["work"].state.tags[fixture.SequenceState.name] == fixture.DIVERTED
     assert not any(
         tag == fixture.OverwriteInterlock.name
         for event in events
@@ -260,23 +257,20 @@ def test_late_program_guard_rebases_to_its_pre_bootstrap_writer() -> None:
     assert plan.state.tags[poisoned.name] == 0
     assert plan.replay().state.tags[state.name] == target
 
-    # ClickNick's generated run.py executes one scan before DAP discovers the
-    # runner. The same transition must remain recoverable from retained runner
-    # history even though Pilot did not own it as a bootstrap execution.
+    # ClickNick's generated run.py executes one scan before DAP discovers the runner.  That
+    # scan poisoned the machine and no plan can un-run it, so how() says what a restart needs.
     warmed = PLC(logic)
     warmed.step()
     assert warmed.state.tags[poisoned.name] == 1
-    warm_events = tuple(pilot_events(warmed, state == target, max_scans=30))
-    warm_rebased = tuple(
-        event.data["requirement"]
-        for event in warm_events
-        if event.kind == "requirement_activated"
-        and event.data["requirement"].provenance == "program-guard-rebase"
-    )
-    assert len(warm_rebased) == 1
-    assert (warm_rebased[0].source_scan, warm_rebased[0].deadline.scan_id) == (0, 1)
-    assert warm_events[-1].kind == "finished"
-    assert warm_events[-1].data["reached"] is True
+    warm_plan = warmed.how(state == target, max_scans=30)
+    assert warm_plan.status is PlanStatus.STOPPED
+    assert poisoned.name in warm_plan.restart.clear
+    warmed.stop()
+    warmed._state = warmed.state.with_tags(dict(warm_plan.restart.clear))
+    warmed.start()
+    followed = warmed.how(state == target, max_scans=30)
+    assert followed.reachable, followed.reason
+    assert followed.total_scans == warm_plan.restart.clear_scans
 
 
 def test_current_read_can_prevent_poison_before_a_rebase_is_needed() -> None:

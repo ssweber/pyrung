@@ -41,6 +41,7 @@ from pyrung.core.crossing import (
     Quant,
     ReverseResult,
 )
+from pyrung.core.state import value_changed
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -132,16 +133,26 @@ def recorded_read_changes(
 
     cur = history.at(scan_id)
     prev = history.at(prev_scan_id) if prev_scan_id is not None else None
+    plc = getattr(history, "_plc", None)
+    lookup = getattr(plc, "_tag_known_or_reached", None)
+
+    def value_in(state: Any, name: str) -> Any:
+        # A slot no scan has written is not in the state and holds its default.
+        if name in state.tags or lookup is None:
+            return state.tags.get(name)
+        known = lookup(name)
+        return None if known is None else known.default
+
     changed: list[tuple[str, Any, Any]] = []
     nonzero_now: list[str] = []
     for tag in sorted(footprint):
         if read_values is not None and tag in read_values:
             after = read_values[tag]
         else:
-            after = cur.tags.get(tag)
+            after = value_in(cur, tag)
         if prev is not None:
-            before = prev.tags.get(tag)
-            if before != after:
+            before = value_in(prev, tag)
+            if value_changed(before, after):
                 changed.append((tag, before, after))
         if _is_nonzero(after):
             nonzero_now.append(tag)
@@ -197,7 +208,7 @@ def _read_pair(history: History, tag: str, scan_id: int) -> tuple[Any, Any, bool
     after = history.at(scan_id).tags.get(tag)
     prev = _prev_scan_id(history, scan_id)
     before = history.at(prev).tags.get(tag) if prev is not None else None
-    return before, after, before != after
+    return before, after, value_changed(before, after)
 
 
 def resolve_recorded(

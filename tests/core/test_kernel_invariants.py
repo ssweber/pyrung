@@ -1,7 +1,6 @@
 """Unit-level invariants for pyrung kernel pure functions.
 
-Implements the U1-U8 invariant tests catalogued in Section 11 of
-``scratchpad/fuzzer-checklist.md``. These exercise the underlying kernel
+Implements the U1-U8 invariant tests listed below. These exercise the underlying kernel
 primitives with Hypothesis ``@given`` strategies and ``RuleBasedStateMachine``
 tests. They are cheap to run, shrink to single-value examples, and localise
 failures to a specific function -- complementary to the grammar fuzzer that
@@ -65,9 +64,8 @@ _ALL_TAG_TYPES = (*_INT_TAG_TYPES, TagType.REAL)
 def _in_range(value: object, tag_type: TagType) -> bool:
     """Return True if ``value`` is within ``tag_type``'s storage range.
 
-    REAL destinations accept any numeric scalar (the non-finite sentinel branch
-    in ``_store_copy_value_to_tag_type`` returns int ``0``, which is a valid
-    REAL value).
+    REAL destinations accept any numeric scalar (a REAL holds +/-Inf and NaN:
+    a value past CLICK's range stores as +/-Inf).
     """
     if tag_type == TagType.REAL:
         return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -100,7 +98,8 @@ def test_clamp_idempotent(value, tag_type):
     tag = _TAG_BY_TYPE[tag_type]
     once = _store_copy_value_to_tag_type(value, tag)
     twice = _store_copy_value_to_tag_type(once, tag)
-    assert once == twice, f"clamp not idempotent: once={once!r} twice={twice!r}"
+    both_nan = once != once and twice != twice  # a REAL keeps NaN, which equals nothing
+    assert once == twice or both_nan, f"clamp not idempotent: once={once!r} twice={twice!r}"
     # Result must lie inside the destination type's range.
     assert _in_range(once, tag_type), f"clamped value {once!r} not in {tag_type.name} range"
 

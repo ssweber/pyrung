@@ -13,8 +13,9 @@ during simulation and exists only for code generation.
 
 from __future__ import annotations
 
+import itertools
 from concurrent.futures import Future
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyclickplc.addresses import parse_address
@@ -23,7 +24,7 @@ from pyrung.core._source import _capture_source
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.program.context import _require_rung_context
 from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from ..base import Instruction
 from ..conversions import _store_copy_value_to_tag_type
@@ -172,6 +173,48 @@ def _submit_raw_receive_request(
 
 
 # ---------------------------------------------------------------------------
+# Status bits
+# ---------------------------------------------------------------------------
+
+#: Name prefix of the hidden tag a status bit gets when it is left off.
+MODBUS_STATUS_TAG_PREFIX = "_modbus."
+
+_status_site_counter = itertools.count(1)
+
+
+def is_modbus_status_tag(name: str) -> bool:
+    """Whether *name* is the hidden tag of a send/receive status bit that was left off."""
+    return name.startswith(MODBUS_STATUS_TAG_PREFIX)
+
+
+def _status_tags(
+    busy_name: str,
+    busy: Tag | None,
+    success: Tag | None,
+    error: Tag | None,
+    exception_response: Tag | None,
+) -> tuple[Tag, Tag, Tag, Tag]:
+    """The four status tags, a hidden one for each bit left off (CLICK allows any)."""
+    site = next(_status_site_counter)
+
+    def resolve(tag: Tag | None, field_name: str, tag_type: TagType) -> Tag:
+        if tag is not None:
+            return tag
+        return Tag(
+            f"{MODBUS_STATUS_TAG_PREFIX}{site}.{field_name}",
+            tag_type,
+            comment=f"{field_name} left off",
+        )
+
+    return (
+        resolve(busy, busy_name, TagType.BOOL),
+        resolve(success, "success", TagType.BOOL),
+        resolve(error, "error", TagType.BOOL),
+        resolve(exception_response, "exception_response", TagType.INT),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Instruction classes
 # ---------------------------------------------------------------------------
 
@@ -207,7 +250,6 @@ class ModbusSendInstruction(Instruction):
     word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
-    _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
 
     def always_execute(self) -> bool:
         return True
@@ -248,26 +290,27 @@ class ModbusSendInstruction(Instruction):
         return f"send:{self.target_name}:{self.sending.name}"
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if ctx.is_replay_io:
-            return self._execute_replay(ctx, enabled)
-        if not self._is_live():
-            return
-        return self._execute_live(ctx, enabled)
+        io = ctx.modbus_io
+        if io == "replay":
+            self._execute_replay(ctx, enabled)
+        elif io == "live" and self._is_live():
+            self._execute_live(ctx, enabled)
 
     def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
         key = self._io_key
 
-        if self._pending is not None:
-            if not self._pending.future.done():
+        pending = ctx.modbus_requests.get(id(self))
+        if pending is not None:
+            if not pending.future.done():
                 ctx.set_tag(self.sending.name, True)
                 return
 
             try:
-                result = self._pending.future.result()
+                result = pending.future.result()
             except Exception:
                 result = _RequestResult(ok=False, exception_code=0)
 
-            self._pending = None
+            del ctx.modbus_requests[id(self)]
             if result.ok:
                 drain_writes: dict[str, Any] = {
                     self.sending.name: False,
@@ -299,7 +342,7 @@ class ModbusSendInstruction(Instruction):
 
         source_tags = _normalize_operand_tags(self.source, ctx)
         values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
-        self._pending = _PendingRequest(future=self._submit(source_tags, values))
+        ctx.modbus_requests[id(self)] = _PendingRequest(future=self._submit(source_tags, values))
         submit_writes: dict[str, Any] = {
             self.sending.name: True,
             self.success.name: False,
@@ -361,7 +404,6 @@ class ModbusReceiveInstruction(Instruction):
     word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
-    _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
 
     def always_execute(self) -> bool:
         return True
@@ -414,27 +456,28 @@ class ModbusReceiveInstruction(Instruction):
         return f"recv:{self.target_name}:{self.receiving.name}"
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if ctx.is_replay_io:
-            return self._execute_replay(ctx, enabled)
-        if not self._is_live():
-            return
-        return self._execute_live(ctx, enabled)
+        io = ctx.modbus_io
+        if io == "replay":
+            self._execute_replay(ctx, enabled)
+        elif io == "live" and self._is_live():
+            self._execute_live(ctx, enabled)
 
     def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
         key = self._io_key
 
-        if self._pending is not None:
-            if not self._pending.future.done():
+        pending = ctx.modbus_requests.get(id(self))
+        if pending is not None:
+            if not pending.future.done():
                 ctx.set_tag(self.receiving.name, True)
                 return
 
-            target_tags = self._pending.target_tags or []
+            target_tags = pending.target_tags or []
             try:
-                result = self._pending.future.result()
+                result = pending.future.result()
             except Exception:
                 result = _RequestResult(ok=False, exception_code=0)
 
-            self._pending = None
+            del ctx.modbus_requests[id(self)]
             if not result.ok:
                 drain_writes: dict[str, Any] = {
                     self.receiving.name: False,
@@ -502,7 +545,7 @@ class ModbusReceiveInstruction(Instruction):
             return
 
         dest_tags = _normalize_operand_tags(self.dest, ctx)
-        self._pending = _PendingRequest(
+        ctx.modbus_requests[id(self)] = _PendingRequest(
             future=self._submit(dest_tags),
             target_tags=dest_tags,
         )
@@ -614,10 +657,10 @@ def send(
     target: str | ModbusTcpTarget | ModbusRtuTarget,
     remote_start: str | ModbusAddress,
     source: Tag | BlockRange,
-    sending: Tag,
-    success: Tag,
-    error: Tag,
-    exception_response: Tag,
+    sending: Tag | None = None,
+    success: Tag | None = None,
+    error: Tag | None = None,
+    exception_response: Tag | None = None,
     count: int | None = None,
     word_swap: bool = False,
 ) -> None:
@@ -628,7 +671,13 @@ def send(
 
     ``remote_start`` may be a Click address string (e.g. ``"DS1"``) for Click
     PLCs, or a :class:`ModbusAddress` for raw Modbus devices.
+
+    Status bits are optional, as in CLICK: one left off still runs, on a
+    hidden tag that CLICK export leaves off.
     """
+    sending, success, error, exception_response = _status_tags(
+        "sending", sending, success, error, exception_response
+    )
     _validate_status_tags(
         busy=sending,
         success=success,
@@ -674,10 +723,10 @@ def receive(
     target: str | ModbusTcpTarget | ModbusRtuTarget,
     remote_start: str | ModbusAddress,
     dest: Tag | BlockRange,
-    receiving: Tag,
-    success: Tag,
-    error: Tag,
-    exception_response: Tag,
+    receiving: Tag | None = None,
+    success: Tag | None = None,
+    error: Tag | None = None,
+    exception_response: Tag | None = None,
     count: int | None = None,
     word_swap: bool = False,
 ) -> None:
@@ -688,7 +737,13 @@ def receive(
 
     ``remote_start`` may be a Click address string (e.g. ``"DS1"``) for Click
     PLCs, or a :class:`ModbusAddress` for raw Modbus devices.
+
+    Status bits are optional, as in CLICK: one left off still runs, on a
+    hidden tag that CLICK export leaves off.
     """
+    receiving, success, error, exception_response = _status_tags(
+        "receiving", receiving, success, error, exception_response
+    )
     _validate_status_tags(
         busy=receiving,
         success=success,
@@ -730,6 +785,7 @@ def receive(
 
 
 __all__ = [
+    "MODBUS_STATUS_TAG_PREFIX",
     "ModbusAddress",
     "ModbusReceiveInstruction",
     "ModbusRtuTarget",
@@ -738,6 +794,7 @@ __all__ = [
     "RegisterType",
     "VALID_COM_PORTS",
     "WordOrder",
+    "is_modbus_status_tag",
     "receive",
     "send",
 ]

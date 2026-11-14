@@ -10,12 +10,15 @@ reducing object allocation from O(instructions) to O(1) per scan.
 
 from __future__ import annotations
 
+import builtins
+import dis
+import inspect
 import logging
 import math
 import time
 import warnings
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import Token
 from dataclasses import dataclass
@@ -23,16 +26,16 @@ from datetime import datetime, timedelta
 from itertools import count
 
 logger = logging.getLogger(__name__)
-from types import MappingProxyType
+from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard, TypeVar, cast
 
 from pyrsistent import PMap, pmap
 
 from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
-from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.compiled_plc import CompiledPLC, absent_scalars
 from pyrung.core.condition_trace import ConditionTraceEngine
-from pyrung.core.context import ConditionView, RungId, ScanContext
+from pyrung.core.context import ConditionView, RungId, ScanContext, refused_inside_its_own_scan
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.executor import (
@@ -41,38 +44,52 @@ from pyrung.core.executor import (
     execute_observed_rung,
     execute_program,
 )
+from pyrung.core.expression import RandIntExpr
 from pyrung.core.history import History
-from pyrung.core.input_overrides import InputOverrideManager
+from pyrung.core.input_overrides import (
+    InputOverrideManager,
+    TagsKnownOrReached,
+    TagsRungsReach,
+)
 from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
-from pyrung.core.rung_firings import RungFiringTimelines
+from pyrung.core.rung_firings import (
+    _UNKNOWN_VALUE,
+    SETTLE_SCAN_LIMIT,
+    RungFiringTimelines,
+    SearchQuestionRefused,
+    UnrecordedScansError,
+)
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
-from pyrung.core.state import SystemState
+from pyrung.core.site_memory import bind_logic_list, migrate_legacy_edge_memory
+from pyrung.core.state import SystemState, snapshot_dict, value_changed
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
     _MODE_RUN_KEY,
+    _SCAN_TIME_MIN_NAME,
     READ_ONLY_SYSTEM_TAG_NAMES,
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
 )
 from pyrung.core.time_mode import TimeMode
 from pyrung.core.trace_formatter import TraceFormatter
-from pyrung.core.validation._common import _collect_write_sites
+from pyrung.core.validation._common import _collect_write_sites, walk_instructions
 from pyrung.core.validation.readonly_write import _any_write_targets
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
 
     from pyrung.core.analysis.causal import CausalChain
+    from pyrung.core.coast_run import CoastMemo
     from pyrung.core.condition import Condition
     from pyrung.core.rung import Rung
-    from pyrung.core.tag import Tag
+    from pyrung.core.tag import Tag, TagType
 
 _SENTINEL = object()  # distinguishes "not passed" from None/False
 
 _CHECKPOINT_INTERVAL_DEFAULT = 200
 # One causal working set, independent of checkpoint spacing.  Checkpoints may
-# intentionally be sparse (or skipped by live folding); they are replay anchors,
+# intentionally be sparse (or skipped by a long compiled run); they are replay anchors,
 # not a license to materialize the entire gap into memory.
 _REPLAY_SLAB_SCANS = 1600
 _REPLAY_SLAB_MAX_ANCHORS = 1
@@ -82,13 +99,15 @@ _REPLAY_SLAB_MAX_ANCHORS = 1
 # alternates among the same source/action/landing scans.
 _REPLAY_CAPTURE_CACHE_SCANS = 16
 
+_RECORDS = ("_rung_firing_timelines", "_committed_tag_timelines", "_node_firing_timelines")
+
 _EPOCH_REFERENCE_VALUES = count(1)
 
-# Byte budget for the recent-state cache (default for ``history_budget``).
+# Default ``history_budget``, in bytes.
 _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
 
 # Floor: never evict below this many entries regardless of byte budget.
-# Monitor ``previous_value`` / ``_prev:*`` reads assume N-1 is always
+# Monitor ``previous_value`` reads assume N-1 is always
 # present; the recent-state cache floor must not regress under budget pressure.
 _RECENT_STATE_CACHE_MIN_ENTRIES = 20
 
@@ -115,7 +134,7 @@ def _parse_retention(value: str | int | None, dt_seconds: float) -> int | None:
 # Conservative per-entry byte estimate for PMap HAMT nodes.
 _PER_PMAP_ENTRY_BYTES = 200
 
-# Fixed overhead for PRecord shell (scan_id, timestamp, two PMap roots).
+# Fixed overhead for the state shell (scan_id, timestamp, two PMap roots).
 _STATE_BASE_BYTES = 200
 
 
@@ -147,7 +166,7 @@ class ScanStep:
     rung_index: int
     rung: Rung
     ctx: ScanContext
-    kind: Literal["rung", "branch", "subroutine", "instruction"]
+    kind: Literal["rung", "branch", "subroutine", "loop_body", "instruction"]
     subroutine_name: str | None
     depth: int
     call_stack: tuple[str, ...]
@@ -157,6 +176,9 @@ class ScanStep:
     enabled_state: Literal["enabled", "disabled_local", "disabled_parent"] | None
     trace: TraceEvent | None
     instruction_kind: str | None
+    #: Place in the top-level rung's tree (``()`` for the rung, ``(k,)`` for its
+    #: k-th branch); ``None`` in a called subroutine or a loop body.
+    branch_path: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -177,6 +199,93 @@ class _BreakpointRegistration:
     callback: Callable[[SystemState], None] | None = None
     enabled: bool = True
     removed: bool = False
+
+
+# Longest run_for() counted in advance, at a few tens of ns a scan.  Past this it steps.
+_RUN_FOR_MAX_COUNTED_SCANS = 500_000_000
+
+
+class _ConditionPredicate:
+    """A ``run_until()`` / ``when()`` condition with no edges: stateless."""
+
+    __slots__ = ("_condition", "_context")
+
+    guard_edges: tuple[Any, ...] = ()
+
+    def __init__(self, condition: Any, context: Callable[[SystemState], Any]) -> None:
+        self._condition = condition
+        self._context = context
+
+    def __call__(self, state: SystemState) -> bool:
+        return self._condition.evaluate(self._context(state))
+
+    @property
+    def guard_condition(self) -> Any:
+        return self._condition
+
+    @staticmethod
+    def guard_last_seen() -> Mapping[str, bool]:
+        return {}
+
+
+class _EdgePredicate:
+    """A ``run_until()`` / ``when()`` condition holding ``rise()`` / ``fall()``.
+
+    Its edges compare against the bit as this predicate last judged it, armed
+    from the runner's current state.  A breakpoint registers its own armed
+    copy (two registrations from one ``when()`` never share memory) and
+    re-arms it when re-enabled, so the scans it skipped while disabled do not
+    count as an edge.
+    """
+
+    __slots__ = ("_condition", "_edges", "_context", "_current", "_last_seen")
+
+    def __init__(
+        self,
+        condition: Any,
+        edges: Sequence[Any],
+        context: Callable[[SystemState], Any],
+        current: Callable[[], SystemState],
+    ) -> None:
+        self._condition = condition
+        self._edges = tuple(edges)
+        self._context = context
+        self._current = current
+        self._last_seen: dict[str, bool] = {}
+        self.rearm()
+
+    def _bits(self, ctx: Any) -> dict[str, bool]:
+        return {
+            edge._memory_key: bool(ctx.get_tag(edge._resolved_tag.name, False))
+            for edge in self._edges
+        }
+
+    def rearm(self) -> None:
+        """Remember every edge's bit as it is in the runner's current state."""
+        self._last_seen = self._bits(self._context(self._current()))
+
+    def armed(self) -> _EdgePredicate:
+        """An independent copy, armed now."""
+        return _EdgePredicate(self._condition, self._edges, self._context, self._current)
+
+    def __call__(self, state: SystemState) -> bool:
+        ctx = self._context(state)
+        for key, bit in self._last_seen.items():
+            ctx.set_memory(key, bit)
+        hit = bool(self._condition.evaluate(ctx))
+        self._last_seen.update(self._bits(ctx))
+        return hit
+
+    @property
+    def guard_condition(self) -> Any:
+        return self._condition
+
+    @property
+    def guard_edges(self) -> tuple[Any, ...]:
+        return self._edges
+
+    def guard_last_seen(self) -> Mapping[str, bool]:
+        return self._last_seen
 
 
 class _RunnerHandle:
@@ -241,8 +350,7 @@ class _BreakpointBuilder:
         runner via ``plc.patch`` / ``plc.force``.  Unlike :meth:`pause`, the run
         continues.  This is the hook for reactive inputs — e.g. a liveness
         oscillator ``when(tag != v).do(lambda s: plc.patch({tag: v}))`` — which the
-        runner then applies every scan (folding can't skip past it: the side
-        effect changes visible state each scan, so the fold window never folds).
+        runner then applies every scan.
         Use ``patch`` (one-shot) rather than ``force`` for a reactive re-assert —
         a force would pin the tag so the program could never drift it.
         """
@@ -256,60 +364,123 @@ class _BreakpointBuilder:
 
 def _iter_tags_and_edge_names(
     roots: Iterable[Any],
+    *,
+    block_uses: list[Any] | None = None,
+    beyond_rungs: list[Tag] | None = None,
 ) -> tuple[tuple[Tag, ...], frozenset[str]]:
-    """Single-pass graph walk collecting both Tag objects and edge tag names."""
+    """Single-pass graph walk collecting both Tag objects and edge tag names.
+
+    The tags returned are what the rungs say.  A range holds its block, whose cache is every
+    slot anything has asked for, and a call holds its program, which holds what has run and
+    been asked of it, so the walk takes neither on its way.  Of a block's slots it takes the
+    ones a map_to put there.  Of a program it takes only its rungs and subroutines.
+
+    *block_uses*, when given, also collects each range and pointer into a block.
+    *beyond_rungs*, when given, also collects the tags found in those blocks
+    once the rungs are done.  A tag a rung names wins over another of the same name.
+    Of a block's cache it takes only the slots the user's code indexed (``block[n]``).
+    The rest are what scans and analyses asked for, and a runner built later must not
+    know more than one built first.
+    """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
+    from pyrung.core.memory_block import (
+        Block,
+        BlockRange,
+        IndirectBlockRange,
+        IndirectExprRef,
+        IndirectRef,
+    )
+    from pyrung.core.program import Program
     from pyrung.core.tag import Tag as TagClass
 
     found_by_name: dict[str, TagClass] = {}
     edge_names: set[str] = set()
     visited: set[int] = set()
     queue: list[Any] = list(roots)
+    held_back: dict[int, Any] = {}
+    on_the_rungs = True
+    on_rungs_by_name: dict[str, TagClass] = {}
 
-    while queue:
-        current = queue.pop()
-        if current is None:
-            continue
-        if isinstance(current, TagClass):
-            found_by_name[current.name] = current
-            continue
-        if isinstance(current, (RisingEdgeCondition, FallingEdgeCondition)):
-            edge_names.add(current._resolved_tag.name)
-            # Still need to walk children for Tag references
+    while True:
+        while queue:
+            current = queue.pop()
+            if current is None:
+                continue
+            if isinstance(current, TagClass):
+                found_by_name[current.name] = current
+                continue
+            if isinstance(current, (RisingEdgeCondition, FallingEdgeCondition)):
+                edge_names.add(current._resolved_tag.name)
+                # Still need to walk children for Tag references
+                current_id = id(current)
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
+                if hasattr(current, "__dict__"):
+                    queue.extend(vars(current).values())
+                continue
+            if isinstance(current, (str, bytes, bytearray, int, float, bool)):
+                continue
+
             current_id = id(current)
+            if on_the_rungs and isinstance(current, Block):
+                if current_id not in held_back:
+                    held_back[current_id] = current
+                    queue.extend(current._mapped_tags.values())
+                continue
             if current_id in visited:
                 continue
             visited.add(current_id)
+            if isinstance(current, Program):
+                # A program is its rungs and subroutines. The rest is caches that how() fills,
+                # which hold no tag the rungs use and are slow to walk.
+                queue.extend(current.rungs)
+                queue.extend(current.subroutines.values())
+                continue
+
+            if (
+                on_the_rungs
+                and block_uses is not None
+                and isinstance(
+                    current, BlockRange | IndirectRef | IndirectExprRef | IndirectBlockRange
+                )
+            ):
+                block_uses.append(current)
+
+            if isinstance(current, Block):
+                cache = current._tag_cache
+                queue.extend(cache[addr] for addr in current._indexed if addr in cache)
+                queue.extend(value for key, value in vars(current).items() if key != "_tag_cache")
+                continue
+            if isinstance(current, Mapping):
+                queue.extend(current.keys())
+                queue.extend(current.values())
+                continue
+            if isinstance(current, tuple | list | set | frozenset):
+                queue.extend(current)
+                continue
+
             if hasattr(current, "__dict__"):
                 queue.extend(vars(current).values())
-            continue
-        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
-            continue
+                continue
+            if hasattr(current, "__slots__"):
+                for slot in current.__slots__:
+                    if slot in {"__weakref__", "__dict__"}:
+                        continue
+                    if hasattr(current, slot):
+                        queue.append(getattr(current, slot))
 
-        current_id = id(current)
-        if current_id in visited:
-            continue
-        visited.add(current_id)
+        if beyond_rungs is None or not on_the_rungs:
+            break
+        on_the_rungs = False
+        on_rungs_by_name = found_by_name
+        found_by_name = {}
+        queue = list(held_back.values())
 
-        if isinstance(current, Mapping):
-            queue.extend(current.keys())
-            queue.extend(current.values())
-            continue
-        if isinstance(current, tuple | list | set | frozenset):
-            queue.extend(current)
-            continue
-
-        if hasattr(current, "__dict__"):
-            queue.extend(vars(current).values())
-            continue
-        if hasattr(current, "__slots__"):
-            for slot in current.__slots__:
-                if slot in {"__weakref__", "__dict__"}:
-                    continue
-                if hasattr(current, slot):
-                    queue.append(getattr(current, slot))
-
-    return tuple(found_by_name.values()), frozenset(edge_names)
+    if beyond_rungs is None:
+        return tuple(found_by_name.values()), frozenset(edge_names)
+    beyond_rungs.extend(tag for name, tag in found_by_name.items() if name not in on_rungs_by_name)
+    return tuple(on_rungs_by_name.values()), frozenset(edge_names)
 
 
 def _apply_lifecycle_to_replay(replay: Any, event: LifecycleEvent) -> None:
@@ -345,9 +516,207 @@ def _program_writes_read_only_system_tags(program: Any) -> bool:
     return False
 
 
-def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
-    if isinstance(exc, NotImplementedError):
+def _global_names(code: CodeType) -> tuple[set[str], set[str]]:
+    """The global names *code* and the code nested in it read, and those it binds."""
+    read: set[str] = set()
+    bound: set[str] = set()
+    for instruction in dis.get_instructions(code):
+        if instruction.opname in ("LOAD_GLOBAL", "LOAD_NAME"):
+            read.add(instruction.argval)
+        elif instruction.opname in ("STORE_GLOBAL", "DELETE_GLOBAL"):
+            bound.add(instruction.argval)
+    for constant in code.co_consts:
+        if isinstance(constant, CodeType):
+            inner_read, inner_bound = _global_names(constant)
+            read |= inner_read
+            bound |= inner_bound
+    return read, bound
+
+
+#: Builtins whose answer depends only on what they are handed, in any module.  Anything
+#: else (``globals``, ``eval``, ``vars``, ``getattr``, ``open``, ``print``...) can reach
+#: the function's module or the world, or is simply not worth the proof.
+_SELF_CONTAINED_BUILTINS = frozenset(
+    {
+        "abs",
+        "all",
+        "any",
+        "bin",
+        "bool",
+        "bytes",
+        "chr",
+        "complex",
+        "dict",
+        "divmod",
+        "enumerate",
+        "filter",
+        "float",
+        "frozenset",
+        "hex",
+        "int",
+        "isinstance",
+        "iter",
+        "len",
+        "list",
+        "map",
+        "max",
+        "min",
+        "next",
+        "oct",
+        "ord",
+        "pow",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "slice",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "zip",
+    }
+)
+
+#: Attributes that hand a function a frame, and through it the globals of its module.
+#: ``format`` and ``format_map`` are here for the same reason: they walk attributes named
+#: in a text that can be built while the function runs, so no constant can clear them.
+_ATTRIBUTES_PAST_ITS_SCOPE = frozenset(
+    {
+        "format",
+        "format_map",
+        "ag_frame",
+        "cr_frame",
+        "f_back",
+        "f_builtins",
+        "f_globals",
+        "f_locals",
+        "gi_frame",
+        "tb_frame",
+    }
+)
+
+
+def _is_self_contained_builtin(name: str) -> bool:
+    if name in _SELF_CONTAINED_BUILTINS:
         return True
+    # Not a BaseException outside Exception: a batch that raises one of those is not undone.
+    builtin = getattr(builtins, name, None)
+    return isinstance(builtin, type) and issubclass(builtin, Exception)
+
+
+def _reaches_past_its_scope(code: CodeType) -> bool:
+    """Whether *code* imports, sets an attribute, or asks an object for a dunder or a frame.
+
+    An import or an attribute of ``math`` shares state with every other call, and a dunder
+    (``__globals__``, ``__defaults__``, ``__traceback__``), a frame or ``str.format``
+    (``"{0.__globals__}"``) hands over the function's own module, by a route no global
+    name shows.
+    """
+    for instruction in dis.get_instructions(code):
+        if instruction.opname in ("IMPORT_NAME", "STORE_ATTR", "DELETE_ATTR"):
+            return True
+    for name in code.co_names:
+        if name.startswith("__") or name in _ATTRIBUTES_PAST_ITS_SCOPE:
+            return True
+    return any(
+        _reaches_past_its_scope(constant)
+        for constant in code.co_consts
+        if isinstance(constant, CodeType)
+    )
+
+
+def _is_immutable_constant(value: Any) -> bool:
+    if type(value) in (tuple, frozenset):
+        return all(_is_immutable_constant(item) for item in value)
+    return value is None or type(value) in (bool, int, float, complex, str, bytes)
+
+
+def _may_be_called_again(fn: Any) -> bool:
+    """Whether a kernel may run *fn*, given that an undo means calling it again.
+
+    A kernel calls the function itself, so its names, defaults and cells are the ones
+    stepping sees.  What a kernel can't promise is one call per scan: a batch that raises
+    or leaves its bounds is undone and stepped, which calls the function again for scans
+    it has already run.  So a function that keeps anything from one call to the next, or
+    reaches past its own frame to something that can (a closure cell, a global, a mutable
+    default, an import, a dunder or a frame), runs stepped, once per scan.
+    """
+    if not inspect.isfunction(fn) or fn.__closure__ or fn.__builtins__ is not vars(builtins):
+        return False
+    defaults = (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values())
+    if not all(_is_immutable_constant(default) for default in defaults):
+        return False
+    if _reaches_past_its_scope(fn.__code__):
+        return False
+    read, bound = _global_names(fn.__code__)
+    if bound:
+        return False
+    function_globals = fn.__globals__
+    for name in read:
+        if function_globals.get(name) is math:
+            continue  # The math module, under any name: nothing in it depends on a past call.
+        if name in function_globals or not _is_self_contained_builtin(name):
+            return False
+    return True
+
+
+def _hands_over_nothing_it_could_keep(value: Any) -> bool:
+    """Whether an ``ins`` value reaches the function as a fresh value, or one nothing can change.
+
+    A list a function appends to, or any object it can call, is state like a mutable default.
+    """
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    return isinstance(
+        value, Tag | IndirectRef | IndirectExprRef | Expression | ImmediateRef
+    ) or _is_immutable_constant(value)
+
+
+def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any, str]]:
+    """Each ``run_function`` whose answer may not follow from its inputs, and why.
+
+    The one gate on calling a function anywhere but its own scan: a kernel's undo calls it
+    again, and the verifier calls it to explore, for inputs no scan may ever give it.
+    """
+    from pyrung.core.instruction.control import (
+        EnabledFunctionCallInstruction,
+        FunctionCallInstruction,
+    )
+    from pyrung.core.program import Program
+
+    if not isinstance(program, Program):
+        return []
+    found: list[tuple[Any, str]] = []
+    for instruction in walk_instructions(program):
+        if not isinstance(instruction, FunctionCallInstruction | EnabledFunctionCallInstruction):
+            continue
+        if not _may_be_called_again(instruction._fn):
+            found.append(
+                (
+                    instruction,
+                    "it is not a plain def of its arguments: it is a callable object, or uses "
+                    "a closure, a global, a helper, a mutable default or an import",
+                )
+            )
+            continue
+        for key, value in instruction._ins.items():
+            if not _hands_over_nothing_it_could_keep(value):
+                found.append((instruction, f"ins[{key!r}] is an object it could change or keep"))
+                break
+    return found
+
+
+def _program_calls_what_a_kernel_may_not(program: Any) -> bool:
+    return bool(calls_that_depend_on_more_than_their_inputs(program))
+
+
+def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
+    if isinstance(exc, NotImplementedError | NameError | SyntaxError):
+        return True  # A kernel that doesn't build is a kernel not used: the run steps.
     if not isinstance(exc, ValueError | TypeError):
         return False
     message = str(exc)
@@ -355,7 +724,6 @@ def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
         needle in message
         for needle in (
             "requires generate_circuitpy",
-            "Could not inspect source for callable",
             "Unsupported",
         )
     )
@@ -372,9 +740,11 @@ class _DebugNamespace:
     # -- DebugRunner protocol (used by PLCDebugger) --
 
     def prepare_scan(self) -> tuple[ScanContext, float]:
+        self._plc._refuse_inside_a_call()
         return self._plc._prepare_scan()
 
     def commit_scan(self, ctx: ScanContext, dt: float) -> None:
+        self._plc._refuse_inside_a_call()
         self._plc._commit_scan(ctx, dt)
 
     def iter_top_level_rungs(self) -> Iterable[Rung]:
@@ -407,6 +777,16 @@ class _DebugNamespace:
     def scan_steps_debug(self) -> Generator[ScanStep, None, None]:
         """Execute one scan cycle yielding fine-grained debug steps."""
         return self._plc._scan_steps_debug()
+
+    def abandon_scan(self) -> None:
+        """Forget a partially stepped scan without committing it.
+
+        Call this when dropping a ``scan_steps()`` / ``scan_steps_debug()``
+        generator before it is exhausted.  The scan already took the pending
+        patches; they are queued again (ahead of any newer patch for the same
+        tag) so the next scan applies them instead of losing them.
+        """
+        self._plc._requeue_drained_patches()
 
     def rung_trace(self, rung_id: int) -> RungTrace:
         """Return rung-level debug trace for the most recently committed scan.
@@ -467,10 +847,41 @@ def _avoid_expr_has_edge(expr: Any) -> bool:
     return any(_avoid_expr_has_edge(child) for child in getattr(expr, "terms", ()) or ())
 
 
-def _avoid_fold_condition(spec: Any, expr: Any) -> Any | None:
-    """Return executable fold metadata for one condition-like avoid.
+def _avoid_expr_is_opaque(expr: Any) -> bool:
+    """Does this avoid lower to a stand-in for a pointer or an expression, naming no real tag?"""
+    if getattr(expr, "unsupported", None) is not None:
+        return True
+    if str(getattr(expr, "tag", "")).startswith("indirect("):
+        return True
+    return any(_avoid_expr_is_opaque(child) for child in getattr(expr, "terms", ()) or ())
 
-    Opaque callables have no expression and therefore no readable fold metadata.
+
+def _avoid_condition_predicate(condition: Any) -> Callable[[dict[str, Any]], bool]:
+    """Evaluate *condition* itself on a state, each tag not yet in it at its default."""
+
+    class _StateReads:
+        def __init__(self, state: dict[str, Any]) -> None:
+            self._state = state
+
+        def get_tag(self, name: str, default: Any = None) -> Any:
+            return self._state.get(name, default)
+
+    def _predicate(state: dict[str, Any]) -> bool:
+        return bool(condition.evaluate(_StateReads(state)))
+
+    return _predicate
+
+
+def _avoid_opaque_name(condition: Any) -> str:
+    from pyrung.core.validation.render import render_condition
+
+    return render_condition(condition)
+
+
+def _avoid_condition(spec: Any, expr: Any) -> Any | None:
+    """Return the executable condition of one condition-like avoid.
+
+    Opaque callables have no expression and therefore none.
     """
 
     if expr is None:
@@ -492,8 +903,8 @@ def _compile_avoid(spec: Any) -> Any:
     Each condition is avoided independently: ``avoid=(A, B)`` / ``avoid=[A, B]``
     exclude a path that depends on *either*, while ``avoid=And(A, B)`` is a single
     member that excludes only the combined state.  Every member keeps its own
-    printable name and condition fold metadata so a decline can point at what
-    it violated and a folded PILOT coast can observe it. Opaque callables retain
+    printable name and condition so a decline can point at what it violated and
+    a PILOT coast can say what it reads. Opaque callables retain
     only their predicate; rise/fall transition conditions are rejected because
     avoidance is defined over snapshots.
     """
@@ -512,12 +923,17 @@ def _compile_avoid(spec: Any) -> Any:
                 "use a snapshot state condition or callable"
             )
         name = _render_avoid_expr(expr) if expr is not None else ", ".join(tags or ()) or "avoid"
+        condition = _avoid_condition(cond, expr)
+        if expr is not None and _avoid_expr_is_opaque(expr):
+            # The lowered form has no reading of these, and undecided counts as violated.
+            name = _avoid_opaque_name(condition)
+            pred = _avoid_condition_predicate(condition)
         members.append(
             _AvoidMember(
                 name=name,
                 pred=pred,
                 tags=frozenset(tags or ()),
-                condition=_avoid_fold_condition(cond, expr),
+                condition=condition,
             )
         )
     return _AvoidPredicate(tuple(members))
@@ -543,9 +959,10 @@ class EpochCaches:
     """Invalidation registry for history-derived epoch caches.
 
     The matrix deliberately preserves the lifecycle asymmetry.  Trimming
-    prunes surviving recent states separately, while a runtime-scope reset and
-    recording reset are distinct because STOP-to-RUN keeps replay slabs and a
-    reboot does not.
+    prunes surviving recent states separately.  A runtime-scope reset and a
+    recording reset are distinct events: a fork's time-mode setup starts a log
+    with no runtime reset.  Reboot and STOP-to-RUN compose both, because each
+    returns scan ids to 0 and a slab from before would answer for a new scan.
     """
 
     INVALIDATION_MATRIX: Mapping[_EpochCacheEvent, tuple[_EpochCacheName, ...]] = MappingProxyType(
@@ -611,6 +1028,40 @@ def _new_epoch_ref() -> EpochRef:
     return EpochRef(next(_EPOCH_REFERENCE_VALUES))
 
 
+class AvoidCheckError(Exception):
+    """An ``avoid=`` check raised on a real state: where how() starts, or a scan a trial ran.
+
+    A check that raised did not say the state is clear, so how() does not go through it,
+    and it proved nothing about the target.  So there is no plan to return, and the check's
+    own exception is the ``__cause__``.  A raise on a state how() is only weighing, such as
+    a hold laid over a state, is not this error.
+    """
+
+    def __init__(self, check: str, error: Exception) -> None:
+        super().__init__(
+            f"avoid check {check!r} raised {type(error).__name__}: {error}. "
+            "That was on the state how() starts from or on a scan a trial ran, which may be a "
+            "trial the plan would not have kept. A raise is no answer, so how() stopped without "
+            "a plan. "
+            "A callable reads a tag a state may not have yet with snapshot.get(name, default). "
+            "A condition compares what it finds, so check each tag it names is in the program "
+            "and the two sides can be compared."
+        )
+        self.check = check
+
+
+class SearchStopped(Exception):
+    """A how() world stopped itself, and its next scan would restart it.
+
+    A restart is a new recording with scan ids from 0.  A plan is scans of one
+    recording, so how() ends here rather than step over it.
+    """
+
+    def __init__(self, scan_id: int) -> None:
+        super().__init__(f"the program stopped itself at scan {scan_id}")
+        self.scan_id = scan_id
+
+
 @dataclass(frozen=True)
 class Epoch:
     """One immutable executed interval and the evidence needed to replay it."""
@@ -627,7 +1078,12 @@ class Epoch:
     rung_firing_timelines: RungFiringTimelines[int]
     committed_tag_timelines: RungFiringTimelines[str]
     node_firing_timelines: RungFiringTimelines[RungId]
+    # ``(first, last)`` scan ranges that ran without records, clipped to the
+    # interval.  Shared with the epoch's query runner: settling empties it, once
+    # for every fork that holds this epoch.
+    unrecorded_scans: list[tuple[int, int]]
     synthesis: Any | None
+    plant_changes: tuple[tuple[int, list[Any] | None], ...]
     program: Any | None
     logic: tuple[Any, ...]
     time_mode: TimeMode
@@ -644,6 +1100,8 @@ class Epoch:
     causal_initial_tags: Mapping[str, Any]
     rtc_base: datetime
     rtc_base_sim_time: float
+    keep_forces_on_run: bool
+    modbus_stubbed: bool = False
 
     @classmethod
     def seal(
@@ -691,7 +1149,13 @@ class Epoch:
             rung_firing_timelines=plc._rung_firing_timelines.snapshot(up_to=last_scan),
             committed_tag_timelines=plc._committed_tag_timelines.snapshot(up_to=last_scan),
             node_firing_timelines=plc._node_firing_timelines.snapshot(up_to=last_scan),
+            unrecorded_scans=list(
+                (max(first, first_scan), min(last, last_scan))
+                for first, last in plc._unrecorded_scans
+                if first <= last_scan and last >= first_scan
+            ),
             synthesis=synthesis,
+            plant_changes=tuple(plc._plant_changes),
             program=plc._program,
             logic=tuple(plc._logic),
             time_mode=plc._time_mode,
@@ -708,6 +1172,8 @@ class Epoch:
             causal_initial_tags=MappingProxyType(dict(plc._causal_initial_tags)),
             rtc_base=plc._rtc_base,
             rtc_base_sim_time=plc._rtc_base_sim_time,
+            keep_forces_on_run=plc._keep_forces_on_run,
+            modbus_stubbed=plc._modbus_stubbed,
         )
 
 
@@ -740,6 +1206,7 @@ class EpochQuery:
             history_budget=epoch.recent_state_cache_budget,
             checkpoint_interval=epoch.checkpoint_interval,
             record_all_tags=epoch.record_all_tags,
+            keep_forces_on_run=epoch.keep_forces_on_run,
             _tag_index=(
                 dict(epoch.known_tags_by_name),
                 epoch.edge_tag_names,
@@ -754,6 +1221,7 @@ class EpochQuery:
         runner._playhead = epoch.last_scan
         runner._scan_log = epoch.scan_log.clone(up_to=epoch.last_scan)
         runner._checkpoints = dict(epoch.checkpoints)
+        runner._plant_changes = list(epoch.plant_changes)
         runner._recent_state_cache = OrderedDict(epoch.state_cache)
         runner._recent_state_cache_bytes = sum(
             estimate for _state, estimate in runner._recent_state_cache.values()
@@ -761,8 +1229,11 @@ class EpochQuery:
         runner._rung_firing_timelines = epoch.rung_firing_timelines
         runner._committed_tag_timelines = epoch.committed_tag_timelines
         runner._node_firing_timelines = epoch.node_firing_timelines
+        runner._unrecorded_scans = epoch.unrecorded_scans
         runner._causal_initial_tags = dict(epoch.causal_initial_tags)
         runner._causal_lineage = CausalLineage(runner)
+        runner._modbus_stubbed = epoch.modbus_stubbed
+        runner._reconstructs_history = True
         runner._set_rtc_internal(epoch.rtc_base, epoch.rtc_base_sim_time)
         if epoch.synthesis is not None:
             from pyrung.core.synthesis import Synthesis
@@ -838,7 +1309,8 @@ class EpochQuery:
         return self._runner()._replay_pilot_rung_write_projection_at(scan_id)
 
     def rtc_at(self, state: SystemState) -> datetime:
-        return self._runner()._system_runtime._rtc_now(state)
+        runner = self._runner()
+        return runner._replay_rtc_at_state(state, runner._scan_log)
 
     def cause(
         self,
@@ -1120,6 +1592,7 @@ class PLC:
         history_budget: int | float | None = None,
         checkpoint_interval: int | None = None,
         record_all_tags: bool = False,
+        keep_forces_on_run: bool = False,
         _tag_index: tuple[dict[str, Tag], frozenset[str], dict[str, TagConstraint]] | None = None,
     ) -> None:
         """Create a new PLC.
@@ -1137,7 +1610,9 @@ class PLC:
             cache: Instant-lookup window for full ``SystemState``
                 snapshots.  Same formats as *history*.  ``None`` uses
                 byte-budget-only eviction.
-            history_budget: Byte ceiling for the recent-state cache.
+            history_budget: Byte limit on the recent-state cache, and with
+                ``history=`` on the window's checkpoints.  When the checkpoints
+                weigh more, the runner drops the window's oldest scans.
                 Defaults to 100 MB.  Raises ``ValueError`` below 1 MB.
             checkpoint_interval: Number of scans between replay checkpoints.
                 Defaults to ``_CHECKPOINT_INTERVAL_DEFAULT``.
@@ -1147,6 +1622,8 @@ class PLC:
                 don't need them.  Set this to True when a diagnostic
                 session needs the unfiltered firing history (e.g. when
                 the PDG is suspected of misclassifying a consumer).
+            keep_forces_on_run: Keep active forces across STOP -> RUN
+                transitions (see :attr:`keep_forces_on_run`).
             _tag_index: Internal (``fork()``).  A ``(known_tags_by_name,
                 edge_tag_names, constrained_tags)`` triple from a runner
                 sharing the same program object.  The dicts are copied
@@ -1198,16 +1675,27 @@ class PLC:
             self._logic = logic
         else:
             self._logic = [logic]
+        self._site_table = self._bind_logic_sites()
 
         self._state = initial_state if initial_state is not None else SystemState()
+        if _tag_index is None:
+            # A state saved before edge memory was per contact (``_prev:X``).
+            # Forks start from this runner's own (already migrated) states.
+            self._state = migrate_legacy_edge_memory(self._state, self._site_table)
         # Mutable read mirror for ordinary interpreted scans.  The committed
-        # state remains an immutable PMap; this avoids repeated HAMT bucket
+        # tag map remains an immutable PMap; this avoids repeated HAMT bucket
         # walks while a scan reads its unchanged input image.  Capturing/debug
         # scans bypass it because they retain ConditionViews after commit.
         self._state_tags_read_cache: dict[str, Any] | None = None
         self._state_tags_read_cache_state: SystemState | None = None
         self._running = True
+        # How many of this PLC's ``run_function`` bodies are running now: none of them may
+        # scan, stop or reboot it or set its battery (ScanContext.call_user_function).  Not "a
+        # scan is open": a paused scan_steps generator has one open, and doing those beside it
+        # is legal.
+        self._user_calls_running = 0
         self._battery_present = True
+        self._keep_forces_on_run = bool(keep_forces_on_run)
         self._state = self._apply_runtime_memory_flags(
             self._state,
             mode_run=self._running,
@@ -1230,20 +1718,24 @@ class PLC:
         self._current_rung_traces: dict[int, RungTrace] = {}
         self._current_rung_traces_scan_id: int | None = None
         # Independent compressed columns for rung firing, final attempted
-        # values, and sparse within-scope variation.
-        self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines()
+        # values, and sparse within-scope variation.  A history window bounds their memory,
+        # so with one a column has no limit.
+        capped = history_scans is None
+        self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines(capped=capped)
         # Authoritative committed tag boundaries. Unlike rung write payloads,
         # these are captured after the complete scan, so same-scan overwrites
         # are already resolved. The range encoder compresses arithmetic churn
         # while sparse tags contribute only when their committed value changes.
-        self._committed_tag_timelines: RungFiringTimelines[str] = RungFiringTimelines()
-        self._causal_initial_tags = dict(self._state.tags)
+        self._committed_tag_timelines: RungFiringTimelines[str] = RungFiringTimelines(capped=capped)
+        self._causal_initial_tags = snapshot_dict(self._state.tags)
         self._causal_rung_firing_timelines = _CausalRungFiringTimelines(self)
         # Node-level firing log, keyed by ``RungId`` (subroutine, rung_index).
         # Holds subroutine-rung firings the main-rung log can't represent;
         # consumed by ``query.cold_rungs`` / ``hot_rungs`` so subroutine rungs
         # are visible to coverage.
-        self._node_firing_timelines: RungFiringTimelines[RungId] = RungFiringTimelines()
+        self._node_firing_timelines: RungFiringTimelines[RungId] = RungFiringTimelines(
+            capped=capped
+        )
         self._inflight_scan_id: int | None = None
         self._inflight_rung_events: dict[int, list[RungTraceEvent]] = {}
         self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
@@ -1266,12 +1758,34 @@ class PLC:
         # REALTIME mode; ``_replay_mode`` suppresses user monitors,
         # breakpoint labels, and the RTC setter during a replay walk.
         self._dt_override_for_next_scan: float | None = None
+        # Every ``(first, last)`` range of scans that ran without causal records, in
+        # the compiled kernel or its guarded loop.  A question that reaches one settles it.
+        self._unrecorded_scans: list[tuple[int, int]] = []
+        # Without ``history=``, a stepped scan records nothing once the records hold
+        # ``coast_run.MAX_RECORD_RUNS`` runs, which bounds their memory.  A question steps those
+        # scans again from a checkpoint, as it does for a compiled run.  Replays record every scan.
+        self._records_bounded = True
+        self._records_full = False
         self._replay_mode: bool = False
+        # Set while a replay steps the scans of its recording.  A restart would end the
+        # recording, so the replay never restarts.  The fork a replay returns restarts on its
+        # next scan, as a live PLC does.
+        self._walks_a_recording = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
-        # Constant-size instrumentation for the most recent sparse point seek.
-        # This is deliberately not a per-scan trace: replay folding must not
-        # trade CPU savings for memory proportional to the skipped interval.
-        self._last_replay_seek_stats: dict[str, int] = {}
+        # how() sets this on its forks.  Their send() and receive() do no I/O, as for a
+        # string target.  Every runner made from one, such as a fork or a replay, keeps it.
+        self._modbus_stubbed = False
+        # A runner that rebuilds recorded scans for cause() or the epoch does no Modbus I/O.
+        # ScanContext.modbus_io reads both flags and ``_replay_mode``.
+        self._reconstructs_history = False
+        # Each live send()/receive() request in flight.  A fork starts with none, so it
+        # can't collect a request its parent sent.
+        self._modbus_requests: dict[int, Any] = {}
+        # What coasts keep for later coasts: a search's, shared with its forks.
+        self._coast_memo: CoastMemo | None = None
+        # The interpreted scans of a wait that how()'s ledger prices as loop scans.
+        self._loop_priced_scans: set[int] = set()
+        self._search_refuses_restart = False
         self._last_replay_slab_stats: dict[str, int] = {}
         # The synthesis-bracketed compilation unit for soft-exec replay (holds +
         # user + plant), built lazily and cached.  ``None`` ⇒ no synthesis (use
@@ -1293,6 +1807,7 @@ class PLC:
         # invalidated.
         self._record_all_tags: bool = record_all_tags
         self._pdg_consumed_tags: frozenset[str] | None = None
+        self._pdg_edits = 0
         # One-slot cache for ``replay_trace_at``.  Reconstructing rung
         # traces for a historical scan costs one fork + up to K plain
         # scans + one debug scan; caching a back-to-back repeat query
@@ -1319,7 +1834,14 @@ class PLC:
             rtc_now_getter=self._rtc_at_sim_time,
             rtc_setter=self._set_rtc_and_record,
         )
-        self._input_overrides = InputOverrideManager(is_read_only=self._system_runtime.is_read_only)
+        self._input_overrides = InputOverrideManager(
+            is_read_only=self._system_runtime.is_read_only,
+            known_type=self._type_a_name_holds,
+        )
+        self._tags_rungs_reach = TagsRungsReach(self._logic, self._program)
+        # Known only because a patch or a force named them by Tag: a name means no more than
+        # it did, so a string's answer doesn't depend on which came first.
+        self._names_no_rung_gave: set[str] = set()
         # Preserve direct access used in tests/live-tag helpers.
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
@@ -1337,7 +1859,10 @@ class PLC:
         # ``plant`` post-scan (feedback).  ``None`` ⇒ no overlay (the common
         # case; deploy/prove never set it).  See ``core/synthesis.py``.
         self._synthesis: Any | None = None
-        self._fold_context_cache: Any | None = None
+        # ``(scan_id, plant)``: a checkpoint no replay steps across.  *plant* is the plant
+        # that ran the scans up to *scan_id*, kept when a coupling change replaced it there
+        # (:meth:`_note_plant_change`).  It is None when only the state was edited there.
+        self._plant_changes: list[tuple[int, list[Any] | None]] = []
         self._fork_seed_cache: tuple[SystemState, int, SystemState] | None = None
         self._bounds_violations: dict[str, BoundsViolation] = {}
         if _tag_index is not None:
@@ -1351,7 +1876,9 @@ class PLC:
             return
         self._known_tags_by_name = {}
         self._edge_tag_names = self._refresh_known_tags_and_edges()
-        self._constrained_tags = build_constraint_index(self._known_tags_by_name)
+        self._constrained_tags = build_constraint_index(
+            self._tags_rungs_reach.declared_with(self._known_tags_by_name)
+        )
         # Seed initial state with tag defaults (skip tags already in state).
         # One pmap iteration + C-level set difference; per-key pmap
         # ``in`` probes cost ~2 bucket walks per known tag.
@@ -1382,8 +1909,13 @@ class PLC:
 
     @property
     def tags(self) -> MappingProxyType[str, Tag]:
-        """Read-only mapping of tag name → Tag object."""
-        return MappingProxyType(self._known_tags_by_name)
+        """Read-only mapping of tag name → Tag object, for what the program has and reaches.
+
+        A slot a range reaches becomes a tag when it is read from here.
+        """
+        return MappingProxyType(
+            TagsKnownOrReached(self._known_tags_by_name, self._tags_rungs_reach)
+        )
 
     @property
     def bounds_violations(self) -> dict[str, BoundsViolation]:
@@ -1430,6 +1962,26 @@ class PLC:
             raise KeyError(scan_id)
         return owner.state_at(scan_id)
 
+    def _timestamp_at(self, scan_id: int) -> float:
+        """A scan's timestamp, added up from the nearest state its epoch holds, not stepped to."""
+        owner = self._causal_lineage.owner_at(scan_id)
+        if owner is None:
+            raise KeyError(scan_id)
+        plc = owner._runner()
+        if scan_id == plc._state.scan_id:
+            return plc._state.timestamp
+        held = plc._recent_state_cache.get(scan_id)
+        if held is not None:
+            return held[0].timestamp
+        anchor = plc._replay_anchor_scan(scan_id)
+        state = plc._checkpoints.get(anchor, plc._initial_state)
+        timestamp = state.timestamp
+        dts = plc._scan_log._dts
+        base = plc._scan_log.base_scan
+        for scan in range(state.scan_id + 1, scan_id + 1):
+            timestamp += plc._dt if dts is None else dts[scan - base]
+        return timestamp
+
     def _causal_state_in_cache(self, scan_id: int) -> bool:
         owner = self._causal_lineage.owner_at(scan_id)
         return owner.state_in_cache(scan_id) if owner is not None else False
@@ -1462,9 +2014,7 @@ class PLC:
         writes = owner.committed_tag_timelines.rung_writes_at(tag_name, scan_id)
         if writes is None or tag_name not in writes:
             return None
-        prior = self._causal_raw_committed_transition_before(tag_name, scan_id)
-        before = prior[1] if prior is not None else self._causal_initial_tags.get(tag_name)
-        return Transition(tag_name, scan_id, before, writes[tag_name])
+        return self._committed_transition(tag_name, scan_id, writes[tag_name])
 
     def _causal_last_committed_transition_before(
         self,
@@ -1475,9 +2025,22 @@ class PLC:
         latest = self._causal_raw_committed_transition_before(tag_name, before_scan_id)
         if latest is None:
             return None
-        scan_id, after = latest
+        return self._committed_transition(tag_name, latest[0], latest[1])
+
+    def _committed_transition(self, tag_name: str, scan_id: int, after: Any) -> Transition:
+        """The two sides of a change, a side no column can say read from its state.
+
+        The column says what the last write it has wrote, which is the old value only if no
+        scan since then ran without records: one of those may have moved the tag.
+        """
         prior = self._causal_raw_committed_transition_before(tag_name, scan_id)
         before = prior[1] if prior is not None else self._causal_initial_tags.get(tag_name)
+        if before is _UNKNOWN_VALUE or self._unrecorded_in(
+            None if prior is None else prior[0] + 1, scan_id - 1
+        ):
+            before = self.history.at(scan_id - 1).tags.get(tag_name)
+        if after is _UNKNOWN_VALUE:
+            after = self.history.at(scan_id).tags.get(tag_name)
         return Transition(tag_name, scan_id, before, after)
 
     @property
@@ -1523,10 +2086,52 @@ class PLC:
         Values are attempted writes, including a later writer reasserting the
         already-pending value. Transition consumers compare committed state;
         causal execution consumers retain the exact writer occurrence.
+
+        A column that grew too long to keep, or that a loop's record cannot speak for,
+        is read by stepping the scan again from the nearest checkpoint, up to
+        ``UnrecordedScansError`` where that is too far.
         """
         target = self._playhead if scan_id is None else scan_id
+        firings = self._recorded_rung_firings(target)
+        if any(value is _UNKNOWN_VALUE for writes in firings.values() for value in writes.values()):
+            owner = self._causal_lineage.owner_at(target)
+            assert owner is not None
+            return owner._runner()._rung_firings_stepped_again(
+                target, self._search_limits(), self._refusal
+            )
+        return firings
+
+    def _recorded_rung_firings(self, target: int) -> PMap:
+        """What the timelines say of *target*, a value they gave up on as ``_UNKNOWN_VALUE``."""
+        self._settle_compiled_ranges(target, target)
         owner = self._causal_lineage.owner_at(target)
         return owner.rung_firing_timelines.at(target) if owner is not None else pmap()
+
+    def _refusal(self, first: int, last: int, scans: int) -> BaseException:
+        """What a question gets when reading *first*..*last* would step too far."""
+        refusal = UnrecordedScansError(first, last, scans)
+        return SearchQuestionRefused(refusal) if self._search_refuses_restart else refusal
+
+    def _rung_firings_stepped_again(
+        self,
+        target: int,
+        check_limits: Callable[[], None] | None,
+        refusal: Callable[[int, int, int], BaseException],
+    ) -> PMap:
+        steps = target - self._replay_anchor_scan(target - 1)
+        if steps > SETTLE_SCAN_LIMIT:
+            raise refusal(target, target, steps)
+        anchor = self._nearest_checkpoint_at_or_before(target - 1)
+        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+        for scan_id in range(anchor_scan_id + 1, target + 1):
+            if check_limits is not None:
+                check_limits()
+            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+            if scan_id == target:
+                # A fresh record keeps every value of this one scan.
+                replay._rung_firing_timelines = RungFiringTimelines(capped=False)
+            replay.step()
+        return replay._rung_firing_timelines.at(target)
 
     def _node_firings_at(self, scan_id: int | None = None) -> PMap:
         """Return node-level subroutine/synthesis firings for the given scan.
@@ -1537,6 +2142,7 @@ class PLC:
         exclusively in :meth:`rung_firings`.
         """
         target = self._playhead if scan_id is None else scan_id
+        self._settle_compiled_ranges(target, target)
         owner = self._causal_lineage.owner_at(target)
         return owner.node_firing_timelines.at(target) if owner is not None else pmap()
 
@@ -1653,7 +2259,7 @@ class PLC:
         for key in all_keys:
             old_value = state_a.tags.get(key)
             new_value = state_b.tags.get(key)
-            if old_value != new_value:
+            if value_changed(old_value, new_value):
                 changed[key] = (old_value, new_value)
         return changed
 
@@ -1671,7 +2277,13 @@ class PLC:
         clear ``_pdg_consumed_tags`` together — the two caches share a
         lifetime.
         """
-        if not hasattr(self, "_pdg_cache") or self._pdg_cache is None:
+        from pyrung.core.tag import metadata_edits
+
+        if (
+            not hasattr(self, "_pdg_cache")
+            or self._pdg_cache is None
+            or self._pdg_edits != metadata_edits()
+        ):
             from pyrung.core.analysis.pdg import build_program_graph
             from pyrung.core.program import Program
             from pyrung.core.tag import TagType
@@ -1681,6 +2293,7 @@ class PLC:
                 program = Program.__new__(Program)
                 program.rungs = list(self._logic)
                 program.subroutines = {}
+            self._pdg_edits = metadata_edits()
             self._pdg_cache = build_program_graph(program)
             consumed = set(self._pdg_cache.readers_of.keys())
             # Union in every Bool-typed tag the PDG observed. A mixed rung
@@ -1692,50 +2305,6 @@ class PLC:
                     consumed.add(name)
             self._pdg_consumed_tags = frozenset(consumed)
         return self._pdg_cache
-
-    def _ensure_fold_context(
-        self,
-        target_names: frozenset[str] = frozenset(),
-        clock_reads: frozenset[str] = frozenset(),
-        scan_derived: frozenset[str] = frozenset(),
-    ) -> Any:
-        """Lazily build and cache the fold context for time-folding.
-
-        Keyed by the protected-read triple so a ``run_until`` condition's
-        tags become ``target_names`` (never excluded from the plateau
-        guard) without perturbing other callers.  External invalidation
-        sites reset ``_fold_context_cache = None``; that clears every key.
-        """
-        key = (target_names, clock_reads, scan_derived)
-        cache = self._fold_context_cache
-        if cache is None:
-            cache = self._fold_context_cache = {}
-        ctx = cache.get(key)
-        if ctx is None:
-            from pyrung.core.analysis.pdg import build_program_graph
-            from pyrung.core.fold import _build_fold_context
-            from pyrung.core.program import Program
-
-            program = self._soft_exec_program()
-            if program is None:
-                program = Program.__new__(Program)
-                program.rungs = list(self._logic)
-                program.subroutines = {}
-            # Folding executes the soft machine, not merely the deployable user
-            # program.  Synthesis plant + PilotRungs are ordinary leading rungs,
-            # so their reads, writes, guards, and timer crossings belong in the
-            # same proof surface.  Reuse the bare PDG only when no bracket exists.
-            pdg = self._ensure_pdg() if program is self._program else build_program_graph(program)
-            ctx = _build_fold_context(
-                self,
-                pdg,
-                program,
-                target_names=target_names,
-                condition_clock_reads=clock_reads,
-                condition_scan_derived=scan_derived,
-            )
-            cache[key] = ctx
-        return ctx
 
     def _consumed_tags_for_capture(self) -> frozenset[str] | None:
         """Capture-worthy tag set for ``ScanContext.capturing_rung``
@@ -1754,6 +2323,10 @@ class PLC:
         """
         if self._record_all_tags or not self._logic:
             return None
+        from pyrung.core.tag import metadata_edits
+
+        if self._pdg_consumed_tags is not None and self._pdg_edits != metadata_edits():
+            self._ensure_pdg()
         if self._pdg_consumed_tags is None:
             from pyrung.core.rung import Rung as RungClass
 
@@ -1823,6 +2396,8 @@ class PLC:
                 _validate_assume(self._logic, assume)
             from pyrung.core.analysis.causal import projected_cause
 
+            # Each enabler's held_since reads its last change, which may be on any earlier scan.
+            self._settle_compiled_ranges()
             return projected_cause(
                 logic=self._logic,
                 history=self._history,
@@ -1834,6 +2409,7 @@ class PLC:
                 program=self._program,
             )
 
+        self._settle_compiled_ranges(since, scan)
         from pyrung.core.analysis.causal import recorded_cause
 
         cause_history = (
@@ -1843,7 +2419,7 @@ class PLC:
         return recorded_cause(
             logic=self._logic,
             history=cast(History, cause_history),
-            rung_firings_fn=self.rung_firings,
+            rung_firings_fn=self._recorded_rung_firings,
             tag=tag,
             scan_id=scan,
             pdg=self._ensure_pdg() if self._logic else None,
@@ -1919,6 +2495,7 @@ class PLC:
             if to_value is not _SENTINEL:
                 kwargs["to_value"] = to_value
 
+            self._settle_compiled_ranges()  # as in cause(to=)
             return projected_effect(
                 logic=self._logic,
                 history=self._history,
@@ -1930,12 +2507,13 @@ class PLC:
                 **kwargs,
             )
 
+        self._settle_compiled_ranges(scan, None)
         from pyrung.core.analysis.causal import recorded_effect
 
         return recorded_effect(
             logic=self._logic,
             history=self._history,
-            rung_firings_fn=self.rung_firings,
+            rung_firings_fn=self._recorded_rung_firings,
             tag=tag,
             scan_id=scan,
             steady_state_k=steady_state_k,
@@ -1946,12 +2524,99 @@ class PLC:
             node_runs_fn=self._replay_rung_runs_at,
         )
 
+    def _settle_compiled_ranges(
+        self, first: int | None = None, last: int | None = None, *, at_any_cost: bool = False
+    ) -> None:
+        """Give the scans in *first*..*last* that ran without records their records.
+
+        A plain compiled run commits states and no index, which is its whole speed.  The
+        first question that reaches such a scan pays for it, by stepping it again from the
+        nearest checkpoint: the answer is then what a stepped run recorded, because it is
+        one.  An epoch's ranges settle once, for every fork that holds it.
+        """
+        asked = self._unrecorded_in(first, last)
+        if not asked:
+            return
+        # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
+        scans = sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
+        if scans > SETTLE_SCAN_LIMIT and not at_any_cost:
+            raise self._refusal(asked[0][1][0], asked[-1][1][1], scans)
+        for owner, (start, end) in asked:
+            owner._settle_window(start, end, self._search_limits())
+
+    def _unrecorded_in(
+        self, first: int | None = None, last: int | None = None
+    ) -> list[tuple[PLC, tuple[int, int]]]:
+        """Each epoch's scans in *first*..*last* that ran without records, by the epoch's runner."""
+        lineage = self._causal_lineage
+        owners = [self] if self._unrecorded_scans else []
+        for epoch in lineage.sealed_epochs:
+            if epoch.unrecorded_scans:
+                owners.append(lineage._query_for(epoch)._runner())
+        return [
+            (
+                owner,
+                (
+                    start if first is None else max(start, first),
+                    end if last is None else min(end, last),
+                ),
+            )
+            for owner in owners
+            for start, end in owner._unrecorded_scans
+            if (last is None or start <= last) and (first is None or end >= first)
+        ]
+
+    def _replay_anchor_scan(self, scan_id: int) -> int:
+        anchor = self._nearest_checkpoint_at_or_before(scan_id)
+        return anchor if anchor is not None else self._initial_scan_id
+
+    def _search_limits(self) -> Callable[[], None] | None:
+        """What a how() asking this question polls while it waits for the answer."""
+        return None if self._coast_memo is None else self._coast_memo.check_limits
+
+    def _stepped_again(self, first: int, last: int, check_limits: Callable[[], None] | None) -> PLC:
+        """A replay of scans up to *last* from the checkpoint before *first*, with its records."""
+        anchor = self._nearest_checkpoint_at_or_before(first - 1)
+        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+        for name in _RECORDS:
+            setattr(replay, name, RungFiringTimelines(capped=False))
+        for scan_id in range(anchor_scan_id + 1, last + 1):
+            if check_limits is not None:
+                check_limits()
+            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+            replay.step()
+        return replay
+
+    def _settle_window(
+        self, first: int, last: int, check_limits: Callable[[], None] | None
+    ) -> None:
+        # Each scan after a plant change or an edit is stepped again from that checkpoint.
+        for at, _plant in self._plant_changes:
+            if first <= at < last:
+                self._settle_window(first, at, check_limits)
+                self._settle_window(at + 1, last, check_limits)
+                return
+        replay = self._stepped_again(first, last, check_limits)
+        for name in _RECORDS:
+            getattr(self, name).replace_range(getattr(replay, name), first, last)
+        self._causal_lineage.invalidate_current_epoch()
+        remaining: list[tuple[int, int]] = []
+        for start, end in self._unrecorded_scans:
+            if end < first or start > last:
+                remaining.append((start, end))
+                continue
+            if start < first:
+                remaining.append((start, first - 1))
+            if end > last:
+                remaining.append((last + 1, end))
+        self._unrecorded_scans[:] = remaining
+
     def why(self, *tags: Tag | str) -> CausalChain:
         """Explain how tags reached their current values from a snapshot.
 
         No history required. Walks the program graph backward from each
         tag, using the current state as evidence. Terminates at external
-        inputs.
+        inputs. Active forces on tags in the chain are named in it.
 
         Multiple tags produce one unified tree — a single explanation
         consistent with all observations.
@@ -1975,6 +2640,7 @@ class PLC:
             tags=resolved,
             pdg=self._ensure_pdg(),
             program=self._program,
+            forces=self._forces,
         )
 
     def how(
@@ -1984,6 +2650,7 @@ class PLC:
         max_scans: int = 4000,
         unlink: list[str] | None = None,
         on_event: Any = None,
+        wall_clock_s: float | None = 300.0,
     ) -> Any:
         """Find an input-change sequence that reaches a target state.
 
@@ -2000,7 +2667,10 @@ class PLC:
         settles back to rest).  A path is excluded if it depends on the avoided
         condition at *any* of these three gates, and if every path is excluded
         the returned Path is unreachable with a reason that names the violated
-        avoid condition(s).
+        avoid condition(s).  A check that raises on the state how() starts from, or
+        on a scan a trial runs, raises ``AvoidCheckError`` here, since it has not
+        said that state is clear.  A raise on a state how() is only weighing, such
+        as a hold laid over a state, says nothing about the route and denies nothing.
 
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a
@@ -2012,7 +2682,15 @@ class PLC:
                 condition avoided independently).  Express a composite prohibition
                 explicitly — ``avoid=And(A, B)`` avoids only the combined state,
                 not A or B alone.
-            max_scans: Scan budget for the search.
+            max_scans: Work budget for the search.  Each scan the search steps counts
+                one, and so do the first two scans and the last scan of each wait.  The
+                other scans of a wait count a hundredth each, so a long timer fits a small
+                budget.  A wait pyrung cannot run compiled counts one for every scan.  That
+                happens when the program writes a read-only system tag or has a
+                ``run_function()`` that keeps state between calls, or when a tag is forced.
+            wall_clock_s: Seconds of real time before the search stops and says so, or
+                ``None`` for no limit.  A search this ends may have reached on a faster
+                machine.
             unlink: Harness-feedback tag names to free for fault injection.
                 Named tags have their ``link=`` coupling removed so the harness
                 stops driving them and PILOT may steer them directly — the way
@@ -2028,6 +2706,7 @@ class PLC:
             avoid=avoid,
             unlink=unlink,
             on_event=on_event,
+            wall_clock_s=wall_clock_s,
         )
 
     def _how_with_pilot(
@@ -2037,6 +2716,7 @@ class PLC:
         avoid: Any = None,
         unlink: list[str] | None = None,
         on_event: Any = None,
+        wall_clock_s: float | None = 300.0,
     ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
@@ -2048,6 +2728,7 @@ class PLC:
             avoid_pred=_compile_avoid(avoid),
             unlink=unlink,
             on_event=on_event,
+            wall_clock_s=wall_clock_s,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
@@ -2190,32 +2871,45 @@ class PLC:
         historical_owner = self._causal_lineage.owner_at(target_scan_id)
         if historical_owner is None:
             raise KeyError(target_scan_id)
-        historical_state = historical_owner.state_at(target_scan_id)
+        # A runner's first scan belongs to its parent's epoch, but this runner ran on from
+        # its own edit of that state (a harness moving a count, a tip seed).
+        if target_scan_id == self._initial_scan_id:
+            historical_state = self._initial_state
+        else:
+            historical_state = historical_owner.state_at(target_scan_id)
         effective_budget = (
             history_budget if history_budget is not None else self._recent_state_cache_budget
         )
+        seeded = self._seed_defaults_for_fork(historical_state)
         fork = PLC(
             logic=self._program if self._program is not None else list(self._logic),
-            initial_state=self._seed_defaults_for_fork(historical_state),
+            initial_state=seeded,
             history=self._history_retention_scans,
             cache=None if effective_budget == math.inf else self._cache_retention_scans,
             history_budget=effective_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
+            keep_forces_on_run=self._keep_forces_on_run,
             _tag_index=(
                 self._known_tags_by_name,
                 self._edge_tag_names,
                 self._constrained_tags,
             ),
         )
+        # A new PLC starts in RUN with battery_present True.  A fork of a stopped state, or of
+        # one with battery_present False, steps on as that state would.
+        memory = historical_state.memory
+        if not (memory.get(_MODE_RUN_KEY, True) and memory.get(_BATTERY_PRESENT_KEY, True)):
+            fork._start_from_state(seeded)
+        fork._tags_rungs_reach = self._tags_rungs_reach
+        fork._names_no_rung_gave = set(self._names_no_rung_gave)
         fork._set_time_mode(self._time_mode, dt=self._dt)
+        fork._coast_memo = self._coast_memo
+        fork._search_refuses_restart = self._search_refuses_restart
+        fork._modbus_stubbed = self._modbus_stubbed
+        fork._reconstructs_history = self._reconstructs_history
         parent_rtc_at_fork_point = historical_owner.rtc_at(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
-        if self._harness is not None:
-            # Re-install the feedback harness on the fork (it rebuilds its plant
-            # rungs against the fork's tags; accumulator state rides the inherited
-            # committed state).
-            self._harness.fork_onto(fork)
         if inherit_log:
             # Continue the parent's recording instead of starting a fresh log, so
             # a chain of execution forks accumulates the whole history —
@@ -2227,6 +2921,11 @@ class PLC:
                 self._causal_lineage.seal_through(target_scan_id),
             )
             fork._causal_initial_tags = dict(self._causal_initial_tags)
+        if self._harness is not None:
+            # Re-install the feedback harness on the fork (it rebuilds its plant
+            # rungs against the fork's tags; accumulator state rides the inherited
+            # committed state).
+            self._harness.fork_onto(fork)
         return fork
 
     def fork_from(self, scan_id: int) -> PLC:
@@ -2272,13 +2971,21 @@ class PLC:
         cache = self._recent_state_cache
         cache_lo = self._cache_oldest_scan_id()
         window_lo = cache_lo if cache_lo is not None else tip + 1
-        if lo >= window_lo:
-            return [state for sid, (state, _) in cache.items() if lo <= sid <= hi]
         if hi < window_lo:
             return self._replay_range(lo, hi)
-        replayed = self._replay_range(lo, window_lo - 1)
-        cached = [state for sid, (state, _) in cache.items() if window_lo <= sid <= hi]
-        return replayed + cached
+        replayed = self._replay_range(lo, window_lo - 1) if lo < window_lo else []
+        first = max(lo, window_lo)
+        cached = {sid: state for sid, (state, _) in cache.items() if first <= sid <= hi}
+        if len(cached) == hi - first + 1:
+            return replayed + [cached[sid] for sid in range(first, hi + 1)]
+        # A compiled run leaves its landing in the cache, not the scans before it.
+        # Replay the gaps.
+        missing = [sid for sid in range(first, hi + 1) if sid not in cached]
+        gap_lo = missing[0]
+        filled = self._replay_range(gap_lo, missing[-1])
+        for offset, state in enumerate(filled):
+            cached.setdefault(gap_lo + offset, state)
+        return replayed + [cached[sid] for sid in range(first, hi + 1)]
 
     def _seed_defaults_for_fork(self, state: SystemState) -> SystemState:
         """Return *state* with defaults for any known tag it lacks.
@@ -2312,10 +3019,9 @@ class PLC:
         Used by ``fork()`` and ``History.at()`` to avoid the
         ``replay_to → fork → history.at → replay_to`` loop.  Direct
         lookups (current tip, recent-state window, checkpoint dict,
-        the pinned initial state) terminate immediately; the slab cache
-        covers a bounded window behind a miss so that
-        consecutive ``history.at()`` calls in causal backward walks
-        resolve as dict lookups instead of independent replays.
+        the pinned initial state) terminate immediately.  The slab cache
+        covers a bounded window around a miss, so a walk in either direction
+        reads dict lookups instead of separate replays.
         """
         if scan_id == self._state.scan_id:
             return self._state
@@ -2339,76 +3045,63 @@ class PLC:
     def _replay_slab_fill(self, scan_id: int) -> SystemState:
         """Populate one bounded causal slab and return *scan_id*.
 
-        A folded tail may be far from its last checkpoint. Positioning and
-        materialization are separate: fold the run-up when the executable World
-        is provably stable, then retain only one fixed-size working set.
+        A stretch's checkpoints can be far apart.  Positioning and materialization
+        are separate: the run-up goes through the compiled kernel and leaves nothing
+        behind, and only one fixed-size working set is retained.
         """
-        desired_start = max(
-            self._initial_scan_id + 1,
-            scan_id - _REPLAY_SLAB_SCANS + 1,
-        )
+        old = next(reversed(self._replay_slabs.values()), {})
+        ahead = bool(old) and max(old) < scan_id <= max(old) + _REPLAY_SLAB_SCANS // 2
+        # A backward walk reads the scans before the miss, so the slab ends at the miss.
+        # A miss past the old slab's end is a forward walk, so the new slab runs half a slab
+        # past the miss.  A miss further ahead starts a new walk and gets the backward shape.
+        slab_end = scan_id
+        if ahead:
+            slab_end = min(self._state.scan_id, scan_id + _REPLAY_SLAB_SCANS // 2 - 1)
+        desired_start = max(self._initial_scan_id + 1, slab_end - _REPLAY_SLAB_SCANS + 1)
+        # The old slab's states inside the window stay, so a forward walk replays each scan once.
+        kept = {at: state for at, state in old.items() if at >= desired_start} if ahead else {}
+        if kept:
+            desired_start = max(kept) + 1
         # Anchor the slab's whole desired window, not the individual miss.
         # A causal walk routinely crosses replay checkpoints while moving
         # backward; choosing the checkpoint immediately before each miss would
         # truncate the nominal slab and make the one-slot cache ping-pong.
         anchor = self._nearest_checkpoint_at_or_before(desired_start - 1)
         anchor_scan = anchor if anchor is not None else self._initial_scan_id
-        # Causal walks move backward from the requested point.  End the slab at
-        # the miss and retain one contiguous preceding neighborhood, including
-        # across intermediate replay checkpoints.
         slab_start = max(anchor_scan + 1, desired_start)
-        slab_end = scan_id
 
-        positioned_with_fold = False
-        kernel = self._compiled_replay_supported_kernel()
-        if slab_start > anchor_scan + 1 and kernel is not None:
+        kernel = self._replay_kernel_from(anchor_scan)
+        # A single kernel run cannot cross an edited checkpoint, so _replay_range splits the
+        # range there.
+        crosses = any(slab_start <= at <= slab_end for at, _plant in self._plant_changes)
+        if slab_start > anchor_scan + 1 and kernel is not None and not crosses:
             # History ownership has already selected the immutable execution
             # epoch that ran this scan. Its synthesis brackets are therefore
-            # stable replay logic, just like the bare Program, and the ordinary
-            # fold proof may position through a long cold gap without densely
-            # re-executing it. A descendant never reaches this branch with its
-            # own overlay for an inherited scan: ``_causal_state_at`` delegates
-            # to the historical owner first.
-            positioned = self._replay_to_compiled(
-                slab_start - 1,
-                kernel,
-                fold=True,
-            )
+            # stable replay logic, just like the bare Program. A descendant never
+            # reaches this branch with its own overlay for an inherited scan:
+            # ``_causal_state_at`` delegates to the historical owner first.
+            positioned = self._compiled_fork_at(slab_start - 1, kernel)
             states = self._replay_range_from_compiled(
                 positioned,
                 slab_start,
                 slab_end,
                 kernel,
             )
-            positioned_with_fold = True
         else:
             states = self._replay_range(anchor_scan + 1, slab_end)
             if slab_start > anchor_scan + 1:
                 states = [state for state in states if state.scan_id >= slab_start]
-        slab = {state.scan_id: state for state in states}
+        slab = {**kept, **{state.scan_id: state for state in states}}
         # Store under the anchor, marking it most-recently-used, and evict the
         # oldest anchors past the cap.
-        slab_key = slab_start - 1
+        slab_key = (min(kept) if kept else slab_start) - 1
         self._replay_slabs.pop(slab_key, None)
         self._replay_slabs[slab_key] = slab
         while len(self._replay_slabs) > _REPLAY_SLAB_MAX_ANCHORS:
             self._replay_slabs.pop(next(iter(self._replay_slabs)))
         self._last_replay_slab_stats = {
             "runup_scans": max(0, slab_start - anchor_scan - 1),
-            "materialized_states": len(slab),
-            "folded_runup": int(positioned_with_fold),
-            "ordinary_folded_scans": (
-                self._last_replay_seek_stats.get("ordinary_folded_scans", 0)
-                if positioned_with_fold
-                else 0
-            ),
-            "cycle_folded_scans": 0,
-            "residual_scans": (
-                self._last_replay_seek_stats.get("residual_scans", 0)
-                if positioned_with_fold
-                else max(0, slab_start - anchor_scan - 1)
-            )
-            + len(slab),
+            "materialized_states": len(states),
         }
         if scan_id in slab:
             return slab[scan_id]
@@ -2438,6 +3131,106 @@ class PLC:
         self._epoch_caches.on_replay_anchor_replaced()
         self._cache_state(state)
 
+    def _edit_tip_tags(
+        self,
+        tags: Mapping[str, Any],
+        *,
+        memory: Mapping[str, Any] | None = None,
+        drop_memory: Iterable[str] = (),
+    ) -> None:
+        """Put *tags* and *memory* in the state the next scan starts from, between scans.
+
+        The scans before the tip ran without them and stay as they ran.  The tip's
+        own entries follow it, so it reads the same before and after the next scan,
+        and a causal transition's first ``before`` is the value set here.  The keys in
+        *drop_memory* leave the state's memory.
+        """
+        state = self._state.with_tags(dict(tags))
+        if memory:
+            state = state.with_memory(dict(memory))
+        dropped = [name for name in drop_memory if name in state.memory]
+        if dropped:
+            kept = state.memory.evolver()
+            for name in dropped:
+                del kept[name]
+            state = state.set(memory=kept.persistent())
+        self._state = state
+        scan_id = state.scan_id
+        replaced = self._recent_state_cache.pop(scan_id, None)
+        if replaced is not None:
+            self._recent_state_cache_bytes -= replaced[1]
+        self._cache_state(state)
+        at_initial = scan_id == self._initial_scan_id
+        if at_initial:
+            self._initial_state = state
+            if scan_id in self._checkpoints:
+                self._checkpoints[scan_id] = state
+        else:
+            # The scans after this one run from the edit, so no replay may step across it.
+            self._checkpoint_the_tip(None)
+        for name, value in tags.items():
+            if at_initial or name not in self._causal_initial_tags:
+                self._causal_initial_tags[name] = value
+
+    def _note_plant_change(self) -> None:
+        """Keep the plant that ran the scans so far: it is about to be replaced.
+
+        Replay runs a scan under the plant that ran it.  A checkpoint here starts any
+        later scan's replay on this side of the change, so no replay crosses it.
+        """
+        if self._state.scan_id != self._initial_scan_id:
+            self._checkpoint_the_tip([] if self._synthesis is None else list(self._synthesis.plant))
+
+    def _checkpoint_the_tip(self, plant: list[Any] | None) -> None:
+        """Keep the tip as a checkpoint that no replay steps across.
+
+        *plant* is the plant that ran the scans so far, or None when the plant stays.
+        """
+        scan_id = self._state.scan_id
+        last = self._plant_changes[-1] if self._plant_changes else None
+        if last is None or last[0] != scan_id:
+            self._plant_changes.append((scan_id, plant))
+            self._scan_log.record_force_changes(scan_id, self._forces_last_recorded)
+        elif last[1] is None and plant is not None:
+            self._plant_changes[-1] = (scan_id, plant)
+        self._checkpoints[scan_id] = self._state
+
+    def _earlier_plant_at(self, scan_id: int) -> list[Any] | None:
+        """The plant the scans after *scan_id* ran under, when it is not the current one."""
+        for changed_at, plant in self._plant_changes:
+            if scan_id < changed_at and plant is not None:
+                return plant
+        return None
+
+    def _run_on_the_plant_of_the_scan_after(self, scan_id: int, replay: PLC) -> None:
+        """Give *replay*, positioned at *scan_id*, the plant its next scan ran under."""
+        earlier_plant = self._earlier_plant_at(scan_id)
+        if earlier_plant is None:
+            return
+        if replay._synthesis is None:
+            from pyrung.core.synthesis import Synthesis
+
+            replay._synthesis = Synthesis()
+        replay._synthesis.plant = list(earlier_plant)
+        if replay._harness is not None:
+            # Today's couplings do not describe these rungs.
+            replay._harness._detach()
+
+    def _plant_tag_defaults(self) -> dict[str, Any]:
+        """Each tag the synthesis plant uses, at its default.
+
+        A plant stores its timers' zeros from its first scan, into tags no rung has
+        written.  A kernel holds an absent tag at its default and notices a write only
+        by the value leaving it, so it could not say when such a tag joined the state.
+        Present from the start of a recording, they read and commit the same in every
+        engine.
+        """
+        synthesis = self._synthesis
+        if synthesis is None:
+            return {}
+        tags, _edge_names = _iter_tags_and_edge_names(synthesis.plant)
+        return {tag.name: tag.default for tag in tags if tag.name not in SYSTEM_TAGS_BY_NAME}
+
     def _state_in_cache(self, scan_id: int) -> bool:
         """True if *scan_id* is in the recent-state cache."""
         return scan_id in self._recent_state_cache
@@ -2452,29 +3245,34 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
-    def _nearest_checkpoint_at_or_after(self, scan_id: int) -> int | None:
-        """Smallest retained checkpoint scan_id >= ``scan_id``, or None."""
-        return min((c for c in self._checkpoints if c >= scan_id), default=None)
-
-    def _trim_history_before(self, scan_id: int) -> None:
+    def _trim_history_before(self, scan_id: int, *, trim_records: bool = True) -> None:
         """Advance the replay horizon to *scan_id*.
 
         Trims the scan log, rung-firing timelines, and checkpoints in
         lockstep and advances ``_initial_scan_id`` so that
         ``History.oldest_scan_id`` / ``contains()`` / ``scan_ids()``
-        reflect the narrowed range.
+        reflect the narrowed range.  A replay whose records start at *scan_id*
+        passes ``trim_records=False``, because a record without ``history=``
+        cannot be trimmed.
         """
         if not self._causal_history_contains(scan_id):
             raise KeyError(scan_id)
         new_floor_state = self._causal_state_at(scan_id)
         self._epoch_caches.on_history_trimmed()
         self._causal_lineage.trim_before(scan_id)
-        self._scan_log.trim_before(scan_id)
-        self._rung_firing_timelines.trim_before(scan_id)
-        self._committed_tag_timelines.trim_before(scan_id)
-        self._node_firing_timelines.trim_before(scan_id)
-        for cp in [k for k in self._checkpoints if k < scan_id]:
+        # A replay of the oldest kept scan starts on the checkpoint before it, so that
+        # checkpoint stays with the log from it on.
+        below = self._nearest_checkpoint_at_or_before(scan_id - 1)
+        horizon = scan_id if below is None else below
+        self._scan_log.trim_before(horizon)
+        for name in _RECORDS if trim_records else ():
+            getattr(self, name).trim_before(scan_id)
+        self._unrecorded_scans = [
+            (max(first, scan_id), last) for first, last in self._unrecorded_scans if last >= scan_id
+        ]
+        for cp in [k for k in self._checkpoints if k < horizon]:
             del self._checkpoints[cp]
+        self._plant_changes = [c for c in self._plant_changes if c[0] >= horizon]
         if scan_id > self._initial_scan_id:
             self._initial_scan_id = scan_id
             self._initial_state = new_floor_state
@@ -2487,14 +3285,50 @@ class PLC:
                 _, (_, evicted_est) = self._recent_state_cache.popitem(last=False)
                 self._recent_state_cache_bytes -= evicted_est
 
+    def _thin_checkpoints(self, keep: int) -> None:
+        """Drop every other checkpoint once more than *keep* are held.
+
+        A checkpoint only shortens a replay, since the scan log says the rest: one
+        dropped costs run-up and never a value.  A checkpoint at a plant change or an
+        edit stays, because no replay crosses one.  Its force record goes with it unless
+        the forces changed on that scan.
+        """
+        if len(self._checkpoints) <= keep:
+            return
+        plant_changes = {changed_at for changed_at, _plant in self._plant_changes}
+        # The checkpoint a trim keeps before the oldest kept scan stays too.
+        kept = sorted(c for c in self._checkpoints if c >= self._initial_scan_id)
+        dropped = {
+            scan_id
+            for position, scan_id in enumerate(kept)
+            if position % 2 == 1 and scan_id not in plant_changes
+        }
+        for scan_id in dropped:
+            del self._checkpoints[scan_id]
+        self._scan_log.drop_force_records_unchanged_at(dropped)
+
+    def _bind_logic_sites(self) -> Any:
+        """The site table of the logic this runner scans (binding it if never bound)."""
+
+        program = self._program
+        if program is not None:
+            table = getattr(program, "_site_table", None)
+            if table is None:
+                program._assign_state_keys()
+                table = program._site_table
+            return table
+        # A list whose rungs would clash comes back copied (originals keep their keys).
+        self._logic, table = bind_logic_list(self._logic)
+        return table
+
     def _soft_exec_program(self) -> Any:
         """The compilation unit for soft-exec replay: the user program bracketed
         by the synthesis overlay (``plant`` + ``holds`` + user rungs).
 
         Synthesis is *logic*, so replay re-derives it by compiling it into the
-        replay kernel — bool TON/TOF compile natively, an opaque analog
-        ``run_function`` trips ``has_io_gaps`` and falls back to interpreted
-        replay (which re-installs synthesis via ``fork_onto``).  This is the
+        replay kernel — bool TON/TOF compile natively, an opaque ``run_function``
+        that may not be called again falls back to interpreted replay (which re-installs
+        synthesis via ``fork_onto``).  This is the
         *soft* root; deploy (Click / CircuitPython) and ``prove`` compile the
         **bare** ``self._program`` instead — the brackets never reach a
         controller or the verifier.
@@ -2514,11 +3348,15 @@ class PLC:
         bracketed = Program.__new__(Program)
         bracketed.rungs = [*syn.plant, *syn.holds, *self._program.rungs]
         bracketed.subroutines = self._program.subroutines
+        # A CompiledPLC numbers its randint draws from this program's own rungs, as
+        # stepping does, so a bracket rung that reads a draw moves no draw.
+        bracketed._bare_program = self._program
         self._soft_exec_program_cache = bracketed
         return bracketed
 
     def _compiled_replay_supported_kernel(self) -> CompiledKernel | None:
         from pyrung.circuitpy.codegen import compile_kernel
+        from pyrung.core import jit_stats
 
         cached = self._compiled_replay_kernel
         if isinstance(cached, CompiledKernel):
@@ -2528,7 +3366,9 @@ class PLC:
         if self._time_mode != TimeMode.FIXED_STEP or self._program is None:
             self._compiled_replay_kernel = False
             return None
-        if _program_writes_read_only_system_tags(self._program):
+        if _program_writes_read_only_system_tags(
+            self._program
+        ) or _program_calls_what_a_kernel_may_not(self._soft_exec_program()):
             self._compiled_replay_kernel = False
             return None
         # Compile the synthesis pre-pass (``plant`` + ``holds`` — the leading
@@ -2542,14 +3382,30 @@ class PLC:
         split_after = (
             len(syn.plant) + len(syn.holds) if (syn is not None and not syn.is_empty()) else None
         )
+        timings: dict[str, float] | None = {} if jit_stats.ACTIVE else None
+        started = time.perf_counter()
         try:
-            kernel = compile_kernel(self._soft_exec_program(), split_after=split_after)
+            kernel = compile_kernel(
+                self._soft_exec_program(), split_after=split_after, timings=timings
+            )
         except Exception as exc:
-            if _looks_like_compiled_replay_gap(exc):
-                self._compiled_replay_kernel = False
-                return None
-            raise
-        if kernel.has_io_gaps:
+            # A gap is expected.  Anything else is pyrung's own bug and is said, but the kernel
+            # is only speed: what the scans would answer, an interpreted scan answers too.
+            if not _looks_like_compiled_replay_gap(exc):
+                warnings.warn(
+                    f"compiling the kernel failed ({type(exc).__name__}: {exc}); "
+                    "these scans run interpreted, slower and with the same answers",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            self._compiled_replay_kernel = False
+            return None
+        finally:
+            if jit_stats.ACTIVE:
+                jit_stats.add_cost("compile", time.perf_counter() - started)
+                for step, seconds in (timings or {}).items():
+                    jit_stats.add_cost(f"compile: {step}", seconds)
+        if kernel.has_io_gaps and not self._modbus_stubbed:
             self._compiled_replay_kernel = False
             return None
         self._compiled_replay_kernel = kernel
@@ -2573,7 +3429,6 @@ class PLC:
                 plant=list(self._synthesis.plant),
             )
         )
-        target._fold_context_cache = None
         target._compiled_replay_kernel = None
         target._soft_exec_program_cache = None
 
@@ -2593,6 +3448,7 @@ class PLC:
             history_budget=self._recent_state_cache_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
+            keep_forces_on_run=self._keep_forces_on_run,
             # Reuse the parent's tag/edge/constraint index: same program, so
             # re-walking the object graph in __init__ (a ~hundreds-of-ms BFS) is
             # pure waste — and the default-seeding it gates is overwritten by
@@ -2604,54 +3460,98 @@ class PLC:
                 self._constrained_tags,
             ),
         )
+        fork._tags_rungs_reach = self._tags_rungs_reach
+        fork._names_no_rung_gave = set(self._names_no_rung_gave)
         fork._state = state
         fork._reset_cache(state)
         fork._initial_scan_id = state.scan_id
         fork._initial_state = state
         fork._playhead = state.scan_id
-        fork._set_time_mode(TimeMode.FIXED_STEP, dt=self._dt)
+        fork._set_time_mode(self._time_mode, dt=self._dt)
         fork._set_rtc_internal(rtc_at_state, state.timestamp)
         # The reconstructed fork executes the exact same Program object. Reuse
         # its immutable dependency graph and capture filter instead of rebuilding
         # both for every historical scan replay.
         fork._pdg_cache = self._ensure_pdg()
         fork._pdg_consumed_tags = self._pdg_consumed_tags
+        fork._pdg_edits = self._pdg_edits
         fork._input_overrides._forces.clear()
         fork._input_overrides._forces.update(forces)
         # Historical at-fire replay must execute the same current soft program
         # as its source. PILOT holds and Harness plant rungs live outside the
         # user Program, so copy both brackets explicitly.
         self._copy_current_synthesis_onto(fork)
+        self._run_on_the_plant_of_the_scan_after(state.scan_id, fork)
+        fork._modbus_stubbed = self._modbus_stubbed
+        fork._reconstructs_history = True
         fork._replay_mode = replay_mode
+        fork._walks_a_recording = replay_mode
         fork._sync_runtime_flags_from_state()
         return fork
 
     def _build_replay_fork(
-        self, anchor: int | None
+        self,
+        anchor: int | None,
+        kernel: CompiledKernel | None = None,
+        through: int = -1,
     ) -> tuple[PLC, ScanLogSnapshot, int, dict[int, list[LifecycleEvent]]]:
-        """Construct a replay fork anchored at the given checkpoint scan_id.
+        """A replay fork at the checkpoint *anchor*, or at scan *through* if *kernel* runs to it.
 
-        ``anchor`` is either a key in ``self._checkpoints`` (from
-        ``_nearest_checkpoint_at_or_before``) or ``None``.  When ``None``
-        the fork anchors at ``self._initial_scan_id``.  The returned
-        fork has ``_replay_mode=True`` and (when anchored at a real
-        checkpoint) its force map seeded from the log.  The checkpoint
-        bypass guarantees every checkpoint scan carries a full force
-        snapshot; anchoring at ``_initial_scan_id`` starts with an empty
-        force map, matching default PLC construction.
+        The fork starts from the checkpoint's state or the kernel's.  So each replay steps its
+        scans under the plant, forces, run mode, battery and time mode they ran under.
+        ``anchor`` is a key in ``self._checkpoints``, or None for the oldest kept scan.  Returns
+        the fork, the log, the scan the fork is at, and the lifecycle events by scan.
         """
         log = self._scan_log.snapshot()
-        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-        replay = self.fork(scan_id=anchor_scan_id, inherit_log=False)
-        self._copy_current_synthesis_onto(replay)
-        replay._replay_mode = True
-        if anchor is not None:
-            replay._input_overrides._forces.clear()
-            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
         lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
         for event in log.lifecycle_events:
             lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
-        return replay, log, anchor_scan_id, lifecycle_by_scan
+        at = anchor if anchor is not None else self._initial_scan_id
+        state = self._checkpoints[anchor] if anchor is not None else self._initial_state
+        # Each checkpoint has a full force record.  The oldest kept scan has no forces, as a
+        # new PLC has none.
+        forces = log.force_changes_by_scan[anchor] if anchor is not None else {}
+        if kernel is not None and through > at:
+            walker = CompiledPLC(
+                self._soft_exec_program(),
+                initial_state=state,
+                dt=self._dt,
+                compiled=kernel,
+                exact_anchor=True,
+            )
+            walker._set_rtc_internal(*self._replay_rtc_base_at_state(state, log))
+            walker._input_overrides._forces.update(forces)
+            for scan_id in range(at + 1, through + 1):
+                for event in lifecycle_by_scan.get(scan_id, []):
+                    _apply_lifecycle_to_replay(walker, event)
+                if scan_id in log.force_changes_by_scan:
+                    walker._input_overrides._forces.clear()
+                    walker._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
+                if scan_id in log.rtc_base_changes:
+                    walker._set_rtc_internal(*log.rtc_base_changes[scan_id])
+                if scan_id in log.patches_by_scan:
+                    walker.patch_as_recorded(log.patches_by_scan[scan_id])
+                walker.step_replay()
+                for records in (log.io_submits_by_scan, log.io_drains_by_scan):
+                    for record in records.get(scan_id, {}).values():
+                        for tag_name, value in record.tag_writes:
+                            walker.apply_replay_io_write(tag_name, value)
+            state = walker._materialize_replay_state()
+            forces = walker._input_overrides.forces_mutable
+            at = through
+        replay = self._fork_from_reconstructed_state(
+            state,
+            rtc_at_state=self._replay_rtc_at_state(state, log),
+            forces=forces,
+            replay_mode=True,
+        )
+        replay._coast_memo = self._coast_memo
+        replay._search_refuses_restart = self._search_refuses_restart
+        # A replay answers a question about scans it steps again, so it trims no history and
+        # records every scan.  A trim or a full record would drop scans the question reads.
+        replay._history_retention_scans = None
+        replay._records_bounded = False
+        return replay, log, at, lifecycle_by_scan
 
     def _apply_log_entries_for_scan(
         self,
@@ -2677,7 +3577,7 @@ class PLC:
             base, base_sim_time = log.rtc_base_changes[scan_id]
             replay._set_rtc_internal(base, base_sim_time)
         if scan_id in log.patches_by_scan:
-            replay.patch(log.patches_by_scan[scan_id])
+            replay.patch_as_recorded(log.patches_by_scan[scan_id])
         if log.dts is not None:
             replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
         submits = log.io_submits_by_scan.get(scan_id, {})
@@ -2698,28 +3598,21 @@ class PLC:
     def _replay_rtc_at_state(
         self,
         state: SystemState,
-        log: ScanLogSnapshot,
+        log: ScanLogSnapshot | ScanLog,
     ) -> datetime:
-        rtc_scan = max((sid for sid in log.rtc_base_changes if sid <= state.scan_id), default=None)
-        if rtc_scan is None:
-            return self._system_runtime._rtc_now(state)
-        base, base_sim_time = log.rtc_base_changes[rtc_scan]
+        base, base_sim_time = self._replay_rtc_base_at_state(state, log)
         return base + timedelta(seconds=float(state.timestamp) - base_sim_time)
 
-    def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
-        """Reconstruct historical state by forking and replaying the scan log.
+    def _replay_rtc_base_at_state(
+        self,
+        state: SystemState,
+        log: ScanLogSnapshot | ScanLog,
+    ) -> tuple[datetime, float]:
+        """The RTC base *state* ran on: a later change must not reach back to it."""
+        recorded = log.rtc_base_at(state.scan_id)
+        return (self._rtc_base, self._rtc_base_sim_time) if recorded is None else recorded
 
-        Anchors at the nearest retained checkpoint ``<= target_scan_id``
-        (falling back to scan 0 when no earlier checkpoint exists) and
-        walks the scan log forward to ``target_scan_id``, applying
-        captured lifecycle events, force-map replacements, RTC base
-        changes, patches, and per-scan ``dt`` in REALTIME mode.
-
-        Returns a fork positioned at ``target_scan_id`` with
-        ``_replay_mode=True``.  The returned fork is primarily for
-        inspection; callers who want to continue it as a live
-        investigation session can clear ``fork._replay_mode = False``.
-        """
+    def _check_replay_target(self, target_scan_id: int) -> None:
         if target_scan_id < self._initial_scan_id:
             raise ValueError(
                 f"target_scan_id must be >= {self._initial_scan_id}, got {target_scan_id}"
@@ -2735,223 +3628,123 @@ class PLC:
                 f"({log_base}); those scans have been trimmed"
             )
 
-        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
-        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+    def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
+        """``replay_to()`` with every scan stepped, never the kernel."""
+        self._check_replay_target(target_scan_id)
+        return self._replay_to(target_scan_id, None)
 
-        for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
+    def _replay_to(self, target_scan_id: int, kernel: CompiledKernel | None) -> PLC:
+        """A fork at *target_scan_id* from the checkpoint before it, for inspection.
+
+        *kernel*, if given, runs the scans up to the target.  The fork steps the target
+        scan, so it holds the target's records.  The fork never talks to a Modbus device,
+        even with ``_replay_mode`` cleared.
+        """
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
+        replay, log, at, lifecycle_by_scan = self._build_replay_fork(
+            anchor, kernel, target_scan_id - 1
+        )
+        for scan_id in range(at + 1, target_scan_id + 1):
             self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+            if scan_id == target_scan_id:
+                # The fork keeps the target's records and none before them.  Each record starts
+                # again here, because one without history= has a limit and cannot be trimmed.
+                capped = self._history_retention_scans is None
+                for name in _RECORDS:
+                    setattr(replay, name, RungFiringTimelines(capped=capped))
             replay.step()
+        return self._keep_replay_from(replay, target_scan_id, lifecycle_by_scan)
 
-        # Trailing lifecycle events that fired after the last committed
-        # scan (e.g. a trailing stop() with no subsequent step).
-        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
-            _apply_lifecycle_to_replay(replay, event)
-
+    def _keep_replay_from(
+        self,
+        replay: PLC,
+        target_scan_id: int,
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]],
+    ) -> PLC:
+        """Start *replay* at the target, with its source's limits.  The caller may step it on."""
+        replay._walks_a_recording = False
+        replay._history_retention_scans = self._history_retention_scans
+        replay._records_bounded = self._records_bounded
+        # Each replay path starts its fork at the target.  The two forks then trim alike.
+        if target_scan_id > replay._initial_scan_id:
+            replay._trim_history_before(target_scan_id, trim_records=False)
+        # A harness install or a reload edits the checkpoint between scans.  History serves
+        # the edited state.  The fork starts from it, not from the scan as stepped.
+        edited = self._checkpoints.get(target_scan_id)
+        if edited is not None:
+            replay._start_from_state(edited)
+        # The fork steps on under the plant that ran the scans after the target.
+        self._copy_current_synthesis_onto(replay)
+        self._run_on_the_plant_of_the_scan_after(target_scan_id, replay)
+        current_plant = self._earlier_plant_at(target_scan_id) is None
+        if current_plant and self._harness is not None:
+            self._harness.fork_onto(replay, as_recorded=True)
+        # A stop() or a battery change after the last scan is in history's tip state.  One
+        # after an earlier scan belongs to the next scan, as a force or a patch does.
+        if target_scan_id == self._state.scan_id:
+            for event in lifecycle_by_scan.get(target_scan_id + 1, []):
+                _apply_lifecycle_to_replay(replay, event)
         return replay
 
-    def _replay_to_compiled(
-        self,
-        target_scan_id: int,
-        kernel: CompiledKernel,
-        *,
-        fold: bool = False,
-    ) -> PLC:
-        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+    def _start_from_state(self, state: SystemState) -> None:
+        """Make *state* this runner's tip and oldest kept state, both at the same scan."""
+        scan_id = state.scan_id
+        assert scan_id == self._state.scan_id == self._initial_scan_id
+        self._state = state
+        self._initial_state = state
+        self._causal_initial_tags = dict(state.tags)
+        replaced = self._recent_state_cache.pop(scan_id, None)
+        if replaced is not None:
+            self._recent_state_cache_bytes -= replaced[1]
+        self._reset_cache(state)
+        if scan_id in self._checkpoints:
+            self._checkpoints[scan_id] = state
+        self._causal_lineage.invalidate_current_epoch()
+        self._sync_runtime_flags_from_state()
+
+    def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
+        """The kernel, if it can rebuild every key of the scans after *scan_id*'s checkpoint.
+
+        Stepping adds a tag to the state on its first write.  A kernel holds an absent
+        tag at its default and notices the first write only by the value leaving it, so
+        a rung, patch or force that may store the default into a tag the checkpoint lacks
+        replays interpreted.  compiled_run.run_scans holds a live run to the same rule.
+
+        A rung reading the scan time minimum: the first scan's hook takes the scan time
+        when the tag is absent, and a kernel has the tag, at 0, so it would stay 0.
+        """
+        if self._earlier_plant_at(scan_id) is not None:
+            return None  # The kernel is compiled from the current plant.
+        kernel = self._compiled_replay_supported_kernel()
+        if kernel is None:
+            return None
+        anchor = self._nearest_checkpoint_at_or_before(scan_id)
+        state = self._checkpoints[anchor] if anchor is not None else self._initial_state
+        if _SCAN_TIME_MIN_NAME in kernel.referenced_tags and _SCAN_TIME_MIN_NAME not in state.tags:
+            return None
+        absent = absent_scalars(kernel, state.tags)
+        if not absent:
+            return kernel
+        from pyrung.core.scan_trace import may_store_a_default
+
+        if may_store_a_default(kernel, absent):
+            return None
         log = self._scan_log.snapshot()
-        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-        anchor_state = self._checkpoints[anchor] if anchor is not None else self._initial_state
-        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
-        for event in log.lifecycle_events:
-            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+        for named in (*log.patches_by_scan.values(), *log.force_changes_by_scan.values()):
+            if not absent.keys().isdisjoint(named):
+                return None
+        return kernel
 
-        replay = CompiledPLC(
-            self._soft_exec_program(),
-            initial_state=anchor_state,
-            dt=self._dt,
-            compiled=kernel,
-        )
-        replay._set_rtc_internal(
-            self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
-        )
-        if anchor is not None:
-            replay._input_overrides._forces.clear()
-            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
-
-        strategy = None
-        event_scans: tuple[int, ...] = ()
-        if fold and anchor_scan_id < target_scan_id:
-            from pyrung.core.fold import _OrdinaryFoldStrategy
-
-            strategy = _OrdinaryFoldStrategy(self._ensure_fold_context())
-            boundaries = (
-                set(log.patches_by_scan)
-                | set(log.rtc_base_changes)
-                | set(log.io_submits_by_scan)
-                | set(log.io_drains_by_scan)
-                | {event.at_scan_id for event in log.lifecycle_events}
-            )
-            # Checkpoints repeat the full force map even when it did not
-            # change.  Only an effective replacement is a replay boundary.
-            effective_forces: Mapping[str, Any] = {}
-            for force_scan in sorted(log.force_changes_by_scan):
-                next_forces = log.force_changes_by_scan[force_scan]
-                if force_scan > anchor_scan_id and next_forces != effective_forces:
-                    boundaries.add(force_scan)
-                effective_forces = next_forces
-            event_scans = tuple(
-                sorted(scan for scan in boundaries if anchor_scan_id < scan <= target_scan_id)
-            )
-
-        scan_id = anchor_scan_id + 1
-        event_index = 0
-        kernel_scans = 0
-        while scan_id <= target_scan_id:
-            for event in lifecycle_by_scan.get(scan_id, []):
-                _apply_lifecycle_to_replay(replay, event)
-            if scan_id in log.force_changes_by_scan:
-                replay._input_overrides._forces.clear()
-                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
-            if scan_id in log.rtc_base_changes:
-                base, base_sim_time = log.rtc_base_changes[scan_id]
-                replay._set_rtc_internal(base, base_sim_time)
-            if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
-
-            probe = (
-                strategy.capture_state(replay._materialize_replay_state())
-                if strategy is not None
-                else None
-            )
-            replay.step_replay()
-            kernel_scans += 1
-            for record in log.io_submits_by_scan.get(scan_id, {}).values():
-                for tag_name, value in record.tag_writes:
-                    replay.apply_replay_io_write(tag_name, value)
-            for record in log.io_drains_by_scan.get(scan_id, {}).values():
-                for tag_name, value in record.tag_writes:
-                    replay.apply_replay_io_write(tag_name, value)
-
-            scan_id += 1
-            if strategy is None or probe is None or scan_id > target_scan_id:
-                continue
-
-            state = replay._materialize_replay_state()
-            while event_index < len(event_scans) and event_scans[event_index] <= state.scan_id:
-                event_index += 1
-            max_skip = target_scan_id - state.scan_id
-            if event_index < len(event_scans):
-                max_skip = min(max_skip, event_scans[event_index] - state.scan_id - 1)
-            plan = strategy.plan(
-                state,
-                probe,
-                max_skip=max_skip,
-                endpoint_is_boundary=True,
-            )
-            if plan is None:
-                continue
-
-            from pyrung.core.fold import _fold_patches
-
-            patches = _fold_patches(
-                state,
-                plan.skip,
-                strategy.ctx,
-                probe.totals,
-                plan.after_totals,
-            )
-            if patches:
-                replay.patch(patches)
-            replay.step_replay(logical_scans=plan.skip)
-            kernel_scans += 1
-            state = replay._materialize_replay_state()
-            strategy.finish(state, probe, plan)
-            scan_id = state.scan_id + 1
-
-        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
-            _apply_lifecycle_to_replay(replay, event)
-
-        state = replay._materialize_replay_state()
-        if fold:
-            logical_scans = target_scan_id - anchor_scan_id
-            ordinary_folded_scans = logical_scans - kernel_scans
-            self._last_replay_seek_stats = {
-                "logical_scans": logical_scans,
-                "kernel_scans": kernel_scans,
-                "folded_scans": ordinary_folded_scans,
-                "ordinary_folded_scans": ordinary_folded_scans,
-                "cycle_folded_scans": 0,
-                "residual_scans": kernel_scans,
-            }
-        return self._fork_from_reconstructed_state(
-            state,
-            rtc_at_state=replay._rtc_at_sim_time(state.timestamp),
-            forces=replay._input_overrides.forces_mutable,
-            replay_mode=True,
-        )
+    def _compiled_fork_at(self, target_scan_id: int, kernel: CompiledKernel) -> PLC:
+        """A fork at *target_scan_id*, with the kernel running each scan after the checkpoint."""
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+        return self._build_replay_fork(anchor, kernel, target_scan_id)[0]
 
     def replay_to(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state, preferring compiled replay when supported."""
-        if target_scan_id < self._initial_scan_id:
-            raise ValueError(
-                f"target_scan_id must be >= {self._initial_scan_id}, got {target_scan_id}"
-            )
-        if target_scan_id > self._state.scan_id:
-            raise ValueError(
-                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
-            )
-        log_base = self._scan_log.base_scan
-        if target_scan_id < log_base:
-            raise ValueError(
-                f"target_scan_id {target_scan_id} predates the log horizon "
-                f"({log_base}); those scans have been trimmed"
-            )
-
-        kernel = self._compiled_replay_supported_kernel()
-        if kernel is None:
-            return self._replay_to_interpreted(target_scan_id)
-        return self._replay_to_compiled(target_scan_id, kernel)
-
-    def _replay_seek(self, target_scan_id: int) -> PLC:
-        """Position a disposable replay at one endpoint without a dense slab.
-
-        Point-state consumers need an exact historical endpoint, not every
-        intermediate ``SystemState`` promised by ``History.range``. Keep those
-        contracts separate and route large sparse gaps through this seam.
-
-        Compiled replay uses the same ordinary-fold proof as live execution,
-        clamped to the requested endpoint and every effective scan-log event.
-        It retains only the proof's two endpoint states; no skipped-scan log or
-        dense history slab is constructed.
-        """
-        if target_scan_id < self._initial_scan_id:
-            raise ValueError(
-                f"target_scan_id must be >= {self._initial_scan_id}, got {target_scan_id}"
-            )
-        if target_scan_id > self._state.scan_id:
-            raise ValueError(
-                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
-            )
-        if target_scan_id < self._scan_log.base_scan:
-            raise ValueError(
-                f"target_scan_id {target_scan_id} predates the log horizon "
-                f"({self._scan_log.base_scan}); those scans have been trimmed"
-            )
-        kernel = self._compiled_replay_supported_kernel()
-        if kernel is None:
-            replay = self._replay_to_interpreted(target_scan_id)
-            anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
-            anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-            logical_scans = target_scan_id - anchor_scan_id
-            self._last_replay_seek_stats = {
-                "logical_scans": logical_scans,
-                "kernel_scans": logical_scans,
-                "folded_scans": 0,
-                "ordinary_folded_scans": 0,
-                "cycle_folded_scans": 0,
-                "residual_scans": logical_scans,
-            }
-            return replay
-        return self._replay_to_compiled(target_scan_id, kernel, fold=True)
+        self._check_replay_target(target_scan_id)
+        # Both paths run from the checkpoint before the target.
+        return self._replay_to(target_scan_id, self._replay_kernel_from(target_scan_id - 1))
 
     def replay_trace_at(self, target_scan_id: int) -> dict[int, RungTrace]:
         """Reconstruct the rung-trace dict for a historical scan.
@@ -2991,7 +3784,8 @@ class PLC:
         if cached is not None and cached[0] == target_scan_id:
             return dict(cached[1])
 
-        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+        # A checkpoint at the target holds the state after it, so the walk starts before.
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
 
         for scan_id in range(anchor_scan_id + 1, target_scan_id):
@@ -3074,25 +3868,16 @@ class PLC:
         # at-fire-time ConditionView).  Position the fork at ``target - 1`` from
         # the shared historical slab.  A causal walk asks for many adjacent and
         # repeated points, so the bounded slab is intentional amortization; its
-        # refill may use a folded compiled run-up without throwing that locality
-        # away.
+        # refill may use a compiled run-up without throwing that locality away.
+        # The log starts at or before the oldest kept scan, so it holds the scan before the target.
         prev_scan = target_scan_id - 1
-        if prev_scan >= self._initial_scan_id and prev_scan >= self._scan_log.base_scan:
-            prev_state = self._state_at(prev_scan)
-            replay = self._fork_from_reconstructed_state(
-                prev_state,
-                rtc_at_state=self._replay_rtc_at_state(prev_state, log),
-                forces=self._replay_force_map_at_scan(prev_scan, log),
-                replay_mode=True,
-            )
-        else:
-            # ``target`` is the first reconstructable scan — nothing before it to
-            # replay to; build the fork directly at the anchor.
-            anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
-            replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
-            for scan_id in range(anchor_scan_id + 1, target_scan_id):
-                self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
-                replay.step()
+        prev_state = self._state_at(prev_scan)
+        replay = self._fork_from_reconstructed_state(
+            prev_state,
+            rtc_at_state=self._replay_rtc_at_state(prev_state, log),
+            forces=self._replay_force_map_at_scan(prev_scan, log),
+            replay_mode=True,
+        )
 
         # Final scan: run the live program path with a capturing observer.
         self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
@@ -3103,7 +3888,6 @@ class PLC:
         # replay. Post-logic forces and scan-end runtime writes remain part of
         # the same root journal, while timelines/history/monitors stay untouched.
         replay._input_overrides.apply_post_logic(ctx)
-        replay._capture_previous_states(ctx, _dt)
         replay._system_runtime.on_scan_end(ctx)
         capture.exit_tags = ctx.commit(dt=_dt).tags
         return capture
@@ -3277,10 +4061,9 @@ class PLC:
             initial_state=anchor_state,
             dt=self._dt,
             compiled=kernel,
+            exact_anchor=True,
         )
-        replay._set_rtc_internal(
-            self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
-        )
+        replay._set_rtc_internal(*self._replay_rtc_base_at_state(anchor_state, log))
         if anchor is not None:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
@@ -3299,12 +4082,22 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
             if scan_id >= start_scan_id:
                 replay.step()
-                results.append(replay.current_state)
             else:
                 replay.step_replay()
+            # The kernel runs no send() or receive(), so each scan takes the recorded answers.
+            for record in log.io_submits_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay.apply_replay_io_write(tag_name, value)
+            for record in log.io_drains_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay.apply_replay_io_write(tag_name, value)
+            if scan_id >= start_scan_id:
+                if log.io_submits_by_scan.get(scan_id) or log.io_drains_by_scan.get(scan_id):
+                    replay._materialize_replay_state()
+                results.append(replay.current_state)
 
         return results
 
@@ -3317,8 +4110,7 @@ class PLC:
     ) -> list[SystemState]:
         """Materialize one bounded range after a separately-positioned run-up.
 
-        ``positioned`` must be at ``start_scan_id - 1``.  The caller may have
-        reached it with folded compiled replay; this second phase deliberately
+        ``positioned`` must be at ``start_scan_id - 1``.  This second phase
         executes every requested scan and retains exactly those states for the
         causal slab.
         """
@@ -3338,6 +4130,7 @@ class PLC:
             initial_state=positioned.state,
             dt=self._dt,
             compiled=kernel,
+            exact_anchor=True,
         )
         replay._set_rtc_internal(
             positioned._rtc_at_sim_time(positioned.state.timestamp),
@@ -3357,7 +4150,7 @@ class PLC:
                 base, base_sim_time = log.rtc_base_changes[scan_id]
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
+                replay.patch_as_recorded(log.patches_by_scan[scan_id])
             replay.step()
             for record in log.io_submits_by_scan.get(scan_id, {}).values():
                 for tag_name, value in record.tag_writes:
@@ -3371,7 +4164,13 @@ class PLC:
         return results
 
     def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
-        kernel = self._compiled_replay_supported_kernel()
+        for changed_at, _plant in self._plant_changes:
+            if start_scan_id < changed_at <= end_scan_id:
+                return [
+                    *self._replay_range(start_scan_id, changed_at - 1),
+                    *self._replay_range(changed_at, end_scan_id),
+                ]
+        kernel = self._replay_kernel_from(start_scan_id)
         if kernel is None:
             return self._replay_range_interpreted(start_scan_id, end_scan_id)
         return self._replay_range_compiled(start_scan_id, end_scan_id, kernel)
@@ -3396,8 +4195,41 @@ class PLC:
         """Debugger-facing methods and internal runtime access."""
         return self._debug_ns
 
+    @property
+    def mode(self) -> Literal["run", "stop"]:
+        """PLC mode: ``"run"`` or ``"stop"``."""
+        return "run" if self._running else "stop"
+
+    def start(self) -> None:
+        """Transition STOP -> RUN now, without executing a scan.
+
+        Performs the same transition the next ``step()`` would: non-retentive
+        tags reset, ``scan_id`` and ``timestamp`` restart at 0, pending patches
+        are dropped, and forces are cleared unless :attr:`keep_forces_on_run`.
+        Patches and forces applied afterwards reach the first scan.  Does
+        nothing in RUN mode.
+        """
+        if not self._running:
+            self._ensure_running()
+
+    @property
+    def keep_forces_on_run(self) -> bool:
+        """Whether active forces survive a STOP -> RUN transition.
+
+        Off by default: entering RUN clears forces along with patches, like a
+        fresh start.  When on, forces are kept (and apply from the first scan);
+        tags and pending patches still reset.  ``reboot()`` clears forces
+        either way.
+        """
+        return self._keep_forces_on_run
+
+    @keep_forces_on_run.setter
+    def keep_forces_on_run(self, value: bool) -> None:
+        self._keep_forces_on_run = bool(value)
+
     def stop(self) -> None:
         """Transition PLC to STOP mode."""
+        self._refuse_inside_a_call()
         if not self._running:
             return
         self._running = False
@@ -3410,11 +4242,17 @@ class PLC:
 
     @property
     def battery_present(self) -> bool:
-        """Simulated backup battery presence."""
+        """Whether the project's Battery Backup Setup box is checked (default True).
+
+        ``sys.battery_present`` (SC203 on a CLICK) reads it.  The property
+        mirrors that setting and does not detect a battery.  With it True, :meth:`reboot`
+        keeps the retentive tags.  With it False, :meth:`reboot` resets every tag.
+        """
         return self._battery_present
 
     @battery_present.setter
     def battery_present(self, value: bool) -> None:
+        self._refuse_inside_a_call()
         new_value = bool(value)
         if new_value == self._battery_present:
             return
@@ -3429,8 +4267,10 @@ class PLC:
     def reboot(self) -> SystemState:
         """Power-cycle the runner and return the reset state.
 
-        Reboot is destructive: tags reset to defaults (except
-        battery-preserved retentive values), ``state.scan_id`` and
+        Reboot is destructive.  With :attr:`battery_present` True the retentive
+        tags keep their values and the rest return to their defaults, as over
+        STOP -> RUN.  With it False every tag returns to its default.  Forces
+        are cleared either way.  ``state.scan_id`` and
         ``state.timestamp`` return to 0.  Because post-reboot scan_ids
         would alias pre-reboot entries in every sparse channel
         (patches, forces, rtc_base_changes, dts), the scan log and
@@ -3439,22 +4279,30 @@ class PLC:
         replay-addressable — users who need that should ``fork()``
         before rebooting.
         """
-        tag_values = self._rebuild_tags_for_reset(
-            preserve_all=self._battery_present,
-            preserve_retentive=False,
-        )
+        self._refuse_inside_a_call()
+        tag_values = self._rebuild_tags_for_reset(preserve_retentive=self._battery_present)
         self._reset_runtime_scope(
             tag_values=tag_values,
             mode_run=True,
             preserve_rtc_continuity=self._battery_present,
         )
         self._running = True
+        self._reset_recording()
+        return self._state
+
+    def _reset_recording(self) -> None:
+        """Start a fresh recording rooted at scan 0, which a reset has just returned to.
+
+        The scan ids to come would alias every sparse channel of the old log (patches,
+        forces, rtc_base_changes, dts), so history replayed the old run's entries, and
+        every state in a replay slab, so a seek returned the old run's state outright.
+        """
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
+        self._plant_changes = []
         self._epoch_caches.on_recording_reset()
         self._forces_last_recorded = {}
         self._this_scan_drained_patches = {}
-        return self._state
 
     def set_rtc(self, value: datetime) -> None:
         """Set the current RTC value for the runner."""
@@ -3489,18 +4337,42 @@ class PLC:
     def _refresh_known_tags_and_edges(self) -> frozenset[str]:
         from pyrung.core.system_points import _DERIVED_EDGE_TAGS
 
-        roots: list[Any] = list(self._logic)
-        if self._program is not None:
-            for subroutine_rungs in self._program.subroutines.values():
-                roots.extend(subroutine_rungs)
-        tags, edge_names = _iter_tags_and_edge_names(roots)
-        for tag in tags:
+        walked = self._tags_rungs_reach.walk()
+        for tag in walked.named:
             self._register_known_tag(tag)
-        return edge_names - _DERIVED_EDGE_TAGS.keys()
+        for tag in walked.beyond_rungs:
+            self._register_tag_no_rung_gave(tag)
+        return walked.edge_names - _DERIVED_EDGE_TAGS.keys()
+
+    def _type_a_name_holds(self, name: str) -> TagType | None:
+        """The type a patch or force by *name* stores, or None if it stores as given.
+
+        A tag known only because something else named it, an override or a cached slot
+        no rung reaches, doesn't change what the name means: the rungs say that.
+        """
+        known = self._known_tags_by_name.get(name)
+        if known is None or name in self._names_no_rung_gave:
+            return self._tags_rungs_reach.type_of(name)
+        return known.type
+
+    def _tag_known_or_reached(self, name: str) -> Tag | None:
+        """The tag *name* names, or None.  A slot its factory refuses is None, as in ``plc.tags``."""
+        known = self._known_tags_by_name.get(name)
+        if known is not None:
+            return known
+        reach = self._tags_rungs_reach
+        return None if reach.refusal_of(name) is not None else reach.get(name)
+
+    def _register_tag_no_rung_gave(self, tag: Tag) -> None:
+        no_rung = tag.name not in self._known_tags_by_name or tag.name in self._names_no_rung_gave
+        self._register_known_tag(tag)
+        if no_rung and tag.name not in SYSTEM_TAGS_BY_NAME:
+            self._names_no_rung_gave.add(tag.name)
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
             return
+        self._names_no_rung_gave.discard(tag.name)
         existing = self._known_tags_by_name.get(tag.name)
         if existing is None:
             self._known_tags_by_name[tag.name] = tag
@@ -3527,25 +4399,24 @@ class PLC:
 
         for key in tags:
             if isinstance(key, TagClass):
-                self._register_known_tag(key)
+                self._register_tag_no_rung_gave(key)
 
-    def _rebuild_tags_for_reset(
-        self,
-        *,
-        preserve_all: bool,
-        preserve_retentive: bool,
-    ) -> dict[str, Any]:
+    def _rebuild_tags_for_reset(self, *, preserve_retentive: bool) -> dict[str, Any]:
         current_tags = self._state.tags
         rebuilt: dict[str, Any] = {}
         for tag in self._known_tags_by_name.values():
-            if preserve_all:
-                rebuilt[tag.name] = current_tags.get(tag.name, tag.default)
-                continue
             if preserve_retentive and tag.retentive and tag.name in current_tags:
                 rebuilt[tag.name] = current_tags[tag.name]
                 continue
             rebuilt[tag.name] = tag.default
-        return rebuilt
+        self._tags_rungs_reach.kept_through_a_reset(
+            current_tags,
+            rebuilt,
+            preserve_retentive=preserve_retentive,
+        )
+        # A plant is the machine's physics, not the controller's memory: nothing of it
+        # survives a reset but the tags themselves, which start over at their defaults.
+        return {**self._plant_tag_defaults(), **rebuilt}
 
     def _clear_retained_debug_trace_state(self) -> None:
         self._current_rung_traces = {}
@@ -3566,7 +4437,9 @@ class PLC:
         self._rtc_base = value
         self._rtc_base_sim_time = float(sim_time)
 
-    def _set_rtc_and_record(self, value: datetime, sim_time: float) -> None:
+    def _set_rtc_and_record(
+        self, value: datetime, sim_time: float, *, scan_id: int | None = None
+    ) -> None:
         """Set RTC base and record the change for replay.
 
         Used for user-initiated (``set_rtc()``) and in-scan
@@ -3575,6 +4448,9 @@ class PLC:
         stop-to-run) use ``_set_rtc_internal`` directly; the lifecycle
         event itself implies the RTC transition at replay time.
 
+        *scan_id* is the scan the change belongs to, the next one by default.  A
+        compiled range, which applied it some scans ago, says which.
+
         No-op in replay mode — the log's ``rtc_base_changes`` entry is
         load-bearing, and ``replay_to`` applies it via
         ``_set_rtc_internal`` directly.  Re-firing here would
@@ -3582,9 +4458,15 @@ class PLC:
         """
         if self._replay_mode:
             return
+        previous = (self._rtc_base, self._rtc_base_sim_time)
         self._set_rtc_internal(value, sim_time)
         self._causal_lineage.invalidate_current_epoch()
-        self._scan_log.record_rtc_base_change(self._state.scan_id + 1, value, float(sim_time))
+        self._scan_log.record_rtc_base_change(
+            self._state.scan_id + 1 if scan_id is None else scan_id,
+            value,
+            float(sim_time),
+            previous=previous,
+        )
 
     def _record_lifecycle(self, kind: LifecycleKind, value: bool | None = None) -> None:
         self._scan_log.record_lifecycle(
@@ -3623,6 +4505,8 @@ class PLC:
         self._initial_scan_id = self._state.scan_id
         self._initial_state = self._state
         self._causal_lineage = CausalLineage(self)
+        # Scan ids start again, so an old priced id would price a new scan.
+        self._loop_priced_scans.clear()
         self._history._reset_labels()
         self._playhead = self._state.scan_id
 
@@ -3636,6 +4520,8 @@ class PLC:
         self._rung_firing_timelines.reset()
         self._committed_tag_timelines.reset()
         self._node_firing_timelines.reset()
+        self._unrecorded_scans = []
+        self._records_full = False
         self._causal_initial_tags = dict(self._state.tags)
 
         if self._time_mode == TimeMode.REALTIME:
@@ -3646,26 +4532,44 @@ class PLC:
     def _stop_to_run_transition(self) -> None:
         if self._running:
             return
-        tag_values = self._rebuild_tags_for_reset(
-            preserve_all=False,
-            preserve_retentive=True,
-        )
+        kept_forces = dict(self._forces) if self._keep_forces_on_run else {}
+        tag_values = self._rebuild_tags_for_reset(preserve_retentive=True)
         self._reset_runtime_scope(
             tag_values=tag_values,
             mode_run=True,
             preserve_rtc_continuity=True,
         )
+        self._reset_recording()
+        self._forces.update(kept_forces)
         self._running = True
 
+    def _requeue_drained_patches(self) -> None:
+        drained = self._this_scan_drained_patches
+        if not drained:
+            return
+        restored = {**drained, **self._pending_patches}
+        self._pending_patches.clear()
+        self._pending_patches.update(restored)
+        self._this_scan_drained_patches = {}
+
+    def _refuse_inside_a_call(self) -> None:
+        if self._user_calls_running:
+            raise refused_inside_its_own_scan()
+
     def _ensure_running(self) -> None:
-        if not self._running:
+        # Every way into a scan comes through here first, ahead of anything it would move.
+        # Not through _refuse_inside_a_call: every scan pays for this line.
+        if self._user_calls_running:
+            raise refused_inside_its_own_scan()
+        if not self._running and not self._walks_a_recording:
+            if self._search_refuses_restart:
+                raise SearchStopped(self._state.scan_id)
             self._stop_to_run_transition()
 
     def _sync_runtime_flags_from_state(self) -> None:
-        self._running = bool(self._state.memory.get(_MODE_RUN_KEY, True))
-        self._battery_present = bool(
-            self._state.memory.get(_BATTERY_PRESENT_KEY, self._battery_present)
-        )
+        memory = self._state.memory
+        self._running = bool(memory.get(_MODE_RUN_KEY, True))
+        self._battery_present = bool(memory.get(_BATTERY_PRESENT_KEY, self._battery_present))
 
     def __enter__(self) -> PLC:
         """Bind this runner as active for live Tag.value access."""
@@ -3693,6 +4597,11 @@ class PLC:
         self._register_known_tags_from_mapping_keys(tags)
         self._input_overrides.patch(tags)
 
+    def patch_as_recorded(self, recorded: Mapping[str, bool | int | float | str]) -> None:
+        """Queue a patch a scan log recorded: see ``InputOverrideManager.restore_patch``."""
+        self._register_known_tags_from_mapping_keys(recorded)
+        self._input_overrides.restore_patch(recorded)
+
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         """Persistently override a tag value until explicitly removed.
 
@@ -3717,7 +4626,7 @@ class PLC:
         from pyrung.core.tag import Tag as TagClass
 
         if isinstance(tag, TagClass):
-            self._register_known_tag(tag)
+            self._register_tag_no_rung_gave(tag)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:
@@ -3777,6 +4686,19 @@ class PLC:
     def forces(self) -> Mapping[str, bool | int | float | str]:
         """Read-only view of active persistent overrides."""
         return self._input_overrides.forces
+
+    @property
+    def pending_patches(self) -> Mapping[str, bool | int | float | str]:
+        """Read-only view of patches not yet in the committed state.
+
+        Holds the patches queued for the next scan, plus any already taken
+        by a scan still being stepped (``debug.scan_steps_debug()``) that has
+        not committed.
+        """
+        drained = self._this_scan_drained_patches
+        if not drained:
+            return MappingProxyType(self._pending_patches)
+        return MappingProxyType({**drained, **self._pending_patches})
 
     def monitor(self, tag: str | Tag, callback: Callable[[Any, Any], None]) -> _RunnerHandle:
         """Call ``callback(current, previous)`` after commit when tag value changes."""
@@ -3842,15 +4764,24 @@ class PLC:
             group_empty_error=f"{method}() condition group cannot be empty",
         )
 
-        def _predicate(state: SystemState) -> bool:
-            ctx = ScanContext(
+        def _context(state: SystemState) -> ScanContext:
+            return ScanContext(
                 state,
                 resolver=self._system_runtime.resolve,
                 read_only_tags=self._system_runtime.read_only_tags,
             )
-            return normalized.evaluate(ctx)
 
-        return _predicate
+        from pyrung.core.site_memory import private_edges
+
+        # An edge here is no contact of the program: it gets a key of its own
+        # and compares against the bit as this predicate last judged it (as of
+        # now, when armed), so rise(Y) holds on the first judgement after Y
+        # turns on.
+        condition, edges = private_edges(normalized, method)
+        if not edges:
+            return _ConditionPredicate(normalized, _context)
+
+        return _EdgePredicate(condition, edges, _context, lambda: self._state)
 
     def _normalize_tag_name(self, tag: str | Tag, *, method: str) -> str:
         from pyrung.core.tag import Tag as TagClass
@@ -3894,6 +4825,8 @@ class PLC:
         callback: Callable[[SystemState], None] | None = None,
     ) -> _RunnerHandle:
         breakpoint_id = self._next_handle_id()
+        if isinstance(predicate, _EdgePredicate):
+            predicate = predicate.armed()
         self._breakpoints_by_id[breakpoint_id] = _BreakpointRegistration(
             id=breakpoint_id,
             predicate=predicate,
@@ -3919,6 +4852,8 @@ class PLC:
         registration = self._breakpoints_by_id.get(breakpoint_id)
         if registration is None or registration.removed:
             return
+        if not registration.enabled and isinstance(registration.predicate, _EdgePredicate):
+            registration.predicate.rearm()
         registration.enabled = True
 
     def _disable_breakpoint(self, breakpoint_id: int) -> None:
@@ -3926,6 +4861,35 @@ class PLC:
         if registration is None or registration.removed:
             return
         registration.enabled = False
+
+    def _note_unrecorded_scans(self, first: int, last: int) -> None:
+        """These scans ran and left no records: a question that reaches them settles them."""
+        windows = self._unrecorded_scans
+        if windows and windows[-1][1] == first - 1:
+            windows[-1] = (windows[-1][0], last)
+        else:
+            windows.append((first, last))
+        for name in _RECORDS:
+            getattr(self, name).note_gap(first, last)
+
+    def _record_landing(self, first_scan_id: int | None = None) -> None:
+        """Cache the state a compiled run landed on, and checkpoint it if one is due.
+
+        It is the exact state of its scan, so history may serve it, and a replay may
+        anchor on it, as on any stepped scan.  *first_scan_id* is the first of the
+        scans that ran with no records: a question that reaches them settles them.
+        """
+        state = self._state
+        scan_id = state.scan_id
+        if first_scan_id is not None and first_scan_id <= scan_id:
+            self._note_unrecorded_scans(first_scan_id, scan_id)
+        self._cache_state(state)
+        if scan_id <= 0 or scan_id % self._checkpoint_interval != 0:
+            return
+        current_forces = dict(self._input_overrides.forces)
+        self._scan_log.record_force_changes(scan_id, current_forces)
+        self._forces_last_recorded = current_forces
+        self._checkpoints[scan_id] = state
 
     def _consume_pause_request(self) -> bool:
         pause_requested = self._pause_requested_this_scan
@@ -3971,14 +4935,14 @@ class PLC:
         state_tags_read: Mapping[str, Any] | None = None
         if fast_reads:
             if self._state_tags_read_cache_state is not self._state:
-                self._state_tags_read_cache = dict(self._state.tags)
+                self._state_tags_read_cache = snapshot_dict(self._state.tags)
                 self._state_tags_read_cache_state = self._state
             state_tags_read = self._state_tags_read_cache
         ctx = ScanContext(
             self._state,
             resolver=self._system_runtime.resolve,
             read_only_tags=self._system_runtime.read_only_tags,
-            consumed_tags_getter=self._consumed_tags_for_capture,
+            runner=self,
             replay_io=replay_io,
             state_tags_read=state_tags_read,
         )
@@ -3988,7 +4952,11 @@ class PLC:
             # into this same root execution body.
             synthesis_observer.attach(ctx)
 
-        self._system_runtime.on_scan_start(ctx)
+        # An attached observer records what the hook reads, so it runs the hook.
+        if synthesis_observer is not None or not self._system_runtime.scan_start_is_quiet(
+            ctx._state_tags_read, ctx._state_memory
+        ):
+            self._system_runtime.on_scan_start(ctx)
 
         dt = self._calculate_dt()
         if self._state.memory.get("_dt", _SENTINEL) != dt:
@@ -4018,7 +4986,19 @@ class PLC:
             )
         ctx._read_sink = None
         self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
+        sites = self._randint_site_list()
+        if sites:
+            self._input_overrides.apply_randint_draws(
+                ctx,
+                sites,
+                self._tags_rungs_reach.randint_numbers(),
+                self._this_scan_drained_patches,
+            )
         return ctx, dt
+
+    def _randint_site_list(self) -> tuple[RandIntExpr, ...]:
+        """The ``randint`` sites the program's rungs run, as the compiled run draws them."""
+        return self._tags_rungs_reach.randint_sites()
 
     def _evaluate_synthesis(
         self,
@@ -4031,16 +5011,13 @@ class PLC:
         """Evaluate synthesis bracket rungs in their own condition scope.
 
         The brackets are scanned like a subroutine body: a fresh condition
-        scope (so a user rung's ``.continued()`` can't reach across into a
-        bracket, and vice-versa), writes batched into the same ctx/commit as the
-        user rungs.  Each entry records under a synthetic ``RungId`` in the
-        node timeline, leaving the public integer main-rung timeline unchanged.
+        scope, writes batched into the same ctx/commit as the user rungs.  Each
+        entry records under a synthetic ``RungId`` in the node timeline, leaving
+        the public integer main-rung timeline unchanged.
         """
         if not rungs:
             return
-        saved_snapshot = ctx._condition_snapshot
         saved_scope = ctx._condition_scope_token
-        ctx._condition_snapshot = None
         ctx._condition_scope_token = object()
         try:
             for rung_index, rung in enumerate(rungs):
@@ -4058,54 +5035,7 @@ class PLC:
                     else:
                         rung.evaluate(ctx)
         finally:
-            ctx._condition_snapshot = saved_snapshot
             ctx._condition_scope_token = saved_scope
-
-    def _capture_previous_states(self, ctx: ScanContext, dt: float) -> None:
-        """Write _prev:* only for tags used in rise()/fall() edge detection.
-
-        *dt* is this scan's effective step.  It equals the normal dt for an
-        ordinary scan, but a time-fold step advances many scans at once with a
-        large ``dt`` — and a system clock is a pure function of the timestamp,
-        resolved on read and never stored.  Capturing such a clock at this
-        scan's *start* would leave the next scan's rise()/fall() comparing
-        against a value ``dt - normal_dt`` in the past, so a fold landing just
-        after a clock edge misfires (or misses) the edge.  Resolve those clocks
-        at ``start + dt - normal_dt`` — the value the immediately-prior scan
-        would have left — which is exactly the start for an ordinary scan.
-        """
-        from pyrung.core.system_points import _CLOCK_HALF_PERIODS, clock_high
-
-        state_memory = self._state.memory
-        tags_pending = ctx._tags_pending
-        state_tags = self._state.tags
-        prior_clock_ts = ctx.timestamp + dt - self._dt
-        for name in self._edge_tag_names:
-            current = tags_pending.get(name, _SENTINEL)
-            if current is _SENTINEL:
-                current = state_tags.get(name, _SENTINEL)
-            if current is _SENTINEL:
-                # Derived system points (clocks, scan signals) are resolved on
-                # read and never stored, so the lookups above miss them.
-                hp = _CLOCK_HALF_PERIODS.get(name)
-                if hp is not None and hp > 0:
-                    # Clock = pure function of timestamp; capture the value one
-                    # normal scan before the landing so rise()/fall() compare
-                    # against the true previous scan even across a fold step.
-                    # Grid-snapped phase (clock_high) so the captured _prev agrees
-                    # with the on-read value across a fold's big-step timestamps.
-                    current = clock_high(prior_clock_ts, hp)
-                else:
-                    # Other resolved-on-read edge tags (e.g. scan-derived) carry
-                    # no timestamp half-period; fall back to the on-read value
-                    # (folding is disabled when such signals are read).
-                    resolved, value = self._system_runtime.resolve(name, ctx)
-                    current = value if resolved else None
-            if current is None:
-                continue
-            prev_key = f"_prev:{name}"
-            if state_memory.get(prev_key, _SENTINEL) != current:
-                ctx.set_memory(prev_key, current)
 
     def _commit_scan(
         self,
@@ -4125,7 +5055,6 @@ class PLC:
         previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)
 
-        self._capture_previous_states(ctx, dt)
         self._system_runtime.on_scan_end(ctx)
         if self._constrained_tags:
             self._bounds_violations = check_bounds(ctx._tags_pending, self._constrained_tags)
@@ -4133,15 +5062,29 @@ class PLC:
                 warnings.warn(str(v), stacklevel=2)
         else:
             self._bounds_violations = {}
-        self._state = ctx.commit(dt=dt)
+        new_state = self._state = ctx.commit(dt=dt)
+        new_scan_id = new_state.scan_id
+        # Record the actual committed boundary, not attempted rung writes. This
+        # is the cheap exactness index consumed by cause(): later same-scan
+        # writers, synthesis, and forces have already won before this point.
+        # A commit stores each pending value or keeps one it stores identically
+        # (same_stored_value), so the pending dict says what the state holds.
+        pending = ctx._tags_pending
+        entry_tags = ctx._state_tags_read if ctx._state is previous_state else previous_state.tags
+        recording = not self._records_full
+        if recording:
+            for name, after in pending.items():
+                # Most tags keep their object, so the identity test skips the call for them.
+                before = entry_tags.get(name)
+                if before is not after and value_changed(before, after):
+                    self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         if (
             self._state_tags_read_cache is not None
             and ctx._state_tags_read is self._state_tags_read_cache
         ):
-            self._state_tags_read_cache.update(ctx._tags_pending)
-            self._state_tags_read_cache_state = self._state
+            self._state_tags_read_cache.update(pending)
+            self._state_tags_read_cache_state = new_state
         # Replay recorder: capture nondeterminism for this scan.
-        new_scan_id = self._state.scan_id
         # Checkpoint bypass: the force-map write at checkpoint boundaries
         # is unconditional — replay reads force state from the checkpoint
         # scan's log entry, so diff-eliding it would strand reconstruction.
@@ -4163,17 +5106,11 @@ class PLC:
         if ctx._io_drain_staging:
             for key, record in ctx._io_drain_staging.items():
                 self._scan_log.record_io_drain(new_scan_id, key, record)
-        # Record the actual committed boundary, not attempted rung writes. This
-        # is the cheap exactness index consumed by cause(): later same-scan
-        # writers, synthesis, and forces have already won before this point.
-        for name in ctx._tags_pending:
-            before = previous_state.tags.get(name)
-            after = self._state.tags.get(name)
-            if before != after:
-                self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         # Only firing rungs append. Their value columns independently extend
         # stable, alternating, or arithmetic ranges; varied=true is sparse.
-        new_firings = ctx._rung_firings
+        if not recording:
+            self._note_unrecorded_scans(new_scan_id, new_scan_id)
+        new_firings = ctx._rung_firings if recording else {}
         for rung_index, writes in new_firings.items():
             self._rung_firing_timelines.append(
                 rung_index,
@@ -4181,7 +5118,7 @@ class PLC:
                 writes,
                 ctx._rung_firing_varied.get(rung_index, frozenset()),
             )
-        node_firings = ctx._node_firings
+        node_firings = ctx._node_firings if recording else {}
         for rung_id, writes in node_firings.items():
             self._node_firing_timelines.append(
                 rung_id,
@@ -4198,26 +5135,13 @@ class PLC:
             self._latest_committed_trace_event = None
         self._cache_state(self._state)
 
-        # Retention-policy auto-trim, piggybacked on checkpoint cadence.
-        if (
-            self._history_retention_scans is not None
-            and is_checkpoint
-            and new_scan_id > self._history_retention_scans
-        ):
-            horizon = new_scan_id - self._history_retention_scans
-            surviving_cp = self._nearest_checkpoint_at_or_after(horizon)
-            if surviving_cp is not None:
-                self._trim_history_before(surviving_cp)
-            total = (
-                self._recent_state_cache_bytes
-                + sum(_estimate_state_bytes(s) for s in self._checkpoints.values())
-                + self._scan_log.bytes_estimate()
-            )
-            if total > self._recent_state_cache_budget:
-                extra_horizon = horizon + self._checkpoint_interval
-                extra_cp = self._nearest_checkpoint_at_or_after(extra_horizon)
-                if extra_cp is not None:
-                    self._trim_history_before(extra_cp)
+        if is_checkpoint:
+            self._apply_history_retention(new_scan_id)
+            if self._records_bounded and self._history_retention_scans is None:
+                from pyrung.core import coast_run
+
+                held = sum(getattr(self, name).run_count() for name in _RECORDS)
+                self._records_full = held >= coast_run.MAX_RECORD_RUNS
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:
@@ -4230,6 +5154,29 @@ class PLC:
             self._evaluate_breakpoints(state=self._state)
         self._sync_runtime_flags_from_state()
 
+    def _apply_history_retention(self, new_scan_id: int) -> None:
+        """Trim history to the floor that the tip, ``history=`` and ``history_budget`` set.
+
+        Stepping and a compiled run keep checkpoints and cached states on different scans.  So
+        that both trim to the same scan, the floor depends only on the settings, the oldest kept
+        state and the latest scan that is a multiple of the checkpoint interval.  The budget
+        check counts one checkpoint per interval from the oldest kept scan, each the size of the
+        oldest kept state.  Over the budget the floor moves one interval later.
+        """
+        retention, interval = self._history_retention_scans, self._checkpoint_interval
+        if retention is None:
+            return
+        last_checkpoint = new_scan_id - new_scan_id % interval
+        horizon = last_checkpoint - retention
+        floor = -(-horizon // interval) * interval
+        if floor > self._initial_scan_id:
+            self._trim_history_before(floor)
+        if horizon > 0 and floor + interval > self._initial_scan_id:
+            checkpoints = (last_checkpoint - self._initial_scan_id) // interval + 1
+            held = checkpoints * _estimate_state_bytes(self._initial_state)
+            if held > self._recent_state_cache_budget:
+                self._trim_history_before(floor + interval)
+
     def _evaluate_monitors(
         self, *, previous_state: SystemState, current_state: SystemState
     ) -> None:
@@ -4240,7 +5187,7 @@ class PLC:
 
             previous_value = previous_state.tags.get(registration.tag_name)
             current_value = current_state.tags.get(registration.tag_name)
-            if current_value != previous_value:
+            if value_changed(previous_value, current_value):
                 registration.callback(current_value, previous_value)
 
     def _evaluate_breakpoints(self, *, state: SystemState) -> None:
@@ -4287,10 +5234,12 @@ class PLC:
         4. Calculate dt and inject into context
         5. Evaluate all logic (writes batched in context), yielding after each rung
         6. Re-apply force overrides (post-logic)
-        7. Batch _prev:* updates for edge detection
-        8. Commit all changes in single operation
+        7. Commit all changes in single operation
 
-        The commit in phase 8 only happens when the generator is exhausted.
+        Edge contacts store their own memory while their rows are scanned
+        (``_edge:e{N}``, see :mod:`pyrung.core.site_memory`).
+
+        The commit in phase 7 only happens when the generator is exhausted.
         """
         self._ensure_running()
         ctx, dt = self._prepare_scan()
@@ -4300,6 +5249,8 @@ class PLC:
                 rung.evaluate(ctx)
             yield i, rung, ctx
 
+        # This generator can be resumed from anywhere, a callable included.
+        self._refuse_inside_a_call()
         self._commit_scan(ctx, dt)
 
     def _scan_steps_debug(self) -> Generator[ScanStep, None, None]:
@@ -4374,6 +5325,7 @@ class PLC:
             enabled_state=step.enabled_state,
             instruction_kind=step.instruction_kind,
             trace=step.trace,
+            branch_path=step.branch_path,
         )
 
     def _evaluate_condition_value(
@@ -4475,22 +5427,30 @@ class PLC:
                 break
         return self._state
 
-    def run_for(self, seconds: float, *, fold: bool = True) -> SystemState:
+    def run_for(self, seconds: float, *, jit: bool = True) -> SystemState:
         """Run until simulation time advances by N seconds or a pause breakpoint fires.
 
         Args:
             seconds: Minimum simulation time to advance.
-            fold: When True (default), fold past timer/counter plateaus
-                instead of stepping scan-by-scan.
+            jit: When True (default), a long run goes through the compiled kernel
+                and its guarded loop, which run every scan without recording
+                causal timelines. False steps every scan interpreted.
 
         Returns:
             The final SystemState after reaching the target time.
         """
         self._ensure_running()
-        if fold and self._logic:
-            from pyrung.core.fold import fold_run_for
+        if jit and self._logic and self._time_mode == TimeMode.FIXED_STEP:
+            from pyrung.core.compiled_run import _stepped_scans_until, run_scans
 
-            return fold_run_for(self, seconds, fold_ctx=self._ensure_fold_context())
+            scans = _stepped_scans_until(
+                self._state.timestamp,
+                self._state.timestamp + seconds,
+                self._dt,
+                max_scans=_RUN_FOR_MAX_COUNTED_SCANS,
+            )
+            if scans is not None:
+                return run_scans(self, scans) if scans else self._state
         target_time = self._state.timestamp + seconds
         while self._state.timestamp < target_time:
             self._consume_pause_request()
@@ -4507,7 +5467,7 @@ class PLC:
         | tuple[Condition | Tag, ...]
         | list[Condition | Tag],
         max_cycles: int = 10000,
-        fold: bool = True,
+        jit: bool = True,
     ) -> SystemState:
         """Run until condition is true, pause breakpoint fires, or max_cycles reached.
 
@@ -4517,51 +5477,27 @@ class PLC:
         Args:
             conditions: Condition expressions or a single callable predicate.
             max_cycles: Maximum scans before giving up (default 10000).
-            fold: When True (default), fold past timer/counter plateaus
-                instead of stepping scan-by-scan.
+            jit: When True (default), a long run goes through the compiled kernel
+                and its guarded loop, which run every scan without recording
+                causal timelines. False, or a callable predicate, steps every scan
+                interpreted.
 
         Returns:
             The state that matched the condition, or final state if max reached.
         """
-        extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None
-        protected_reads: frozenset[str] = frozenset()
-        clock_reads: frozenset[str] = frozenset()
-        scan_derived: frozenset[str] = frozenset()
-        if self._is_fn_predicate(conditions):
+        opaque = self._is_fn_predicate(conditions)
+        if opaque:
             predicate = conditions[0]
         else:
             predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
-            from pyrung.core.condition import _as_condition, _normalize_and_condition
-            from pyrung.core.fold import _extract_condition_crossings, _extract_condition_reads
-
-            normalized = _normalize_and_condition(
-                *conditions,
-                coerce=_as_condition,
-                empty_error="run_until() requires at least one condition",
-                group_empty_error="run_until() condition group cannot be empty",
-            )
-            extra_comparisons = _extract_condition_crossings(normalized)
-            # The condition's tags become fold-protected reads: a bump on a
-            # churn-excluded / frozen-write tag must break the plateau, and a
-            # condition-read clock or scan-derived signal must bound the fold
-            # even when no program rung reads it.
-            from pyrung.core.system_points import _CLOCK_HALF_PERIODS, _SCAN_DERIVED_NAMES
-
-            reads = _extract_condition_reads(normalized)
-            clock_reads = reads & frozenset(_CLOCK_HALF_PERIODS)
-            scan_derived = reads & frozenset(_SCAN_DERIVED_NAMES)
-            protected_reads = reads - clock_reads - scan_derived
         self._ensure_running()
-        if fold and self._logic:
-            from pyrung.core.fold import fold_run_until
+        if jit and self._logic and self._time_mode == TimeMode.FIXED_STEP:
+            from pyrung.core.compiled_run import run_scans
 
-            return fold_run_until(
-                self,
-                predicate,
-                max_cycles=max_cycles,
-                fold_ctx=self._ensure_fold_context(protected_reads, clock_reads, scan_derived),
-                extra_comparisons=extra_comparisons,
-            )
+            if max_cycles <= 0:
+                return self._state
+            # A callable may read anything, the runner included: it steps.
+            return run_scans(self, max_cycles, predicate, compiled_predicate=not opaque)
         for _ in range(max_cycles):
             self._consume_pause_request()
             self._run_single_scan(consume_pause_request=False)

@@ -28,10 +28,12 @@ from __future__ import annotations
 
 import array
 import bisect
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
+
+from pyrung.core.state import value_changed
 
 if TYPE_CHECKING:
     from pyrung.core.time_mode import TimeMode
@@ -96,6 +98,20 @@ class ScanLogSnapshot:
     lifecycle_events: tuple[LifecycleEvent, ...]
     io_submits_by_scan: Mapping[int, Mapping[str, IoSubmitRecord]]
     io_drains_by_scan: Mapping[int, Mapping[str, IoResultRecord]]
+    rtc_origin: tuple[datetime, float] | None = None
+
+    def rtc_base_at(self, scan_id: int) -> tuple[datetime, float] | None:
+        """The RTC base in effect at ``scan_id``, as :meth:`ScanLog.rtc_base_at`."""
+        return _rtc_base_at(self.rtc_base_changes, self.rtc_origin, scan_id)
+
+
+def _rtc_base_at(
+    changes: Mapping[int, tuple[datetime, float]],
+    origin: tuple[datetime, float] | None,
+    scan_id: int,
+) -> tuple[datetime, float] | None:
+    latest = max((scan for scan in changes if scan <= scan_id), default=None)
+    return origin if latest is None else changes[latest]
 
 
 class ScanLog:
@@ -108,6 +124,9 @@ class ScanLog:
         self._patches_by_scan: dict[int, dict[str, Any]] = {}
         self._force_changes_by_scan: dict[int, dict[str, Any]] = {}
         self._rtc_base_changes: dict[int, tuple[datetime, float]] = {}
+        # The base in effect before the first change kept above; None while nothing
+        # has changed, when the runner's current base is the answer for every scan.
+        self._rtc_origin: tuple[datetime, float] | None = None
         self._dts: array.array[float] | None = (
             array.array("d") if time_mode == _TimeMode.REALTIME else None
         )
@@ -140,9 +159,40 @@ class ScanLog:
         self._force_changes_by_scan[scan_id] = dict(forces)
         self._effective_input_cache.clear()
 
-    def record_rtc_base_change(self, scan_id: int, base: datetime, base_sim_time: float) -> None:
-        """Record an RTC base update taking effect at ``scan_id``."""
+    def drop_force_records_unchanged_at(self, scan_ids: Collection[int]) -> None:
+        """Forget the records at *scan_ids* that repeat the record before them."""
+        records = self._force_changes_by_scan
+        previous: str | None = None
+        for scan_id in sorted(records):
+            # By repr, so a force from True to 1 still counts as a change.
+            current = repr(records[scan_id])
+            if scan_id in scan_ids and current == previous:
+                del records[scan_id]
+            previous = current
+
+    def record_rtc_base_change(
+        self,
+        scan_id: int,
+        base: datetime,
+        base_sim_time: float,
+        *,
+        previous: tuple[datetime, float],
+    ) -> None:
+        """Record an RTC base update taking effect at ``scan_id``.
+
+        *previous* is the base it replaces: scans before the first change still ran
+        on it, and a replay anchored there has to know.
+        """
+        if self._rtc_origin is None and not self._rtc_base_changes:
+            self._rtc_origin = (previous[0], float(previous[1]))
         self._rtc_base_changes[scan_id] = (base, float(base_sim_time))
+
+    def rtc_base_at(self, scan_id: int) -> tuple[datetime, float] | None:
+        """The ``(base, base sim time)`` in effect at ``scan_id``.
+
+        None when no change has been recorded: the runner's current base holds.
+        """
+        return _rtc_base_at(self._rtc_base_changes, self._rtc_origin, scan_id)
 
     def record_dt(self, scan_id: int, dt: float) -> None:
         """Record ``dt`` for ``scan_id`` in REALTIME mode.  No-op in FIXED_STEP."""
@@ -181,6 +231,7 @@ class ScanLog:
             s: dict(v) for s, v in self._force_changes_by_scan.items() if keep(s)
         }
         copy._rtc_base_changes = {s: v for s, v in self._rtc_base_changes.items() if keep(s)}
+        copy._rtc_origin = self._rtc_origin
         if self._dts is None:
             copy._dts = None
         elif up_to is None:
@@ -209,6 +260,7 @@ class ScanLog:
             lifecycle_events=tuple(self._lifecycle_events),
             io_submits_by_scan=dict(self._io_submits_by_scan),
             io_drains_by_scan=dict(self._io_drains_by_scan),
+            rtc_origin=self._rtc_origin,
         )
 
     def effective_input_changes(
@@ -268,7 +320,7 @@ class ScanLog:
             else:
                 next_value = current
 
-            if next_value != current:
+            if value_changed(current, next_value):
                 changes.append((scan_id, current, next_value))
                 current = next_value
 
@@ -340,6 +392,8 @@ class ScanLog:
         """
         if scan_id <= self._base_scan:
             return
+        # The clock at the horizon outlives the change that set it.
+        self._rtc_origin = self.rtc_base_at(scan_id - 1)
         for d in (
             self._patches_by_scan,
             self._force_changes_by_scan,

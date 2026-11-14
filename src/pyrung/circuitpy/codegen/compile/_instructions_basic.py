@@ -10,6 +10,7 @@ from pyrung.circuitpy.codegen._constants import (
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
     _coil_reset_value,
+    _copy_store_expr,
     _indent_body,
     _optional_value_type_name,
     _store_coerce_expr,
@@ -31,12 +32,17 @@ from pyrung.core.instruction import (
     OutInstruction,
     ResetInstruction,
 )
+from pyrung.core.instruction.conversions import copy_source_kind
+from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
+from pyrung.core.instruction.timers import tof_armed_key
 from pyrung.core.kernel import prove_effective_preset_key
-from pyrung.core.tag import Tag
+from pyrung.core.memory_block import block_room, element_names_after
+from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_assignment_lines,
+    _compile_copy_source,
     _compile_guarded_instruction,
     _compile_lvalue,
     _compile_set_address_error_fault_body,
@@ -44,9 +50,11 @@ from ._primitives import (
     _compile_target_write_lines,
     _compile_value,
     _compute_sequential_reloads,
+    _copy_clamp_condition,
     _copy_converter_target_info,
     _copy_converter_write_lines,
-    _timer_dt_to_units_expr,
+    _past_end_keeps,
+    _timer_carry_lines,
 )
 
 
@@ -180,13 +188,10 @@ def _compile_on_delay_instruction(
     frac_key = f"_frac:{instr.accumulator.name}"
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
-    lines: list[str] = [
-        f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
-    ]
+    lines: list[str] = []
     if instr.reset_condition is not None:
         reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
             instr.reset_condition, ctx
@@ -194,7 +199,7 @@ def _compile_on_delay_instruction(
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
-                f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
+                f'{" " * (indent + 4)}_mem["{frac_key}"] = 0',
                 f"{' ' * (indent + 4)}{done_write} = False",
                 f"{' ' * (indent + 4)}{acc_write} = 0",
                 f"{sp}else:",
@@ -204,16 +209,24 @@ def _compile_on_delay_instruction(
     else:
         inner = indent
     isp = " " * inner
+    if ctx.abstract_timers:
+        tick = [
+            f"{' ' * (inner + 4)}_preset = int({preset})",
+            f"{' ' * (inner + 4)}_acc = _bb_tick(_mem, {instr.accumulator.name!r},"
+            f" int({acc_read}), _preset)",
+            f"{' ' * (inner + 4)}_new_frac = 0",
+        ]
+    else:
+        tick = [
+            f"{' ' * (inner + 4)}_acc = int({acc_read})",
+            *_timer_carry_lines(instr.accumulator, instr.unit, ctx, " " * (inner + 4)),
+            f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
+            f"{' ' * (inner + 4)}_preset = int({preset})",
+        ]
     lines.extend(
         [
             f"{isp}if {enabled_expr}:",
-            f'{" " * (inner + 4)}_dt = float(_mem.get("_dt", 0.0))',
-            f"{' ' * (inner + 4)}_acc = int({acc_read})",
-            f"{' ' * (inner + 4)}_dt_units = {unit_expr}",
-            f"{' ' * (inner + 4)}_int_units = int(_dt_units)",
-            f"{' ' * (inner + 4)}_new_frac = _dt_units - _int_units",
-            f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
-            f"{' ' * (inner + 4)}_preset = int({preset})",
+            *tick,
             f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
             f"{' ' * (inner + 4)}{done_write} = (_acc >= _preset)",
             f"{' ' * (inner + 4)}{acc_write} = _acc",
@@ -225,7 +238,7 @@ def _compile_on_delay_instruction(
         lines.extend(
             [
                 f"{isp}else:",
-                f'{" " * (inner + 4)}_mem["{frac_key}"] = 0.0',
+                f'{" " * (inner + 4)}_mem["{frac_key}"] = 0',
                 f"{' ' * (inner + 4)}{done_write} = False",
                 f"{' ' * (inner + 4)}{acc_write} = 0",
             ]
@@ -255,31 +268,44 @@ def _compile_off_delay_instruction(
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
+    armed_key = tof_armed_key(instr.accumulator.name)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
     sp4 = " " * (indent + 4)
     sp8 = " " * (indent + 8)
+    sp12 = " " * (indent + 12)
+    # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
     lines = [
-        f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
+        f'{sp}_tof_armed = _mem.get("{armed_key}", False)',
         f"{sp}if {enabled_expr}:",
-        f'{sp4}_mem["{frac_key}"] = 0.0',
+        f"{sp4}if not _tof_armed:",
+        f'{sp8}_mem["{armed_key}"] = True',
+        f'{sp4}_mem["{frac_key}"] = 0',
         f"{sp4}{done_write} = True",
         f"{sp4}{acc_write} = 0",
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
-        f"{sp4}if {done_read} or _acc != 0:",
-        f'{sp8}_dt = float(_mem.get("_dt", 0.0))',
-        f"{sp8}_dt_units = {unit_expr}",
-        f"{sp8}_int_units = int(_dt_units)",
-        f"{sp8}_new_frac = _dt_units - _int_units",
-        f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{sp8}_preset = int({preset})",
+        f"{sp4}if _tof_armed or {done_read} or _acc != 0:",
+        f"{sp8}if not _tof_armed:",
+        f'{sp12}_mem["{armed_key}"] = True',
+        *(
+            [
+                f"{sp8}_preset = int({preset})",
+                f"{sp8}_acc = _bb_tick(_mem, {instr.accumulator.name!r}, _acc, _preset)",
+                f"{sp8}_new_frac = 0",
+            ]
+            if ctx.abstract_timers
+            else [
+                *_timer_carry_lines(instr.accumulator, instr.unit, ctx, sp8),
+                f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
+                f"{sp8}_preset = int({preset})",
+            ]
+        ),
         f'{sp8}_mem["{frac_key}"] = _new_frac',
-        f"{sp8}{done_write} = (_acc < _preset)",
+        f"{sp8}{done_write} = _acc < _preset",
         f"{sp8}{acc_write} = _acc",
     ]
     if ctx.proof_metadata:
@@ -294,6 +320,22 @@ def _compile_off_delay_instruction(
     return lines
 
 
+def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list[str]:
+    """Bind *name* to a counter input's rising edge and update its memory.
+
+    The memory is the input as the counter last scanned it, written on every
+    scan the counter runs (reset scans included); it starts off, so an input
+    already on at the first scan counts (see ``counters.count_edge``).
+    """
+    sp = " " * indent
+    now = f"{name}_now"
+    return [
+        f"{sp}{now} = bool({input_expr})",
+        f"{sp}{name} = {now} and not _mem.get({key!r}, False)",
+        f"{sp}_mem[{key!r}] = {now}",
+    ]
+
+
 def _compile_count_up_instruction(
     instr: CountUpInstruction,
     enabled_expr: str,
@@ -305,10 +347,20 @@ def _compile_count_up_instruction(
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    if ctx.proof_metadata and ctx._current_function is not None:
+    if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
+    site = ctx.state_key_for(instr)
+    up_key = f"{COUNT_UP_MEMORY}:{site}"
     sp = " " * indent
-    lines: list[str] = []
+    lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent)
+    down_expr: str | None = None
+    if instr.down_condition is not None:
+        down_expr = _get_condition_snapshot(instr, "down_condition", ctx) or compile_condition(
+            instr.down_condition, ctx
+        )
+        lines.extend(
+            _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent)
+        )
     if instr.reset_condition is not None:
         reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
             instr.reset_condition, ctx
@@ -329,17 +381,14 @@ def _compile_count_up_instruction(
         [
             f"{' ' * inner}_acc = int({acc_read})",
             f"{' ' * inner}_delta = 0",
-            f"{isp}if {enabled_expr}:",
+            f"{isp}if _cu_edge:",
             f"{' ' * (inner + 4)}_delta += 1",
         ]
     )
-    if instr.down_condition is not None:
-        down_expr = _get_condition_snapshot(instr, "down_condition", ctx) or compile_condition(
-            instr.down_condition, ctx
-        )
+    if down_expr is not None:
         lines.extend(
             [
-                f"{isp}if {down_expr}:",
+                f"{isp}if _cd_edge:",
                 f"{' ' * (inner + 4)}_delta -= 1",
             ]
         )
@@ -374,10 +423,11 @@ def _compile_count_down_instruction(
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
-    if ctx.proof_metadata and ctx._current_function is not None:
+    if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
+    down_key = f"{COUNT_DOWN_MEMORY}:{ctx.state_key_for(instr)}"
     sp = " " * indent
-    lines: list[str] = []
+    lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent)
     if instr.reset_condition is not None:
         reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
             instr.reset_condition, ctx
@@ -397,11 +447,11 @@ def _compile_count_down_instruction(
     lines.extend(
         [
             f"{' ' * inner}_acc = int({acc_read})",
-            f"{isp}if {enabled_expr}:",
+            f"{isp}if _cd_edge:",
             f"{' ' * (inner + 4)}_acc -= 1",
             f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))",
             f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done_write} = (_acc <= -_preset)",
+            f"{' ' * inner}{done_write} = (_acc <= _preset)",
             f"{' ' * inner}{acc_write} = _acc",
         ]
     )
@@ -422,13 +472,40 @@ def _compile_copy_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if instr.convert is not None:
-        return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
     target_type = _value_type_name(instr.target)
-    source_expr = _compile_value(instr.source, ctx)
-    value_expr = _store_coerce_expr(source_expr, target_type, ctx)
-    enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
+    # A text literal into a CHAR fans out, one character per register.
+    fanout = isinstance(instr.source, str) and len(instr.source) > 1 and target_type == "CHAR"
+    convert = instr.convert
+    if convert is not None or fanout:
+        return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent, convert)
+    source_expr = _compile_copy_source(instr.source, ctx)
+    source_type = (
+        "CHAR" if isinstance(instr.source, str) else _optional_value_type_name(instr.source)
+    )
+    source_kind = copy_source_kind(instr.source)
+    clamp_cond = _copy_clamp_condition("_copy_value", target_type, source_type)
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    if clamp_cond is None or fault_body == ["pass"] or _copy_source_fits(instr.source, target_type):
+        value_expr = _copy_store_expr(source_expr, target_type, source_kind, ctx)
+        enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
+    else:
+        value_expr = _copy_store_expr("_copy_value", target_type, source_kind, ctx)
+        enabled_body = [
+            f"_copy_value = {source_expr}",
+            *_compile_assignment_lines(instr.target, value_expr, ctx, indent=0),
+            f"if {clamp_cond}:",
+            *_indent_body(fault_body, 4),
+        ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _copy_source_fits(source: object, target_type: str) -> bool:
+    """True for a literal the store leaves alone, which needs no clamp test."""
+    if type(source) is not int:
+        return False
+    if target_type == "INT":
+        return -32768 <= source <= 32767
+    return -2147483648 <= source <= 2147483647
 
 
 def _compile_copy_converter_instruction(
@@ -436,24 +513,39 @@ def _compile_copy_converter_instruction(
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
+    converter: CopyConverter | None = None,
 ) -> list[str]:
-    converter = instr.convert
-    if not isinstance(converter, CopyConverter):
+    """A Copy with *converter* (``instr.convert``, or the plain one across text), or a
+    text literal's fan-out when it is ``None``."""
+    if converter is not None and not isinstance(converter, CopyConverter):
         raise TypeError("copy converter compiler requires CopyConverter")
 
     stem = ctx.next_name("copymod")
     address_fault_body = _compile_set_address_error_fault_body(ctx)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
-    mode = converter.mode
-    source_expr = _compile_value(instr.source, ctx)
+    mode = "fanout" if converter is None else converter.mode
+    source_expr = _compile_copy_source(instr.source, ctx)
+    source_read: list[str] = []
+    if _past_end_keeps(instr.source):
+        # Read where a pointer past the end drops the copy (the guard's IndexError),
+        # not inside the conversion's own handler, which would flag it.
+        source_read = [f"_{stem}_source = {source_expr}"]
+        source_expr = f"_{stem}_source"
 
+    target = instr.target.tag if isinstance(instr.target, ImmediateRef) else instr.target
     setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
-        instr.target, ctx, stem
+        target, ctx, stem
     )
     values_var = f"_{stem}_values"
-    target_name = instr.target.name if isinstance(instr.target, Tag) else None
+    target_name = target.name if isinstance(target, Tag) else None
+    fit = block_room(target) if isinstance(target, Tag) else None
+    following_names = (
+        element_names_after(target, fit)
+        if isinstance(target, Tag) and fit is not None and target_kind == "scalar"
+        else None
+    )
     sequential_reloads = (
-        _compute_sequential_reloads(target_name, ctx)
+        _compute_sequential_reloads(target_name, ctx, following_names)
         if target_name and target_kind == "scalar"
         else None
     )
@@ -465,10 +557,27 @@ def _compile_copy_converter_instruction(
         fault_body=fault_body,
         target_name=target_name,
         sequential_reloads=sequential_reloads,
+        kernel=ctx.kernel_runtime,
+        fit=fit,
+        following_names=following_names,
     )
 
-    enabled_body: list[str] = [*setup]
-    if mode in {"value", "ascii"}:
+    enabled_body: list[str] = [*source_read, *setup]
+    if mode == "fanout":
+        enabled_body.extend(
+            [
+                "try:",
+                f"    {values_var} = [{_store_coerce_expr('_ch', target_type, ctx)} for _ch in {source_expr}]",
+                *_indent_body(write_lines, 4),
+                "except IndexError:",
+                *_indent_body(address_fault_body, 4),
+                "except (TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    elif converter is None:
+        raise RuntimeError(f"unhandled copy mode {mode!r}")
+    elif mode in {"value", "ascii"}:
         ctx.mark_helper("_text_from_source_value")
         ctx.mark_helper("_store_numeric_text_digit")
         enabled_body.extend(

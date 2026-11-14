@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -111,7 +111,7 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
 
 def compile_for_dict(
     expr: Expr,
-    tags: dict[str, Any] | None = None,
+    tags: Mapping[str, Any] | None = None,
 ) -> Callable[[dict[str, Any]], bool]:
     """Compile a parsed expression into a predicate over a plain tag dict.
 
@@ -168,7 +168,7 @@ def compile_for_dict(
 
 def to_conditions(
     expr: Expr,
-    tags_by_name: dict[str, Any],
+    tags_by_name: Mapping[str, Any],
 ) -> tuple[Any, ...]:
     """Convert a DAP expression AST into pyrung condition objects.
 
@@ -230,7 +230,7 @@ def _walk_expr_tags(node: Expr, out: set[str]) -> None:
 
 
 def _resolve_choice_label(
-    tags: dict[str, Any], tag_name: str, value: str
+    tags: Mapping[str, Any], tag_name: str, value: str
 ) -> int | float | str | None:
     """Resolve a string value through a tag's choices map.
 

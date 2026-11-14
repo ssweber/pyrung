@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NoReturn
+from contextlib import AbstractContextManager
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
+from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
+from pyrung.core.instruction.data_transfer import _plain_text_converter
+from pyrung.core.instruction.send_receive import is_modbus_status_tag
+from pyrung.core.tag import TagType
 
+from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _quote
 
 
@@ -28,15 +34,22 @@ class _InstructionMixin:
             allow_immediate: bool = False,
             immediate_context: str = "",
         ) -> str: ...
-        def _single_output_rows(
+        def _render_network(
             self,
-            condition_rows: list[Any],
+            conditions: list[Condition],
+            items: list[Any],
             *,
-            output_token: str,
+            path: str,
+            source: Any,
             first_marker: str,
         ) -> list[tuple[str, ...]]: ...
-        def _expand_conditions(self, conditions: list[Condition], *, path: str) -> list[Any]: ...
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
+        def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
+        def _hex_constants(
+            self, mode: Literal["wrap", "exact"] | None
+        ) -> AbstractContextManager[None]: ...
+        @staticmethod
+        def _is_hex_bank_operand(rendered: str) -> bool: ...
         def _render_condition_sequence(
             self,
             values: tuple[Any, ...],
@@ -46,6 +59,7 @@ class _InstructionMixin:
         ) -> str: ...
         def _render_pattern(self, pattern: tuple[tuple[bool, ...], ...]) -> str: ...
         def _render_converter(self, converter: CopyConverter) -> str: ...
+        def _render_source_rung(self, rung: Any, *, path: str) -> list[tuple[str, ...]]: ...
 
     def _render_forloop_instruction(
         self,
@@ -70,27 +84,34 @@ class _InstructionMixin:
             self._render_operand(instruction.count, path=f"{path}.count", source=instruction),
             **for_kw,
         )
-        rows = self._single_output_rows(
-            self._expand_conditions(conditions, path=f"{path}.condition"),
-            output_token=for_token,
-            first_marker=self._next_marker(),
+        rows = self._render_network(
+            conditions, [for_token], path=path, source=instruction, first_marker=self._next_marker()
         )
 
-        for child_index, child_instruction in enumerate(getattr(instruction, "instructions", ())):
-            child_path = f"{path}.instruction[{child_index}]({type(child_instruction).__name__})"
-            child_condition_rows = self._expand_conditions([], path=f"{child_path}.condition")
-            child_rows = self._single_output_rows(
-                child_condition_rows,
-                output_token=self._instruction_token(child_instruction, path=child_path),
+        for child_index, child_instruction in enumerate(instruction.body):
+            child_path = f"{path}.body[{child_index}]({type(child_instruction).__name__})"
+            if is_own_rung(child_instruction):
+                # A conditioned body rung, or a nested loop: a rung of its own.
+                rows.extend(
+                    self._render_source_rung(loop_item_rung(child_instruction), path=child_path)
+                )
+                continue
+            child_rows = self._render_network(
+                [],
+                [self._instruction_token(child_instruction, path=child_path)],
+                path=child_path,
+                source=child_instruction,
                 first_marker=self._next_marker(),
             )
             child_rows.extend(self._pin_rows(child_instruction, path=child_path))
             rows.extend(child_rows)
 
         rows.extend(
-            self._single_output_rows(
-                self._expand_conditions([], path=f"{path}.next"),
-                output_token=self._fn("next"),
+            self._render_network(
+                [],
+                [self._fn("next")],
+                path=f"{path}.next",
+                source=instruction,
                 first_marker=self._next_marker(),
             )
         )
@@ -100,11 +121,13 @@ class _InstructionMixin:
         pin_specs = self._pin_specs(instruction, path=path)
         rows: list[tuple[str, ...]] = []
         for pin_name, condition, pin_token in pin_specs:
-            condition_rows = self._expand_conditions([condition], path=f"{path}.pin[{pin_name}]")
+            # A pin is a wire of its own, drawn from the rail below the box's rows.
             rows.extend(
-                self._single_output_rows(
-                    condition_rows,
-                    output_token=pin_token,
+                self._render_network(
+                    [condition],
+                    [pin_token],
+                    path=f"{path}.pin[{pin_name}]",
+                    source=instruction,
                     first_marker="",
                 )
             )
@@ -144,7 +167,11 @@ class _InstructionMixin:
                 specs.append(("reset", reset_condition, ".reset()"))
             return specs
 
-        if instruction_type in {"EventDrumInstruction", "TimeDrumInstruction"}:
+        if instruction_type in {
+            "EventDrumInstruction",
+            "TimeDrumInstruction",
+            "TimeEventDrumInstruction",
+        }:
             reset_condition = getattr(instruction, "reset_condition", None)
             if reset_condition is not None:
                 specs.append(("reset", reset_condition, ".reset()"))
@@ -164,6 +191,76 @@ class _InstructionMixin:
 
         return specs
 
+    def _out_variant_token(self, instruction: Any, instruction_type: str, *, path: str) -> str:
+        """Debounce/flasher/timed: each phase as its Timer's TD and preset.
+
+        CLICK's coil names only the phase's TD; the T of the same number comes
+        with it (validation reports a Timer whose Done is not that T).
+        """
+        if instruction_type == "TimedInstruction":
+            phases = [("on", instruction.timer_acc, instruction.on_preset)]
+        else:
+            phases = [
+                ("on", instruction.on_acc, instruction.on_preset),
+                ("off", instruction.off_acc, instruction.off_preset),
+            ]
+        kwargs: dict[str, str] = {}
+        for side, acc, preset in phases:
+            kwargs[f"{side}_acc"] = self._render_operand(
+                acc, path=f"{path}.{side}_acc", source=instruction
+            )
+            kwargs[f"{side}_preset"] = self._render_operand(
+                preset, path=f"{path}.{side}_preset", source=instruction
+            )
+        kwargs["unit"] = self._render_operand(
+            instruction.unit, path=f"{path}.unit", source=instruction
+        )
+        if instruction_type == "TimedInstruction" and instruction.maintained:
+            kwargs["maintained"] = "1"
+        verb = {
+            "DebounceInstruction": "debounce",
+            "FlasherInstruction": "flasher",
+            "TimedInstruction": "timed",
+        }[instruction_type]
+        return self._fn(
+            verb,
+            self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+            **kwargs,
+        )
+
+    def _single_register_fill_token(
+        self, instruction: Any, tag: Any, *, path: str, oneshot_kw: dict[str, str]
+    ) -> str:
+        """A Fill of one register as the Copy CLICK takes in its place.
+
+        The Copy must store what the Fill stores.  A text value of several characters
+        would fill several TXT, and a Copy across text converts, so both are refused.
+        """
+        value = instruction.value
+        if isinstance(value, str) and len(value) > 1 and tag.type == TagType.CHAR:
+            self._raise_issue(
+                path=f"{path}.value",
+                message=(
+                    f"fill({value!r}, ...) writes one register, which CLICK takes as a Copy. "
+                    "A Copy of several characters fills several TXT. "
+                    "Fill one character, or use copy() into the TXT you mean."
+                ),
+                source=instruction,
+            )
+        if _plain_text_converter(value, tag) is not None:
+            self._raise_issue(
+                path=f"{path}.value",
+                message=(
+                    "fill() of one register exports as a Copy, and a Copy between text and "
+                    "a number converts. Write copy() with convert= to say which conversion."
+                ),
+                source=instruction,
+            )
+        dest = self._render_operand(tag, path=f"{path}.dest", source=instruction)
+        with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+            source = self._render_operand(value, path=f"{path}.value", source=instruction)
+        return self._fn("copy", source, dest, **oneshot_kw)
+
     def _instruction_token(self, instruction: Any, *, path: str) -> str:
         # Dispatch by runtime type name to avoid importing all instruction classes.
         instruction_type = type(instruction).__name__
@@ -182,6 +279,19 @@ class _InstructionMixin:
                 ),
                 **oneshot_kw,
             )
+        if instruction_type == "ToggleInstruction":
+            return self._fn(
+                "toggle",
+                self._render_operand(
+                    instruction.target,
+                    path=f"{path}.target",
+                    source=instruction,
+                    allow_immediate=True,
+                    immediate_context="coil",
+                ),
+            )
+        if instruction_type in {"DebounceInstruction", "FlasherInstruction", "TimedInstruction"}:
+            return self._out_variant_token(instruction, instruction_type, path=path)
         if instruction_type == "LatchInstruction":
             return self._fn(
                 "latch",
@@ -206,15 +316,16 @@ class _InstructionMixin:
             )
         if instruction_type == "CopyInstruction":
             convert_kw = {}
-            if instruction.convert is not None:
-                convert_kw["convert"] = self._render_converter(instruction.convert)
-            return self._fn(
-                "copy",
-                self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                **convert_kw,
-                **oneshot_kw,
-            )
+            # A plain Copy across text converts on its own; it exports as written.
+            authored = getattr(instruction, "authored_convert", instruction.convert)
+            if authored is not None:
+                convert_kw["convert"] = self._render_converter(authored)
+            dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
+            with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+                copy_source = self._render_operand(
+                    instruction.source, path=f"{path}.source", source=instruction
+                )
+            return self._fn("copy", copy_source, dest, **convert_kw, **oneshot_kw)
         if instruction_type == "BlockCopyInstruction":
             convert_kw = {}
             if instruction.convert is not None:
@@ -227,21 +338,31 @@ class _InstructionMixin:
                 **oneshot_kw,
             )
         if instruction_type == "FillInstruction":
-            return self._fn(
-                "fill",
-                self._render_operand(instruction.value, path=f"{path}.value", source=instruction),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                **oneshot_kw,
-            )
+            single = single_register_fill_dest(instruction.dest)
+            if single is not None:
+                return self._single_register_fill_token(
+                    instruction, single, path=path, oneshot_kw=oneshot_kw
+                )
+            dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
+            with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+                fill_value = self._render_operand(
+                    instruction.value, path=f"{path}.value", source=instruction
+                )
+            return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":
-            mode = infer_calc_mode(instruction.expression, instruction.dest).mode
-            return self._fn(
-                "math",
-                self._render_operand(
-                    instruction.expression,
+            # Export the formula as written, since a hex CLICK Math cuts its constants itself.
+            expression = instruction.source_expression
+            mode = infer_calc_mode(expression, instruction.dest).mode
+            # Hex-mode Math reads every constant as hex (shift counts too).
+            with self._hex_constants("wrap" if str(mode) == "hex" else None):
+                formula = self._render_operand(
+                    expression,
                     path=f"{path}.expression",
                     source=instruction,
-                ),
+                )
+            return self._fn(
+                "math",
+                formula,
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 mode=str(mode),
                 **oneshot_kw,
@@ -256,9 +377,10 @@ class _InstructionMixin:
                 path=f"{path}.search_range",
                 source=instruction,
             )
-            value_str = self._render_operand(
-                instruction.value, path=f"{path}.value", source=instruction
-            )
+            with self._hex_constants("exact" if self._is_hex_bank_operand(range_str) else None):
+                value_str = self._render_operand(
+                    instruction.value, path=f"{path}.value", source=instruction
+                )
             comparison = f"{range_str} {instruction.condition} {value_str}"
             return self._fn(
                 "search",
@@ -407,7 +529,7 @@ class _InstructionMixin:
         if instruction_type == "ShiftInstruction":
             return self._fn(
                 "shift",
-                self._render_operand(
+                self._render_shift_range(
                     instruction.bit_range,
                     path=f"{path}.bit_range",
                     source=instruction,
@@ -471,6 +593,45 @@ class _InstructionMixin:
                     source=instruction,
                 ),
             )
+        if instruction_type == "TimeEventDrumInstruction":
+            # A step's blank preset or event renders as None.
+            return self._fn(
+                "time_event_drum",
+                outputs=self._render_sequence(
+                    instruction.outputs,
+                    path=f"{path}.outputs",
+                    source=instruction,
+                ),
+                presets=self._render_sequence(
+                    instruction.presets,
+                    path=f"{path}.presets",
+                    source=instruction,
+                ),
+                events=self._render_condition_sequence(
+                    instruction.events,
+                    path=f"{path}.events",
+                    source=instruction,
+                ),
+                unit=self._render_operand(
+                    instruction.unit, path=f"{path}.unit", source=instruction
+                ),
+                pattern=self._render_pattern(instruction.pattern),
+                current_step=self._render_operand(
+                    instruction.current_step,
+                    path=f"{path}.current_step",
+                    source=instruction,
+                ),
+                accumulator=self._render_operand(
+                    instruction.accumulator,
+                    path=f"{path}.accumulator",
+                    source=instruction,
+                ),
+                completion_flag=self._render_operand(
+                    instruction.completion_flag,
+                    path=f"{path}.completion_flag",
+                    source=instruction,
+                ),
+            )
         if instruction_type == "ModbusSendInstruction":
             remote_start_expr = _render_remote_start(instruction)
             target_expr = _render_modbus_target(instruction)
@@ -480,25 +641,8 @@ class _InstructionMixin:
                 source=self._render_operand(
                     instruction.source, path=f"{path}.source", source=instruction
                 ),
-                sending=self._render_operand(
-                    instruction.sending,
-                    path=f"{path}.sending",
-                    source=instruction,
-                ),
-                success=self._render_operand(
-                    instruction.success,
-                    path=f"{path}.success",
-                    source=instruction,
-                ),
-                error=self._render_operand(
-                    instruction.error, path=f"{path}.error", source=instruction
-                ),
-                exception_response=self._render_operand(
-                    instruction.exception_response,
-                    path=f"{path}.exception_response",
-                    source=instruction,
-                ),
             )
+            kwargs.update(self._render_status_bits(instruction, "sending", path))
             if instruction.word_swap:
                 kwargs["word_swap"] = "1"
             return self._fn("send", **kwargs)
@@ -511,25 +655,8 @@ class _InstructionMixin:
                 dest=self._render_operand(
                     instruction.dest, path=f"{path}.dest", source=instruction
                 ),
-                receiving=self._render_operand(
-                    instruction.receiving,
-                    path=f"{path}.receiving",
-                    source=instruction,
-                ),
-                success=self._render_operand(
-                    instruction.success,
-                    path=f"{path}.success",
-                    source=instruction,
-                ),
-                error=self._render_operand(
-                    instruction.error, path=f"{path}.error", source=instruction
-                ),
-                exception_response=self._render_operand(
-                    instruction.exception_response,
-                    path=f"{path}.exception_response",
-                    source=instruction,
-                ),
             )
+            kwargs.update(self._render_status_bits(instruction, "receiving", path))
             if instruction.word_swap:
                 kwargs["word_swap"] = "1"
             return self._fn("receive", **kwargs)
@@ -537,6 +664,10 @@ class _InstructionMixin:
             return self._fn("call", _quote(str(instruction.subroutine_name)))
         if instruction_type == "ReturnInstruction":
             return self._fn("return")
+        if instruction_type == "BreakInstruction":
+            return self._fn("break")
+        if instruction_type == "ContinueInstruction":
+            return self._fn("continue")
 
         if instruction_type == "NopInstruction":
             return "NOP"
@@ -549,6 +680,17 @@ class _InstructionMixin:
             message=f"Unsupported instruction type: {instruction_type}.",
             source=instruction,
         )
+
+    def _render_status_bits(self, instruction: Any, busy_name: str, path: str) -> dict[str, str]:
+        """Send/Receive status kwargs; a bit on a hidden tag was left off and stays off."""
+        rendered: dict[str, str] = {}
+        for name in (busy_name, "success", "error", "exception_response"):
+            tag = getattr(instruction, name)
+            if not is_modbus_status_tag(tag.name):
+                rendered[name] = self._render_operand(
+                    tag, path=f"{path}.{name}", source=instruction
+                )
+        return rendered
 
     def _fn(self, name: str, *args: str, **kwargs: str) -> str:
         parts = list(args)
@@ -596,11 +738,19 @@ _984_BASES = {
 
 
 def _render_remote_start(instruction: object) -> str:
-    """Render remote_start as Click address string or ModbusAddress(...)."""
+    """Render remote_start as Click address string or ModbusAddress(...).
+
+    A hex-written address stays hex; anything else is MODBUS 984, written as
+    CLICK writes it (a coil is ``17``, not ``000017``).
+    """
     remote_address = getattr(instruction, "remote_address", None)
     if remote_address is not None:
-        base = _984_BASES[remote_address.register_type.value]
-        addr_984 = base + remote_address.address
+        register_type = remote_address.register_type.value
+        if remote_address.notation == "hex":
+            return (
+                f"ModbusAddress(address={remote_address.address:X}h,register_type={register_type})"
+            )
+        addr_984 = _984_BASES[register_type] + remote_address.address
         return f"ModbusAddress(address={addr_984})"
 
     bank = getattr(instruction, "bank", "")

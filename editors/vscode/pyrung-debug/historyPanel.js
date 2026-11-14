@@ -13,6 +13,7 @@ class PyrungHistoryPanelProvider {
     this._chainResult = null;
     this._chainError = null;
     this._fetchGeneration = 0;
+    this._fetching = false;
     this._getExecutionState =
       typeof getExecutionState === "function" ? getExecutionState : () => "unknown";
     this._log = typeof log === "function" ? log : null;
@@ -123,6 +124,7 @@ class PyrungHistoryPanelProvider {
 
   setSession(session) {
     this._fetchGeneration += 1;
+    this._fetching = false;
     this._session = session;
     this._debug(`setSession(${session ? session.id : "null"})`);
     if (!session) {
@@ -182,7 +184,8 @@ class PyrungHistoryPanelProvider {
             changes[tag] = delta;
           }
         }
-        if (!Object.keys(changes).length) {
+        // A window stands for scans not read yet, whichever tags are watched.
+        if (!Object.keys(changes).length && !entry.window) {
           return null;
         }
         return {
@@ -241,12 +244,21 @@ class PyrungHistoryPanelProvider {
   }
 
   async _loadOlder() {
-    if (!this._canFetchHistory() || !this._watchedTags.size || !this._entries.length) {
+    // A fetch in flight is about to change what "older" means, so the click has no last entry
+    // to go on: the button is disabled for the same reason, and this catches what got past it.
+    if (
+      this._fetching ||
+      !this._canFetchHistory() ||
+      !this._watchedTags.size ||
+      !this._entries.length
+    ) {
       return;
     }
+    // A window's own scans are still to read; after an entry, what is older than it.
+    const last = this._entries[this._entries.length - 1];
     await this._fetchEntries({
       append: true,
-      beforeScan: this._entries[this._entries.length - 1].scanId,
+      beforeScan: last.window ? last.scanId + 1 : last.scanId,
     });
   }
 
@@ -339,7 +351,12 @@ class PyrungHistoryPanelProvider {
       return;
     }
 
+    // The newest fetch is the one that answers: a refresh during a Load older replaces the list
+    // the older page would have been added to.
+    this._fetchGeneration += 1;
     const generation = this._fetchGeneration;
+    this._fetching = true;
+    this._postState();
     try {
       this._debug(
         `_fetchEntries(append=${append ? "true" : "false"}, beforeScan=${beforeScan ?? "none"}) watched=${Array.from(this._watchedTags).join(",")}`
@@ -353,13 +370,22 @@ class PyrungHistoryPanelProvider {
         return;
       }
       const nextEntries = Array.isArray(result?.entries) ? result.entries : [];
-      this._entries = append ? this._entries.concat(nextEntries) : nextEntries;
-      this._hasMore = nextEntries.length === this._pageSize;
+      // What comes back takes over from a window: it covers the window's scans.
+      const kept = append ? this._entries.filter((entry) => !entry.window) : [];
+      this._entries = kept.concat(nextEntries);
+      this._hasMore =
+        nextEntries.length === this._pageSize ||
+        Boolean(nextEntries[nextEntries.length - 1]?.window);
       this._debug(`_fetchEntries received ${nextEntries.length} entries`);
+      this._fetching = false;
       this._postState();
     } catch (error) {
       this._debug(`_fetchEntries failed: ${String(error?.message || error)}`);
       // Session may have ended between the stopped event and the request.
+      if (this._fetchGeneration === generation) {
+        this._fetching = false;
+        this._postState();
+      }
     }
   }
 
@@ -384,6 +410,7 @@ class PyrungHistoryPanelProvider {
       hasSession: Boolean(this._session),
       executionState: this._executionState(),
       hasMore: this._hasMore,
+      fetching: this._fetching,
       mode: this._mode,
       chainResult: this._chainResult,
       chainError: this._chainError,
@@ -514,7 +541,8 @@ class PyrungHistoryPanelProvider {
   .run-btn:hover:not(:disabled) {
     background: var(--vscode-button-hoverBackground);
   }
-  .run-btn:disabled {
+  .run-btn:disabled,
+  .load-btn:disabled {
     opacity: 0.5;
     cursor: default;
   }
@@ -599,6 +627,10 @@ class PyrungHistoryPanelProvider {
   .entry-time {
     color: var(--vscode-descriptionForeground);
     white-space: nowrap;
+  }
+  .window-note {
+    color: var(--vscode-descriptionForeground);
+    margin-top: 4px;
   }
   .entry-actions {
     display: inline-flex;
@@ -963,6 +995,7 @@ class PyrungHistoryPanelProvider {
     hasSession: false,
     executionState: "unknown",
     hasMore: false,
+    fetching: false,
     mode: "tags",
     chainResult: null,
     chainError: null,
@@ -1150,6 +1183,59 @@ class PyrungHistoryPanelProvider {
     return "+" + minutes + "m " + secs.toFixed(1).replace(/\\.0$/, "") + "s";
   }
 
+  // Scans not read yet.  It says how the tags stand at its two ends and claims no scan for a
+  // change inside, so a change here has no scan to explain and the only forks are its ends.
+  function renderWindow(entry) {
+    const first = Number(entry.prevScanId) + 1;
+    const changeRows = Object.entries(entry.changes || {})
+      .map(
+        ([tagName, values]) =>
+          '<div class="change-row">' +
+          '<div class="change-text"><span class="change-tag">' +
+          esc(tagName) +
+          ':</span><span class="change-values">' +
+          formatChange(tagName, values) +
+          "</span></div>" +
+          "</div>"
+      )
+      .join("");
+    return (
+      '<div class="entry window-entry' +
+      (state.activeScanId === entry.scanId ? " active" : "") +
+      '">' +
+      '<div class="entry-header">' +
+      '<div class="entry-meta">' +
+      '<span class="scan-id">#' +
+      esc(first) +
+      "..#" +
+      esc(entry.scanId) +
+      "</span>" +
+      "</div>" +
+      '<div class="entry-actions">' +
+      '<button class="fork-btn" data-fork-scan="' +
+      esc(entry.prevScanId) +
+      '" title="Fork at #' +
+      esc(entry.prevScanId) +
+      ', before these scans">\u21a9</button>' +
+      '<button class="fork-btn" data-fork-scan="' +
+      esc(entry.scanId) +
+      '" title="Fork at #' +
+      esc(entry.scanId) +
+      ', the last of these scans">\u21aa</button>' +
+      "</div>" +
+      "</div>" +
+      '<div class="entry-body" data-seek-scan="' +
+      esc(entry.scanId) +
+      '">' +
+      changeRows +
+      '<div class="window-note">Not read yet. These are the net changes across these scans, not ' +
+      "when they happened, and a change that came back is not shown. Load older to read them." +
+      "</div>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
   function renderEntries() {
     if (!state.watchedTags.length) {
       content.innerHTML =
@@ -1171,6 +1257,9 @@ class PyrungHistoryPanelProvider {
 
     const entriesHtml = state.entries
       .map((entry) => {
+        if (entry.window) {
+          return renderWindow(entry);
+        }
         const activeClass = state.activeScanId === entry.scanId ? " active" : "";
         const changeRows = Object.entries(entry.changes || {})
           .map(
@@ -1223,7 +1312,9 @@ class PyrungHistoryPanelProvider {
       .join("");
 
     const loadOlderHtml = state.hasMore
-      ? '<button class="load-btn" id="load-older-btn">Load older...</button>'
+      ? '<button class="load-btn" id="load-older-btn"' +
+        (state.fetching ? " disabled" : "") +
+        ">Load older...</button>"
       : "";
 
     content.innerHTML =
@@ -1476,7 +1567,26 @@ class PyrungHistoryPanelProvider {
       conjunctive || ambiguous
         ? '<div class="chain-roots">' + conjunctive + ambiguous + "</div>"
         : "";
-    return steps + footer;
+    return renderForces(chain) + steps + footer;
+  }
+
+  function renderForces(chain) {
+    const group = (title, forces) => {
+      const rows = Object.keys(forces || {})
+        .map(
+          (tag) =>
+            '<div><span class="change-tag">' +
+            esc(tag) +
+            "</span> = " +
+            formatValue(tag, forces[tag]) +
+            "</div>"
+        )
+        .join("");
+      return rows ? '<div class="chain-roots-title">' + title + "</div>" + rows : "";
+    };
+    const body =
+      group("Forced", chain.forced) + group("Forced from the next scan", chain.force_pending);
+    return body ? '<div class="chain-roots">' + body + "</div>" : "";
   }
 
   function renderChainResult() {
@@ -1579,6 +1689,7 @@ class PyrungHistoryPanelProvider {
       state.hasSession = Boolean(msg.hasSession);
       state.executionState = msg.executionState || "unknown";
       state.hasMore = Boolean(msg.hasMore);
+      state.fetching = Boolean(msg.fetching);
       state.mode = msg.mode === "chain" ? "chain" : "tags";
       state.chainResult = msg.chainResult || null;
       state.chainError = typeof msg.chainError === "string" ? msg.chainError : null;

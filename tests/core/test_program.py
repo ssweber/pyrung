@@ -745,8 +745,9 @@ class TestStrictDslControlFlowGuard:
         runner.step()
         assert runner.current_state.tags["Light"] is True
 
-    def test_guard_warns_and_skips_when_source_is_unavailable(self, monkeypatch):
+    def test_guard_skips_quietly_when_source_is_unavailable(self, monkeypatch):
         import importlib
+        import warnings
 
         program_module = importlib.import_module("pyrung.core.program")
         validation_module = importlib.import_module("pyrung.core.program.validation")
@@ -758,6 +759,57 @@ class TestStrictDslControlFlowGuard:
             raise OSError("source unavailable")
 
         monkeypatch.setattr(validation_module.inspect, "getsourcelines", _raise_source_error)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with program_module.Program() as logic:
+                with program_module.Rung(Enable):
+                    program_module.out(Light)
+
+        assert len(logic.rungs) == 1
+
+    def test_guard_skips_quietly_for_exec_of_a_string(self):
+        import warnings
+
+        from pyrung.core.program import Program
+
+        source = (
+            "from pyrung import Bool, Program, Rung, out, subroutine\n"
+            "Enable = Bool('Enable')\n"
+            "Light = Bool('Light')\n"
+            "@subroutine('init')\n"
+            "def init():\n"
+            "    with Rung(Light):\n"
+            "        out(Enable)\n"
+            "with Program() as logic:\n"
+            "    with Rung(Enable):\n"
+            "        out(Light)\n"
+            "    with subroutine('nested'):\n"
+            "        with Rung(Light):\n"
+            "            out(Enable)\n"
+        )
+        namespace: dict[str, object] = {}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            exec(compile(source, "<analysis>", "exec"), namespace)
+
+        logic = namespace["logic"]
+        assert isinstance(logic, Program)
+        assert len(logic.rungs) == 1
+
+    def test_guard_warns_and_skips_when_source_cannot_be_parsed(self, monkeypatch):
+        import importlib
+
+        program_module = importlib.import_module("pyrung.core.program")
+        validation_module = importlib.import_module("pyrung.core.program.validation")
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        def _unparsable_source(_obj: object) -> tuple[list[str], int]:
+            return ["def broken(:\n"], 1
+
+        monkeypatch.setattr(validation_module.inspect, "getsourcelines", _unparsable_source)
 
         with pytest.warns(RuntimeWarning, match="Unable to perform strict DSL control-flow check"):
             with program_module.Program() as logic:
@@ -998,15 +1050,15 @@ class TestCopyAndMathReferenceExamples:
     def test_math_hex_shift_rotate_example(self):
         """math_hex.md: RSH/RRO example with DH1=0x45B1."""
         from pyrung.core import rro, rsh
-        from pyrung.core.program import Program, Rung, calc
+        from pyrung.core.program import Program, Rung, math
 
         Enable = Bool("Enable")
         DH = Block("DH", TagType.WORD, 1, 200)
 
         with Program() as prog:
             with Rung(Enable):
-                calc(rsh(DH[1], 1), DH[2])
-                calc(rro(DH[1], 1), DH[3])
+                math(rsh(DH[1], 1), DH[2])
+                math(rro(DH[1], 1), DH[3])
 
         state = SystemState().with_tags({"Enable": True, "DH1": 0x45B1})
         new_state = evaluate_program(prog, state)
@@ -1015,7 +1067,7 @@ class TestCopyAndMathReferenceExamples:
         assert new_state.tags["DH3"] == 0xA2D8
 
     def test_calc_dsl_rejects_mode_keyword(self):
-        from pyrung.core.program import Program, Rung, calc
+        from pyrung.core.program import Program, Rung, math
 
         Enable = Bool("Enable")
         Result = Int("Result")
@@ -1023,7 +1075,7 @@ class TestCopyAndMathReferenceExamples:
         with Program():
             with pytest.raises(TypeError):
                 with Rung(Enable):
-                    calc(1 + 2, Result, mode="decimal")  # ty: ignore[unknown-argument]
+                    math(1 + 2, Result, mode="decimal")  # ty: ignore[unknown-argument]
 
 
 class TestClickPrebuiltProgramIntegration:
@@ -1279,8 +1331,8 @@ class TestBranch:
         runner.step()
         assert runner.current_state.tags["Light"] is False  # Rung false now
 
-    def test_branch_enable_is_snapshotted_before_item_execution(self, runner_factory):
-        """Branch enable is computed before item execution and applied for this whole rung scan."""
+    def test_branch_reads_its_contacts_when_the_solve_reaches_it(self, runner_factory):
+        """A branch's contacts read live, after the rows above it have written."""
         from pyrung.core.program import Program, Rung, branch, latch, out
 
         Step = Int("Step")
@@ -1291,8 +1343,8 @@ class TestBranch:
         with Program() as logic:
             with Rung(Step == 0):
                 out(Light1)
-                # This write happens before the branch item in source order.
-                # Branch should still use its precomputed enable from scan start.
+                # This write happens before the branch in source order, so
+                # the branch reads it (the live row solve, as a CLICK does).
                 latch(AutoMode)
                 with branch(AutoMode):
                     out(Light2)
@@ -1303,11 +1355,31 @@ class TestBranch:
 
         assert runner.current_state.tags["Light1"] is True
         assert runner.current_state.tags["AutoMode"] is True
-        assert runner.current_state.tags["Light2"] is False
-
-        # Next scan sees AutoMode already true at scan start, so branch executes.
-        runner.step()
         assert runner.current_state.tags["Light2"] is True
+
+    def test_trunk_power_is_held_for_the_rows_below(self, runner_factory):
+        """The trunk is solved once: a write that clears its contact leaves its rows powered."""
+        from pyrung.core.program import Program, Rung, branch, copy, out
+
+        Step = Int("Step")
+        Go = Bool("Go")
+        Light = Bool("Light")
+        Lamp = Bool("Lamp")
+
+        with Program() as logic:
+            with Rung(Step == 0):
+                copy(1, Step)
+                out(Light)
+                with branch(Go):
+                    out(Lamp)
+
+        runner = runner_factory(logic)
+        runner.patch({"Step": 0, "Go": True, "Light": False, "Lamp": False})
+        runner.step()
+
+        assert runner.current_state.tags["Step"] == 1
+        assert runner.current_state.tags["Light"] is True
+        assert runner.current_state.tags["Lamp"] is True
 
     def test_branch_outside_rung_raises_error(self, runner_factory):
         """branch() outside Rung context raises RuntimeError."""
@@ -1607,9 +1679,9 @@ class TestNestedBranches:
         # Trace accumulates: 1, then 12, then 123, then 1234 (each *10 + current Order)
         assert runner.current_state.tags["Trace"] == 1234
 
-    def test_nested_branch_conditions_see_rung_entry_snapshot(self, runner_factory):
-        """All branch conditions at every nesting depth evaluate against the
-        same frozen snapshot taken at rung entry — not the live mutable state."""
+    def test_nested_branch_conditions_read_live(self, runner_factory):
+        """A branch's contacts at every nesting depth read when the solve
+        reaches them, so they see the writes of the rows above."""
         from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
@@ -1618,9 +1690,8 @@ class TestNestedBranches:
 
         with Program() as logic:
             with Rung(A):
-                # This latch mutates Flag before the nested branch is reached
-                # in source order, but the condition snapshot was frozen at
-                # rung entry when Flag was still False.
+                # This latch writes Flag before the nested branch is reached
+                # in source order, so the nested branch reads Flag True.
                 latch(Flag)
                 with branch(A):
                     with branch(Flag):
@@ -1630,19 +1701,12 @@ class TestNestedBranches:
         runner.patch({"A": True, "Flag": False, "Light": False})
         runner.step()
 
-        # Flag was mutated to True by latch(), but the nested branch's
-        # condition was evaluated against the rung-entry snapshot where
-        # Flag was False — so Light should be False.
         assert runner.current_state.tags["Flag"] is True
-        assert runner.current_state.tags["Light"] is False
-
-        # On the NEXT scan, Flag is True at rung entry, so it fires
-        runner.step()
         assert runner.current_state.tags["Light"] is True
 
-    def test_snapshot_applies_across_all_nesting_levels(self, runner_factory):
-        """Even a deeply nested branch's condition sees the rung-entry state,
-        not mutations from parent-level instructions."""
+    def test_live_reads_apply_across_all_nesting_levels(self, runner_factory):
+        """A nested branch's condition sees the writes of its parent's rows and
+        of the trunk's rows above it."""
         from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
@@ -1656,10 +1720,10 @@ class TestNestedBranches:
                 with branch(B):
                     latch(Deep)  # mutates Deep inside parent branch
                     with branch(Flag):
-                        # Flag was False at rung entry — should not fire
+                        # Flag was written by the trunk row above
                         out(Bool("L1"))
                     with branch(Deep):
-                        # Deep was False at rung entry — should not fire
+                        # Deep was written by the parent branch's row above
                         out(Bool("L2"))
 
         runner = runner_factory(logic)
@@ -1668,11 +1732,6 @@ class TestNestedBranches:
 
         assert runner.current_state.tags["Flag"] is True
         assert runner.current_state.tags["Deep"] is True
-        assert runner.current_state.tags.get("L1", False) is False
-        assert runner.current_state.tags.get("L2", False) is False
-
-        # Second scan: both are true at rung entry
-        runner.step()
         assert runner.current_state.tags.get("L1", False) is True
         assert runner.current_state.tags.get("L2", False) is True
 

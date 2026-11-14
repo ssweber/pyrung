@@ -6,9 +6,10 @@ import json
 import struct
 from pathlib import Path
 
+import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word
+from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word, math
 from pyrung.circuitpy import (
     P1AM,
     CircuitPyOutput,
@@ -141,7 +142,101 @@ def test_read_and_write_backed_coil_and_register(monkeypatch):
     assert namespace[reg_symbol] == 42
 
 
-def test_unmapped_and_invalid_register_addresses_return_error(monkeypatch):
+class _IdleBase:
+    def rollCall(self, modules):
+        return None
+
+    def readDiscrete(self, slot):
+        return 0
+
+    def writeDiscrete(self, value, slot):
+        return None
+
+    def readAnalog(self, slot, ch):
+        return 0
+
+    def writeAnalog(self, value, slot, ch):
+        return None
+
+    def readTemperature(self, slot, ch):
+        return 0.0
+
+
+def _float_from_bits(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+@pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+def test_a_df_holding_any_nan_serves_as_a_click_serves_it(monkeypatch, bits):
+    level = Real("Level")
+    mapping = TagMap({level: df[1]})
+    with Program(strict=False) as prog:
+        pass
+    result = _ctx_and_source(prog, mapping)
+    ns = _run_single_scan_source(
+        result.code, monkeypatch, _IdleBase(), runtime_source=result.runtime
+    )
+    handle = ns["_mb_handle"]
+    addr = plc_to_modbus("DF", 1)[0]
+    ns["_t_Level"] = _float_from_bits(bits)
+
+    resp = handle(_mbap(1, struct.pack(">BHH", 3, addr, 2)), 12)
+    assert struct.unpack(">HH", resp[-4:]) == (0xFFFF, 0xFFFF)
+    # A write to the high word keeps the low word the client read.
+    req = _mbap(2, struct.pack(">BHH", 6, addr + 1, 0x4000))
+    assert handle(req, len(req)) == req
+    assert struct.unpack("<I", struct.pack("<f", ns["_t_Level"]))[0] == 0x4000FFFF
+
+
+@pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+def test_a_send_of_any_nan_sends_what_a_click_sends(monkeypatch, bits):
+    source = Real("Source")
+    flags = {name: Bool(name) for name in ("Sending", "Success", "Error")}
+    with Program(strict=False) as prog:
+        with Rung():
+            for remote_start in ("DF1", ModbusAddress(0x300)):
+                send(
+                    target="peer",
+                    remote_start=remote_start,
+                    source=source,
+                    sending=flags["Sending"],
+                    success=flags["Success"],
+                    error=flags["Error"],
+                )
+    ns, _sockets = _run_raw_client_job(monkeypatch, prog)
+    nan = _float_from_bits(bits)
+    assert ns["_mb_client_pack_register_values"]("DF", [nan]) == [0xFFFF, 0xFFFF]
+    for order in ("high_low", "low_high"):
+        raw = ns["_mb_client_raw_pack_register_values"]([nan], ["REAL"], order)
+        assert raw == [0xFFFF, 0xFFFF]
+
+
+def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
+    """A calc marks a math-import flag, not a runtime name; code.py must still import."""
+    src = Int("Src", default=6)
+    dest = Int("Dest")
+    mapping = TagMap({src: ds[1], dest: ds[2]})
+    with Program(strict=False) as prog:
+        with Rung():
+            math(src * 7, dest)
+
+    result = _ctx_and_source(prog, mapping)
+    assert result.runtime
+
+    class StubBase:
+        def rollCall(self, modules):
+            return None
+
+        def readDiscrete(self, slot):
+            return 0
+
+    namespace = _run_single_scan_source(
+        result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
+    assert namespace["_t_Dest"] == 42
+
+
+def test_an_unmapped_register_reads_0_and_an_address_outside_the_banks_answers_02(monkeypatch):
     mapped = Int("Mapped", default=5)
     mapping = TagMap({mapped: ds[1]})
     with Program(strict=False) as prog:
@@ -172,18 +267,19 @@ def test_unmapped_and_invalid_register_addresses_return_error(monkeypatch):
         source, monkeypatch, StubBase(), runtime_source=result.runtime
     )
 
-    # Unmapped-but-valid Click address (DS2) — sparse lookup returns error
+    # DS2 is a CLICK address no tag holds.  It reads 0, and a write to it is refused.
     resp = namespace["_mb_handle"](_mbap(10, struct.pack(">BHH", 3, 1, 1)), 12)
-    assert resp is not None
-    assert resp[-2:] == bytes([0x83, 0x02])
+    assert resp == _mbap(10, struct.pack(">BBH", 3, 2, 0))
+    resp = namespace["_mb_handle"](_mbap(12, struct.pack(">BHH", 6, 1, 9)), 12)
+    assert resp[-2:] == bytes([0x86, 0x02])
 
-    # Completely invalid address — also returns error
+    # Register 5000 is in no bank.
     resp = namespace["_mb_handle"](_mbap(11, struct.pack(">BHH", 3, 5000, 1)), 12)
     assert resp is not None
     assert resp[-2:] == bytes([0x83, 0x02])
 
 
-def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
+def test_read_only_system_writes_answer_02(monkeypatch):
     with Program(strict=False) as prog:
         pass
 
@@ -194,7 +290,6 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
         runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=TagMap(),
-        mapped_tag_scope="all_mapped",
     )
     source = result.code
 
@@ -222,10 +317,10 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
     )
 
     coil_resp = namespace["_mb_handle"](_mbap(12, struct.pack(">BHH", 5, 61441, 0xFF00)), 12)
-    assert coil_resp == _mbap(12, struct.pack(">BHH", 5, 61441, 0xFF00))
+    assert coil_resp[-2:] == bytes([0x85, 0x02])
 
     reg_resp = namespace["_mb_handle"](_mbap(13, struct.pack(">BHH", 6, 61440, 99)), 12)
-    assert reg_resp == _mbap(13, struct.pack(">BHH", 6, 61440, 99))
+    assert reg_resp[-2:] == bytes([0x86, 0x02])
 
 
 def test_yd_mirror_read_and_write(monkeypatch):
@@ -263,6 +358,12 @@ def test_yd_mirror_read_and_write(monkeypatch):
     block_symbol = "_b_OutBits"
     out_bits = namespace[block_symbol]
     assert isinstance(out_bits, list)
+    # The slots power on at their default=True, and the wire sees it.
+    resp = namespace["_mb_handle"](_mbap(19, struct.pack(">BHH", 3, 57856, 1)), 12)
+    assert resp is not None
+    assert struct.unpack(">H", resp[-2:])[0] == 0xFFFF
+
+    out_bits[:] = [False] * 16
     out_bits[0] = True
     out_bits[2] = True
     out_bits[15] = True
@@ -314,6 +415,12 @@ def test_xd_mirror_read(monkeypatch):
     block_symbol = "_b_InBits"
     in_bits = namespace[block_symbol]
     assert isinstance(in_bits, list)
+    # The slots power on at their default=True, and the wire sees it.
+    resp = namespace["_mb_handle"](_mbap(29, struct.pack(">BHH", 4, 57344, 1)), 12)
+    assert resp is not None
+    assert struct.unpack(">H", resp[-2:])[0] == 0xFFFF
+
+    in_bits[:] = [False] * 16
     in_bits[0] = True
     in_bits[7] = True
     in_bits[15] = True
@@ -884,7 +991,6 @@ def test_codegen_server_first_and_last_of_every_bank(monkeypatch):
         runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=mapping,
-        mapped_tag_scope="all_mapped",
     )
     source = result.code
 
@@ -1218,6 +1324,39 @@ def test_codegen_client_receive_first_and_last_of_every_bank(monkeypatch):
             assert actual == expected, f"{label}: {actual}"
 
 
+@pytest.mark.parametrize(
+    ("remote_start", "register"),
+    [("TXT1", ord("A") << 8), ("TXT2", ord("A"))],
+    ids=["odd_low_byte", "even_high_byte"],
+)
+def test_codegen_client_receive_zero_txt_byte_is_nul(monkeypatch, remote_start, register):
+    """A 0 byte received into a TXT is NUL, the blank a CLICK TXT holds (not '')."""
+    enable = Bool("Enable", default=True)
+    dest = Char("Dest", default="Q")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target="peer",
+                remote_start=remote_start,
+                dest=dest,
+                receiving=Bool("Receiving"),
+                success=Bool("Success"),
+                error=Bool("Error"),
+                exception_response=Int("ExCode"),
+            )
+
+    ns, sockets = _run_client_job(monkeypatch, prog)
+    ns["service_modbus_client"]()
+    ns["service_modbus_client"]()
+    assert sockets
+    sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBH", 3, 2, register), uid=17))
+    ns["service_modbus_client"]()
+
+    assert ns["_t_Success"] is True
+    assert ns["_t_Dest"] == "\x00"
+
+
 # ---------------------------------------------------------------------------
 # Boundary integration: codegen client send — first & last of every bank
 # ---------------------------------------------------------------------------
@@ -1456,6 +1595,30 @@ def test_raw_send_int_single_register(monkeypatch):
     ns["service_modbus_client"]()  # receive
     assert ns["_t_Success"] is True
     assert ns["_t_Sending"] is False
+
+
+def test_raw_send_with_status_bits_left_off(monkeypatch):
+    """CLICK lets a status bit be left off; the send still runs on the board."""
+    enable = Bool("Enable", default=True)
+    source = Int("Source", default=123)
+    success = Bool("Success")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x100),
+                source=source,
+                success=success,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    expected_pdu = struct.pack(">BHH", 6, 0x100, 123)
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, expected_pdu, uid=17))
+    ns["service_modbus_client"]()  # receive
+    assert ns["_t_Success"] is True
 
 
 def test_raw_send_dint_high_low(monkeypatch):

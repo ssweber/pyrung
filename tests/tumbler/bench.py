@@ -1,8 +1,7 @@
 """Shared test bench for driving the tumbler fixture like a commissioning rig.
 
-Ported from ``scratchpad/burner/reconstitute_*.py``.  The bench holds the
-physical permissives true, keeps the rotate sensor oscillating (the rotate
-watchdogs fault a stalled sensor once Rotate_CurStep >= 3: SensorOn WD 2 s,
+The bench holds the physical permissives true, keeps the rotate sensor
+oscillating (the rotate watchdogs fault a stalled sensor once Rotate_CurStep >= 3: SensorOn WD 2 s,
 SensorOff WD 10 s; a 50-scan / 0.5 s half period keeps both fed), and offers
 ``step_until`` staging primitives.
 """
@@ -10,8 +9,22 @@ SensorOff WD 10 s; a 50-scan / 0.5 s half period keeps both fed), and offers
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
+from typing import Any
 
 from pyrung import PLC
+
+# A runner starts its clock at the wall-clock time.  The program copies the clock into tags
+# every scan, so a fixed start makes each run spend the same scans.
+RTC_AT_START = datetime(2026, 1, 2, 3, 4, 5)
+
+
+def tumbler_plc(logic: Any, **kwargs: Any) -> PLC:
+    """Build a runner on *logic* whose clock starts at ``RTC_AT_START``."""
+    plc = PLC(logic, **kwargs)
+    plc.set_rtc(RTC_AT_START)
+    return plc
+
 
 #: Physical permissives and feedback.  These are external inputs, not internal
 #: shortcuts; ReadInputs maps them into the i_* image bits.
@@ -45,7 +58,7 @@ class Bench:
     """Hand-drive the tumbler program with rotate-sensor animation."""
 
     def __init__(self, logic) -> None:
-        self.plc = PLC(logic, dt=0.010)
+        self.plc = tumbler_plc(logic, dt=0.010)
         self.scan = 0
         self.burner_hit_scan: int | None = None
         self.alarm_baseline: dict[str, object] = {}

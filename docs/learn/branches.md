@@ -39,13 +39,13 @@ with Program() as logic:
         latch(Running)
 ```
 
-`Or` is variadic — pass any number of conditions. `And` is the explicit form of comma-separated conditions, useful inside `Or` for nested groups. Mirrors a familiar Python pattern: `any([a, b, c])` and `all([a, b, c])`.
+`Or` is variadic, so you can pass any number of conditions. `And` is the explicit form of comma-separated conditions, useful inside `Or` for nested groups. `Or` and `And` mirror `any([a, b, c])` and `all([a, b, c])` in Python.
 
 ## Branches
 
 A `branch` creates a parallel path within a rung. Think of it as a second wire that ANDs its condition with the parent's.
 
-Here's the conveyor's motor rung. `EstopOK` gates everything — it's a permission input from the safety relay, True when the world is safe to run. Below that, the motor and status light share the same gate:
+Here's the conveyor's motor rung. `EstopOK` gates everything. It's a permission input from the safety relay, True when the world is safe to run. Below that, the motor and status light share the same gate:
 
 ```
   EstopOK (parent rung — True when safe)
@@ -55,7 +55,7 @@ Here's the conveyor's motor rung. `EstopOK` gates everything — it's a permissi
 
 ```python
 with Program() as logic:
-    comment("Start/stop — NC stop resets when pressed or wire broken")
+    comment("Start/stop - NC stop resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with rung(~StopCircuitOK):
@@ -63,7 +63,7 @@ with Program() as logic:
     with rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
@@ -71,16 +71,16 @@ with Program() as logic:
             out(StatusLight)
 ```
 
-This is the **gate pattern**. The parent rung holds your master condition, and every branch inside inherits that permission automatically. Lose the gate, lose all the outputs — atomically, in one scan. `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopCircuitOK` and `~EstopOK` because those fire when the NC circuits open — same `~` convention from [Lesson 3](latch-reset.md).
+This is the **gate pattern**. The parent rung holds your master condition, and every branch inside inherits that permission automatically. Lose the gate, lose all the outputs, atomically, in one scan. `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopCircuitOK` and `~EstopOK` because those fire when the NC circuits open. That's the same `~` convention from [Lesson 3](latch-reset.md).
 
-The gate pattern is *the* textbook ladder structure for any permission or interlock — guard doors, light curtains, machine-enabled flags. Real fail-safe E-stop wiring lives in [Lesson 11](hardware.md); here, the gate is general-purpose.
+The gate pattern is *the* textbook ladder structure for any permission or interlock, such as guard doors, light curtains, and machine-enabled flags. Real fail-safe E-stop wiring lives in [Lesson 11](hardware.md). Here, the gate is general-purpose.
 
 ## Combining branches and `Or`
 
-The diverter needs to fire in two cases: auto mode during sorting, or manual mode with the button pressed. That's `Or` with `And` — same pattern as `any([all([...]), all([...]])` in Python:
+The diverter needs to fire in two cases: auto mode during sorting, or manual mode with the button pressed. That's `Or` with `And`, the same pattern as `any([all([...]), all([...]])` in Python:
 
 ```python
-    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    comment("Diverter output - auto sort OR manual button, gated by EstopOK")
     with rung(
         EstopOK,
         Or(
@@ -91,15 +91,15 @@ The diverter needs to fire in two cases: auto mode during sorting, or manual mod
         out(DiverterCmd)
 ```
 
-The diverter rung reads `State` and `IsLarge` directly from the state machine in [Lesson 7](state-machines.md) — no intermediate latch needed. Both control sources fold into one rung with a single `out(DiverterCmd)`. Remember "order has meaning" from [Lesson 1](scan-cycle.md)? This is how you escape it: **one coil, one rung.** If two separate rungs both `out` the same tag, the last one evaluated wins — a false manual rung below a true auto rung would de-energize the diverter. Fold every reason the output should energize into one rung and order stops being a side effect.
+The diverter rung reads `State` and `IsLarge` directly from the state machine in [Lesson 7](state-machines.md). No intermediate latch is needed. Both control sources combine into one rung with a single `out(DiverterCmd)`. Remember "order has meaning" from [Lesson 1](scan-cycle.md)? This is how you escape it: **one coil, one rung.** If two separate rungs both `out` the same tag, the last one evaluated wins. A false manual rung below a true auto rung would de-energize the diverter. Put every reason the output should energize into one rung, and order stops being a side effect.
 
-!!! tip "Key concept: atomic rungs"
+!!! tip "Key concept: order inside a rung"
 
-    **All conditions evaluate before any instructions execute.** The branch doesn't "see" results of instructions above it in the same rung — every rung is a snapshot of the world, evaluated then acted on as a unit. This is the **atomic rung** property: conditions read from the state as it was when the rung started, not from half-finished instruction results. It ties back to [Lesson 1's scan cycle](scan-cycle.md) and forward to [Testing](testing.md), where deterministic scans make this guarantee testable.
+    **A rung is commonly said to be evaluated left to right, top to bottom. It's a little more nuanced than that.** Instructions run in the order written. The rung's own condition is read once and holds for everything below it. A branch reads its own condition when execution reaches it, so it sees what the instructions above it in the same rung just wrote. Order inside a rung has meaning, just as order between rungs does ([Lesson 1's scan cycle](scan-cycle.md)). The scan is still deterministic, so [Testing](testing.md) can pin it down. When a branch should not depend on a write above it, read the tag on the rung's own condition or move the write to a rung of its own.
 
 ## Seal-in: a branch that holds itself
 
-[Lesson 3](latch-reset.md) used `latch`/`reset` for start/stop control. The classic ladder alternative is a **seal-in** — a single rung where the output feeds back into its own branch:
+[Lesson 3](latch-reset.md) used `latch`/`reset` for start/stop control. The classic ladder alternative is a **seal-in**, a single rung where the output feeds back into its own branch:
 
 ```python
 with rung(~StopCircuitOK):
@@ -107,7 +107,7 @@ with rung(~StopCircuitOK):
         out(Running)
 ```
 
-`Running` appears in its own branch condition. Press `StartBtn` and `Running` energizes; release it and `Running` still powers the branch — it holds itself in. Open the stop circuit and `StopCircuitOK` goes False, so the parent rung drops and breaks the seal. Reach for `latch`/`reset` when clarity matters; expect seal-in in every legacy ladder you inherit.
+`Running` appears in its own branch condition. Press `StartBtn` and `Running` energizes. Release `StartBtn` and `Running` still powers the branch, so `Running` holds itself in. Open the stop circuit and `StopCircuitOK` goes False, so the parent rung drops and breaks the seal. Reach for `latch`/`reset` when clarity matters. Expect seal-in in every legacy ladder you inherit.
 
 ## Try it
 
@@ -143,8 +143,8 @@ Add a `ManualLight` that is on only in manual mode. Write a test that switches f
 
 ---
 
-Each bin has a count, the diverter has a state, and there's a mode selector. That's a lot of scattered tags. In a real PLC, you'd group them into structures -- UDTs for the bins and the equipment.
+Each bin has a count, the diverter has a state, and there's a mode selector. That's a lot of scattered tags. In a real PLC, you'd group them into structures (UDTs) for the bins and the equipment.
 
 !!! info "Also known as..."
 
-    OR is a parallel branch of contacts; AND is contacts in series. `branch()` is "parallel branch" everywhere. The safety-gate pattern is sometimes called "Master Control Reset" (`MCR`). Seal-in is the classic OR-branch with a series stop contact.
+    OR is a parallel branch of contacts. AND is contacts in series. `branch()` is "parallel branch" everywhere. The safety-gate pattern is sometimes called "Master Control Reset" (`MCR`). Seal-in is the classic OR-branch with a series stop contact.

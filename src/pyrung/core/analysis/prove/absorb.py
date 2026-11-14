@@ -1,36 +1,32 @@
-"""Accumulator absorption and threshold abstraction helpers.
+"""Done/Acc pairing, and the accumulator absorption of how()'s domain prior.
+
+The search does not absorb: its timers are black boxes (``blackbox.py``) and
+its counters count concretely, so every accumulator it tracks is plain state.
+What lives here is structural (Done/Acc pairs, write targets, the data-read
+exclusivity check ``_has_forbidden_data_read``, which classify and the
+black-box model share) plus the absorptions PILOT's ``how()`` prior is built
+from (``_build_prior_facts``): its world key projects a timer's Done and
+Acc onto ``False``/``PENDING``/``True`` (``_done_acc_state``) and a progress
+accumulator onto threshold-crossing bits (``_ThresholdVectorSpec``), and its
+earned-work ordinal sources come from the same vectors.  PILOT replays every
+route it plans, so these are steering heuristics, not soundness claims.
 
 Threshold absorption principle
 ------------------------------
-The concrete value of a threshold is irrelevant to reachability.  A timer
-fires or it doesn't — prove explores both outcomes.  Whether the threshold
-is 100 or 4000 changes WHEN the crossing occurs, not WHETHER it's
-reachable.  The gate for absorption is **exclusivity** (the threshold tag
-is only used in threshold comparisons and as a timer/counter preset, never
-in copy/calc data-flow), not **stability** (the threshold doesn't change
-between scans).  If a tag passes the exclusivity check it can be absorbed
-regardless of how, when, or by whom it is written.
+The concrete value of a threshold is irrelevant to which side of it a
+progress accumulator is on.  The gate for absorption is **exclusivity** (the
+threshold tag is only used in threshold comparisons and as a timer/counter
+preset, never in copy/calc data-flow), not **stability**.
 
-Implementation status: this module has two absorption paths with different
-readiness for the exclusivity framing.
+*Redundant Acc absorption* (``_find_redundant_acc_absorptions``): an
+accumulator compared only at its own preset boundary is the Done bit.
 
-*Redundant Acc absorption* (``_find_redundant_acc_absorptions``): the
-threshold is already discarded (synthetic preset=1).  The stability check
-(``_is_stable_dynamic_preset``) is purely unnecessary — the exclusivity
-check (``_has_non_timer_data_read``) is the only gate that matters.
+*Threshold vector absorption* (``_find_threshold_absorptions``): a progress
+accumulator compared against thresholds becomes a vector of crossed bits.
 
-*Threshold vector absorption* (``_find_threshold_absorptions``): accepts
-both exact and abstract threshold atoms.  Exact atoms keep the current
-scan-distance scheduling.  Abstract atoms represent exclusive threshold-only
-tags whose concrete value is hidden from the state key; the BFS materializes
-representative crossed successors when needed instead of requiring a stable
-value up front.
-
-*Comparison-only absorption* (``_find_comparison_absorptions``): hides
- large or non-enumerable written tags whose value is never used in
- data-flow.  Their concrete state key slot is replaced with a vector of
- comparison outcomes, so only the Boolean partition visible to the program
- remains.
+*Comparison-only absorption* (``_find_comparison_absorptions``): a large
+written tag whose value is never used in data-flow becomes the vector of its
+comparison outcomes.
 """
 
 from __future__ import annotations
@@ -46,6 +42,8 @@ from .expr import _build_atom_index, _collect_atoms_for_tag
 from .results import PENDING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
 
@@ -83,26 +81,51 @@ _INT_PROGRESS_RESET = object()
 
 
 @dataclass(frozen=True)
-class _DrumEventMeta:
-    step_name: str
-    step_count: int
-    output_names: tuple[str, ...]
-    pattern: tuple[tuple[bool, ...], ...]
-
-
-@dataclass(frozen=True)
 class _DoneAccInfo:
     pairs: dict[str, str]
     presets: dict[str, int]
     preset_tags: dict[str, str]
     kinds: dict[str, str]
-    drum_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
+
+
+def _drum_flag_without_its_time(drum: Any, program: Program) -> str | None:
+    """Why *drum*'s completion flag can be on without its last step's time up, or None.
+
+    The Done/Acc tri-state reads a flag that is on as settled, whatever the
+    accumulator holds.  That holds for a time drum only while the flag comes
+    on at the last step and stays there until a reset.  A jump keeps the flag
+    on but moves the step and clears the accumulator; a jog on the last step
+    turns the flag on with that step's time not yet up; a flag that starts on
+    has no time behind it; and another writer of its step register can move
+    it, or of the flag can free it with its accumulator as it stands.  Then
+    the drum's time is a real dimension, not absorbed.  The reason reads as a
+    hint.
+    """
+    from pyrung.core.validation._common import walk_instructions
+
+    step_name = drum.current_step.name
+    flag_name = drum.completion_flag.name
+    if drum.jump_condition is not None:
+        return "its jump keeps the completion flag on"
+    if drum.jog_condition is not None:
+        return "its jog can complete it before its time is up"
+    if bool(drum.completion_flag.default):
+        return f"its completion flag {flag_name} starts on"
+    for instr in walk_instructions(program):
+        if instr is drum:
+            continue
+        written = {name for name, _ in _all_write_targets(instr)}
+        if step_name in written:
+            return f"its step register {step_name} has another writer"
+        if flag_name in written:
+            return f"its completion flag {flag_name} has another writer"
+    return None
 
 
 def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     """Map Done tag names to their Acc tag names for timer/counter instructions.
 
-    Also captures constant presets and instruction kinds for event jumps.
+    Also captures constant presets and instruction kinds.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.drums import TimeDrumInstruction
@@ -114,7 +137,6 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     presets: dict[str, int] = {}
     preset_tags: dict[str, str] = {}
     kinds: dict[str, str] = {}
-    drum_meta: dict[str, _DrumEventMeta] = {}
 
     for instr in walk_instructions(program):
         if isinstance(instr, OnDelayInstruction):
@@ -126,16 +148,13 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr, CountDownInstruction):
             kind = _DONE_KIND_COUNT_DOWN
         elif isinstance(instr, TimeDrumInstruction):
+            if _drum_flag_without_its_time(instr, program) is not None:
+                # Tracked exactly: the tri-state would hide its time.
+                continue
             done_name = instr.completion_flag.name
             pairs[done_name] = instr.accumulator.name
             kinds[done_name] = _DONE_KIND_TIME_DRUM
             preset_tags[done_name] = f"__drum_preset:{done_name}"
-            drum_meta[done_name] = _DrumEventMeta(
-                step_name=instr.current_step.name,
-                step_count=len(instr.pattern),
-                output_names=tuple(t.name for t in instr.outputs),
-                pattern=tuple(tuple(bool(cell) for cell in row) for row in instr.pattern),
-            )
             continue
         else:
             continue
@@ -147,9 +166,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
         elif isinstance(instr.preset, (int, float)):
             presets[instr.done_bit.name] = int(instr.preset)
 
-    return _DoneAccInfo(
-        pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds, drum_meta=drum_meta
-    )
+    return _DoneAccInfo(pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds)
 
 
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
@@ -168,6 +185,10 @@ def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
     off_delay                False  *          False
     off_delay                True   True       PENDING
     off_delay                True   False      True
+
+    For a timer the state key passes its fractional carry as *acc_val* when
+    ``Acc`` is 0: a timer in seconds at a 10 ms scan is timing long before
+    ``Acc`` leaves 0.
     """
     acc_nonzero = bool(acc_val and acc_val != 0)
     if kind == _DONE_KIND_OFF_DELAY:
@@ -181,8 +202,53 @@ def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
     return False
 
 
-def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
-    """Extract (tag_name, instruction_type) for every write target."""
+_TIMER_DELAY_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE_KIND_TIME_DRUM))
+
+
+@dataclass(frozen=True)
+class _StateKeyDoneSpec:
+    """One Done bit of the how() prior's world key, projected by ``_done_acc_state``."""
+
+    index: int
+    acc_name: str
+    kind: str
+    # ``_frac:<acc>`` memory key for timers: a timer in a unit coarser than
+    # the scan (``"sec"`` at 10 ms) runs for many scans on its fractional
+    # carry alone, with ``Acc`` still 0.
+    frac_key: str | None = None
+
+
+def _prior_key_done_specs(
+    stateful_names: tuple[str, ...],
+    done_acc: Mapping[str, str],
+    done_kinds: Mapping[str, str],
+) -> tuple[_StateKeyDoneSpec, ...]:
+    """The Done bits of the how() prior's world key: each with an absorbed accumulator."""
+    specs: list[_StateKeyDoneSpec] = []
+    for index, done_name in enumerate(stateful_names):
+        acc_name = done_acc.get(done_name)
+        if acc_name is None:
+            continue
+        kind = done_kinds[done_name]
+        specs.append(
+            _StateKeyDoneSpec(
+                index=index,
+                acc_name=acc_name,
+                kind=kind,
+                frac_key=f"_frac:{acc_name}" if kind in _TIMER_DELAY_KINDS else None,
+            )
+        )
+    return tuple(specs)
+
+
+def _all_write_targets(
+    instr: Any, reach: Mapping[int, tuple[str, ...]] | None = None
+) -> list[tuple[str, str]]:
+    """Extract (tag_name, instruction_type) for every write target.
+
+    *reach* (``ProgramGraph.indirect_reach``) names the elements an over-cap
+    write through an unbounded index reaches; without it that write has none.
+    """
     from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.coils import (
@@ -201,7 +267,17 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         CopyInstruction,
         FillInstruction,
     )
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+        ToggleInstruction,
+    )
     from pyrung.core.instruction.packing import (
         PackBitsInstruction,
         PackTextInstruction,
@@ -237,7 +313,7 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         else:
             targets = _resolve_tag_names(dest)
             if not targets:
-                targets = _expand_indirect_tag_names(dest)
+                targets = _expand_indirect_tag_names(dest, reach)
     elif isinstance(instr, CalcInstruction):
         dest = instr.dest
         if isinstance(dest, Tag):
@@ -245,10 +321,10 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         else:
             targets = _resolve_tag_names(dest)
             if not targets:
-                targets = _expand_indirect_tag_names(dest)
+                targets = _expand_indirect_tag_names(dest, reach)
     elif isinstance(instr, ShiftInstruction):
         targets = _resolve_tag_names(instr.bit_range)
-    elif isinstance(instr, TimeDrumInstruction):
+    elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
         targets = [t.name for t in instr.outputs]
         targets.append(instr.current_step.name)
         targets.append(instr.completion_flag.name)
@@ -259,12 +335,9 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets.append(instr.completion_flag.name)
     elif isinstance(instr, (FunctionCallInstruction, EnabledFunctionCallInstruction)):
         for target in instr._outs.values():
-            if isinstance(target, Tag):
-                targets.append(target.name)
-    elif isinstance(instr, BlockCopyInstruction):
-        targets = _resolve_tag_names(instr.dest)
-    elif isinstance(instr, FillInstruction):
-        targets = _resolve_tag_names(instr.dest)
+            targets.extend(_resolve_tag_names(target) or _expand_indirect_tag_names(target, reach))
+    elif isinstance(instr, (BlockCopyInstruction, FillInstruction)):
+        targets = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest, reach)
     elif isinstance(
         instr,
         (
@@ -294,24 +367,41 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets = [instr.result.name, instr.found.name]
     elif isinstance(instr, ForLoopInstruction):
         targets = [instr.idx_tag.name]
+    elif isinstance(
+        instr, (ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction)
+    ):
+        from pyrung.core.analysis.write_sites import (
+            instruction_write_targets,
+            static_write_target_names,
+        )
+
+        for target in instruction_write_targets(instr):
+            targets.extend(sorted(static_write_target_names(target)))
 
     return [(name, itype) for name in targets]
 
 
 def _has_forbidden_data_read(
     program: Program,
+    graph: ProgramGraph,
     tag_name: str,
     *,
     allowed: Callable[[Any], bool] | None = None,
 ) -> bool:
-    """Detect non-condition data-flow reads of a candidate absorbed tag."""
-    from pyrung.core.analysis.pdg import _extract_tag_names
+    """Detect non-condition data-flow reads of a candidate absorbed tag.
+
+    A read through an index with no declared bounds counts where *graph*
+    found it can reach the tag (``copy(DS[Ptr], N)`` with an accumulator
+    mapped into ``DS``).
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names, unbounded_read_names
     from pyrung.core.validation._common import walk_instructions
 
     for instr in walk_instructions(program):
         for field_name in getattr(type(instr), "_reads", ()):
-            refs = _extract_tag_names(getattr(instr, field_name), {})
-            if tag_name not in refs:
+            value = getattr(instr, field_name)
+            reads = _extract_tag_names(value, {}) | unbounded_read_names(value, graph)
+            if tag_name not in reads:
                 continue
             if allowed is not None and allowed(instr):
                 continue
@@ -447,21 +537,6 @@ def _owner_reset_depends_on_progress(
     if done_name is not None:
         targets.add(done_name)
     return _condition_dependency_reaches_targets(graph, reset_refs, frozenset(targets))
-
-
-def _is_stable_dynamic_preset(preset_tag_name: str, graph: ProgramGraph) -> bool:
-    """True when a dynamic preset is frozen or owned by the ladder.
-
-    Redundant — the synthetic preset=1 path discards the concrete value,
-    so stability doesn't matter.  The real gate is exclusivity
-    (_has_non_timer_data_read).  Safe to relax or remove.
-    """
-    tag = graph.tags.get(preset_tag_name)
-    if tag is None:
-        return False
-    if tag.readonly:
-        return True
-    return bool(tag.final and preset_tag_name in graph.writers_of)
 
 
 def _atom_matches_acc_preset_boundary(
@@ -608,7 +683,7 @@ def _find_redundant_acc_absorptions(
             if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
                 rejected[acc_name] = "accumulator comparisons not redundant"
                 continue
-            if _has_forbidden_data_read(program, acc_name):
+            if _has_forbidden_data_read(program, graph, acc_name):
                 rejected[acc_name] = "accumulator has forbidden data reads"
                 continue
 
@@ -880,8 +955,14 @@ def _find_comparison_absorptions(
     project: tuple[str, ...] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     atom_index: dict[str, list[Atom]] | None = None,
+    stable_partners_only: bool = False,
 ) -> _ThresholdAbsorptions:
-    """Find written tags whose value is only ever observed through comparisons."""
+    """Find written tags whose value is only ever observed through comparisons.
+
+    *stable_partners_only* (the BFS) also requires every comparison partner to
+    be a literal or a stable tag; the ``how()`` domain prior keeps the wider
+    rule.
+    """
     if atom_index is None:
         atom_index = _build_atom_index(all_exprs)
     projected = frozenset(project or ())
@@ -914,7 +995,7 @@ def _find_comparison_absorptions(
             continue
         if not _comparison_domain_is_worth_absorbing(tag_name, tag, structural_domains):
             continue
-        if _has_forbidden_data_read(program, tag_name):
+        if _has_forbidden_data_read(program, graph, tag_name):
             continue
 
         atoms = _collect_atoms_for_tag(atom_index, tag_name)
@@ -929,6 +1010,12 @@ def _find_comparison_absorptions(
                 break
             normalized.extend(specs)
         if not normalized:
+            continue
+        # The vector holds each comparison as of the end of the scan.  Against
+        # a tag the program or the outside rewrites, the next scan compares
+        # with a new value (``copy(rtc.minute, C)``, then ``Rung(C != P)``),
+        # which the hidden value of *tag_name* decides: keep it concrete.
+        if stable_partners_only and any(spec.mode != _THRESHOLD_MODE_EXACT for spec in normalized):
             continue
 
         absorbed_tags.add(tag_name)
@@ -1048,12 +1135,12 @@ def _literal_expr_value(value: Any) -> Any:
 
 
 def _normalized_copy_literal_int_value(source: Any, target: Any) -> int | None:
-    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+    from pyrung.core.instruction.conversions import LITERAL, _store_copy_value_to_tag_type
 
     if isinstance(source, bool) or not isinstance(source, int | float):
         return None
     try:
-        stored = _store_copy_value_to_tag_type(source, target)
+        stored = _store_copy_value_to_tag_type(source, target, LITERAL)
     except (TypeError, ValueError):
         return None
     return stored if isinstance(stored, int) and not isinstance(stored, bool) else None
@@ -1232,15 +1319,24 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
     return kinds
 
 
-def _acc_has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
-    """True when a progress accumulator has only owner/reset-safe writes."""
+def _acc_has_only_owner_writes(
+    program: Program,
+    acc_name: str,
+    kind: str,
+    reach: Mapping[int, tuple[str, ...]] | None = None,
+) -> bool:
+    """True when a progress accumulator has only owner/reset-safe writes.
+
+    *reach* (``ProgramGraph.indirect_reach``) adds the over-cap writes through
+    an unbounded index that can land on it.
+    """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
     saw_owner = False
     for instr in walk_instructions(program):
-        if acc_name not in {name for name, _itype in _all_write_targets(instr)}:
+        if acc_name not in {name for name, _itype in _all_write_targets(instr, reach)}:
             continue
 
         is_owner = False
@@ -1279,7 +1375,7 @@ def _collect_int_progress_source_kinds(
     result: dict[str, str] = {}
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
-        for target_name, _itype in _all_write_targets(instr):
+        for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
     # Only referenced-at-all matters here.
@@ -1316,6 +1412,7 @@ def _collect_int_progress_source_kinds(
             continue
         if _has_forbidden_data_read(
             program,
+            graph,
             tag_name,
             allowed=lambda instr, name=tag_name: _is_int_progress_write(
                 instr, name, stable_int_tags
@@ -1446,7 +1543,7 @@ def _collect_real_progress_source_kinds(
 ) -> dict[str, str]:
     """Find conservative monotone Real progress tags.
 
-    This covers finite same-sign strides such as ``calc(R0 + ExtStep, R0)``
+    This covers finite same-sign strides such as ``math(R0 + ExtStep, R0)``
     where ``ExtStep`` has positive-only choices.  The event scheduler still
     uses the concrete per-scan delta observed from the current BFS edge.
     """
@@ -1455,7 +1552,7 @@ def _collect_real_progress_source_kinds(
     result: dict[str, str] = {}
     by_target: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
-        for target_name, _itype in _all_write_targets(instr):
+        for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             by_target.setdefault(target_name, []).append(instr)
     stable_int_tags = _stable_int_tag_values(graph, by_target)
     if atom_index is None:
@@ -1491,6 +1588,7 @@ def _collect_real_progress_source_kinds(
             continue
         if _has_forbidden_data_read(
             program,
+            graph,
             tag_name,
             allowed=lambda instr, name=tag_name: _is_numeric_progress_write(
                 instr, name, graph, stable_int_tags
@@ -1585,7 +1683,7 @@ def _find_threshold_absorptions(
             _PROGRESS_KIND_REAL_UP,
             _PROGRESS_KIND_REAL_DOWN,
         }:
-            if not _acc_has_only_owner_writes(program, acc_name, kind):
+            if not _acc_has_only_owner_writes(program, acc_name, kind, graph.indirect_reach):
                 blockers.append(
                     _ThresholdBlocker(
                         acc_name,
@@ -1607,12 +1705,12 @@ def _find_threshold_absorptions(
                         )
                     )
                     continue
-            if _has_forbidden_data_read(program, acc_name):
+            if _has_forbidden_data_read(program, graph, acc_name):
                 blockers.append(
                     _ThresholdBlocker(
                         acc_name,
                         kind,
-                        (f"{acc_name}: read in data-flow; remove copy/calc reads of accumulator",),
+                        (f"{acc_name}: read in data-flow; remove copy/math reads of accumulator",),
                     )
                 )
                 continue
@@ -1717,6 +1815,7 @@ def _find_threshold_absorptions(
                 break
             if _has_forbidden_data_read(
                 program,
+                graph,
                 threshold_name,
                 allowed=lambda instr, t=threshold_name, a=acc_name: _is_matching_owner_preset_read(
                     instr, t, a

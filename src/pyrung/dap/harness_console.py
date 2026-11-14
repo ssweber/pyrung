@@ -1,30 +1,70 @@
 """Harness integration for the DAP debug session.
 
 Auto-installs the autoharness when Physical+link= annotations are detected
-at launch. Console verbs: ``harness status``, ``harness install``,
+at launch, and keeps the session's bench links (``pyrung.dap.links``) applied
+across reloads. Console verbs: ``harness status``, ``harness install``,
 ``harness remove``.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-from pyrung.core.harness import Harness
+from pyrung.core.harness import CoilWiring, Harness
+from pyrung.dap import execution_flow
 from pyrung.dap.console import ConsoleResult, register
 
+if TYPE_CHECKING:
+    from pyrung.dap.links import BenchDrop, BenchLink
 
-def try_auto_install(adapter: Any) -> str | None:
-    """If the runner has Physical+link= couplings, install the harness.
 
-    Returns a banner string for the debug console, or ``None`` if no
-    couplings were found.
+def install_harness(adapter: Any) -> Harness:
+    """Install a harness on the current runner, even one with no declared couplings.
+
+    Nothing is settled yet.  The caller settles once the bench links are in.
     """
-    runner = adapter._runner
-    if runner is None:
-        return None
+    harness = Harness(adapter._require_runner_locked())
+    harness._install()
+    harness.on_patches_applied = _make_patch_listener(adapter)
+    adapter._harness = harness
+    return harness
+
+
+@dataclass(frozen=True)
+class StagedHarness:
+    """A harness installed and fit on a runner, for the adapter to take or throw away."""
+
+    #: ``None`` when the program and the bench links have no coupling.
+    harness: Harness | None
+    #: The bench links the fit kept.
+    bench_links: dict[str, BenchLink]
+    #: The banner for the debug console, or ``None`` when there is nothing to say.
+    banner: str | None
+
+
+def stage_harness(
+    adapter: Any,
+    runner: Any,
+    bench_links: Mapping[str, BenchLink],
+    carry: Collection[CoilWiring] = (),
+    drops: list[BenchDrop] | None = None,
+) -> StagedHarness:
+    """Install the harness for *runner*'s couplings plus *bench_links*, and settle it.
+
+    Only *runner* changes, so a reload can stage the harness on the new runner and
+    still keep the old one if a later step fails.  :func:`commit_harness` hands the
+    result to the adapter.
+    """
+    from pyrung.dap.links import fit_bench_links
 
     harness = Harness(runner)
-    harness.install()
+    harness._install()
+    harness.on_patches_applied = _make_patch_listener(adapter)
+    kept, notes = fit_bench_links(runner, harness, bench_links, adapter._bench_links_on, drops)
+    # The one settle, over the couplings that run with the bench links in.
+    harness._settle(carry)
 
     summary = harness.coupling_summary()
     n_bool = len(summary["bool_couplings"])
@@ -33,17 +73,42 @@ def try_auto_install(adapter: Any) -> str | None:
 
     if total == 0:
         harness.uninstall()
+        return StagedHarness(None, kept, "\n".join(notes) or None)
+
+    kinds: dict[str, int] = {"delay": n_bool} if n_bool else {}
+    for coupling in summary["profile_couplings"]:
+        kinds[coupling["kind"]] = kinds.get(coupling["kind"], 0) + 1
+    parts = [f"{count} {kind}" for kind, count in kinds.items()]
+    banner = f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
+    if kept:
+        banner += f"\n{len(kept)} bench change(s) to the wiring; `links` for details"
+    return StagedHarness(harness, kept, "\n".join([banner, *notes]))
+
+
+def commit_harness(adapter: Any, staged: StagedHarness) -> None:
+    """Give the adapter a staged harness and the bench links it kept."""
+    from pyrung.dap.links import links_changed
+
+    adapter._harness = staged.harness
+    adapter._bench_links = staged.bench_links
+    links_changed(adapter)
+
+
+def try_auto_install(
+    adapter: Any,
+    carry: Collection[CoilWiring] = (),
+    drops: list[BenchDrop] | None = None,
+) -> str | None:
+    """Install the harness for the program's couplings plus the bench links.
+
+    Returns a banner string for the debug console, or ``None`` if there are
+    no couplings and nothing to report.
+    """
+    if adapter._runner is None:
         return None
-
-    harness.on_patches_applied = _make_patch_listener(adapter)
-    adapter._harness = harness
-
-    parts = []
-    if n_bool:
-        parts.append(f"{n_bool} bool")
-    if n_profile:
-        parts.append(f"{n_profile} profile")
-    return f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
+    staged = stage_harness(adapter, adapter._runner, adapter._bench_links, carry, drops)
+    commit_harness(adapter, staged)
+    return staged.banner
 
 
 def uninstall_harness(adapter: Any) -> None:
@@ -130,7 +195,7 @@ def _harness_status(adapter: Any) -> ConsoleResult:
     for ac in summary["profile_couplings"]:
         tv = ac.get("trigger_value")
         en_label = f"{ac['en']}=={tv}" if tv is not None else ac["en"]
-        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}")
+        lines.append(f"  {ac['kind']}  {en_label} -> {ac['fb']}  ({ac['keys']})")
 
     pending = summary["pending_patches"]
     if pending:
@@ -144,6 +209,8 @@ def _harness_install(adapter: Any) -> ConsoleResult:
         return ConsoleResult("Harness already installed; use `harness remove` first")
 
     adapter._require_runner_locked()
+    # A scan paused mid-way began before the install and would commit over its seeding.
+    execution_flow.invalidate_mid_scan(adapter)
     banner = try_auto_install(adapter)
     if banner is None:
         return ConsoleResult("No Physical+link= couplings found; nothing to install")
@@ -153,5 +220,6 @@ def _harness_install(adapter: Any) -> ConsoleResult:
 def _harness_remove(adapter: Any) -> ConsoleResult:
     if adapter._harness is None:
         return ConsoleResult("Harness not installed")
+    execution_flow.invalidate_mid_scan(adapter)
     uninstall_harness(adapter)
     return ConsoleResult("Harness removed")

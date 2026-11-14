@@ -21,7 +21,7 @@ jobs:
       - name: Install uv (official Astral action)
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.11.29"
+          version: "0.13.8"
           enable-cache: auto
           python-version: "3.12"
 
@@ -32,7 +32,11 @@ jobs:
         run: uv sync --locked --all-extras --dev
 
       - name: Run tests
-        run: uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz" --ignore=tests/fuzz
+        # Same selection and options as local `make test` (markers, --ignore,
+        # --runner-backend=both); edit the Makefile target, not this step.
+        run: make test
+        env:
+          PYTEST_WORKERS: auto
 
       - name: Build package
         run: uv build

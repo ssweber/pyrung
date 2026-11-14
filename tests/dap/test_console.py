@@ -6,6 +6,7 @@ import io
 from pathlib import Path
 from typing import Any
 
+from pyrung.core import AvoidCheckError
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
 
@@ -224,6 +225,18 @@ class TestForceVerbs:
         assert resp["success"] is True
         assert dict(adapter._runner.forces) == {}
 
+    def test_force_says_what_the_tag_holds(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "force Counter 99999", seq=10)
+        assert resp["body"]["result"] == "Forced Counter=32767"
+        resp, _ = _repl(adapter, out, "force Counter 3.7", seq=11)
+        assert resp["body"]["result"] == "Forced Counter=3"
+        resp, _ = _repl(adapter, out, "force Button 1", seq=12)
+        assert resp["body"]["result"] == "Forced Button=True"
+        resp, _ = _repl(adapter, out, "force Counter abc", seq=13)
+        assert resp["success"] is False
+        assert "INT holds a number" in resp["message"]
+
 
 # ---------------------------------------------------------------------------
 # Patch
@@ -236,6 +249,13 @@ class TestPatch:
         resp, _ = _repl(adapter, out, "patch Button true")
         assert resp["success"] is True
         assert "Patched" in resp["body"]["result"]
+
+    def test_patch_says_what_the_tag_will_hold(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "patch Counter 99999", seq=10)
+        assert resp["body"]["result"] == "Patched Counter=32767"
+        resp, _ = _repl(adapter, out, "patch Button 0", seq=11)
+        assert resp["body"]["result"] == "Patched Button=False"
 
     def test_patch_missing_args(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -427,6 +447,21 @@ class TestCausalVerbs:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Reached" in result or "Cannot reach" in result or "Stopped" in result
+
+    def test_how_reports_an_avoid_check_that_raises(self, tmp_path: Path, monkeypatch):
+        """A console condition cannot raise on demand, so the planner's error is staged."""
+        adapter, out = _setup_how(tmp_path)
+
+        def raises(*_args, **_kwargs):
+            raise AvoidCheckError("Start > 'x'", TypeError("cannot compare"))
+
+        monkeypatch.setattr(adapter._require_runner_locked().__class__, "how", raises)
+
+        resp, _ = _repl(adapter, out, "how Done avoid ~Start", seq=10)
+
+        assert resp["success"] is False
+        assert resp["message"].startswith("how avoid: avoid check")
+        assert "Internal adapter error" not in resp["message"]
 
     def test_how_avoid_multiple_is_union(self, tmp_path: Path):
         """Comma-separated ``avoid`` conditions are a union of exclusions: both A
@@ -711,8 +746,8 @@ class TestCausalVerbs:
         )
 
         assert result == (
-            " Yes -- with rung(And(~ProgressTest_WatchdogDone, "
-            "~ProgressTest_Sensor)): latch(ProgressTest_Sensor).\n"
+            " Yes -- with rung(~ProgressTest_WatchdogDone, "
+            "~ProgressTest_Sensor): out(ProgressTest_Sensor).\n"
         )
 
     def test_how_progress_prints_working_theory_corrective_rung(self):
@@ -743,7 +778,7 @@ class TestCausalVerbs:
         )
 
         assert result == (
-            " Yes -- with rung(ProgressTest_TheoryRunning): latch(ProgressTest_TheorySail).\n"
+            " Yes -- with rung(ProgressTest_TheoryRunning): out(ProgressTest_TheorySail).\n"
         )
 
     def test_how_progress_groups_corrections_on_their_exact_rung(self):
@@ -773,7 +808,7 @@ class TestCausalVerbs:
 
         assert result == (
             " Yes -- with rung(ProgressTest_State == 6): "
-            "latch(ProgressTest_Door); latch(ProgressTest_LintDoor).\n"
+            "out(ProgressTest_Door); out(ProgressTest_LintDoor).\n"
         )
 
     def test_how_progress_keeps_intrascan_investigation_grounded_in_the_channel(self):
@@ -838,9 +873,8 @@ class TestCausalVerbs:
         assert result == (
             " Yes.\n"
             "  Remove temporary logic: with rung(ProgressTest_RevokeState == 6): "
-            "latch(ProgressTest_RevokeGo).\n"
-            "  Replace with: with rung(ProgressTest_RevokeState == 6): "
-            "reset(ProgressTest_RevokeGo).\n"
+            "out(ProgressTest_RevokeGo).\n"
+            "  Replace with: with rung(): reset(ProgressTest_RevokeGo).\n"
         )
 
     def test_how_progress_surfaces_exploratory_inputs_as_guidance(self):
@@ -884,7 +918,7 @@ class TestCausalVerbs:
 
         assert _format_pilot_progress(event) == "  State 6 -> 7 after 20 scans.\n"
 
-    def test_how_progress_reports_folded_and_kernel_work(self):
+    def test_how_progress_reports_loop_and_interpreted_work(self):
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.dap.console import _format_pilot_progress
 
@@ -897,14 +931,14 @@ class TestCausalVerbs:
                 "bearing_coast_channel_tag": "State",
                 "bearing_coast_before_value": 6,
                 "bearing_coast_actual_value": 7,
-                "coast_skipped_scans": 3300,
+                "coast_stretched_scans": 3300,
                 "coast_kernel_scans": 497,
             },
         )
 
         assert (
             _format_pilot_progress(event)
-            == "  State 6 -> 7 after 3797 scans (3,300 folded; 497 kernel).\n"
+            == "  State 6 -> 7 after 3797 scans (3,300 in the loop; 497 interpreted).\n"
         )
 
 
@@ -1047,6 +1081,54 @@ class TestMonitorVerbs:
 # ---------------------------------------------------------------------------
 
 
+class TestLogVerb:
+    @staticmethod
+    def _log(tmp_path: Path, count: int, *, jit: bool) -> str:
+        script = (
+            "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+            "\n"
+            "held = Bool('Held')\n"
+            "mirror = Bool('Mirror')\n"
+            "\n"
+            "with Program(strict=False) as prog:\n"
+            "    with Rung(held):\n"
+            "        out(mirror)\n"
+            "\n"
+            "runner = PLC(prog, dt=0.010)\n"
+            "runner.force(held, True)\n"
+            f"runner.run_for(11.0, jit={jit})\n"
+            "runner.force(held, False)\n"
+            f"runner.run_for(2.0, jit={jit})\n"
+            "runner.unforce(held)\n"
+            f"runner.run_for(2.0, jit={jit})\n"
+        )
+        out = io.BytesIO()
+        adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out)
+        path = _write_script(tmp_path, f"log_{jit}_{count}.py", script)
+        _send_request(adapter, out, seq=1, command="launch", arguments={"program": str(path)})
+        resp, _ = _repl(adapter, out, f"log {count}")
+        assert resp["success"] is True
+        # Each checkpoint repeats the set in force, which is what the log has to see through.
+        assert len(adapter._runner._scan_log._force_changes_by_scan) > 3
+        return resp["body"]["result"]
+
+    def test_one_force_prints_one_line_however_many_checkpoints_it_spans(self, tmp_path: Path):
+        lines = self._log(tmp_path, 5000, jit=True).splitlines()
+        forces = [line.strip() for line in lines if "force" in line and "forces:" not in line]
+        assert forces == ["force Held True", "force Held True -> False", "unforce Held"]
+
+    def test_compiled_log_is_the_stepped_log(self, tmp_path: Path):
+        assert self._log(tmp_path, 5000, jit=True) == self._log(tmp_path, 5000, jit=False)
+
+    def test_a_span_begun_before_the_log_prints_only_what_it_becomes(self, tmp_path: Path):
+        # The last 450 of 1500 scans: Held is forced False at about 1100 and let go at about 1300.
+        lines = self._log(tmp_path, 450, jit=True).splitlines()
+        forces = [line.strip() for line in lines if "force" in line and "forces:" not in line]
+        assert forces == ["force Held True -> False", "unforce Held"]
+        # Let go before these scans, and nothing since.
+        assert "force Held" not in self._log(tmp_path, 100, jit=True)
+
+
 class TestCheckVerb:
     def test_check_clean_program(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -1168,9 +1250,7 @@ class TestHelpAndErrors:
         from pyrung.dap.grammar import command_grammar
 
         command_grammar()  # Import every module that contributes console verbs.
-        source = (Path(__file__).parents[2] / "docs/guides/dap-vscode.md").read_text(
-            encoding="utf-8"
-        )
+        source = (Path(__file__).parents[2] / "docs/guides/console.md").read_text(encoding="utf-8")
         start = "<!-- dap-console-help:start -->"
         end = "<!-- dap-console-help:end -->"
         payload = source.split(start, 1)[1].split(end, 1)[0].strip()

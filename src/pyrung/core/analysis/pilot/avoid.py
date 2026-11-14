@@ -2,11 +2,57 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
+_BARE_CHECK = "avoided condition"
 
-def _avoid_snap_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
-    """Names of the avoid conditions *snap* trips (``()`` when avoid is None).
+
+class _AvoidCheckRaised(BaseException):
+    """An avoid check raised on a real state, on its way out of the search to the caller.
+
+    A BaseException, as ``SearchOutOfTime`` is: the search reads its causes under many
+    ``except Exception`` that mean "no evidence", and a check that raised has not said a
+    state is clear.  ``pilot_how`` and ``pilot_events`` turn it into the public
+    ``AvoidCheckError``.
+    """
+
+    def __init__(self, check: str, error: Exception) -> None:
+        super().__init__(check, error)
+        self.check = check
+        self.error = error
+
+
+# Every ask of an avoid is one of two kinds, and a site picks by the state it holds.
+#
+# ON A REAL STATE: the state how() starts from, or a scan a trial really ran, failed trials
+# included.  A raise there is an error, since the check has not said that state is clear:
+# ``_member_on_scan``, ``_avoid_scan_names``.
+#
+# WEIGHED: anything else, such as values laid over a state, the resting baseline, or the
+# state a restart lands on before its first scan.  A raise there says nothing about the
+# route, so that member is not violated, and the others keep their answers:
+# ``_member_weighed``, ``_avoid_weighed_names`` and what is built on them.
+
+
+def _member_on_scan(check: str, pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:
+    """Whether *pred* holds on a real state.  A *pred* that raises gave no answer to read."""
+    try:
+        return bool(pred(state))
+    except Exception as error:
+        raise _AvoidCheckRaised(check, error) from error
+
+
+def _member_weighed(pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:
+    """Whether *pred* holds on a state no scan need have had.  A raise is not violated."""
+    try:
+        return bool(pred(state))
+    except Exception:
+        return False
+
+
+def _avoid_scan_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
+    """Names of the avoid conditions a real state trips (``()`` when avoid is None).
 
     A ``_AvoidPredicate`` reports its violated member names; a bare callable
     (someone passed ``avoid_pred=`` a raw predicate) reports a generic name.
@@ -15,14 +61,34 @@ def _avoid_snap_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
         return ()
     violated = getattr(avoid, "violated", None)
     if violated is not None:
-        try:
-            return tuple(violated(snap))
-        except Exception:
-            return ()
-    try:
-        return ("avoided condition",) if bool(avoid(snap)) else ()
-    except Exception:
+        return tuple(violated(snap))
+    return (_BARE_CHECK,) if _member_on_scan(_BARE_CHECK, avoid, snap) else ()
+
+
+def _avoid_weighed_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
+    """Names of the avoid conditions a weighed state trips, each member on its own."""
+    if avoid is None:
         return ()
+    members = getattr(avoid, "members", None)
+    if members is None:
+        return (_BARE_CHECK,) if _member_weighed(avoid, snap) else ()
+    return tuple(
+        member.name
+        for member in members
+        # A condition reads a tag it cannot see as violated, where a callable raises.  Both
+        # are a check with no answer for this state, whichever form it was written in.
+        if all(tag in snap for tag in member.tags) and _member_weighed(member.pred, snap)
+    )
+
+
+def _avoid_weighed_after_clear(
+    avoid: Any,
+    start: dict[str, Any],
+    observed: dict[str, Any],
+) -> tuple[str, ...]:
+    """Members clear at *start* that a weighed *observed* trips."""
+    exempt = _avoid_weighed_names(avoid, start)
+    return tuple(name for name in _avoid_weighed_names(avoid, observed) if name not in exempt)
 
 
 def _avoid_violations(
@@ -33,17 +99,21 @@ def _avoid_violations(
     """Names of the avoid conditions that *pairs* would force.
 
     Static: overlays each ``(tag, value)`` onto *snapshot* (or the resting
-    baseline when no snapshot is given — the neutral world a hold asserts its
+    baseline when no snapshot is given, the neutral world a hold asserts its
     tag against) and evaluates the avoid predicate. This is the action gate's
     primitive (a candidate/hold whose overlay trips avoid depends on it).
+
+    What it asks is weighed.  The baseline has the steerable inputs and nothing else, so a
+    callable can raise on it for a tag every real state has, and a hold laid over a state
+    is no scan either: both go on, and the gates judge the scans they lead to.  A check
+    that answers keeps its answer, so one reading only what the baseline has can still
+    refuse the hold.
     """
     avoid = getattr(ctx, "avoid_pred", None)
     if avoid is None:
         return ()
     base = dict(snapshot) if snapshot is not None else dict(getattr(ctx, "resting", {}) or {})
-    for tag, value in pairs:
-        base[tag] = value
-    return _avoid_snap_names(avoid, base)
+    return _avoid_weighed_names(avoid, {**base, **dict(pairs)})
 
 
 def _avoid_forces(
@@ -55,6 +125,7 @@ def _avoid_forces(
 
 
 def _hold_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
+    """Whether a hold of *pair* may be installed.  ``_avoid_violations`` says what is asked."""
     tag, _value = pair
     compass = getattr(ctx, "compass", None)
     action_tags = getattr(compass, "action_tags", frozenset())

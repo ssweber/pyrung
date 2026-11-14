@@ -26,6 +26,7 @@ from pyrung.core.expression import (
     lro,
     lsh,
     radians,
+    randint,
     rro,
     rsh,
     sin,
@@ -60,7 +61,17 @@ from pyrung.core.memory_block import (
     SlotView,
     WordBlock,
 )
-from pyrung.core.physical import Approach, Physical, Pulse, Ramp, parse_duration
+from pyrung.core.physical import (
+    PHYSICAL_KEYS,
+    PHYSICAL_KINDS,
+    FeedbackType,
+    Physical,
+    PhysicalKey,
+    PhysicalKind,
+    kind_of_keys,
+    parse_duration,
+    physical_kind,
+)
 from pyrung.core.program import (
     And,
     ForbiddenControlFlowError,
@@ -71,17 +82,22 @@ from pyrung.core.program import (
     SubroutineFunc,
     blockcopy,
     branch,
+    break_loop,
     calc,
     call,
     comment,
+    continue_loop,
     copy,
     count_down,
     count_up,
+    debounce,
     event_drum,
     fall,
     fill,
+    flasher,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -99,10 +115,14 @@ from pyrung.core.program import (
     shift,
     subroutine,
     time_drum,
+    time_event_drum,
+    timed,
+    toggle,
     unpack_to_bits,
     unpack_to_words,
 )
-from pyrung.core.runner import PLC
+from pyrung.core.rung_firings import UnrecordedScansError
+from pyrung.core.runner import PLC, AvoidCheckError
 from pyrung.core.state import SystemState
 from pyrung.core.structure import (
     AutoDefault,
@@ -138,6 +158,8 @@ from pyrung.core.time_mode import (  # noqa: F401 (TimeMode importable but not i
 
 __all__ = [
     "PLC",
+    "UnrecordedScansError",
+    "AvoidCheckError",
     "CompiledPLC",
     "ScanContext",
     "SystemState",
@@ -153,9 +175,13 @@ __all__ = [
     "normalize_unit",
     # Physical feedback
     "Physical",
-    "Ramp",
-    "Approach",
-    "Pulse",
+    "PHYSICAL_KEYS",
+    "PHYSICAL_KINDS",
+    "FeedbackType",
+    "PhysicalKey",
+    "PhysicalKind",
+    "kind_of_keys",
+    "physical_kind",
     "parse_duration",
     # Autoharness
     "Coupling",
@@ -223,6 +249,7 @@ __all__ = [
     "run_function",
     "run_enabled_function",
     "blockcopy",
+    "break_loop",
     "fill",
     "pack_bits",
     "pack_text",
@@ -230,7 +257,9 @@ __all__ = [
     "unpack_to_bits",
     "unpack_to_words",
     "calc",
+    "math",
     "call",
+    "continue_loop",
     "return_early",
     "count_up",
     "count_down",
@@ -240,6 +269,11 @@ __all__ = [
     "on_delay",
     "off_delay",
     "time_drum",
+    "time_event_drum",
+    "toggle",
+    "debounce",
+    "flasher",
+    "timed",
     "send",
     "receive",
     "ModbusAddress",
@@ -275,4 +309,5 @@ __all__ = [
     "rsh",
     "lro",
     "rro",
+    "randint",
 ]

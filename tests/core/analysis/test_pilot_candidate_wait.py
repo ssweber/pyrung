@@ -104,6 +104,7 @@ from pyrung.core.analysis.pilot.trace_tree import (
 )
 from pyrung.core.analysis.pilot.wait_options import _prescribe_wait
 from pyrung.core.crossing import Eq
+from pyrung.core.instruction.advance import AdvanceStep
 
 
 def _candidate_world(frame: Any, context: Any, state: Any = None) -> OrientationWorld:
@@ -3137,7 +3138,7 @@ def test_trace_lifetime_positions_concurrent_input_for_its_instruction_coast() -
             copy(1, result_tag)
     plc = PLC(logic)
     boundary = Eq(result_tag.name, frozenset((1,)))
-    advance = SimpleNamespace(until=Eq(accumulator_tag.name, frozenset((5,))))
+    advance = AdvanceStep(until=Eq(accumulator_tag.name, frozenset((5,))))
     detail = TraceAction(
         feedback_tag.name,
         True,

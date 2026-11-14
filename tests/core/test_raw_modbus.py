@@ -100,6 +100,13 @@ class TestModbusAddress:
         with pytest.raises(AttributeError):
             addr.address = 200  # ty: ignore[invalid-assignment]
 
+    def test_notation_records_the_written_form_without_changing_identity(self):
+        assert ModbusAddress("64h") == ModbusAddress(400101) == ModbusAddress(100)
+        assert hash(ModbusAddress("64h")) == hash(ModbusAddress(100))
+        assert ModbusAddress("64h").notation == "hex"
+        assert ModbusAddress(400101).notation == "984"
+        assert ModbusAddress(100).notation == "raw"
+
 
 class TestModbusRtuTarget:
     def test_defaults(self):
@@ -224,6 +231,14 @@ class TestPacking:
         result = _pack_values_to_registers([val], tags, WordOrder.LOW_HIGH, RegisterType.HOLDING)
         hi, lo = struct.unpack(">HH", struct.pack(">f", val))
         assert result == [lo, hi]
+
+    @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+    @pytest.mark.parametrize("order", [WordOrder.HIGH_LOW, WordOrder.LOW_HIGH])
+    def test_pack_any_nan_as_a_click_sends_it(self, bits, order):
+        tags = [Tag("a", TagType.REAL)]
+        nan = struct.unpack(">f", struct.pack(">I", bits))[0]
+        result = _pack_values_to_registers([nan], tags, order, RegisterType.HOLDING)
+        assert result == [0xFFFF, 0xFFFF]
 
     def test_pack_coils(self):
         tags = [Tag("a", TagType.BOOL), Tag("b", TagType.BOOL)]

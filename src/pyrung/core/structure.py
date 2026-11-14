@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Callable, Iterable, Mapping, Sized
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, Protocol, get_origin
 
@@ -426,16 +426,37 @@ class _DoneAccRuntime(_StructRuntime):
         *,
         count: int | None = None,
         nicknames: Mapping[str, str] | None = None,
+        retentive: Mapping[str, bool] | None = None,
+        comments: Mapping[str, str] | None = None,
         readonly: bool | None = None,
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
         lock: bool | None = None,
     ) -> _DoneAccRuntime:
+        """Copy this Timer/Counter under *name*.
+
+        ``nicknames`` renames the ``Done``/``Acc`` tags (``count=1`` only);
+        ``retentive`` overrides either field's retentive policy, for example
+        ``retentive={"Acc": True}`` for a timer whose time survives STOP -> RUN;
+        ``comments`` sets either field's comment (``count=1`` only).
+        """
+        field_specs = self._original_field_specs
+        if retentive:
+            unknown = set(retentive) - {"Done", "Acc"}
+            if unknown:
+                fields = ", ".join(sorted(unknown))
+                raise ValueError(f"Unknown Timer/Counter retentive fields: {fields}.")
+            field_specs = tuple(
+                replace(spec, retentive=bool(retentive[spec.name]))
+                if spec.name in retentive
+                else spec
+                for spec in field_specs
+            )
         clone = _DoneAccRuntime(
             name=name,
             count=self.count if count is None else count,
-            field_specs=self._original_field_specs,
+            field_specs=field_specs,
             always_number=self.always_number,
             readonly=self.readonly if readonly is None else readonly,
             external=self.external if external is None else external,
@@ -457,6 +478,17 @@ class _DoneAccRuntime(_StructRuntime):
                         f"Timer/Counter nickname for {field_name} must be a non-empty string."
                     )
                 clone._blocks[field_name].slot(1, name=nickname)
+        if comments:
+            if clone.count != 1:
+                raise ValueError("Timer/Counter comment overrides require count=1.")
+            unknown = set(comments) - {"Done", "Acc"}
+            if unknown:
+                fields = ", ".join(sorted(unknown))
+                raise ValueError(f"Unknown Timer/Counter comment fields: {fields}.")
+            for field_name, comment in comments.items():
+                if not isinstance(comment, str):
+                    raise ValueError(f"Timer/Counter comment for {field_name} must be a string.")
+                clone._blocks[field_name].slot(1, comment=comment)
         return clone
 
 
@@ -963,27 +995,36 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
 def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
     field_by_name = {spec.name: spec for spec in field_specs}
     for spec in field_specs:
-        has_profile = spec.physical is not None and spec.physical.profile is not None
-        if has_profile and spec.link is None:
+        if spec.physical is not None and spec.physical.kind != "delay" and spec.link is None:
             raise ValueError(
-                f"Field {spec.name!r}: physical profile requires link "
-                "(profile defines response to a linked command)."
+                f"Field {spec.name!r}: physical {spec.physical.kind} requires link "
+                "(it answers a linked command)."
             )
         if spec.link is None:
             continue
-        link_field, _, trigger_part = spec.link.partition(":")
+        from pyrung.core.harness import NC_TRIGGER, _parse_link_spec
+
+        link_field, trigger_part = _parse_link_spec(spec.link)
         if link_field not in field_by_name:
             raise ValueError(
                 f"Field {spec.name!r} links to unknown field {link_field!r}; "
                 "links must refer to a field in the same structure."
             )
-        if trigger_part:
-            en_spec = field_by_name[link_field]
+        en_spec = field_by_name[link_field]
+        if trigger_part == NC_TRIGGER:
+            if en_spec.type != TagType.BOOL:
+                raise ValueError(
+                    f"Field {spec.name!r}: ~ marks a normally-closed BOOL enable, but "
+                    f"{link_field!r} is {en_spec.type.value}. "
+                    f"Use link='{link_field}:0' to drive while it is 0."
+                )
+        elif trigger_part:
             if en_spec.type == TagType.BOOL:
                 raise ValueError(
                     f"Field {spec.name!r}: trigger value {trigger_part!r} is not valid "
                     f"for BOOL enable field {link_field!r}. "
-                    "Use plain link='fieldname' for BOOL enables."
+                    f"Use link='{link_field}' to drive while it is on, or "
+                    f"link='~{link_field}' while it is off."
                 )
             try:
                 int(trigger_part)
@@ -1005,15 +1046,10 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
                         ) from None
         if spec.type != TagType.BOOL:
             continue
-        physical = spec.physical
-        has_timing = physical is not None and (
-            physical.on_delay is not None or physical.off_delay is not None
-        )
-        has_prof = physical is not None and physical.profile is not None
-        if not has_timing and not has_prof:
+        if spec.physical is None:
             raise ValueError(
-                f"Field {spec.name!r} is a linked BOOL feedback and requires physical "
-                "timing via on_delay/off_delay or a profile."
+                f"Field {spec.name!r} is a linked BOOL feedback and requires a physical "
+                "response, such as on_delay/off_delay."
             )
 
 
@@ -1022,7 +1058,8 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
 # ---------------------------------------------------------------------------
 # Built-in Timer / Counter UDTs (count=1).  Use ``Timer.clone("Name")``
 # for named instances.  For a full Click-sized pool, clone with an
-# explicit count: ``Timer.clone("T", count=500)``.
+# explicit count: ``Timer.clone("T", count=500)``.  Retentive policy follows
+# CLICK's bank defaults: T, TD non-retentive; CT, CTD retentive.
 
 
 Timer = _DoneAccRuntime(
@@ -1030,7 +1067,7 @@ Timer = _DoneAccRuntime(
     count=1,
     field_specs=(
         _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
-        _FieldSpec("Acc", TagType.INT, UNSET, retentive=True),
+        _FieldSpec("Acc", TagType.INT, UNSET, retentive=False),
         _FieldSpec("EN", TagType.BOOL, UNSET, retentive=False, final=True),
         _FieldSpec("TT", TagType.BOOL, UNSET, retentive=False, final=True),
     ),
@@ -1040,7 +1077,7 @@ Counter = _DoneAccRuntime(
     name="Counter",
     count=1,
     field_specs=(
-        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=True),
         _FieldSpec("Acc", TagType.DINT, UNSET, retentive=True),
         _FieldSpec("CU", TagType.BOOL, UNSET, retentive=False, final=True),
         _FieldSpec("CD", TagType.BOOL, UNSET, retentive=False, final=True),

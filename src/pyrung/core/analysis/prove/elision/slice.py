@@ -29,6 +29,15 @@ Pipeline per candidate:
    and detect whether any read of ``X`` saw its scan-entry value.
 6. Decide — all combinations write-before-read ⇒ elidable.
 
+When every rung that touches ``X`` is in one subroutine, and nothing outside
+the program reads ``X``, a cheaper check runs first (``_local_slice_check``):
+one call of that subroutine's body, from every entry state of the tags its own
+rungs decide ``X``'s accesses by.  If each call writes ``X`` before reading it,
+no read anywhere sees a value from before the call, so ``X`` need not be
+written every scan.  The historian idiom needs it: a slot per id, written and
+read back in the same call, behind call sites whose conditions reach the whole
+program.
+
 Soundness notes:
 
 * Free variables are restricted to ``stateful_dims`` ∪ ``nondeterministic_dims``.
@@ -68,14 +77,31 @@ from pyrung.core.condition import (
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.executor import execute_program
 from pyrung.core.instruction.advanced import ShiftInstruction
-from pyrung.core.instruction.control import ForLoopInstruction
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.control import (
+    FOR_COUNT_MASK_16,
+    ForLoopInstruction,
+    for_count_mask,
+)
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
+from pyrung.core.instruction.out_variants import (
+    DebounceInstruction,
+    FlasherInstruction,
+    TimedInstruction,
+    ToggleInstruction,
+)
+from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 from pyrung.core.rung import Rung
+from pyrung.core.site_memory import EDGE_MEMORY, site_table_of
 from pyrung.core.state import SystemState
 from pyrung.core.tag import ImmediateRef
 
 from ..expr import _referenced_tags
 from ..results import PENDING
+from ..system_points import FAULT_FLAGS
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.simplified import Expr
@@ -178,8 +204,8 @@ class _WriteBeforeReadContext(ScanContext):
         self._watched = watched
         self.entry_read_seen = False
 
-    def _new_condition_view(self) -> _WBRConditionView:
-        return _WBRConditionView(self)
+    def _new_condition_view(self, *, live: bool = False) -> _WBRConditionView:
+        return _WBRConditionView(self, live=live)
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         if name == self._watched and name not in self._tags_pending:
@@ -188,12 +214,17 @@ class _WriteBeforeReadContext(ScanContext):
 
 
 class _WBRConditionView(ConditionView):
-    """Condition snapshot view that reports watched-tag entry reads."""
+    """Condition view that reports watched-tag entry reads.
+
+    A row's view is taken as the solve reaches it, so a read is an entry read
+    when no write to the tag came before the view (a live view's pending map
+    is the context's own, so it sees every write up to the read).
+    """
 
     __slots__ = ("_wbr_ctx",)
 
-    def __init__(self, ctx: _WriteBeforeReadContext) -> None:
-        super().__init__(ctx)
+    def __init__(self, ctx: _WriteBeforeReadContext, *, live: bool = False) -> None:
+        super().__init__(ctx, live=live)
         self._wbr_ctx = ctx
 
     def get_tag(self, name: str, default: Any = None) -> Any:
@@ -219,14 +250,16 @@ def _upstream_closure(graph: ProgramGraph, seed_tags: frozenset[str]) -> frozens
     return frozenset(result)
 
 
+def _iter_loop_instructions(loop: ForLoopInstruction) -> Any:
+    """Yield every instruction in a forloop's body, nested loops included."""
+    for child in loop.instructions:
+        yield child
+        if isinstance(child, ForLoopInstruction):
+            yield from _iter_loop_instructions(child)
+
+
 def _iter_program_instructions(program: Program) -> Any:
     """Yield every instruction in the program (main + subroutines + loops)."""
-
-    def walk_forloop(loop: ForLoopInstruction) -> Any:
-        for child in loop.instructions:
-            yield child
-            if isinstance(child, ForLoopInstruction):
-                yield from walk_forloop(child)
 
     def walk_rung(rung: Rung) -> Any:
         for item in rung._execution_items:
@@ -235,7 +268,7 @@ def _iter_program_instructions(program: Program) -> Any:
             else:
                 yield item
                 if isinstance(item, ForLoopInstruction):
-                    yield from walk_forloop(item)
+                    yield from _iter_loop_instructions(item)
 
     for rung in program.rungs:
         yield from walk_rung(rung)
@@ -259,20 +292,46 @@ def _instruction_write_targets(instr: Any, tag_refs: dict[str, Tag]) -> set[str]
 def _collect_hidden_memory_info(
     program: Program,
     tag_refs: dict[str, Tag],
+    *,
+    black_box_timers: bool = True,
 ) -> tuple[frozenset[str], tuple[tuple[str, frozenset[str]], ...]]:
     """Survey instructions for unmodelled cross-scan memory and oneshot keys.
 
     Returns ``(drum_shift_writes, oneshot_key_writes)`` where *drum_shift_writes*
-    is the set of tags written by drum/shift instructions (whose hidden memory
+    is the set of tags written by drum, shift and Out coil variant instructions (whose hidden memory
     slice elision does not model) and *oneshot_key_writes* pairs each
-    oneshot instruction's ``_oneshot`` memory key with the tags it writes.
+    oneshot instruction's ``_oneshot`` memory key with the tags it writes.  A
+    oneshot forloop runs its whole body only on its rung's rising edge, so its
+    key pairs with every tag written in the body, not just the loop index.
+
+    Under *black_box_timers* (the search's model) an on/off-delay timer's
+    Done and accumulator join *drum_shift_writes*: the slice runs a scan on
+    the concrete runtime at a fixed tick, where a timer moves by that tick,
+    while the search lets it jump to any value, so a slice reading the timer
+    would judge a write it gates by the wrong value.  How()'s domain prior
+    keeps the exact model and passes False.
     """
     drum_shift_writes: set[str] = set()
     oneshot_key_writes: list[tuple[str, frozenset[str]]] = []
 
     for instr in _iter_program_instructions(program):
         targets = _instruction_write_targets(instr, tag_refs)
-        if isinstance(instr, (EventDrumInstruction, TimeDrumInstruction, ShiftInstruction)):
+        if isinstance(instr, ForLoopInstruction) and instr._oneshot:
+            for child in _iter_loop_instructions(instr):
+                targets |= _instruction_write_targets(child, tag_refs)
+        if isinstance(
+            instr,
+            (
+                EventDrumInstruction,
+                TimeDrumInstruction,
+                TimeEventDrumInstruction,
+                ShiftInstruction,
+                ToggleInstruction,
+                DebounceInstruction,
+                FlasherInstruction,
+                TimedInstruction,
+            ),
+        ) or (black_box_timers and isinstance(instr, (OnDelayInstruction, OffDelayInstruction))):
             drum_shift_writes.update(targets)
         if getattr(instr, "_oneshot", False):
             oneshot_key_writes.append((instr.memory_key("_oneshot"), frozenset(targets)))
@@ -310,6 +369,9 @@ def _collect_edge_tags(program: Program) -> frozenset[str]:
                     if isinstance(item, Condition):
                         walk_condition(item)
         if isinstance(instr, ForLoopInstruction):
+            for body_rung in instr.body_rungs:
+                for cond in body_rung._conditions:
+                    walk_condition(cond)
             for child in instr.instructions:
                 walk_instruction(child)
 
@@ -358,15 +420,20 @@ class _SliceElision:
         graph: ProgramGraph,
         stateful_dims: Mapping[str, tuple[Any, ...]],
         nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+        observed: frozenset[str] = frozenset(),
+        *,
+        black_box_timers: bool = True,
     ) -> None:
         self.program = program
         self.graph = graph
         self.stateful_dims = stateful_dims
         self.nondeterministic_dims = nondeterministic_dims
+        # Tags read from outside the program (properties, the projection).
+        self.observed = observed
 
         tag_refs = dict(graph.tags)
         self.drum_shift_writes, self.oneshot_key_writes = _collect_hidden_memory_info(
-            program, tag_refs
+            program, tag_refs, black_box_timers=black_box_timers
         )
         # Tags written by a oneshot instruction.  A oneshot write does not fire
         # every scan, so def-use chains (sequential SSA, which assumes every
@@ -374,8 +441,26 @@ class _SliceElision:
         self.oneshot_written_tags: frozenset[str] = frozenset(
             tag for _key, targets in self.oneshot_key_writes for tag in targets
         )
+        # Tags an instruction reads back before writing (a timer's or
+        # counter's accumulator, a drum's step).  Def-use chains leave these
+        # exclusive reads out, so the fast path would take a timer's
+        # accumulator, which its own tick reads every scan, for scan-local.
+        self.self_read_tags: frozenset[str] = frozenset().union(
+            *(node.exclusive_reads for node in graph.rung_nodes)
+        )
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
+        # The checks run scans on the interpreter, which has no iteration cap:
+        # a 32-bit For count can run up to 2147483647 times (a positive
+        # Dint), so a program with one gets no enumerated check.  A constant
+        # count is read whole too, but a constant of 65535 or less runs no more
+        # iterations than a 16-bit count.
+        self.runs_a_wide_for = any(
+            isinstance(instr, ForLoopInstruction)
+            and for_count_mask(instr.count) > FOR_COUNT_MASK_16
+            and not (isinstance(instr.count, int) and instr.count <= FOR_COUNT_MASK_16)
+            for instr in _iter_program_instructions(program)
+        )
 
         # Memoized scan-locality results, plus a recursion guard.  Determining
         # whether one tag is scan-local can require recursively checking
@@ -397,9 +482,11 @@ class _SliceElision:
         never eligible because the oneshot write fires only on first
         activation, but def-use chains optimistically record it as a normal
         write, so a later read could observe the entry value on subsequent
-        scans.  Such tags fall through to the full slice check.
+        scans.  Nor is a tag an instruction reads back before writing it
+        (``self_read_tags``), which def-use chains do not record as a read.
+        Such tags fall through to the full slice check.
         """
-        if candidate in self.oneshot_written_tags:
+        if candidate in self.oneshot_written_tags or candidate in self.self_read_tags:
             return False
         return self.graph.unconditional_write_before_read(candidate)
 
@@ -421,7 +508,10 @@ class _SliceElision:
             return False
 
         tag = self.graph.tags.get(name)
-        if tag is None:
+        if tag is None or name in FAULT_FLAGS:
+            # A fault flag carries from scan to scan.  The one-shot survey
+            # here reads only the declared write targets, not
+            # ``_fault_writes``, so a flag is never taken for scan-local.
             self._scan_local_memo[name] = False
             return False
 
@@ -462,16 +552,23 @@ class _SliceElision:
 
     def _slice_check(self, candidate: str, tag: Tag) -> bool:
         """Run the full enumerate-and-scan write-before-read check."""
+        if self.runs_a_wide_for:
+            return False
         graph = self.graph
         writer_rungs = graph.writers_of.get(candidate, frozenset())
         reader_rungs = graph.all_readers_of.get(candidate, frozenset())
         x_touching = writer_rungs | reader_rungs
+        if self._local_slice_check(candidate, x_touching):
+            return True
 
-        # Step 2: condition seed + transitive closure.
+        # Step 2: condition seed + transitive closure.  An index decides which
+        # element a touching rung reaches (``copy(DS[P], N)`` reads X only at
+        # one P), so the tags it reads seed the closure like conditions do.
         seed: set[str] = set()
         for rung_idx in x_touching:
             node = graph.rung_nodes[rung_idx]
             seed.update(node.condition_reads)
+            seed.update(node.data_reads & graph.index_tags)
             if node.subroutine is not None:
                 seed.update(self.caller_condition_reads.get(node.subroutine, frozenset()))
         seed.discard(candidate)
@@ -502,6 +599,8 @@ class _SliceElision:
                 if self._is_scan_local(name):
                     continue
                 domain = self.stateful_dims[name]
+                # An absorbed timer's Done (how()'s prior only; the search's
+                # timers bail above as drum_shift_writes).
                 if PENDING in domain:
                     return False
             elif name in self.nondeterministic_dims:
@@ -532,14 +631,15 @@ class _SliceElision:
                 var_names.append(key)
                 domains.append((False, True))
 
-        # Rising/falling-edge _prev memory keys for relevant edge tags.
-        for name in sorted(closure & self.edge_tags):
-            prev_domain = self._prev_domain(name)
-            if prev_domain is None:
-                return False
+        # The memory of every edge contact reading a relevant tag: a contact's
+        # result, and so which rungs it powers, turns on the bit it last saw.
+        edge_keys = self._edge_memory_keys(relevant_tags)
+        if edge_keys is None:
+            return False
+        for key in edge_keys:
             var_kinds.append("mem")
-            var_names.append(f"_prev:{name}")
-            domains.append(prev_domain)
+            var_names.append(key)
+            domains.append((False, True))
 
         # Step 4: cap the cross product.
         total = 1
@@ -574,15 +674,118 @@ class _SliceElision:
 
         return True
 
-    def _prev_domain(self, name: str) -> tuple[Any, ...] | None:
-        """Domain for an edge tag's ``_prev:`` memory key, or None to bail."""
-        domain = self.stateful_dims.get(name) or self.nondeterministic_dims.get(name)
-        if domain and PENDING not in domain:
-            return tuple(domain)
-        tag = self.graph.tags.get(name)
-        if tag is not None and tag.type.name == "BOOL":
-            return (False, True)
-        return None
+    def _local_slice_check(self, candidate: str, x_touching: frozenset[int]) -> bool:
+        """Write-before-read within each call of the one subroutine touching X.
+
+        The free variables are the tags the subroutine's own rungs decide X's
+        accesses by: the conditions and indexes of the touching rungs, closed
+        over the subroutine's writers only, each taking any value of its
+        domain at the call.  A tag the subroutine writes unconditionally
+        above every rung of it that reads the tag (``HistIdIdx`` from
+        ``HistorianId``) holds a value from that write wherever it matters,
+        so it stays at its default.  A call that never reaches X leaves X
+        alone, and a later call writes before it reads too, so no read sees
+        what X held before.  Bails on a projected or property-read X (its
+        exit value would show), on a subroutine that calls another, and on
+        anything the global check bails on.
+        """
+        graph = self.graph
+        nodes = [graph.rung_nodes[i] for i in x_touching]
+        sub = nodes[0].subroutine if nodes else None
+        if sub is None or any(node.subroutine != sub for node in nodes):
+            return False
+        if candidate in self.observed or candidate in self.edge_tags:
+            return False
+        sub_nodes = [node for node in graph.rung_nodes if node.subroutine == sub]
+        if any(node.calls for node in sub_nodes):
+            return False
+
+        def writes_first(name: str) -> bool:
+            """Written by an unconditional rung of *sub* above its first reader there."""
+            if name in self.oneshot_written_tags:
+                return False
+            reads = [
+                node.rung_index
+                for node in sub_nodes
+                if name in node.condition_reads | node.data_reads | node.exclusive_reads
+            ]
+            writes = [
+                node.rung_index
+                for node in sub_nodes
+                if name in node.all_writes and not node.branch_path and not node.own_condition_reads
+            ]
+            return bool(writes) and (not reads or min(writes) < min(reads))
+
+        closure: set[str] = set()
+        pending: list[str] = []
+        for node in nodes:
+            pending.extend(node.condition_reads | (node.data_reads & graph.index_tags))
+        while pending:
+            name = pending.pop()
+            if name == candidate or name in closure:
+                continue
+            closure.add(name)
+            for node in sub_nodes:
+                if name in node.all_writes:
+                    pending.extend(node.condition_reads | node.data_reads | node.exclusive_reads)
+
+        relevant = closure | {candidate}
+        if relevant & (self.drum_shift_writes | self.edge_tags):
+            return False
+        if any(targets & relevant for _key, targets in self.oneshot_key_writes):
+            return False
+
+        names: list[str] = []
+        domains: list[tuple[Any, ...]] = []
+        total = 1
+        for name in sorted(closure):
+            if writes_first(name):
+                continue
+            if name in self.stateful_dims:
+                domain = self.stateful_dims[name]
+                if PENDING in domain:
+                    return False
+            elif name in self.nondeterministic_dims:
+                domain = self.nondeterministic_dims[name]
+            else:
+                closure_tag = graph.tags.get(name)
+                if closure_tag is not None and closure_tag.readonly:
+                    continue
+                return False
+            if not domain:
+                return False
+            total *= len(domain)
+            if total > _SLICE_COMBO_CAP:
+                return False
+            names.append(name)
+            domains.append(tuple(domain))
+
+        x_default = graph.tags[candidate].default
+        for combo in itertools.product(*domains):
+            tag_values = dict(zip(names, combo, strict=True))
+            if x_default is not None:
+                tag_values[candidate] = x_default
+            state = SystemState().with_tags(tag_values) if tag_values else SystemState()
+            ctx = _WriteBeforeReadContext(state, candidate)
+            ctx.set_memory("_dt", _SLICE_DT)
+            self.program._call_subroutine_ctx(sub, ctx)
+            if ctx.entry_read_seen:
+                return False
+        return True
+
+    def _edge_memory_keys(self, tags: set[str]) -> tuple[str, ...] | None:
+        """``_edge:e{N}`` of every edge contact reading one of *tags*, or None to bail.
+
+        Each contact keeps its own bit (``site_memory``), so a tag read by two
+        contacts gives two free variables.  A program with edge contacts on
+        *tags* but no site table (assembled by hand) bails.
+        """
+        if not tags & self.edge_tags:
+            return ()
+        table = site_table_of(self.program)
+        if table is None:
+            return None
+        return tuple(f"{EDGE_MEMORY}:{site.key}" for site in table.edge_sites if site.tag in tags)
 
 
 # ---------------------------------------------------------------------------
@@ -599,10 +802,12 @@ def _elide_sliced(
     observer_exprs: tuple[Expr, ...] = (),
     observer_tag_names: frozenset[str] = frozenset(),
     projected_observers: frozenset[str] = frozenset(),
+    observed_tags: frozenset[str] = frozenset(),
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
     unclassified_tags: frozenset[str] = frozenset(),
     infeasible_out: set[str] | None = None,
+    black_box_timers: bool = True,
 ) -> tuple[
     dict[str, tuple[Any, ...]],
     dict[str, str],
@@ -613,6 +818,11 @@ def _elide_sliced(
 
     Returns ``(reduced_stateful_dims, elided_dict, proof_details, substitutions)``
     matching the contract of ``_elide_scan_local_stateful_dims``.
+
+    *observed_tags* are read from outside the program besides the observers
+    (the projection, what a callable property reads); the subroutine-local
+    check leaves them alone.  *black_box_timers* is the search's timer model
+    (see ``_collect_hidden_memory_info``); how()'s domain prior passes False.
     """
     del projected_observers  # slice elision does not need scratch projection
 
@@ -625,13 +835,20 @@ def _elide_sliced(
         header = f"{progress_prefix()}elision | sliced {len(stateful_dims)} tags "
         print(header, end="", file=sys.stderr, flush=True)
 
-    analyzer = _SliceElision(program, graph, stateful_dims, nondeterministic_dims)
-
     stateful_names = sorted(name for name, domain in stateful_dims.items() if PENDING not in domain)
 
     observer_seeds: set[str] = set(observer_tag_names)
     for expr in observer_exprs:
         observer_seeds.update(_referenced_tags(expr))
+
+    analyzer = _SliceElision(
+        program,
+        graph,
+        stateful_dims,
+        nondeterministic_dims,
+        observed=frozenset(observer_seeds) | observed_tags,
+        black_box_timers=black_box_timers,
+    )
 
     elidable: dict[str, str] = {}
     proof_details: dict[str, tuple[tuple[str, str], ...]] = {}

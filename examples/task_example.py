@@ -15,7 +15,7 @@ from pyrung import (
     Int,
     rung,
     Timer,
-    calc,
+    math,
     call,
     copy,
     on_delay,
@@ -83,10 +83,10 @@ def task_logic() -> None:
     # 4) Boilerplate: odd steps are active, even steps auto-advance
     #    and reset the step timer.
     with rung(Task.Step % 2 == 0):
-        calc(Task.Step + 1, Task.Step)
+        math(Task.Step + 1, Task.Step)
 
     with rung(Task.Advance == 1):
-        calc(Task.Step + 1, Task.Step)
+        math(Task.Step + 1, Task.Step)
         copy(0, Task.Advance)
         copy(0, StepTimer.Acc)
 

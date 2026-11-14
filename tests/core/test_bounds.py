@@ -4,17 +4,33 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Real, Rung, calc, copy
+from pyrung.core import PLC, Bool, Int, Program, Real, Rung, copy, math
 
 
 class TestRangeViolation:
+    @pytest.mark.parametrize("value", [float("inf"), float("nan")])
+    def test_inf_and_nan_are_out_of_range(self, value):
+        P = Real("P", min=0, max=100)
+        Q = Real("Q")
+
+        with Program() as logic:
+            with Rung():
+                copy(Q, P)
+
+        plc = PLC(logic, dt=0.01)
+        plc.patch({"Q": value})
+        plc.step()
+
+        assert "P" in plc.bounds_violations
+        assert plc.bounds_violations["P"].kind == "range"
+
     def test_max_violation(self):
         Enable = Bool("Enable")
         P = Real("P", min=0, max=100)
 
         with Program() as logic:
             with Rung(Enable):
-                calc(P + 150, P)
+                math(P + 150, P)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "P": 50.0})
@@ -30,7 +46,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(P - 10, P)
+                math(P - 10, P)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "P": 5.0})
@@ -46,7 +62,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(P + 10, P)
+                math(P + 10, P)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "P": 40.0})
@@ -61,7 +77,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(Temp - 100, Temp)
+                math(Temp - 100, Temp)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "Temp": 0.0})
@@ -75,7 +91,7 @@ class TestRangeViolation:
 
         with Program() as logic:
             with Rung(Enable):
-                calc(Speed + 500, Speed)
+                math(Speed + 500, Speed)
 
         plc = PLC(logic, dt=0.01)
         plc.patch({"Enable": True, "Speed": 800})

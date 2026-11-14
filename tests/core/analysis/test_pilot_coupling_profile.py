@@ -14,11 +14,11 @@ from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.crossing import Cmp
 from pyrung.core.harness import Harness
-from pyrung.core.physical import Approach, Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 
 # +1.0 units/s while enabled, -0.5/s decaying.
-SENSOR = Physical("TempSensor", profile=Ramp(up=1.0, down=-0.5))
+SENSOR = Physical("TempSensor", ramp_on=1.0, ramp_off=-0.5)
 
 
 def _installed_plc() -> tuple[PLC, object]:
@@ -66,7 +66,7 @@ def test_no_harness_excludes_couplings() -> None:
 def test_nonlinear_profile_falls_back_to_empirical() -> None:
     # A first-order Approach (slope depends on the current value) cannot be
     # solved analytically: rate_per_scan raises, scans_until -> None.
-    fo_sensor = Physical("FoSensor", profile=Approach(toward=10.0, rate=0.4))
+    fo_sensor = Physical("FoSensor", approach_to=10.0, approach_rate=0.4)
     Enable = Bool("Enable", external=True)
     Temp = Real("Temp", physical=fo_sensor, link="Enable")
     Stage = Int("Stage")

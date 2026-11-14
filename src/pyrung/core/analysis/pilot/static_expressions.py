@@ -16,6 +16,7 @@ from pyrung.core.analysis.sp_values import (
     _values_match,
     _written_value_for_tag,
 )
+from pyrung.core.tag import metadata_edits
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -25,8 +26,12 @@ _REAL_STRICT_EPSILON = 1e-6
 _FORM_SYMBOL = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "==", "ne": "!="}
 
 
-@functools.lru_cache(maxsize=16)
 def caller_guard_context(program: Any) -> Any:
+    return _caller_guard_context_as_of(program, metadata_edits())
+
+
+@functools.lru_cache(maxsize=16)
+def _caller_guard_context_as_of(program: Any, _edits: int) -> Any:
     """Shared recursive symbolic caller guards for one immutable program."""
 
     from pyrung.core.analysis.simplified import _build_guard_ctx

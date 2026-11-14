@@ -1,34 +1,39 @@
 # -- Imports -------------------------------------------------------------------
-import gc
 import json
 import math
 import os
+import re
 import struct
 import time
 
-import adafruit_wiznet5k.adafruit_wiznet5k_socket as _mb_socket
 import board
 import busio
-import digitalio
 import P1AM
 import sdcardio
 import storage
+
+import digitalio
+
 from adafruit_wiznet5k.adafruit_wiznet5k import WIZNET5K
+import adafruit_wiznet5k.adafruit_wiznet5k_socketpool as _mb_socketpool
 
 try:
     import microcontroller
 except ImportError:
     microcontroller = None
 
+import pyrung_rt as _rt
+from pyrung_rt import _MB_CLIENT_IDLE, _mb_client_pack_register_values, _mb_client_raw_pack_register_values, _mb_client_raw_unpack_register_values, _mb_client_unpack_register_values, _store_bool, _store_copy_value_to_type
+
 # -- Configuration -------------------------------------------------------------
 TARGET_SCAN_MS = 10.0
 WATCHDOG_MS = 5000
 PRINT_SCAN_OVERRUNS = False
 
-_SLOT_MODULES = ["P1-08SIM", "P1-08TRS"]
-_RET_DEFAULTS = {"GreenAcc": 0, "RedAcc": 0, "State": "r", "YellowAcc": 0}
-_RET_TYPES = {"GreenAcc": "INT", "RedAcc": "INT", "State": "CHAR", "YellowAcc": "INT"}
-_RET_SCHEMA = "00e8dfc526c074a1fede3a1f74f6074ccaea57c73dd3d7d71798052aac7f3a1f"
+_SLOT_MODULES = ['P1-08SIM', 'P1-15TD2']
+_RET_DEFAULTS = {'State': 'r'}
+_RET_TYPES = {'State': 'CHAR'}
+_RET_SCHEMA = "a603a70741819cfb57cb0a860df25ed01542841ea1af785607532037d2428ddc"
 
 # -- Hardware bootstrap --------------------------------------------------------
 base = P1AM.Base()
@@ -37,9 +42,11 @@ base.rollCall(_SLOT_MODULES)
 _mb_cs = digitalio.DigitalInOut(board.D5)
 _mb_spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
 _mb_eth = WIZNET5K(_mb_spi, _mb_cs)
-_mb_eth.ifconfig = ((192, 168, 1, 200), (255, 255, 255, 0), (192, 168, 1, 1), (0, 0, 0, 0))
-_mb_socket.set_interface(_mb_eth)
+_mb_eth.ifconfig = ((192, 168, 1, 221), (255, 255, 255, 0), (192, 168, 1, 1), (0, 0, 0, 0))
+_mb_pool = _mb_socketpool.SocketPool(_mb_eth)
 
+_board_switch_io = digitalio.DigitalInOut(board.SWITCH)
+_board_switch_io.direction = digitalio.Direction.INPUT
 
 _wd_config = getattr(base, "config_watchdog", None)
 _wd_start = getattr(base, "start_watchdog", None)
@@ -51,32 +58,94 @@ _wd_start()
 
 # -- Tags and blocks -----------------------------------------------------------
 # Scalars (non-block tags).
-_t_GreenAcc = 0
-_t_GreenDone = False
-_t_RedAcc = 0
-_t_RedDone = False
+_t_GreenTimer_Acc = 0
+_t_GreenTimer_Done = False
+_t_GreenTimer_EN = False
+_t_GreenTimer_TT = False
+_t_RedTimer_Acc = 0
+_t_RedTimer_Done = False
+_t_RedTimer_EN = False
+_t_RedTimer_TT = False
 _t_RxBusy = False
 _t_RxErr = False
 _t_RxExCode = 0
 _t_RxOk = False
-_t_State = "r"
+_t_State = 'r'
 _t_WalkActive = False
 _t_WalkRequest = False
-_t_YellowAcc = 0
-_t_YellowDone = False
+_t_YellowTimer_Acc = 0
+_t_YellowTimer_Done = False
+_t_YellowTimer_EN = False
+_t_YellowTimer_TT = False
+_t_board_switch = False
+_t_fault_address_error = False
+_t_fault_code = 0
+_t_fault_division_error = False
+_t_fault_math_operation_error = False
+_t_fault_out_of_range = False
+_t_fault_plc_error = False
+_t_firmware_main_ver_high = 0
+_t_firmware_main_ver_low = 0
+_t_firmware_sub_ver_high = 0
+_t_firmware_sub_ver_low = 0
+_t_rtc_apply_date = False
+_t_rtc_apply_date_error = False
+_t_rtc_apply_time = False
+_t_rtc_apply_time_error = False
+_t_rtc_day = 0
+_t_rtc_hour = 0
+_t_rtc_minute = 0
+_t_rtc_month = 0
+_t_rtc_new_day = 0
+_t_rtc_new_hour = 0
+_t_rtc_new_minute = 0
+_t_rtc_new_month = 0
+_t_rtc_new_second = 0
+_t_rtc_new_year4 = 0
+_t_rtc_second = 0
+_t_rtc_weekday = 0
+_t_rtc_year2 = 0
+_t_rtc_year4 = 0
+_t_storage_sd_delete_all_cmd = False
+_t_storage_sd_eject_cmd = False
+_t_storage_sd_error = False
+_t_storage_sd_error_code = 0
+_t_storage_sd_ready = False
+_t_storage_sd_write_status = False
+_t_sys_always_on = False
+_t_sys_battery_present = False
+_t_sys_clock_100ms = False
+_t_sys_clock_10ms = False
+_t_sys_clock_1h = False
+_t_sys_clock_1m = False
+_t_sys_clock_1s = False
+_t_sys_clock_500ms = False
+_t_sys_cmd_mode_stop = False
+_t_sys_cmd_watchdog_reset = False
+_t_sys_first_scan = False
+_t_sys_fixed_scan_mode = False
+_t_sys_interrupt_scan_time_ms = 0
+_t_sys_mode_run = False
+_t_sys_mode_switch_run = False
+_t_sys_scan_clock_toggle = False
+_t_sys_scan_counter = 0
+_t_sys_scan_time_current_ms = 0
+_t_sys_scan_time_fixed_setup_ms = 0
+_t_sys_scan_time_max_ms = 0
+_t_sys_scan_time_min_ms = 0
 
 # Blocks (list-backed; PLC addresses remain 1-based, list indexes are 0-based).
 _b_Slot1 = [False] * 8
-_b_Slot2 = [False] * 8
+_b_Slot2 = [False] * 15
 
 _mem = {}
-_prev = {}
-_last_scan_ts = time.monotonic()
+_last_scan_ns = time.monotonic_ns()
 _scan_overrun_count = 0
 
 _sd_available = False
 _MEMORY_PATH = "/sd/memory.json"
 _MEMORY_TMP_PATH = "/sd/_memory.tmp"
+_MEMORY_BAK_PATH = "/sd/memory.json.bak"
 _sd_spi = None
 _sd = None
 _sd_vfs = None
@@ -86,191 +155,56 @@ _sd_error_code = 0
 _sd_save_cmd = False
 _sd_eject_cmd = False
 _sd_delete_all_cmd = False
+_ret_snapshot = {}
+_ret_last_save_ns = 0
+_RET_AUTO_SAVE_NS = 30000000000
+
+_mode_run = True
+_stop_hold = False
+_runstop_initialized = False
+_runstop_raw = False
+_runstop_debounced = False
+_runstop_last_change_ns = 0
+
+_sys_scan_n = 0
+_sys_first = True
+_sys_t0_ns = 0
+_sys_prev_ns = 0
 
 # -- Modbus TCP ----------------------------------------------------------------
-_mb_server = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)
-_mb_server.bind(("", 502))
+_mb_server = _mb_pool.socket()
+_mb_server.bind(('', 502))
 _mb_server.listen(2)
 _mb_server.settimeout(0)
 _mb_clients = [None] * 2
 _mb_buf = bytearray(260)
 
-
-def service_modbus_server():
-    try:
-        _client, _addr = _mb_server.accept()
-    except OSError:
-        _client = None
-    if _client is not None:
-        _client.settimeout(0)
-        for _idx in range(len(_mb_clients)):
-            if _mb_clients[_idx] is None:
-                _mb_clients[_idx] = _client
-                _client = None
-                break
-        if _client is not None:
-            _client.close()
-    for _idx in range(len(_mb_clients)):
-        _sock = _mb_clients[_idx]
-        if _sock is None:
-            continue
-        try:
-            _n = _sock.recv_into(_mb_buf)
-        except OSError:
-            _sock.close()
-            _mb_clients[_idx] = None
-            continue
-        if not _n:
-            _sock.close()
-            _mb_clients[_idx] = None
-            continue
-        _resp = _mb_handle(_mb_buf, int(_n))
-        if _resp is None:
-            continue
-        try:
-            _sock.send(_resp)
-        except OSError:
-            _sock.close()
-            _mb_clients[_idx] = None
-
-
-_MB_CLIENT_IDLE = 0
-_MB_CLIENT_CONNECTING = 1
-_MB_CLIENT_SENDING = 2
-_MB_CLIENT_WAITING = 3
-_MB_CLIENT_DONE = 4
-_MB_CLIENT_ERROR = 5
-
-
-def _mb_client_close(job):
-    _sock = job.get("socket")
-    if _sock is not None:
-        try:
-            _sock.close()
-        except Exception:
-            pass
-    job["socket"] = None
-
-
-def _mb_client_reset_runtime(job):
-    _mb_client_close(job)
-    job["request"] = b""
-    job["sent_offset"] = 0
-    job["rx_len"] = 0
-    job["state"] = _MB_CLIENT_IDLE
-
-
-def _mb_client_frame_length(data, n):
-    if int(n) < 7:
-        return None
-    try:
-        _length = struct.unpack(">H", bytes(data[4:6]))[0]
-    except Exception:
-        return None
-    return 6 + int(_length)
-
-
-def _mb_client_pack_register_values(bank, values):
-    if bank in ("DS", "TD", "SD"):
-        return [struct.unpack("<H", struct.pack("<h", int(_value)))[0] for _value in values]
-    if bank in ("DD", "CTD"):
-        _regs = []
-        for _value in values:
-            _regs.extend(struct.unpack("<HH", struct.pack("<i", int(_value))))
-        return _regs
-    if bank == "DF":
-        _regs = []
-        for _value in values:
-            _regs.extend(struct.unpack("<HH", struct.pack("<f", float(_value))))
-        return _regs
-    if bank in ("DH", "XD", "YD"):
-        return [int(_value) & 0xFFFF for _value in values]
-    if bank == "TXT":
-        _regs = []
-        _index = 0
-        while _index < len(values):
-            _lo_raw = values[_index]
-            _hi_raw = values[_index + 1] if (_index + 1) < len(values) else ""
-            _lo = ord(_lo_raw[0]) if isinstance(_lo_raw, str) and _lo_raw else 0
-            _hi = ord(_hi_raw[0]) if isinstance(_hi_raw, str) and _hi_raw else 0
-            _regs.append((_lo & 0xFF) | ((_hi & 0xFF) << 8))
-            _index += 2
-        return _regs
-    return [int(_value) & 0xFFFF for _value in values]
-
-
-def _mb_client_unpack_register_values(bank, regs, logical_count):
-    if bank in ("DS", "TD", "SD"):
-        return [
-            struct.unpack("<h", struct.pack("<H", int(_reg) & 0xFFFF))[0]
-            for _reg in regs[:logical_count]
-        ]
-    if bank in ("DD", "CTD"):
-        _values = []
-        for _index in range(0, len(regs), 2):
-            if (_index + 1) >= len(regs):
-                break
-            _values.append(
-                struct.unpack(
-                    "<i",
-                    struct.pack("<HH", int(regs[_index]) & 0xFFFF, int(regs[_index + 1]) & 0xFFFF),
-                )[0]
-            )
-        return _values[:logical_count]
-    if bank == "DF":
-        _values = []
-        for _index in range(0, len(regs), 2):
-            if (_index + 1) >= len(regs):
-                break
-            _values.append(
-                struct.unpack(
-                    "<f",
-                    struct.pack("<HH", int(regs[_index]) & 0xFFFF, int(regs[_index + 1]) & 0xFFFF),
-                )[0]
-            )
-        return _values[:logical_count]
-    if bank in ("DH", "XD", "YD"):
-        return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]
-    if bank == "TXT":
-        _values = []
-        for _reg in regs:
-            _lo = int(_reg) & 0xFF
-            _hi = (int(_reg) >> 8) & 0xFF
-            _values.append("" if _lo == 0 else chr(_lo))
-            _values.append("" if _hi == 0 else chr(_hi))
-        return _values[:logical_count]
-    return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]
-
-
-def _mb_client_i1_set_status(busy, success, error, exception_response):
+def _mb_client_i12_set_status(busy, success, error, exception_response):
     global _t_RxBusy, _t_RxErr, _t_RxExCode, _t_RxOk
     _t_RxBusy = bool(busy)
     _t_RxOk = bool(success)
     _t_RxErr = bool(error)
     _t_RxExCode = int(exception_response)
 
-
-def _mb_client_i1_values():
+def _mb_client_i12_values():
     global _t_WalkRequest
     return [_t_WalkRequest]
 
+def _mb_client_i12_build_request(tid):  # read coils: coil 0x0000 (1 coil) on ped_panel
+    _pdu = struct.pack('>BHH', 1, 0, 1)
+    return struct.pack('>HHHB', int(tid) & 0xFFFF, 0, len(_pdu) + 1, 1) + _pdu
 
-def _mb_client_i1_build_request(tid):  # read coils: C1 (1 coil) on ped_panel
-    _pdu = struct.pack(">BHH", 1, 16384, 1)
-    return struct.pack(">HHHB", int(tid) & 0xFFFF, 0, len(_pdu) + 1, 1) + _pdu
-
-
-def _mb_client_i1_apply_response(data, n):
+def _mb_client_i12_apply_response(data, n):
     global _t_WalkRequest
     if int(n) < 8:
         return (False, 0)
     try:
-        _tid, _pid, _length, _uid = struct.unpack(">HHHB", bytes(data[:7]))
+        _tid, _pid, _length, _uid = struct.unpack('>HHHB', bytes(data[:7]))
     except Exception:
         return (False, 0)
     if _pid != 0 or _uid != 1:
         return (False, 0)
-    if _tid != int(_mb_client_i1["tid"]):
+    if _tid != int(_mb_client_i12['tid']):
         return (False, 0)
     _frame_len = 6 + int(_length)
     if _frame_len > int(n) or _frame_len < 8:
@@ -291,116 +225,29 @@ def _mb_client_i1_apply_response(data, n):
     for _offset in range(1):
         _byte = int(data[9 + (_offset // 8)])
         _values.append(bool((_byte >> (_offset % 8)) & 0x1))
-    _t_WalkRequest = _store_copy_value_to_type(_values[0], "BOOL")
+    _t_WalkRequest = _store_bool(_values[0])
     return (True, 0)
 
-
-_mb_client_i1 = {
-    "name": "_mb_client_i1",
-    "enabled": False,
-    "state": _MB_CLIENT_IDLE,
-    "socket": None,
-    "request": b"",
-    "sent_offset": 0,
-    "rx_buf": bytearray(260),
-    "rx_len": 0,
-    "deadline": 0.0,
-    "tid": 0,
-    "host": "192.168.1.50",
-    "port": 502,
-    "timeout_s": 1.0,
-    "build": _mb_client_i1_build_request,
-    "apply": _mb_client_i1_apply_response,
-    "set_status": _mb_client_i1_set_status,
+_mb_client_i12 = {
+    'name': '_mb_client_i12',
+    'enabled': False,
+    'state': _MB_CLIENT_IDLE,
+    'socket': None,
+    'request': b'',
+    'sent_offset': 0,
+    'rx_buf': bytearray(260),
+    'rx_len': 0,
+    'deadline': 0.0,
+    'tid': 0,
+    'host': '192.168.1.122',
+    'port': 502,
+    'timeout_s': 1.0,
+    'build': _mb_client_i12_build_request,
+    'apply': _mb_client_i12_apply_response,
+    'set_status': _mb_client_i12_set_status,
 }
 
-_mb_client_jobs = [_mb_client_i1]
-
-
-def service_modbus_client():
-    _now = time.monotonic()
-    for _job in _mb_client_jobs:
-        if not bool(_job["enabled"]):
-            _mb_client_reset_runtime(_job)
-            _job["set_status"](False, False, False, 0)
-            continue
-        if _job["state"] in (_MB_CLIENT_DONE, _MB_CLIENT_ERROR):
-            _mb_client_reset_runtime(_job)
-        if _job["state"] == _MB_CLIENT_IDLE:
-            _job["tid"] = (int(_job["tid"]) + 1) & 0xFFFF
-            if _job["tid"] == 0:
-                _job["tid"] = 1
-            _job["request"] = _job["build"](_job["tid"])
-            _job["sent_offset"] = 0
-            _job["rx_len"] = 0
-            _job["deadline"] = _now + float(_job["timeout_s"])
-            _job["set_status"](True, False, False, 0)
-            _job["state"] = _MB_CLIENT_CONNECTING
-            continue
-        if _job["state"] == _MB_CLIENT_CONNECTING:
-            if _job["socket"] is None:
-                try:
-                    _job["socket"] = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)
-                    _job["socket"].settimeout(0)
-                except OSError:
-                    _job["set_status"](False, False, True, 0)
-                    _job["state"] = _MB_CLIENT_ERROR
-                    continue
-            try:
-                _job["socket"].connect((_job["host"], int(_job["port"])))
-            except OSError:
-                if _now >= float(_job["deadline"]):
-                    _job["set_status"](False, False, True, 0)
-                    _job["state"] = _MB_CLIENT_ERROR
-                    _mb_client_close(_job)
-                else:
-                    _job["state"] = _MB_CLIENT_CONNECTING
-                continue
-            _job["state"] = _MB_CLIENT_SENDING
-            continue
-        if _job["state"] == _MB_CLIENT_SENDING:
-            try:
-                _sent = int(_job["socket"].send(_job["request"][int(_job["sent_offset"]) :]))
-            except OSError:
-                _job["set_status"](False, False, True, 0)
-                _job["state"] = _MB_CLIENT_ERROR
-                _mb_client_close(_job)
-                continue
-            if _sent < 0:
-                _sent = 0
-            _job["sent_offset"] = int(_job["sent_offset"]) + _sent
-            if int(_job["sent_offset"]) >= len(_job["request"]):
-                _job["state"] = _MB_CLIENT_WAITING
-            elif _now >= float(_job["deadline"]):
-                _job["set_status"](False, False, True, 0)
-                _job["state"] = _MB_CLIENT_ERROR
-                _mb_client_close(_job)
-            continue
-        if _job["state"] != _MB_CLIENT_WAITING:
-            continue
-        try:
-            _view = memoryview(_job["rx_buf"])[int(_job["rx_len"]) :]
-            _n = int(_job["socket"].recv_into(_view))
-        except OSError:
-            _n = 0
-        if _n > 0:
-            _job["rx_len"] = int(_job["rx_len"]) + _n
-            _frame_len = _mb_client_frame_length(_job["rx_buf"], _job["rx_len"])
-            if _frame_len is not None and int(_job["rx_len"]) >= int(_frame_len):
-                _ok, _exception = _job["apply"](_job["rx_buf"], int(_frame_len))
-                if _ok:
-                    _job["set_status"](False, True, False, 0)
-                    _job["state"] = _MB_CLIENT_DONE
-                else:
-                    _job["set_status"](False, False, True, int(_exception))
-                    _job["state"] = _MB_CLIENT_ERROR
-                _mb_client_close(_job)
-                continue
-        if _now >= float(_job["deadline"]):
-            _job["set_status"](False, False, True, 0)
-            _job["state"] = _MB_CLIENT_ERROR
-            _mb_client_close(_job)
-
+_mb_client_jobs = [_mb_client_i12]
 
 # -- Retentive memory (SD card) ------------------------------------------------
 def _mount_sd():
@@ -419,35 +266,39 @@ def _mount_sd():
         _sd_error_code = 1
         print(f"Retentive storage unavailable: {exc}")
 
-
 def load_memory():
-    global \
-        _t_GreenAcc, \
-        _t_RedAcc, \
-        _t_State, \
-        _t_YellowAcc, \
-        _sd_write_status, \
-        _sd_error, \
-        _sd_error_code
+    global _t_State, _sd_write_status, _sd_error, _sd_error_code, _ret_snapshot, _ret_last_save_ns
     if not _sd_available:
         print("Retentive load skipped: SD unavailable")
         return
     _sd_write_status = True
     if microcontroller is not None and len(microcontroller.nvm) > 0 and microcontroller.nvm[0] == 1:
-        _sd_error = True
-        _sd_error_code = 2
-        _sd_write_status = False
-        print("Retentive load skipped: interrupted previous save detected")
-        return
-    try:
-        with open(_MEMORY_PATH, encoding="utf-8") as f:
-            payload = json.load(f)
-    except Exception as exc:
-        _sd_error = True
-        _sd_error_code = 2
-        _sd_write_status = False
-        print(f"Retentive load skipped: {exc}")
-        return
+        try:
+            with open(_MEMORY_BAK_PATH, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            print("Retentive memory recovered from backup")
+        except Exception:
+            _sd_error = True
+            _sd_error_code = 2
+            _sd_write_status = False
+            print("Retentive load skipped: interrupted save, no backup available")
+            return
+        microcontroller.nvm[0] = 0
+    else:
+        try:
+            with open(_MEMORY_PATH, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as exc:
+            try:
+                with open(_MEMORY_BAK_PATH, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                print(f"Retentive memory loaded from backup ({exc})")
+            except Exception:
+                _sd_error = True
+                _sd_error_code = 2
+                _sd_write_status = False
+                print(f"Retentive load skipped: {exc}")
+                return
     if payload.get("schema") != _RET_SCHEMA:
         _sd_error = True
         _sd_error_code = 2
@@ -455,60 +306,27 @@ def load_memory():
         print("Retentive load skipped: schema mismatch")
         return
     values = payload.get("values", {})
-    _entry = values.get("GreenAcc")
-    if isinstance(_entry, dict) and _entry.get("type") == "INT":
-        try:
-            _t_GreenAcc = max(-32768, min(32767, int(_entry.get("value", _t_GreenAcc))))
-        except Exception:
-            pass
-    _entry = values.get("RedAcc")
-    if isinstance(_entry, dict) and _entry.get("type") == "INT":
-        try:
-            _t_RedAcc = max(-32768, min(32767, int(_entry.get("value", _t_RedAcc))))
-        except Exception:
-            pass
     _entry = values.get("State")
     if isinstance(_entry, dict) and _entry.get("type") == "CHAR":
         try:
-            _t_State = (
-                _entry.get("value", _t_State)
-                if isinstance(_entry.get("value", _t_State), str)
-                else ""
-            )
+            _t_State = ((_entry.get("value", _t_State) or '\x00') if isinstance(_entry.get("value", _t_State), str) else '\x00')
         except Exception:
             pass
-    _entry = values.get("YellowAcc")
-    if isinstance(_entry, dict) and _entry.get("type") == "INT":
-        try:
-            _t_YellowAcc = max(-32768, min(32767, int(_entry.get("value", _t_YellowAcc))))
-        except Exception:
-            pass
+    print("Retentive memory loaded")
     _sd_error = False
     _sd_error_code = 0
     _sd_write_status = False
-
+    _ret_snapshot = {"State": _t_State}
+    _ret_last_save_ns = time.monotonic_ns()
 
 def save_memory():
-    global \
-        _t_GreenAcc, \
-        _t_RedAcc, \
-        _t_State, \
-        _t_YellowAcc, \
-        _sd_write_status, \
-        _sd_error, \
-        _sd_error_code
+    global _t_State, _sd_write_status, _sd_error, _sd_error_code, _ret_snapshot, _ret_last_save_ns
     if not _sd_available:
         return
     _sd_write_status = True
     values = {}
-    if _t_GreenAcc != _RET_DEFAULTS["GreenAcc"]:
-        values["GreenAcc"] = {"type": "INT", "value": _t_GreenAcc}
-    if _t_RedAcc != _RET_DEFAULTS["RedAcc"]:
-        values["RedAcc"] = {"type": "INT", "value": _t_RedAcc}
     if _t_State != _RET_DEFAULTS["State"]:
         values["State"] = {"type": "CHAR", "value": _t_State}
-    if _t_YellowAcc != _RET_DEFAULTS["YellowAcc"]:
-        values["YellowAcc"] = {"type": "INT", "value": _t_YellowAcc}
     payload = {"schema": _RET_SCHEMA, "values": values}
     dirty_armed = False
     if microcontroller is not None and len(microcontroller.nvm) > 0:
@@ -517,7 +335,11 @@ def save_memory():
     try:
         with open(_MEMORY_TMP_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f)
-        os.replace(_MEMORY_TMP_PATH, _MEMORY_PATH)
+        try:
+            os.rename(_MEMORY_PATH, _MEMORY_BAK_PATH)
+        except OSError:
+            pass
+        os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)
     except Exception as exc:
         _sd_error = True
         _sd_error_code = 3
@@ -526,14 +348,18 @@ def save_memory():
         return
     if dirty_armed:
         microcontroller.nvm[0] = 0
+    try:
+        os.remove(_MEMORY_BAK_PATH)
+    except OSError:
+        pass
     _sd_error = False
     _sd_error_code = 0
     _sd_write_status = False
-
+    _ret_snapshot = {"State": _t_State}
+    _ret_last_save_ns = time.monotonic_ns()
 
 _mount_sd()
 load_memory()
-
 
 # -- Helpers -------------------------------------------------------------------
 def _service_sd_commands():
@@ -552,7 +378,7 @@ def _service_sd_commands():
     _command_failed = False
     if _do_delete:
         try:
-            for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH):
+            for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH, _MEMORY_BAK_PATH):
                 try:
                     os.remove(_path)
                 except OSError:
@@ -591,149 +417,115 @@ def _service_sd_commands():
     # SC69 pulses for this serviced-command scan; reset occurs at next scan start.
     _sd_write_status = True
 
+def _reset_for_run_transition():
+    global _mem, _ret_snapshot, _sd_delete_all_cmd, _sd_eject_cmd, _sd_save_cmd, _sys_first, _sys_scan_n, _t_GreenTimer_Acc, _t_GreenTimer_Done, _t_GreenTimer_EN, _t_GreenTimer_TT, _t_RedTimer_Acc, _t_RedTimer_Done, _t_RedTimer_EN, _t_RedTimer_TT, _t_RxBusy, _t_RxErr, _t_RxExCode, _t_RxOk, _t_State, _t_WalkActive, _t_WalkRequest, _t_YellowTimer_Acc, _t_YellowTimer_Done, _t_YellowTimer_EN, _t_YellowTimer_TT, _t_board_switch, _t_fault_address_error, _t_fault_code, _t_fault_division_error, _t_fault_math_operation_error, _t_fault_out_of_range, _t_fault_plc_error, _t_firmware_main_ver_high, _t_firmware_main_ver_low, _t_firmware_sub_ver_high, _t_firmware_sub_ver_low, _t_rtc_apply_date, _t_rtc_apply_date_error, _t_rtc_apply_time, _t_rtc_apply_time_error, _t_rtc_day, _t_rtc_hour, _t_rtc_minute, _t_rtc_month, _t_rtc_new_day, _t_rtc_new_hour, _t_rtc_new_minute, _t_rtc_new_month, _t_rtc_new_second, _t_rtc_new_year4, _t_rtc_second, _t_rtc_weekday, _t_rtc_year2, _t_rtc_year4, _t_storage_sd_delete_all_cmd, _t_storage_sd_eject_cmd, _t_storage_sd_error, _t_storage_sd_error_code, _t_storage_sd_ready, _t_storage_sd_write_status, _t_sys_always_on, _t_sys_battery_present, _t_sys_clock_100ms, _t_sys_clock_10ms, _t_sys_clock_1h, _t_sys_clock_1m, _t_sys_clock_1s, _t_sys_clock_500ms, _t_sys_cmd_mode_stop, _t_sys_cmd_watchdog_reset, _t_sys_first_scan, _t_sys_fixed_scan_mode, _t_sys_interrupt_scan_time_ms, _t_sys_mode_run, _t_sys_mode_switch_run, _t_sys_scan_clock_toggle, _t_sys_scan_counter, _t_sys_scan_time_current_ms, _t_sys_scan_time_fixed_setup_ms, _t_sys_scan_time_max_ms, _t_sys_scan_time_min_ms
+    _mem = {}
+    _ret_snapshot = {}
+    _sd_save_cmd = False
+    _sd_eject_cmd = False
+    _sd_delete_all_cmd = False
+    _sys_scan_n = 0
+    _sys_first = True
+    _t_GreenTimer_Acc = 0
+    _t_GreenTimer_Done = False
+    _t_GreenTimer_EN = False
+    _t_GreenTimer_TT = False
+    _t_RedTimer_Acc = 0
+    _t_RedTimer_Done = False
+    _t_RedTimer_EN = False
+    _t_RedTimer_TT = False
+    _t_RxBusy = False
+    _t_RxErr = False
+    _t_RxExCode = 0
+    _t_RxOk = False
+    _t_WalkActive = False
+    _t_WalkRequest = False
+    _t_YellowTimer_Acc = 0
+    _t_YellowTimer_Done = False
+    _t_YellowTimer_EN = False
+    _t_YellowTimer_TT = False
+    _t_fault_address_error = False
+    _t_fault_code = 0
+    _t_fault_division_error = False
+    _t_fault_math_operation_error = False
+    _t_fault_out_of_range = False
+    _t_fault_plc_error = False
+    _t_firmware_main_ver_high = 0
+    _t_firmware_main_ver_low = 0
+    _t_firmware_sub_ver_high = 0
+    _t_firmware_sub_ver_low = 0
+    _t_rtc_apply_date = False
+    _t_rtc_apply_date_error = False
+    _t_rtc_apply_time = False
+    _t_rtc_apply_time_error = False
+    _t_rtc_day = 0
+    _t_rtc_hour = 0
+    _t_rtc_minute = 0
+    _t_rtc_month = 0
+    _t_rtc_new_day = 0
+    _t_rtc_new_hour = 0
+    _t_rtc_new_minute = 0
+    _t_rtc_new_month = 0
+    _t_rtc_new_second = 0
+    _t_rtc_new_year4 = 0
+    _t_rtc_second = 0
+    _t_rtc_weekday = 0
+    _t_rtc_year2 = 0
+    _t_rtc_year4 = 0
+    _t_storage_sd_delete_all_cmd = False
+    _t_storage_sd_eject_cmd = False
+    _t_storage_sd_error = False
+    _t_storage_sd_error_code = 0
+    _t_storage_sd_ready = False
+    _t_storage_sd_write_status = False
+    _t_sys_always_on = False
+    _t_sys_battery_present = False
+    _t_sys_clock_100ms = False
+    _t_sys_clock_10ms = False
+    _t_sys_clock_1h = False
+    _t_sys_clock_1m = False
+    _t_sys_clock_1s = False
+    _t_sys_clock_500ms = False
+    _t_sys_cmd_mode_stop = False
+    _t_sys_cmd_watchdog_reset = False
+    _t_sys_first_scan = False
+    _t_sys_fixed_scan_mode = False
+    _t_sys_interrupt_scan_time_ms = 0
+    _t_sys_mode_run = False
+    _t_sys_mode_switch_run = False
+    _t_sys_scan_clock_toggle = False
+    _t_sys_scan_counter = 0
+    _t_sys_scan_time_current_ms = 0
+    _t_sys_scan_time_fixed_setup_ms = 0
+    _t_sys_scan_time_max_ms = 0
+    _t_sys_scan_time_min_ms = 0
+    for _i in range(0, 15):
+        _b_Slot2[_i] = False
 
-def _rise(curr, prev):
-    return bool(curr) and not bool(prev)
-
-
-def _store_copy_value_to_type(value, dest_type):
-    if isinstance(value, float) and not math.isfinite(value):
-        value = 0
-    if dest_type == "INT":
-        return max(-32768, min(32767, int(value)))
-    if dest_type == "DINT":
-        return max(-2147483648, min(2147483647, int(value)))
-    if dest_type == "WORD":
-        return int(value) & 0xFFFF
-    if dest_type == "REAL":
-        return float(value)
-    if dest_type == "BOOL":
-        return bool(value)
-    if dest_type == "CHAR":
-        if not isinstance(value, str):
-            raise ValueError("CHAR value must be a string")
-        if value == "":
-            return value
-        if len(value) != 1 or ord(value) > 127:
-            raise ValueError("CHAR value must be blank or one ASCII character")
-        return value
-    return value
-
+def _force_outputs_off():
+    global _t_GreenTimer_Acc, _t_GreenTimer_Done, _t_GreenTimer_EN, _t_GreenTimer_TT, _t_RedTimer_Acc, _t_RedTimer_Done, _t_RedTimer_EN, _t_RedTimer_TT, _t_RxBusy, _t_RxErr, _t_RxExCode, _t_RxOk, _t_State, _t_WalkActive, _t_WalkRequest, _t_YellowTimer_Acc, _t_YellowTimer_Done, _t_YellowTimer_EN, _t_YellowTimer_TT, _t_board_switch, _t_fault_address_error, _t_fault_code, _t_fault_division_error, _t_fault_math_operation_error, _t_fault_out_of_range, _t_fault_plc_error, _t_firmware_main_ver_high, _t_firmware_main_ver_low, _t_firmware_sub_ver_high, _t_firmware_sub_ver_low, _t_rtc_apply_date, _t_rtc_apply_date_error, _t_rtc_apply_time, _t_rtc_apply_time_error, _t_rtc_day, _t_rtc_hour, _t_rtc_minute, _t_rtc_month, _t_rtc_new_day, _t_rtc_new_hour, _t_rtc_new_minute, _t_rtc_new_month, _t_rtc_new_second, _t_rtc_new_year4, _t_rtc_second, _t_rtc_weekday, _t_rtc_year2, _t_rtc_year4, _t_storage_sd_delete_all_cmd, _t_storage_sd_eject_cmd, _t_storage_sd_error, _t_storage_sd_error_code, _t_storage_sd_ready, _t_storage_sd_write_status, _t_sys_always_on, _t_sys_battery_present, _t_sys_clock_100ms, _t_sys_clock_10ms, _t_sys_clock_1h, _t_sys_clock_1m, _t_sys_clock_1s, _t_sys_clock_500ms, _t_sys_cmd_mode_stop, _t_sys_cmd_watchdog_reset, _t_sys_first_scan, _t_sys_fixed_scan_mode, _t_sys_interrupt_scan_time_ms, _t_sys_mode_run, _t_sys_mode_switch_run, _t_sys_scan_clock_toggle, _t_sys_scan_counter, _t_sys_scan_time_current_ms, _t_sys_scan_time_fixed_setup_ms, _t_sys_scan_time_max_ms, _t_sys_scan_time_min_ms
+    for _i in range(15):
+        _b_Slot2[_i] = False
+    _write_outputs()
 
 # -- Modbus address mapping ----------------------------------------------------
-def _mb_reverse_coil(addr):
-    # X (digital inputs)
-    if 0 <= addr <= 31:
-        _offset = addr - 0
-        if _offset < 16:
-            return ("X", _offset + 1)
-        return ("X", 21 + (_offset - 16))
-    if 32 <= addr <= 47:
-        return ("X", 101 + (addr - 32))
-    if 64 <= addr <= 79:
-        return ("X", 201 + (addr - 64))
-    if 96 <= addr <= 111:
-        return ("X", 301 + (addr - 96))
-    if 128 <= addr <= 143:
-        return ("X", 401 + (addr - 128))
-    if 160 <= addr <= 175:
-        return ("X", 501 + (addr - 160))
-    if 192 <= addr <= 207:
-        return ("X", 601 + (addr - 192))
-    if 224 <= addr <= 239:
-        return ("X", 701 + (addr - 224))
-    if 256 <= addr <= 271:
-        return ("X", 801 + (addr - 256))
-    # Y (digital outputs)
-    if 8192 <= addr <= 8223:
-        _offset = addr - 8192
-        if _offset < 16:
-            return ("Y", _offset + 1)
-        return ("Y", 21 + (_offset - 16))
-    if 8224 <= addr <= 8239:
-        return ("Y", 101 + (addr - 8224))
-    if 8256 <= addr <= 8271:
-        return ("Y", 201 + (addr - 8256))
-    if 8288 <= addr <= 8303:
-        return ("Y", 301 + (addr - 8288))
-    if 8320 <= addr <= 8335:
-        return ("Y", 401 + (addr - 8320))
-    if 8352 <= addr <= 8367:
-        return ("Y", 501 + (addr - 8352))
-    if 8384 <= addr <= 8399:
-        return ("Y", 601 + (addr - 8384))
-    if 8416 <= addr <= 8431:
-        return ("Y", 701 + (addr - 8416))
-    if 8448 <= addr <= 8463:
-        return ("Y", 801 + (addr - 8448))
-    # C (bit memory)
-    if 16384 <= addr <= 18383:
-        return ("C", (addr - 16384) + 1)
-    # T (timer done bits)
-    if 45056 <= addr <= 45555:
-        return ("T", (addr - 45056) + 1)
-    # CT (counter done bits)
-    if 49152 <= addr <= 49401:
-        return ("CT", (addr - 49152) + 1)
-    # SC (system control bits)
-    if 61440 <= addr <= 62439:
-        return ("SC", (addr - 61440) + 1)
-    return None
+_MB_COIL_MAP = {16384: ('C', 1), 16385: ('C', 2), 16386: ('C', 3), 16387: ('C', 4), 16388: ('C', 5), 61440: ('SC', 1), 61441: ('SC', 2), 61442: ('SC', 3), 61443: ('SC', 4), 61444: ('SC', 5), 61445: ('SC', 6), 61446: ('SC', 7), 61447: ('SC', 8), 61448: ('SC', 9), 61449: ('SC', 10), 61450: ('SC', 11), 61458: ('SC', 19), 61479: ('SC', 40), 61482: ('SC', 43), 61483: ('SC', 44), 61485: ('SC', 46), 61489: ('SC', 50), 61490: ('SC', 51), 61492: ('SC', 53), 61493: ('SC', 54), 61494: ('SC', 55), 61495: ('SC', 56), 61504: ('SC', 65), 61505: ('SC', 66), 61507: ('SC', 68), 61508: ('SC', 69), 61509: ('SC', 70), 61641: ('SC', 202), 61642: ('SC', 203), 45056: ('T', 1), 45057: ('T', 2), 45058: ('T', 3)}
+_MB_REG_MAP = {0: ('DS', 1, 0), 61440: ('SD', 1, 0), 61444: ('SD', 5, 0), 61445: ('SD', 6, 0), 61446: ('SD', 7, 0), 61447: ('SD', 8, 0), 61448: ('SD', 9, 0), 61449: ('SD', 10, 0), 61450: ('SD', 11, 0), 61451: ('SD', 12, 0), 61452: ('SD', 13, 0), 61453: ('SD', 14, 0), 61458: ('SD', 19, 0), 61459: ('SD', 20, 0), 61460: ('SD', 21, 0), 61461: ('SD', 22, 0), 61462: ('SD', 23, 0), 61463: ('SD', 24, 0), 61464: ('SD', 25, 0), 61465: ('SD', 26, 0), 61468: ('SD', 29, 0), 61470: ('SD', 31, 0), 61471: ('SD', 32, 0), 61473: ('SD', 34, 0), 61474: ('SD', 35, 0), 61475: ('SD', 36, 0), 61508: ('SD', 69, 0), 45056: ('TD', 1, 0), 45057: ('TD', 2, 0), 45058: ('TD', 3, 0), 36864: ('TXT', 1, 0)}
+_MB_COIL_SPANS = ((0, 287), (8192, 8479), (16384, 18383), (45056, 45555), (49152, 49401), (61440, 62439))
+_MB_REG_SPANS = ((0, 4499), (16384, 18383), (24576, 25075), (28672, 29671), (36864, 37363), (45056, 45555), (49152, 49651), (61440, 62439))
+_MB_COIL_READ_ONLY = ('CT', 'T', 'X')
+_MB_SC_WRITABLE = (53, 55, 60, 61, 65, 66, 67, 75, 76, 120, 121)
+_MB_SD_WRITABLE = (29, 31, 32, 34, 35, 36, 40, 41, 42, 50, 51, 60, 61, 106, 107, 108, 112, 113, 114, 140, 141, 142, 143, 144, 145, 146, 147, 214, 215)
+_MB_WIDE = ('CTD', 'DD', 'DF')
+_mb_yd = [0] * 17
 
-
-def _mb_reverse_register(addr):
-    # DS (int memory)
-    if 0 <= addr <= 4499:
-        _offset = addr - 0
-        return ("DS", (_offset // 1) + 1, _offset % 1)
-    # DD (double-int memory)
-    if 16384 <= addr <= 18383:
-        _offset = addr - 16384
-        return ("DD", (_offset // 2) + 1, _offset % 2)
-    # DH (hex/word memory)
-    if 24576 <= addr <= 25075:
-        _offset = addr - 24576
-        return ("DH", (_offset // 1) + 1, _offset % 1)
-    # DF (float memory)
-    if 28672 <= addr <= 29671:
-        _offset = addr - 28672
-        return ("DF", (_offset // 2) + 1, _offset % 2)
-    # TXT (text memory)
-    if 36864 <= addr <= 37363:
-        return ("TXT", ((addr - 36864) * 2) + 1, 0)
-    # TD (timer accumulators)
-    if 45056 <= addr <= 45555:
-        _offset = addr - 45056
-        return ("TD", (_offset // 1) + 1, _offset % 1)
-    # CTD (counter accumulators)
-    if 49152 <= addr <= 49651:
-        _offset = addr - 49152
-        return ("CTD", (_offset // 2) + 1, _offset % 2)
-    # XD (input words)
-    if 57344 <= addr <= 57360:
-        return ("XD", addr - 57344, 0)
-    # YD (output words)
-    if 57856 <= addr <= 57872:
-        return ("YD", addr - 57856, 0)
-    # SD (system data)
-    if 61440 <= addr <= 62439:
-        _offset = addr - 61440
-        return ("SD", (_offset // 1) + 1, _offset % 1)
-    return None
-
-
-def _mb_xy_word_start(word_index):
-    _idx = int(word_index)
-    if _idx < 0 or _idx > 16:
-        return None
-    return (
-        1
-        if int(word_index) == 0
-        else 21
-        if int(word_index) == 1
-        else (((int(word_index) // 2) * 100) + 1)
-    )
-
+def _mb_in(addr, spans):
+    for _lo, _hi in spans:
+        if addr < _lo:
+            return False
+        if addr <= _hi:
+            return True
+    return False
 
 def _mb_read_coil_plc(bank, index):
     if bank == "C" and index == 1:
@@ -746,408 +538,461 @@ def _mb_read_coil_plc(bank, index):
         return bool(_t_RxOk)
     if bank == "C" and index == 5:
         return bool(_t_RxErr)
+    if bank == "SC" and index == 1:
+        return bool(_t_sys_always_on)
+    if bank == "SC" and index == 2:
+        return bool(_t_sys_first_scan)
+    if bank == "SC" and index == 3:
+        return bool(_t_sys_scan_clock_toggle)
+    if bank == "SC" and index == 4:
+        return bool(_t_sys_clock_10ms)
+    if bank == "SC" and index == 5:
+        return bool(_t_sys_clock_100ms)
+    if bank == "SC" and index == 6:
+        return bool(_t_sys_clock_500ms)
+    if bank == "SC" and index == 7:
+        return bool(_t_sys_clock_1s)
+    if bank == "SC" and index == 8:
+        return bool(_t_sys_clock_1m)
+    if bank == "SC" and index == 9:
+        return bool(_t_sys_clock_1h)
+    if bank == "SC" and index == 10:
+        return bool(_t_sys_mode_switch_run)
+    if bank == "SC" and index == 11:
+        return bool(_mode_run)
+    if bank == "SC" and index == 19:
+        return bool(_t_fault_plc_error)
+    if bank == "SC" and index == 40:
+        return bool(_t_fault_division_error)
+    if bank == "SC" and index == 43:
+        return bool(_t_fault_out_of_range)
+    if bank == "SC" and index == 44:
+        return bool(_t_fault_address_error)
+    if bank == "SC" and index == 46:
+        return bool(_t_fault_math_operation_error)
+    if bank == "SC" and index == 50:
+        return bool(_t_sys_cmd_mode_stop)
+    if bank == "SC" and index == 51:
+        return bool(_t_sys_cmd_watchdog_reset)
+    if bank == "SC" and index == 53:
+        return bool(_t_rtc_apply_date)
+    if bank == "SC" and index == 54:
+        return bool(_t_rtc_apply_date_error)
+    if bank == "SC" and index == 55:
+        return bool(_t_rtc_apply_time)
+    if bank == "SC" and index == 56:
+        return bool(_t_rtc_apply_time_error)
+    if bank == "SC" and index == 65:
+        return bool(_t_storage_sd_eject_cmd)
+    if bank == "SC" and index == 66:
+        return bool(_t_storage_sd_delete_all_cmd)
+    if bank == "SC" and index == 68:
+        return bool(_t_storage_sd_ready)
+    if bank == "SC" and index == 69:
+        return bool(_t_storage_sd_write_status)
+    if bank == "SC" and index == 70:
+        return bool(_t_storage_sd_error)
+    if bank == "SC" and index == 202:
+        return bool(_t_sys_fixed_scan_mode)
+    if bank == "SC" and index == 203:
+        return bool(_t_sys_battery_present)
     if bank == "T" and index == 1:
-        return bool(_t_RedDone)
+        return bool(_t_RedTimer_Done)
     if bank == "T" and index == 2:
-        return bool(_t_GreenDone)
+        return bool(_t_GreenTimer_Done)
     if bank == "T" and index == 3:
-        return bool(_t_YellowDone)
+        return bool(_t_YellowTimer_Done)
     return False
 
-
 def _mb_write_coil_plc(bank, index, val):
-    global \
-        _t_GreenDone, \
-        _t_RedDone, \
-        _t_RxBusy, \
-        _t_RxErr, \
-        _t_RxOk, \
-        _t_WalkActive, \
-        _t_WalkRequest, \
-        _t_YellowDone
+    global _t_GreenTimer_Done, _t_RedTimer_Done, _t_RxBusy, _t_RxErr, _t_RxOk, _t_WalkActive, _t_WalkRequest, _t_YellowTimer_Done, _t_rtc_apply_date, _t_rtc_apply_time, _t_storage_sd_delete_all_cmd, _t_storage_sd_eject_cmd
     _value = bool(val)
     if bank == "C" and index == 1:
         _t_WalkActive = _value
-        return True
+        return
     if bank == "C" and index == 2:
         _t_WalkRequest = _value
-        return True
+        return
     if bank == "C" and index == 3:
         _t_RxBusy = _value
-        return True
+        return
     if bank == "C" and index == 4:
         _t_RxOk = _value
-        return True
+        return
     if bank == "C" and index == 5:
         _t_RxErr = _value
-        return True
+        return
+    if bank == "SC" and index == 53:
+        _t_rtc_apply_date = _value
+        return
+    if bank == "SC" and index == 55:
+        _t_rtc_apply_time = _value
+        return
+    if bank == "SC" and index == 65:
+        _t_storage_sd_eject_cmd = _value
+        return
+    if bank == "SC" and index == 66:
+        _t_storage_sd_delete_all_cmd = _value
+        return
     if bank == "T" and index == 1:
-        _t_RedDone = _value
-        return True
+        _t_RedTimer_Done = _value
+        return
     if bank == "T" and index == 2:
-        _t_GreenDone = _value
-        return True
+        _t_GreenTimer_Done = _value
+        return
     if bank == "T" and index == 3:
-        _t_YellowDone = _value
-        return True
-    if bank in ("Y", "C"):
-        return True
-    if bank == "SC":
-        return index in [53, 55, 60, 61, 65, 66, 67, 75, 76, 120, 121]
-    return False
-
-
-def _mb_read_mirrored_word(bank, word_index):
-    _start = _mb_xy_word_start(word_index)
-    if _start is None:
-        return 0
-    _word = 0
-    for _bit_index in range(16):
-        if _mb_read_coil_plc(bank, _start + _bit_index):
-            _word |= 1 << _bit_index
-    return _word
-
-
-def _mb_write_mirrored_word(word_index, value):
-    _start = _mb_xy_word_start(word_index)
-    if _start is None:
-        return False
-    _word = int(value) & 0xFFFF
-    for _bit_index in range(16):
-        _mb_write_coil_plc("Y", _start + _bit_index, bool((_word >> _bit_index) & 0x1))
-    return True
-
+        _t_YellowTimer_Done = _value
+        return
 
 def _mb_read_reg_plc(bank, index, reg_pos):
-    if bank == "XD":
-        return _mb_read_mirrored_word("X", index)
-    if bank == "YD":
-        return _mb_read_mirrored_word("Y", index)
     if bank == "DS" and index == 1:
-        return struct.unpack("<H", struct.pack("<h", int(_t_RxExCode)))[0]
+        return struct.unpack('<H', struct.pack('<h', int(_t_RxExCode)))[0]
+    if bank == "SD" and index == 1:
+        return struct.unpack('<H', struct.pack('<h', int(_t_fault_code)))[0]
+    if bank == "SD" and index == 5:
+        return struct.unpack('<H', struct.pack('<h', int(_t_firmware_main_ver_low)))[0]
+    if bank == "SD" and index == 6:
+        return struct.unpack('<H', struct.pack('<h', int(_t_firmware_main_ver_high)))[0]
+    if bank == "SD" and index == 7:
+        return struct.unpack('<H', struct.pack('<h', int(_t_firmware_sub_ver_low)))[0]
+    if bank == "SD" and index == 8:
+        return struct.unpack('<H', struct.pack('<h', int(_t_firmware_sub_ver_high)))[0]
+    if bank == "SD" and index == 9:
+        return struct.unpack('<H', struct.pack('<h', int(_t_sys_scan_counter)))[0]
+    if bank == "SD" and index == 10:
+        return struct.unpack('<H', struct.pack('<h', int(_t_sys_scan_time_current_ms)))[0]
+    if bank == "SD" and index == 11:
+        return struct.unpack('<H', struct.pack('<h', int(_t_sys_scan_time_min_ms)))[0]
+    if bank == "SD" and index == 12:
+        return struct.unpack('<H', struct.pack('<h', int(_t_sys_scan_time_max_ms)))[0]
+    if bank == "SD" and index == 13:
+        return struct.unpack('<H', struct.pack('<h', int(_t_sys_scan_time_fixed_setup_ms)))[0]
+    if bank == "SD" and index == 14:
+        return struct.unpack('<H', struct.pack('<h', int(_t_sys_interrupt_scan_time_ms)))[0]
+    if bank == "SD" and index == 19:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_year4)))[0]
+    if bank == "SD" and index == 20:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_year2)))[0]
+    if bank == "SD" and index == 21:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_month)))[0]
+    if bank == "SD" and index == 22:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_day)))[0]
+    if bank == "SD" and index == 23:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_weekday)))[0]
+    if bank == "SD" and index == 24:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_hour)))[0]
+    if bank == "SD" and index == 25:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_minute)))[0]
+    if bank == "SD" and index == 26:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_second)))[0]
+    if bank == "SD" and index == 29:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_new_year4)))[0]
+    if bank == "SD" and index == 31:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_new_month)))[0]
+    if bank == "SD" and index == 32:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_new_day)))[0]
+    if bank == "SD" and index == 34:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_new_hour)))[0]
+    if bank == "SD" and index == 35:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_new_minute)))[0]
+    if bank == "SD" and index == 36:
+        return struct.unpack('<H', struct.pack('<h', int(_t_rtc_new_second)))[0]
+    if bank == "SD" and index == 69:
+        return struct.unpack('<H', struct.pack('<h', int(_t_storage_sd_error_code)))[0]
     if bank == "TD" and index == 1:
-        return struct.unpack("<H", struct.pack("<h", int(_t_RedAcc)))[0]
+        return struct.unpack('<H', struct.pack('<h', int(_t_RedTimer_Acc)))[0]
     if bank == "TD" and index == 2:
-        return struct.unpack("<H", struct.pack("<h", int(_t_GreenAcc)))[0]
+        return struct.unpack('<H', struct.pack('<h', int(_t_GreenTimer_Acc)))[0]
     if bank == "TD" and index == 3:
-        return struct.unpack("<H", struct.pack("<h", int(_t_YellowAcc)))[0]
+        return struct.unpack('<H', struct.pack('<h', int(_t_YellowTimer_Acc)))[0]
     if bank == "TXT" and index == 1:
         return ((ord(_t_State) if _t_State else 0) & 0xFF) | (((0) & 0xFF) << 8)
     return 0
 
-
 def _mb_write_reg_plc(bank, index, reg_pos, value):
-    global _t_GreenAcc, _t_RedAcc, _t_RxExCode, _t_State, _t_YellowAcc
+    global _t_GreenTimer_Acc, _t_RedTimer_Acc, _t_RxExCode, _t_State, _t_YellowTimer_Acc, _t_rtc_new_day, _t_rtc_new_hour, _t_rtc_new_minute, _t_rtc_new_month, _t_rtc_new_second, _t_rtc_new_year4
     _word = int(value) & 0xFFFF
-    if bank == "XD":
-        return False
-    if bank == "YD":
-        return _mb_write_mirrored_word(index, _word)
     if bank == "DS" and index == 1:
-        _t_RxExCode = struct.unpack("<h", struct.pack("<H", _word))[0]
-        return True
+        _t_RxExCode = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
+    if bank == "SD" and index == 29:
+        _t_rtc_new_year4 = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
+    if bank == "SD" and index == 31:
+        _t_rtc_new_month = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
+    if bank == "SD" and index == 32:
+        _t_rtc_new_day = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
+    if bank == "SD" and index == 34:
+        _t_rtc_new_hour = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
+    if bank == "SD" and index == 35:
+        _t_rtc_new_minute = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
+    if bank == "SD" and index == 36:
+        _t_rtc_new_second = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
     if bank == "TD" and index == 1:
-        _t_RedAcc = struct.unpack("<h", struct.pack("<H", _word))[0]
-        return True
+        _t_RedTimer_Acc = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
     if bank == "TD" and index == 2:
-        _t_GreenAcc = struct.unpack("<h", struct.pack("<H", _word))[0]
-        return True
+        _t_GreenTimer_Acc = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
     if bank == "TD" and index == 3:
-        _t_YellowAcc = struct.unpack("<h", struct.pack("<H", _word))[0]
-        return True
+        _t_YellowTimer_Acc = struct.unpack('<h', struct.pack('<H', _word))[0]
+        return
     if bank == "TXT" and index == 1:
         _t_State = chr(_word & 0xFF)
-        return True
-    if bank in ("DS", "DD", "DH", "DF", "TXT", "TD", "CTD"):
-        return True
-    if bank == "SD":
-        return index in [
-            29,
-            31,
-            32,
-            34,
-            35,
-            36,
-            40,
-            41,
-            42,
-            50,
-            51,
-            60,
-            61,
-            106,
-            107,
-            108,
-            112,
-            113,
-            114,
-            140,
-            141,
-            142,
-            143,
-            144,
-            145,
-            146,
-            147,
-            214,
-            215,
-        ]
-    return False
+        return
 
+def _mb_xy_start(base, word):
+    if word > 1 and word % 2:
+        return None
+    return base + word * 16
+
+def _mb_coil_cell(addr):
+    return None
+
+def _mb_reg_cell(addr):
+    return None
+
+def _mb_cell_word(bank, cells, i, pos):
+    return 0
+
+def _mb_cell_store(bank, cells, i, pos, _word):
+    return None
+
+def _mb_coil_get(addr):
+    _mapped = _MB_COIL_MAP.get(addr)
+    if _mapped is not None:
+        return _mb_read_coil_plc(_mapped[0], _mapped[1])
+    _cell = _mb_coil_cell(addr)
+    return None if _cell is None else bool(_cell[1][_cell[2]])
+
+def _mb_coil_set(addr, val):
+    _mapped = _MB_COIL_MAP.get(addr)
+    if _mapped is not None:
+        _mb_write_coil_plc(_mapped[0], _mapped[1], val)
+        return
+    _cell = _mb_coil_cell(addr)
+    if _cell is not None:
+        _cell[1][_cell[2]] = bool(val)
+
+def _mb_reg_get(addr):
+    _mapped = _MB_REG_MAP.get(addr)
+    if _mapped is not None:
+        return _mb_read_reg_plc(_mapped[0], _mapped[1], _mapped[2])
+    _cell = _mb_reg_cell(addr)
+    return None if _cell is None else _mb_cell_word(_cell[0], _cell[1], _cell[2], _cell[3])
+
+def _mb_xy_word(base, word, held):
+    _start = _mb_xy_start(base, word)
+    if _start is None:
+        return held
+    for _bit in range(16):
+        _value = _mb_coil_get(_start + _bit)
+        if _value is not None:
+            if _value:
+                held |= 1 << _bit
+            else:
+                held &= ~(1 << _bit)
+    return held
 
 def _mb_read_coil(addr):
-    _mapped = _mb_reverse_coil(int(addr))
-    if _mapped is None:
-        return None
-    _bank, _index = _mapped
-    return _mb_read_coil_plc(_bank, _index)
+    _value = _mb_coil_get(addr)
+    if _value is None:
+        return False if _mb_in(addr, _MB_COIL_SPANS) else None
+    return _value
 
-
-def _mb_write_coil(addr, val):
-    _mapped = _mb_reverse_coil(int(addr))
-    if _mapped is None:
+def _mb_coil_ok(addr):
+    _mapped = _MB_COIL_MAP.get(addr) or _mb_coil_cell(addr)
+    if _mapped is None or _mapped[0] in _MB_COIL_READ_ONLY:
         return False
-    _bank, _index = _mapped
-    return _mb_write_coil_plc(_bank, _index, val)
+    return _mapped[0] != "SC" or _mapped[1] in _MB_SC_WRITABLE
 
+def _mb_write_coils(start, values):
+    for _offset in range(len(values)):
+        if not _mb_coil_ok(start + _offset):
+            return False
+    for _offset in range(len(values)):
+        _mb_coil_set(start + _offset, values[_offset])
+    return True
 
 def _mb_read_reg(addr):
-    _mapped = _mb_reverse_register(int(addr))
-    if _mapped is None:
-        return None
-    _bank, _index, _reg_pos = _mapped
-    return _mb_read_reg_plc(_bank, _index, _reg_pos)
-
-
-def _mb_write_reg(addr, val):
-    _mapped = _mb_reverse_register(int(addr))
-    if _mapped is None:
-        return False
-    _bank, _index, _reg_pos = _mapped
-    return _mb_write_reg_plc(_bank, _index, _reg_pos, val)
-
-
-def _mb_err(tid, uid, fc, code):
-    return struct.pack(
-        ">HHHBB", int(tid) & 0xFFFF, 0, 3, int(uid) & 0xFF, (int(fc) & 0x7F) | 0x80
-    ) + bytes([int(code) & 0xFF])
-
-
-def _mb_handle(data, n):
-    if n < 8:
-        return None
+    if 57344 <= addr < 57361:
+        return _mb_xy_word(0, addr - 57344, 0)
+    if 57856 <= addr < 57873:
+        return _mb_xy_word(8192, addr - 57856, _mb_yd[addr - 57856])
     try:
-        tid, pid, length, uid = struct.unpack(">HHHB", bytes(data[:7]))
+        _word = _mb_reg_get(addr)
     except Exception:
         return None
-    if pid != 0:
-        return None
-    if length < 2 or (length + 6) > int(n):
-        return None
-    fc = int(data[7])
-    pdu_end = 6 + length
-    if fc in (1, 2):
-        if pdu_end < 12:
-            return _mb_err(tid, uid, fc, 3)
-        start, count = struct.unpack(">HH", bytes(data[8:12]))
-        if count < 1 or count > 2000:
-            return _mb_err(tid, uid, fc, 3)
-        bits = []
-        for _offset in range(count):
-            _bit = _mb_read_coil(start + _offset)
-            if _bit is None:
-                return _mb_err(tid, uid, fc, 2)
-            bits.append(bool(_bit))
-        byte_count = (count + 7) // 8
-        payload = bytearray(byte_count)
-        for _offset, _bit in enumerate(bits):
-            if _bit:
-                payload[_offset // 8] |= 1 << (_offset % 8)
-        return struct.pack(">HHHBBB", tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(
-            payload
-        )
-    if fc in (3, 4):
-        if pdu_end < 12:
-            return _mb_err(tid, uid, fc, 3)
-        start, count = struct.unpack(">HH", bytes(data[8:12]))
-        if count < 1 or count > 125:
-            return _mb_err(tid, uid, fc, 3)
-        regs = []
-        for _offset in range(count):
-            _reg = _mb_read_reg(start + _offset)
-            if _reg is None:
-                return _mb_err(tid, uid, fc, 2)
-            regs.append(int(_reg) & 0xFFFF)
-        payload = bytearray()
-        for _reg in regs:
-            payload.extend(struct.pack(">H", _reg))
-        return struct.pack(">HHHBBB", tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(
-            payload
-        )
-    if fc == 5:
-        if pdu_end < 12:
-            return _mb_err(tid, uid, fc, 3)
-        addr, raw = struct.unpack(">HH", bytes(data[8:12]))
-        if raw not in (0x0000, 0xFF00):
-            return _mb_err(tid, uid, fc, 3)
-        if not _mb_write_coil(addr, raw == 0xFF00):
-            return _mb_err(tid, uid, fc, 2)
-        return bytes(data[:12])
-    if fc == 6:
-        if pdu_end < 12:
-            return _mb_err(tid, uid, fc, 3)
-        addr, raw = struct.unpack(">HH", bytes(data[8:12]))
-        if not _mb_write_reg(addr, raw):
-            return _mb_err(tid, uid, fc, 2)
-        return bytes(data[:12])
-    if fc == 15:
-        if pdu_end < 13:
-            return _mb_err(tid, uid, fc, 3)
-        start, count, byte_count = struct.unpack(">HHB", bytes(data[8:13]))
-        if count < 1 or count > 1968 or byte_count != ((count + 7) // 8):
-            return _mb_err(tid, uid, fc, 3)
-        if pdu_end < 13 + byte_count:
-            return _mb_err(tid, uid, fc, 3)
-        payload = data[13 : 13 + byte_count]
-        for _offset in range(count):
-            _bit = bool((payload[_offset // 8] >> (_offset % 8)) & 0x1)
-            if not _mb_write_coil(start + _offset, _bit):
-                return _mb_err(tid, uid, fc, 2)
-        return struct.pack(">HHHBBHH", tid, 0, 6, uid, fc, start, count)
-    if fc == 16:
-        if pdu_end < 13:
-            return _mb_err(tid, uid, fc, 3)
-        start, count, byte_count = struct.unpack(">HHB", bytes(data[8:13]))
-        if count < 1 or count > 123 or byte_count != (count * 2):
-            return _mb_err(tid, uid, fc, 3)
-        if pdu_end < 13 + byte_count:
-            return _mb_err(tid, uid, fc, 3)
-        for _offset in range(count):
-            _base = 13 + (_offset * 2)
-            _reg = struct.unpack(">H", bytes(data[_base : _base + 2]))[0]
-            if not _mb_write_reg(start + _offset, _reg):
-                return _mb_err(tid, uid, fc, 2)
-        return struct.pack(">HHHBBHH", tid, 0, 6, uid, fc, start, count)
-    return _mb_err(tid, uid, fc, 1)
+    if _word is None:
+        return 0 if _mb_in(addr, _MB_REG_SPANS) else None
+    return _word
 
+def _mb_reg_ok(addr):
+    if 57856 <= addr < 57873:
+        return True
+    _mapped = _MB_REG_MAP.get(addr) or _mb_reg_cell(addr)
+    if _mapped is None:
+        return False
+    if _mapped[0] == "SD" and _mapped[1] not in _MB_SD_WRITABLE:
+        return False
+    if _mapped[0] in _MB_WIDE:
+        try:
+            _mb_reg_get(addr)
+        except Exception:
+            return False
+    return True
+
+def _mb_write_regs(start, values):
+    for _offset in range(len(values)):
+        if not _mb_reg_ok(start + _offset):
+            return False
+    for _offset in range(len(values)):
+        _addr = start + _offset
+        _word = int(values[_offset]) & 0xFFFF
+        if 57856 <= _addr < 57873:
+            _mb_yd[_addr - 57856] = _word
+            _start = _mb_xy_start(8192, _addr - 57856)
+            for _bit in range(16 if _start is not None else 0):
+                if _mb_coil_get(_start + _bit) is not None:
+                    _mb_coil_set(_start + _bit, (_word >> _bit) & 1)
+            continue
+        _mapped = _MB_REG_MAP.get(_addr)
+        try:
+            if _mapped is not None:
+                _mb_write_reg_plc(_mapped[0], _mapped[1], _mapped[2], _word)
+            else:
+                _cell = _mb_reg_cell(_addr)
+                _mb_cell_store(_cell[0], _cell[1], _cell[2], _cell[3], _word)
+        except Exception:
+            return False
+    return True
+
+
+# -- Wire runtime ------------------------------------------------------------
+_rt._mb_read_coil = _mb_read_coil
+_rt._mb_write_coils = _mb_write_coils
+_rt._mb_read_reg = _mb_read_reg
+_rt._mb_write_regs = _mb_write_regs
+_rt._mb_server = _mb_server
+_rt._mb_clients = _mb_clients
+_rt._mb_buf = _mb_buf
+_rt._mb_pool = _mb_pool
+_rt._mb_client_jobs = _mb_client_jobs
 
 # Embedded function call targets.
 # None emitted in foundation step.
 
-
 # -- Ladder logic --------------------------------------------------------------
 def _run_main_rungs():
-    global \
-        _b_Slot1, \
-        _b_Slot2, \
-        _mb_client_i1, \
-        _mem, \
-        _prev, \
-        _t_GreenAcc, \
-        _t_GreenDone, \
-        _t_RedAcc, \
-        _t_RedDone, \
-        _t_RxBusy, \
-        _t_RxErr, \
-        _t_RxExCode, \
-        _t_RxOk, \
-        _t_State, \
-        _t_WalkActive, \
-        _t_WalkRequest, \
-        _t_YellowAcc, \
-        _t_YellowDone
-    _rung_1_enabled = (_t_State == "r") and (not bool(_b_Slot1[0]))
-    _frac = float(_mem.get("_frac:RedAcc", 0.0))
+    global _b_Slot1, _b_Slot2, _mb_client_i12, _mem, _t_GreenTimer_Acc, _t_GreenTimer_Done, _t_GreenTimer_EN, _t_GreenTimer_TT, _t_RedTimer_Acc, _t_RedTimer_Done, _t_RedTimer_EN, _t_RedTimer_TT, _t_RxBusy, _t_RxErr, _t_RxExCode, _t_RxOk, _t_State, _t_WalkActive, _t_WalkRequest, _t_YellowTimer_Acc, _t_YellowTimer_Done, _t_YellowTimer_EN, _t_YellowTimer_TT, _t_fault_address_error, _t_fault_out_of_range
+    _rung_1_enabled = (_t_State == 'r') and (not bool(_b_Slot1[0]))
     if _rung_1_enabled:
-        _dt = float(_mem.get("_dt", 0.0))
-        _acc = int(_t_RedAcc)
-        _dt_units = (_dt * 1000.0) + _frac
-        _int_units = int(_dt_units)
-        _new_frac = _dt_units - _int_units
+        _acc = int(_t_RedTimer_Acc)
+        _carry = _mem.get("_frac:RedTimer_Acc", 0) + _mem.get("_dt_ns", 0)
+        _int_units = _carry // 1000000
+        _new_frac = _carry % 1000000
         _acc = min(_acc + _int_units, 32767)
-        _preset = 5000
-        _mem["_frac:RedAcc"] = _new_frac
-        _t_RedDone = _acc >= _preset
-        _t_RedAcc = _acc
+        _preset = int(5000)
+        _mem["_frac:RedTimer_Acc"] = _new_frac
+        _t_RedTimer_Done = (_acc >= _preset)
+        _t_RedTimer_Acc = _acc
     else:
-        _mem["_frac:RedAcc"] = 0.0
-        _t_RedDone = False
-        _t_RedAcc = 0
-    _rung_2_enabled = bool(_t_RedDone)
+        _mem["_frac:RedTimer_Acc"] = 0
+        _t_RedTimer_Done = False
+        _t_RedTimer_Acc = 0
+    _t_RedTimer_EN = bool(_rung_1_enabled)
+    _t_RedTimer_TT = bool(_rung_1_enabled) and not _t_RedTimer_Done
+    _rung_2_enabled = bool(_t_RedTimer_Done)
     if _rung_2_enabled:
-        _t_State = _store_copy_value_to_type("g", "CHAR")
-    _rung_3_enabled = (_t_State == "g") and (not bool(_b_Slot1[0]))
-    _frac = float(_mem.get("_frac:GreenAcc", 0.0))
+        _t_fault_address_error = False
+        _t_fault_out_of_range = False
+        _t_State = _store_copy_value_to_type('g', "CHAR")
+    _rung_3_enabled = (_t_State == 'g') and (not bool(_b_Slot1[0]))
     if _rung_3_enabled:
-        _dt = float(_mem.get("_dt", 0.0))
-        _acc = int(_t_GreenAcc)
-        _dt_units = (_dt * 1000.0) + _frac
-        _int_units = int(_dt_units)
-        _new_frac = _dt_units - _int_units
+        _acc = int(_t_GreenTimer_Acc)
+        _carry = _mem.get("_frac:GreenTimer_Acc", 0) + _mem.get("_dt_ns", 0)
+        _int_units = _carry // 1000000
+        _new_frac = _carry % 1000000
         _acc = min(_acc + _int_units, 32767)
-        _preset = 4000
-        _mem["_frac:GreenAcc"] = _new_frac
-        _t_GreenDone = _acc >= _preset
-        _t_GreenAcc = _acc
+        _preset = int(4000)
+        _mem["_frac:GreenTimer_Acc"] = _new_frac
+        _t_GreenTimer_Done = (_acc >= _preset)
+        _t_GreenTimer_Acc = _acc
     else:
-        _mem["_frac:GreenAcc"] = 0.0
-        _t_GreenDone = False
-        _t_GreenAcc = 0
-    _rung_4_enabled = bool(_t_GreenDone)
+        _mem["_frac:GreenTimer_Acc"] = 0
+        _t_GreenTimer_Done = False
+        _t_GreenTimer_Acc = 0
+    _t_GreenTimer_EN = bool(_rung_3_enabled)
+    _t_GreenTimer_TT = bool(_rung_3_enabled) and not _t_GreenTimer_Done
+    _rung_4_enabled = bool(_t_GreenTimer_Done)
     if _rung_4_enabled:
-        _t_State = _store_copy_value_to_type("y", "CHAR")
-    _rung_5_enabled = (_t_State == "y") and (not bool(_b_Slot1[0]))
-    _frac = float(_mem.get("_frac:YellowAcc", 0.0))
+        _t_fault_address_error = False
+        _t_fault_out_of_range = False
+        _t_State = _store_copy_value_to_type('y', "CHAR")
+    _rung_5_enabled = (_t_State == 'y') and (not bool(_b_Slot1[0]))
     if _rung_5_enabled:
-        _dt = float(_mem.get("_dt", 0.0))
-        _acc = int(_t_YellowAcc)
-        _dt_units = (_dt * 1000.0) + _frac
-        _int_units = int(_dt_units)
-        _new_frac = _dt_units - _int_units
+        _acc = int(_t_YellowTimer_Acc)
+        _carry = _mem.get("_frac:YellowTimer_Acc", 0) + _mem.get("_dt_ns", 0)
+        _int_units = _carry // 1000000
+        _new_frac = _carry % 1000000
         _acc = min(_acc + _int_units, 32767)
-        _preset = 1500
-        _mem["_frac:YellowAcc"] = _new_frac
-        _t_YellowDone = _acc >= _preset
-        _t_YellowAcc = _acc
+        _preset = int(1500)
+        _mem["_frac:YellowTimer_Acc"] = _new_frac
+        _t_YellowTimer_Done = (_acc >= _preset)
+        _t_YellowTimer_Acc = _acc
     else:
-        _mem["_frac:YellowAcc"] = 0.0
-        _t_YellowDone = False
-        _t_YellowAcc = 0
-    _rung_6_enabled = bool(_t_YellowDone)
+        _mem["_frac:YellowTimer_Acc"] = 0
+        _t_YellowTimer_Done = False
+        _t_YellowTimer_Acc = 0
+    _t_YellowTimer_EN = bool(_rung_5_enabled)
+    _t_YellowTimer_TT = bool(_rung_5_enabled) and not _t_YellowTimer_Done
+    _rung_6_enabled = bool(_t_YellowTimer_Done)
     if _rung_6_enabled:
-        _t_State = _store_copy_value_to_type("r", "CHAR")
-    _rung_7_enabled = _rise(bool(_t_WalkRequest), bool(_prev.get("WalkRequest", False))) or _rise(
-        bool(_b_Slot1[1]), bool(_prev.get("Slot1.2", False))
-    )
+        _t_fault_address_error = False
+        _t_fault_out_of_range = False
+        _t_State = _store_copy_value_to_type('r', "CHAR")
+    _edge_e1_now = bool(_t_WalkRequest)
+    _edge_e1_was = _mem.get('_edge:e1', False)
+    if _edge_e1_now != _edge_e1_was:
+        _mem['_edge:e1'] = _edge_e1_now
+    _edge_e2_now = bool(_b_Slot1[1])
+    _edge_e2_was = _mem.get('_edge:e2', False)
+    if _edge_e2_now != _edge_e2_was:
+        _mem['_edge:e2'] = _edge_e2_now
+    _rung_7_enabled = ((_edge_e1_now and not _edge_e1_was) or (_edge_e2_now and not _edge_e2_was))
     if _rung_7_enabled:
         _t_WalkActive = True
     else:
         _t_WalkActive = False
-    _rung_8_enabled = bool(_t_GreenDone)
+    _rung_8_enabled = bool(_t_GreenTimer_Done)
     if _rung_8_enabled:
-        _t_WalkActive = _store_copy_value_to_type(False, "BOOL")
-    _rung_9_enabled = _t_State == "r"
+        _t_WalkActive = False
+    _rung_9_enabled = (_t_State == 'r')
     if _rung_9_enabled:
         _b_Slot2[0] = True
     else:
         _b_Slot2[0] = False
-    _rung_10_enabled = _t_State == "g"
+    _rung_10_enabled = (_t_State == 'g')
     if _rung_10_enabled:
         _b_Slot2[2] = True
     else:
         _b_Slot2[2] = False
-    _rung_11_enabled = _t_State == "y"
+    _rung_11_enabled = (_t_State == 'y')
     if _rung_11_enabled:
         _b_Slot2[1] = True
     else:
         _b_Slot2[1] = False
     _rung_12_enabled = True
-    _mb_client_i1["enabled"] = bool(_rung_12_enabled)
-
+    _mb_client_i12["enabled"] = bool(_rung_12_enabled)
 
 # -- I/O -----------------------------------------------------------------------
 def _read_inputs():
-    global _b_Slot1
+    global _b_Slot1, _t_board_switch
     _mask_s1_1 = int(base.readDiscrete(1))
     _b_Slot1[0] = bool((_mask_s1_1 >> 0) & 1)
     _b_Slot1[1] = bool((_mask_s1_1 >> 1) & 1)
@@ -1157,56 +1002,153 @@ def _read_inputs():
     _b_Slot1[5] = bool((_mask_s1_1 >> 5) & 1)
     _b_Slot1[6] = bool((_mask_s1_1 >> 6) & 1)
     _b_Slot1[7] = bool((_mask_s1_1 >> 7) & 1)
-
+    _t_board_switch = bool(_board_switch_io.value)
 
 def _write_outputs():
     global _b_Slot2
     _out_mask_s2_1 = 0
     if bool(_b_Slot2[0]):
-        _out_mask_s2_1 |= 1 << 0
+        _out_mask_s2_1 |= (1 << 0)
     if bool(_b_Slot2[1]):
-        _out_mask_s2_1 |= 1 << 1
+        _out_mask_s2_1 |= (1 << 1)
     if bool(_b_Slot2[2]):
-        _out_mask_s2_1 |= 1 << 2
+        _out_mask_s2_1 |= (1 << 2)
     if bool(_b_Slot2[3]):
-        _out_mask_s2_1 |= 1 << 3
+        _out_mask_s2_1 |= (1 << 3)
     if bool(_b_Slot2[4]):
-        _out_mask_s2_1 |= 1 << 4
+        _out_mask_s2_1 |= (1 << 4)
     if bool(_b_Slot2[5]):
-        _out_mask_s2_1 |= 1 << 5
+        _out_mask_s2_1 |= (1 << 5)
     if bool(_b_Slot2[6]):
-        _out_mask_s2_1 |= 1 << 6
+        _out_mask_s2_1 |= (1 << 6)
     if bool(_b_Slot2[7]):
-        _out_mask_s2_1 |= 1 << 7
+        _out_mask_s2_1 |= (1 << 7)
+    if bool(_b_Slot2[8]):
+        _out_mask_s2_1 |= (1 << 8)
+    if bool(_b_Slot2[9]):
+        _out_mask_s2_1 |= (1 << 9)
+    if bool(_b_Slot2[10]):
+        _out_mask_s2_1 |= (1 << 10)
+    if bool(_b_Slot2[11]):
+        _out_mask_s2_1 |= (1 << 11)
+    if bool(_b_Slot2[12]):
+        _out_mask_s2_1 |= (1 << 12)
+    if bool(_b_Slot2[13]):
+        _out_mask_s2_1 |= (1 << 13)
+    if bool(_b_Slot2[14]):
+        _out_mask_s2_1 |= (1 << 14)
     base.writeDiscrete(_out_mask_s2_1, 2)
 
-
 # -- Main scan loop ------------------------------------------------------------
-gc.disable()
-
 while True:
-    scan_start = time.monotonic()
+    scan_start_ns = time.monotonic_ns()
     _sd_write_status = False
-    dt = scan_start - _last_scan_ts
-    if dt < 0:
-        dt = 0.0
-    _last_scan_ts = scan_start
+    _dt_ns = scan_start_ns - _last_scan_ns
+    dt = _dt_ns / 1000000000
+    _last_scan_ns = scan_start_ns
     _mem["_dt"] = dt
+    _mem["_dt_ns"] = _dt_ns
 
+    _sd_eject_cmd = bool(_t_storage_sd_eject_cmd)
+    _sd_delete_all_cmd = bool(_t_storage_sd_delete_all_cmd)
     _service_sd_commands()
+    _t_storage_sd_eject_cmd = _sd_eject_cmd
+    _t_storage_sd_delete_all_cmd = _sd_delete_all_cmd
+    _t_storage_sd_ready = bool(_sd_available)
+    _t_storage_sd_write_status = bool(_sd_write_status)
+    _t_storage_sd_error = bool(_sd_error)
+    _t_storage_sd_error_code = int(_sd_error_code)
     _read_inputs()
-    _run_main_rungs()
-    _write_outputs()
+    _runstop_sample = bool(_t_board_switch)
+    if not _runstop_initialized:
+        _runstop_raw = _runstop_sample
+        _runstop_debounced = _runstop_sample
+        _runstop_last_change_ns = scan_start_ns
+        _runstop_initialized = True
+    elif _runstop_sample != _runstop_raw:
+        _runstop_raw = _runstop_sample
+        _runstop_last_change_ns = scan_start_ns
+    elif (scan_start_ns - _runstop_last_change_ns) >= 30000000:
+        _runstop_debounced = _runstop_raw
 
-    service_modbus_server()
-    service_modbus_client()
+    _desired_run = bool(_runstop_debounced)
+    if _stop_hold:
+        if _desired_run:
+            _desired_run = False
+        else:
+            _stop_hold = False
+    if _desired_run != _mode_run:
+        if _desired_run:
+            _reset_for_run_transition()
+            _mem["_dt"] = dt
+            _mem["_dt_ns"] = _dt_ns
+            print("Mode: RUN")
+        else:
+            save_memory()
+            print("Mode: STOP")
+        _mode_run = _desired_run
+    _t_sys_mode_switch_run = bool(_runstop_debounced)
+    _t_sys_mode_run = bool(_mode_run)
+    if _mode_run:
+        _stop_cmd = _t_sys_cmd_mode_stop
+        if _stop_cmd:
+            _t_sys_cmd_mode_stop = False
+            _t_sys_mode_run = False
+        _t_fault_division_error = False
+        _t_fault_math_operation_error = False
+        _t_fault_out_of_range = False
+        _t_fault_address_error = False
+        _t_sys_always_on = True
+        _t_sys_scan_counter = _sys_scan_n
+        _t_sys_scan_clock_toggle = (_sys_scan_n & 1) == 0
+        _t_sys_first_scan = _sys_first
+        if _sys_first:
+            _sys_t0_ns = scan_start_ns
+            _sys_prev_ns = scan_start_ns
+        _sys_ms = (_sys_prev_ns - _sys_t0_ns) // 1000000
+        _sys_prev_ns = scan_start_ns
+        _t_sys_clock_10ms = ((_sys_ms // 5) & 1) == 1
+        _t_sys_clock_100ms = ((_sys_ms // 50) & 1) == 1
+        _t_sys_clock_500ms = ((_sys_ms // 250) & 1) == 1
+        _t_sys_clock_1s = ((_sys_ms // 500) & 1) == 1
+        _t_sys_clock_1m = ((_sys_ms // 30000) & 1) == 1
+        _t_sys_clock_1h = ((_sys_ms // 1800000) & 1) == 1
+        _t_sys_scan_time_current_ms = int(round(dt * 1000.0))
+        _rtc_now = time.localtime()
+        _t_rtc_year4 = _rtc_now[0]
+        _t_rtc_year2 = _rtc_now[0] % 100
+        _t_rtc_month = _rtc_now[1]
+        _t_rtc_day = _rtc_now[2]
+        _t_rtc_weekday = ((_rtc_now[6] + 1) % 7) + 1
+        _t_rtc_hour = _rtc_now[3]
+        _t_rtc_minute = _rtc_now[4]
+        _t_rtc_second = _rtc_now[5]
+        _run_main_rungs()
+        _write_outputs()
+        _sys_scan_n = (_sys_scan_n + 1) % 32768
+        _sys_first = False
+        if _stop_cmd and _mode_run:
+            _mode_run = False
+            _stop_hold = True
+            _t_sys_mode_run = False
+            save_memory()
+            print("Mode: STOP")
+    else:
+        _force_outputs_off()
 
-    _prev["Slot1.2"] = _b_Slot1[1]
-    _prev["WalkRequest"] = _t_WalkRequest
+    _rt.service_modbus_server()
+    _rt.service_modbus_client()
+
+    if (scan_start_ns - _ret_last_save_ns) >= _RET_AUTO_SAVE_NS:
+        if _t_State != _ret_snapshot.get("State"):
+            save_memory()
+        else:
+            _ret_last_save_ns = scan_start_ns
+
 
     _wd_pet()
 
-    elapsed_ms = (time.monotonic() - scan_start) * 1000.0
+    elapsed_ms = (time.monotonic_ns() - scan_start_ns) / 1000000
     sleep_ms = TARGET_SCAN_MS - elapsed_ms
     if sleep_ms > 0:
         time.sleep(sleep_ms / 1000.0)
@@ -1215,4 +1157,3 @@ while True:
         if PRINT_SCAN_OVERRUNS:
             print(f"Scan overrun #{_scan_overrun_count}: {-sleep_ms:.3f} ms late")
 
-    gc.collect()

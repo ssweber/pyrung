@@ -2,11 +2,11 @@
 
 from pyrung import (
     Or,
-    calc,
     comment,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     reset,
     return_early,
@@ -182,7 +182,7 @@ def sfc_example():
 
     comment("Check if current step is odd")
     with rung():  # R19
-        calc(SFCExample._CurStep % 2, SFCExample._valstepisodd)
+        math(SFCExample._CurStep % 2, SFCExample._valstepisodd)
 
     comment("""\
         EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
@@ -191,11 +191,11 @@ def sfc_example():
             # we immediately increment to the next odd step without executing any step logic.
             # This provides a safe "neutral zone" when manually changing step numbers.""")
     with rung(SFCExample._valstepisodd != 1, SFCExample.xPause == 0):  # R20
-        calc(SFCExample._CurStep + 1, SFCExample._CurStep)
+        math(SFCExample._CurStep + 1, SFCExample._CurStep)
 
     comment("Step advancement when transition is triggered")
     with rung(SFCExample.Trans == 1):  # R21
-        calc(SFCExample._CurStep + 1, SFCExample._CurStep)
+        math(SFCExample._CurStep + 1, SFCExample._CurStep)
         copy(0, SFCExample.Trans)
 
     comment("""\

@@ -1,0 +1,213 @@
+"""Follow-up Math probes: the ``math_terms`` group (part ``follow_values``).
+
+What the 2026-11-05 round left unread in ``math_more``, for the fix step ``math-click`` (2 in the
+``conform-fix`` arc).  A question's field holds every candidate (``probe_kit.between``), so a
+pass answers nothing and a run on a CLICK records what it read; an answered one expects what
+the CLICK read.
+
+- ``wide_values``: the value ``math_more`` read as "neither listed".  ABS(-2147483648) into a
+  DD preset 99 (``abs_and_precision`` ErrorCode): Result1 1 for itself, 2 for 2147483647, 3 for 0
+  (as ABS(-32768) into an Int reads), 4 for 99 (no store), 0 for any other, and Result2 the DD /
+  100000, which shows any other reading's size.  Result4 has SC43 after the ABS (bit 1).  A CLICK
+  read 3, 0 and 1 (2026-11-06).  The case once also divided 3000000000 by a DD.  CLICK's editor
+  refuses that constant typed in, so no case pastes it.
+- ``error_terms``: is a math error's 0 put on its term or on the whole formula, outside RAND
+  (``store_probe/rand_tag_bounds`` read RAND ( 7 , 7 ) + 5 as 5)?  Answered on a CLICK
+  (2026-11-06): the term, 5, 5, 5, 0, 7, and 0 ^ 0 raises no flag.  DD 7 / DD 0 + 5 (Result1): 5
+  for the term, 0 for the formula, 99 for no store.  (DD 7 / DD 0 + 1) * 5 (Result2): 5 for the
+  term, 0 for the formula.  SQRT(DF -4.0) + 5 (Result3): 5 or 0.  DD 0 ^ DD 0 (Result4): 0
+  (``power_edges`` read it), 99 for no store.  ErrorCode has the flags: SC40 after the first two
+  (bits 1, 2), SC46 after the root (bit 4), and after 0 ^ 0 SC40 (bit 8), SC43 (bit 16) and SC46
+  (bit 32): which flag 0 ^ 0 raises.  Into an Int a 0 for the formula is also what a term that
+  went non-finite and carried through writes (``non_finite_math_into_int`` stores 0), and SQRT of
+  -4.0 alone is 0 with SC46 (``math_error``): Result3 = 0 with bit 4 off is a NaN carried through
+  and stored as 0 with no flag.  ``error_terms_real`` tells these apart.
+- ``error_terms_real``: the same three formulas into DFs preset 99.0, where a non-finite value is
+  kept.  Answered on a CLICK (2026-11-06): the term, 1, 1, 1, 50, 50.  Result1 (7 / 0 + 5),
+  Result2 ((7 / 0 + 1) * 5) and Result3 (SQRT(-4.0) + 5): 1 for 5.0 (the term is 0), 2 for 0.0 (the formula is), 3 for 99.0 (no store), 4 for +Inf (a Real division
+  by 0 carried through), 5 for -Inf, 0 for any other: NaN or a finite value none of these (7 / 0
+  stored as 7 makes 12.0).  Result4 is DF12 * 10 and ErrorCode DF14 * 10, each into an Int, to
+  size a finite other reading of Result1 and Result3 (a NaN or an infinity there writes what a
+  Math into an Int makes of one).
+
+SC46 stays on to the end of the scan, so the root and the power each run on the first scan whose
+SC46 is off right before them, as ``probe_kit.GuardedProbes`` does; SC40 and SC43 follow the last
+Math, so each is read on the rung right after.  After 0 ^ 0, SC43 is read by a coil first, since
+the Math that reads SC40 settles it.
+
+The cases own what ``memory.OWNED_APART`` lists under this group.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pyrung.conformance import Group, assert_all_passed, case, run
+from pyrung.core import Rung, copy, fill, latch, math, out, reset, system
+from pyrung.core.expression import sqrt
+from tests.conformance.memory import c, dd, df
+from tests.conformance.probe_kit import class_of, finish, flag_bit, once
+from tests.conformance.scans import count_scans, done, scans_for
+
+SC40 = system.fault.division_error
+SC43 = system.fault.out_of_range
+SC46 = system.fault.math_operation_error
+
+
+def prove_wide_values(slot: Any) -> None:
+    low, scale, absolute = dd[51], dd[53], dd[54]
+    with Rung(*once(slot)):
+        copy(-2147483648, low)
+        copy(100000, scale)
+        copy(99, absolute)
+        math(abs(low), absolute)
+    flag_bit(slot, SC43, slot.Result4, 1)
+    class_of(slot, absolute, [-2147483648, 2147483647, 0, 99], slot.Result1)
+    with Rung(*once(slot)):
+        math(absolute / scale, slot.Result2)
+    finish(slot)
+
+
+def init_wide_values(slot: Any) -> None:
+    fill(0, dd.select(51, 54))
+
+
+WINDOW = 8
+
+
+def _guarded(slot: Any, now: Any, taken: Any) -> None:
+    """*now* on, once, on the first scan from 2 whose SC46 is off right here."""
+    with Rung(slot.Scratch > 1, slot.Scratch <= WINDOW, ~taken, ~SC46):
+        out(now)
+        latch(taken)
+
+
+def prove_error_terms(slot: Any) -> None:
+    seven, zero, minus = dd[61], dd[62], df[11]
+    count_scans(slot, WINDOW)
+    with Rung(slot.Scratch == 1):
+        copy(7, seven)
+        copy(0, zero)
+        copy(-4.0, minus)
+        copy(99, slot.Result1)
+        copy(99, slot.Result2)
+        copy(99, slot.Result3)
+        copy(99, slot.Result4)
+    with Rung(slot.Scratch == 2):
+        math(seven / zero + 5, slot.Result1)
+    with Rung(slot.Scratch == 2, SC40):
+        math(slot.ErrorCode + 1, slot.ErrorCode)
+    with Rung(slot.Scratch == 2):
+        math((seven / zero + 1) * 5, slot.Result2)
+    with Rung(slot.Scratch == 2, SC40):
+        math(slot.ErrorCode + 2, slot.ErrorCode)
+    root_now, root_taken, power_now, power_taken, power_sc43 = (c[n] for n in range(181, 186))
+    _guarded(slot, root_now, root_taken)
+    with Rung(root_now):
+        math(sqrt(minus) + 5, slot.Result3)
+    with Rung(root_now, SC46):
+        math(slot.ErrorCode + 4, slot.ErrorCode)
+    _guarded(slot, power_now, power_taken)
+    with Rung(power_now):
+        math(zero**zero, slot.Result4)
+    with Rung(power_now, SC43):
+        out(power_sc43)
+    with Rung(power_now, SC40):
+        math(slot.ErrorCode + 8, slot.ErrorCode)
+    with Rung(power_now, SC46):
+        math(slot.ErrorCode + 32, slot.ErrorCode)
+    with Rung(power_sc43):
+        math(slot.ErrorCode + 16, slot.ErrorCode)
+    done(slot, WINDOW)
+
+
+def init_error_terms(slot: Any) -> None:
+    fill(0, dd.select(61, 62))
+    copy(0.0, df[11])
+    reset(c.select(181, 185))
+
+
+#: What a formula into a DF may hold, in each field's order; 4 and 5 are +/-Inf, 0 any other.
+REAL_READINGS = (5.0, 0.0, 99.0)
+
+
+def prove_error_terms_real(slot: Any) -> None:
+    seven, zero, minus = dd[63], dd[64], df[15]
+    results = [df[n] for n in (12, 13, 14)]
+    with Rung(*once(slot)):
+        copy(7, seven)
+        copy(0, zero)
+        copy(-4.0, minus)
+        for result in results:
+            copy(99.0, result)
+        math(seven / zero + 5, results[0])
+        math((seven / zero + 1) * 5, results[1])
+        math(sqrt(minus) + 5, results[2])
+    fields = (slot.Result1, slot.Result2, slot.Result3)
+    for result, field in zip(results, fields, strict=True):
+        class_of(slot, result, REAL_READINGS, field)
+        with Rung(*once(slot), result >= 3.0e38):
+            copy(4, field)
+        with Rung(*once(slot), result <= -3.0e38):
+            copy(5, field)
+    with Rung(*once(slot)):
+        math(results[0] * 10, slot.Result4)
+        math(results[2] * 10, slot.ErrorCode)
+    finish(slot)
+
+
+def init_error_terms_real(slot: Any) -> None:
+    fill(0, dd.select(63, 64))
+    fill(0.0, df.select(12, 15))
+
+
+group = Group(
+    "math_terms",
+    [
+        case(
+            "ABS(-2147483648) into a DD (Result1, Result2 = DD / 100000), with SC43 after it "
+            "(Result4)",
+            ladder=prove_wide_values,
+            init=init_wide_values,
+            expect={
+                "Result1": 3,
+                "Result2": 0,
+                "Result4": 1,
+            },
+            probe="ABS of the least DD",
+        ),
+        case(
+            "A math error's 0 is its term's: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 (Result2) "
+            "and SQRT(-4.0) + 5 (Result3) are 5; 0 ^ 0 (Result4) is 0; SC40 after the two "
+            "divisions and SC46 after the root, 0 ^ 0 none (ErrorCode 7)",
+            ladder=prove_error_terms,
+            init=init_error_terms,
+            expect={
+                "Result1": 5,
+                "Result2": 5,
+                "Result3": 5,
+                "Result4": 0,
+                "ErrorCode": 7,
+            },
+            scans=scans_for(WINDOW),
+        ),
+        case(
+            "A math error's 0 is its term's, into a DF too: 7 / 0 + 5 (Result1), (7 / 0 + 1) * 5 "
+            "(Result2) and SQRT(-4.0) + 5 (Result3) are 5.0 (1); Result1's and Result3's DF * 10 "
+            "(Result4, ErrorCode) are 50",
+            ladder=prove_error_terms_real,
+            init=init_error_terms_real,
+            expect={
+                "Result1": 1,
+                "Result2": 1,
+                "Result3": 1,
+                "Result4": 50,
+                "ErrorCode": 50,
+            },
+        ),
+    ],
+)
+
+
+def test_math_terms():
+    assert_all_passed(run(group))

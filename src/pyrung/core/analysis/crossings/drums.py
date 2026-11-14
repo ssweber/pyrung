@@ -1,9 +1,12 @@
 """Drum crossing — intentional reverse frontier.
 
-A drum output is selected by its *final* step after same-scan event, time,
-jump, jog, and reset transitions.  ``current_step in emitting_steps OR held``
-is therefore not a sound preimage over the occurrence-entry state: an event can
-advance from a non-emitting entry step into an emitting final step.
+A drum writes an output only when it moves, completes or its rung comes back,
+from its *final* step after same-scan event, time, jump, jog, and reset
+transitions, and a reset writes every output off.  ``current_step in
+emitting_steps OR held`` is therefore not a sound preimage over the
+occurrence-entry state: an event can advance from a non-emitting entry step into
+an emitting final step, and a write to the step register moves the step without
+touching the output, which keeps the value it last had.
 
 Until the constraint algebra represents those transition controls, drum
 reverse falls through.  The instruction's :meth:`advance_profile` remains the
@@ -21,7 +24,11 @@ from pyrung.core.crossing import (
     CrossingContext,
     ReverseResult,
 )
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
 
 
 class DrumCrossing(BaseCrossing):
@@ -36,3 +43,4 @@ class DrumCrossing(BaseCrossing):
 _DRUM = DrumCrossing()
 register(EventDrumInstruction, _DRUM)
 register(TimeDrumInstruction, _DRUM)
+register(TimeEventDrumInstruction, _DRUM)

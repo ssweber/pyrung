@@ -4,7 +4,7 @@ import ast
 import re
 from typing import TYPE_CHECKING
 
-from pyrung.click._topology import Leaf, Parallel, Series, SPNode, factor_outputs, make_compound
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode
 
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
 _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
@@ -39,16 +39,19 @@ from pyrung.click.codegen.models import (
     _SubroutineInfo,
     _TagMetadata,
 )
+from pyrung.click.codegen.shaping import _BlockItem, _BranchBlock, rung_blocks
 from pyrung.click.codegen.utils import (
     _CLICK_FUNC_RE,
     _CLICK_FUNC_TO_PYTHON,
     _CLICK_HEX_RE,
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
+    _hex_math_bare_numbers,
     _parse_af_args,
     _parse_operand_prefix,
     _sub_operand,
     _sub_operand_kwarg,
+    _text_code_value,
 )
 from pyrung.core.structure import AutoDefault
 
@@ -194,12 +197,7 @@ def _emit_physical_declarations(lines: list[str], collection: _OperandCollection
     """Emit hoisted Physical(...) declarations."""
     for decl in sorted(collection.physical_decls.values(), key=lambda item: item.var_name):
         args = [repr(decl.spec.name)]
-        if decl.spec.on_delay is not None:
-            args.append(f"on_delay={decl.spec.on_delay!r}")
-        if decl.spec.off_delay is not None:
-            args.append(f"off_delay={decl.spec.off_delay!r}")
-        if decl.spec.profile is not None:
-            args.append(f"profile={decl.spec.profile!r}")
+        args += [f"{key}={value!r}" for key, value in decl.spec.keywords]
         if decl.spec.system is not None:
             args.append(f"system={decl.spec.system!r}")
         lines.append(f"{decl.var_name} = Physical({', '.join(args)})")
@@ -257,6 +255,12 @@ def _generate_code(
     # Slot name overrides for nicknamed addresses inside ranges
     _emit_slot_overrides(lines, collection)
 
+    # Tag map: before the program, so a text compare built below reads the
+    # hardware slot its tag is mapped to
+    lines.append("# --- Tag Map ---")
+    _emit_tag_map(lines, collection)
+    lines.append("")
+
     # Program body
     lines.append("# --- Program ---")
     _emit_program(
@@ -269,11 +273,6 @@ def _generate_code(
     )
     lines.append("")
 
-    # Tag map
-    lines.append("# --- Tag Map ---")
-    _emit_tag_map(lines, collection)
-    lines.append("")
-
     return "\n".join(lines) + "\n"
 
 
@@ -283,14 +282,6 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     core_imports: list[str] = ["Program", "rung"]
     if collection.physical_decls:
         core_imports.append("Physical")
-        # A declarative analog profile emits ``profile=Ramp(...)`` / ``Approach(...)``,
-        # so the generated file must import the spec class it references.
-        profile_types = {
-            type(decl.spec.profile).__name__
-            for decl in collection.physical_decls.values()
-            if decl.spec.profile is not None
-        }
-        core_imports.extend(sorted(profile_types & {"Ramp", "Approach", "Pulse"}))
 
     # Block/TagType for reconstructed plain named blocks
     if collection.plain_blocks:
@@ -311,7 +302,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         core_imports.append("auto")
 
     # Built-in Timer/Counter UDTs
-    if collection.used_instructions & {"on_delay", "off_delay"}:
+    if collection.used_instructions & {"on_delay", "off_delay", "debounce", "flasher", "timed"}:
         core_imports.append("Timer")
     if collection.used_instructions & {"count_up", "count_down"}:
         core_imports.append("Counter")
@@ -338,7 +329,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         "copy": "copy",
         "blockcopy": "blockcopy",
         "fill": "fill",
-        "math": "calc",
+        "math": "math",
         "on_delay": "on_delay",
         "off_delay": "off_delay",
         "count_up": "count_up",
@@ -352,8 +343,15 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         "unpack_to_words": "unpack_to_words",
         "event_drum": "event_drum",
         "time_drum": "time_drum",
+        "time_event_drum": "time_event_drum",
+        "toggle": "toggle",
+        "debounce": "debounce",
+        "flasher": "flasher",
+        "timed": "timed",
         "call": "call",
         "return": "return_early",
+        "break": "break_loop",
+        "continue": "continue_loop",
     }
     for instr_name in sorted(collection.used_instructions):
         import_name = instruction_map.get(instr_name)
@@ -383,12 +381,16 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append("ModbusRtuTarget")
     if collection.has_modbus_address:
         click_imports.append("ModbusAddress")
+    if collection.has_register_type:
+        click_imports.append("RegisterType")
     if collection.has_subroutine:
         pass
     if "send" in collection.used_instructions:
         click_imports.append("send")
     if "receive" in collection.used_instructions:
         click_imports.append("receive")
+    if "raw" in collection.used_instructions:
+        click_imports.append("raw")
 
     lines.append(f"from pyrung.click import {', '.join(click_imports)}")
 
@@ -490,7 +492,18 @@ def _emit_tc_clone_declarations(lines: list[str], collection: _OperandCollection
             f"{field_name!r}: {nickname!r}" for field_name, nickname in decl.nicknames.items()
         )
         nicknames_arg = f", nicknames={{{nickname_items}}}" if nickname_items else ""
-        lines.append(f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}"{nicknames_arg})')
+        retentive_items = ", ".join(
+            f"{field_name!r}: {value!r}" for field_name, value in decl.retentive.items()
+        )
+        retentive_arg = f", retentive={{{retentive_items}}}" if retentive_items else ""
+        comment_items = ", ".join(
+            f"{field_name!r}: {comment!r}" for field_name, comment in decl.comments.items()
+        )
+        comments_arg = f", comments={{{comment_items}}}" if comment_items else ""
+        lines.append(
+            f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}"'
+            f"{nicknames_arg}{retentive_arg}{comments_arg})"
+        )
 
 
 def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -749,7 +762,7 @@ def _emit_rung_sequence(
                 lines.append("")
             first = False
             rung_number += 1
-            _emit_forloop(
+            end = _emit_forloop(
                 lines,
                 rungs,
                 i,
@@ -760,13 +773,9 @@ def _emit_rung_sequence(
                 call_func_map=call_func_map,
                 rung_number=rung_number if index else None,
             )
-            # Skip to after next()
-            i += 1
-            while i < len(rungs) and rungs[i].role is not RungRole.FORLOOP_NEXT:
-                rung_number += 1
-                i += 1
-            rung_number += 1  # next() rung
-            i += 1  # skip the next() rung
+            # The body rungs and next() rungs count, nested loops included.
+            rung_number += end - i - 1
+            i = end
             continue
 
         if rung.role is RungRole.FORLOOP_NEXT:
@@ -802,8 +811,13 @@ def _emit_forloop(
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
     rung_number: int | None = None,
-) -> None:
-    """Emit a for/next block."""
+    bare: bool = False,
+) -> int:
+    """Emit a for/next block; return the index after its next() rung.
+
+    A wire-only body rung becomes a bare instruction, any other body rung a
+    ``with rung(...)`` inside the loop, and a nested for() a nested loop.
+    """
     pad = "    " * indent
     for_rung = rungs[start_idx]
 
@@ -825,29 +839,62 @@ def _emit_forloop(
         count_arg = "1"
         kw_parts = []
 
-    # Emit rung with forloop
-    _emit_rung_header(lines, for_rung, conditions_str, indent, rung_number=rung_number)
+    # Emit rung with forloop; a bare nested loop has no rung of its own, so
+    # the caller passes one indent less and the header is skipped.
+    if not bare:
+        _emit_rung_header(lines, for_rung, conditions_str, indent, rung_number=rung_number)
 
     forloop_args = count_arg
     if kw_parts:
         forloop_args += ", " + ", ".join(kw_parts)
     lines.append(f"{pad}    with forloop({forloop_args}):")
 
-    # Body rungs — forloop body instructions are bare (not wrapped in Rung)
     body_pad = "    " * (indent + 2)
     body_count = 0
-    for j in range(start_idx + 1, len(rungs)):
-        if rungs[j].role is RungRole.FORLOOP_NEXT:
-            break
+    j = start_idx + 1
+    while j < len(rungs) and rungs[j].role is not RungRole.FORLOOP_NEXT:
         body_rung = rungs[j]
-        for instr in body_rung.instructions:
-            _emit_instruction(
-                lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
-            )
         body_count += 1
+        if body_rung.role is RungRole.FORLOOP_START:
+            # A For rung with no contacts or comment nests as a bare loop.
+            bare = body_rung.condition_tree is None and not body_rung.comment
+            j = _emit_forloop(
+                lines,
+                rungs,
+                j,
+                collection,
+                nicknames,
+                indent=indent + 1 if bare else indent + 2,
+                structured_map=structured_map,
+                call_func_map=call_func_map,
+                bare=bare,
+            )
+            continue
+        body_condition, body_items = rung_blocks(body_rung)
+        if (
+            body_condition is None
+            and not body_rung.comment
+            and body_items
+            and not any(isinstance(item, _BranchBlock) for item in body_items)
+        ):
+            _emit_blocks(
+                lines, body_items, collection, nicknames, indent + 2, structured_map, call_func_map
+            )
+        else:
+            _emit_rung(
+                lines,
+                body_rung,
+                collection,
+                nicknames,
+                indent=indent + 2,
+                structured_map=structured_map,
+                call_func_map=call_func_map,
+            )
+        j += 1
 
     if body_count == 0:
         lines.append(f"{body_pad}pass")
+    return j + 1
 
 
 def _emit_rung_header(
@@ -879,112 +926,43 @@ def _emit_rung(
     call_func_map: dict[str, str] | None = None,
     rung_number: int | None = None,
 ) -> None:
-    """Emit a single rung."""
+    """Emit a single rung from the blocks :func:`rung_blocks` shapes it into."""
     pad = "    " * indent
+    condition, items = rung_blocks(rung)
+    conditions_str = _render_condition_tree(condition, collection, nicknames, structured_map)
 
-    # Filter out bare NOP tokens — they become empty rungs (pass).
-    real_instructions = [i for i in rung.instructions if i.af_token != "NOP"]
-
-    if not real_instructions:
+    if not items:
         # Empty or NOP-only rung — preserve with pass (comment-only rungs survive).
         if not rung.instructions and not rung.comment:
             return  # truly empty, no comment — skip
-        conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
         _emit_rung_header(lines, rung, conditions_str, indent, rung_number=rung_number)
         lines.append(f"{pad}    pass")
         return
 
-    conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
     _emit_rung_header(lines, rung, conditions_str, indent, rung_number=rung_number)
-
-    if len(real_instructions) == 1:
-        _emit_instruction(
-            lines,
-            real_instructions[0],
-            collection,
-            nicknames,
-            indent + 1,
-            structured_map,
-            call_func_map,
-        )
-        return
-
-    _emit_grouped_instructions(
-        lines,
-        [(instr.branch_tree, instr) for instr in real_instructions],
-        collection,
-        nicknames,
-        indent + 1,
-        structured_map,
-        call_func_map,
-    )
+    _emit_blocks(lines, items, collection, nicknames, indent + 1, structured_map, call_func_map)
 
 
-def _emit_grouped_instructions(
+def _emit_blocks(
     lines: list[str],
-    outputs: list[tuple[SPNode | None, _InstructionInfo]],
+    items: list[_BlockItem],
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
     indent: int,
     structured_map: TagMap | None = None,
     call_func_map: dict[str, str] | None = None,
 ) -> None:
-    """Emit instructions with recursive shared-prefix factoring for nested branches."""
+    """Render instructions and nested ``with branch(...)`` blocks."""
     pad = "    " * indent
-    index = 0
-
-    while index < len(outputs):
-        tree, instr = outputs[index]
-        if tree is None:
-            _emit_instruction(
-                lines,
-                instr,
-                collection,
-                nicknames,
-                indent,
-                structured_map,
-                call_func_map,
+    for item in items:
+        if isinstance(item, _BranchBlock):
+            branch_cond = _render_sp_node(item.tree, collection, nicknames, structured_map)
+            lines.append(f"{pad}with branch({branch_cond}):")
+            _emit_blocks(
+                lines, item.items, collection, nicknames, indent + 1, structured_map, call_func_map
             )
-            index += 1
             continue
-
-        stop = index + 1
-        while stop < len(outputs):
-            candidate_tree, _candidate_instr = outputs[stop]
-            if candidate_tree is None:
-                break
-            shared = factor_outputs(
-                [candidate for candidate, _item in outputs[index : stop + 1]]
-            ).shared
-            if not shared:
-                break
-            stop += 1
-
-        group = outputs[index:stop]
-        result = factor_outputs([candidate for candidate, _item in group])
-        branch_tree = make_compound(result.shared, Series)
-        branch_cond = _render_sp_node(branch_tree, collection, nicknames, structured_map)
-        lines.append(f"{pad}with branch({branch_cond}):")
-
-        remaining_outputs = [
-            (
-                make_compound(result.branches[group_index], Series)
-                if result.branches[group_index]
-                else None,
-                group_instr,
-            )
-            for group_index, (_group_tree, group_instr) in enumerate(group)
-        ]
-        _emit_grouped_instructions(
-            lines,
-            remaining_outputs,
-            collection,
-            nicknames,
-            indent + 1,
-            structured_map,
-            call_func_map,
-        )
-        index = stop
+        _emit_instruction(lines, item, collection, nicknames, indent, structured_map, call_func_map)
 
 
 def _render_sp_node(
@@ -1024,9 +1002,19 @@ def _build_conditions_str(
     structured_map: TagMap | None = None,
 ) -> str:
     """Build the condition string for a Rung() constructor."""
-    if rung.condition_tree is None:
+    return _render_condition_tree(rung.condition_tree, collection, nicknames, structured_map)
+
+
+def _render_condition_tree(
+    tree: SPNode | None,
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None = None,
+) -> str:
+    """Render a rung condition tree (``""`` when unconditional)."""
+    if tree is None:
         return ""
-    return _render_sp_node(rung.condition_tree, collection, nicknames, structured_map)
+    return _render_sp_node(tree, collection, nicknames, structured_map)
 
 
 _NO_CHOICE_LITERAL = object()
@@ -1037,6 +1025,9 @@ def _parse_choice_literal(text: str) -> object:
     hex_match = _CLICK_HEX_RE.fullmatch(text.strip())
     if hex_match is not None:
         return int(hex_match.group(1), 16)
+    code_char = _text_code_value(text)
+    if code_char is not None:
+        return code_char
     if text.strip().startswith('"'):
         return _csv_string_value(text.strip())
     try:
@@ -1249,6 +1240,54 @@ def _render_timer_counter_call(
     return f"{py_func}({', '.join(rendered_parts)})"
 
 
+def _render_out_variant_call(
+    py_func: str,
+    args: list[str],
+    kwargs: list[tuple[str, str]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None,
+) -> str | None:
+    """Render debounce/flasher/timed with each phase as ``(Timer, preset)``."""
+    from pyrung.click.codegen.utils import _out_variant_timer_pairs
+
+    if len(args) != 1:
+        return None
+    values = dict(kwargs)
+    phases: dict[str, tuple[str, str]] = {}
+    for side, done_operand, _acc in _out_variant_timer_pairs(kwargs):
+        udt_ref = _merge_timer_counter_args(done_operand, collection)
+        preset = values.get(f"{side}_preset")
+        if udt_ref is None or preset is None:
+            return None
+        phases[side] = (
+            udt_ref,
+            _sub_operand_kwarg(f"{side}_preset", preset, collection, nicknames, structured_map),
+        )
+    target = _sub_operand(args[0], collection, nicknames, structured_map)
+    unit = values.get("unit", "Tms")
+    unit_arg = None if unit == "Tms" else f'"{_FRIENDLY_TIMER_UNITS.get(unit, unit)}"'
+
+    if py_func == "timed":
+        if set(phases) != {"on"}:
+            return None
+        timer, preset = phases["on"]
+        parts = [target, timer, preset]
+        if unit_arg is not None:
+            parts.append(unit_arg)
+        if values.get("maintained") in {"1", "True"}:
+            parts.append("maintained=True")
+        return f"timed({', '.join(parts)})"
+
+    if not phases:
+        return None
+    parts = [target]
+    parts.extend(f"{side}=({timer}, {preset})" for side, (timer, preset) in phases.items())
+    if unit_arg is not None:
+        parts.append(f"unit={unit_arg}")
+    return f"{py_func}({', '.join(parts)})"
+
+
 def _render_af_token(
     token: str,
     collection: _OperandCollection,
@@ -1280,7 +1319,11 @@ def _render_af_token(
         raise ValueError(f"Unrecognised AF instruction: {func_name!r}")
 
     # Map CSV token names → Python DSL names
-    _CSV_TO_DSL = {"return": "return_early", "math": "calc"}
+    _CSV_TO_DSL = {
+        "return": "return_early",
+        "break": "break_loop",
+        "continue": "continue_loop",
+    }
     py_func = _CSV_TO_DSL.get(func_name, func_name)
 
     # In project mode, call("name") → call(func_name) using bare identifier
@@ -1304,6 +1347,9 @@ def _render_af_token(
 
     args, kwargs = _parse_af_args(args_str)
 
+    if func_name == "math" and args and ("mode", "hex") in kwargs:
+        args = [_hex_math_bare_numbers(args[0]), *args[1:]]
+
     # search("cond",value=V,search_range=R,...) → search(R <op> V, ...)
     if func_name == "search":
         return _render_search_token(args, kwargs, collection, nicknames, structured_map)
@@ -1320,6 +1366,13 @@ def _render_af_token(
         )
         if rendered_timer_counter is not None:
             return rendered_timer_counter
+
+    if func_name in {"debounce", "flasher", "timed"}:
+        rendered_out_variant = _render_out_variant_call(
+            py_func, args, kwargs, collection, nicknames, structured_map
+        )
+        if rendered_out_variant is not None:
+            return rendered_out_variant
 
     rendered_parts = []
     choice_source = None
@@ -1360,15 +1413,11 @@ def _render_pin(
                 f"got {len(pin.conditions)} flat condition tokens."
             )
         cond = _render_condition(pin.conditions[0], collection, nicknames, structured_map)
-    if cond:
-        if pin.arg:
-            arg = _sub_operand(pin.arg, collection, nicknames, structured_map)
-            return f".{pin.name}({cond}, {arg})"
-        return f".{pin.name}({cond})"
+    args = [cond] if cond else []
     if pin.arg:
-        arg = _sub_operand(pin.arg, collection, nicknames, structured_map)
-        return f".{pin.name}({arg})"
-    return f".{pin.name}()"
+        # Only .jump() takes an argument: its keyword-only step.
+        args.append(f"step={_sub_operand(pin.arg, collection, nicknames, structured_map)}")
+    return f".{pin.name}({', '.join(args)})"
 
 
 def _comment_triple_delimiter(comment: str) -> str | None:

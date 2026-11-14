@@ -18,10 +18,9 @@ if TYPE_CHECKING:
 class UnsupportedConstruct(Exception):
     """Trace encountered a program construct for which it has no read rule.
 
-    Raised at read time and caught at exactly one drive boundary in
-    ``pilot.py``; ``recording.py`` renders the caret/source diagnostic. Test
-    mode propagates the exception; drive mode degrades to a named terminal
-    result instead of probing a construct the reader did not understand.
+    Raised at read time for a condition of a class pyrung does not know, and out of
+    ``how()``; ``recording.py`` renders the caret/source diagnostic. Arithmetic in a
+    comparison is known, and is a gate with no lever instead.
     """
 
     def __init__(

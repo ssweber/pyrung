@@ -16,14 +16,18 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    call,
     copy,
     count_up,
     latch,
+    math,
     named_array,
     on_delay,
     out,
     reset,
     rise,
+    subroutine,
+    system,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
@@ -215,8 +219,9 @@ class TestProve:
         runner = _replay_trace(logic, result.trace)
         assert runner.current_state.tags.get("Alarm") is True
 
-    def test_abstract_threshold_counterexample_carries_nonreplayable_trace_caveat(self):
-        """Abstract threshold witnesses should be called out explicitly on counterexamples."""
+    def test_tag_threshold_counterexample_replays(self):
+        """A timer crossing an HMI threshold: the search tries each of the
+        threshold's values and the PLC replays the trace it found."""
         enable = Bool("Enable", external=True)
         hmi_threshold = Int(
             "HmiThreshold",
@@ -235,10 +240,10 @@ class TestProve:
 
         result = always(logic, ~alarm, depth_budget=5)
         assert isinstance(result, Counterexample)
-        assert any("abstract threshold witness" in caveat for caveat in result.caveats)
+        assert not result.caveats
 
         runner = _replay_trace(logic, result.trace)
-        assert runner.current_state.tags.get("Alarm") is not True
+        assert runner.current_state.tags.get("Alarm") is True
 
     def test_callable_predicate_fallback(self):
         """Callable predicate still works for complex properties."""
@@ -536,19 +541,28 @@ class TestReachableStates:
 
         states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], depth_budget=60)
         assert not isinstance(states, Intractable)
-        # Exactly four states: idle + one of three mutually exclusive outcomes
+        # Idle + one of three mutually exclusive outcomes, plus the one row
+        # only impossible timing reaches: the 2 s watchdog done before the
+        # 1 s timer, so one press latches TooSoon and TooLate together.
+        # Black-box timers over-approximate it (any Done sequence goes).
         assert states == frozenset(
             {
                 frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", False)}),
                 frozenset({("TooSoon", True), ("Perfect", False), ("TooLate", False)}),
                 frozenset({("TooSoon", False), ("Perfect", True), ("TooLate", False)}),
                 frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", True)}),
+                frozenset({("TooSoon", True), ("Perfect", False), ("TooLate", True)}),
             }
         )
 
     def test_reaction_time_window_counters(self):
-        """Counter variant: three mutually exclusive count thresholds."""
+        """Counter variant: three mutually exclusive count thresholds.
+
+        A counter counts rising edges, so the counters count ``Tick`` pulses
+        while running.
+        """
         trigger = Bool("Trigger", external=True)
+        tick = Bool("Tick", external=True)
         running = Bool("Running")
         too_few = Bool("TooFew", lock=True)
         just_right = Bool("JustRight", lock=True)
@@ -560,9 +574,9 @@ class TestReachableStates:
         with Program(strict=False) as logic:
             with Rung(~too_few, ~just_right, ~too_many):
                 out(running)
-            with Rung(running):
+            with Rung(running, tick):
                 count_up(ready_ctr, preset=3).reset(never)
-            with Rung(running):
+            with Rung(running, tick):
                 count_up(limit_ctr, preset=5).reset(never)
             with Rung(running, ~ready_ctr.Done, trigger):
                 latch(too_few)
@@ -617,6 +631,89 @@ class TestReachableStates:
             }
         )
         assert expected <= states
+
+
+def _divide_by_input() -> tuple[Program, Int]:
+    """``math(100 / Divisor, Quotient)`` on an unconditioned rung: no rung
+    condition names Divisor, it reaches Quotient and the division fault only
+    through data flow."""
+    divisor = Int("Divisor", external=True, choices={1: "one", 0: "zero", 2: "two"}, default=1)
+    quotient = Int("Quotient", default=100)
+    with Program(strict=False) as logic:
+        with Rung():
+            math(100 / divisor, quotient)
+    return logic, quotient
+
+
+class TestDataFlowInputsReachObservers:
+    """Inputs that reach an observed tag through data flow alone stay live.
+
+    Live-input pruning keeps an input only while some expression names it.
+    ``never()``, a callable property, ``scope=`` and a projection must still
+    see the inputs upstream of what they read.
+    """
+
+    def test_never_keeps_the_condition_expression(self):
+        logic, quotient = _divide_by_input()
+        fault = never(logic, system.fault.division_error)
+        assert isinstance(fault, Counterexample)
+        assert _replay_trace(logic, fault.trace).current_state.tags["fault.division_error"]
+        half = never(logic, quotient == 50)
+        assert isinstance(half, Counterexample)
+        assert _replay_trace(logic, half.trace).current_state.tags["Quotient"] == 50
+
+    def test_never_batch_keeps_the_condition_expressions(self):
+        logic, quotient = _divide_by_input()
+        results = never(logic, [system.fault.division_error, quotient == 7])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Proven)
+
+    def test_callable_without_scope_keeps_every_input(self):
+        logic, _quotient = _divide_by_input()
+        result = always(logic, lambda s: s["Quotient"] != 50)
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["Quotient"] == 50
+        assert isinstance(always(logic, lambda s: s["Quotient"] != 7), Proven)
+
+    def test_callable_scope_is_its_read_set(self):
+        logic, _quotient = _divide_by_input()
+        result = always(
+            logic,
+            lambda s: not s["fault.division_error"],
+            scope=["fault.division_error"],
+        )
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["fault.division_error"]
+        negated = never(logic, lambda s: s["Quotient"] == 50, scope=["Quotient"])
+        assert isinstance(negated, Counterexample)
+
+    def test_projection_keeps_its_upstream_inputs(self):
+        logic, _quotient = _divide_by_input()
+        states = reachable_states(logic, project=["Quotient", "fault.division_error"])
+        assert states == frozenset(
+            {
+                frozenset({("Quotient", 100), ("fault.division_error", False)}),
+                frozenset({("Quotient", 50), ("fault.division_error", False)}),
+                frozenset({("Quotient", 0), ("fault.division_error", True)}),
+            }
+        )
+
+    def test_projection_through_a_gated_subroutine(self):
+        gate = Bool("SubGate", external=True)
+        source = Int("SubSource", external=True, choices={0: "a", 5: "b"}, default=0)
+        copied = Int("SubCopy")
+        with Program(strict=False) as logic:
+            with Rung(gate):
+                call("copy_sub")
+            with subroutine("copy_sub"):
+                with Rung():
+                    copy(source, copied)
+        states = reachable_states(logic, project=["SubCopy"])
+        assert states == frozenset({frozenset({("SubCopy", 0)}), frozenset({("SubCopy", 5)})})
+        result = always(logic, lambda s: s["SubCopy"] != 5)
+        assert isinstance(result, Counterexample)
+        assert _replay_trace(logic, result.trace).current_state.tags["SubCopy"] == 5
 
 
 class TestDiffStates:

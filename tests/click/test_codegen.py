@@ -32,6 +32,7 @@ from pyrung.core import (
     Or,
     Program,
     Real,
+    Rung,
     TagType,
     Timer,
     rung,
@@ -42,6 +43,7 @@ from pyrung.core.program import (
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -49,6 +51,7 @@ from pyrung.core.program import (
 from tests.click.helpers import (
     build_program,
     exec_with_source,
+    join_continued,
     normalize_pyrung,
     strip_pyrung_boilerplate,
 )
@@ -144,6 +147,15 @@ def _codegen_program_body(source: str) -> str:
 
 def _assert_codegen_body(source: str, expected: str) -> None:
     assert _codegen_body(source) == normalize_pyrung(textwrap.dedent(expected))
+
+
+def _assert_wires_import_as(source: str, expected: str) -> None:
+    """The export of *source*, with its continued rungs joined into one CLICK rung, imports as
+    *expected*."""
+    logic, mapping = build_program(source)
+    bundle = join_continued(pyrung_to_ladder(logic, mapping), logic)
+    code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
+    assert code == normalize_pyrung(textwrap.dedent(expected))
 
 
 def _assert_codegen_program_body(source: str, expected: str) -> None:
@@ -631,8 +643,8 @@ class TestDroppedContactValidation:
             assert par is not None
             assert sorted(_leaf_labels(c) for c in par.children) == [["X001"], ["X002"]]
 
-    def test_equivalent_conditions_merged_across_outputs_are_not_dropped(self):
-        """Factoring equal labels may merge occurrences at different positions."""
+    def test_equal_labels_in_two_cells_stay_two_contacts(self):
+        """Two C001 cells are two contacts (two reads), each kept on its own branch."""
         from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row(
@@ -653,12 +665,15 @@ class TestDroppedContactValidation:
                 validate=True,
             )
 
-        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(X001)", "C001"]
+        assert _leaf_labels(analyzed[0].condition_tree) == ["rise(X001)"]
         assert [instruction.af_token for instruction in analyzed[0].instructions] == [
             "copy(0,DS001,oneshot=1)",
             "reset(C010..C012)",
         ]
-        assert all(instruction.branch_tree is None for instruction in analyzed[0].instructions)
+        assert [_leaf_labels(i.branch_tree) for i in analyzed[0].instructions] == [
+            ["C001"],
+            ["C001"],
+        ]
 
     @pytest.mark.parametrize("source_kind", ["bundle", "directory"])
     def test_subroutine_error_identifies_subroutine_and_one_indexed_rung(
@@ -921,8 +936,8 @@ class TestGraphWalkEdgeCases:
         assert result.instructions[1].pins[0].name == "reset"
         assert result.instructions[1].pins[0].conditions == ["X002"]
 
-    def test_pin_row_requires_immediate_preceding_instruction(self):
-        """A separated pin row should fail instead of attaching heuristically."""
+    def test_pin_row_after_padding_row_attaches(self):
+        """A padding row between an instruction and its pin is allowed (CLICK draws it)."""
         from pyrung.click.codegen.analyzer import _analyze_single_rung
         from pyrung.click.codegen.models import _RawRung
 
@@ -931,7 +946,20 @@ class TestGraphWalkEdgeCases:
         row2 = _make_row("", _fill_dashes({0: "X002"}, 1, 31), af=".reset()")
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
-        with pytest.raises(ValueError, match="must immediately follow"):
+        result = _analyze_single_rung(rung)
+        assert [pin.name for pin in result.instructions[0].pins] == ["reset"]
+        assert result.instructions[0].pins[0].conditions == ["X002"]
+
+    def test_pin_row_without_instruction_rejected(self):
+        """A pin label with no instruction row above it cannot be attributed."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row("R", _fill_dashes({0: "X002"}, 1, 31), af=".reset()")
+        row1 = _make_row("", _fill_dashes({0: "X001"}, 1, 31), af="on_delay(T1)")
+        rung = _RawRung(comment_lines=[], rows=[row0, row1])
+
+        with pytest.raises(ValueError, match="no instruction row above it"):
             _analyze_single_rung(rung)
 
     def test_noncanonical_left_edge_not_col0(self):
@@ -1804,11 +1832,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(DS1 + DS2, DS3)
+                    math(DS1 + DS2, DS3)
             """,
             """
             with rung(X001):
-                calc(DS1 + DS2, DS3)
+                math(DS1 + DS2, DS3)
             """,
         )
 
@@ -1818,21 +1846,21 @@ class TestRoundTrip:
             """
             from pyrung.core.expression import sqrt
             with rung(X1):
-                calc(DS1**2, DS3)
+                math(DS1**2, DS3)
             with rung(X1):
-                calc(DS1 % DS2, DS3)
+                math(DS1 % DS2, DS3)
             with rung(X1):
-                calc(sqrt(DS1), DS3)
+                math(sqrt(DS1), DS3)
             """,
             """
             with rung(X001):
-                calc(DS1**2, DS3)
+                math(DS1**2, DS3)
 
             with rung(X001):
-                calc(DS1 % DS2, DS3)
+                math(DS1 % DS2, DS3)
 
             with rung(X001):
-                calc(sqrt(DS1), DS3)
+                math(sqrt(DS1), DS3)
             """,
         )
 
@@ -1842,16 +1870,16 @@ class TestRoundTrip:
             """
             from pyrung.core.expression import lsh
             with rung(X1):
-                calc(DH1 << 3, DH3)
+                math(DH1 << 3, DH3)
             with rung(X1):
-                calc(lsh(DH1, 4), DH3)
+                math(lsh(DH1, 4), DH3)
             """,
             """
             with rung(X001):
-                calc(lsh(DH1, 3), DH3)
+                math(lsh(DH1, 0x3), DH3)
 
             with rung(X001):
-                calc(lsh(DH1, 4), DH3)
+                math(lsh(DH1, 0x4), DH3)
             """,
         )
 
@@ -1860,21 +1888,21 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with rung(X1):
-                calc(DH1 & DH2, DH3)
+                math(DH1 & DH2, DH3)
             with rung(X1):
-                calc(DH1 | DH2, DH3)
+                math(DH1 | DH2, DH3)
             with rung(X1):
-                calc(DH1 ^ DH2, DH3)
+                math(DH1 ^ DH2, DH3)
             """,
             """
             with rung(X001):
-                calc(DH1 & DH2, DH3)
+                math(DH1 & DH2, DH3)
 
             with rung(X001):
-                calc(DH1 | DH2, DH3)
+                math(DH1 | DH2, DH3)
 
             with rung(X001):
-                calc(DH1 ^ DH2, DH3)
+                math(DH1 ^ DH2, DH3)
             """,
         )
 
@@ -1934,10 +1962,10 @@ class TestRoundTrip:
             textwrap.dedent(
                 """
                 with rung():
-                    calc(DH001 & 0x00FF, DH002)
+                    math(DH001 & 0x00FF, DH002)
 
                 with rung():
-                    calc(DH001 & 0xFFFF, DH003)
+                    math(DH001 & 0xFFFF, DH003)
                 """
             )
         )
@@ -1975,13 +2003,14 @@ class TestRoundTrip:
             DS134 = ds[134]
             DH051 = dh[51]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung():
                     copy(dh[DS134], DH051)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
         # Must be valid Python
@@ -1994,12 +2023,146 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with rung(X1):
-                    calc(dh.select(1, 5).sum(), dh[100])
+                    math(dh.select(1, 5).sum(), dh[100])
             """,
             """
             with rung(X001):
-                calc(dh.select(1, 5).sum(), DH100)
+                math(dh.select(1, 5).sum(), DH100)
             """,
+        )
+
+    def test_calc_range_aggregates_codegen(self):
+        """MAX/MIN/MDN/AVG import back to .max()/.min()/.median()/.mean()."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    math(ds.select(1, 5).max(), ds[100])
+                    math(ds.select(1, 5).min(), ds[101])
+                    math(dd.select(1, 4).median(), dd[100])
+                    math(df.select(1, 4).mean(), df[100])
+                    math(dh.select(1, 3).max(), dh[100])
+            """,
+            """
+            with rung(X001):
+                math(ds.select(1, 5).max(), DS100)
+                math(ds.select(1, 5).min(), DS101)
+                math(dd.select(1, 4).median(), DD100)
+                math(df.select(1, 4).mean(), DF100)
+                math(dh.select(1, 3).max(), DH100)
+            """,
+        )
+
+    def test_calc_range_aggregate_in_expression_codegen(self):
+        """Aggregates compose with arithmetic and ABS inside one formula."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    math(ds.select(1, 5).max() + abs(ds[6]) * 2, ds[100])
+            """,
+            """
+            with rung(X001):
+                math(ds.select(1, 5).max() + (abs(DS6) * 2), DS100)
+            """,
+        )
+
+    def test_calc_bool_range_sum_codegen(self):
+        """SUM over a bit bank imports back to .sum() on the bit range."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    math(c.select(1, 8).sum(), ds[100])
+            """,
+            """
+            with rung(X001):
+                math(c.select(1, 8).sum(), DS100)
+            """,
+        )
+
+    def test_calc_abs_codegen(self):
+        """ABS imports as the Python builtin abs, with no expression import."""
+        logic, mapping = build_program(
+            """
+            with Program() as p:
+                with rung(X1):
+                    math(abs(ds[1]), ds[2])
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        assert "math(ABS ( DS1 ),DS2,mode=decimal)" in [row[-1] for row in bundle.main_rows]
+        code = ladder_to_pyrung(bundle)
+        assert "math(abs(DS1), DS2)" in code
+        assert "pyrung.core.expression" not in code
+        ns: dict = {}
+        exec_with_source(code, ns)
+
+    def test_calc_randint_codegen(self):
+        """RAND imports as randint, from pyrung.core.expression."""
+        logic, mapping = build_program(
+            """
+            with Program() as p:
+                with rung(X1):
+                    math(randint(1, 6), ds[2])
+                    math(randint(ds[1], 6) + 1, ds[3])
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        rows = [row[-1] for row in bundle.main_rows]
+        assert "math(RAND ( 1 , 6 ),DS2,mode=decimal)" in rows
+        code = ladder_to_pyrung(bundle)
+        assert "from pyrung.core.expression import randint" in code
+        assert "math(randint(1, 6), DS2)" in code
+        assert "math(randint(DS1, 6) + 1, DS3)" in code
+        ns: dict = {}
+        exec_with_source(code, ns)
+
+    def test_calc_aggregates_and_abs_full_round_trip(self, tmp_path: Path):
+        """pyrung -> CSV -> pyrung -> CSV is stable, and the import runs the same."""
+        from pyrung.core import PLC
+
+        with Program() as logic:
+            with Rung(x[1]):
+                math(ds.select(1, 4).max(), ds[100])
+                math(ds.select(1, 4).min(), ds[101])
+                math(ds.select(1, 4).median(), ds[102])
+                math(ds.select(1, 4).mean(), ds[103])
+                math(c.select(1, 4).sum(), ds[104])
+                math(abs(ds[5]) + ds.select(1, 4).max(), ds[105])
+        mapping = TagMap({})
+        code, original_rows, reproduced_rows = _round_trip(logic, mapping, tmp_path)
+        assert original_rows == reproduced_rows
+
+        ns: dict = {}
+        exec_with_source(code, ns)
+        inputs = {
+            "X001": True,
+            "DS1": 3,
+            "DS2": -7,
+            "DS3": 10,
+            "DS4": 4,
+            "DS5": -2,
+            "C1": True,
+            "C3": True,
+        }
+        results = []
+        for program in (logic, ns["logic"]):
+            plc = PLC(program, dt=0.01)
+            plc.patch(inputs)
+            plc.step()
+            results.append({f"DS{n}": plc.current_state.tags[f"DS{n}"] for n in range(100, 106)})
+        assert (
+            results[0]
+            == results[1]
+            == {
+                "DS100": 10,
+                "DS101": -7,
+                "DS102": 3,
+                "DS103": 2,
+                "DS104": 2,
+                "DS105": 12,
+            }
         )
 
     def test_fill(self):
@@ -2097,6 +2260,97 @@ class TestRoundTrip:
             """
             with rung(X001):
                 time_drum(outputs=[Y001, Y002], presets=[100, 200], unit="Tms", pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
+            """,
+        )
+
+    def test_time_event_drum(self):
+        """Time & event drum: blank presets and events round-trip as None."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    time_event_drum(
+                        outputs=[Y1, Y2, Y3],
+                        presets=[100, None, DS5],
+                        events=[None, X3, X4],
+                        unit="Tms",
+                        pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                        current_step=DS1,
+                        accumulator=TD1,
+                        completion_flag=C1,
+                    ).reset(X2).jog(X5)
+            """,
+            """
+            with rung(X001):
+                time_event_drum(outputs=[Y001, Y002, Y003], presets=[100, None, DS5], events=[None, X003, X004], unit="Tms", pattern=[[1, 0, 0], [0, 1, 0], [0, 0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002).jog(X005)
+            """,
+        )
+
+    def test_toggle(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    toggle(Y1)
+                with rung(X2):
+                    toggle(immediate(Y2))
+            """,
+            """
+            with rung(X001):
+                toggle(Y001)
+
+            with rung(X002):
+                toggle(immediate(Y002))
+            """,
+        )
+
+    def test_debounce(self):
+        """Each phase's Timer is rebuilt from its Done and Acc operands."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    debounce(Y1, on=(Timers[1], 100), off=(Timers[2], DS5))
+                with rung(X2):
+                    debounce(Y2, on=(Timers[3], 1), off=(Timers[4], 2), unit="sec")
+            """,
+            """
+            with rung(X001):
+                debounce(Y001, on=(T1, 100), off=(T2, DS5))
+
+            with rung(X002):
+                debounce(Y002, on=(T3, 1), off=(T4, 2), unit="sec")
+            """,
+        )
+
+    def test_flasher(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    flasher(Y1, on=(Timers[3], 500), off=(Timers[4], DS1))
+            """,
+            """
+            with rung(X001):
+                flasher(Y001, on=(T3, 500), off=(T4, DS1))
+            """,
+        )
+
+    def test_timed(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    timed(Y1, Timers[5], 1000)
+                with rung(X2):
+                    timed(Y2, Timers[6], 3, "min", maintained=True)
+            """,
+            """
+            with rung(X001):
+                timed(Y001, T5, 1000)
+
+            with rung(X002):
+                timed(Y002, T6, 3, "min", maintained=True)
             """,
         )
 
@@ -2265,6 +2519,193 @@ class TestRoundTrip:
             """
             with rung(X001):
                 receive(target=ModbusRtuTarget(name="vfd1", com_port="slot1_2", device_id=2), remote_start=ModbusAddress(address=400101), dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
+        )
+
+    @pytest.mark.parametrize(
+        ("csv_address", "python_address", "register_type", "raw"),
+        [
+            # laddercodec writes CLICK's hex addressing with the register type it implies.
+            (
+                "ModbusAddress(address=50Eh,register_type=holding)",
+                'ModbusAddress(address="50Eh", register_type=RegisterType.HOLDING)',
+                "HOLDING",
+                0x50E,
+            ),
+            (
+                "ModbusAddress(address=0h,register_type=coil)",
+                'ModbusAddress(address="0h", register_type=RegisterType.COIL)',
+                "COIL",
+                0,
+            ),
+            (
+                "ModbusAddress(address=FFFEh,register_type=input)",
+                'ModbusAddress(address="FFFEh", register_type=RegisterType.INPUT)',
+                "INPUT",
+                0xFFFE,
+            ),
+            (
+                "ModbusAddress(address=10h,register_type=discrete_input)",
+                'ModbusAddress(address="10h", register_type=RegisterType.DISCRETE_INPUT)',
+                "DISCRETE_INPUT",
+                0x10,
+            ),
+            # MODBUS 984 coils are 1..65536; CLICK writes them without padding.
+            (
+                "ModbusAddress(address=17)",
+                "ModbusAddress(address=16, register_type=RegisterType.COIL)",
+                "COIL",
+                16,
+            ),
+            (
+                "ModbusAddress(address=300005)",
+                "ModbusAddress(address=300005)",
+                "INPUT",
+                4,
+            ),
+        ],
+    )
+    def test_receive_csv_modbus_address(self, csv_address, python_address, register_type, raw):
+        """CSV remote addresses import as the same Modbus register and export as written."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        af = (
+            'receive(target=ModbusTcpTarget(name="tcp",ip="192.168.1.10",port=502,device_id=1),'
+            f"remote_start={csv_address},dest=DS1,receiving=C1,success=C2,error=C3,"
+            "exception_response=DS2)"
+        )
+        bundle = LadderBundle(
+            main_rows=(header, tuple(_make_row("R", {0: "X001"}, af))),
+            subroutine_rows=(),
+        )
+
+        code = ladder_to_pyrung(bundle)
+        assert f"remote_start={python_address}" in code
+        assert ("RegisterType" in code.split("with Program")[0]) == (
+            "register_type=" in python_address
+        )
+
+        ns: dict = {}
+        exec_with_source(code, ns)
+        instruction = ns["logic"].rungs[0]._instructions[0]
+        assert instruction.remote_address.register_type.name == register_type
+        assert instruction.remote_address.address == raw
+
+        rows = pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows
+        assert f"remote_start={csv_address}," in rows[1][-1]
+
+    @pytest.mark.parametrize(
+        "csv_address",
+        [
+            "ModbusAddress(address=50Eh,register_type=bogus)",
+            "ModbusAddress(address=400001,register_type=holding)",
+            "ModbusAddress(address=DS1)",
+            "ModbusAddress(offset=1)",
+        ],
+    )
+    def test_receive_csv_modbus_address_rejects_unknown_forms(self, csv_address):
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        af = (
+            'receive(target=ModbusTcpTarget(name="tcp",ip="192.168.1.10",port=502,device_id=1),'
+            f"remote_start={csv_address},dest=DS1,receiving=C1,success=C2,error=C3,"
+            "exception_response=DS2)"
+        )
+        bundle = LadderBundle(
+            main_rows=(header, tuple(_make_row("R", {0: "X001"}, af))),
+            subroutine_rows=(),
+        )
+
+        with pytest.raises(ValueError, match="Unsupported CSV operand expression"):
+            ladder_to_pyrung(bundle)
+
+    @pytest.mark.parametrize("instruction", ["send", "receive"])
+    @pytest.mark.parametrize("left_off", ["busy", "success", "error", "exception_response"])
+    def test_status_bit_left_off_round_trips(self, instruction, left_off):
+        """CLICK lets any Send/Receive status bit be left off; it stays off through import."""
+        busy = "sending" if instruction == "send" else "receiving"
+        operand = "source=DS1" if instruction == "send" else "dest=DS1"
+        bits = {busy: "C1", "success": "C2", "error": "C3", "exception_response": "DS2"}
+        del bits[busy if left_off == "busy" else left_off]
+        call = (
+            f'{instruction}(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, '
+            f'device_id=1), remote_start="DS1", {operand}, '
+            + ", ".join(f"{k}={v}" for k, v in bits.items())
+            + ")"
+        )
+        _assert_codegen_body(f"with rung(X1):\n    {call}", f"with rung(X001):\n    {call}")
+
+        logic, mapping = build_program(f"with rung(X1):\n    {call}")
+        bundle = pyrung_to_ladder(logic, mapping)
+        ns: dict = {}
+        exec_with_source(ladder_to_pyrung(bundle), ns)
+        assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
+    def test_event_drum_jump_step_is_keyword(self):
+        """A drum's jump pin imports as .jump(cond, step=...); step is keyword-only."""
+        _assert_codegen_body(
+            """
+            with rung(X1):
+                event_drum(outputs=[C1, C2], events=[C3, C4], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C5).reset(C6).jump(C7, step=DS2).jog(C8)
+            """,
+            """
+            with rung(X001):
+                event_drum(outputs=[C1, C2], events=[C3, C4], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C5).reset(C6).jump(C7, step=DS2).jog(C8)
+            """,
+        )
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                event_drum(outputs=[C1, C2], events=[C3, C4], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C5).reset(C6).jump(C7, step=DS2).jog(C8)
+            """
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        ns: dict = {}
+        exec_with_source(ladder_to_pyrung(bundle), ns)
+        assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
+    @pytest.mark.parametrize(
+        ("source", "generated"),
+        [
+            ("to_text()", "to_text(suppress_zero=True, exponential=False)"),
+            (
+                "to_text(suppress_zero=False, exponential=True)",
+                "to_text(suppress_zero=False, exponential=True)",
+            ),
+            (
+                'to_text(termination_code="$0D")',
+                'to_text(suppress_zero=True, exponential=False, termination_code="$0D")',
+            ),
+            (
+                "to_text(termination_code=19)",
+                'to_text(suppress_zero=True, exponential=False, termination_code="$13")',
+            ),
+        ],
+    )
+    def test_copy_to_text(self, source, generated):
+        """to_text options survive export + import, including CLICK's termination_code=none."""
+        _assert_codegen_body(
+            f"""
+            with rung(X1):
+                copy(DS1, TXT1, convert={source})
+            """,
+            f"""
+            with rung(X001):
+                copy(DS1, TXT1, convert={generated})
             """,
         )
 
@@ -2534,13 +2975,14 @@ class TestNicknameMerge:
             start_button = x[1]  # X001
             motor_out = y[1]  # Y001
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(start_button):
                     out(motor_out)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -2565,13 +3007,14 @@ class TestNicknameMerge:
             _False = ds[2]  # DS2
             X001 = x[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     copy(_True, _False)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
             nicknames={"DS1": "True", "DS2": "False"},
         )
@@ -2605,13 +3048,14 @@ class TestNicknameMerge:
             _True_2 = ds[2]  # DS2
             X001 = x[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     copy(_True, _True_2)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -2635,13 +3079,14 @@ class TestNicknameMerge:
             start_button = x[1]  # X001
             motor_out = y[1]  # Y001
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(start_button):
                     out(motor_out)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
             nicknames={"X001": "start_button", "Y001": "motor_out"},
         )
@@ -2671,13 +3116,14 @@ class TestNicknameMerge:
             X001 = x[1]
             Y001 = y[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     out(Y001)
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -2707,18 +3153,19 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer'})
-
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    on_delay(OvenTimer, 100)
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1'})
 
             # --- Tag Map ---
             mapping = TagMap([
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    on_delay(OvenTimer, 100)
+
             """,
             nicknames={"T1": "OvenTimer"},
         )
@@ -2741,18 +3188,19 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer_Done'})
-
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    on_delay(OvenTimer, 100)
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer_Done', 'Acc': 'TD1'})
 
             # --- Tag Map ---
             mapping = TagMap([
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    on_delay(OvenTimer, 100)
+
             """,
             nicknames={"T1": "OvenTimer_Done"},
         )
@@ -2768,7 +3216,7 @@ class TestNicknameMerge:
             (
                 {"TD1": "HeatingElapsed_Acc"},
                 "HeatingElapsed",
-                {"Acc": "HeatingElapsed_Acc"},
+                {"Done": "T1", "Acc": "HeatingElapsed_Acc"},
             ),
         ],
     )
@@ -2800,10 +3248,118 @@ class TestNicknameMerge:
         namespace["mapping"].to_nickname_file(nickname_path)
         rows = pyclickplc.read_csv(nickname_path)
 
-        expected_done = source_nicknames.get("T1", f"{clone_name}_Done")
-        expected_acc = source_nicknames.get("TD1", f"{clone_name}_Acc")
-        assert rows[get_addr_key("T", 1)].nickname == expected_done
-        assert rows[get_addr_key("TD", 1)].nickname == expected_acc
+        # Each address keeps the nickname it came with, and gains none.
+        for address, (bank, index) in {"T1": ("T", 1), "TD1": ("TD", 1)}.items():
+            row = rows.get(get_addr_key(bank, index))
+            assert (row.nickname if row is not None else None) == source_nicknames.get(address)
+
+    @pytest.mark.parametrize(
+        ("records", "expected_retentive"),
+        [
+            ({}, ""),
+            ({("TD", 1): ("", True)}, ", retentive={'Acc': True}"),
+            ({("T", 1): ("OvenTimer", False), ("TD", 1): ("", True)}, ", retentive={'Acc': True}"),
+        ],
+        ids=["bank-default", "unnamed-retentive-td", "named-t-retentive-td"],
+    )
+    def test_timer_clone_conforms_to_its_addresses_retentive(
+        self, tmp_path: Path, records, expected_retentive: str
+    ):
+        """The clone takes the retentive policy its T/TD rows set (bank default when
+        absent), and exports the same rows back."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import BANKS
+
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """
+        )
+        csv_dir = tmp_path / "csv"
+        pyrung_to_ladder(logic, mapping).write(csv_dir)
+        nick_path = tmp_path / "nicknames.csv"
+        source = {
+            get_addr_key(bank, index): AddressRecord(
+                memory_type=bank,
+                address=index,
+                nickname=nickname,
+                comment="",
+                initial_value="0",
+                retentive=retentive,
+                data_type=BANKS[bank].data_type,
+            )
+            for (bank, index), (nickname, retentive) in records.items()
+        }
+        pyclickplc.write_csv(nick_path, source)
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        clone_line = next(line for line in code.splitlines() if "Timer.clone(" in line)
+        assert clone_line.endswith(f"{expected_retentive})")
+
+        namespace = exec_with_source(code)
+        out_path = tmp_path / "out.csv"
+        namespace["mapping"].to_nickname_file(out_path)
+        assert pyclickplc.read_csv(out_path) == pyclickplc.read_csv(nick_path)
+
+    @pytest.mark.parametrize(
+        ("records", "expected_comments"),
+        [
+            ({("TD", 1): ("", "Elapsed")}, ", comments={'Acc': 'Elapsed'})"),
+            ({("T", 1): ("", "Cured")}, ", comments={'Done': 'Cured'})"),
+            (
+                {("T", 1): ("OvenTimer", "Cured"), ("TD", 1): ("", "Elapsed")},
+                ", comments={'Done': 'Cured', 'Acc': 'Elapsed'})",
+            ),
+            (
+                {("T", 1): ("OvenTimer", "Cured"), ("TD", 1): ("OvenTime", "Elapsed")},
+                ", comments={'Done': 'Cured', 'Acc': 'Elapsed'})",
+            ),
+        ],
+        ids=["unnamed-td", "unnamed-t", "named-t-unnamed-td", "named-t-named-td"],
+    )
+    def test_timer_clone_keeps_its_addresses_comments(
+        self, tmp_path: Path, records, expected_comments: str
+    ):
+        """A T/TD row's comment rides on the clone, named or not, and exports back
+        on the same row without gaining a nickname."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import BANKS
+
+        logic, mapping = build_program(
+            """
+            with rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """
+        )
+        csv_dir = tmp_path / "csv"
+        pyrung_to_ladder(logic, mapping).write(csv_dir)
+        nick_path = tmp_path / "nicknames.csv"
+        source = {
+            get_addr_key(bank, index): AddressRecord(
+                memory_type=bank,
+                address=index,
+                nickname=nickname,
+                comment=comment,
+                initial_value="0",
+                retentive=False,
+                data_type=BANKS[bank].data_type,
+            )
+            for (bank, index), (nickname, comment) in records.items()
+        }
+        pyclickplc.write_csv(nick_path, source)
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        clone_line = next(line for line in code.splitlines() if "Timer.clone(" in line)
+        assert clone_line.endswith(expected_comments)
+        assert "td.slot(" not in code and "t.slot(" not in code
+
+        namespace = exec_with_source(code)
+        out_path = tmp_path / "out.csv"
+        namespace["mapping"].to_nickname_file(out_path)
+        assert pyclickplc.read_csv(out_path) == pyclickplc.read_csv(nick_path)
 
     def test_named_counter(self):
         """Counter with nickname emits Counter.clone() declaration."""
@@ -2824,18 +3380,19 @@ class TestNicknameMerge:
             X002 = x[2]
 
             # --- Clones ---
-            PartCounter = Counter.clone("PartCounter", nicknames={'Done': 'PartCounter'})
-
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    count_up(PartCounter, 10).reset(X002)
+            PartCounter = Counter.clone("PartCounter", nicknames={'Done': 'PartCounter', 'Acc': 'CTD1'})
 
             # --- Tag Map ---
             mapping = TagMap([
                 PartCounter.Done.map_to(ct[1]),
                 PartCounter.Acc.map_to(ctd[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    count_up(PartCounter, 10).reset(X002)
+
             """,
             nicknames={"CT1": "PartCounter"},
         )
@@ -2869,8 +3426,9 @@ class TestNicknameMerge:
         assert rows[get_addr_key("CT", 1)].nickname == "PartsComplete"
         assert rows[get_addr_key("CTD", 1)].nickname == "LifetimeParts"
 
-    def test_timer_without_nickname_uses_address_based_field_names(self, tmp_path: Path):
-        """An unnamed Timer exposes both underlying CLICK addresses."""
+    def test_timer_without_nickname_invents_none(self, tmp_path: Path):
+        """An unnamed Timer's fields are named after their addresses, so export
+        writes no nickname for them."""
         _assert_codegen_full(
             """
             with rung(X1):
@@ -2887,18 +3445,19 @@ class TestNicknameMerge:
             X001 = x[1]
 
             # --- Clones ---
-            T1 = Timer.clone("T1", nicknames={'Done': 'T1_Done', 'Acc': 'TD1_Acc'})
-
-            # --- Program ---
-            with Program() as logic:
-                with rung(X001):
-                    on_delay(T1, 100)
+            T1 = Timer.clone("T1", nicknames={'Done': 'T1', 'Acc': 'TD1'})
 
             # --- Tag Map ---
             mapping = TagMap([
                 T1.Done.map_to(t[1]),
                 T1.Acc.map_to(td[1]),
             ])
+
+            # --- Program ---
+            with Program() as logic:
+                with rung(X001):
+                    on_delay(T1, 100)
+
             """,
         )
 
@@ -2917,8 +3476,8 @@ class TestNicknameMerge:
         namespace["mapping"].to_nickname_file(nickname_path)
         rows = pyclickplc.read_csv(nickname_path)
 
-        assert rows[get_addr_key("T", 1)].nickname == "T1_Done"
-        assert rows[get_addr_key("TD", 1)].nickname == "TD1_Acc"
+        assert get_addr_key("T", 1) not in rows
+        assert get_addr_key("TD", 1) not in rows
 
     def test_named_timer_condition_reference(self):
         """Timer done-bit used as condition renders as Slug.Done."""
@@ -2941,7 +3500,13 @@ class TestNicknameMerge:
             Y001 = y[1]
 
             # --- Clones ---
-            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer'})
+            OvenTimer = Timer.clone("OvenTimer", nicknames={'Done': 'OvenTimer', 'Acc': 'TD1'})
+
+            # --- Tag Map ---
+            mapping = TagMap([
+                OvenTimer.Done.map_to(t[1]),
+                OvenTimer.Acc.map_to(td[1]),
+            ])
 
             # --- Program ---
             with Program() as logic:
@@ -2951,11 +3516,6 @@ class TestNicknameMerge:
                 with rung(OvenTimer.Done):
                     out(Y001)
 
-            # --- Tag Map ---
-            mapping = TagMap([
-                OvenTimer.Done.map_to(t[1]),
-                OvenTimer.Acc.map_to(td[1]),
-            ])
             """,
             nicknames={"T1": "OvenTimer"},
         )
@@ -3024,7 +3584,9 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-        mapping_block = code.split("# --- Tag Map ---", maxsplit=1)[1]
+        mapping_block = code.split("# --- Tag Map ---", maxsplit=1)[1].split(
+            "# --- Program ---", maxsplit=1
+        )[0]
         assert normalize_pyrung(mapping_block) == normalize_pyrung(
             textwrap.dedent(
                 """
@@ -3040,11 +3602,29 @@ class TestCodeGeneration:
 
 
 class TestContinuedRoundTrip:
-    """Round-trip tests for .continued() rungs."""
+    """A CLICK rung of several wires imports as a rung and one continued rung per other wire."""
+
+    def test_a_continued_rung_exports_as_a_rung_of_its_own(self):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with rung(X1):
+                    out(Y1)
+                with rung(X2).continued():
+                    out(Y2)
+            """,
+            """
+            with rung(X001):
+                out(Y001)
+
+            with rung(X002):
+                out(Y002)
+            """,
+        )
 
     def test_simple_continuation(self):
         """Two independent wires: primary rung + continued rung."""
-        _assert_codegen_body(
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):
@@ -3061,8 +3641,8 @@ class TestContinuedRoundTrip:
         )
 
     def test_continued_chain(self):
-        """Three consecutive continued rungs share the same snapshot."""
-        _assert_codegen_body(
+        """Three consecutive continued rungs round-trip as a chain."""
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):
@@ -3084,7 +3664,7 @@ class TestContinuedRoundTrip:
 
     def test_continuation_with_branch(self):
         """Continued rung with a branch inside it."""
-        _assert_codegen_body(
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):
@@ -3106,7 +3686,7 @@ class TestContinuedRoundTrip:
 
     def test_continuation_with_branch_local_or(self):
         """continued() stays stable when the continued rung has branch-local OR."""
-        _assert_codegen_body(
+        _assert_wires_import_as(
             """
             with Program() as p:
                 with rung(X1):
@@ -3308,7 +3888,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=approach:toward=100|rate=0.3, min=0, max=100, uom=psi]",
+                    comment="[link=Enable, approach_to=100, approach_rate=0.3, min=0, max=100, uom=psi]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3328,8 +3908,7 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert (
-            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
-            in code
+            "Pressure_physical = Physical('Pressure', approach_to=100.0, approach_rate=0.3)" in code
         )
         assert (
             "df.slot(101, name='Pressure', physical=Pressure_physical,"
@@ -3522,7 +4101,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[link=Enable, profile=approach:toward=100|rate=0.3]",
+                    comment="[link=Enable, approach_to=100, approach_rate=0.3]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3542,9 +4121,8 @@ class TestStructuredCodegen:
         files = ladder_to_pyrung_project(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert "Physical" in files["src/plc/tags.py"]
-        assert "Approach" in files["src/plc/tags.py"]
         assert (
-            "Pressure_physical = Physical('Pressure', profile=Approach(toward=100.0, rate=0.3))"
+            "Pressure_physical = Physical('Pressure', approach_to=100.0, approach_rate=0.3)"
             in files["src/plc/tags.py"]
         )
 
@@ -4284,13 +4862,14 @@ class TestStructuredCodegen:
             # --- Tags ---
             X001 = x[1]
 
+            # --- Tag Map ---
+            mapping = TagMap({})
+
             # --- Program ---
             with Program() as logic:
                 with rung(X001):
                     reset(c.select(1004, 1006))
 
-            # --- Tag Map ---
-            mapping = TagMap({})
             """,
         )
 
@@ -5353,3 +5932,59 @@ class TestIndexedMarkerImport:
         )
         files = ladder_to_pyrung_project(bundle, index=False)
         assert "# R" not in files["src/plc/main.py"]
+
+
+class TestMapBeforeProgram:
+    """The generated code maps before it builds the program, so a text compare reads the hardware."""
+
+    @pytest.mark.parametrize(
+        ("addr", "lit", "expected"),
+        [
+            (13, "AB", ["Rec3_a", "Rec1_b"]),
+            (2, "XY", ["Padded1_b", "TXT3"]),
+        ],
+    )
+    def test_text_window_round_trips_with_no_finding(self, tmp_path, addr, lit, expected):
+        from pyrung.click.validation import CLK_TEXT_WINDOW_NOT_CONTIGUOUS, validate_click_program
+        from pyrung.core import Char, named_array, udt
+        from pyrung.core.condition import AllCondition
+
+        @named_array(Char, count=2, stride=3)
+        class Padded:
+            a = ""
+            b = ""
+
+        @udt(count=3)
+        class Rec:
+            a: Char
+            b: Char
+
+        blocks = ClickBlocks()
+        src_map = TagMap(
+            [
+                *Padded.map_to(blocks.txt.select(1, 6)),
+                Rec.a.map_to(blocks.txt.select(11, 13)),
+                Rec.b.map_to(blocks.txt.select(14, 16)),
+                Bool("Hit").map_to(blocks.c[1]),
+            ],
+            include_system=False,
+        )
+        nick = tmp_path / "Address.csv"
+        src_map.to_nickname_file(nick)
+
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with rung(blocks.txt[addr] == lit):
+                out(hit)
+        bundle = pyrung_to_ladder(prog, TagMap({hit: blocks.c[1]}, include_system=False))
+        source = ladder_to_pyrung(bundle, nickname_csv=nick)
+        assert source.index("mapping = TagMap") < source.index("with Program")
+
+        ns: dict = {}
+        exec_with_source(source, ns)
+        cond = ns["logic"].rungs[0]._conditions[0]
+        assert isinstance(cond, AllCondition)
+        assert [c.tag.name for c in cond.conditions][:1] == expected[:1]
+        assert [c.tag.name for c in cond.conditions][1] == expected[1]
+        report = validate_click_program(ns["logic"], ns["mapping"], mode="strict")
+        assert [f for f in report.errors if f.code == CLK_TEXT_WINDOW_NOT_CONTIGUOUS] == []

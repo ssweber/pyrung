@@ -480,16 +480,20 @@ def _producer_caller_scope(program: Any, subroutine: str) -> tuple[Any | None, b
     """
 
     from pyrung.core.condition import AllCondition, AnyCondition
-    from pyrung.core.validation._common import _build_caller_map
+    from pyrung.core.validation._common import _build_caller_map, _inexact_entry_subroutines
 
     caller_map = _build_caller_map(program)
+    # A call its conditions do not decide (a forloop body-rung contact an
+    # iteration can change, a oneshot loop, a break_loop()) is unknown call
+    # structure too.
+    inexact = _inexact_entry_subroutines(program)
     memo: dict[str, tuple[Any | None, bool, bool]] = {}
     visiting: set[str] = set()
 
     def visit(name: str) -> tuple[Any | None, bool, bool]:
         if name in memo:
             return memo[name]
-        if name in visiting:
+        if name in visiting or name in inexact:
             return None, False, False
         callers = caller_map.get(name, ())
         if not callers:
@@ -1053,7 +1057,7 @@ def _accumulator_corrections(
         from pyrung.core.condition import AllCondition, CompareEq
 
         done_name = profile.done.name
-        done = plc._known_tags_by_name[done_name]
+        done = plc.tags[done_name]
         scope = CompareEq(done, incident.before_snap.get(done_name, False))
         operation_holds: list[PilotRung] = []
         for action in reset_actions:

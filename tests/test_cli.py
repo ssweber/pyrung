@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from pyrung import cli
-from pyrung.core import Bool, Program, Rung, out
+from pyrung.core import Bool, Counter, Program, Rung, count_up, out
 
 
 def test_run_with_optional_profile_passthrough() -> None:
@@ -240,3 +240,63 @@ def test_check_uses_project_config_and_explicit_config_override(tmp_path, monkey
     args.extend_select = ["TAG_READONLY_WRITE"]
     with pytest.raises(SystemExit, match="1"):
         cli._cmd_check(args)
+
+
+def _lock_args(lock_path: Path, *, check: bool) -> argparse.Namespace:
+    return argparse.Namespace(
+        module="main",
+        output=str(lock_path),
+        project=None if check else ["B0", "C0_Done"],
+        check=check,
+        depth_budget=20,
+        max_states=10_000,
+    )
+
+
+def test_lock_warns_when_the_depth_budget_cuts_the_search_short(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pulse = Bool("In0", external=True)
+    down = Bool("B0")
+    counter = Counter.clone("C0")
+    with Program(strict=False) as program:
+        with Rung(pulse):
+            count_up(counter, 10).down(down).reset(Bool("B1"))
+        with Rung():
+            out(down)
+    monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
+    lock_path = tmp_path / "pyrung.lock"
+
+    cli._cmd_lock(_lock_args(lock_path, check=False))
+    err = capsys.readouterr().err
+    assert (
+        "Warning: the search stopped at --depth-budget 20."
+        " A state more than 20 scans from power-on may be missing from the lock file.\n"
+        "Raise --depth-budget to search further."
+        " See https://pyrung.com/pyrung/guides/verification/#cli-reference\n"
+    ) in err
+    assert lock_path.exists()
+
+    cli._cmd_lock(_lock_args(lock_path, check=True))
+    captured = capsys.readouterr()
+    assert (
+        "A state more than 20 scans from power-on may be missing,"
+        " so the check can report it lost or miss a new one.\n"
+    ) in captured.err
+    assert "OK: program matches lock file" in captured.out
+
+
+def test_lock_of_a_finished_search_has_no_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    button = Bool("Button", external=True)
+    light = Bool("B0")
+    with Program(strict=False) as program:
+        with Rung(button):
+            out(light)
+    monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
+    args = _lock_args(tmp_path / "pyrung.lock", check=False)
+    args.project = ["B0"]
+
+    cli._cmd_lock(args)
+    assert "Warning" not in capsys.readouterr().err

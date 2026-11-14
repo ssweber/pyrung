@@ -9,7 +9,9 @@ Exercises:
 - Branch-local Or(...)
 - Nested branch() blocks
 - Nested branch() blocks with inner OR
-- continued() rungs whose branch rows must stay visually pushed down
+- continued() rungs with branches, each a CLICK rung of its own
+- Any mix of the above: Ors in series on the rail and in branches, Ors nested in an And inside
+  an Or, and outputs and branches in any order under an Or
 """
 
 from __future__ import annotations
@@ -18,14 +20,15 @@ import csv
 from io import StringIO
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 pytestmark = pytest.mark.hypothesis
 
-from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
+from pyrung.click import ClickBlocks, LadderExportError, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.core import And, Bool, Or, Program, Rung
 from pyrung.core.program import branch, out
+from tests.click.drawing_rule import assert_same_logic, check_scope, contact_size
 from tests.click.helpers import exec_with_source
 
 # ---------------------------------------------------------------------------
@@ -467,6 +470,7 @@ def test_branch_structural_invariants(tree):
     _check_first_row_wired(data_rows)
     _check_all_tags_present(data_rows, [mapping.resolve(t) for t in cond_tags + out_tags])
     _check_all_outputs_in_af(data_rows, [mapping.resolve(t) for t in out_tags])
+    check_scope(bundle.main_rows)
 
 
 @given(tree=simple_branch_rung())
@@ -502,6 +506,7 @@ def test_or_branch_structural_invariants(tree):
     _check_first_row_wired(data_rows)
     _check_all_tags_present(data_rows, [mapping.resolve(t) for t in cond_tags + out_tags])
     _check_all_outputs_in_af(data_rows, [mapping.resolve(t) for t in out_tags])
+    check_scope(bundle.main_rows)
 
 
 @given(tree=or_branch_rung())
@@ -537,6 +542,7 @@ def test_branch_local_or_structural_invariants(tree):
     _check_first_row_wired(data_rows)
     _check_all_tags_present(data_rows, [mapping.resolve(t) for t in cond_tags + out_tags])
     _check_all_outputs_in_af(data_rows, [mapping.resolve(t) for t in out_tags])
+    check_scope(bundle.main_rows)
 
 
 @given(tree=branch_local_or_rung())
@@ -601,6 +607,7 @@ def test_nested_branch_structural_invariants(tree):
     _check_first_row_wired(data_rows)
     _check_all_tags_present(data_rows, [mapping.resolve(t) for t in cond_tags + out_tags])
     _check_all_outputs_in_af(data_rows, [mapping.resolve(t) for t in out_tags])
+    check_scope(bundle.main_rows)
 
 
 @given(tree=nested_branch_rung())
@@ -654,6 +661,7 @@ def test_nested_branch_local_or_structural_invariants(tree):
     _check_first_row_wired(data_rows)
     _check_all_tags_present(data_rows, [mapping.resolve(t) for t in cond_tags + out_tags])
     _check_all_outputs_in_af(data_rows, [mapping.resolve(t) for t in out_tags])
+    check_scope(bundle.main_rows)
 
 
 @given(tree=nested_branch_local_or_rung())
@@ -681,13 +689,13 @@ def test_nested_branch_local_or_round_trip(tree):
 
 
 # ---------------------------------------------------------------------------
-# Property tests - continued() + pushed-down branch rows
+# Property tests - continued() rungs with branches
 # ---------------------------------------------------------------------------
 
 
 @given(tree=_continued_branch_rung())
 @settings(max_examples=100, deadline=None)
-def test_continued_branch_rows_stay_blank_marker_and_pushed_down(tree):
+def test_continued_branch_rung_is_a_click_rung_of_its_own(tree):
     (
         first_conditions,
         first_output,
@@ -716,8 +724,10 @@ def test_continued_branch_rows_stay_blank_marker_and_pushed_down(tree):
     _check_first_row_wired(data_rows)
     _check_all_tags_present(data_rows, [mapping.resolve(t) for t in cond_tags + out_tags])
     _check_all_outputs_in_af(data_rows, [mapping.resolve(t) for t in out_tags])
+    check_scope(bundle.main_rows)
     assert continued_rows, "Expected at least one continued() row"
-    assert all(row[0] == "" for row in continued_rows), "continued() rows must keep blank markers"
+    assert continued_rows[0][0] == "R", "a continued() rung starts a CLICK rung"
+    assert all(row[0] == "" for row in continued_rows[1:]), "its other rows carry no marker"
 
 
 @given(tree=_continued_branch_rung())
@@ -745,3 +755,90 @@ def test_continued_branch_round_trip(tree):
         out_tags,
     )
     _check_round_trip(bundle)
+
+
+# ---------------------------------------------------------------------------
+# Property tests - any mix keeps the drawing rule and the logic
+# ---------------------------------------------------------------------------
+
+
+@st.composite
+def _mixed_rung(draw):
+    """A rung of contacts and Ors, with outputs and branches (two deep) in any order.
+
+    An Or's row may be an And that holds another Or.  The rung's own conditions may be empty or
+    start with an Or on the rail.  Returns ``(conditions, items, cond_tags, out_tags)``.  An item
+    is an output tag or ``(branch_conditions, items)``.
+    """
+    make_cond, make_out, cond_tags, out_tags = _new_tag_builders()
+
+    def term(depth: int):
+        if depth >= 2 or not draw(st.booleans()):
+            return make_cond()
+        return Or(*(row(depth + 1) for _ in range(draw(st.integers(2, 3)))))
+
+    def row(depth: int):
+        parts = [term(depth) for _ in range(draw(st.integers(1, 2)))]
+        return parts[0] if len(parts) == 1 else And(*parts)
+
+    def items(depth: int) -> list:
+        result: list = []
+        for _ in range(draw(st.integers(1, 3))):
+            if depth < 2 and draw(st.booleans()):
+                conditions = [term(1) for _ in range(draw(st.integers(1, 2)))]
+                result.append((conditions, items(depth + 1)))
+            else:
+                result.append(make_out())
+        return result
+
+    conditions = [term(0) for _ in range(draw(st.integers(0, 3)))]
+    return conditions, items(0), cond_tags, out_tags
+
+
+def _export_mixed(conditions, items, cond_tags, out_tags):
+    def place(entries: list) -> None:
+        for entry in entries:
+            if isinstance(entry, tuple):
+                branch_conditions, inner = entry
+                with branch(*branch_conditions):
+                    place(inner)
+            else:
+                out(entry)
+
+    with Program(strict=False) as logic:
+        with Rung(*conditions):
+            place(items)
+
+    x, y, c, *_ = ClickBlocks()
+    tag_map_dict = _make_tag_map(cond_tags, [])
+    for index, tag in enumerate(out_tags):
+        tag_map_dict[tag] = c[500 + index]
+    mapping = TagMap(tag_map_dict, include_system=False)
+
+    def size(branch_conditions: list, entries: list) -> tuple[int, int]:
+        depth, rows = contact_size(branch_conditions)
+        inner = [size(*entry) if isinstance(entry, tuple) else (0, 1) for entry in entries]
+        return depth + max(d for d, _ in inner), max(rows, sum(h for _, h in inner))
+
+    depth, rows = size(conditions, items)
+    try:
+        bundle = pyrung_to_ladder(logic, mapping)
+    except LadderExportError:
+        # Only a rung that really runs past AE or past 32 rows may be refused.
+        if depth < 31 and rows <= 32:
+            raise
+        assume(False)
+    return logic, mapping, bundle
+
+
+@given(tree=_mixed_rung())
+@settings(max_examples=400, deadline=None)
+def test_mixed_rung_follows_the_drawing_rule_and_keeps_its_logic(tree):
+    """The validator's round trip runs inside the export.
+
+    Importing the export and exporting it again gives the same rows.
+    """
+    logic, mapping, bundle = _export_mixed(*tree)
+    check_scope(bundle.main_rows)
+    _check_round_trip(bundle)
+    assert_same_logic(logic, mapping, bundle)

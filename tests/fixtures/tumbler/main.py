@@ -5,12 +5,12 @@ from pyrung import (
     Or,
     Program,
     branch,
-    calc,
     call,
     comment,
     copy,
     fall,
     fill,
+    math,
     on_delay,
     out,
     reset,
@@ -473,10 +473,10 @@ with Program() as logic:
         call(warn_timestamp)
 
     with rung(rise(system.sys.clock_1s)):  # R67
-        calc(ds.select(201, 300).sum(), A_AlmExtent)
+        math(ds.select(201, 300).sum(), A_AlmExtent)
 
     with rung(fall(system.sys.clock_1s)):  # R68
-        calc(ds.select(301, 350).sum(), A_WarnExtent)
+        math(ds.select(301, 350).sum(), A_WarnExtent)
 
     with rung(Sts_State_Clearing):  # R69
         copy(0, z_AckAndClearAllAlm_loop, oneshot=True)

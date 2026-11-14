@@ -270,7 +270,7 @@ def test_scan_entry_journal_repeats_configuration_overwritten_by_program() -> No
 
 
 def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
-    """The coast receipt, not runner history, owns exact fold edits."""
+    """The coast receipt, not runner history, owns exact coast edits."""
     step = _Step(inputs={}, scan_before=10, scan_after=13)
     receipt = CoastReceipt(
         kind="bearing_coast",
@@ -280,7 +280,6 @@ def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
         fired=(),
         events=(),
         budget=3,
-        advances=(("Acc", 7),),
     )
     context = _StepContext(
         policy=ActPolicy(
@@ -303,7 +302,7 @@ def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
     )
 
     def _unusable_scan_log() -> None:
-        raise AssertionError("plan recording must not reconstruct fold edits")
+        raise AssertionError("plan recording must not reconstruct coast edits")
 
     scan_log = SimpleNamespace(snapshot=_unusable_scan_log)
     fork = SimpleNamespace(
@@ -320,7 +319,6 @@ def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
 
     assert len(journal) == 1
     assert journal[0].kind == "coast"
-    assert journal[0].accelerators == (("Acc", 7),)
 
 
 def test_plan_manual_edit_is_hidden_only_by_matching_effective_owner() -> None:

@@ -15,6 +15,7 @@ from pyrung.core.state import SystemState
 from pyrung.dap.expressions import And, Compare, Expr, ExpressionParseError, Not, Or
 from pyrung.dap.expressions import compile as compile_condition
 from pyrung.dap.expressions import parse as parse_condition
+from pyrung.dap.internal_tags import visible_tags
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -114,7 +115,7 @@ def on_variables(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         values = dict(state.tags)
         if current_ctx is not None:
             values.update(getattr(current_ctx, "_tags_pending", {}))
-        return {"variables": adapter._as_dap_variables(values)}, []
+        return {"variables": adapter._as_dap_variables(visible_tags(values))}, []
 
     if ref == adapter.FORCES_SCOPE_REF:
         return {"variables": adapter._as_dap_variables(forces)}, []
@@ -123,13 +124,44 @@ def on_variables(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         values = dict(state.memory)
         if current_ctx is not None:
             values.update(getattr(current_ctx, "_memory_pending", {}))
-        return {"variables": adapter._as_dap_variables(values)}, []
+        variables = adapter._as_dap_variables(values)
+        _label_site_memory(variables, getattr(runner, "_site_table", None))
+        variables.sort(key=lambda item: _natural_key(item["name"]))
+        return {"variables": variables}, []
 
     if ref == adapter._monitor_scope_ref:
         variables = adapter._monitor_variables()
         return {"variables": variables}, []
 
     raise adapter.DAPAdapterError(f"Unknown variablesReference: {ref}")
+
+
+def _natural_key(name: str) -> list[Any]:
+    """Sort key putting ``_edge:e2`` before ``_edge:e10``."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
+
+
+def _label_site_memory(variables: list[dict[str, Any]], table: Any) -> None:
+    """Suffix each site-memory value (``_edge:e3``, ``_oneshot:i7``) with the
+    site it belongs to, such as ``rise(Start) line 12``."""
+    from pyrung.core.site_memory import SiteTable
+
+    if not isinstance(table, SiteTable):
+        return
+    for item in variables:
+        _prefix, sep, key = item["name"].partition(":")
+        if not sep:
+            continue
+        try:
+            site = table.site(key)
+        except KeyError:
+            continue
+        if not any(name == item["name"] for name, _default in site.memory):
+            continue
+        label = f"{site.kind}({site.tag})" if site.tag is not None else site.kind
+        if site.source_line is not None:
+            label += f" line {site.source_line}"
+        item["value"] = f"{item['value']} ({label})"
 
 
 def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
@@ -140,6 +172,12 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     context = parsed.context
     evaluate_context = context if isinstance(context, str) else "repl"
 
+    if evaluate_context != "watch":
+        # The last command wins: step, run and reload pause a running continue first.
+        from pyrung.dap.handlers.simulation import pause_before_console_command
+
+        pause_before_console_command(adapter, expression)
+
     with adapter._state_lock:
         adapter._require_runner_locked()
         if evaluate_context == "watch":
@@ -149,34 +187,9 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             from pyrung.dap.console import dispatch
 
             console_result = dispatch(adapter, expression)
-            return {"result": console_result.text, "variablesReference": 0}, console_result.events
-
-
-def evaluate_repl_command_locked(adapter: Any, expression: str) -> str:
-    parts = expression.strip().split()
-    command = parts[0]
-    runner = adapter._require_runner_locked()
-    if command == "force":
-        if len(parts) < 3:
-            raise adapter.DAPAdapterError("Usage: force <tag> <value>")
-        tag = parts[1]
-        raw_value = expression.strip().split(None, 2)[2]
-        value = adapter._parse_literal(raw_value)
-        runner.force(tag, value)
-        return f"Forced {tag}={value!r}"
-    if command == "unforce":
-        if len(parts) != 2:
-            raise adapter.DAPAdapterError("Usage: unforce <tag>")
-        tag = parts[1]
-        runner.unforce(tag)
-        return f"Removed force {tag}"
-    if command == "clear_forces":
-        runner.clear_forces()
-        return "Cleared all forces"
-    raise adapter.DAPAdapterError(
-        "Unsupported Debug Console command. Use force/unforce/clear_forces. "
-        "Use Watch for predicate expressions."
-    )
+            body = {"result": console_result.text, "variablesReference": 0}
+            body.update(console_result.body)
+            return body, console_result.events
 
 
 def evaluate_watch_expression_locked(adapter: Any, expression: str) -> Any:

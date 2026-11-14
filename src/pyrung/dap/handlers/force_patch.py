@@ -2,13 +2,16 @@
 
 Owns pyrungForce, pyrungUnforce, pyrungClearForces, pyrungPatch,
 and pyrungListForces custom requests.  These provide structured
-entry points parallel to the Debug Console text commands.
+entry points parallel to the Debug Console text commands.  Targets are tag
+names or Click addresses ("X001", "DS10") resolved through the session TagMap.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+from pyrung.dap import execution_flow
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -51,6 +54,7 @@ def on_pyrung_force(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
+        tag_name = adapter._resolve_target_locked(tag_name)
         try:
             runner.force(tag_name, value)
         except KeyError as exc:
@@ -72,6 +76,7 @@ def on_pyrung_unforce(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
+        tag_name = adapter._resolve_target_locked(tag_name)
         try:
             runner.unforce(tag_name)
         except KeyError:
@@ -109,6 +114,7 @@ def on_pyrung_patch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
+        tag_name = adapter._resolve_target_locked(tag_name)
         try:
             runner.patch({tag_name: value})
         except KeyError as exc:
@@ -121,6 +127,7 @@ def on_pyrung_patch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             raise adapter.DAPAdapterError(
                 f"patch operation failed: {type(exc).__name__}: {exc}"
             ) from exc
+        execution_flow.invalidate_mid_scan(adapter)
     return {}, []
 
 
@@ -141,6 +148,7 @@ def _on_pyrung_patch_batch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
+        cleaned = {adapter._resolve_target_locked(k): v for k, v in cleaned.items()}
         try:
             runner.patch(cleaned)
         except KeyError as exc:
@@ -153,6 +161,7 @@ def _on_pyrung_patch_batch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             raise adapter.DAPAdapterError(
                 f"patch operation failed: {type(exc).__name__}: {exc}"
             ) from exc
+        execution_flow.invalidate_mid_scan(adapter)
     return {}, []
 
 

@@ -228,7 +228,7 @@ def _completion_branch_error(
     if controls is None:
         return "advance owner does not declare exact completion controls"
 
-    # Completion controls use the rung-entry ConditionView. Build that factual
+    # Completion controls read the view the owner's box started from. Build that factual
     # value surface from exact direct reads before the selected write, keeping
     # it separate from ``observed_operands`` where Acc is post-advance.
     entry_values: dict[str, Any] = {}
@@ -646,8 +646,9 @@ def derive_overwriter_guard_requirement_from_write(
         preserved_values=preserved_values,
     )
     # Only protected terminal tags use the established deadline refinement.
-    # The complete transitive walk remains separate report evidence; it is not
-    # executable navigation authority.
+    # The complete transitive walk is report evidence here.  The delayed
+    # regression reads it again for navigation, only for a guard with nothing
+    # adjustable in it (requirement_evidence._walk_program_guard_to_inputs).
     condition = _refine_preserved_tag_deadlines(condition, projection, preserved_values)
     demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
     explanation_kind = (

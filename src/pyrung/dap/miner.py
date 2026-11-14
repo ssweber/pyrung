@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from pyrung.core.state import value_changed
 from pyrung.dap.capture import CaptureEntry
 
 CandidateKind = Literal["edge_correlation", "steady_implication", "value_temporal"]
@@ -153,7 +154,16 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
         return frozenset()
 
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+    )
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
@@ -164,6 +174,12 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
             "accumulator",
             "current_step",
             "completion_flag",
+            "on_done",
+            "on_acc",
+            "off_done",
+            "off_acc",
+            "timer_done",
+            "timer_acc",
         }
     )
     _OWNED_TYPES = (
@@ -173,6 +189,10 @@ def _instruction_owned_tags(runner: Any) -> frozenset[str]:
         CountDownInstruction,
         EventDrumInstruction,
         TimeDrumInstruction,
+        TimeEventDrumInstruction,
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
     )
 
     owned: set[str] = set()
@@ -396,7 +416,7 @@ def _build_edge_map(
         for tag in relevant:
             old = before.get(tag)
             new = after.get(tag)
-            if old != new:
+            if value_changed(old, new):
                 edges[tag].append((scan_id, old, new))
 
     return edges
@@ -776,12 +796,14 @@ def _mine_value_temporals(
                         b_val = history.at(sid).tags.get(b_tag)
 
                         if observed_b_val is None:
-                            if sid > t_scan and b_val != history.at(t_scan).tags.get(b_tag):
+                            if sid > t_scan and value_changed(
+                                history.at(t_scan).tags.get(b_tag), b_val
+                            ):
                                 observed_b_val = b_val
                                 found = True
                                 max_delay = max(max_delay, sid - t_scan)
                                 break
-                        elif b_val == observed_b_val:
+                        elif not value_changed(observed_b_val, b_val):
                             found = True
                             max_delay = max(max_delay, sid - t_scan)
                             break

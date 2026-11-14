@@ -13,14 +13,11 @@ nothing meaningful on flash and lets us ship a single canonical
 from __future__ import annotations
 
 from pyrung.circuitpy.codegen._constants import (
-    _DINT_MAX,
-    _DINT_MIN,
     _HELPER_ORDER,
-    _INT_MAX,
-    _INT_MIN,
-    _STORE_TYPE_HELPERS,
 )
+from pyrung.circuitpy.codegen._helpers import _render_helper_defs
 from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.render_modbus import _df_words, _modbus_protocol_lines
 
 
 def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
@@ -38,9 +35,9 @@ def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
         "_mb_clients = None",
         "_mb_buf = None",
         "_mb_read_coil = None",
-        "_mb_write_coil = None",
+        "_mb_write_coils = None",
         "_mb_read_reg = None",
-        "_mb_write_reg = None",
+        "_mb_write_regs = None",
         "",
         "# Modbus client — set by code.py at startup",
         "_mb_pool = None",
@@ -52,382 +49,13 @@ def _render_runtime(ctx: CodegenContext) -> str:  # noqa: ARG001
     lines.extend(_render_helper_defs(set(_HELPER_ORDER)))
 
     # -- Modbus protocol handler (server) ------------------------------------
-    lines.extend(_render_modbus_protocol_static())
+    lines.extend(_modbus_protocol_lines())
     lines.extend(_render_modbus_server_service_static())
 
     # -- Modbus client infrastructure ----------------------------------------
     lines.extend(_render_modbus_client_runtime_static())
 
     return "\n".join(lines).rstrip() + "\n"
-
-
-def _needed_helpers(ctx: CodegenContext) -> set[str]:
-    """Compute the full set of helpers needed (including transitive deps).
-
-    Used by code.py rendering to decide which names to import from the
-    runtime.  The runtime itself always emits everything.
-    """
-    needed = set(ctx.used_helpers)
-    if "_store_numeric_text_digit" in needed:
-        needed.add("_as_single_ascii_char")
-    if "_termination_char" in needed:
-        needed.update({"_as_single_ascii_char", "_ascii_char_from_code"})
-    if "_render_text_from_numeric" in needed:
-        needed.add("_format_int_text")
-    if ctx.modbus_client is not None and ctx.modbus_client_specs:
-        for spec in ctx.modbus_client_specs:
-            for item in spec.items:
-                helper = _STORE_TYPE_HELPERS.get(item.tag_type) if item.tag_type else None
-                if helper is not None:
-                    needed.add(helper)
-                else:
-                    needed.add("_store_copy_value_to_type")
-    return needed
-
-
-def _render_helper_defs(needed: set[str]) -> list[str]:
-    """Emit only the helper function definitions that are needed."""
-    helper_defs: dict[str, list[str]] = {
-        "_clamp_int": [
-            "def _clamp_int(value):",
-            "    if value < -32768:",
-            "        return -32768",
-            "    if value > 32767:",
-            "        return 32767",
-            "    return int(value)",
-            "",
-        ],
-        "_wrap_int": [
-            "def _wrap_int(value, bits, signed):",
-            "    mask = (1 << bits) - 1",
-            "    v = int(value) & mask",
-            "    if signed and v >= (1 << (bits - 1)):",
-            "        v -= (1 << bits)",
-            "    return v",
-            "",
-        ],
-        "_rise": [
-            "def _rise(curr, prev):",
-            "    return bool(curr) and not bool(prev)",
-            "",
-        ],
-        "_fall": [
-            "def _fall(curr, prev):",
-            "    return not bool(curr) and bool(prev)",
-            "",
-        ],
-        "_int_to_float_bits": [
-            "def _int_to_float_bits(n):",
-            '    return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]',
-            "",
-        ],
-        "_float_to_int_bits": [
-            "def _float_to_int_bits(f):",
-            '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
-            "",
-        ],
-        "_ascii_char_from_code": [
-            "def _ascii_char_from_code(code):",
-            "    if code < 0 or code > 127:",
-            '        raise ValueError("ASCII code out of range")',
-            "    return chr(code)",
-            "",
-        ],
-        "_as_single_ascii_char": [
-            "def _as_single_ascii_char(value):",
-            "    if not isinstance(value, str):",
-            '        raise ValueError("CHAR value must be a string")',
-            '    if value == "":',
-            "        return value",
-            "    if len(value) != 1 or ord(value) > 127:",
-            '        raise ValueError("CHAR value must be blank or one ASCII character")',
-            "    return value",
-            "",
-        ],
-        "_text_from_source_value": [
-            "def _text_from_source_value(value):",
-            "    if isinstance(value, str):",
-            "        return value",
-            '    raise ValueError("text conversion source must resolve to str")',
-            "",
-        ],
-        "_store_numeric_text_digit": [
-            "def _store_numeric_text_digit(char, mode):",
-            "    _char = _as_single_ascii_char(char)",
-            '    if _char == "":',
-            '        raise ValueError("empty CHAR cannot be converted to numeric")',
-            '    if mode == "value":',
-            '        if _char < "0" or _char > "9":',
-            '            raise ValueError("Copy Character Value accepts only digits 0-9")',
-            '        return ord(_char) - ord("0")',
-            '    if mode == "ascii":',
-            "        return ord(_char)",
-            '    raise ValueError(f"Unsupported text->numeric mode: {mode}")',
-            "",
-        ],
-        "_format_int_text": [
-            "def _format_int_text(value, width, suppress_zero, signed=True):",
-            "    if suppress_zero:",
-            "        return str(value)",
-            "    if not signed:",
-            '        return f"{value:0{width}X}"',
-            "    if value < 0:",
-            '        return f"-{abs(value):0{width}d}"',
-            '    return f"{value:0{width}d}"',
-            "",
-        ],
-        "_render_text_from_numeric": [
-            "def _render_text_from_numeric(",
-            "    value,",
-            "    *,",
-            "    source_type=None,",
-            "    suppress_zero=True,",
-            "    pad=None,",
-            "    exponential=False,",
-            "):",
-            '    if source_type == "REAL" or isinstance(value, float):',
-            "        numeric = float(value)",
-            "        if not math.isfinite(numeric):",
-            '            raise ValueError("REAL source is not finite")',
-            '        return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"',
-            "",
-            "    number = int(value)",
-            "    effective_suppress_zero = suppress_zero if pad is None else False",
-            "    signed_width = max(pad - 1, 0) if pad is not None and number < 0 else pad",
-            "",
-            '    if source_type == "WORD":',
-            "        width = 4 if pad is None else pad",
-            "        return _format_int_text(number & 0xFFFF, width, effective_suppress_zero, False)",
-            '    if source_type == "DINT":',
-            "        width = 10 if signed_width is None else signed_width",
-            "        return _format_int_text(number, width, effective_suppress_zero)",
-            '    if source_type == "INT":',
-            "        width = 5 if signed_width is None else signed_width",
-            "        return _format_int_text(number, width, effective_suppress_zero)",
-            "",
-            "    if pad is None:",
-            '        return str(number) if suppress_zero else f"{number:05d}"',
-            "    width = 5 if signed_width is None else signed_width",
-            "    return _format_int_text(number, width, False)",
-            "",
-        ],
-        "_termination_char": [
-            "def _termination_char(termination_code):",
-            "    if termination_code is None:",
-            '        return ""',
-            "    if isinstance(termination_code, str):",
-            "        if len(termination_code) != 1:",
-            '            raise ValueError("termination_code must be one character or int ASCII code")',
-            "        return _as_single_ascii_char(termination_code)",
-            "    if not isinstance(termination_code, int):",
-            '        raise TypeError("termination_code must be int, str, or None")',
-            "    return _ascii_char_from_code(termination_code)",
-            "",
-        ],
-        "_parse_pack_text_value": [
-            "def _parse_pack_text_value(text, dest_type):",
-            '    if text == "":',
-            '        raise ValueError("empty text cannot be parsed")',
-            '    if dest_type in {"INT", "DINT"}:',
-            '        if not re.fullmatch(r"[+-]?\\d+", text):',
-            '            raise ValueError("integer parse failed")',
-            "        parsed = int(text, 10)",
-            '        if dest_type == "INT" and (parsed < -32768 or parsed > 32767):',
-            '            raise ValueError("integer out of INT range")',
-            '        if dest_type == "DINT" and (parsed < -2147483648 or parsed > 2147483647):',
-            '            raise ValueError("integer out of DINT range")',
-            "        return parsed",
-            '    if dest_type == "WORD":',
-            '        if not re.fullmatch(r"[0-9A-Fa-f]+", text):',
-            '            raise ValueError("hex parse failed")',
-            "        parsed = int(text, 16)",
-            "        if parsed < 0 or parsed > 0xFFFF:",
-            '            raise ValueError("hex out of WORD range")',
-            "        return parsed",
-            '    if dest_type == "REAL":',
-            "        parsed = float(text)",
-            "        if not math.isfinite(parsed):",
-            '            raise ValueError("REAL parse produced non-finite value")',
-            '        struct.pack("<f", parsed)',
-            "        return parsed",
-            '    raise TypeError(f"Unsupported pack_text destination type: {dest_type}")',
-            "",
-        ],
-        "_store_copy_value_to_type": [
-            "def _store_copy_value_to_type(value, dest_type):",
-            "    if isinstance(value, float) and not math.isfinite(value):",
-            "        value = 0",
-            '    if dest_type == "INT":',
-            f"        return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
-            '    if dest_type == "DINT":',
-            f"        return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
-            '    if dest_type == "WORD":',
-            "        return int(value) & 0xFFFF",
-            '    if dest_type == "REAL":',
-            "        return float(value)",
-            '    if dest_type == "BOOL":',
-            "        return bool(value)",
-            '    if dest_type == "CHAR":',
-            "        if not isinstance(value, str):",
-            '            raise ValueError("CHAR value must be a string")',
-            '        if value == "":',
-            "            return value",
-            "        if len(value) != 1 or ord(value) > 127:",
-            '            raise ValueError("CHAR value must be blank or one ASCII character")',
-            "        return value",
-            "    return value",
-            "",
-        ],
-        "_store_int": [
-            "def _store_int(value):",
-            "    if type(value) is int:",
-            f"        return {_INT_MAX} if value > {_INT_MAX} else ({_INT_MIN} if value < {_INT_MIN} else value)",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            f"    return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
-            "",
-        ],
-        "_store_dint": [
-            "def _store_dint(value):",
-            "    if type(value) is int:",
-            f"        return {_DINT_MAX} if value > {_DINT_MAX} else ({_DINT_MIN} if value < {_DINT_MIN} else value)",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
-            "",
-        ],
-        "_store_word": [
-            "def _store_word(value):",
-            "    if type(value) is int:",
-            "        return value & 0xFFFF",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            "    return int(value) & 0xFFFF",
-            "",
-        ],
-        "_store_real": [
-            "def _store_real(value):",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0.0",
-            "    return float(value)",
-            "",
-        ],
-        "_store_bool": [
-            "def _store_bool(value):",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return False",
-            "    return bool(value)",
-            "",
-        ],
-    }
-
-    lines: list[str] = []
-    for name in _HELPER_ORDER:
-        if name in needed:
-            lines.extend(helper_defs[name])
-    return lines
-
-
-def _render_modbus_protocol_static() -> list[str]:
-    """Render ``_mb_err`` and ``_mb_handle`` unconditionally (no ctx)."""
-    return [
-        "def _mb_err(tid, uid, fc, code):",
-        "    return struct.pack('>HHHBB', int(tid) & 0xFFFF, 0, 3, int(uid) & 0xFF, (int(fc) & 0x7F) | 0x80) + bytes([int(code) & 0xFF])",
-        "",
-        "def _mb_handle(data, n):",
-        "    if n < 8:",
-        "        return None",
-        "    try:",
-        "        tid, pid, length, uid = struct.unpack('>HHHB', bytes(data[:7]))",
-        "    except Exception:",
-        "        return None",
-        "    if pid != 0:",
-        "        return None",
-        "    if length < 2 or (length + 6) > int(n):",
-        "        return None",
-        "    fc = int(data[7])",
-        "    pdu_end = 6 + length",
-        "    if fc in (1, 2):",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if count < 1 or count > 2000:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        bits = []",
-        "        for _offset in range(count):",
-        "            _bit = _mb_read_coil(start + _offset)",
-        "            if _bit is None:",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "            bits.append(bool(_bit))",
-        "        byte_count = (count + 7) // 8",
-        "        payload = bytearray(byte_count)",
-        "        for _offset, _bit in enumerate(bits):",
-        "            if _bit:",
-        "                payload[_offset // 8] |= 1 << (_offset % 8)",
-        "        return struct.pack('>HHHBBB', tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(payload)",
-        "    if fc in (3, 4):",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if count < 1 or count > 125:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        regs = []",
-        "        for _offset in range(count):",
-        "            _reg = _mb_read_reg(start + _offset)",
-        "            if _reg is None:",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "            regs.append(int(_reg) & 0xFFFF)",
-        "        payload = bytearray()",
-        "        for _reg in regs:",
-        "            payload.extend(struct.pack('>H', _reg))",
-        "        return struct.pack('>HHHBBB', tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(payload)",
-        "    if fc == 5:",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        addr, raw = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if raw not in (0x0000, 0xFF00):",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        if not _mb_write_coil(addr, raw == 0xFF00):",
-        "            return _mb_err(tid, uid, fc, 2)",
-        "        return bytes(data[:12])",
-        "    if fc == 6:",
-        "        if pdu_end < 12:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        addr, raw = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if not _mb_write_reg(addr, raw):",
-        "            return _mb_err(tid, uid, fc, 2)",
-        "        return bytes(data[:12])",
-        "    if fc == 15:",
-        "        if pdu_end < 13:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count, byte_count = struct.unpack('>HHB', bytes(data[8:13]))",
-        "        if count < 1 or count > 1968 or byte_count != ((count + 7) // 8):",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        if pdu_end < 13 + byte_count:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        payload = data[13:13 + byte_count]",
-        "        for _offset in range(count):",
-        "            _bit = bool((payload[_offset // 8] >> (_offset % 8)) & 0x1)",
-        "            if not _mb_write_coil(start + _offset, _bit):",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)",
-        "    if fc == 16:",
-        "        if pdu_end < 13:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        start, count, byte_count = struct.unpack('>HHB', bytes(data[8:13]))",
-        "        if count < 1 or count > 123 or byte_count != (count * 2):",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        if pdu_end < 13 + byte_count:",
-        "            return _mb_err(tid, uid, fc, 3)",
-        "        for _offset in range(count):",
-        "            _base = 13 + (_offset * 2)",
-        "            _reg = struct.unpack('>H', bytes(data[_base:_base + 2]))[0]",
-        "            if not _mb_write_reg(start + _offset, _reg):",
-        "                return _mb_err(tid, uid, fc, 2)",
-        "        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)",
-        "    return _mb_err(tid, uid, fc, 1)",
-        "",
-    ]
 
 
 def _render_modbus_server_service_static() -> list[str]:
@@ -527,7 +155,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
         "    if bank == 'DF':",
         "        _regs = []",
         "        for _value in values:",
-        "            _regs.extend(struct.unpack('<HH', struct.pack('<f', float(_value))))",
+        f"            _regs.extend({_df_words('_value')})",
         "        return _regs",
         "    if bank in ('DH', 'XD', 'YD'):",
         "        return [int(_value) & 0xFFFF for _value in values]",
@@ -568,8 +196,8 @@ def _render_modbus_client_runtime_static() -> list[str]:
         "        for _reg in regs:",
         "            _lo = int(_reg) & 0xFF",
         "            _hi = (int(_reg) >> 8) & 0xFF",
-        "            _values.append('' if _lo == 0 else chr(_lo))",
-        "            _values.append('' if _hi == 0 else chr(_hi))",
+        "            _values.append(chr(_lo))",
+        "            _values.append(chr(_hi))",
         "        _offset = 0 if (int(plc_start) % 2) == 1 else 1",
         "        return _values[_offset:_offset + int(logical_count)]",
         "    return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]",
@@ -590,7 +218,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
             "        elif _tt == 'REAL':",
             "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
             "            _bf = '>f' if word_order == 'high_low' else '<f'",
-            "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+            "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
             "        elif _tt == 'INT':",
             "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
             "        else:",
@@ -625,7 +253,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
     lines.extend(
         [
             "def service_modbus_client():",
-            "    _now = time.monotonic()",
+            "    _now = time.monotonic_ns() // 1000000",
             "    for _job in _mb_client_jobs:",
             "        if _job['state'] in (_MB_CLIENT_DONE, _MB_CLIENT_ERROR):",
             "            _mb_client_reset_runtime(_job)",
@@ -638,7 +266,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
             "            _job['request'] = _job['build'](_job['tid'])",
             "            _job['sent_offset'] = 0",
             "            _job['rx_len'] = 0",
-            "            _job['deadline'] = _now + float(_job['timeout_s'])",
+            "            _job['deadline'] = _now + round(float(_job['timeout_s']) * 1000)",
             "            _job['set_status'](True, False, False, 0)",
             "            _job['state'] = _MB_CLIENT_CONNECTING",
             "            continue",
@@ -654,7 +282,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
             "            try:",
             "                _job['socket'].connect((_job['host'], int(_job['port'])))",
             "            except (OSError, RuntimeError):",
-            "                if _now >= float(_job['deadline']):",
+            "                if _now >= _job['deadline']:",
             "                    _job['set_status'](False, False, True, 0)",
             "                    _job['state'] = _MB_CLIENT_ERROR",
             "                    _mb_client_close(_job)",
@@ -676,7 +304,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
             "            _job['sent_offset'] = int(_job['sent_offset']) + _sent",
             "            if int(_job['sent_offset']) >= len(_job['request']):",
             "                _job['state'] = _MB_CLIENT_WAITING",
-            "            elif _now >= float(_job['deadline']):",
+            "            elif _now >= _job['deadline']:",
             "                _job['set_status'](False, False, True, 0)",
             "                _job['state'] = _MB_CLIENT_ERROR",
             "                _mb_client_close(_job)",
@@ -701,7 +329,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
             "                    _job['state'] = _MB_CLIENT_ERROR",
             "                _mb_client_close(_job)",
             "                continue",
-            "        if _now >= float(_job['deadline']):",
+            "        if _now >= _job['deadline']:",
             "            _job['set_status'](False, False, True, 0)",
             "            _job['state'] = _MB_CLIENT_ERROR",
             "            _mb_client_close(_job)",

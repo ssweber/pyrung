@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .base import Instruction, OneShotMixin
@@ -37,7 +38,7 @@ _RESET_VALUES: dict[TagType, bool | int | float | str] = {
     TagType.DINT: 0,
     TagType.REAL: 0.0,
     TagType.WORD: 0,
-    TagType.CHAR: "",
+    TagType.CHAR: BLANK_CHAR,
 }
 
 
@@ -73,7 +74,6 @@ class OutInstruction(OneShotMixin, Instruction):
         if targets is None:
             targets = resolve_coil_targets_ctx(self.target, ctx)
         if not enabled:
-            self.reset_oneshot()
             if self._oneshot:
                 ctx.set_memory(self.memory_key("_oneshot"), False)
             for target in targets:
@@ -87,10 +87,6 @@ class OutInstruction(OneShotMixin, Instruction):
                     ctx.set_tag(target.name, False)
                 return
             ctx.set_memory(key, True)
-        elif not self.should_execute(enabled):
-            for target in targets:
-                ctx.set_tag(target.name, False)
-            return
         for target in targets:
             ctx.set_tag(target.name, True)
 

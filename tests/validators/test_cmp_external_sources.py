@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung import Bool, Int, Program, Real, Rung, calc, copy, out
+from pyrung import Bool, Int, Program, Real, Rung, copy, math, out
 from pyrung.core import Block, TagType
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive
 from pyrung.core.validation.context import ValidationContext
@@ -37,7 +37,7 @@ def test_receive_payload_stays_open_through_resets_and_copy_chains(range_dest, r
             _receive(dest)
         with Rung(Bool("Sample", external=True)):
             copy(incoming, sampled)
-            calc(sampled + 1, derived)
+            math(sampled + 1, derived)
         if reset:
             with Rung(incoming == 1):
                 copy(0, incoming)

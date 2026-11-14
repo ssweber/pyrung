@@ -436,7 +436,6 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
         fired=(),
         events=timeline,
         budget=1,
-        advances=(("Acc", 7),),
     )
     earned_occurrence = RevisitCredential(
         kind="earned-work",
@@ -476,7 +475,6 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     context = state.committed_acts[-1].context
     assert context.execution is trial.execution
     assert context.policy is trial.attempt.bearing.act.policy
-    assert context.execution.accelerators == (("Acc", 7),)
     assert state.consumed_revisits == {earned_occurrence}
 
     before_settlement = state.snapshot_world()

@@ -26,12 +26,12 @@ from pathlib import Path
 
 import pytest
 
-from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.runner import _compile_avoid
 from tests.fixtures.tumbler import enter_production
-from tests.tumbler.bench import Bench
+from tests.fold_check import wall_budget
+from tests.tumbler.bench import Bench, tumbler_plc
 from tests.tumbler.skeleton import divergence_message, dump_skeleton, extract_skeleton
 
 pytestmark = pytest.mark.tumbler
@@ -69,7 +69,7 @@ def _drive_state_target(logic, value: int, max_scans: int):
     mode changes and door corrections are exactly what the pilot is expected
     to DISCOVER, and that discovery is part of the locked record.
     """
-    plc = PLC(logic)
+    plc = tumbler_plc(logic)
     plc.step()
     target = plc._known_tags_by_name["Sts_StateCurrent"]
     events = []
@@ -82,10 +82,10 @@ def _drive_state_target(logic, value: int, max_scans: int):
 
 def _drive_bool_target(logic, tag_name: str, max_scans: int, wall_budget_s: float):
     """Cold-boot Pilot drive toward one Boolean output."""
-    plc = PLC(logic, dt=0.010)
+    plc = tumbler_plc(logic, dt=0.010)
     plc.step()
     target = plc._known_tags_by_name[tag_name]
-    deadline = time.monotonic() + wall_budget_s
+    deadline = time.monotonic() + wall_budget(wall_budget_s)
     events = []
     for event in pilot_events(plc, target, max_scans=max_scans):
         events.append(event)
@@ -380,11 +380,11 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
 def test_completed_first_door_incident_opens_working_theory(tumbler_logic) -> None:
     """A route-less Rotate coast records both door causes as one theory repair."""
 
-    plc = PLC(tumbler_logic)
+    plc = tumbler_plc(tumbler_logic)
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
-    deadline = time.monotonic() + 45.0
+    deadline = time.monotonic() + wall_budget(45.0)
     for event in pilot_events(
         plc,
         tags["Sts_State_Completed"],
@@ -428,14 +428,14 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     ``Sts_State_Completed``. The Boolean target is deliberate: reaching state 17
     one scan before its status output is not completion.
     """
-    plc = PLC(tumbler_logic)
+    plc = tumbler_plc(tumbler_logic)
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
     events = []
     theory_corrections = []
     finished = None
-    deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
+    deadline = time.monotonic() + wall_budget(INTERNAL_ROUTE_WALL_BUDGET_S)
     for event in pilot_events(
         plc,
         tags["Sts_State_Completed"],

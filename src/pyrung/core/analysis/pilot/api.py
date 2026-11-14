@@ -6,16 +6,26 @@ requested conditions into that engine's inputs and assembles public plans.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from functools import wraps
+from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec
 
+import pyrung.core.analysis.pilot.budget as _budget
 import pyrung.core.analysis.pilot.drive_setup as _drive_setup
+import pyrung.core.analysis.pilot.last_resort as _last_resort
 import pyrung.core.analysis.pilot.pilot as _engine
+import pyrung.core.analysis.pilot.restart as _restart
+import pyrung.core.analysis.pilot.static_proofs as _static_proofs
 import pyrung.core.analysis.pilot.target_route as _target_route
+import pyrung.core.analysis.pilot.trim as _trim
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _AvoidCheckRaised
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
+from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import PilotEvent
+from pyrung.core.runner import AvoidCheckError
 
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
@@ -29,21 +39,27 @@ if TYPE_CHECKING:
 def _relational_target_atom(cond: Any) -> Any | None:
     """Build a simplified inequality ``Atom`` from a ``Compare*`` target, or None.
 
-    Maps the ordered comparisons (``<``, ``<=``, ``>``, ``>=``) to their atom
+    Maps the ordered comparisons (``<``, ``<=``, ``>``, ``>=``) and ``!=`` to their atom
     forms so a relational ``how(A > B)`` target rides the same trace machinery as
     a relational prerequisite (live predicate + reactive levers + coast).  The
     operand is the RHS tag name (a *live* threshold) or a literal.
     """
     from pyrung.core.analysis.simplified import Atom
-    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt
+    from pyrung.core.condition import CompareGe, CompareGt, CompareLe, CompareLt, CompareNe
+    from pyrung.core.expression import Expression
     from pyrung.core.tag import Tag
 
-    forms = {CompareLt: "lt", CompareLe: "le", CompareGt: "gt", CompareGe: "ge"}
+    forms = {CompareLt: "lt", CompareLe: "le", CompareGt: "gt", CompareGe: "ge", CompareNe: "ne"}
     form = forms.get(type(cond))
     if form is None:
         return None
     tag = cond.tag
     tag_name = tag.name if isinstance(tag, Tag) else str(tag)
+    if isinstance(cond.value, Expression):
+        raise ValueError(
+            f"pilot: how() target {tag_name} is compared with arithmetic; compare it with "
+            "a tag or a literal."
+        )
     operand = cond.value.name if isinstance(cond.value, Tag) else cond.value
     return Atom(
         tag=tag_name,
@@ -59,15 +75,26 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
     Accepts:
     - A Tag object (implies ``tag == True``)
     - A ``tag == value`` comparison (CompareEq)
-    - A relational comparison ``A < / <= / > / >= B`` — returned as a live
+    - A relational comparison ``A < / <= / > / >= / != B`` — returned as a live
       ``predicate`` Atom (the goal is the relation, not a frozen value); the
       ``(tag, value)`` pair is a representative for display/keying only.
     """
-    from pyrung.core.condition import CompareEq
+    from pyrung.core.condition import (
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        NormallyClosedCondition,
+    )
     from pyrung.core.tag import Tag
 
     if isinstance(cond, Tag):
         return cond.name, True, None
+
+    # And(Tag, ...) holds its members as contacts.
+    if isinstance(cond, BitCondition) and isinstance(cond.tag, Tag):
+        return cond.tag.name, True, None
+    if isinstance(cond, NormallyClosedCondition) and isinstance(cond.tag, Tag):
+        return cond.tag.name, False, None
 
     if isinstance(cond, CompareEq):
         tag = cond.tag
@@ -90,9 +117,14 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
     if atom is not None:
         return atom.tag, atom.operand, atom
 
+    if isinstance(cond, AnyCondition):
+        raise ValueError(
+            f"pilot: how() has no either-or target: {cond!r}.  Ask for one arm at a time."
+        )
+
     raise ValueError(
         f"pilot: cannot extract a target from {cond!r}.  Pass a Tag (Bool target), "
-        "tag == value, or a relational comparison (tag < / <= / > / >= value)."
+        "tag == value, or a relational comparison (tag < / <= / > / >= / != value)."
     )
 
 
@@ -100,7 +132,17 @@ def _parse_targets(*conditions: Any) -> list[tuple[str, Any, Any]]:
     """Extract one ``(tag, value, predicate)`` per condition (multi-target goals)."""
     if not conditions:
         raise ValueError("pilot: how() requires at least one target condition")
-    return [_parse_one(c) for c in conditions]
+    return [_parse_one(member) for condition in conditions for member in _members(condition)]
+
+
+def _members(condition: Any) -> Iterator[Any]:
+    from pyrung.core.condition import AllCondition
+
+    if isinstance(condition, AllCondition):
+        for member in condition.conditions:
+            yield from _members(member)
+    else:
+        yield condition
 
 
 def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
@@ -108,6 +150,44 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
     if len(conditions) != 1:
         raise ValueError("pilot currently supports exactly one target condition")
     return _parse_one(conditions[0])
+
+
+def _check_operands(
+    targets: list[tuple[str, Any, Any]], pdg: Any, snapshot: Mapping[str, Any]
+) -> None:
+    """A relational operand has to have a value in the search, or the goal has no meaning."""
+    for tag, _value, predicate in targets:
+        if (
+            predicate is not None
+            and predicate.operand_is_tag
+            and predicate.operand not in pdg.tags
+            and predicate.operand not in snapshot
+        ):
+            raise ValueError(
+                f"pilot: how() target {tag} is compared with {predicate.operand}, and no rung "
+                "uses that tag, so a search has no value for it. Compare with a literal."
+            )
+
+
+def _carry_goal_tags(setup: _drive_setup.DriveSetup, conditions: tuple[Any, ...]) -> None:
+    """Name each tag of the goal to the search: a pointer or a range writes a slot unnamed.
+
+    An operand tag that only a patch or force by name gave a value is registered too, so a rung
+    the search adds compares with the tag and not with its name.
+    """
+    from pyrung.core.tag import Tag
+
+    known = setup.work._known_tags_by_name
+    for condition in conditions:
+        for member in _members(condition):
+            named = (
+                (member,)
+                if isinstance(member, Tag)
+                else (member.tag, getattr(member, "value", None))
+            )
+            for tag in named:
+                if isinstance(tag, Tag) and tag.name not in known:
+                    setup.work._register_tag_no_rung_gave(tag)
 
 
 def _plan_from_outcome(
@@ -120,17 +200,12 @@ def _plan_from_outcome(
     target_tag, target_value = target.tag, target.value
     targets = tuple((member.tag, member.value) for member in target.members)
 
+    # A search that did not finish found no block.  The link may still be on its way to one.
     linked_block = (
         None
-        if outcome.reached or target.predicate is not None
-        else _target_route.linked_feedback_block(
-            target_tag,
-            target_value,
-            setup.diag_snapshot,
-            setup.pdg,
-            setup.program,
-            setup.steerable,
-            _target_route.harness_couplings(setup.work),
+        if outcome.reached or outcome.cut_short or target.predicate is not None
+        else _static_proofs.linked_feedback_block(
+            target_tag, target_value, _static_proofs.facts_for(setup)
         )
     )
     return Plan(
@@ -159,7 +234,18 @@ def _plan_from_outcome(
         hold_log=outcome.knowledge.get("hold_log", ()),
         lever_notes=outcome.knowledge.get("lever_notes", {}),
         avoid_names=outcome.knowledge.get("avoid_names", ()),
+        session_inputs=dict(setup.session_inputs),
+        waiting_overrides=setup.waiting_overrides,
     )
+
+
+@contextmanager
+def _avoid_errors_named() -> Iterator[None]:
+    """A check that raised in the search reaches the caller under its public name."""
+    try:
+        yield
+    except _AvoidCheckRaised as raised:
+        raise AvoidCheckError(raised.check, raised.error) from raised.error
 
 
 def pilot_events(
@@ -168,26 +254,55 @@ def pilot_events(
     max_scans: int = 3000,
     avoid_pred: Any = None,
     unlink: list[str] | None = None,
+    wall_clock_s: float | None = _budget.DEFAULT_WALL_CLOCK_S,
 ) -> Iterator[PilotEvent]:
     """PILOT on a fork, yielding structured diagnostic events.
 
     ``unlink`` frees the named harness-feedback tags for fault injection (see
     :func:`pilot_how`). ``avoid_pred`` excludes routes, actions, and observed
-    states the same way ``how(avoid=...)`` does.
+    states the same way ``how(avoid=...)`` does, and one that raises on a real
+    state ends the stream with ``AvoidCheckError``.
     """
+    with _avoid_errors_named():
+        stopped = _in_stop(plc, conditions, avoid_pred)
+    if stopped is not None:
+        yield from _stopped_events(stopped)
+        return
+    clock = _budget.WallClock.starting_now(wall_clock_s)
     target_tag, target_value, target_predicate = _parse_target(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
-    ctx, _route_taken = _drive_setup.prepare_target_context(
-        setup,
-        target_tag,
-        target_value,
-        target_predicate,
-        max_scans=max_scans,
-        avoid_pred=avoid_pred,
-    )
-    yield from _engine._pilot_loop_events(setup.work, ctx)
+    _check_operands([(target_tag, target_value, target_predicate)], setup.pdg, setup.diag_snapshot)
+    _carry_goal_tags(setup, conditions)
+    with _avoid_errors_named():
+        ctx, _route_taken = _drive_setup.prepare_target_context(
+            setup,
+            target_tag,
+            target_value,
+            target_predicate,
+            max_scans=max_scans,
+            avoid_pred=avoid_pred,
+        )
+        yield from _engine._pilot_loop_events(setup.work, replace(ctx, wall_clock=clock))
 
 
+_Options = ParamSpec("_Options")
+
+
+def _says_modbus_is_not_simulated(
+    how: Callable[Concatenate[PLC, _Options], Plan],
+) -> Callable[Concatenate[PLC, _Options], Plan]:
+    """A plan for a program with send() or receive() says that how() ran none of them."""
+
+    @wraps(how)
+    def said(plc: PLC, *args: _Options.args, **kwargs: _Options.kwargs) -> Plan:
+        plan = how(plc, *args, **kwargs)
+        return replace(plan, modbus_levers=_drive_setup.modbus_levers(plc._program))
+
+    return said
+
+
+@_says_modbus_is_not_simulated
+@_avoid_errors_named()
 def pilot_how(
     plc: PLC,
     *conditions: Any,
@@ -195,13 +310,15 @@ def pilot_how(
     avoid_pred: Any = None,
     unlink: list[str] | None = None,
     on_event: Callable[[PilotEvent], None] | None = None,
+    wall_clock_s: float | None = _budget.DEFAULT_WALL_CLOCK_S,
 ) -> Plan:
     """PILOT on a fork — drive to the target and return the recording. Nothing changes.
 
     For a multi-route value target (``Bool == True/False`` or word
     ``tag == value``) PILOT starts with a deterministic preferred route and
     records the route that actually reached the goal on ``Plan.route``;
-    ``avoid_pred`` excludes a reported route so PILOT can take another.
+    ``avoid_pred`` excludes a reported route so PILOT can take another. One that
+    raises on a real state ends the search with ``AvoidCheckError``.
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so
@@ -210,25 +327,225 @@ def pilot_how(
 
     ``max_scans`` bounds invocation search work, including discarded attempts,
     probe scans, and bounded research requests; restoring a checkpoint never
-    refunds it. Folded simulated dwell is reported separately. Research tools
-    also keep their local caps; this is not a wall-clock deadline.
+    refunds it. Each scan the search steps counts one, and so do the first two
+    scans and the last scan of each wait. The other scans of a wait count a
+    hundredth each, whether the guarded loop ran them or not, so a long timer fits
+    a small budget. A wait pyrung cannot run compiled counts one for every scan.
+    That happens when the program writes a read-only system tag or has a
+    ``run_function()`` that keeps state between calls, or when a tag is forced.
+    Research tools also keep their local caps.
+
+    ``wall_clock_s`` is a backstop on real time, since most of a search's time
+    is work the ledger does not charge. A how() that runs out of it stops and
+    says so. ``None`` turns it off.
 
     When ordinary steering lacks evidence, a bounded survey tries single and
     paired input assignments for one scan from the same current source. Only
     confirmed observations return to a fresh Compass read.
     """
+    stopped = _in_stop(plc, conditions, avoid_pred)
+    if stopped is not None:
+        if on_event is not None:
+            for event in _stopped_events(stopped):
+                on_event(event)
+        return stopped
+    clock = _budget.WallClock.starting_now(wall_clock_s)
+    plan, setup, outcome = _how_from(
+        plc, conditions, max_scans, avoid_pred, unlink, on_event, wall_clock_s
+    )
+    if plan.status is PlanStatus.REACHED:
+        return _trim.trim_holds(
+            plan, _goal_check(conditions), avoid_pred, frozenset(setup.steerable), clock
+        )
+    if plan.status is not PlanStatus.STOPPED or outcome is None:
+        return plan
+    # A search that ran out of time or work did not find there was nothing left to do.  Under a
+    # force it may only have run out: the guarded loop declines those, so its waits cost full
+    # scans.  The try without them has a budget of its own, and settles what comes next.
+    if outcome.cut_short and not plc._forces:
+        return plan
+
+    def asker(*, start_had_a_scan: bool) -> Callable[[PLC, float], tuple[Plan, bool]]:
+        def ask(fork: PLC, wall_s: float) -> tuple[Plan, bool]:
+            answer, _setup, asked = _how_from(
+                fork,
+                conditions,
+                max_scans,
+                avoid_pred,
+                unlink,
+                None,
+                wall_s if clock is None else min(wall_s, clock.left()),
+                start_had_a_scan=start_had_a_scan,
+                check_operands=False,
+            )
+            return answer, asked is not None and asked.cut_short
+
+        return ask
+
+    if not outcome.cut_short:
+        moved = _last_resort.try_moves(
+            plan,
+            setup,
+            _goal_check(conditions),
+            avoid_pred,
+            asker(start_had_a_scan=True),
+            max_scans,
+        )
+        if moved is not None:
+            return moved
+    released, finished = _restart.try_release(plan, plc, asker(start_had_a_scan=True))
+    if released is not None:
+        return released
+    if outcome.cut_short:
+        if not finished:
+            return plan
+        # Forces are free tags to the proof, so what it proves holds with them on.
+        blocked = (
+            None
+            if plan.target_predicate is not None
+            else _static_proofs.linked_feedback_block(
+                plan.target_tag, plan.target_value, _static_proofs.facts_for(setup)
+            )
+        )
+        if blocked is not None:
+            return replace(plan, reason=blocked, status=PlanStatus.CANNOT_REACH)
+    return _restart.try_restart(plan, plc, setup, avoid_pred, asker(start_had_a_scan=False))
+
+
+def _in_stop(plc: PLC, conditions: tuple[Any, ...], avoid_pred: Any = None) -> Plan | None:
+    """The plan for a PLC in STOP, whose next scan is a restart.
+
+    A goal that already holds is reached with nothing to plan.  Any other goal is Stopped.
+    The setup must not step the PLC.  A waiting patch or force would make that step restart the
+    PLC, and the plan would start from a scan the restarted PLC no longer has.  The goal, the
+    operands and *avoid_pred* are judged on the state how() would start from.
+    """
+    if plc._running:
+        return None
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    targets = _parse_targets(*conditions)
+    fork = _drive_setup.start_fork(plc)
+    tags = dict(fork.state.tags)
+    # A running PLC applies its waiting patches and forces first, so their names count as known.
+    known = {**tags, **plc._pending_patches, **plc._forces}
+    _check_operands(targets, build_program_graph(plc._program), known)
+    _avoid_scan_names(avoid_pred, tags)
+    goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
+    goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()
+    # An operand only a waiting patch or force gives has no value yet, so the goal does not hold.
+    valued = all(
+        not (p is not None and p.operand_is_tag and p.operand not in tags) for _, _, p in targets
+    )
+    already = valued and target_reached(tags, goal.tag, goal.value, goal.predicate)
+    return Plan(
+        reachable=already,
+        target_tag=goal.tag,
+        target_value=goal.value,
+        targets=goal_pairs,
+        target_predicate=goal.predicate,
+        fork=fork if already else None,
+        reason=None
+        if already
+        else _engine.restart_ahead(f"the PLC is in STOP at scan {plc.state.scan_id}"),
+        status=PlanStatus.REACHED if already else PlanStatus.STOPPED,
+        anchor_scan=plc.state.scan_id,
+        session_inputs={} if already else {**plc._pending_patches, **plc._forces},
+        waiting_overrides=() if already else _drive_setup._waiting_overrides(plc),
+    )
+
+
+def _stopped_events(plan: Plan) -> Iterator[PilotEvent]:
+    """The events of a search that ends as *plan* before it steps anything."""
+    scan, reason = plan.anchor_scan, plan.reason
+    if plan.status is PlanStatus.REACHED:
+        yield PilotEvent(
+            "started",
+            scan,
+            {
+                "target": (plan.target_tag, plan.target_value),
+                "steerable_count": 0,
+                "opaque_loop": frozenset(),
+                "pipeline_roles": (),
+                "pipeline_internal_tags": frozenset(),
+                "route": None,
+                "active_requirements": (),
+            },
+        )
+        reason = "target reached"
+    else:
+        yield PilotEvent(
+            "stuck",
+            scan,
+            {
+                "reason": reason,
+                "distance": None,
+                "candidate_count": 0,
+                "nogoods_at_key": 0,
+                "terminal": True,
+            },
+        )
+    yield PilotEvent(
+        "finished",
+        scan,
+        {
+            "reached": plan.reachable,
+            "cut_short": False,
+            "steps": (),
+            "journey": (),
+            "knowledge": {},
+            "root_route": None,
+            "work": plan.fork,
+            "reason": reason,
+            "plan_journal": (),
+        },
+    )
+
+
+def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool]:
+    """The goal as a check on a state's tags, judged as the search judges it.
+
+    A goal whose tag the state lacks does not hold.  The prover's check reads such a goal as
+    holding.  A trimmed run that never wrote the goal's tag would then pass.
+    """
+    goal = TargetSpec.conjunction(
+        tuple(TargetSpec(*target) for target in _parse_targets(*conditions))
+    )
+    return lambda tags: target_reached(tags, goal.tag, goal.value, goal.predicate)
+
+
+def _how_from(
+    plc: PLC,
+    conditions: tuple[Any, ...],
+    max_scans: int,
+    avoid_pred: Any,
+    unlink: list[str] | None,
+    on_event: Callable[[PilotEvent], None] | None,
+    wall_clock_s: float | None,
+    *,
+    start_had_a_scan: bool = True,
+    check_operands: bool = True,
+) -> tuple[Plan, _drive_setup.DriveSetup, _engine._DriveOutcome | None]:
+    """One how() from where *plc* stands, with what the caller needs to decide what comes next.
+
+    A try after the first ask skips the operand check, which the first ask passed.  A restart
+    drops a tag that only a patch or force by name gave, and the try reads that tag at its
+    default, as stepping does.
+    """
+    clock = _budget.WallClock.starting_now(wall_clock_s)
     targets = _parse_targets(*conditions)
     setup = _drive_setup.prepare_drive(plc, unlink=unlink)
+    if check_operands:
+        _check_operands(targets, setup.pdg, setup.diag_snapshot)
+    _carry_goal_tags(setup, conditions)
     goal = TargetSpec.conjunction(tuple(TargetSpec(*target) for target in targets))
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets) if len(targets) > 1 else ()
     if goal.members:
         from pyrung.core.analysis.pilot import multitarget
 
-        ok, reason = multitarget.analyze(
-            setup.diag_snapshot, setup.pdg, setup.program, setup.steerable, targets
-        )
+        ok, reason = multitarget.analyze(_static_proofs.facts_for(setup), targets)
         if not ok:
-            return Plan(
+            refused = Plan(
                 reachable=False,
                 target_tag=goal.tag,
                 target_value=goal.value,
@@ -238,6 +555,7 @@ def pilot_how(
                 status=PlanStatus.CANNOT_REACH,
                 anchor_scan=setup.anchor_scan,
             )
+            return refused, setup, None
     target_tag, target_value, target_predicate = goal.tag, goal.value, goal.predicate
     ctx, route_taken = _drive_setup.prepare_target_context(
         setup,
@@ -246,12 +564,13 @@ def pilot_how(
         target_predicate,
         max_scans=max_scans,
         avoid_pred=avoid_pred,
+        start_had_a_scan=start_had_a_scan,
     )
-    ctx = replace(ctx, target=goal)
+    ctx = replace(ctx, target=goal, wall_clock=clock)
     outcome = _engine._pilot_loop(
         setup.work,
         ctx,
         on_event=on_event,
     )
 
-    return _plan_from_outcome(setup, outcome, goal, route_taken)
+    return _plan_from_outcome(setup, outcome, goal, route_taken), setup, outcome

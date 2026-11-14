@@ -16,9 +16,9 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    calc,
     copy,
     latch,
+    math,
     out,
 )
 from pyrung.core.analysis.prove import (
@@ -414,7 +414,7 @@ class TestReachableStateSlicing:
 
         with Program(strict=False) as logic:
             with Rung(enable):
-                calc(100 / divisor, result)
+                math(100 / divisor, result)
             with Rung(system.fault.division_error):
                 out(alarm)
 
@@ -442,7 +442,7 @@ class TestReachableStateSlicing:
                 copy(20, table[2])
                 copy(1, init_done)
             with Rung():
-                calc(selector, idx)
+                math(selector, idx)
             with Rung():
                 copy(table[idx], tmp)
             with Rung():

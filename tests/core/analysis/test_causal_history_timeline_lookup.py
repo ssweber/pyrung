@@ -12,7 +12,7 @@ from pyrung.core.analysis.causal.history import (
 )
 from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.rung_firings import (
-    _VALUE_VARIETY_THRESHOLD,
+    _ENTRY_LIMIT,
     Arithmetic,
     RungFiringTimelines,
     Unknown,
@@ -79,7 +79,7 @@ class _OpaqueInteriorHistory:
         self.read_scan_ids: list[int] = []
 
     def scan_ids(self) -> range:
-        return range(0, _VALUE_VARIETY_THRESHOLD + 6)
+        return range(0, _ENTRY_LIMIT + 6)
 
     def at(self, scan_id: int) -> _State:
         self.read_scan_ids.append(scan_id)
@@ -216,23 +216,23 @@ def test_rejected_arithmetic_tail_checks_next_scan_before_older_range() -> None:
 def test_fired_only_interior_is_searched_conservatively() -> None:
     """An opaque range cannot turn a real committed transition into a miss."""
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    for scan_id in range(1, _VALUE_VARIETY_THRESHOLD + 1):
+    for scan_id in range(1, _ENTRY_LIMIT + 1):
         # Quadratic values defeat stable, alternating, and arithmetic encoding,
         # naturally degrading this value column to unknown.
         timelines.append(0, scan_id, pmap({"Ready": scan_id**2}))
-    for scan_id in range(_VALUE_VARIETY_THRESHOLD + 1, _VALUE_VARIETY_THRESHOLD + 6):
+    for scan_id in range(_ENTRY_LIMIT + 1, _ENTRY_LIMIT + 6):
         timelines.append(0, scan_id, pmap({"Ready": "discarded"}))
 
     opaque = timelines._value_timelines[(0, "Ready")][-1]
     assert isinstance(opaque.payload, Unknown)
-    transition_scan = _VALUE_VARIETY_THRESHOLD + 3
+    transition_scan = _ENTRY_LIMIT + 3
     history = _OpaqueInteriorHistory(transition_scan)
 
     assert (
         _find_last_transition_scan(
             history,  # type: ignore[arg-type]
             "Ready",
-            _VALUE_VARIETY_THRESHOLD + 6,
+            _ENTRY_LIMIT + 6,
             timelines=timelines,
             pdg=_PDG(),  # type: ignore[arg-type]
         )

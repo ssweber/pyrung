@@ -102,9 +102,9 @@ with Program() as logic:
         out(DiverterCmd)
 
     comment("Bin counters")
-    with rung(rise(Bin[1].Sensor)):
+    with rung(Bin[1].Sensor):
         count_up(BinACounter, preset=10).reset(CountReset)
-    with rung(rise(Bin[2].Sensor)):
+    with rung(Bin[2].Sensor):
         count_up(BinBCounter, preset=10).reset(CountReset)
 
 # --- Option B: Map to a Click PLC ---
@@ -113,6 +113,8 @@ from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
+# Uses X001-X008 (8 inputs, built in or in Slot 0) and X101 (an input module
+# at expansion module 1).
 mapping = TagMap(
     {
         StartBtn: x[1],  # Physical input terminal 1
@@ -123,7 +125,7 @@ mapping = TagMap(
         EntrySensor: x[6],
         DiverterBtn: x[7],
         Bin[1].Sensor: x[8],
-        Bin[2].Sensor: x[9],
+        Bin[2].Sensor: x[101],
         ConveyorMotor: y[1],  # Physical output terminal 1
         DiverterCmd: y[2],
         StatusLight: y[3],

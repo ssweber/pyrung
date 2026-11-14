@@ -2,11 +2,11 @@
 
 from pyrung import (
     Or,
-    calc,
     comment,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -155,7 +155,7 @@ def rotate():
 
     comment("Check if current step is odd")
     with rung():  # R18
-        calc(Rotate_CurStep % 2, Rotate__valstepisodd)
+        math(Rotate_CurStep % 2, Rotate__valstepisodd)
 
     comment("""\
         EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
@@ -164,11 +164,11 @@ def rotate():
             # we immediately increment to the next odd step without executing any step logic.
             # This provides a safe "neutral zone" when manually changing step numbers.""")
     with rung(Rotate__valstepisodd != 1, Rotate_xPause == 0):  # R19
-        calc(Rotate_CurStep + 1, Rotate_CurStep)
+        math(Rotate_CurStep + 1, Rotate_CurStep)
 
     comment("Step advancement when transition is triggered")
     with rung(Rotate_Trans == 1):  # R20
-        calc(Rotate_CurStep + 1, Rotate_CurStep)
+        math(Rotate_CurStep + 1, Rotate_CurStep)
         copy(0, Rotate_Trans)
 
     comment("""\

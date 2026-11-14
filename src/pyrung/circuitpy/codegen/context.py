@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
-import inspect
-import textwrap
+import math
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from decimal import Decimal
+from enum import Enum
+from fractions import Fraction
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -15,21 +19,21 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_NEOPIXEL_R_TAG,
     _BOARD_SAVE_MEMORY_CMD_TAG,
     _BOARD_SWITCH_TAG,
+    _TYPE_DEFAULTS,
 )
-from pyrung.circuitpy.codegen._util import _first_defined_name, _io_kind, _mangle_symbol
+from pyrung.circuitpy.codegen._util import (
+    _default_literal,
+    _first_defined_name,
+    _io_kind,
+    _mangle_symbol,
+)
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
-from pyrung.core.condition import (
-    Condition,
-    FallingEdgeCondition,
-    RisingEdgeCondition,
-)
-from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.expression import (
-    Expression,
-)
+from pyrung.core.function_source import _names_in, embedded_source, is_the_function
+from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.memory_block import (
+    UNSET,
     Block,
     BlockRange,
     IndirectBlockRange,
@@ -39,10 +43,9 @@ from pyrung.core.memory_block import (
     OutputBlock,
 )
 from pyrung.core.program import Program
-from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.system_points import system
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.validation.walker import _condition_children, _instruction_fields
+from pyrung.core.validation.walker import walk_rung_operands
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,85 @@ class StaticRangeLayout:
     tags: tuple[Tag, ...]
     addresses: tuple[int, ...]
     uses_backing_storage: bool
+
+
+def _name_for_the_lock(fn: Any) -> str:
+    """What a lock sees of a callable with no source: its names, and no address."""
+    kind = type(fn)
+    return f"{kind.__module__}.{kind.__qualname__} {getattr(fn, '__qualname__', '')}".rstrip()
+
+
+def _text_for_the_lock(value: Any, seen: dict[int, int] | None = None) -> str:
+    """What a lock sees of a constant: its value wherever text says it, the same in any process.
+
+    A kernel holds the constant itself, so this is read and never run, and it can say what
+    ``repr`` alone wouldn't: a set's items in order, a list held twice.  What has no text
+    gets its names.
+    """
+    kind = type(value)
+    if value is None or kind in (bool, int, float, complex, str, bytes, bytearray, range):
+        return repr(value)
+    if kind in (Decimal, Fraction):
+        return repr(value)
+    if isinstance(value, Enum):
+        return f"{kind.__qualname__}.{value.name}"
+    if isinstance(value, Tag):
+        return f"{kind.__qualname__}({value.name!r})"
+    if kind in (set, frozenset):
+        # Their items are hashable, so nothing in one can be seen elsewhere as a list.
+        items = ", ".join(sorted(_text_for_the_lock(item) for item in value))
+        return f"{kind.__name__}({{{items}}})"
+    if kind not in (list, tuple, dict):
+        return _name_for_the_lock(value)
+    seen = {} if seen is None else seen
+    if kind is tuple:
+        return "(" + "".join(f"{_text_for_the_lock(item, seen)}, " for item in value) + ")"
+    if id(value) in seen:
+        return f"<as {seen[id(value)]}>"
+    seen[id(value)] = len(seen)
+    if kind is list:
+        return "[" + ", ".join(_text_for_the_lock(item, seen) for item in value) + "]"
+    pairs = (
+        f"{_text_for_the_lock(key, seen)}: {_text_for_the_lock(item, seen)}"
+        for key, item in value.items()
+    )
+    return "{" + ", ".join(pairs) + "}"
+
+
+def _is_plain_literal(value: Any) -> bool:
+    """Whether ``repr(value)`` is *value*, and no call can tell one copy from another."""
+    kind = type(value)
+    if kind is float:
+        return math.isfinite(value)
+    if kind is tuple:
+        return all(_is_plain_literal(item) for item in value)
+    return value is None or kind in (bool, int, str, bytes)
+
+
+def _renders_faithfully(value: Any, seen: set[int] | None = None) -> bool:
+    """Whether ``repr(value)`` rebuilds *value*: one object, sharing nothing inside itself."""
+    if _is_plain_literal(value):
+        return True
+    kind = type(value)
+    if kind not in (list, tuple, dict):
+        return False
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    items = [*value.keys(), *value.values()] if kind is dict else value
+    return all(_renders_faithfully(item, seen) for item in items)
+
+
+def _mutables_inside(value: Any) -> Iterator[Any]:
+    """Each list and dict a constant holds, itself included: what a call can change."""
+    kind = type(value)
+    if kind not in (list, tuple, dict):
+        return
+    if kind is not tuple:
+        yield value
+    for item in [*value.keys(), *value.values()] if kind is dict else value:
+        yield from _mutables_inside(item)
 
 
 def describe_static_range(range_value: BlockRange) -> StaticRangeLayout:
@@ -133,6 +215,9 @@ class CodegenContext:
     blockless: bool = False
     kernel_runtime: bool = False
     proof_metadata: bool = False
+    # Prover-only: every timed tick becomes a choice (see render_kernel
+    # ``_BB_TICK_HELPER``) instead of advancing by the scan's dt.
+    abstract_timers: bool = False
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
@@ -145,6 +230,7 @@ class CodegenContext:
         force_rung_enable: bool = False,
         blockless: bool = False,
         proof_metadata: bool = False,
+        abstract_timers: bool = False,
     ) -> CodegenContext:
         """Create a hardware-free context for kernel compilation."""
         ctx = cls(
@@ -156,8 +242,8 @@ class CodegenContext:
             blockless=blockless,
             kernel_runtime=True,
             proof_metadata=proof_metadata,
+            abstract_timers=abstract_timers,
         )
-        ctx._runtime_state_keys = True
         ctx.collect_program_references()
         ctx.resolve_block_aliases()
         ctx.assign_symbols()
@@ -165,43 +251,70 @@ class CodegenContext:
         return ctx
 
     slot_bindings: list[SlotBinding] = field(default_factory=list)
+    # A proof_metadata kernel's capped For loops: (where, count, tags), by index.
+    for_cap_sites: list[tuple[str, str, tuple[str, ...]]] = field(default_factory=list)
     block_bindings: dict[int, BlockBinding] = field(default_factory=dict)
     scalar_tags: dict[str, Tag] = field(default_factory=dict)
     referenced_tags: dict[str, Tag] = field(default_factory=dict)
     retentive_tags: dict[str, Tag] = field(default_factory=dict)
-    edge_prev_tags: set[str] = field(default_factory=set)
     dict_backed_tag_names: set[str] = field(default_factory=set)
 
     subroutine_names: list[str] = field(default_factory=list)
     function_sources: dict[str, str] = field(default_factory=dict)
     function_globals: dict[str, set[str]] = field(default_factory=dict)
+    # Names an embedded function reads the math module by (``import math as pymath``).
+    math_aliases: set[str] = field(default_factory=set)
     used_helpers: set[str] = field(default_factory=set)
+    # Nanoseconds to a unit of each accumulator the compiled timers tick.
+    timer_unit_ns: dict[str, int] = field(default_factory=dict)
     symbol_table: dict[str, str] = field(default_factory=dict)
 
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
+    # Tags a Copy writes several elements from (a text, its digits): their block is
+    # never compacted, outside blockless mode.
+    multi_element_store_targets: set[str] = field(default_factory=set)
+    # Blocks a rung condition indexes: their ``_cond_index_*`` helper reads an
+    # address outside the block as 0 rather than raising.
+    used_condition_index_blocks: set[int] = field(default_factory=set)
+    used_read_index_blocks: set[int] = field(default_factory=set)
+    used_window_addrs_blocks: set[int] = field(default_factory=set)
     # logical block id -> (bank block id, {logical addr: bank addr}). An aliased
     # block is a named window onto the bank's array, not storage of its own.
     block_alias: dict[int, tuple[int, dict[int, int]]] = field(default_factory=dict)
     function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
+    #: A kernel's globals: each symbol bound to the object itself.
+    function_objects: dict[str, Any] = field(default_factory=dict)
+    function_constants: dict[str, Any] = field(default_factory=dict)
+    function_constant_symbols: dict[int, str] = field(default_factory=dict)
+    #: A code.py's constants: each list and dict one holds -> the symbol that holds it.
+    function_constant_owners: dict[int, str] = field(default_factory=dict)
     runstop: RunStopConfig | None = None
     board_tag_names: set[str] = field(default_factory=set)
     uses_board_switch: bool = False
     uses_board_led: bool = False
     uses_board_neopixel: bool = False
-    uses_board_save_memory_cmd: bool = False
+    uses_random: bool = False
     _current_function: str | None = None
+    # Open forloop nesting while compiling, so nested loops get their own
+    # counter names.
+    _for_loop_depth: int = 0
     _name_counters: dict[str, int] = field(default_factory=dict)
-    _state_key_counter: int = 0
-    _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
-    _runtime_state_keys: bool = False
     has_io_gaps: bool = False
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
+    # The locals holding each box's helper legs, by ``id(instr)`` then field,
+    # bound just before the box's code (see compile._core._bind_helper_legs).
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
+    # ``(memory key, edge condition)`` per row (a rung's trunk, branch or box,
+    # a For-body rung or bare For-body box), by ``id``, for the rows being
+    # compiled (see site_memory.edge_rows).
+    _edge_rows: dict[int, tuple[tuple[str, Any], ...]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
     _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)
+    _power_on_literals_by_block: dict[int, dict[int, str]] = field(default_factory=dict)
+    _slot_addresses_by_block: dict[int, dict[str, int]] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -251,74 +364,37 @@ class CodegenContext:
                 )
             )
 
+    def _note_multi_element_store(self, instr: Any) -> None:
+        """Note the target of a Copy that writes elements from a fixed one on.
+
+        A text and its digits go into the elements after the target, by address, so
+        the block that target lives in keeps every address (``build_compact_block_maps``).
+        """
+        if not isinstance(instr, CopyInstruction):
+            return
+        target = instr.target
+        if isinstance(target, ImmediateRef):
+            target = target.value
+        if not isinstance(target, Tag):
+            return
+        if instr.convert is not None or (isinstance(instr.source, str) and len(instr.source) > 1):
+            self.multi_element_store_targets.add(target.name)
+
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()
-        self.edge_prev_tags.clear()
+        self.multi_element_store_targets.clear()
         self.dict_backed_tag_names.clear()
         self._static_range_layouts.clear()
         self.subroutine_names = sorted(self.program.subroutines)
-        seen_values: set[int] = set()
 
-        def walk_rung(rung: LogicRung) -> None:
-            for cond in rung._conditions:
-                walk_value(cond)
-            for item in rung._execution_items:
-                if isinstance(item, LogicRung):
-                    walk_rung(item)
-                else:
-                    walk_instruction(item)
-
-        def walk_instruction(instr: Any) -> None:
-            fields = _instruction_fields(instr)
-            if fields is None:
-                for key in sorted(vars(instr)):
-                    if key.startswith("_"):
-                        continue
-                    walk_value(getattr(instr, key))
-            else:
-                for key in fields:
-                    walk_value(getattr(instr, key))
-            if hasattr(instr, "oneshot"):
-                walk_value(instr.oneshot)
-            if hasattr(instr, "_ins"):
-                ins = instr._ins
-                if isinstance(ins, dict):
-                    for key in sorted(ins, key=repr):
-                        walk_value(ins[key])
-            if hasattr(instr, "_outs"):
-                outs = instr._outs
-                if isinstance(outs, dict):
-                    for key in sorted(outs, key=repr):
-                        walk_value(outs[key])
-            child_instructions = getattr(instr, "instructions", None)
-            if isinstance(child_instructions, list):
-                for child in child_instructions:
-                    walk_instruction(child)
-
-        def walk_value(value: Any) -> None:
-            value_id = id(value)
-            if value_id in seen_values:
-                return
-            seen_values.add(value_id)
-
+        def visit(value: Any) -> None:
             if isinstance(value, Tag):
                 self.referenced_tags.setdefault(value.name, value)
                 self._associate_tag_with_known_block(value)
-                return
-
-            if isinstance(value, IndirectRef):
+            elif isinstance(value, IndirectRef | IndirectExprRef | IndirectBlockRange):
                 self._ensure_block_binding(value.block)
                 self.used_indirect_blocks.add(id(value.block))
-                walk_value(value.pointer)
-                return
-
-            if isinstance(value, IndirectExprRef):
-                self._ensure_block_binding(value.block)
-                self.used_indirect_blocks.add(id(value.block))
-                walk_value(value.expr)
-                return
-
-            if isinstance(value, BlockRange):
+            elif isinstance(value, BlockRange):
                 layout = self.static_range_layout(value)
                 if layout.uses_backing_storage:
                     self._ensure_block_binding(value.block)
@@ -335,52 +411,29 @@ class CodegenContext:
                             self._ensure_block_binding(annotated_block)
                     if layout.uses_backing_storage or not self.blockless:
                         self._associate_tag_with_known_block(tag)
-                return
 
-            if isinstance(value, IndirectBlockRange):
-                self._ensure_block_binding(value.block)
-                self.used_indirect_blocks.add(id(value.block))
-                walk_value(value.start_expr)
-                walk_value(value.end_expr)
-                return
-
-            if isinstance(value, CopyConverter):
-                return
-
-            if isinstance(value, Condition):
-                if isinstance(value, (RisingEdgeCondition, FallingEdgeCondition)):
-                    self.edge_prev_tags.add(value.tag.name)
-                for _, child in _condition_children(value):
-                    walk_value(child)
-                return
-
-            if isinstance(value, Expression):
-                for key in sorted(vars(value)):
-                    if key.startswith("_"):
-                        continue
-                    walk_value(getattr(value, key))
-                return
-
-            if isinstance(value, dict):
-                for key in sorted(value, key=repr):
-                    walk_value(value[key])
-                return
-
-            if isinstance(value, (list, tuple, set, frozenset)):
-                for item in value:
-                    walk_value(item)
-
-        for rung in self.program.rungs:
-            walk_rung(rung)
-        for sub_name in self.subroutine_names:
-            for rung in self.program.subroutines[sub_name]:
-                walk_rung(rung)
+        walk_rung_operands(
+            [
+                *self.program.rungs,
+                *(
+                    rung
+                    for sub_name in self.subroutine_names
+                    for rung in self.program.subroutines[sub_name]
+                ),
+            ],
+            visit,
+            on_instruction=self._note_multi_element_store,
+        )
         for fault_tag in (
             system.fault.division_error,
             system.fault.out_of_range,
             system.fault.address_error,
+            system.fault.math_operation_error,
         ):
             self.referenced_tags.setdefault(fault_tag.name, fault_tag)
+        # The walk meets a tag before it may meet the block holding it.
+        for tag in list(self.referenced_tags.values()):
+            self._associate_tag_with_known_block(tag)
         self._refresh_board_usage()
 
     def collect_retentive_tags(self) -> None:
@@ -517,8 +570,25 @@ class CodegenContext:
     def build_compact_block_maps(self) -> None:
         """Build compact index mappings for blocks with only static access."""
         self.compact_block_map = {}
+        # A block a multi-element store writes into keeps every address, for the
+        # elements after its target.  Blockless code stores those by name, and its
+        # template holds only the tags the program names, so it compacts as before.
+        # ``tag_block_addresses`` is alias-resolved: the block the slot is in.
+        whole = (
+            set()
+            if self.blockless
+            else {
+                self.tag_block_addresses[name][0]
+                for name in self.multi_element_store_targets
+                if name in self.tag_block_addresses
+            }
+        )
         for block_id in self.block_bindings:
-            if block_id in self.used_indirect_blocks or block_id in self.block_alias:
+            if (
+                block_id in self.used_indirect_blocks
+                or block_id in self.block_alias
+                or block_id in whole
+            ):
                 continue
             addrs = sorted(
                 addr
@@ -614,23 +684,20 @@ class CodegenContext:
         self._name_counters[prefix] = n
         return f"{prefix}_{n}"
 
-    def reset_name_counters(self) -> None:
-        self._name_counters.clear()
-
     def state_key_for(self, obj: Any) -> str:
+        """The site key ``bind_sites`` gave *obj*; raises for an unbound object.
+
+        Generated code keys instruction memory by site, so a key handed out
+        here (a counter or ``id()``) could collide with the program's own
+        ``i{N}`` keys or differ from the interpreter's.
+        """
         assigned = getattr(obj, "_state_key", None)
-        if assigned is not None:
-            return assigned
-        obj_id = id(obj)
-        if self._runtime_state_keys:
-            return str(obj_id)
-        existing = self._state_keys_by_obj.get(obj_id)
-        if existing is not None:
-            return existing
-        self._state_key_counter += 1
-        key = f"i{self._state_key_counter}"
-        self._state_keys_by_obj[obj_id] = key
-        return key
+        if assigned is None:
+            raise RuntimeError(
+                f"{type(obj).__name__} has no site key: it was never bound into a program "
+                "(pyrung.core.site_memory.bind_sites)."
+            )
+        return assigned
 
     def index_helper_name(self, block_id: int) -> str:
         symbol = self.block_symbols.get(block_id)
@@ -642,6 +709,33 @@ class CodegenContext:
     def use_indirect_block(self, block_id: int) -> str:
         self.used_indirect_blocks.add(block_id)
         return self.index_helper_name(block_id)
+
+    def condition_index_helper_name(self, block_id: int) -> str:
+        return self.index_helper_name(block_id).replace("_resolve_index_", "_cond_index_", 1)
+
+    def use_condition_index_block(self, block_id: int) -> str:
+        """The helper a condition indexes *block_id* through: -1 when out of range."""
+        self.used_indirect_blocks.add(block_id)
+        self.used_condition_index_blocks.add(block_id)
+        return self.condition_index_helper_name(block_id)
+
+    def read_index_helper_name(self, block_id: int) -> str:
+        return self.index_helper_name(block_id).replace("_resolve_index_", "_read_index_", 1)
+
+    def use_read_index_block(self, block_id: int) -> str:
+        """The helper an instruction's source indexes *block_id* through."""
+        self.used_indirect_blocks.add(block_id)
+        self.used_read_index_blocks.add(block_id)
+        return self.read_index_helper_name(block_id)
+
+    def window_addrs_helper_name(self, block_id: int) -> str:
+        return self.index_helper_name(block_id).replace("_resolve_index_", "_window_addrs_", 1)
+
+    def use_window_addrs_block(self, block_id: int) -> str:
+        """The helper a dynamic window (``block.select(S, E)``) gets its addresses from."""
+        self.used_indirect_blocks.add(block_id)
+        self.used_window_addrs_blocks.add(block_id)
+        return self.window_addrs_helper_name(block_id)
 
     def symbol_if_referenced(self, tag_name: str) -> str | None:
         tag = self.referenced_tags.get(tag_name)
@@ -659,21 +753,102 @@ class CodegenContext:
         existing = self.function_symbols_by_obj.get(key)
         if existing is not None:
             return existing
+        if self.kernel_runtime:
+            return self._call_by_reference(fn)
 
         try:
-            source = inspect.getsource(fn)
+            rendered = embedded_source(fn)
         except (OSError, TypeError) as exc:
             raise ValueError(f"Could not inspect source for callable {fn!r}") from exc
-        rendered = textwrap.dedent(source).rstrip()
         if not rendered:
             raise ValueError(f"Could not inspect source for callable {fn!r}")
-        if _first_defined_name(rendered) is None:
+        defined = _first_defined_name(rendered)
+        if defined is None:
             raise ValueError(f"Callable source is not inspectable for embedding: {fn!r}")
+        if not is_the_function(rendered, fn):
+            raise ValueError(
+                f"Callable source is not the function it stands for: {fn!r}. Embedding copies "
+                "the text of a plain def: the file may have changed since the import, or the "
+                "function uses a closure, a decorator or a wrapper."
+            )
+        if defined == "math" or hasattr(builtins, defined):
+            # The def lands in the generated module, over the name its other code calls.
+            raise ValueError(
+                f"Callable name would shadow a name the generated code uses: {fn!r}. "
+                "Rename the function."
+            )
+        for name in sorted(_names_in(fn.__code__)):
+            if name == "math" or getattr(fn, "__globals__", {}).get(name) is not math:
+                continue
+            if name.startswith("_") or hasattr(builtins, name):
+                raise ValueError(
+                    f"Callable reads the math module as {name!r}, a name the generated code "
+                    f"uses: {fn!r}. Import it under another name."
+                )
+            self.math_aliases.add(name)
 
         fn_name = getattr(fn, "__name__", type(fn).__name__)
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
         self.function_sources[symbol] = rendered
         self.function_symbols_by_obj[key] = symbol
+        return symbol
+
+    def function_constant(self, value: Any) -> str:
+        """A ``run_function`` constant as generated code names it.
+
+        Stepping hands the function one object, scan after scan, so what the function does
+        to it lasts.  A plain literal's text will do.  Anything else a kernel holds by
+        reference, and a code.py binds once at module level if its text rebuilds it.  Text
+        can't say that two constants hold one list, so a code.py refuses that as well.
+        """
+        if _is_plain_literal(value):
+            return repr(value)
+        existing = self.function_constant_symbols.get(id(value))
+        if existing is not None:
+            return existing
+        if not self.kernel_runtime and not _renders_faithfully(value):
+            raise ValueError(
+                f"A run_function constant a code.py can't rebuild from its text: {value!r}. "
+                "Pass a number, a string, or a list or dict of them."
+            )
+        symbol = f"_fc_{len(self.function_constants)}"
+        if not self.kernel_runtime:
+            inside = {id(item) for item in _mutables_inside(value)}
+            if any(item in self.function_constant_owners for item in inside):
+                raise ValueError(
+                    f"A run_function constant shares a list or dict with another: {value!r}. "
+                    "A code.py rebuilds each from its text, so a change made through one "
+                    "would not show in the other. Pass one object, or a copy to each."
+                )
+            self.function_constant_owners.update(dict.fromkeys(inside, symbol))
+        self.function_constants[symbol] = value
+        self.function_constant_symbols[id(value)] = symbol
+        return symbol
+
+    def function_constant_lines(self) -> list[str]:
+        """Each constant's binding: a code.py runs these, a kernel's lock reads them."""
+        return [
+            f"{symbol} = {repr(value) if _renders_faithfully(value) else _text_for_the_lock(value)}"
+            for symbol, value in self.function_constants.items()
+        ]
+
+    def _call_by_reference(self, fn: Any) -> str:
+        """Bind *fn* itself to a symbol: a kernel lives in this process and calls the function.
+
+        Its text is kept for the lock only, so a lock sees an edit to the function, and one
+        with no text is known by name.  Whether that text is what *fn* runs doesn't matter
+        here: a kernel takes any callable.  Whether it may be called is for the kernel's
+        gate and the verifier's, ``calls_that_depend_on_more_than_their_inputs``.
+        """
+        fn_name = getattr(fn, "__name__", type(fn).__name__)
+        symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
+        try:
+            text = embedded_source(fn)
+        except (OSError, SyntaxError, TypeError):
+            text = ""
+        self.function_sources[symbol] = text or f"# {_name_for_the_lock(fn)}"
+        self.function_objects[symbol] = fn
+        self.function_symbols_by_obj[id(fn)] = symbol
         return symbol
 
     def _ensure_block_binding(
@@ -708,9 +883,104 @@ class CodegenContext:
             channel_count=channel_count,
         )
         self.block_bindings[block_id] = binding
-        for addr, tag in block._tag_cache.items():
-            self.tag_block_addresses[tag.name] = (block_id, addr)
         return block_id
+
+    def _slot_addresses(self, binding: BlockBinding) -> dict[str, int]:
+        """The address of each slot of a block, by the name its slot resolves to.
+
+        Memory is keyed by name, so a tag naming a slot is that slot however it
+        got the name: ``map_to``, ``slot(name=...)`` or the same spelling.  Read
+        from the slot configuration, not ``Block._tag_cache``: the cache holds
+        whichever slots something has indexed so far, and an indirect read only
+        indexes a slot when a scan reaches it.  What compiles must not depend on
+        that, or a kernel compiled before the pointer arrives keeps the name and
+        the slot in two cells.
+        """
+        addresses = self._slot_addresses_by_block.get(binding.block_id)
+        if addresses is None:
+            block = binding.block
+            addresses = {}
+            for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
+                # The same precedence as ``Block._get_tag``.
+                mapped = block._mapped_tags.get(addr)
+                name = mapped.name if mapped is not None else block._effective_slot_name(addr)
+                addresses[name] = addr
+            self._slot_addresses_by_block[binding.block_id] = addresses
+        return addresses
+
+    def _slot_holders(self, binding: BlockBinding) -> dict[int, Tag]:
+        """The tag already known to hold each slot, by address, without indexing any.
+
+        A name the program references wins: the engines seed the name, and a pointer
+        reads the same cell.  Otherwise the tag mapped onto the slot.
+        `Block._tag_cache` is left out because it holds whatever ran before the export asked
+        for.  A tag there holds only what the block's configuration gives it anyway.
+        """
+        holders: dict[int, Tag] = dict(binding.block._mapped_tags)
+        for name, (block_id, addr) in self.tag_block_addresses.items():
+            if block_id == binding.block_id and name in self.referenced_tags:
+                holders[addr] = self.referenced_tags[name]
+        return holders
+
+    def _factory_power_on_values(self, binding: BlockBinding, answered: set[int]) -> dict[int, Any]:
+        """What a block's ``default_factory`` gives the slots nothing else answers for.
+
+        Asked through the block (`Block._factory_default`), which asks the factory once
+        per slot in address order and keeps the answer.  So a factory that counts gives
+        each slot what stepping reads there, and an export changes no value a later scan
+        reads.  A slot the factory raises for stays at zero, because the interpreter cannot
+        read it.
+        """
+        block = binding.block
+        if block.default_factory is None:
+            return {}
+        values: dict[int, Any] = {}
+        for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
+            if addr in answered:
+                continue
+            try:
+                values[addr] = block._factory_default(addr)
+            except Exception:
+                continue
+        return values
+
+    def block_power_on_literals(self, binding: BlockBinding) -> dict[int, str]:
+        """Source for the slots of a block that do not power on at the type's zero.
+
+        A slot with no holder powers on as `Block._get_tag` would build it.  One no
+        literal can spell stays at zero.
+        """
+        literals = self._power_on_literals_by_block.get(binding.block_id)
+        if literals is not None:
+            return literals
+        block = binding.block
+        holders = self._slot_holders(binding)
+        configured = {
+            addr: block._slot_field(addr, "default", UNSET) for addr in block._slot_config
+        }
+        configured = {addr: value for addr, value in configured.items() if value is not UNSET}
+        values = self._factory_power_on_values(binding, {*holders, *configured})
+        values.update(configured)
+        values.update((addr, tag.default) for addr, tag in holders.items())
+        zero = repr(_TYPE_DEFAULTS[binding.tag_type])
+        literals = {}
+        for addr in sorted(values):
+            literal = _default_literal(values[addr])
+            # By spelling: a Bool's False on an INT block is not the block's 0.
+            if literal is not None and literal != zero:
+                literals[addr] = literal
+        self._power_on_literals_by_block[binding.block_id] = literals
+        return literals
+
+    def block_retentive_overrides(self, binding: BlockBinding) -> dict[int, bool]:
+        """Each slot whose retentive flag may not be its block's, by address."""
+        block = binding.block
+        overrides = {
+            addr: block._slot_field(addr, "retentive", block.retentive)
+            for addr in block._slot_config
+        }
+        overrides.update((addr, tag.retentive) for addr, tag in self._slot_holders(binding).items())
+        return overrides
 
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
         if tag.name in self.tag_block_addresses or tag.name in self.dict_backed_tag_names:
@@ -726,10 +996,10 @@ class CodegenContext:
         for binding in sorted(
             self.block_bindings.values(), key=lambda b: (b.logical_name, b.block_id)
         ):
-            for addr, cached_tag in binding.block._tag_cache.items():
-                if cached_tag is tag:
-                    self.tag_block_addresses[tag.name] = (binding.block_id, addr)
-                    return
+            addr = self._slot_addresses(binding).get(tag.name)
+            if addr is not None:
+                self.tag_block_addresses[tag.name] = (binding.block_id, addr)
+                return
 
     def _refresh_board_usage(self) -> None:
         names = set(self.referenced_tags)
@@ -748,7 +1018,6 @@ class CodegenContext:
         }
         self.uses_board_switch = _BOARD_SWITCH_TAG in names
         self.uses_board_led = _BOARD_LED_TAG in names
-        self.uses_board_save_memory_cmd = _BOARD_SAVE_MEMORY_CMD_TAG in names
         self.uses_board_neopixel = bool(
             {_BOARD_NEOPIXEL_R_TAG, _BOARD_NEOPIXEL_G_TAG, _BOARD_NEOPIXEL_B_TAG} & names
         )

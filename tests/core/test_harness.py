@@ -6,6 +6,7 @@ import pytest
 
 from pyrung.core import (
     PLC,
+    Block,
     Bool,
     Char,
     Coupling,
@@ -15,19 +16,25 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    TagType,
+    copy,
+    latch,
     out,
     udt,
 )
-from pyrung.core.physical import Physical, Pulse, Ramp
+from pyrung.core.analysis.graph import PlanStatus
+from pyrung.core.harness import _parse_link_spec, format_link_spec, link_problem
+from pyrung.core.physical import Physical
+from pyrung.core.synthesis import coil_timer, plant_acc_name, plant_timer
 
 # --- Fixtures: Physical declarations ---
 
 LIMIT_SWITCH = Physical("LimitSwitch", on_delay="20ms", off_delay="10ms")
 SLOW_VALVE = Physical("SlowValve", on_delay="100ms", off_delay="200ms")
 FAST_SENSOR = Physical("FastSensor", on_delay="5ms", off_delay="5ms")
-TEMP_SENSOR = Physical("TempSensor", profile=Ramp(up=10.0, down=-5.0))
-BURNER = Physical("Burner", profile=Ramp(up=10.0, down=-2.0))
-ENCODER = Physical("Encoder", profile=Pulse(on_dwell="25ms", off_dwell="25ms"))
+TEMP_SENSOR = Physical("TempSensor", ramp_on=10.0, ramp_off=-5.0)
+BURNER = Physical("Burner", ramp_on=10.0, ramp_off=-2.0)
+ENCODER = Physical("Encoder", flasher_on="25ms", flasher_off="25ms")
 
 
 # --- Fixtures: UDTs ---
@@ -124,14 +131,17 @@ class TestBoolAutoharness:
 
         # Drop En — off_delay=10ms, dt=10ms → 1 dt of dwell.  The pre-logic plant
         # reads the *previous* commit's En, so the scan En falls the plant still
-        # sees it high (Fb holds); it sees the drop next scan, then the off-delay
-        # clears Fb — one input-read scan later than the command.
+        # sees it high (Fb holds).  It sees the drop next scan, where the debounce's
+        # off side counts but compares nothing, and clears Fb the scan after.
         plc.patch({Cmd: False})
         plc.step()  # En falls (committed); plant still saw it high → Fb holds
         assert _fb(plc, dev[1].En) is False
         assert _fb(plc, dev[1].Fb) is True
 
-        plc.step()  # plant sees En low; off-delay clears Fb
+        plc.step()  # the plant sees En low and the off side counts 10 ms
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.step()  # the off side was done before this scan: Fb clears
         assert _fb(plc, dev[1].Fb) is False
 
     def test_asymmetric_delay(self):
@@ -373,8 +383,8 @@ class TestAnalogRampSpec:
             assert result == pytest.approx(5.0, rel=0.25), f"dt={dt_val} gave {result}"
 
 
-class TestPulseSpec:
-    """A declarative ``Pulse`` lowers to an astable plant flasher (bool pulse train)."""
+class TestFlasherSpec:
+    """A flasher feedback lowers to a plant flasher."""
 
     def test_pulse_toggles_feedback_while_enabled(self):
         plc, Cmd, dev = _make_plc(EncoderDevice, dt=0.005)
@@ -396,6 +406,1035 @@ class TestPulseSpec:
 
         plc.run_for(0.100)  # never enabled → rests low
         assert _fb(plc, dev[1].Fb_Pulse) is False
+
+
+# --- Delays longer than a millisecond timer counts ---
+
+
+def _long_delay_plc(physical: Physical, *, dt: float = 0.25, default: bool = False):
+    Cmd = Bool("Cmd", default=default)
+    En = Bool("En")
+    Fb = Bool("Fb", physical=physical, link="En")
+    Seen = Bool("Seen")
+    with Program(strict=False) as logic:
+        with Rung(Cmd):
+            out(En)
+        with Rung(Fb):
+            out(Seen)
+    plc = PLC(logic, dt=dt)
+    Harness(plc).install()
+    return plc, Cmd, Fb
+
+
+def _whole_state(plc) -> tuple:
+    s = plc.current_state
+    return s.scan_id, s.timestamp, dict(s.tags), dict(s.memory)
+
+
+class TestDelaysPastTheMillisecondRange:
+    """A plant timer's accumulator stops at 32767, 32.767 s in milliseconds."""
+
+    @pytest.mark.parametrize(
+        ("delay_ms", "expected"),
+        [
+            (0, (0, "Tms", 1)),
+            (32_767, (32_767, "Tms", 1)),
+            (32_768, (33, "Ts", 1_000)),
+            (60_000, (60, "Ts", 1_000)),
+            (32_767_000, (32_767, "Ts", 1_000)),
+            (32_767_001, (547, "Tm", 60_000)),
+            (86_400_000, (1_440, "Tm", 60_000)),
+            (32_767 * 60_000 + 1, (547, "Th", 3_600_000)),
+            (32_767 * 3_600_000 + 1, (1_366, "Td", 86_400_000)),
+            (32_767 * 86_400_000, (32_767, "Td", 86_400_000)),
+        ],
+    )
+    def test_the_finest_unit_that_can_count_the_delay(self, delay_ms, expected):
+        assert plant_timer(delay_ms) == expected
+
+    def test_a_delay_no_timer_can_count_says_so(self):
+        with pytest.raises(ValueError, match="longer than a timer can count"):
+            plant_timer(32_767 * 86_400_000 + 1)
+
+    @pytest.mark.parametrize("delay", ["30s", "33s", "60s", "10min"])
+    def test_on_delay_rises(self, delay):
+        physical = Physical("Slow", on_delay=delay)
+        plc, Cmd, Fb = _long_delay_plc(physical, dt=0.25)
+        plc.patch({Cmd: True})
+        # One scan to command the enable, then ceil(delay / dt) held scans: the count
+        # a millisecond timer gives a delay it can hold (30 s here).
+        on_delay_ms = physical.on_delay_ms
+        assert on_delay_ms is not None
+        expected = on_delay_ms // 250 + 1
+        plc.run(expected - 1)
+        assert _fb(plc, Fb) is False
+        plc.step()
+        assert _fb(plc, Fb) is True
+
+    def test_off_delay_holds_then_drops(self):
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", off_delay="60s"), dt=0.25)
+        plc.patch({Cmd: True})
+        plc.run(5)
+        assert _fb(plc, Fb) is True
+        plc.force(Cmd, False)
+        plc.run(238)
+        assert _fb(plc, Fb) is True
+        plc.run(5)
+        assert _fb(plc, Fb) is False
+
+    def test_a_long_pulse_flips_both_ways(self):
+        physical = Physical("Flow", flasher_on="60s", flasher_off="40s")
+        plc, Cmd, Fb = _long_delay_plc(physical, dt=0.25)
+        plc.patch({Cmd: True})
+        flips = []
+        last = _fb(plc, Fb)
+        for _ in range(1_000):
+            plc.step()
+            value = _fb(plc, Fb)
+            if value != last:
+                flips.append((plc.current_state.scan_id, value))
+                last = value
+        assert [value for _scan, value in flips][:4] == [True, False, True, False]
+        gaps = [later - earlier for (earlier, _), (later, _) in zip(flips, flips[1:], strict=False)]
+        # 60 s high and 40 s low at 4 scans a second, give or take the scan a pair of
+        # timers takes to hand over.
+        assert gaps[0] == pytest.approx(240, abs=2)
+        assert gaps[1] == pytest.approx(160, abs=2)
+
+    def test_a_delay_in_the_millisecond_range_keeps_its_timer(self):
+        plc, _Cmd, _Fb = _long_delay_plc(Physical("Fast", on_delay="32s500ms"))
+        coil = plc._synthesis.plant[0]._instructions[0]
+        assert (coil.on_preset, coil.unit.name) == (32_500, "Tms")
+
+    @pytest.mark.parametrize(
+        ("on_ms", "off_ms", "expected"),
+        [
+            (100, 50, (100, 50, "Tms", 1)),
+            (0, 0, (0, 0, "Tms", 1)),
+            (100, 40_000, (1, 40, "Ts", 1_000)),
+            (32_768, 32_767, (33, 33, "Ts", 1_000)),
+        ],
+    )
+    def test_both_sides_of_a_coil_count_in_one_unit(self, on_ms, off_ms, expected):
+        """A CLICK coil has one unit, so the shorter side rounds up to it."""
+        assert coil_timer(on_ms, off_ms) == expected
+
+    def test_pending_ms_counts_down_past_the_millisecond_range(self):
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", on_delay="60s"), dt=0.25)
+        harness = plc._harness
+        plc.patch({Cmd: True})
+        plc.run(5)
+        # One scan to command the enable, then each held scan counts a quarter second,
+        # most of which sits in the timer's fraction, not its whole seconds.
+        assert harness.pending_ms()[Fb.name] == 60_000 - 4 * 250
+        plc.run(40)
+        assert harness.pending_ms()[Fb.name] == 60_000 - 44 * 250
+        plc.run(1)
+        assert harness.pending_ms()[Fb.name] == 60_000 - 45 * 250
+
+    def test_pending_ms_counts_a_falling_delay_the_same(self):
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", off_delay="60s"), dt=0.25)
+        harness = plc._harness
+        plc.patch({Cmd: True})
+        plc.run(4)
+        plc.force(Cmd, False)
+        plc.run(3)
+        first = harness.pending_ms()[Fb.name]
+        plc.run(3)
+        assert harness.pending_ms()[Fb.name] == first - 3 * 250
+
+    def test_pending_ms_is_when_the_timer_will_flip(self):
+        # 32.768 s counts in whole seconds, so the flip comes at 33 s.
+        plc, Cmd, Fb = _long_delay_plc(Physical("Slow", on_delay="32768ms"), dt=0.25)
+        harness = plc._harness
+        plc.patch({Cmd: True})
+        plc.run(2)
+        assert harness.pending_ms()[Fb.name] == 33_000 - 250
+
+    def test_an_enable_already_on_at_install_settles_without_dropping(self):
+        En = Bool("En", default=True)
+        Fb = Bool("Fb", physical=Physical("Slow", on_delay="60s"), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.25)
+        Harness(plc).install()
+        plc.run(10)
+        assert _fb(plc, Fb) is True
+
+    @pytest.mark.parametrize(
+        ("physical", "scans"),
+        [
+            (Physical("Slow", on_delay="60s"), 300),
+            (Physical("Slow", on_delay="60s", off_delay="60s"), 300),
+            (Physical("Flow", flasher_on="60s", flasher_off="40s"), 700),
+        ],
+        ids=["on", "on-off", "pulse"],
+    )
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_a_long_run_equals_stepping(self, physical, scans, dt):
+        stepped, stepped_cmd, _ = _long_delay_plc(physical, dt=dt)
+        stepped.patch({stepped_cmd: True})
+        for _ in range(scans):
+            stepped.step()
+
+        run, run_cmd, _ = _long_delay_plc(physical, dt=dt)
+        run.patch({run_cmd: True})
+        run.run(scans)
+
+        assert _whole_state(run) == _whole_state(stepped)
+
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_run_until_lands_on_the_stepped_flip(self, dt):
+        physical = Physical("Slow", on_delay="60s")
+        stepped, stepped_cmd, stepped_fb = _long_delay_plc(physical, dt=dt)
+        stepped.patch({stepped_cmd: True})
+        for _ in range(2_000):
+            stepped.step()
+            if _fb(stepped, stepped_fb):
+                break
+        assert _fb(stepped, stepped_fb) is True
+
+        run, run_cmd, run_fb = _long_delay_plc(physical, dt=dt)
+        run.patch({run_cmd: True})
+        run.run_until(run_fb, max_cycles=2_000)
+
+        assert _whole_state(run) == _whole_state(stepped)
+
+
+class TestALinkChangedAcrossUnits:
+    """A link changed mid-run keeps the time counted, whatever unit either delay counts in."""
+
+    @staticmethod
+    def _linked(on_delay: str, *, dt: float = 0.25, default: bool = False):
+        En = Bool("En", default=default)
+        Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=dt)
+        Harness(plc).install()
+        return plc, En, Fb
+
+    @staticmethod
+    def _relink(plc, **physical) -> None:
+        plc._harness.set_overrides({"Fb": Coupling("En", "Fb", Physical("S", **physical), None)})
+
+    @staticmethod
+    def _scans_to_flip(plc, Fb, budget: int = 1_000) -> int | None:
+        start = _fb(plc, Fb)
+        for i in range(budget):
+            plc.step()
+            if _fb(plc, Fb) != start:
+                return i + 1
+        return None
+
+    @pytest.mark.parametrize(
+        ("first", "then", "left_s"),
+        [
+            ("5s", "10s", 7.25),  # same unit, the control
+            ("5s", "60s", 57.25),
+            ("40s", "60s", 57.25),  # same unit, the control
+            ("40s", "5s", 2.25),
+        ],
+    )
+    def test_mid_count_the_time_counted_carries(self, first, then, left_s):
+        plc, En, Fb = self._linked(first)
+        plc.patch({En: True})
+        plc.run(12)  # one to command the enable, 11 held: 2.75 s counted
+        assert _fb(plc, Fb) is False
+        self._relink(plc, on_delay=then)
+        assert self._scans_to_flip(plc, Fb) == left_s * 4
+
+    @pytest.mark.parametrize(
+        ("first", "then"),
+        [
+            ("10s", "5s"),  # same unit, the control
+            ("40s", "5s"),
+            ("60s", "5s"),
+            ("60s", "40s"),  # same unit, the control
+            ("5s", "10s"),  # same unit, the control
+            ("5s", "60s"),
+            ("5s", "40s"),
+            ("40s", "60s"),  # same unit, the control
+        ],
+    )
+    def test_settled_feedback_holds_whatever_the_new_delay(self, first, then):
+        """A debounce never turns its target off while its rung is true."""
+        plc, _En, Fb = self._linked(first, default=True)
+        plc.run(4)
+        assert _fb(plc, Fb) is True
+        self._relink(plc, on_delay=then)
+        plc.run(2)
+        assert _fb(plc, Fb) is True
+
+    def test_a_fresh_harness_given_the_same_links_keeps_an_off_delay_counting(self):
+        """How how()'s fork rebuilds the plant: an empty old accumulator gives nothing."""
+        plc, En, Fb = self._linked("0ms")
+        plc.patch({En: True})
+        plc.run(3)
+        self._relink(plc, off_delay="60s")
+        plc.run(1)
+        plc.force(En, False)
+        plc.run(13)
+        assert _fb(plc, Fb) is True
+        before = _whole_state(plc)
+        assert plc.current_state.tags["__cpl_off_Ts__Fb"] == 3
+
+        overrides = plc._harness.overrides
+        fresh = Harness(plc)
+        fresh.install()
+        fresh.set_overrides(overrides)
+
+        assert _whole_state(plc) == before
+
+    def test_there_and_back_leaves_no_stale_count(self):
+        plc, En, Fb = self._linked("5s", default=True)
+        plc.run(4)
+        self._relink(plc, on_delay="60s")  # counts 5 s + 1 s in seconds
+        plc.run(4)
+        plc.force(En, False)
+        plc.run(2)  # the debounce keeps its on count when its enable falls
+        plc.unforce(En)
+        self._relink(plc, on_delay="5s")
+        assert plc.current_state.tags["__cpl_on__Fb"] == 7_250
+        assert plc.current_state.tags["__cpl_on_Ts__Fb"] == 0
+        plc.run(2)
+        assert _fb(plc, Fb) is False
+        # The next rise counts from 0: the kept count does not shorten it.
+        plc.patch({En: True})
+        assert self._scans_to_flip(plc, Fb) == 1 + 5 * 4
+
+    def test_an_off_delay_carries(self):
+        plc, En, Fb = self._linked("0ms")
+        plc.patch({En: True})
+        plc.run(3)
+        self._relink(plc, off_delay="5s")
+        plc.run(1)
+        plc.force(En, False)
+        plc.run(13)  # 3 s into the off-delay
+        assert _fb(plc, Fb) is True
+        self._relink(plc, off_delay="60s")
+        assert self._scans_to_flip(plc, Fb) == pytest.approx(57 * 4, abs=2)
+
+    def test_a_pulse_dwell_carries(self):
+        En = Bool("En")
+        Fb = Bool("Fb", physical=Physical("F", flasher_on="5s", flasher_off="5s"), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.25)
+        Harness(plc).install()
+        plc.patch({En: True})
+        plc.run(5)  # part way through the first on phase
+        assert _fb(plc, Fb) is True
+        count = plc.current_state.tags["__pls_on__Fb"]
+        assert count > 0
+        self._relink(plc, flasher_on="60s", flasher_off="60s")
+        assert self._scans_to_flip(plc, Fb) == pytest.approx((60_000 - count) // 250, abs=2)
+
+    def test_a_delay_staying_in_its_unit_writes_nothing(self):
+        plc, En, _Fb = self._linked("5s")
+        plc.patch({En: True})
+        plc.run(5)
+        before = _whole_state(plc)
+        self._relink(plc, on_delay="10s", off_delay="20s")
+        assert _whole_state(plc) == before
+
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_runs_history_and_forks_equal_stepping_after_the_change(self, dt):
+        def changed(scans_after: int):
+            plc, En, Fb = self._linked("5s", dt=dt)
+            plc.patch({En: True})
+            plc.run(12)
+            self._relink(plc, on_delay="60s")
+            for _ in range(scans_after):
+                plc.step()
+            return plc
+
+        changed_at = changed(0).current_state.scan_id
+        stepped = changed(700)
+        ran = changed(0)
+        ran.run(700)
+        assert _whole_state(ran) == _whole_state(stepped)
+        assert ran.current_state.tags["Fb"] is True
+
+        reference = changed(100)
+        at = stepped.history.at(changed_at + 100)
+        assert dict(at.tags) == dict(reference.current_state.tags)
+        assert dict(at.memory) == dict(reference.current_state.memory)
+        at_change = stepped.history.at(changed_at)
+        assert dict(at_change.tags) == dict(changed(0).current_state.tags)
+
+        fork = stepped.fork(scan_id=changed_at + 100)
+        fork.run(50)
+        twin = changed(150)
+        assert dict(fork.current_state.tags) == dict(twin.current_state.tags)
+        assert dict(fork.current_state.memory) == dict(twin.current_state.memory)
+
+    @pytest.mark.parametrize(
+        ("first", "then", "left_s"),
+        [
+            ("5s", "10s", 7.25),  # same unit, the control
+            ("5s", "60s", 57.25),
+            ("40s", "60s", 57.25),  # same unit, the control
+            ("40s", "5s", 2.25),
+        ],
+    )
+    def test_a_fork_from_before_the_change_keeps_the_time_counted(self, first, then, left_s):
+        plc, En, Fb = self._linked(first)
+        plc.patch({En: True})
+        plc.run(12)
+        before = plc.current_state.scan_id - 1  # the tip itself takes the change
+        self._relink(plc, on_delay=then)
+        plc.run(5)
+
+        assert self._scans_to_flip(plc.fork(scan_id=before), Fb) == left_s * 4 + 1
+
+    @pytest.mark.parametrize(
+        ("declared", "bench"), [("30s", "5s"), ("40s", "5s"), ("60s", "5s")]
+    )  # 30 s stays in its unit, the control
+    def test_a_fork_from_before_a_narrowing_keeps_settled_feedback(self, declared, bench):
+        plc, En, Fb = self._linked(declared)
+        plc.patch({En: True})
+        plc.run(250)
+        before = plc.current_state.scan_id - 1
+        self._relink(plc, on_delay=bench)
+        plc.run(100)
+
+        fork = plc.fork(scan_id=before)
+        assert _fb(fork, Fb) is True
+        for _ in range(30):
+            fork.step()
+            assert _fb(fork, Fb) is True
+
+    @pytest.mark.parametrize(("first", "then"), [("40s", "5s"), ("5s", "60s"), ("5s", "10s")])
+    @pytest.mark.parametrize("dt", [0.25, 0.1], ids=["binary-dt", "decimal-dt"])
+    def test_a_fork_from_before_the_change_runs_as_it_steps(self, first, then, dt):
+        plc, En, _Fb = self._linked(first, dt=dt)
+        plc.patch({En: True})
+        plc.run(12)
+        before = plc.current_state.scan_id - 1
+        recorded = plc.history.at(before)
+        self._relink(plc, on_delay=then)
+        plc.run(5)
+
+        stepped = plc.fork(scan_id=before)
+        ran = plc.fork(scan_id=before)
+        for _ in range(100):
+            stepped.step()
+        ran.run(100)
+        assert _whole_state(ran) == _whole_state(stepped)
+
+        # The session's record is untouched, and a fork of the fork goes the same way.
+        assert dict(plc.history.at(before).tags) == dict(recorded.tags)
+        at_its_start = stepped.fork(scan_id=before)
+        at_its_start.run(100)
+        assert _whole_state(at_its_start) == _whole_state(stepped)
+        inside = stepped.fork(scan_id=before + 40)
+        inside.run(60)
+        assert _whole_state(inside) == _whole_state(stepped)
+        tip = stepped.fork()
+        assert _whole_state(tip) == _whole_state(stepped)
+
+    @pytest.mark.parametrize(("first", "then"), [("40s", "5s"), ("5s", "60s")])
+    def test_a_fork_with_a_moved_count_replays_what_it_ran(self, first, then):
+        plc, En, _Fb = self._linked(first)
+        plc.patch({En: True})
+        plc.run(12)
+        before = plc.current_state.scan_id - 1
+        self._relink(plc, on_delay=then)
+        plc.run(5)
+
+        def forked(scans: int):
+            fork = plc.fork(scan_id=before)
+            for _ in range(scans):
+                fork.step()
+            return fork
+
+        fork = forked(50)
+        reference = forked(25)
+        for replayed in (fork.replay_to(before + 25), fork._replay_to_interpreted(before + 25)):
+            assert dict(replayed.current_state.tags) == dict(reference.current_state.tags)
+            assert dict(replayed.current_state.memory) == dict(reference.current_state.memory)
+
+    def test_a_replay_from_before_the_change_starts_from_what_it_recorded(self):
+        def session(change: bool):
+            plc, En, _Fb = self._linked("40s")
+            plc.patch({En: True})
+            plc.run(12)
+            if change:
+                self._relink(plc, on_delay="5s")
+                plc.run(5)
+            return plc
+
+        replayed = session(True)._replay_to_interpreted(8)
+        reference = session(False).fork(scan_id=8)
+        assert dict(replayed.current_state.tags) == dict(reference.current_state.tags)
+        assert dict(replayed.current_state.memory) == dict(reference.current_state.memory)
+
+    def test_a_fork_with_its_counts_in_place_changes_nothing(self):
+        plc, En, _Fb = self._linked("5s")
+        plc.patch({En: True})
+        plc.run(12)
+        self._relink(plc, on_delay="60s")
+        plc.run(5)
+        assert _whole_state(plc.fork()) == _whole_state(plc)
+
+    @pytest.mark.parametrize(
+        ("first", "then", "left_s"),
+        [
+            ("5s", "5s", 2.25),  # same unit, the control
+            ("5s", "10s", 7.25),  # same unit, the control
+            ("5s", "60s", 57.25),
+            ("60s", "5s", 2.25),
+        ],
+    )
+    def test_cut_and_linked_again_resumes(self, first, then, left_s):
+        def cut_and_linked(scans_after: int):
+            plc, En, Fb = self._linked(first)
+            plc.patch({En: True})
+            plc.run(12)
+            plc._harness.set_overrides({"Fb": None})
+            plc.run(5)
+            self._relink(plc, on_delay=then)
+            for _ in range(scans_after):
+                plc.step()
+            return plc, Fb
+
+        plc, Fb = cut_and_linked(0)
+        assert self._scans_to_flip(plc, Fb) == left_s * 4
+        stepped, _Fb = cut_and_linked(40)
+        ran, _Fb = cut_and_linked(0)
+        ran.run(40)
+        assert _whole_state(ran) == _whole_state(stepped)
+
+    @staticmethod
+    def _off_delaying(off_delay: str):
+        En = Bool("En")
+        Fb = Bool("Fb", physical=Physical("S", on_delay="0ms", off_delay=off_delay), link="En")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Fb):
+                out(Bool("Seen"))
+        return logic, En, Fb
+
+    def _after_a_reload_to(self, off_delay: str, then: str) -> tuple:
+        """A new program and runner on the old state, as a reload is: enable off 2 s."""
+        logic, En, _Fb = self._off_delaying(off_delay)
+        old = PLC(logic, dt=0.25)
+        Harness(old).install()
+        old.patch({En: True})
+        old.run(10)
+        old.patch({En: False})
+        old.run(8)
+        new_logic, _En, Fb = self._off_delaying(then)
+        new = PLC(new_logic, initial_state=old.current_state, dt=0.25)
+        Harness(new).install()
+        return new, Fb
+
+    def test_a_reload_across_units_continues_a_running_off_delay(self):
+        same_unit, Fb = self._after_a_reload_to("10s", "5s")
+        left = self._scans_to_flip(same_unit, Fb)
+        assert left == 14  # the control
+
+        narrowed, Fb = self._after_a_reload_to("60s", "5s")
+        assert self._scans_to_flip(narrowed, Fb) == left
+        widened, Fb = self._after_a_reload_to("5s", "60s")
+        assert self._scans_to_flip(widened, Fb) == left + 55 * 4
+
+    def test_a_reload_across_units_runs_as_it_steps(self):
+        stepped, _Fb = self._after_a_reload_to("5s", "60s")
+        for _ in range(100):
+            stepped.step()
+        ran, _Fb = self._after_a_reload_to("5s", "60s")
+        ran.run(100)
+        assert _whole_state(ran) == _whole_state(stepped)
+
+
+class TestHowAroundALinkChange:
+    """how() and the replay it reads take the scans before a change as they ran."""
+
+    @staticmethod
+    def _program(on_delay: str):
+        En = Bool("En", default=True)
+        Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
+        Alarm = Bool("Alarm")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(En, ~Fb):
+                latch(Alarm)
+        plc = PLC(logic, dt=0.25)
+        Harness(plc).install()
+        plc.run(4)
+        return plc, Alarm
+
+    @staticmethod
+    def _relink(plc, on_delay: str) -> None:
+        plc._harness.set_overrides(
+            {"Fb": Coupling("En", "Fb", Physical("S", on_delay=on_delay), None)}
+        )
+
+    @pytest.mark.parametrize(
+        ("first", "then"), [("5s", "10s"), ("40s", "5s"), ("5s", "40s"), ("60s", "40s")]
+    )
+    def test_a_scan_before_the_change_replays_on_the_plant_it_ran(self, first, then):
+        plc, _Alarm = self._program(first)
+        scan = plc.current_state.scan_id
+        self._relink(plc, then)
+
+        projection = plc._replay_rung_write_projection_at(scan)
+
+        assert projection.exit_tags["Fb"] is True
+        assert projection.exit_tags["Alarm"] is False
+
+    @pytest.mark.parametrize(
+        ("first", "then"),
+        [
+            ("5s", "5s"),
+            ("10s", "5s"),
+            ("32s", "5s"),
+            ("40s", "5s"),
+            ("60s", "5s"),
+            ("60s", "40s"),
+            ("5s", "10s"),
+            ("5s", "20s"),
+            ("10s", "20s"),
+            ("5s", "32s"),
+            ("5s", "40s"),
+            ("5s", "60s"),
+            ("40s", "60s"),
+        ],
+    )
+    def test_how_answers_under_a_changed_link(self, first, then):
+        plc, Alarm = self._program(first)
+        self._relink(plc, then)
+
+        plan = plc.how(Alarm, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+
+    def test_how_answers_when_the_scan_it_starts_from_made_the_target(self):
+        plc, Alarm = self._program("5s")
+        # Fb now follows ~En, so the debounce drops it a scan after it sees the change.
+        plc._harness.set_overrides({"Fb": Coupling("En", "Fb", Physical("S", on_delay="10s"), 0)})
+        plc.run(2)
+        assert plc.current_state.tags["Alarm"] is True
+
+        plan = plc.how(Alarm, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == 0
+
+
+class TestHowFromASessionMidCount:
+    """A plan starts from the session's own counts: stepping the session is the truth."""
+
+    @staticmethod
+    def _program(on_delay, *, default=False):
+        En = Bool("En", default=default)
+        Fb = Bool("Fb", physical=Physical("S", on_delay=on_delay), link="En")
+        Lost = Bool("Lost")
+        with Program(strict=False) as program:
+            with Rung(En):
+                out(Bool("Seen"))
+            with Rung(Fb):
+                latch(Lost)
+        return program, En, Fb, Lost
+
+    def _counting(self, on_delay, scans):
+        """A session with its harness on and the enable held for *scans* scans."""
+        program, En, _Fb, Lost = self._program(on_delay)
+        plc = PLC(program, dt=0.25)
+        Harness(plc).install()
+        plc.patch({En: True})
+        plc.run(scans)
+        return plc, Lost
+
+    @staticmethod
+    def _relink(plc, on_delay):
+        coupling = Coupling("En", "Fb", Physical("S", on_delay=on_delay))
+        plc._harness.set_overrides({"Fb": coupling})
+
+    @staticmethod
+    def _scans_to_reach(plc, tag, budget=2_000):
+        session = plc.fork()
+        for scans in range(budget + 1):
+            if session.state.tags[tag.name]:
+                return scans
+            session.step()
+        pytest.fail(f"{tag.name} not reached stepping {budget} scans")
+
+    def _assert_plan_is_the_session(self, plc, target):
+        stepped = self._scans_to_reach(plc, target)
+
+        plan = plc.how(target, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == stepped
+        assert plan.replay().state.tags == plan.fork.state.tags
+        session = plc.fork()
+        for _ in range(plan.total_scans):
+            session.step()
+        assert session.state.tags[target.name] is True
+
+    @pytest.mark.parametrize(
+        ("on_delay", "scans"),
+        [("5s", 4), ("5s", 12), ("20s", 4), ("40s", 4), ("40s", 100), ("60s", 8)],
+    )
+    def test_under_a_held_enable(self, on_delay, scans):
+        plc, Lost = self._counting(on_delay, scans)
+
+        self._assert_plan_is_the_session(plc, Lost)
+
+    @pytest.mark.parametrize(
+        ("declared", "bench"),
+        [("5s", "10s"), ("5s", "60s"), ("60s", "5s"), ("40s", "60s"), ("60s", "40s")],
+    )
+    @pytest.mark.parametrize("scans_since", [0, 2])
+    def test_on_a_bench_link(self, declared, bench, scans_since):
+        plc, Lost = self._counting(declared, 8)
+        self._relink(plc, bench)
+        plc.run(scans_since)
+
+        self._assert_plan_is_the_session(plc, Lost)
+
+    @pytest.mark.parametrize(("declared", "bench"), [("5s", "60s"), ("60s", "5s")])
+    def test_on_a_fork_whose_count_moved(self, declared, bench):
+        plc, Lost = self._counting(declared, 8)
+        before_the_change = plc.current_state.scan_id - 1
+        self._relink(plc, bench)
+        plc.run(2)
+        fork = plc.fork(scan_id=before_the_change)
+
+        self._assert_plan_is_the_session(fork, Lost)
+
+    def test_the_feedback_itself(self):
+        plc, _Lost = self._counting("5s", 4)
+        Fb = plc._known_tags_by_name["Fb"]
+
+        self._assert_plan_is_the_session(plc, Fb)
+
+    def test_a_cut_link_stays_cut(self):
+        plc, Lost = self._counting("5s", 4)
+        plc._harness.set_overrides({"Fb": None})
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans < 17
+
+    @pytest.mark.parametrize(
+        ("on_delay", "scans"),
+        [("5s", 20), ("40s", 160)],
+    )
+    def test_a_session_with_no_harness_counts_the_delay(self, on_delay, scans):
+        program, En, _Fb, Lost = self._program(on_delay)
+        plc = PLC(program, dt=0.25)
+        plc.patch({En: True})
+        plc.run(4)
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == scans
+
+    def test_a_session_with_no_harness_and_the_enable_on_from_cold_counts_the_delay(self):
+        program, _En, _Fb, Lost = self._program("5s", default=True)
+        plc = PLC(program, dt=0.25)
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == 20
+
+    def test_how_leaves_the_session_alone(self):
+        plc, Lost = self._counting("5s", 4)
+        before = plc.current_state.tags
+
+        plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plc.current_state.tags == before
+
+
+class TestADirectInstallSettles:
+    """``Harness(plc).install()`` takes a held enable as long since settled."""
+
+    @staticmethod
+    def _program(*, default):
+        En = Bool("En", default=default)
+        Fb = Bool("Fb", physical=Physical("S", on_delay="5s"), link="En")
+        Lost = Bool("Lost")
+        with Program(strict=False) as program:
+            with Rung(En):
+                out(Bool("Seen"))
+            with Rung(Fb):
+                latch(Lost)
+        return program, En, Lost
+
+    @staticmethod
+    def _assert_settled(tags):
+        assert tags["Fb"] is True
+        assert tags[plant_acc_name("__cpl_on", "Fb", "Tms")] == coil_timer(5000, 0)[0]
+
+    def test_from_cold(self):
+        program, _En, Lost = self._program(default=True)
+        plc = PLC(program, dt=0.25)
+
+        Harness(plc).install()
+
+        self._assert_settled(plc.current_state.tags)
+        self._assert_settled(plc.fork().state.tags)
+        plc.step()
+        assert plc.current_state.tags["Fb"] is True
+        assert plc.current_state.tags[Lost.name] is True
+
+    def test_on_a_running_session(self):
+        program, En, Lost = self._program(default=False)
+        plc = PLC(program, dt=0.25)
+        plc.patch({En: True})
+        plc.run(4)
+        assert plc.current_state.tags["Fb"] is False
+
+        Harness(plc).install()
+
+        self._assert_settled(plc.current_state.tags)
+        plc.step()
+        assert plc.current_state.tags[Lost.name] is True
+
+    def test_a_plan_starts_from_the_settled_session(self):
+        program, _En, Lost = self._program(default=True)
+        plc = PLC(program, dt=0.25)
+        Harness(plc).install()
+
+        plan = plc.how(Lost, wall_clock_s=30, max_scans=2_000)
+
+        assert plan.status is PlanStatus.REACHED
+        assert plan.total_scans == 1
+
+
+class TestPlantOnASlotOnlyAPointerReaches:
+    """The plant reads and writes the program's slot, with the slot's own default."""
+
+    @staticmethod
+    def _approach_program():
+        En = Bool("En")
+        Ptr = Int("Ptr", default=2)
+        Sps = Block("Sps", TagType.REAL, 1, 3)
+        Sps.slot(2, default=100.0)
+        Temp = Real(
+            "Temp",
+            default=20.0,
+            physical=Physical("T", approach_to="Sps2", approach_rate=0.3),
+            link="En",
+        )
+        CopySp = Real("CopySp")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Temp > 1000.0):
+                out(Bool("Seen"))
+            with Rung():
+                copy(Sps[Ptr], CopySp)
+        return logic, En
+
+    def test_approach_runs_toward_the_slots_default(self):
+        logic, En = self._approach_program()
+        plc = PLC(logic, dt=0.01)
+        Harness(plc).install()
+        plc.patch({En: True})
+        plc.run(500)
+        tags = plc.current_state.tags
+        assert tags["Sps2"] == 100.0
+        assert tags["CopySp"] == 100.0
+        assert tags["Temp"] == pytest.approx(100.0 - 80.0 * (1 - 0.3 * 0.01) ** 499, rel=1e-3)
+
+    def test_approach_equals_stepping(self):
+        def started():
+            logic, En = self._approach_program()
+            plc = PLC(logic, dt=0.01)
+            Harness(plc).install()
+            plc.patch({En: True})
+            return plc
+
+        stepped = started()
+        for _ in range(500):
+            stepped.step()
+        ran = started()
+        ran.run(500)
+        assert _whole_state(ran) == _whole_state(stepped)
+
+    @staticmethod
+    def _ambient_program():
+        """A setpoint no rung names: an ambient temperature a test may patch."""
+        En = Bool("En")
+        Temp = Real(
+            "Temp",
+            default=20.0,
+            physical=Physical("T", approach_to="Sp", approach_rate=0.3),
+            link="En",
+        )
+        Lamp = Bool("Lamp")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                latch(Lamp)
+            with Rung(Temp > 1000.0):
+                out(Bool("Seen"))
+        return logic, En, Lamp
+
+    # Temp after 500 scans of dt 0.01 toward a setpoint, from 20.0: it moves on 499.
+    @staticmethod
+    def _temp_toward(setpoint: float) -> float:
+        return setpoint - (setpoint - 20.0) * (1 - 0.3 * 0.01) ** 499
+
+    def test_a_setpoint_nobody_knows_warns_at_install_and_runs_from_zero(self):
+        logic, En, _Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        with pytest.warns(UserWarning, match="Sp, which no rung names: it starts from 0") as seen:
+            harness.install()
+        assert str(seen[0].message).isascii()
+        assert plc._harness is harness
+        assert plc.current_state.tags["Sp"] == 0.0
+        plc.patch({En: True})
+        plc.run(500)
+        assert plc.current_state.tags["Temp"] == pytest.approx(self._temp_toward(0.0), rel=1e-3)
+
+    @pytest.mark.parametrize("when", ["before install", "after install"])
+    def test_a_setpoint_no_rung_names_can_be_patched_by_name(self, when, recwarn):
+        logic, En, _Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        if when == "before install":
+            plc.patch({"Sp": 150.0})
+        Harness(plc).install()
+        if when == "after install":
+            plc.patch({"Sp": 150.0})
+        plc.patch({En: True})
+        plc.run(500)
+        assert plc.current_state.tags["Temp"] == pytest.approx(self._temp_toward(150.0), rel=1e-3)
+
+    def test_a_setpoint_already_in_state_is_known_and_keeps_its_value(self, recwarn):
+        logic, En, _Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        plc.patch({"Sp": 150.0})
+        plc.step()
+        Harness(plc).install()
+        assert [w for w in recwarn if "no rung names" in str(w.message)] == []
+        assert plc.current_state.tags["Sp"] == 150.0
+        plc.patch({En: True})
+        plc.run(500)
+        assert plc.current_state.tags["Temp"] == pytest.approx(self._temp_toward(150.0), rel=1e-3)
+
+    def test_how_on_an_unrelated_target_runs_with_such_a_setpoint(self):
+        logic, _En, Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        with pytest.warns(UserWarning, match="no rung names"):
+            plan = plc.how(Lamp, wall_clock_s=30, max_scans=2_000)
+        assert plan.status is PlanStatus.REACHED
+
+    def test_how_after_install_does_not_warn_again(self, recwarn):
+        logic, _En, Lamp = self._ambient_program()
+        plc = PLC(logic, dt=0.01)
+        with pytest.warns(UserWarning, match="no rung names"):
+            Harness(plc).install()
+        recwarn.clear()
+        plan = plc.how(Lamp, wall_clock_s=30, max_scans=2_000)
+        assert plan.status is PlanStatus.REACHED
+        assert [w for w in recwarn if "no rung names" in str(w.message)] == []
+
+    def test_a_bench_link_toward_a_setpoint_no_rung_names_runs_and_warns(self):
+        En, Temp = Bool("En"), Real("Temp")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Temp > 1000.0):
+                out(Bool("Seen"))
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        harness.install()
+        coupling = Coupling("En", "Temp", Physical("T", approach_to="Sp", approach_rate=0.3), None)
+        assert link_problem(plc, coupling) is None
+        with pytest.warns(UserWarning, match="no rung names"):
+            harness.set_overrides({"Temp": coupling})
+        assert harness.overrides == {"Temp": coupling}
+
+    def test_run_equals_step_toward_a_setpoint_no_rung_names(self, recwarn):
+        def started():
+            logic, En, _Lamp = self._ambient_program()
+            plc = PLC(logic, dt=0.01)
+            plc.patch({"Sp": 150.0})
+            Harness(plc).install()
+            plc.patch({En: True})
+            return plc
+
+        stepped = started()
+        for _ in range(300):
+            stepped.step()
+        ran = started()
+        ran.run(300)
+        assert _whole_state(ran) == _whole_state(stepped)
+
+    def test_a_setpoint_only_a_pointer_reaches_passes_link_problem(self):
+        logic, _En = self._approach_program()
+        plc = PLC(logic, dt=0.01)
+        coupling = Coupling(
+            "En", "Temp", Physical("T", approach_to="Sps2", approach_rate=0.3), None
+        )
+        assert link_problem(plc, coupling) is None
+
+    def test_a_bench_ramp_starts_from_the_slots_default(self):
+        En = Bool("En")
+        Ptr = Int("Ptr", default=4)
+        Temps = Block("Temps", TagType.REAL, 1, 5)
+        Temps.slot(4, default=20.0)
+        Seen = Real("Seen")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung():
+                copy(Temps[Ptr], Seen)
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        harness.install()
+        plc.run(5)
+        assert plc.current_state.tags["Seen"] == 20.0
+        harness.set_overrides(
+            {"Temps4": Coupling("En", "Temps4", Physical("T", ramp_on=1.0), None)}
+        )
+        assert plc.current_state.tags["Temps4"] == 20.0
+        plc.run(5)
+        assert plc.current_state.tags["Seen"] == 20.0
+        plc.patch({En: True})
+        plc.run(101)
+        assert plc.current_state.tags["Temps4"] == pytest.approx(21.0, abs=0.02)
+
+    def test_a_bench_bool_link_keeps_the_slots_default(self):
+        En = Bool("En", default=False)
+        Ptr = Int("Ptr", default=2)
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+        Bits.slot(2, default=True)
+        Seen = Bool("Seen")
+        with Program(strict=False) as logic:
+            with Rung(En):
+                out(Bool("Echo"))
+            with Rung(Bits[Ptr] == True):  # noqa: E712
+                out(Seen)
+        plc = PLC(logic, dt=0.01)
+        harness = Harness(plc)
+        harness.install()
+        plc.run(2)
+        assert plc.current_state.tags["Seen"] is True
+        link = Coupling("En", "Bits2", Physical("S", on_delay="10ms"), None)
+        harness.set_overrides({"Bits2": link})
+        assert plc.current_state.tags["Bits2"] is True
 
 
 # --- Value-Trigger Fixtures ---
@@ -474,7 +1513,10 @@ class TestTriggerValueAutoharness:
         plc.step()  # off-edge commits; the plant still saw SORTING → Fb holds
         assert _fb(plc, dev[1].Fb) is True
 
-        plc.step()  # plant sees the leave; off_delay=10ms (1 dt) clears Fb
+        plc.step()  # the plant sees the leave and the off side counts 10 ms (1 dt)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.step()  # and clears Fb the scan after
         assert _fb(plc, dev[1].Fb) is False
 
     def test_non_matching_transition_no_effect(self):
@@ -687,6 +1729,84 @@ class TestTriggerValidation:
         harness = Harness(plc)
         with pytest.raises(ValueError, match="has no choices map"):
             harness.install()
+
+
+# --- Normally-Closed (~) Links ---
+
+
+@udt()
+class NormallyClosedPair:
+    En: Bool
+    Fb: Bool = Field(physical=LIMIT_SWITCH, link="~En")
+
+
+class TestNormallyClosedLink:
+    def test_fb_follows_the_bit_while_it_is_off(self):
+        plc, dev = _make_trigger_plc(NormallyClosedPair, en_field="En")
+        harness = Harness(plc)
+        harness.install()
+
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.patch({dev[1].En: True})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is False
+
+    def test_coupling_triggers_on_zero(self):
+        plc, dev = _make_trigger_plc(NormallyClosedPair, en_field="En")
+        harness = Harness(plc)
+        harness.install()
+
+        (coupling,) = harness.couplings()
+        assert coupling.trigger_value == 0
+
+    def test_flat_tag(self):
+        Sol = Bool("VentSol")
+        Open = Bool("VentOpen", physical=LIMIT_SWITCH, link="~VentSol")
+
+        with Program() as logic:
+            pass
+        plc = PLC(logic, dt=0.010)
+        plc._register_known_tag(Sol)
+        plc._register_known_tag(Open)
+        Harness(plc).install()
+
+        plc.run_for(0.050)
+        assert _fb(plc, Open) is True
+        plc.patch({Sol: True})
+        plc.run_for(0.050)
+        assert _fb(plc, Open) is False
+
+    def test_on_a_non_bool_field_raises(self):
+        with pytest.raises(ValueError, match="normally-closed BOOL enable"):
+
+            @udt()
+            class Bad:
+                State: Int
+                Fb: Bool = Field(physical=LIMIT_SWITCH, link="~State")
+
+    def test_on_a_non_bool_flat_tag_raises(self):
+        State = Int("NcState")
+        Fb = Bool("NcFb", physical=LIMIT_SWITCH, link="~NcState")
+
+        with Program() as logic:
+            pass
+        plc = PLC(logic, dt=0.010)
+        plc._register_known_tag(State)
+        plc._register_known_tag(Fb)
+        with pytest.raises(ValueError, match="write NcState:0"):
+            Harness(plc).install()
+
+    def test_cannot_combine_with_a_trigger(self):
+        with pytest.raises(ValueError, match="cannot combine ~"):
+            _parse_link_spec("~En:1")
+
+    def test_format_is_canonical(self):
+        assert format_link_spec("En", None, bit=True) == "En"
+        assert format_link_spec("En", 0, bit=True) == "~En"
+        assert format_link_spec("Mode", 0, bit=False) == "Mode:0"
+        assert format_link_spec("Mode", "BAKE", bit=False) == "Mode:BAKE"
 
 
 # --- Coupling Summary Display ---

@@ -28,9 +28,16 @@ from pyrung.core.condition import (
     CompareNe,
     Condition,
     FallingEdgeCondition,
+    IndirectCompareEq,
+    IndirectCompareGe,
+    IndirectCompareGt,
+    IndirectCompareLe,
+    IndirectCompareLt,
+    IndirectCompareNe,
     IntTruthyCondition,
     NormallyClosedCondition,
     RisingEdgeCondition,
+    text_window_of,
 )
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -41,6 +48,12 @@ _COMPARE_SYMBOLS: dict[type, str] = {
     CompareLe: "<=",
     CompareGt: ">",
     CompareGe: ">=",
+    IndirectCompareEq: "==",
+    IndirectCompareNe: "!=",
+    IndirectCompareLt: "<",
+    IndirectCompareLe: "<=",
+    IndirectCompareGt: ">",
+    IndirectCompareGe: ">=",
 }
 
 # type(instruction).__name__ -> DSL verb.  Only the verb is needed for the fallback
@@ -53,12 +66,17 @@ _VERB: dict[str, str] = {
     "BlockCopyInstruction": "blockcopy",
     "FillInstruction": "fill",
     "CalcInstruction": "math",
-    "OnDelayInstruction": "ondelay",
-    "OffDelayInstruction": "offdelay",
-    "CountUpInstruction": "countup",
-    "CountDownInstruction": "countdown",
-    "EventDrumInstruction": "eventdrum",
-    "TimeDrumInstruction": "timedrum",
+    "OnDelayInstruction": "on_delay",
+    "OffDelayInstruction": "off_delay",
+    "CountUpInstruction": "count_up",
+    "CountDownInstruction": "count_down",
+    "EventDrumInstruction": "event_drum",
+    "TimeDrumInstruction": "time_drum",
+    "TimeEventDrumInstruction": "time_event_drum",
+    "ToggleInstruction": "toggle",
+    "DebounceInstruction": "debounce",
+    "FlasherInstruction": "flasher",
+    "TimedInstruction": "timed",
     "ShiftInstruction": "shift",
     "SearchInstruction": "search",
     "ModbusSendInstruction": "send",
@@ -66,8 +84,11 @@ _VERB: dict[str, str] = {
     "PackBitsInstruction": "pack_bits",
     "PackWordsInstruction": "pack_words",
     "PackTextInstruction": "pack_text",
-    "UnpackToBitsInstruction": "unpack_bits",
-    "UnpackToWordsInstruction": "unpack_words",
+    "UnpackToBitsInstruction": "unpack_to_bits",
+    "UnpackToWordsInstruction": "unpack_to_words",
+    "ForLoopInstruction": "forloop",
+    "FunctionCallInstruction": "run_function",
+    "EnabledFunctionCallInstruction": "run_enabled_function",
 }
 
 
@@ -110,7 +131,7 @@ def operand_name(value: Any) -> str:
     if isinstance(value, IndirectBlockRange):
         return f"{value.block.name}[{value.start_expr}..{value.end_expr}]"
     if isinstance(value, IndirectExprRef):
-        return f"{value.block.name}[{value.expr}]"
+        return f"{value.block.name}[{render_expr(value.expr)}]"
     if isinstance(value, Expression):
         return render_expr(value)
     if isinstance(value, bool):
@@ -124,7 +145,17 @@ def operand_name(value: Any) -> str:
 
 def render_expr(expr: Any) -> str:
     """Render an :class:`~pyrung.core.expression.Expression` tree as source."""
-    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
+    from pyrung.core.expression import (
+        BinaryExpr,
+        LiteralExpr,
+        MathFuncExpr,
+        RangeAggregateExpr,
+        ShiftFuncExpr,
+        SumExpr,
+        TagExpr,
+        UnaryExpr,
+        format_expr,
+    )
 
     if isinstance(expr, TagExpr):
         return operand_name(expr.tag)
@@ -133,7 +164,15 @@ def render_expr(expr: Any) -> str:
     if isinstance(expr, BinaryExpr):
         return f"({render_expr(expr.left)} {expr.symbol} {render_expr(expr.right)})"
     if isinstance(expr, UnaryExpr):
+        if expr.symbol == "abs":
+            return f"abs({render_expr(expr.operand)})"
         return f"{expr.symbol}{render_expr(expr.operand)}"
+    if isinstance(expr, MathFuncExpr):
+        return f"{expr.name}({render_expr(expr.operand)})"
+    if isinstance(expr, ShiftFuncExpr):
+        return f"{expr.name}({render_expr(expr.value)}, {render_expr(expr.count)})"
+    if isinstance(expr, (SumExpr, RangeAggregateExpr)):
+        return format_expr(expr)
     return type(expr).__name__
 
 
@@ -144,6 +183,7 @@ def render_expr(expr: Any) -> str:
 
 def render_condition(cond: Condition) -> str:
     """Render a leaf/compound :class:`Condition` as source text."""
+    cond = text_window_of(cond)
     if (
         isinstance(cond, (CompareEq, CompareNe))
         and cond.tag.type is TagType.BOOL
@@ -155,6 +195,19 @@ def render_condition(cond: Condition) -> str:
     if isinstance(cond, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
         sym = _COMPARE_SYMBOLS[type(cond)]
         return f"{operand_name(cond.tag)} {sym} {operand_name(cond.value)}"
+    if isinstance(
+        cond,
+        (
+            IndirectCompareEq,
+            IndirectCompareNe,
+            IndirectCompareLt,
+            IndirectCompareLe,
+            IndirectCompareGt,
+            IndirectCompareGe,
+        ),
+    ):
+        sym = _COMPARE_SYMBOLS[type(cond)]
+        return f"{operand_name(cond.indirect_ref)} {sym} {operand_name(cond.value)}"
     if isinstance(cond, BitCondition):
         return operand_name(cond.tag)
     if isinstance(cond, NormallyClosedCondition):
@@ -165,6 +218,10 @@ def render_condition(cond: Condition) -> str:
         return f"rise({operand_name(cond.tag)})"
     if isinstance(cond, FallingEdgeCondition):
         return f"fall({operand_name(cond.tag)})"
+    from pyrung.core.expression import ExprCompare
+
+    if isinstance(cond, ExprCompare):
+        return f"{operand_name(cond.left)} {cond.symbol} {operand_name(cond.right)}"
     if isinstance(cond, AnyCondition):
         return f"Or({', '.join(render_condition(c) for c in cond.conditions)})"
     if isinstance(cond, AllCondition):
@@ -219,19 +276,15 @@ def render_instruction(
     elif itype == "FillInstruction":
         code = f"fill({operand_name(instr.value)}, {operand_name(instr.dest)})"
     elif itype == "CalcInstruction":
-        code = f"math({operand_name(instr.dest)}, {render_expr(instr.expression)})"
+        written = getattr(instr, "source_expression", instr.expression)
+        code = f"math({render_expr(written)}, {operand_name(instr.dest)})"
     elif itype in (
         "OnDelayInstruction",
         "OffDelayInstruction",
         "CountUpInstruction",
         "CountDownInstruction",
     ):
-        verb = {
-            "OnDelayInstruction": "on_delay",
-            "OffDelayInstruction": "off_delay",
-            "CountUpInstruction": "count_up",
-            "CountDownInstruction": "count_down",
-        }[itype]
+        verb = _VERB[itype]
         owner = operand_name(instr.accumulator)
         if owner.endswith(".Acc"):
             owner = owner[:-4]

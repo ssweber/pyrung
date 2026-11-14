@@ -2,11 +2,11 @@
 
 from pyrung import (
     Or,
-    calc,
     comment,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -140,7 +140,7 @@ def blower():
 
     comment("Check if current step is odd")
     with rung():  # R15
-        calc(Blower_CurStep % 2, Blower__valstepisodd)
+        math(Blower_CurStep % 2, Blower__valstepisodd)
 
     comment("""\
         EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
@@ -149,11 +149,11 @@ def blower():
             # we immediately increment to the next odd step without executing any step logic.
             # This provides a safe "neutral zone" when manually changing step numbers.""")
     with rung(Blower__valstepisodd != 1, Blower_xPause == 0):  # R16
-        calc(Blower_CurStep + 1, Blower_CurStep)
+        math(Blower_CurStep + 1, Blower_CurStep)
 
     comment("Step advancement when transition is triggered")
     with rung(Blower_Trans == 1):  # R17
-        calc(Blower_CurStep + 1, Blower_CurStep)
+        math(Blower_CurStep + 1, Blower_CurStep)
         copy(0, Blower_Trans)
 
     comment("""\

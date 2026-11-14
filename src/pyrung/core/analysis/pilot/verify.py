@@ -3,9 +3,11 @@
 ``verify_gates`` applies avoid and target checks, rejects spins and structural
 dead ends, delegates motion attribution and progress classification to
 ``outcome.py``, then decides whether that classified landing may revisit an
-executable world. It reports a suspicious excursion to the drive loop without
-performing runtime investigation; recovery converts any exact correction
-evidence into an inert Working Theory requirement.
+executable world. A trace-setup step under a counter-input transition that
+raises the input without a count, or clears one, is rejected as it lands. It
+reports a suspicious excursion to the drive loop without performing runtime
+investigation; recovery converts any exact correction evidence into an inert
+Working Theory requirement.
 
 Passing these gates makes a trial eligible for commit and progress monitoring;
 it does not guarantee that later assessment will retain the committed world.
@@ -25,7 +27,7 @@ from pyrung.core.analysis.pilot.attempt_observation import (
     _observe_temporal_setup_occurrences,
     _route_blocker_crossings,
 )
-from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
+from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _avoid_weighed_after_clear
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     EarnedWorkReceipt,
@@ -564,7 +566,7 @@ def _verify_gates(
     """Apply the shared trial gates to an executed pulse or coast.
 
     Runs avoid and target checks, then spin and dead-end gates, outcome
-    classification, and finally revisit admission. Condition-like avoids fired by a folded coast
+    classification, and finally revisit admission. Condition-like avoids fired by a coast
     arrive on its receipt; opaque callables are checked only at endpoints and
     real snapshots retained by execution. All steering execution modes
     converge here.
@@ -677,7 +679,7 @@ def _verify_gates(
                 nogoods=({nogood_pair} if nogood_pair is not None else ()),
                 avoid_names=coast_avoided,
             )
-        settled = _avoid_snap_names(ctx.avoid_pred, trial.snap)
+        settled = _avoid_scan_names(ctx.avoid_pred, trial.snap)
         if settled:
             gate_events.append(
                 PilotGateEvent("avoid", f"settled state matches avoid: {', '.join(settled)}")
@@ -687,7 +689,13 @@ def _verify_gates(
                 avoid_names=settled,
             )
         for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
-            wink = _trial_gates._avoid_names_after_clear(ctx.avoid_pred, frame.snap, snap)
+            # Some trials keep their source here: the values they stood on before any scan,
+            # which may be behind how()'s start, and no scan they ran.
+            wink = (
+                _avoid_weighed_after_clear(ctx.avoid_pred, frame.snap, snap)
+                if snap is trial.source_snap
+                else _trial_gates._avoid_names_after_clear(ctx.avoid_pred, frame.snap, snap)
+            )
             if wink:
                 gate_events.append(
                     PilotGateEvent("avoid", f"transient scan enters avoid: {', '.join(wink)}")
@@ -1070,6 +1078,36 @@ def _verify_gates(
             policy.local_progress is LocalProgressKind.TRACE_SETUP
             and (channel_motion.departed or not expectation_boundaries_preserved)
         )
+        lost_counts = (
+            tuple(
+                edge.accumulator
+                for node in frame.tree.iter_nodes()
+                if (edge := node.counter_edge) is not None and edge.lost(frame.snap, trial.snap)
+            )
+            if policy.local_progress is LocalProgressKind.TRACE_SETUP
+            and getattr(frame, "tree", None) is not None
+            else ()
+        )
+        if lost_counts:
+            # The selected read cycles a counter's input for one count.  A
+            # step that raised the input without counting (a reset the read
+            # could not see held it) or cleared a count already made is no
+            # local progress: accepting it would cycle the input forever.
+            gate_events.append(
+                PilotGateEvent(
+                    "counter-count-lost",
+                    "the counter input moved but the count did not land",
+                    evidence={
+                        "accumulators": lost_counts,
+                        "before": tuple(frame.snap.get(tag) for tag in lost_counts),
+                        "after": tuple(trial.snap.get(tag) for tag in lost_counts),
+                    },
+                )
+            )
+            return _reject(
+                nogoods=(policy.regression_nogoods if not trace_setup_owned else ()),
+                proof_rejection=True,
+            )
         local_progress_reached = (
             (
                 (bool(changed) and assignments_reached)

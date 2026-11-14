@@ -49,8 +49,8 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C2"] is True
         assert runner.current_state.tags["C3"] is False
 
-    def test_clock_condition_uses_rung_entry_snapshot(self, runner_factory):
-        """Same-rung writes do not trigger the shift clock until next scan."""
+    def test_clock_reads_at_box_entry(self, runner_factory):
+        """clock() reads at box entry, so a clock latched on the wire above shifts this scan."""
         Data = Bool("Data")
         Clock = Bool("Clock")
         Reset = Bool("Reset")
@@ -59,6 +59,7 @@ class TestShiftInstruction:
         with Program() as logic:
             with Rung(Data):
                 latch(Clock)
+            with Rung(Data).continued():
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -68,9 +69,6 @@ class TestShiftInstruction:
 
         runner.step()
         assert runner.current_state.tags["Clock"] is True
-        assert runner.current_state.tags["C1"] is False
-
-        runner.step()
         assert runner.current_state.tags["C1"] is True
 
     def test_reset_clears_full_range(self):

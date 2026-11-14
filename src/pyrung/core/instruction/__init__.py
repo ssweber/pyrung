@@ -6,11 +6,20 @@ All state modifications are collected and committed at scan end.
 
 from .advance import AdvanceProfile, AdvanceStep, ConditionDemand, LinearProgress
 from .advanced import SearchInstruction, ShiftInstruction
-from .base import DebugInstructionSubStep, Instruction, OneShotMixin, SubroutineReturnSignal
+from .base import (
+    DebugInstructionSubStep,
+    Instruction,
+    LoopBreakSignal,
+    LoopContinueSignal,
+    OneShotMixin,
+    SubroutineReturnSignal,
+)
 from .calc import CalcInstruction
 from .coils import LatchInstruction, OutInstruction, ResetInstruction
 from .control import (
+    BreakInstruction,
     CallInstruction,
+    ContinueInstruction,
     EnabledFunctionCallInstruction,
     ForLoopInstruction,
     FunctionCallInstruction,
@@ -18,7 +27,13 @@ from .control import (
 )
 from .counters import CountDownInstruction, CountUpInstruction
 from .data_transfer import BlockCopyInstruction, CopyInstruction, FillInstruction
-from .drums import EventDrumInstruction, TimeDrumInstruction
+from .drums import EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction
+from .out_variants import (
+    DebounceInstruction,
+    FlasherInstruction,
+    TimedInstruction,
+    ToggleInstruction,
+)
 from .packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -44,6 +59,8 @@ __all__ = [
     "DebugInstructionSubStep",
     "Instruction",
     "LinearProgress",
+    "LoopBreakSignal",
+    "LoopContinueSignal",
     "OneShotMixin",
     "SubroutineReturnSignal",
     # Resolvers
@@ -55,13 +72,17 @@ __all__ = [
     "resolve_tag_or_value_ctx",
     # Instructions
     "BlockCopyInstruction",
+    "BreakInstruction",
     "CallInstruction",
+    "ContinueInstruction",
     "CopyInstruction",
     "CountDownInstruction",
     "CountUpInstruction",
+    "DebounceInstruction",
     "EventDrumInstruction",
     "EnabledFunctionCallInstruction",
     "FillInstruction",
+    "FlasherInstruction",
     "ForLoopInstruction",
     "FunctionCallInstruction",
     "LatchInstruction",
@@ -76,7 +97,10 @@ __all__ = [
     "ReturnInstruction",
     "SearchInstruction",
     "ShiftInstruction",
+    "TimedInstruction",
     "TimeDrumInstruction",
+    "TimeEventDrumInstruction",
+    "ToggleInstruction",
     "UnpackToBitsInstruction",
     "UnpackToWordsInstruction",
 ]

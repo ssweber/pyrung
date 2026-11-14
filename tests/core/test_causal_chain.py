@@ -15,6 +15,7 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    branch,
     call,
     copy,
     latch,
@@ -1365,8 +1366,8 @@ class TestIndirectCopyWriter:
         subroutine that uses and resets it.  The firing log captures the
         final value (False, after reset), so the intermediate True is
         invisible at scan boundaries.  The fire-view fallback in the PDG
-        writer resolution re-evaluates the rise() condition at rung-entry
-        time, where the edge is still live.
+        writer resolution re-evaluates the rise() condition on the view the
+        row read, where the edge is still live.
         """
         Trigger = Bool("Trigger")
         Param = Bool("Param")
@@ -1397,3 +1398,225 @@ class TestIndirectCopyWriter:
         }
         assert "Param" in all_tags
         assert "Trigger" in all_tags
+
+
+# ---------------------------------------------------------------------------
+# Long recorded chains
+# ---------------------------------------------------------------------------
+
+
+class TestLongRecordedChains:
+    """A writer that feeds on its own output is explained once, not once per scan."""
+
+    def test_self_accumulator_is_one_step(self):
+        import sys
+
+        from pyrung.core import math
+
+        En = Bool("En")
+        T = Int("T")
+        with Program() as prog:
+            with Rung(En):
+                math(T + 3, T)
+
+        plc = PLC(prog)
+        plc.patch({"En": True})
+        scans = sys.getrecursionlimit()
+        plc.run(cycles=scans)
+
+        chain = plc.cause("T")
+        assert chain is not None
+        assert chain.effect.to_value == 3 * scans
+        (step,) = chain.steps
+        assert {e.tag_name: e.value for e in step.enablers} == {"En": True, "T": 3 * (scans - 1)}
+        assert [r.tag_name for r in chain.roots] == ["En"]
+
+    def test_mutual_accumulators_are_one_round(self):
+        import sys
+
+        from pyrung.core import math
+
+        En = Bool("En")
+        A = Int("A")
+        B = Int("B")
+        with Program() as prog:
+            with Rung(En):
+                math(B + 1, A)
+            with Rung(En):
+                math(A + 1, B)
+
+        plc = PLC(prog)
+        plc.patch({"En": True})
+        plc.run(cycles=sys.getrecursionlimit())
+
+        chain = plc.cause("A")
+        assert chain is not None
+        assert [s.transition.tag_name for s in chain.steps] == ["A", "B"]
+        assert [r.tag_name for r in chain.roots] == ["En"]
+
+    def test_accumulator_walks_to_its_seed(self):
+        from pyrung.core import math
+
+        Reset = Bool("Reset")
+        Setpoint = Int("Setpoint")
+        T = Int("T")
+        with Program() as prog:
+            with Rung(rise(Reset)):
+                copy(Setpoint, T)
+            with Rung(~Reset):
+                math(T + 3, T)
+
+        plc = PLC(prog)
+        plc.patch({"Setpoint": 100})
+        plc.step()
+        plc.patch({"Reset": True})
+        plc.step()
+        plc.patch({"Reset": False})
+        plc.run(cycles=20)
+
+        chain = plc.cause("T")
+        assert chain is not None
+        assert [(s.rung_index, s.transition.to_value) for s in chain.steps] == [(1, 160), (0, 100)]
+        assert {r.tag_name for r in chain.roots} == {"Reset", "Setpoint"}
+
+
+class TestBranchInheritedRows:
+    """A branch's inherited contacts are read on the rows above it.
+
+    The solve reads a trunk's contacts once and holds that power for every
+    branch under it; a branch's own contacts are read when the solve reaches
+    it.  A write above the branch to a trunk (or outer-branch) contact does not
+    reach the branch, so cause()/effect() must not re-read it there.
+    """
+
+    @staticmethod
+    def _trunk_reset_above_branch():
+        A = Bool("A")
+        B = Bool("B")
+        Y = Bool("Y")
+        with Program(strict=False) as prog:
+            with Rung(A):
+                reset(A)
+                with branch(B):
+                    out(Y)
+        plc = PLC(prog)
+        plc.step()
+        plc.patch({"A": True, "B": True})
+        plc.step()
+        return plc
+
+    def test_cause_reads_trunk_contact_on_trunk_row(self) -> None:
+        plc = self._trunk_reset_above_branch()
+        assert plc.current_state.tags["Y"] is True
+        assert plc.current_state.tags["A"] is False
+
+        chain = plc.cause("Y")
+        assert chain is not None
+        (step,) = chain.steps
+        assert {(t.tag_name, t.from_value, t.to_value) for t in step.triggers} == {
+            ("A", False, True),
+            ("B", False, True),
+        }
+        assert step.enablers == ()
+
+    def test_effect_crosses_branch_under_trunk_reset(self) -> None:
+        plc = self._trunk_reset_above_branch()
+        chain = plc.effect("B", scan=plc.current_state.scan_id)
+        assert chain is not None
+        assert "Y" in {s.transition.tag_name for s in chain.steps}
+
+    def test_nested_branch_reads_middle_contact_on_its_row(self) -> None:
+        A = Bool("A")
+        M = Bool("M")
+        N = Bool("N")
+        Y = Bool("Y")
+        with Program(strict=False) as prog:
+            with Rung(A):
+                with branch(M):
+                    reset(M)
+                    with branch(N):
+                        out(Y)
+        plc = PLC(prog)
+        plc.patch({"A": True})
+        plc.step()
+        plc.patch({"M": True, "N": True})
+        plc.step()
+        assert plc.current_state.tags["Y"] is True
+        assert plc.current_state.tags["M"] is False
+
+        chain = plc.cause("Y")
+        assert chain is not None
+        (step,) = chain.steps
+        assert {(t.tag_name, t.from_value, t.to_value) for t in step.triggers} == {
+            ("M", False, True),
+            ("N", False, True),
+        }
+        assert [(e.tag_name, e.value) for e in step.enablers] == [("A", True)]
+
+    def test_branch_run_routes_inherited_conditions_to_parent_rows(self) -> None:
+        A = Bool("A")
+        M = Bool("M")
+        N = Bool("N")
+        Y = Bool("Y")
+        with Program(strict=False) as prog:
+            with Rung(A):
+                with branch(M):
+                    reset(M)
+                    with branch(N):
+                        out(Y)
+        plc = PLC(prog)
+        plc.patch({"A": True, "M": True, "N": True})
+        plc.step()
+
+        runs = {run.rung: run for run in plc._replay_rung_runs_at(plc.current_state.scan_id)}
+        trunk = prog.rungs[0]
+        trunk_run = runs[trunk]
+        (middle_run,) = (run for run in runs.values() if run.depth == 1)
+        (inner_run,) = (run for run in runs.values() if run.depth == 2)
+        a_cond, m_cond, n_cond = inner_run.rung._conditions
+        assert trunk_run.inherited_views == ()
+        assert inner_run.condition_view(a_cond) is trunk_run.view
+        assert inner_run.condition_view(m_cond) is middle_run.view
+        assert inner_run.condition_view(n_cond) is inner_run.view
+        assert inner_run.view.get_tag("M") is False
+        assert m_cond.evaluate(inner_run.condition_view(m_cond)) is True
+
+    def test_shared_condition_object_is_read_on_each_row(self) -> None:
+        """One condition object on the trunk and on a branch is two contacts:
+        each is read on its own row, so cause() names what each one read."""
+        A = Bool("A")
+        Z = Bool("Z")
+        Y = Bool("Y")
+        Go = Bool("Go")
+        shared = Or(A, Z)
+        with Program(strict=False) as prog:
+            with Rung(Go, shared):
+                reset(A)
+                latch(Z)
+                with branch(shared):
+                    out(Y)
+        plc = PLC(prog)
+        plc.patch({"A": True})
+        plc.step()
+        plc.patch({"Go": True})
+        plc.step()
+        assert plc.current_state.tags["Y"] is True
+
+        chain = plc.cause("Y")
+        assert chain is not None
+        step = next(s for s in chain.steps if s.transition.tag_name == "Y")
+        # The trunk read A on (Z off); the branch read Z on (A reset above it).
+        assert {t.tag_name for t in step.triggers} == {"Go", "Z"}
+        assert [(e.tag_name, e.value) for e in step.enablers] == [("A", True)]
+
+    def test_compacted_projection_keeps_inherited_contacts(self) -> None:
+        """A compacted branch view holds only its own contacts' reads; the
+        inherited contacts stay readable on the trunk row's compacted view."""
+        plc = self._trunk_reset_above_branch()
+        projection = plc._replay_pilot_rung_write_projection_at(plc.current_state.scan_id)
+        assert projection is not None
+        (branch_run,) = (run for run in projection.runs if run.kind == "branch")
+        a_cond, b_cond = branch_run.rung._conditions
+        assert branch_run.condition_view(a_cond) is not branch_run.view
+        assert a_cond.evaluate(branch_run.condition_view(a_cond)) is True
+        assert b_cond.evaluate(branch_run.condition_view(b_cond)) is True

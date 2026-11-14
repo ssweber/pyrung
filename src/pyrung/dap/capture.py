@@ -225,6 +225,10 @@ def _parse_replay_args(rest: str) -> tuple[str, str]:
     return rest, mode
 
 
+#: Bench-link verbs change the harness wiring; replayed only with the current harness.
+_LINK_VERBS = frozenset({"link", "unlink", "restore", "links"})
+
+
 def _replay_commands(lines: list[str], *, harness_mode: str) -> list[tuple[int, str]]:
     from pyrung.dap.condenser import parse_provenance_line
 
@@ -238,6 +242,10 @@ def _replay_commands(lines: list[str], *, harness_mode: str) -> list[tuple[int, 
             if harness_mode in {"current", "off"}:
                 continue
             commands.append((i + 1, parsed.command))
+            continue
+        verb = parsed.command.split(maxsplit=1)[0].lower()
+        if verb in _LINK_VERBS and harness_mode != "current":
+            # Recorded feedback already reflects the wiring, and "off" means no harness.
             continue
         commands.append((i + 1, parsed.command))
     return commands

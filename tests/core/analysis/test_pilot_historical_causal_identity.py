@@ -95,7 +95,7 @@ def test_recorded_startup_cause_survives_later_pilot_overlay() -> None:
 
     original = plc.cause(trip, scan=trip_scan, deep=True)
     assert original is not None
-    assert original.effect == Transition(trip.name, trip_scan, False, True, 17)
+    assert original.effect == Transition(trip.name, trip_scan, False, True, 18)
     assert original.steps[0].triggers == (
         Transition(system.sys.first_scan.name, trip_scan, None, True),
     )
@@ -354,10 +354,10 @@ def test_noninherited_fork_uses_its_boundary_as_causal_initial_state() -> None:
     )
 
 
-@pytest.mark.parametrize("mutation", ["reboot", "trim"])
+@pytest.mark.parametrize("mutation", ["reboot", "restart", "trim"])
 def test_child_causal_history_is_independent_of_later_parent_mutation(mutation: str) -> None:
     program, command, seen = _branching_history_program()
-    parent = PLC(program)
+    parent = PLC(program, history=1000)
     parent.patch({command.name: True})
     parent.step()
     parent.step()
@@ -368,6 +368,9 @@ def test_child_causal_history_is_independent_of_later_parent_mutation(mutation: 
 
     if mutation == "reboot":
         parent.reboot()
+    elif mutation == "restart":
+        parent.stop()
+        parent.step()
     else:
         parent._trim_history_before(parent.state.scan_id)
 
@@ -428,7 +431,7 @@ def test_historical_fork_uses_executing_epochs_rtc_base() -> None:
 
 
 def test_child_trim_and_reboot_reset_only_its_retained_floor() -> None:
-    parent = PLC(logic=[])
+    parent = PLC(logic=[], history=1000)
     parent.run(2)
     child = parent.fork()
     child.run(2)

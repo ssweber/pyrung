@@ -2,7 +2,7 @@
   "name": "pyrung-debug",
   "displayName": "pyrung Debugger",
   "description": "Debug pyrung ladder logic through the Debug Adapter Protocol.",
-  "version": "0.15.2",
+  "version": "0.16.0",
   "publisher": "ssweber",
   "license": "MPL-2.0",
   "icon": "icon.png",
@@ -124,6 +124,37 @@
                 "type": "boolean",
                 "description": "Automatically reload when .py files in the program directory change.",
                 "default": false
+              },
+              "modbus": {
+                "type": "object",
+                "description": "Serve the session as a simulated CLICK PLC over Modbus TCP.",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "default": "127.0.0.1"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "default": 502
+                  }
+                }
+              },
+              "speed": {
+                "type": "number",
+                "description": "Pace Continue to wall time x speed. 0 runs unpaced.",
+                "default": 0
+              },
+              "startMode": {
+                "type": "string",
+                "enum": [
+                  "run",
+                  "stop"
+                ],
+                "description": "PLC mode at launch. Omit to keep the runner's own mode."
+              },
+              "keepForcesOnRun": {
+                "type": "boolean",
+                "description": "Keep forces across STOP -> RUN transitions. Omit to keep the program's own setting."
               }
             }
           }

@@ -18,9 +18,9 @@ with PLC(logic) as plc:
     assert Light.value is True
 ```
 
-**Know ladder?** Start with the [Quickstart](getting-started/quickstart.md): a traffic light, a test, and a hardware map in ten minutes.
+**Know ladder?** Start with the [Quickstart](getting-started/quickstart.md). In ten minutes you build a traffic light, a test, and a hardware map.
 
-**Know Python?** Start with [Know Python? Learn Ladder Logic.](learn/index.md): eleven lessons that build a conveyor sorting station.
+**Know Python?** Start with [Know Python? Learn Ladder Logic.](learn/index.md), eleven lessons that build a conveyor sorting station.
 
 ```bash
 pip install pyrung
@@ -30,7 +30,7 @@ pip install pyrung
 
 **Every scan is a snapshot.** Logic is a pure function: same inputs, same outputs, nothing mutated in place. Each `plc.step()` produces a new immutable state, and history keeps all of them.
 
-**You drive execution.** The engine never runs on its own. `plc.run_until(Motor, ~Fault)` from a test, a GUI, or a debugger; pause anywhere, inject inputs, inspect any past state.
+**You drive execution.** The engine never runs on its own. Call `plc.run_until(Motor, ~Fault)` from a test, a GUI, or a debugger. Pause anywhere, inject inputs, and inspect any past state.
 
 **Time is a variable.** `PLC(logic, dt=0.010)` advances the clock exactly 10 ms per scan, so a 3-second timer fires on scan 300 every time. No wall clock, no flaky tests.
 
@@ -46,7 +46,7 @@ pip install pyrung
 
 1. [Install](getting-started/installation.md), then the [Quickstart](getting-started/quickstart.md).
 2. [Instruction reference](instructions/index.md): every coil, timer, counter, copy, and math instruction.
-3. Deploy: the [CLICK quickstart](guides/click-quickstart.md) maps tags to addresses and exports for ClickNick; the [CircuitPython quickstart](guides/circuitpy-quickstart.md) generates a P1AM-200 program.
+3. Deploy: the [CLICK quickstart](guides/click-quickstart.md) maps tags to addresses and exports for ClickNick. The [CircuitPython quickstart](guides/circuitpy-quickstart.md) generates a P1AM-200 program.
 4. [Analysis](guides/analysis.md): cause, effect, why, and how.
 
 !!! tip "Rather keep drawing ladder in CLICK?"

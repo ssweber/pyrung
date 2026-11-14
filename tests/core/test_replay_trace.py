@@ -17,11 +17,11 @@ from __future__ import annotations
 import pytest
 
 from pyrung import Rung, program
-from pyrung.core import PLC, Bool, Dint, calc, out
+from pyrung.core import PLC, Bool, Dint, math, out
 from pyrung.core.debug_trace import RungTrace
 
 
-def _build_source(cycles: int = 6) -> PLC:
+def _build_source(cycles: int = 6, checkpoint_interval: int = 100) -> PLC:
     """Construct a PLC with a small ladder and run ``cycles`` scans."""
 
     a = Bool("input_a")
@@ -33,9 +33,9 @@ def _build_source(cycles: int = 6) -> PLC:
         with Rung(a):
             out(b)
         with Rung(b):
-            calc(c + 1, c)
+            math(c + 1, c)
 
-    plc = PLC(logic=ladder, dt=0.01)
+    plc = PLC(logic=ladder, dt=0.01, checkpoint_interval=checkpoint_interval)
     plc.patch({"input_a": True})
     for _ in range(cycles):
         plc.step()
@@ -57,6 +57,13 @@ def test_replay_trace_at_returns_traces_for_historical_scan() -> None:
         )
         assert trace.rung_id == rung_id
         assert trace.events, f"trace for rung {rung_id} has no events"
+
+
+def test_replay_trace_at_a_checkpoint_traces_that_scan() -> None:
+    source = _build_source(cycles=6, checkpoint_interval=2)
+    assert 4 in source._checkpoints
+
+    assert source.replay_trace_at(4) == _build_source(cycles=6).replay_trace_at(4)
 
 
 def test_replay_trace_at_does_not_disturb_live_state() -> None:

@@ -236,8 +236,9 @@ class TestRisingEdgeCondition:
 
         Button = Bool("Button")
         cond = RisingEdgeCondition(Button)
+        cond._site_key = "e1"  # its contact site; memory _edge:e1
 
-        state = SystemState().with_tags({"Button": True}).with_memory({"_prev:Button": False})
+        state = SystemState().with_tags({"Button": True}).with_memory({"_edge:e1": False})
 
         assert evaluate_condition(cond, state) is True
 
@@ -247,8 +248,9 @@ class TestRisingEdgeCondition:
 
         Button = Bool("Button")
         cond = RisingEdgeCondition(Button)
+        cond._site_key = "e1"  # its contact site; memory _edge:e1
 
-        state = SystemState().with_tags({"Button": True}).with_memory({"_prev:Button": True})
+        state = SystemState().with_tags({"Button": True}).with_memory({"_edge:e1": True})
 
         assert evaluate_condition(cond, state) is False
 
@@ -258,8 +260,9 @@ class TestRisingEdgeCondition:
 
         Button = Bool("Button")
         cond = RisingEdgeCondition(Button)
+        cond._site_key = "e1"  # its contact site; memory _edge:e1
 
-        state = SystemState().with_tags({"Button": False}).with_memory({"_prev:Button": False})
+        state = SystemState().with_tags({"Button": False}).with_memory({"_edge:e1": False})
 
         assert evaluate_condition(cond, state) is False
 
@@ -273,8 +276,9 @@ class TestFallingEdgeCondition:
 
         Button = Bool("Button")
         cond = FallingEdgeCondition(Button)
+        cond._site_key = "e1"  # its contact site; memory _edge:e1
 
-        state = SystemState().with_tags({"Button": False}).with_memory({"_prev:Button": True})
+        state = SystemState().with_tags({"Button": False}).with_memory({"_edge:e1": True})
 
         assert evaluate_condition(cond, state) is True
 
@@ -284,8 +288,9 @@ class TestFallingEdgeCondition:
 
         Button = Bool("Button")
         cond = FallingEdgeCondition(Button)
+        cond._site_key = "e1"  # its contact site; memory _edge:e1
 
-        state = SystemState().with_tags({"Button": False}).with_memory({"_prev:Button": False})
+        state = SystemState().with_tags({"Button": False}).with_memory({"_edge:e1": False})
 
         assert evaluate_condition(cond, state) is False
 
@@ -295,8 +300,9 @@ class TestFallingEdgeCondition:
 
         Button = Bool("Button")
         cond = FallingEdgeCondition(Button)
+        cond._site_key = "e1"  # its contact site; memory _edge:e1
 
-        state = SystemState().with_tags({"Button": True}).with_memory({"_prev:Button": True})
+        state = SystemState().with_tags({"Button": True}).with_memory({"_edge:e1": True})
 
         assert evaluate_condition(cond, state) is False
 

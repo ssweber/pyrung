@@ -151,6 +151,7 @@ from pyrung.core.analysis.crossings import calc as _calc  # noqa: E402, F401
 from pyrung.core.analysis.crossings import copy as _copy  # noqa: E402, F401
 from pyrung.core.analysis.crossings import drums as _drums  # noqa: E402, F401
 from pyrung.core.analysis.crossings import external as _external  # noqa: E402, F401
+from pyrung.core.analysis.crossings import out_variants as _out_variants  # noqa: E402, F401
 from pyrung.core.analysis.crossings import pack as _pack  # noqa: E402, F401
 from pyrung.core.analysis.crossings import search as _search  # noqa: E402, F401
 from pyrung.core.analysis.crossings import shift as _shift  # noqa: E402, F401

@@ -234,7 +234,7 @@ def _instr_code(spec: InstrSpec) -> str:
     elif spec.kind == "calc":
         ops = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%", "pow": "**"}
         op_sym = ops.get(a["op"], a["op"])
-        return f"calc({_tag_ref(a['source'])} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
+        return f"math({_tag_ref(a['source'])} {op_sym} {a['literal']!r}, {_tag_ref(a['dest'])})"
     elif spec.kind == "calc_tag_tag":
         ops = {
             "add": "+",
@@ -247,12 +247,12 @@ def _instr_code(spec: InstrSpec) -> str:
         }
         op_sym = ops.get(a["op"], a["op"])
         return (
-            f"calc({_tag_ref(a['source1'])} {op_sym} {_tag_ref(a['source2'])}, "
+            f"math({_tag_ref(a['source1'])} {op_sym} {_tag_ref(a['source2'])}, "
             f"{_tag_ref(a['dest'])})"
         )
     elif spec.kind == "calc_shift":
         return (
-            f"calc({a['shift_op']}({_tag_ref(a['source'])}, {a['count']!r}), {_tag_ref(a['dest'])})"
+            f"math({a['shift_op']}({_tag_ref(a['source'])}, {a['count']!r}), {_tag_ref(a['dest'])})"
         )
     elif spec.kind == "on_delay":
         unit_kw = _kw_suffix(unit=a.get("unit")) if a.get("unit", "ms") != "ms" else ""
@@ -364,7 +364,12 @@ def _instr_code(spec: InstrSpec) -> str:
         return base
     elif spec.kind == "range_sum_calc":
         return (
-            f"calc({a['block'].name}.select({a['start']}, {a['end']}).sum(), {_tag_ref(a['dest'])})"
+            f"math({a['block'].name}.select({a['start']}, {a['end']}).sum(), {_tag_ref(a['dest'])})"
+        )
+    elif spec.kind == "range_agg_calc":
+        return (
+            f"math({a['block'].name}.select({a['start']}, {a['end']}).{a['agg']}(), "
+            f"{_tag_ref(a['dest'])})"
         )
     return f"# unknown instruction: {spec.kind}"
 
@@ -430,8 +435,8 @@ def format_soundness_reproducer(
         "",
         "from pyrung.core import (",
         "    And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
-        "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    TagType, Timer, Word, blockcopy, branch, call, copy, count_down, count_up,",
+        "    event_drum, fall, fill, forloop, latch, lro, lsh, math, off_delay, on_delay, out, pack_bits,",
         "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
         "    subroutine, time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
@@ -489,8 +494,8 @@ def format_parity_reproducer(
         "",
         "from pyrung.core import (",
         "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
-        "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    TagType, Timer, Word, blockcopy, branch, call, copy, count_down, count_up,",
+        "    event_drum, fall, fill, forloop, latch, lro, lsh, math, off_delay, on_delay, out, pack_bits,",
         "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
         "    subroutine, time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
@@ -538,6 +543,7 @@ def format_reachability_reproducer(
     projection: list[str],
     sim_state: dict[str, Any],
     bfs_size: int,
+    depth_budget: int = 20,
 ) -> str:
     global _REF_MAP  # noqa: PLW0603
     _REF_MAP = _build_ref_map(spec.pool)
@@ -546,8 +552,8 @@ def format_reachability_reproducer(
         "",
         "from pyrung.core import (",
         "    PLC, And, Block, Bool, Char, Counter, Dint, Int, Or, Program, Real, Rung,",
-        "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
-        "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+        "    TagType, Timer, Word, blockcopy, branch, call, copy, count_down, count_up,",
+        "    event_drum, fall, fill, forloop, latch, lro, lsh, math, off_delay, on_delay, out, pack_bits,",
         "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
         "    subroutine, time_drum,",
         "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",
@@ -572,7 +578,9 @@ def format_reachability_reproducer(
     lines.append("")
     lines.append(f"    projection = {projection!r}")
     lines.append("    bfs_result = reachable_states(logic, project=projection,")
-    lines.append("                                  max_states=10_000, depth_budget=20)")
+    lines.append(
+        f"                                  max_states=10_000, depth_budget={depth_budget})"
+    )
     lines.append("    assert not isinstance(bfs_result, Intractable)")
     lines.append("")
     lines.append("    plc = PLC(logic, dt=0.010)")
@@ -595,8 +603,8 @@ def format_reachability_reproducer(
 _IMPORT_BLOCK = (
     "from pyrung.core import (",
     "    PLC, And, Block, Bool, Char, CompiledPLC, Counter, Dint, Int, Or, Program, Real, Rung,",
-    "    TagType, Timer, Word, blockcopy, branch, calc, call, copy, count_down, count_up,",
-    "    event_drum, fall, fill, forloop, latch, lro, lsh, off_delay, on_delay, out, pack_bits,",
+    "    TagType, Timer, Word, blockcopy, branch, call, copy, count_down, count_up,",
+    "    event_drum, fall, fill, forloop, latch, lro, lsh, math, off_delay, on_delay, out, pack_bits,",
     "    pack_text, pack_words, receive, reset, return_early, rise, rro, rsh, search, shift,",
     "    subroutine, time_drum,",
     "    to_ascii, to_binary, to_text, to_value, unpack_to_bits, unpack_to_words,",

@@ -13,15 +13,18 @@ from pyrung import (
     comment, branch,                         # rung structure
     And, Or, rise, fall, system,             # conditions
     out, latch, reset,                       # coils
-    calc,                                    # math
+    toggle, debounce, flasher, timed,        # Out coil types (CLICK v4)
+    math,                                    # Math
     copy, blockcopy, fill,                   # data movement
     to_value, to_ascii, to_text, to_binary,  # copy converters
     pack_bits, pack_words, pack_text,        # pack
     unpack_to_bits, unpack_to_words,         # unpack
     on_delay, off_delay,                     # timers
     count_up, count_down,                    # counters
-    shift, event_drum, time_drum, search,    # drum/shift/search
+    shift, event_drum, time_drum,            # drum/shift/search
+    time_event_drum, search,
     call, subroutine, forloop, return_early, # program control
+    break_loop, continue_loop,
     send, receive, ModbusTcpTarget,          # communication
 )
 from pyrung.click import ClickBlocks, TagMap
@@ -82,7 +85,7 @@ Access via `system.<namespace>.<point>`. Import: `from pyrung import system`.
 |-------|-----------|-------|
 | `system.sys.always_on` | SC1 | Constant True |
 | `system.sys.first_scan` | SC2 | True on scan 0 only |
-| `system.sys.scan_clock_toggle` | SC3 | Alternates each scan |
+| `system.sys.scan_clock_toggle` | SC3 | Alternates each scan; on when SD9 is even (on the first scan) |
 | `system.sys.mode_run` | SC11 | True in RUN mode |
 | `system.sys.scan_counter` | SD9 | Current scan count |
 | `system.sys.scan_time_current_ms` | SD10 | Current scan time |
@@ -133,16 +136,19 @@ out(ValveB.immediate)         # immediate I/O (bypasses image table)
 ## Math
 
 ```python
-calc(A + B, Result)           # Result = A + B (wraps on overflow)
-calc(A * 2, R, oneshot=True)  # one-shot: execute once per rising edge
-calc(DH[1] | DH[2], DH[3])   # WORD-only → hex mode (unsigned)
-calc(DS.select(1, 10).sum(), Total)  # sum a range
+math(A + B, Result)           # Result = A + B (wraps on overflow)
+math(A * 2, R, oneshot=True)  # one-shot: execute once per rising edge
+math(DH[1] | DH[2], DH[3])   # WORD-only → hex mode (unsigned)
+math(DS.select(1, 10).sum(), Total)  # SUM ( DS1 : DS10 ); Bool ranges count True bits
+math(DS.select(1, 10).max(), Peak)   # MAX; also .min() MIN, .median() MDN, .mean() AVG
+math(abs(Error), Magnitude)          # ABS (decimal mode only)
+math(randint(1, 6), Die)             # RAND ( 1 , 6 ), inclusive, a draw per scan
 ```
 
-- `calc()` wraps on overflow (modular arithmetic). `copy()` clamps.
-- Division by zero → result = 0, fault flag set.
+- `math()` wraps on overflow (modular arithmetic). `copy()` clamps.
+- Division by zero → that division = 0 (the rest of the formula runs), fault flag set.
 - Integer division truncates toward zero.
-- Don't mix WORD and non-WORD tags in one `calc()`.
+- Don't mix WORD and non-WORD tags in one `math()`.
 
 ## Data movement
 
@@ -189,18 +195,28 @@ on_delay(MyTimer, 500).reset(ResetBtn)
 off_delay(CoolDown, 500)
 ```
 
+Out coil types own their timers, given as `(timer, preset)`; `debounce` and `flasher` take `"ms"`/`"sec"`, `timed` also `"min"`:
+
+```python
+toggle(Light)                                          # flip on each rung edge
+debounce(TankFull, on=(T1, 500), off=(T2, 200))        # follow the rung once steady
+flasher(Beacon, on=(T3, 500), off=(T4, 500))           # blink while the rung is true
+timed(Horn, T5, 1000)                                  # on for 1 s per rung edge
+timed(Lamp, T6, 3, "sec", maintained=True)             # at least 3 s, then follow
+```
+
 ## Counters
 
-Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts every scan while True — use `rise()` for edge-triggered.
+Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts rising edges of its rung (and `.down()` input), as a CLICK does: a held condition counts once. A down counter starts at 0 and is done at `Acc <= preset`.
 
 ```python
 PartCounter = Counter.clone("PartCounter")
 
 count_up(PartCounter, 100).reset(ResetBtn)
-count_down(Dispense, 100).reset(ResetBtn)
+count_down(Dispense, -100).reset(ResetBtn)  # done after 100 counts: Acc <= -100
 
-# Edge-triggered counting
-with rung(rise(Sensor)):
+# One count per rising edge of Sensor
+with rung(Sensor):
     count_up(PartCounter, 9999).reset(CountReset)
 
 # Bidirectional
@@ -225,10 +241,15 @@ with Program() as logic:
     with rung(AutoMode):
         call("init")
 
-# For loops
+# For loops: bare instructions are wire-only body rungs; a `with rung()` inside
+# the loop is a body rung with contacts, evaluated on every iteration
 with rung():
     with forloop(5) as loop:
         copy(Src[loop.idx + 1], Dst[loop.idx + 1])
+        with rung(Fault):
+            break_loop()      # leave the loop (CLICK Break, needs a contact)
+        with rung(Skip):
+            continue_loop()   # next iteration (CLICK Continue, needs a contact)
 ```
 
 ## Shift register
@@ -311,7 +332,7 @@ In pyrung:
 
 ```python
 with rung(rise(system.sys.clock_500ms)):
-    calc(Avg + (Raw - Avg) * (FilterFactor / 10), Avg)
+    math(Avg + (Raw - Avg) * (FilterFactor / 10), Avg)
 ```
 
 `FilterFactor` range: `1-9`
@@ -337,7 +358,7 @@ with rung(system.sys.first_scan):
 
 ```python
 with rung(rise(system.sys.clock_1s)):
-    calc(Counter + 1, Counter)
+    math(Counter + 1, Counter)
 ```
 
 ### Timer-driven state machine
@@ -396,6 +417,18 @@ mapping = TagMap({
 report = mapping.validate(logic, mode="warn")
 ```
 
-Built-in `Timer` and `Counter` UDTs are automatically mapped — `Timer[n].Done` → T*n*, `Timer[n].Acc` → TD*n*, etc. No explicit entries needed.
+Map a cloned `Timer` or `Counter` to its banks explicitly. The done bit goes to T or CT, the accumulator to TD or CTD:
+
+```python
+OvenTimer = Timer.clone("OvenTimer")
+PartCounter = Counter.clone("PartCounter")
+
+mapping = TagMap([
+    OvenTimer.Done.map_to(t[1]),
+    OvenTimer.Acc.map_to(td[1]),
+    PartCounter.Done.map_to(ct[1]),
+    PartCounter.Acc.map_to(ctd[1]),
+])
+```
 
 Named arrays use `.map_to()` instead of TagMap — see [Named arrays](#named-arrays) above.

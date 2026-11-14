@@ -1,8 +1,8 @@
 # CircuitPython Dialect
 
-`pyrung.circuitpy` generates a self-contained CircuitPython scan loop from the same program you already tested in simulation. The same pyrung logic runs in Python *and* on real hardware — write once, simulate, deploy.
+`pyrung.circuitpy` generates a self-contained CircuitPython scan loop from the same program you already tested in simulation. The same pyrung logic runs in Python *and* on real hardware. Write once, simulate, deploy.
 
-It targets the [ProductivityOpen P1AM-200](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html): tinkerer-friendly PLC hardware with a CircuitPython runtime, and currently the only PLC-class controller where this kind of codegen is this straightforward. The hardware model (35 modules), code generator, and validation are fully implemented and tested.
+It targets the [ProductivityOpen P1AM-200](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html). This is tinkerer-friendly PLC hardware with a CircuitPython runtime.
 
 ## Installation
 
@@ -52,15 +52,15 @@ The built-in `MODULE_CATALOG` includes 35 modules from the [Productivity1000 ser
 | Temperature input | 3 | P1-04RTD, P1-04THM, P1-04NTC |
 | Combo analog | 2 | P1-4ADL2DAL-1, P1-4ADL2DAL-2 |
 
-Type mapping: discrete → `Bool`, analog → `Int`, temperature → `Real`.
+Discrete modules map to `Bool`, analog modules to `Int`, and temperature modules to `Real`.
 
-### Excluded modules (v2)
+### Unsupported modules
 
-[`P1-04PWM`](https://facts-engineering.github.io/modules/P1-04PWM/P1-04PWM.html) (PWM) and [`P1-02HSC`](https://facts-engineering.github.io/modules/P1-02HSC/P1-02HSC.html) (high-speed counter) require a multi-tag channel model and are deferred to v2.
+pyrung doesn't support the [`P1-04PWM`](https://facts-engineering.github.io/modules/P1-04PWM/P1-04PWM.html) (PWM) or the [`P1-02HSC`](https://facts-engineering.github.io/modules/P1-02HSC/P1-02HSC.html) (high-speed counter).
 
 ## Writing a CircuitPython program
 
-Programs use the same DSL as any other pyrung dialect — only the hardware setup and export step are dialect-specific.
+Programs use the same DSL as any other pyrung dialect. Only the hardware setup and export step are dialect-specific.
 
 ```python
 from pyrung import Bool, Int, PLC, Program, rung, out, copy, rise
@@ -121,18 +121,17 @@ result.runtime  # pyrung_rt.py content (str) — for maintainer use
 | `modbus_server` | `ModbusServerConfig \| None` | Modbus TCP server config; see [Modbus TCP](circuitpy-modbus.md) |
 | `modbus_client` | `ModbusClientConfig \| None` | Modbus TCP client config; see [Modbus TCP](circuitpy-modbus.md) |
 | `tag_map` | `TagMap \| None` | CLICK address mapping for Modbus-visible tags; required with server/client |
-| `mapped_tag_scope` | `MappedTagScope` | `"referenced_only"` (default) or `"all_mapped"` |
 
 The generator runs strict validation internally and checks the generated source for syntax errors before returning.
 
 ### Generated output
 
-Code generation produces two files:
+Code generation writes `code.py`, plus `pyrung_rt.py` when the program needs the runtime library:
 
 - **`code.py`** — your program. Tags, ladder logic, I/O, scan loop. Regenerated every time you change your logic.
-- **`pyrung_rt.mpy`** — the pyrung runtime library (pre-compiled). Helper functions, Modbus TCP server/client state machine. Same for every project — install once.
+- **`pyrung_rt.py`** — the pyrung runtime library. Helper functions, Modbus TCP server/client state machine. It is the same for every project, so install it once.
 
-`code.py` imports from `pyrung_rt` at runtime. The `.mpy` format loads faster and uses less memory than `.py` on CircuitPython.
+`code.py` imports from `pyrung_rt` at runtime. For faster boot and lower memory use, install the pre-compiled `pyrung_rt.mpy` from the [releases page](https://github.com/ssweber/pyrung/releases) in place of `pyrung_rt.py`.
 
 ### code.py structure
 
@@ -189,9 +188,15 @@ Pass `RunStopConfig(...)` to `generate_circuitpy()` to map `board.switch` to run
 
 - debounced switch sampling (`debounce_ms`, default `30`)
 - `run_when_high` polarity control
-- optional exposure of `sys.mode_run` and `sys.cmd_mode_stop` (`expose_mode_tags=True`)
+- `expose_mode_tags=True` (the default) includes `sys.mode_run` (SC11) and `sys.cmd_mode_stop` (SC50) in the generated code even when no rung uses them. A program that uses them gets them either way.
 - STOP skips rung execution and forces physical outputs off each scan
-- STOP->RUN resets non-retentive runtime state while preserving retentive values
+- STOP->RUN resets non-retentive runtime state while preserving retentive values. On the first RUN scan, timers advance by the time that loop pass took. In the same way, pyrung's first scan after `start()` advances by a full `dt`.
+
+The STOP command (SC50) also puts the code in STOP, as in core. When a rung turns SC50 on, the next scan takes the command (SC50 turns off, SC11 reads off for that scan) and runs. The code is in STOP at the end of that scan.
+
+STOP then holds while the switch reads RUN. Moving the switch to STOP and back to RUN restarts the code (STOP->RUN). Without a `RunStopConfig`, nothing but a restart of the board returns the code to RUN.
+
+Only a rung can write SC50 and SC51. The Modbus server refuses a write to either with exception code 2, as pyrung's soft PLC does.
 
 ### Watchdog
 
@@ -199,7 +204,9 @@ When `watchdog_ms` is set, the generated code calls `base.config_watchdog()` and
 
 ### Scan timing and overrun detection
 
-The scan loop paces itself to `target_scan_ms` using `time.monotonic()`. If a scan takes longer than the target, the overrun is counted and optionally printed (controlled by `PRINT_SCAN_OVERRUNS` in the generated code).
+The scan loop paces itself to `target_scan_ms` using `time.monotonic_ns()`. If a scan takes longer than the target, the overrun is counted and optionally printed (controlled by `PRINT_SCAN_OVERRUNS` in the generated code). The first scan after boot times from the program's initialization, `load_memory()` included, so its `dt` is the time since the code started.
+
+All scan timing comes from integer nanoseconds. That covers the `dt` that timers accumulate, the clock bits, switch debounce, retentive auto-save and Modbus client timeouts. CircuitPython's floats have about 22 bits of precision. A float `time.monotonic()` therefore stops resolving milliseconds within hours of uptime (31 ms steps after a day, 250 ms after 11 days), and timers would lose time.
 
 ### Modbus TCP
 
@@ -256,10 +263,10 @@ If your program uses `FunctionCallInstruction`, the callable's source is embedde
 
 The P1AM-200 runs CircuitPython, which imposes limits beyond what the pyrung simulator allows:
 
-- **No hardware interrupts.** All I/O is polled each scan. Fast external signals can be missed between scans — choose `target_scan_ms` accordingly.
+- **No hardware interrupts.** All I/O is polled each scan. Fast external signals can be missed between scans, so choose `target_scan_ms` accordingly.
 - **No TLS.** Modbus TCP and any network traffic run unencrypted. Keep the P1AM-200 on a trusted, isolated network.
 - **Single-threaded.** The scan loop is cooperative. Long-running `FunctionCallInstruction` callables block the entire scan (and may trip the watchdog).
-- **Limited memory.** CircuitPython has a small heap. Programs with many tags or large blocks may hit memory limits — test on hardware early.
+- **Limited memory.** CircuitPython has a small heap. Programs with many tags or large blocks may hit memory limits, so test on hardware early.
 
 ## External resources
 

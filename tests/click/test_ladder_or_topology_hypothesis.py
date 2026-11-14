@@ -13,15 +13,16 @@ producing invalid CSV that the Click editor would misinterpret.
 from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 pytestmark = pytest.mark.hypothesis
 
-from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.core import And, Bool, Int, Or, Program, Rung
-from pyrung.core.program import out
+from pyrung.click import ClickBlocks, LadderExportError, TagMap, ladder_to_pyrung, pyrung_to_ladder
+from pyrung.core import And, Bool, Counter, Int, Or, Program, Rung
+from pyrung.core.program import count_up, out
 from pyrung.core.tag import TagType
+from tests.click.drawing_rule import assert_same_logic, check_scope, contact_size
 from tests.click.helpers import exec_with_source
 
 # ---------------------------------------------------------------------------
@@ -276,6 +277,7 @@ def test_or_topology_structural_invariants(tree):
     _check_first_row_wired(data_rows)
     _check_all_tags_present(data_rows, [mapping.resolve(t) for t in tags])
     _check_last_row_no_tee_prefix(data_rows)
+    check_scope(bundle.main_rows)
 
 
 @given(tree=single_or_tree())
@@ -321,3 +323,86 @@ def test_or_topology_round_trip_with_compares(tree):
     _check_first_row_wired(data_rows)
     _check_last_row_no_tee_prefix(data_rows)
     _check_round_trip(bundle)
+
+
+# ---------------------------------------------------------------------------
+# Nested Ors, several outputs, pins and wide rungs keep the drawing rule and the logic
+# ---------------------------------------------------------------------------
+
+
+@st.composite
+def _nested_or_rung(draw):
+    """Contacts and Ors in series, where an Or's row may be an And holding another Or.
+
+    Returns ``(conditions, tags, outputs, pin)``.  The rung has 1-3 outputs, or a counter whose
+    reset pin is a contact or an Or (``pin`` is then that condition).  Some rungs start with a run of
+    contacts that brings them near AE.
+    """
+    tags: list[Bool] = []
+    counter = [0]
+
+    def make_tag() -> Bool:
+        counter[0] += 1
+        tag = Bool(f"T{counter[0]}")
+        tags.append(tag)
+        return tag
+
+    def gen_term(depth: int):
+        if depth >= 2 or not draw(st.booleans()):
+            return make_tag()
+        return Or(*(gen_row(depth + 1) for _ in range(draw(st.integers(2, 3)))))
+
+    def gen_row(depth: int):
+        parts = [gen_term(depth) for _ in range(draw(st.integers(1, 3)))]
+        return parts[0] if len(parts) == 1 else And(*parts)
+
+    conditions = []
+    if draw(st.integers(0, 4)) == 0:
+        conditions.extend(make_tag() for _ in range(draw(st.integers(18, 28))))
+    conditions.extend(gen_term(0) for _ in range(draw(st.integers(0, 4))))
+    pin = None
+    outputs = draw(st.integers(1, 3))
+    if draw(st.integers(0, 3)) == 0:
+        pin = gen_row(1)
+        outputs = 0
+    return conditions, tags, outputs, pin
+
+
+def _export_nested(conditions, tags, outputs, pin):
+    x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, *_ = ClickBlocks()
+    coils = [Bool(f"Y_OUT{k}") for k in range(outputs)]
+    with Program(strict=False) as logic:
+        with Rung(*conditions):
+            for coil in coils:
+                out(coil)
+            if pin is not None:
+                count_up(Counter[1], preset=5).reset(pin)
+    tag_map_dict = _make_tag_map(tags)
+    for index, coil in enumerate(coils):
+        tag_map_dict[coil] = y[index + 1]
+    tag_map_dict[Counter[1].Done] = ct[1]
+    tag_map_dict[Counter[1].Acc] = ctd[1]
+    mapping = TagMap(tag_map_dict, include_system=False)
+    depth, rows = contact_size(conditions)
+    rows = max(rows, outputs, 1) + (contact_size([pin])[1] if pin is not None else 0)
+    try:
+        bundle = pyrung_to_ladder(logic, mapping)
+    except LadderExportError:
+        # Only a rung that really runs past AE or past 32 rows may be refused.
+        if depth < 31 and rows <= 32:
+            raise
+        assume(False)
+    return logic, mapping, bundle
+
+
+@given(tree=_nested_or_rung())
+@settings(max_examples=300, deadline=None)
+def test_nested_or_rung_follows_the_drawing_rule_and_keeps_its_logic(tree):
+    """The validator's round trip runs inside the export.
+
+    Importing the export and exporting it again gives the same rows.
+    """
+    logic, mapping, bundle = _export_nested(*tree)
+    check_scope(bundle.main_rows)
+    _check_round_trip(bundle)
+    assert_same_logic(logic, mapping, bundle)

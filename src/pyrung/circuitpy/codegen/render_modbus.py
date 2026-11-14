@@ -5,18 +5,112 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pyclickplc.addresses import format_address_display
+from pyclickplc.addresses import format_address_display, parse_address
 from pyclickplc.banks import BANKS, DataType
 from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
 from pyrung.circuitpy.codegen._constants import _STORE_TYPE_HELPERS
 from pyrung.circuitpy.codegen.context import CodegenContext
-from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core.system_points import system
 
-_SYSTEM_SLOT_BY_HARDWARE = {slot.hardware.name: slot for slot in SYSTEM_CLICK_SLOTS}
-_WORD_BANKS = {"DS", "DD", "DH", "DF", "TD", "CTD", "TXT", "XD", "YD", "SD"}
+#: XD and YD are served from the X and Y bits, not from tags mapped to them.
+_WORD_BANKS = {"DS", "DD", "DH", "DF", "TD", "CTD", "TXT", "SD"}
 _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
+#: Banks a rung can use raw (``ds[3901]``), served as used.  System points and
+#: the XD/YD word images have their own paths.
+_RAW_BANKS = frozenset(MODBUS_MAPPINGS) - {"SC", "SD", "XD", "YD"}
+_XD0 = MODBUS_MAPPINGS["XD"].base
+_YD0 = MODBUS_MAPPINGS["YD"].base
+#: XD and YD each hold 17 registers.  XD0 and XD0u come first, then XD1..XD8, each followed
+#: by a spare word.
+_XY_WORDS = BANKS["XD"].max_addr - BANKS["XD"].min_addr + 1
+_Y0 = MODBUS_MAPPINGS["Y"].base
+#: Banks of two-register cells (Dint, Real), whose half-word write reads the other half.
+_WIDE_BANKS = tuple(sorted(bank for bank, mapping in MODBUS_MAPPINGS.items() if mapping.width == 2))
+#: Coil banks a client may only read (FC 2), so a coil write there answers 02.
+_COIL_READ_ONLY = tuple(
+    sorted(
+        bank
+        for bank, mapping in MODBUS_MAPPINGS.items()
+        if mapping.is_coil and 5 not in mapping.function_codes and mapping.writable is None
+    )
+)
+
+
+def _modbus_spans(is_coil: bool) -> tuple[tuple[int, int], ...]:
+    """The Modbus addresses of CLICK's coil or register banks, as merged ranges.
+
+    The server reads 0 in them where nothing is stored, as a CLICK reads memory nothing
+    wrote.  X and Y run to unit 32 of slot 8, since a CLICK reads OFF in units 17..32 of
+    every slot.  XD and YD are left out, because the generated code serves them first.
+    """
+    spans: list[tuple[int, int]] = []
+    for bank, mapping in MODBUS_MAPPINGS.items():
+        if mapping.is_coil != is_coil or bank in ("XD", "YD"):
+            continue
+        cfg = BANKS[bank]
+        if bank in ("X", "Y"):
+            last = plc_to_modbus(bank, 801)[0] + 31
+        else:
+            end, width = plc_to_modbus(bank, cfg.max_addr)
+            last = end + width - 1
+        spans.append((mapping.base, last))
+    merged: list[tuple[int, int]] = []
+    for lo, hi in sorted(spans):
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(hi, merged[-1][1]))
+        else:
+            merged.append((lo, hi))
+    return tuple(merged)
+
+
+def _cell_runs(ctx: CodegenContext, is_coil: bool) -> list[tuple[str, str, int, int, int]]:
+    """``(bank, array, first, last, index)`` for each run of raw CLICK cells the code keeps.
+
+    A pointer or a block instruction (``ds[Ptr]``, ``fill(0, c.select(1, 100))``) keeps a
+    bank's cells in an array, and the server serves each of them as a CLICK does.  Modbus
+    addresses *first..last* hold the cells from *index* on.  A TXT register holds two cells.
+    """
+    runs: list[tuple[str, str, int, int, int]] = []
+    for binding in ctx.emitted_bindings():
+        bank = binding.block.name
+        if (
+            bank not in _RAW_BANKS
+            or MODBUS_MAPPINGS[bank].is_coil != is_coil
+            or binding.block_id in ctx.compact_block_map
+        ):
+            continue
+        symbol = ctx.block_symbols[binding.block_id]
+        step = 2 if bank == "TXT" else 1
+        cfg = BANKS[bank]
+        ranges = cfg.valid_ranges or ((cfg.min_addr, cfg.max_addr),)
+        for addr in binding.valid_addresses or range(binding.start, binding.end + 1):
+            # A block can start below the bank (``DS0``), and that cell has no register.
+            if not any(lo <= addr <= hi for lo, hi in ranges):
+                continue
+            if bank == "TXT" and (addr % 2 == 0 or addr + 1 > binding.end):
+                continue
+            first, width = plc_to_modbus(bank, addr)
+            index = ctx.block_index(binding.block_id, addr)
+            if runs and runs[-1][:2] == (bank, symbol):
+                _, _, lo, hi, base = runs[-1]
+                if first == hi + 1 and index == base + (hi + 1 - lo) * step // width:
+                    runs[-1] = (bank, symbol, lo, first + width - 1, base)
+                    continue
+            runs.append((bank, symbol, first, first + width - 1, index))
+    return runs
+
+
+def _df_words(value: str) -> str:
+    """Python source for the two Modbus words of the float in *value*, low word first.
+
+    A CLICK serves every NaN as 0xFFFF:0xFFFF, so the generated code does too.
+    """
+    return (
+        f"((0xFFFF, 0xFFFF) if {value} != {value} "
+        f"else struct.unpack('<HH', struct.pack('<f', float({value}))))"
+    )
+
 
 _BANK_DESCRIPTIONS: dict[str, str] = {
     "X": "digital inputs",
@@ -45,7 +139,6 @@ class _ModbusBackedSlot:
     logical_name: str
     symbol: str
     data_type: DataType
-    read_only: bool
     source: str
     default: object
 
@@ -67,14 +160,17 @@ def _ip_tuple_literal(value: str) -> str:
 
 
 def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
+    """Every TagMap register, then every raw CLICK register a rung uses (``ds[3901]``)."""
     if ctx.tag_map is None:
         return ()
     slots: list[_ModbusBackedSlot] = []
+    served: set[tuple[str, int]] = set()
     for slot in ctx.tag_map.mapped_slots():
         tag = ctx.referenced_tags.get(slot.logical_name)
         if tag is None:
             continue
         symbol = ctx.symbol_for_tag(tag)
+        served.add((slot.memory_type, slot.address))
         slots.append(
             _ModbusBackedSlot(
                 bank=slot.memory_type,
@@ -82,8 +178,33 @@ def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
                 logical_name=slot.logical_name,
                 symbol=symbol,
                 data_type=BANKS[slot.memory_type].data_type,
-                read_only=slot.read_only,
                 source=slot.source,
+                default=tag.default,
+            )
+        )
+    for name, tag in ctx.referenced_tags.items():
+        claim = ctx.tag_block_addresses.get(name)
+        if claim is not None:
+            block, addr = ctx.block_bindings[claim[0]].block, claim[1]
+        else:
+            # No array holds it: a raw register a rung uses (``ds[3901]``) is a
+            # scalar, and only its own tag knows the register.
+            block = getattr(tag, "_pyrung_block", None)
+            addr = getattr(tag, "_pyrung_block_addr", 0)
+        if block is None or block.name not in _RAW_BANKS:
+            continue
+        bank, index = parse_address(block._format_tag_name(addr))
+        if (bank, index) in served:
+            continue
+        served.add((bank, index))
+        slots.append(
+            _ModbusBackedSlot(
+                bank=bank,
+                index=index,
+                logical_name=name,
+                symbol=ctx.symbol_for_tag(tag),
+                data_type=BANKS[bank].data_type,
+                source="user",
                 default=tag.default,
             )
         )
@@ -96,90 +217,6 @@ def _backing_global_for_slot(ctx: CodegenContext, slot: _ModbusBackedSlot) -> st
         return slot.symbol
     block_id, _ = block_info
     return ctx.block_symbols[block_id]
-
-
-def _modbus_valid_ranges(bank: str) -> tuple[tuple[int, int], ...]:
-    cfg = BANKS[bank]
-    addresses: set[int] = set()
-    if cfg.valid_ranges is not None:
-        for lo, hi in cfg.valid_ranges:
-            for idx in range(lo, hi + 1):
-                addr, _ = plc_to_modbus(bank, idx)
-                addresses.add(addr)
-    else:
-        for idx in range(cfg.min_addr, cfg.max_addr + 1):
-            addr, _ = plc_to_modbus(bank, idx)
-            addresses.add(addr)
-    ordered = sorted(addresses)
-    if not ordered:
-        return ()
-    ranges: list[tuple[int, int]] = []
-    lo = hi = ordered[0]
-    for addr in ordered[1:]:
-        if addr == hi + 1:
-            hi = addr
-            continue
-        ranges.append((lo, hi))
-        lo = hi = addr
-    ranges.append((lo, hi))
-    return tuple(ranges)
-
-
-def _word_start_expr(word_index_expr: str) -> str:
-    return (
-        f"(1 if int({word_index_expr}) == 0 else "
-        f"21 if int({word_index_expr}) == 1 else "
-        f"(((int({word_index_expr}) // 2) * 100) + 1))"
-    )
-
-
-def _render_sparse_reverse_coil(bank: str, base: int) -> list[str]:
-    return [
-        f"    if {base} <= addr <= {base + 31}:",
-        f"        _offset = addr - {base}",
-        "        if _offset < 16:",
-        f'            return ("{bank}", _offset + 1)',
-        f'        return ("{bank}", 21 + (_offset - 16))',
-        f"    if {base + 32} <= addr <= {base + 47}:",
-        f'        return ("{bank}", 101 + (addr - {base + 32}))',
-        f"    if {base + 64} <= addr <= {base + 79}:",
-        f'        return ("{bank}", 201 + (addr - {base + 64}))',
-        f"    if {base + 96} <= addr <= {base + 111}:",
-        f'        return ("{bank}", 301 + (addr - {base + 96}))',
-        f"    if {base + 128} <= addr <= {base + 143}:",
-        f'        return ("{bank}", 401 + (addr - {base + 128}))',
-        f"    if {base + 160} <= addr <= {base + 175}:",
-        f'        return ("{bank}", 501 + (addr - {base + 160}))',
-        f"    if {base + 192} <= addr <= {base + 207}:",
-        f'        return ("{bank}", 601 + (addr - {base + 192}))',
-        f"    if {base + 224} <= addr <= {base + 239}:",
-        f'        return ("{bank}", 701 + (addr - {base + 224}))',
-        f"    if {base + 256} <= addr <= {base + 271}:",
-        f'        return ("{bank}", 801 + (addr - {base + 256}))',
-    ]
-
-
-def _render_reverse_register_case(bank: str) -> list[str]:
-    mapping = MODBUS_MAPPINGS[bank]
-    cfg = BANKS[bank]
-    if bank == "TXT":
-        max_reg = mapping.base + ((cfg.max_addr + 1) // 2) - 1
-        return [
-            f"    if {mapping.base} <= addr <= {max_reg}:",
-            f'        return ("TXT", ((addr - {mapping.base}) * 2) + 1, 0)',
-        ]
-    if cfg.min_addr == 0:
-        max_reg = mapping.base + cfg.max_addr
-        return [
-            f"    if {mapping.base} <= addr <= {max_reg}:",
-            f'        return ("{bank}", addr - {mapping.base}, 0)',
-        ]
-    max_reg = mapping.base + (mapping.width * cfg.max_addr) - 1
-    return [
-        f"    if {mapping.base} <= addr <= {max_reg}:",
-        f"        _offset = addr - {mapping.base}",
-        f'        return ("{bank}", (_offset // {mapping.width}) + 1, _offset % {mapping.width})',
-    ]
 
 
 def _render_ethernet_setup(ctx: CodegenContext) -> list[str]:
@@ -206,15 +243,215 @@ def _render_ethernet_setup(ctx: CodegenContext) -> list[str]:
     return lines
 
 
+def _writable(slot: _ModbusBackedSlot) -> bool:
+    """Whether a Modbus write may store into *slot*.
+
+    CLICK's Data View marks the rest of SC and SD Read Only, and the server refuses a write
+    to them with exception 02.
+    """
+    writable = MODBUS_MAPPINGS[slot.bank].writable
+    return writable is None or slot.index in writable
+
+
+def _txt_pair(
+    slot: _ModbusBackedSlot, reg_slots: list[_ModbusBackedSlot]
+) -> tuple[int, _ModbusBackedSlot | None, _ModbusBackedSlot | None] | None:
+    """The odd TXT of *slot*'s register and the slots of its two bytes.
+
+    ``None`` for an even slot whose odd slot is served too, since that slot's entry handles
+    both bytes.
+    """
+    pair_index = (slot.index - 1) // 2 * 2 + 1
+
+    def find(index: int) -> _ModbusBackedSlot | None:
+        return next((s for s in reg_slots if s.bank == slot.bank and s.index == index), None)
+
+    low = find(pair_index)
+    if slot.index != pair_index and low is not None:
+        return None
+    return pair_index, low, find(pair_index + 1)
+
+
+def _word_expr(data_type: DataType, symbol: str, pos: str) -> str | None:
+    """The Modbus word at *pos* of the cell in *symbol*, or ``None`` for TXT and bits."""
+    if data_type == DataType.INT:
+        return f"struct.unpack('<H', struct.pack('<h', int({symbol})))[0]"
+    if data_type == DataType.HEX:
+        return f"(int({symbol}) & 0xFFFF)"
+    if data_type == DataType.INT2:
+        return f"struct.unpack('<HH', struct.pack('<i', int({symbol})))[{pos}]"
+    if data_type == DataType.FLOAT:
+        return f"{_df_words(symbol)}[{pos}]"
+    return None
+
+
+def _store_expr(data_type: DataType, symbol: str, pos: str) -> str | None:
+    """The new value of the cell in *symbol* after ``_word`` is written at *pos*."""
+    if data_type == DataType.INT:
+        return "struct.unpack('<h', struct.pack('<H', _word))[0]"
+    if data_type == DataType.HEX:
+        return "(_word & 0xFFFF)"
+    if data_type == DataType.INT2:
+        old = f"struct.unpack('<HH', struct.pack('<i', int({symbol})))"
+        return (
+            f"struct.unpack('<i', struct.pack('<HH', _word if {pos} == 0 else {old}[0], "
+            f"_word if {pos} == 1 else {old}[1]))[0]"
+        )
+    if data_type == DataType.FLOAT:
+        old = _df_words(symbol)
+        return (
+            f"struct.unpack('<f', struct.pack('<HH', _word if {pos} == 0 else {old}[0], "
+            f"_word if {pos} == 1 else {old}[1]))[0]"
+        )
+    return None
+
+
+def _txt_word(low: str | None, high: str | None) -> str:
+    low_expr = f"ord({low}) if {low} else 0" if low else "0"
+    high_expr = f"ord({high}) if {high} else 0" if high else "0"
+    return f"(({low_expr}) & 0xFF) | ((({high_expr}) & 0xFF) << 8)"
+
+
+def _coil_read_chain(ctx: CodegenContext, coil_slots: list[_ModbusBackedSlot]) -> list[str]:
+    lines = ["def _mb_read_coil_plc(bank, index):"]
+    for slot in coil_slots:
+        value = slot.symbol
+        if slot.source == "system" and slot.logical_name == system.sys.mode_run.name:
+            if ctx.runstop is not None:
+                value = "_mode_run"
+        lines.extend(
+            [
+                f'    if bank == "{slot.bank}" and index == {slot.index}:',
+                f"        return bool({value})",
+            ]
+        )
+    lines.extend(["    return False", ""])
+    return lines
+
+
+def _coil_write_chain(ctx: CodegenContext, coil_slots: list[_ModbusBackedSlot]) -> list[str]:
+    writable = [slot for slot in coil_slots if _writable(slot)]
+    lines = ["def _mb_write_coil_plc(bank, index, val):"]
+    owners = sorted({_backing_global_for_slot(ctx, slot) for slot in writable})
+    if owners:
+        lines.append(f"    global {', '.join(owners)}")
+    lines.append("    _value = bool(val)")
+    for slot in writable:
+        lines.extend(
+            [
+                f'    if bank == "{slot.bank}" and index == {slot.index}:',
+                f"        {slot.symbol} = _value",
+                "        return",
+            ]
+        )
+    lines.append("")
+    return lines
+
+
+def _reg_read_chain(reg_slots: list[_ModbusBackedSlot]) -> list[str]:
+    lines = ["def _mb_read_reg_plc(bank, index, reg_pos):"]
+    for slot in reg_slots:
+        index = slot.index
+        value = _word_expr(slot.data_type, slot.symbol, "int(reg_pos)")
+        if slot.data_type == DataType.TXT:
+            pair = _txt_pair(slot, reg_slots)
+            if pair is None:
+                continue
+            index, low, high = pair
+            value = _txt_word(low.symbol if low else None, high.symbol if high else None)
+        if value is None:
+            continue
+        lines.extend(
+            [
+                f'    if bank == "{slot.bank}" and index == {index}:',
+                f"        return {value}",
+            ]
+        )
+    lines.extend(["    return 0", ""])
+    return lines
+
+
+def _reg_write_chain(ctx: CodegenContext, reg_slots: list[_ModbusBackedSlot]) -> list[str]:
+    writable = [slot for slot in reg_slots if _writable(slot)]
+    lines = ["def _mb_write_reg_plc(bank, index, reg_pos, value):"]
+    owners = sorted({_backing_global_for_slot(ctx, slot) for slot in writable})
+    if owners:
+        lines.append(f"    global {', '.join(owners)}")
+    lines.append("    _word = int(value) & 0xFFFF")
+    for slot in writable:
+        if slot.data_type == DataType.TXT:
+            pair = _txt_pair(slot, reg_slots)
+            if pair is None:
+                continue
+            pair_index, low, high = pair
+            lines.append(f'    if bank == "{slot.bank}" and index == {pair_index}:')
+            if low is not None:
+                lines.append(f"        {low.symbol} = chr(_word & 0xFF)")
+            if high is not None:
+                lines.append(f"        {high.symbol} = chr((_word >> 8) & 0xFF)")
+            lines.append("        return")
+            continue
+        store = _store_expr(slot.data_type, slot.symbol, "int(reg_pos)")
+        if store is None:
+            continue
+        lines.extend(
+            [
+                f'    if bank == "{slot.bank}" and index == {slot.index}:',
+                f"        {slot.symbol} = {store}",
+                "        return",
+            ]
+        )
+    lines.append("")
+    return lines
+
+
+def _cell_lines(ctx: CodegenContext) -> list[str]:
+    """The functions that find and convert the raw CLICK cells the code keeps in arrays."""
+    lines = ["def _mb_coil_cell(addr):"]
+    for bank, symbol, lo, hi, index in _cell_runs(ctx, True):
+        lines.append(f"    if {lo} <= addr <= {hi}:")
+        lines.append(f'        return "{bank}", {symbol}, addr - {lo - index}')
+    lines.extend(["    return None", "", "def _mb_reg_cell(addr):"])
+    reg_runs = _cell_runs(ctx, False)
+    for bank, symbol, lo, hi, index in reg_runs:
+        if bank == "TXT":
+            cell, pos = f"(addr - {lo}) * 2 + {index}", "0"
+        elif MODBUS_MAPPINGS[bank].width == 2:
+            cell, pos = f"(addr - {lo}) // 2 + {index}", f"(addr - {lo}) % 2"
+        else:
+            cell, pos = f"addr - {lo - index}", "0"
+        lines.append(f"    if {lo} <= addr <= {hi}:")
+        lines.append(f'        return "{bank}", {symbol}, {cell}, {pos}')
+    lines.extend(["    return None", "", "def _mb_cell_word(bank, cells, i, pos):"])
+    by_type: dict[DataType, set[str]] = {}
+    for run in reg_runs:
+        by_type.setdefault(BANKS[run[0]].data_type, set()).add(run[0])
+    kinds = [(data_type, tuple(sorted(banks))) for data_type, banks in by_type.items()]
+    for data_type, banks in kinds:
+        value = _word_expr(data_type, "cells[i]", "pos")
+        lines.append(f"    if bank in {banks!r}:")
+        lines.append(f"        return {value or _txt_word('cells[i]', 'cells[i + 1]')}")
+    lines.extend(["    return 0", "", "def _mb_cell_store(bank, cells, i, pos, _word):"])
+    for data_type, banks in kinds:
+        store = _store_expr(data_type, "cells[i]", "pos")
+        lines.append(f"    if bank in {banks!r}:")
+        if store is None:
+            lines.append("        cells[i] = chr(_word & 0xFF)")
+            lines.append("        cells[i + 1] = chr((_word >> 8) & 0xFF)")
+        else:
+            lines.append(f"        cells[i] = {store}")
+    lines.extend(["    return None", ""])
+    return lines
+
+
 def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
+    """The server's address map and accessors, or nothing for a program with no server."""
+    if ctx.modbus_server is None:
+        return []
     backed = _modbus_backed_slots(ctx)
     coil_slots = [slot for slot in backed if slot.bank in _COIL_BANKS]
     reg_slots = [slot for slot in backed if slot.bank in _WORD_BANKS]
-    coil_write_globals = sorted({_backing_global_for_slot(ctx, slot) for slot in coil_slots})
-    reg_write_globals = sorted({_backing_global_for_slot(ctx, slot) for slot in reg_slots})
-    if ctx.runstop is not None:
-        coil_write_globals = sorted({*coil_write_globals, "_mode_run"})
-    # Build sparse reverse-lookup dicts from only the backed slots.
+    # Sparse reverse-lookup dicts from only the backed slots.
     coil_map: dict[int, tuple[str, int]] = {}
     for slot in coil_slots:
         addr, _ = plc_to_modbus(slot.bank, slot.index)
@@ -223,356 +460,169 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
     for slot in reg_slots:
         if slot.data_type == DataType.TXT:
             pair_index = (slot.index - 1) // 2 * 2 + 1
-            mapping = MODBUS_MAPPINGS["TXT"]
-            reg_addr = mapping.base + (pair_index - 1) // 2
-            reg_map[reg_addr] = ("TXT", pair_index, 0)
+            reg_map[plc_to_modbus("TXT", pair_index)[0]] = ("TXT", pair_index, 0)
         else:
             addr, width = plc_to_modbus(slot.bank, slot.index)
             for i in range(width):
                 reg_map[addr + i] = (slot.bank, slot.index, i)
-
-    # Add XD/YD word mirrors when X/Y coils are backed.
-    has_x_coils = any(slot.bank == "X" for slot in coil_slots)
-    has_y_coils = any(slot.bank == "Y" for slot in coil_slots)
-    has_xy_words = (
-        has_x_coils or has_y_coils or any(slot.bank in ("XD", "YD") for slot in reg_slots)
-    )
-    if has_x_coils:
-        xd_cfg = BANKS["XD"]
-        for idx in range(xd_cfg.min_addr, xd_cfg.max_addr + 1):
-            addr, _ = plc_to_modbus("XD", idx)
-            reg_map[addr] = ("XD", idx, 0)
-    if has_y_coils:
-        yd_cfg = BANKS["YD"]
-        for idx in range(yd_cfg.min_addr, yd_cfg.max_addr + 1):
-            addr, _ = plc_to_modbus("YD", idx)
-            reg_map[addr] = ("YD", idx, 0)
-
-    lines: list[str] = [
+    xd_end, yd_end = _XD0 + _XY_WORDS, _YD0 + _XY_WORDS
+    return [
         f"_MB_COIL_MAP = {coil_map!r}",
-        "",
-        "def _mb_reverse_coil(addr):",
-        "    return _MB_COIL_MAP.get(int(addr))",
-        "",
         f"_MB_REG_MAP = {reg_map!r}",
+        f"_MB_COIL_SPANS = {_modbus_spans(True)!r}",
+        f"_MB_REG_SPANS = {_modbus_spans(False)!r}",
+        f"_MB_COIL_READ_ONLY = {_COIL_READ_ONLY!r}",
+        f"_MB_SC_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SC'].writable or ()))!r}",
+        f"_MB_SD_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SD'].writable or ()))!r}",
+        f"_MB_WIDE = {_WIDE_BANKS!r}",
+        # A YD register keeps what a client wrote, for Y bits no tag holds and the spare words.
+        f"_mb_yd = [0] * {_XY_WORDS}",
         "",
-        "def _mb_reverse_register(addr):",
-        "    return _MB_REG_MAP.get(int(addr))",
+        "def _mb_in(addr, spans):",
+        "    for _lo, _hi in spans:",
+        "        if addr < _lo:",
+        "            return False",
+        "        if addr <= _hi:",
+        "            return True",
+        "    return False",
+        "",
+        *_coil_read_chain(ctx, coil_slots),
+        *_coil_write_chain(ctx, coil_slots),
+        *_reg_read_chain(reg_slots),
+        *_reg_write_chain(ctx, reg_slots),
+        "def _mb_xy_start(base, word):",
+        # XD0 holds X001..X016 and XD0u X021..X036.  Register 2n is XDn and holds slot n.
+        # The odd register after each XDn is a spare word.
+        "    if word > 1 and word % 2:",
+        "        return None",
+        "    return base + word * 16",
+        "",
+        *_cell_lines(ctx),
+        # Each address is a tag's slot (the maps) or a cell of a raw array, or holds nothing.
+        "def _mb_coil_get(addr):",
+        "    _mapped = _MB_COIL_MAP.get(addr)",
+        "    if _mapped is not None:",
+        "        return _mb_read_coil_plc(_mapped[0], _mapped[1])",
+        "    _cell = _mb_coil_cell(addr)",
+        "    return None if _cell is None else bool(_cell[1][_cell[2]])",
+        "",
+        "def _mb_coil_set(addr, val):",
+        "    _mapped = _MB_COIL_MAP.get(addr)",
+        "    if _mapped is not None:",
+        "        _mb_write_coil_plc(_mapped[0], _mapped[1], val)",
+        "        return",
+        "    _cell = _mb_coil_cell(addr)",
+        "    if _cell is not None:",
+        "        _cell[1][_cell[2]] = bool(val)",
+        "",
+        "def _mb_reg_get(addr):",
+        "    _mapped = _MB_REG_MAP.get(addr)",
+        "    if _mapped is not None:",
+        "        return _mb_read_reg_plc(_mapped[0], _mapped[1], _mapped[2])",
+        "    _cell = _mb_reg_cell(addr)",
+        "    return None if _cell is None else _mb_cell_word(_cell[0], _cell[1], _cell[2], _cell[3])",
+        "",
+        "def _mb_xy_word(base, word, held):",
+        "    _start = _mb_xy_start(base, word)",
+        "    if _start is None:",
+        "        return held",
+        "    for _bit in range(16):",
+        "        _value = _mb_coil_get(_start + _bit)",
+        "        if _value is not None:",
+        "            if _value:",
+        "                held |= 1 << _bit",
+        "            else:",
+        "                held &= ~(1 << _bit)",
+        "    return held",
+        "",
+        "def _mb_read_coil(addr):",
+        "    _value = _mb_coil_get(addr)",
+        "    if _value is None:",
+        # A CLICK reads 0 where nothing is stored, and refuses an address outside its banks.
+        "        return False if _mb_in(addr, _MB_COIL_SPANS) else None",
+        "    return _value",
+        "",
+        "def _mb_coil_ok(addr):",
+        "    _mapped = _MB_COIL_MAP.get(addr) or _mb_coil_cell(addr)",
+        "    if _mapped is None or _mapped[0] in _MB_COIL_READ_ONLY:",
+        "        return False",
+        '    return _mapped[0] != "SC" or _mapped[1] in _MB_SC_WRITABLE',
+        "",
+        "def _mb_write_coils(start, values):",
+        # A CLICK refuses the whole request if it refuses one coil, so each is checked first.
+        "    for _offset in range(len(values)):",
+        "        if not _mb_coil_ok(start + _offset):",
+        "            return False",
+        "    for _offset in range(len(values)):",
+        "        _mb_coil_set(start + _offset, values[_offset])",
+        "    return True",
+        "",
+        "def _mb_read_reg(addr):",
+        f"    if {_XD0} <= addr < {xd_end}:",
+        f"        return _mb_xy_word(0, addr - {_XD0}, 0)",
+        f"    if {_YD0} <= addr < {yd_end}:",
+        f"        return _mb_xy_word({_Y0}, addr - {_YD0}, _mb_yd[addr - {_YD0}])",
+        # A cell can hold what no register can (a Dint on a DS slot). The server refuses
+        # that read, and the program keeps running.
+        "    try:",
+        "        _word = _mb_reg_get(addr)",
+        "    except Exception:",
+        "        return None",
+        "    if _word is None:",
+        "        return 0 if _mb_in(addr, _MB_REG_SPANS) else None",
+        "    return _word",
+        "",
+        "def _mb_reg_ok(addr):",
+        f"    if {_YD0} <= addr < {yd_end}:",
+        "        return True",
+        "    _mapped = _MB_REG_MAP.get(addr) or _mb_reg_cell(addr)",
+        "    if _mapped is None:",
+        "        return False",
+        '    if _mapped[0] == "SD" and _mapped[1] not in _MB_SD_WRITABLE:',
+        "        return False",
+        # A write to half of a Dint or Real keeps the other half.  A cell holding what no
+        # register can (a Dint past 32 bits) has no other half to keep.  Reading the cell
+        # first finds that, so a multi-write refuses it before storing anything.
+        "    if _mapped[0] in _MB_WIDE:",
+        "        try:",
+        "            _mb_reg_get(addr)",
+        "        except Exception:",
+        "            return False",
+        "    return True",
+        "",
+        "def _mb_write_regs(start, values):",
+        "    for _offset in range(len(values)):",
+        "        if not _mb_reg_ok(start + _offset):",
+        "            return False",
+        "    for _offset in range(len(values)):",
+        "        _addr = start + _offset",
+        "        _word = int(values[_offset]) & 0xFFFF",
+        f"        if {_YD0} <= _addr < {yd_end}:",
+        f"            _mb_yd[_addr - {_YD0}] = _word",
+        f"            _start = _mb_xy_start({_Y0}, _addr - {_YD0})",
+        "            for _bit in range(16 if _start is not None else 0):",
+        "                if _mb_coil_get(_start + _bit) is not None:",
+        "                    _mb_coil_set(_start + _bit, (_word >> _bit) & 1)",
+        "            continue",
+        "        _mapped = _MB_REG_MAP.get(_addr)",
+        # _mb_reg_ok already read each cell that a store reads, so no store raises here.
+        # The try only keeps an unexpected error from stopping the scan.
+        "        try:",
+        "            if _mapped is not None:",
+        "                _mb_write_reg_plc(_mapped[0], _mapped[1], _mapped[2], _word)",
+        "            else:",
+        "                _cell = _mb_reg_cell(_addr)",
+        "                _mb_cell_store(_cell[0], _cell[1], _cell[2], _cell[3], _word)",
+        "        except Exception:",
+        "            return False",
+        "    return True",
         "",
     ]
-    if has_xy_words:
-        lines.extend(
-            [
-                "def _mb_xy_word_start(word_index):",
-                "    _idx = int(word_index)",
-                "    if _idx < 0 or _idx > 16:",
-                "        return None",
-                f"    return {_word_start_expr('word_index')}",
-                "",
-            ]
-        )
-    lines.extend(
-        [
-            "def _mb_read_coil_plc(bank, index):",
-        ]
-    )
-    if coil_slots:
-        for slot in coil_slots:
-            if slot.source == "system" and slot.logical_name == system.sys.mode_run.name:
-                if ctx.runstop is not None:
-                    lines.extend(
-                        [
-                            f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                            "        return bool(_mode_run)",
-                        ]
-                    )
-                else:
-                    lines.extend(
-                        [
-                            f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                            f"        return bool({slot.symbol})",
-                        ]
-                    )
-                continue
-            lines.extend(
-                [
-                    f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                    f"        return bool({slot.symbol})",
-                ]
-            )
-    lines.extend(
-        [
-            "    return False",
-            "",
-            "def _mb_write_coil_plc(bank, index, val):",
-        ]
-    )
-    if coil_write_globals:
-        lines.append(f"    global {', '.join(coil_write_globals)}")
-    lines.extend(
-        [
-            "    _value = bool(val)",
-        ]
-    )
-    for slot in coil_slots:
-        if slot.source == "system" and slot.logical_name == system.sys.cmd_mode_stop.name:
-            lines.extend(
-                [
-                    f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                ]
-            )
-            if ctx.runstop is not None:
-                lines.extend(
-                    [
-                        "        if _value:",
-                        "            _mode_run = False",
-                    ]
-                )
-            if slot.symbol != "":
-                lines.append(f"        {slot.symbol} = _value")
-            lines.append("        return True")
-            continue
-        if slot.read_only:
-            lines.extend(
-                [
-                    f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                    "        return True",
-                ]
-            )
-            continue
-        lines.extend(
-            [
-                f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                f"        {slot.symbol} = _value",
-                "        return True",
-            ]
-        )
-    lines.extend(
-        [
-            '    if bank in ("Y", "C"):',
-            "        return True",
-            '    if bank == "SC":',
-            f"        return index in {sorted(MODBUS_MAPPINGS['SC'].writable or [])!r}",
-            "    return False",
-            "",
-        ]
-    )
-    if has_xy_words:
-        lines.extend(
-            [
-                "def _mb_read_mirrored_word(bank, word_index):",
-                "    _start = _mb_xy_word_start(word_index)",
-                "    if _start is None:",
-                "        return 0",
-                "    _word = 0",
-                "    for _bit_index in range(16):",
-                "        if _mb_read_coil_plc(bank, _start + _bit_index):",
-                "            _word |= (1 << _bit_index)",
-                "    return _word",
-                "",
-                "def _mb_write_mirrored_word(word_index, value):",
-                "    _start = _mb_xy_word_start(word_index)",
-                "    if _start is None:",
-                "        return False",
-                "    _word = int(value) & 0xFFFF",
-                "    for _bit_index in range(16):",
-                '        _mb_write_coil_plc("Y", _start + _bit_index, bool((_word >> _bit_index) & 0x1))',
-                "    return True",
-                "",
-            ]
-        )
-    lines.extend(
-        [
-            "def _mb_read_reg_plc(bank, index, reg_pos):",
-        ]
-    )
-    if has_xy_words:
-        lines.extend(
-            [
-                '    if bank == "XD":',
-                '        return _mb_read_mirrored_word("X", index)',
-                '    if bank == "YD":',
-                '        return _mb_read_mirrored_word("Y", index)',
-            ]
-        )
-    for slot in reg_slots:
-        if slot.data_type == DataType.INT:
-            pack_expr = f"struct.unpack('<H', struct.pack('<h', int({slot.symbol})))[0]"
-            read_lines = [pack_expr]
-        elif slot.data_type == DataType.HEX:
-            read_lines = [f"(int({slot.symbol}) & 0xFFFF)"]
-        elif slot.data_type == DataType.INT2:
-            read_lines = [
-                f"struct.unpack('<HH', struct.pack('<i', int({slot.symbol})))[int(reg_pos)]"
-            ]
-        elif slot.data_type == DataType.FLOAT:
-            read_lines = [
-                f"struct.unpack('<HH', struct.pack('<f', float({slot.symbol})))[int(reg_pos)]"
-            ]
-        elif slot.data_type == DataType.TXT:
-            pair_index = (slot.index - 1) // 2 * 2 + 1
-            # Skip even slots whose odd pair is already in reg_slots (avoids
-            # duplicate accessor entries — the odd slot's entry handles both).
-            if slot.index != pair_index and any(
-                item.bank == slot.bank and item.index == pair_index for item in reg_slots
-            ):
-                continue
-            low_slot = next(
-                (item for item in reg_slots if item.bank == slot.bank and item.index == pair_index),
-                None,
-            )
-            high_slot = next(
-                (
-                    item
-                    for item in reg_slots
-                    if item.bank == slot.bank and item.index == pair_index + 1
-                ),
-                None,
-            )
-            if low_slot is not None:
-                low_expr = f"ord({low_slot.symbol}) if {low_slot.symbol} else 0"
-            else:
-                low_expr = "0"
-            if high_slot is not None:
-                high_expr = f"ord({high_slot.symbol}) if {high_slot.symbol} else 0"
-            else:
-                high_expr = "0"
-            read_lines = [f"(({low_expr}) & 0xFF) | ((({high_expr}) & 0xFF) << 8)"]
-        else:
-            continue
-        lines.extend(
-            [
-                f'    if bank == "{slot.bank}" and index == {pair_index if slot.data_type == DataType.TXT else slot.index}:',
-                f"        return {read_lines[0]}",
-            ]
-        )
-    lines.extend(
-        [
-            "    return 0",
-            "",
-            "def _mb_write_reg_plc(bank, index, reg_pos, value):",
-        ]
-    )
-    if reg_write_globals:
-        lines.append(f"    global {', '.join(reg_write_globals)}")
-    lines.append("    _word = int(value) & 0xFFFF")
-    if has_xy_words:
-        lines.extend(
-            [
-                '    if bank == "XD":',
-                "        return False",
-                '    if bank == "YD":',
-                "        return _mb_write_mirrored_word(index, _word)",
-            ]
-        )
-    for slot in reg_slots:
-        if slot.read_only and slot.logical_name != system.sys.cmd_mode_stop.name:
-            lines.extend(
-                [
-                    f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                    "        return True",
-                ]
-            )
-            continue
-        if slot.data_type == DataType.INT:
-            store_expr = "struct.unpack('<h', struct.pack('<H', _word))[0]"
-        elif slot.data_type == DataType.HEX:
-            store_expr = "(_word & 0xFFFF)"
-        elif slot.data_type == DataType.INT2:
-            store_expr = (
-                f"struct.unpack('<i', struct.pack('<HH', _word if int(reg_pos) == 0 else "
-                f"struct.unpack('<HH', struct.pack('<i', int({slot.symbol})))[0], "
-                f"_word if int(reg_pos) == 1 else struct.unpack('<HH', struct.pack('<i', int({slot.symbol})))[1]))[0]"
-            )
-        elif slot.data_type == DataType.FLOAT:
-            store_expr = (
-                f"struct.unpack('<f', struct.pack('<HH', _word if int(reg_pos) == 0 else "
-                f"struct.unpack('<HH', struct.pack('<f', float({slot.symbol})))[0], "
-                f"_word if int(reg_pos) == 1 else struct.unpack('<HH', struct.pack('<f', float({slot.symbol})))[1]))[0]"
-            )
-        elif slot.data_type == DataType.TXT:
-            pair_index = (slot.index - 1) // 2 * 2 + 1
-            if slot.index != pair_index and any(
-                item.bank == slot.bank and item.index == pair_index for item in reg_slots
-            ):
-                continue
-            low_slot = next(
-                (item for item in reg_slots if item.bank == slot.bank and item.index == pair_index),
-                None,
-            )
-            high_slot = next(
-                (
-                    item
-                    for item in reg_slots
-                    if item.bank == slot.bank and item.index == pair_index + 1
-                ),
-                None,
-            )
-            lines.extend(
-                [
-                    f'    if bank == "{slot.bank}" and index == {pair_index}:',
-                ]
-            )
-            if low_slot is not None:
-                lines.append(f"        {low_slot.symbol} = chr(_word & 0xFF)")
-            if high_slot is not None:
-                lines.append(f"        {high_slot.symbol} = chr((_word >> 8) & 0xFF)")
-            lines.append("        return True")
-            continue
-        else:
-            continue
-        lines.extend(
-            [
-                f'    if bank == "{slot.bank}" and index == {slot.index}:',
-                f"        {slot.symbol} = {store_expr}",
-                "        return True",
-            ]
-        )
-    lines.extend(
-        [
-            '    if bank in ("DS", "DD", "DH", "DF", "TXT", "TD", "CTD"):',
-            "        return True",
-            '    if bank == "SD":',
-            f"        return index in {sorted(MODBUS_MAPPINGS['SD'].writable or [])!r}",
-            "    return False",
-            "",
-            "def _mb_read_coil(addr):",
-            "    _mapped = _mb_reverse_coil(int(addr))",
-            "    if _mapped is None:",
-            "        return None",
-            "    _bank, _index = _mapped",
-            "    return _mb_read_coil_plc(_bank, _index)",
-            "",
-            "def _mb_write_coil(addr, val):",
-            "    _mapped = _mb_reverse_coil(int(addr))",
-            "    if _mapped is None:",
-            "        return False",
-            "    _bank, _index = _mapped",
-            "    return _mb_write_coil_plc(_bank, _index, val)",
-            "",
-            "def _mb_read_reg(addr):",
-            "    _mapped = _mb_reverse_register(int(addr))",
-            "    if _mapped is None:",
-            "        return None",
-            "    _bank, _index, _reg_pos = _mapped",
-            "    return _mb_read_reg_plc(_bank, _index, _reg_pos)",
-            "",
-            "def _mb_write_reg(addr, val):",
-            "    _mapped = _mb_reverse_register(int(addr))",
-            "    if _mapped is None:",
-            "        return False",
-            "    _bank, _index, _reg_pos = _mapped",
-            "    return _mb_write_reg_plc(_bank, _index, _reg_pos, val)",
-            "",
-        ]
-    )
-    return lines
 
 
-def _render_modbus_protocol(ctx: CodegenContext) -> list[str]:
-    if ctx.modbus_server is None:
-        return []
-    lines = [
+def _modbus_protocol_lines() -> list[str]:
+    """``_mb_err`` and ``_mb_handle``, the same in code.py and in the runtime."""
+    return [
         "def _mb_err(tid, uid, fc, code):",
         "    return struct.pack('>HHHBB', int(tid) & 0xFFFF, 0, 3, int(uid) & 0xFF, (int(fc) & 0x7F) | 0x80) + bytes([int(code) & 0xFF])",
         "",
@@ -629,14 +679,14 @@ def _render_modbus_protocol(ctx: CodegenContext) -> list[str]:
         "        addr, raw = struct.unpack('>HH', bytes(data[8:12]))",
         "        if raw not in (0x0000, 0xFF00):",
         "            return _mb_err(tid, uid, fc, 3)",
-        "        if not _mb_write_coil(addr, raw == 0xFF00):",
+        "        if not _mb_write_coils(addr, [raw == 0xFF00]):",
         "            return _mb_err(tid, uid, fc, 2)",
         "        return bytes(data[:12])",
         "    if fc == 6:",
         "        if pdu_end < 12:",
         "            return _mb_err(tid, uid, fc, 3)",
         "        addr, raw = struct.unpack('>HH', bytes(data[8:12]))",
-        "        if not _mb_write_reg(addr, raw):",
+        "        if not _mb_write_regs(addr, [raw]):",
         "            return _mb_err(tid, uid, fc, 2)",
         "        return bytes(data[:12])",
         "    if fc == 15:",
@@ -648,10 +698,9 @@ def _render_modbus_protocol(ctx: CodegenContext) -> list[str]:
         "        if pdu_end < 13 + byte_count:",
         "            return _mb_err(tid, uid, fc, 3)",
         "        payload = data[13:13 + byte_count]",
-        "        for _offset in range(count):",
-        "            _bit = bool((payload[_offset // 8] >> (_offset % 8)) & 0x1)",
-        "            if not _mb_write_coil(start + _offset, _bit):",
-        "                return _mb_err(tid, uid, fc, 2)",
+        "        bits = [bool((payload[_offset // 8] >> (_offset % 8)) & 0x1) for _offset in range(count)]",
+        "        if not _mb_write_coils(start, bits):",
+        "            return _mb_err(tid, uid, fc, 2)",
         "        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)",
         "    if fc == 16:",
         "        if pdu_end < 13:",
@@ -661,16 +710,19 @@ def _render_modbus_protocol(ctx: CodegenContext) -> list[str]:
         "            return _mb_err(tid, uid, fc, 3)",
         "        if pdu_end < 13 + byte_count:",
         "            return _mb_err(tid, uid, fc, 3)",
-        "        for _offset in range(count):",
-        "            _base = 13 + (_offset * 2)",
-        "            _reg = struct.unpack('>H', bytes(data[_base:_base + 2]))[0]",
-        "            if not _mb_write_reg(start + _offset, _reg):",
-        "                return _mb_err(tid, uid, fc, 2)",
+        "        regs = struct.unpack('>' + 'H' * count, bytes(data[13:13 + byte_count]))",
+        "        if not _mb_write_regs(start, regs):",
+        "            return _mb_err(tid, uid, fc, 2)",
         "        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)",
         "    return _mb_err(tid, uid, fc, 1)",
         "",
     ]
-    return lines
+
+
+def _render_modbus_protocol(ctx: CodegenContext) -> list[str]:
+    if ctx.modbus_server is None:
+        return []
+    return _modbus_protocol_lines()
 
 
 def _render_modbus_server_init(ctx: CodegenContext) -> list[str]:
@@ -1038,7 +1090,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
         "    if bank == 'DF':",
         "        _regs = []",
         "        for _value in values:",
-        "            _regs.extend(struct.unpack('<HH', struct.pack('<f', float(_value))))",
+        f"            _regs.extend({_df_words('_value')})",
         "        return _regs",
         "    if bank in ('DH', 'XD', 'YD'):",
         "        return [int(_value) & 0xFFFF for _value in values]",
@@ -1079,8 +1131,8 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
         "        for _reg in regs:",
         "            _lo = int(_reg) & 0xFF",
         "            _hi = (int(_reg) >> 8) & 0xFF",
-        "            _values.append('' if _lo == 0 else chr(_lo))",
-        "            _values.append('' if _hi == 0 else chr(_hi))",
+        "            _values.append(chr(_lo))",
+        "            _values.append(chr(_hi))",
         "        _offset = 0 if (int(plc_start) % 2) == 1 else 1",
         "        return _values[_offset:_offset + int(logical_count)]",
         "    return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]",
@@ -1102,7 +1154,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
                 "        elif _tt == 'REAL':",
                 "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
                 "            _bf = '>f' if word_order == 'high_low' else '<f'",
-                "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+                "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
                 "        elif _tt == 'INT':",
                 "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
                 "        else:",
@@ -1169,7 +1221,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
         [
             "",
             "def service_modbus_client():",
-            "    _now = time.monotonic()",
+            "    _now = time.monotonic_ns() // 1000000",
             "    for _job in _mb_client_jobs:",
             "        if _job['state'] in (_MB_CLIENT_DONE, _MB_CLIENT_ERROR):",
             "            _mb_client_reset_runtime(_job)",
@@ -1182,7 +1234,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "            _job['request'] = _job['build'](_job['tid'])",
             "            _job['sent_offset'] = 0",
             "            _job['rx_len'] = 0",
-            "            _job['deadline'] = _now + float(_job['timeout_s'])",
+            "            _job['deadline'] = _now + round(float(_job['timeout_s']) * 1000)",
             "            _job['set_status'](True, False, False, 0)",
             "            _job['state'] = _MB_CLIENT_CONNECTING",
             "            continue",
@@ -1198,7 +1250,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "            try:",
             "                _job['socket'].connect((_job['host'], int(_job['port'])))",
             "            except (OSError, RuntimeError):",
-            "                if _now >= float(_job['deadline']):",
+            "                if _now >= _job['deadline']:",
             "                    _job['set_status'](False, False, True, 0)",
             "                    _job['state'] = _MB_CLIENT_ERROR",
             "                    _mb_client_close(_job)",
@@ -1220,7 +1272,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "            _job['sent_offset'] = int(_job['sent_offset']) + _sent",
             "            if int(_job['sent_offset']) >= len(_job['request']):",
             "                _job['state'] = _MB_CLIENT_WAITING",
-            "            elif _now >= float(_job['deadline']):",
+            "            elif _now >= _job['deadline']:",
             "                _job['set_status'](False, False, True, 0)",
             "                _job['state'] = _MB_CLIENT_ERROR",
             "                _mb_client_close(_job)",
@@ -1245,7 +1297,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "                    _job['state'] = _MB_CLIENT_ERROR",
             "                _mb_client_close(_job)",
             "                continue",
-            "        if _now >= float(_job['deadline']):",
+            "        if _now >= _job['deadline']:",
             "            _job['set_status'](False, False, True, 0)",
             "            _job['state'] = _MB_CLIENT_ERROR",
             "            _mb_client_close(_job)",

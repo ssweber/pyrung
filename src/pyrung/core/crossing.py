@@ -68,7 +68,12 @@ class Affine:
 
 @dataclass(frozen=True)
 class Aggregate:
-    """Writer produces and stores an aggregate (sum/count) over a block range."""
+    """Writer produces and stores an aggregate over a block range.
+
+    ``operation`` is ``"sum"`` or one of the range-aggregate kinds
+    (``"max"``, ``"min"``, ``"median"``, ``"mean"``).  Only ``"sum"`` is
+    additive; consumers that decompose a sum element-wise must gate on it.
+    """
 
     tags: tuple[str, ...]
     operation: str = "sum"
@@ -119,23 +124,34 @@ def evaluate_forward(
             return UNKNOWN
         return _apply_store(raw, claim.storage)
     if isinstance(claim, Aggregate):
-        if claim.operation != "sum" or any(tag not in values for tag in claim.tags):
+        # Deferred: the expression layer is a peer, kept out of this module's imports.
+        from pyrung.core.expression import RANGE_AGGREGATE_KINDS, aggregate_values, sum_values
+
+        if any(tag not in values for tag in claim.tags):
             return UNKNOWN
         try:
-            raw = sum(values[tag] for tag in claim.tags)
-        except (OverflowError, TypeError, ValueError):
+            if claim.operation == "sum":
+                raw = sum_values(values[tag] for tag in claim.tags)
+            elif claim.operation in RANGE_AGGREGATE_KINDS:
+                raw = aggregate_values(claim.operation, [values[tag] for tag in claim.tags])
+            else:
+                return UNKNOWN
+        except (OverflowError, TypeError, ValueError, ZeroDivisionError):
             return UNKNOWN
         return _apply_store(raw, claim.storage)
     return UNKNOWN
 
 
-def invert_affine_candidate(claim: Affine, output: Any) -> Any:
+def invert_affine_candidate(
+    claim: Affine, output: Any, source: StoreTransform | None = None
+) -> Any:
     """Return one source candidate that may make *claim* produce *output*.
 
     This is a proposal helper, not a complete reverse preimage: clamp rails and
     modular stores can have many producers.  Callers must verify the candidate
     in the interpreted fork. :data:`UNKNOWN` means no useful representative
-    could be derived.
+    could be derived.  *source* is the source tag's own store, when the caller
+    knows it: of a modular store's producers, prefer one the source can hold.
     """
 
     scale = claim.scale
@@ -170,6 +186,10 @@ def invert_affine_candidate(claim: Affine, output: Any) -> Any:
         candidate = _apply_store(candidate, storage)
         if candidate is UNKNOWN:
             return UNKNOWN
+        if source is not None and source.lower is not None and source.upper is not None:
+            if not source.lower <= candidate <= source.upper:
+                held = source.lower + (candidate - source.lower) % reduced_modulus
+                candidate = held if held <= source.upper else candidate
         produced = evaluate_forward(claim, {claim.source: candidate})
         return candidate if produced is not UNKNOWN and produced == output else UNKNOWN
 
@@ -184,10 +204,6 @@ def invert_affine_candidate(claim: Affine, output: Any) -> Any:
             candidate = (output - offset) // scale
     produced = evaluate_forward(claim, {claim.source: candidate})
     return candidate if produced is not UNKNOWN and produced == output else UNKNOWN
-
-
-#: Comparison operators a :class:`Cmp` may carry.
-CMP_OPS = frozenset({"==", "!=", "<", "<=", ">", ">="})
 
 
 # --- the constraint algebra ---------------------------------------------------
@@ -224,7 +240,7 @@ class Cmp(Constraint):
     """
 
     tag: str
-    op: str
+    op: str  # one of == != < <= > >=
     bound: Any
     bound_is_tag: bool = False
 

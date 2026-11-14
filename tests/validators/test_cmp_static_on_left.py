@@ -23,7 +23,7 @@ the meaningful case is a static *tag* on the left, which ``Tag.__lt__`` preserve
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, Timer, calc, copy, on_delay
+from pyrung.core import Bool, Int, Program, Rung, Timer, copy, math, on_delay
 from pyrung.core.validation.report import validate
 
 
@@ -63,7 +63,7 @@ def _calc_right_program() -> Program:
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
         with Rung(out):
-            calc(a + b, calc_out)
+            math(a + b, calc_out)
         with Rung(lo_limit < calc_out):
             copy(1, out)
     return prog
@@ -164,11 +164,11 @@ def _correct_forms_program() -> Program:
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
         with Rung(out):
-            calc(a + b, calc_out)
+            math(a + b, calc_out)
         with Rung(out):
-            calc(a + 1, calc_a)
+            math(a + 1, calc_a)
         with Rung(out):
-            calc(b + 1, calc_b)
+            math(b + 1, calc_b)
         with Rung():
             on_delay(tmr, 5, "sec")
         # dynamic (calc) on left, literal right — correct
@@ -192,7 +192,7 @@ def _external_sensor_program() -> Program:
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
         with Rung(out):
-            calc(setpoint - 5, band)
+            math(setpoint - 5, band)
         with Rung(dryer_temp < band):
             copy(1, out)
     return prog

@@ -372,19 +372,19 @@ def _mask_gate_program(transition: str):
     enable prerequisite.  *transition* picks the writer shape:
 
     - ``"identity"`` — ``copy(StateRequested, StateCurrent)`` (the old trigger);
-    - ``"affine"`` — ``calc(StateRequested + 100, StateCurrent)`` (states stored
+    - ``"affine"`` — ``math(StateRequested + 100, StateCurrent)`` (states stored
       at a +100 offset; the fire-time pin is the inverted affine map);
     - ``"affine_copy"`` — ``copy(StateRequested + 100, StateCurrent)`` (an
       expression-source *copy*, semantically identical to ``"affine"`` but routed
       through the copy crossing's affine inversion rather than calc's);
     - ``"decode"`` — ``copy(10, StateCurrent)`` gated ``StateRequested == 10``
       (the pin is the guard's own equality conjunct);
-    - ``"nonaffine"`` — ``calc(StateRequested * StateRequested, StateCurrent)``
+    - ``"nonaffine"`` — ``math(StateRequested * StateRequested, StateCurrent)``
       (a non-affine decode the crossing can't invert; the fire-time pin
       ``StateRequested == 10`` is solved by enumerate-and-evaluate over
       StateRequested's complete finite domain — target ``StateCurrent == 100``).
     """
-    from pyrung import Bool, Int, Program, calc, copy, out, rung
+    from pyrung import Bool, Int, Program, copy, math, out, rung
     from pyrung.click import ClickBlocks
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -432,17 +432,17 @@ def _mask_gate_program(transition: str):
         with rung(ModeCmd != 0):
             copy(ModeCmd, ModeCurrent)
         with rung():
-            calc(200 + ModeCurrent, ModeCfgIdx)
+            math(200 + ModeCurrent, ModeCfgIdx)
         with rung():
             copy(ds[ModeCfgIdx], DisabledStates)
         with rung(CmdHold, StateCurrent == execute):
             copy(10, StateRequested)
         with rung():
-            calc(300 + StateRequested, StateMaskIdx)
+            math(300 + StateRequested, StateMaskIdx)
         with rung():
             copy(ds[StateMaskIdx], StateMask)
         with rung():
-            calc(StateMask & DisabledStates, StateMaskResult)
+            math(StateMask & DisabledStates, StateMaskResult)
         with rung():
             copy(0, StateEnableYes)
         with rung(StateMaskResult == 0):
@@ -453,7 +453,7 @@ def _mask_gate_program(transition: str):
                 copy(0, StateRequested)
         elif transition == "affine":
             with rung(StateRequested != 0, StateEnableYes == 1):
-                calc(StateRequested + 100, StateCurrent)
+                math(StateRequested + 100, StateCurrent)
                 copy(0, StateRequested)
         elif transition == "affine_copy":
             with rung(StateRequested != 0, StateEnableYes == 1):
@@ -465,7 +465,7 @@ def _mask_gate_program(transition: str):
                 copy(0, StateRequested)
         elif transition == "nonaffine":
             with rung(StateRequested != 0, StateEnableYes == 1):
-                calc(StateRequested * StateRequested, StateCurrent)
+                math(StateRequested * StateRequested, StateCurrent)
                 copy(0, StateRequested)
         with rung(StateCurrent == holding):
             out(Output)
@@ -516,7 +516,7 @@ def test_mini_identity_transition_surfaces_mode():
 
 
 def test_affine_calc_transition_surfaces_mode():
-    """A non-identity transition ``calc(StateRequested + 100, StateCurrent)``.
+    """A non-identity transition ``math(StateRequested + 100, StateCurrent)``.
 
     Semantically identical enablement structure to the identity copy — the gate
     register is recomputed from StateRequested each scan — but the old trigger
@@ -557,7 +557,7 @@ def test_decode_transition_surfaces_mode():
 
 
 def test_nonaffine_calc_transition_surfaces_mode():
-    """A non-affine decode ``calc(StateRequested * StateRequested, StateCurrent)``.
+    """A non-affine decode ``math(StateRequested * StateRequested, StateCurrent)``.
 
     The crossing can't invert a self-multiply, so its reverse receipt punts and
     no algebraic pin exists.  The fire-time pin ``StateRequested == 10`` is
@@ -582,18 +582,18 @@ def test_no_mode_surfaced_when_mini_mode_already_enables(transition):
 # --- solve_calc_preimage: forced-vs-varying projection, punts, unsat ----------
 #
 # The value-side sibling of solve_table_predicate: invert a NON-affine
-# ``calc(expr, Dest)`` by enumerate-and-evaluate over the sources' complete
+# ``math(expr, Dest)`` by enumerate-and-evaluate over the sources' complete
 # finite domains, pinning only the FORCED source values (those shared by every
 # satisfying assignment).  These exercise the solver in isolation.
 
 
 def _preimage(expr_fn, target, *, domains=None, extra=None, dest_default=0):
-    """Solve the preimage of ``calc(expr_fn(A,B,C,D,K,Live), Dest) == target``.
+    """Solve the preimage of ``math(expr_fn(A,B,C,D,K,Live), Dest) == target``.
 
     ``expr_fn`` receives the operand tags; ``extra(ns)`` may add side rungs (e.g.
     a writer that makes ``Live`` a genuinely-live, un-domained operand).
     """
-    from pyrung import Int, Program, calc, copy, rung
+    from pyrung import Int, Program, copy, math, rung
 
     A = Int("A")
     B = Int("B")
@@ -606,7 +606,7 @@ def _preimage(expr_fn, target, *, domains=None, extra=None, dest_default=0):
 
     with Program(strict=False) as prog:
         with rung():
-            calc(expr_fn(A, B, C, D, K, Live), Dest)
+            math(expr_fn(A, B, C, D, K, Live), Dest)
         if extra is not None:
             extra(ns)
 
@@ -714,14 +714,14 @@ def test_preimage_unsatisfiable_returns_empty_not_none():
 
 def test_preimage_punts_on_multi_writer_target():
     """A ``Dest`` written by more than one rung is not a sole-calc decode ⇒ None."""
-    from pyrung import Bool, Int, Program, calc, copy, rung
+    from pyrung import Bool, Int, Program, copy, math, rung
 
     A = Int("A")
     Sel = Bool("Sel", external=True)
     Dest = Int("Dest")
     with Program(strict=False) as prog:
         with rung():
-            calc(A * A, Dest)
+            math(A * A, Dest)
         with rung(Sel):
             copy(0, Dest)
     plc = PLC(prog)
@@ -737,12 +737,12 @@ def test_preimage_punts_on_multi_writer_target():
 def _pointer_chase_program(depth):
     """``copy(ds[p0], Dest)`` behind a chain of *depth* calc-defined pointers.
 
-    ``p{i} = calc(p{i+1} + 1)`` for ``i < depth-1`` and ``p{depth-1} =
-    calc(seed + 1)`` with ``seed`` never written, so the chase hops
+    ``p{i} = math(p{i+1} + 1)`` for ``i < depth-1`` and ``p{depth-1} =
+    math(seed + 1)`` with ``seed`` never written, so the chase hops
     ``p0 → p1 → … → p{depth-1}`` — reaching the deepest pointer takes ``depth-1``
     single-calc-source hops.  The chase supports three hops.
     """
-    from pyrung import Int, Program, calc, copy, rung
+    from pyrung import Int, Program, copy, math, rung
     from pyrung.core.memory_block import Block
     from pyrung.core.tag import TagType
 
@@ -756,9 +756,9 @@ def _pointer_chase_program(depth):
             copy(ds[ptrs[0]], Dest)
         for i in range(depth - 1):
             with rung():
-                calc(ptrs[i + 1] + 1, ptrs[i])
+                math(ptrs[i + 1] + 1, ptrs[i])
         with rung():
-            calc(seed + 1, ptrs[-1])
+            math(seed + 1, ptrs[-1])
     return prog
 
 

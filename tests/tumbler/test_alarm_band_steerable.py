@@ -13,15 +13,15 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.steerable import compute_steerable
+from tests.tumbler.bench import tumbler_plc
 
 pytestmark = pytest.mark.tumbler
 
 
 def test_alarm_status_band_not_steerable(tumbler_logic) -> None:
-    plc = PLC(tumbler_logic, dt=0.010)
+    plc = tumbler_plc(tumbler_logic, dt=0.010)
     pdg = build_program_graph(tumbler_logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, tumbler_logic)
 

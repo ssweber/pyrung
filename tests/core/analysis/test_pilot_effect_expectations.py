@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 from types import SimpleNamespace
 
-from pyrung import PLC, Bool, Int, Program, calc, call, copy, latch, out, reset, rung, subroutine
+from pyrung import PLC, Bool, Int, Program, call, copy, latch, math, out, reset, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.candidate_read import _Candidate
@@ -1091,7 +1091,7 @@ def test_unrelated_long_kernel_stream_projects_only_relevant_write_scans() -> No
         with rung(command):
             latch(effect)
         with rung():
-            calc(unrelated + 1, unrelated)
+            math(unrelated + 1, unrelated)
     plc = PLC(program)
     plc.patch({command.name: True})
     plc.step()
@@ -1431,7 +1431,7 @@ def test_incomplete_historical_retention_falls_back_to_full_stream() -> None:
         with rung():
             copy(1, effect)
         with rung():
-            calc(unrelated + 1, unrelated)
+            math(unrelated + 1, unrelated)
     plc = PLC(program)
     for _ in range(4):
         plc.step()
@@ -2088,7 +2088,7 @@ def test_alarm_reset_action_scan_records_exact_watchdog_overwrite() -> None:
     ] == [("Watchdog_Done", True)]
 
 
-def test_expectation_bearing_coast_keeps_cyclefold_and_gap_is_unknown() -> None:
+def test_expectation_bearing_coast_stays_in_the_loop_and_gap_is_unknown() -> None:
     enabled = Bool("FoldedEffectEnabled", external=True)
     effect = Int("FoldedEffect")
     with Program() as program:
@@ -2096,7 +2096,7 @@ def test_expectation_bearing_coast_keeps_cyclefold_and_gap_is_unknown() -> None:
             copy(1, effect)
     plc = PLC(program)
     expectation = EffectExpectation((_terminal_obligation(program, effect.name, 1),))
-    session = CoastSession(plc, kind="expectation-fold")
+    session = CoastSession(plc, kind="expectation-stretch")
 
     receipt = session.seek(
         [value_trigger(plc, "never", TARGET, effect.name, 1)],
@@ -2110,8 +2110,8 @@ def test_expectation_bearing_coast_keeps_cyclefold_and_gap_is_unknown() -> None:
         coast_receipt=receipt,
     )
 
-    assert receipt.macro_folds >= 1
-    assert receipt.skipped_scans > 0
+    assert receipt.stretches >= 1
+    assert receipt.stretched_scans > 0
     assert [item.disposition for item in observations] == ["UNKNOWN"]
 
 
@@ -2279,7 +2279,7 @@ def test_coast_landing_writer_is_retained_without_claiming_gap_coverage() -> Non
         with rung(counter == 3):
             copy(1, effect)
         with rung():
-            calc(counter + 1, counter)
+            math(counter + 1, counter)
     plc = PLC(program)
     expectation = EffectExpectation((_terminal_obligation(program, effect.name, 1),))
     session = CoastSession(plc, kind="expectation-landing")
@@ -2312,7 +2312,7 @@ def test_channel_abort_receipt_remains_authoritative_with_unknown_effect() -> No
         (),
         20,
         kernel_scans=5,
-        macro_folds=1,
+        stretches=1,
     )
     trial = SimpleNamespace(
         snap={"State": 91},
@@ -2385,3 +2385,51 @@ def test_execution_and_recording_retain_only_detached_effect_observations() -> N
                 _walk(getattr(value, declared.name))
 
     _walk(payload["effect_observations"])
+
+
+def test_same_rung_consumer_sees_a_write_only_in_contacts_read_after_it() -> None:
+    """A branch before the producer read its contacts before the write; a
+    branch after it reads the write.  Stepping agrees."""
+    from pyrung.core import Rung, branch
+    from pyrung.core.analysis.pilot.effects import (
+        _contacts_read_after_write,
+        expectation_from_selected_path,
+    )
+
+    A, B, Q, T, U = (Bool(name) for name in ("A", "B", "Q", "T", "U"))
+    with Program(strict=False) as prog:
+        with Rung(A):
+            with branch(Q):
+                out(T)
+            with branch(B):
+                out(Q)
+            with branch(Q):
+                out(U)
+    pdg = build_program_graph(prog)
+    producer = next(i for i, node in enumerate(pdg.rung_nodes) if "Q" in node.writes)
+    snapshot = {"A": True, "B": True, "Q": False, "T": False, "U": False}
+
+    def due(tag: str) -> bool:
+        consumer = next(i for i, node in enumerate(pdg.rung_nodes) if tag in node.writes)
+        path = (
+            EffectPathStep(consumer, tag, True),
+            EffectPathStep(producer, "Q", True, (("A", True), ("B", True))),
+        )
+        expectation = expectation_from_selected_path(
+            path, pdg, prog, boundary=None, snapshot=snapshot
+        )
+        return expectation is not None
+
+    assert not due("T")
+    assert due("U")
+    plc = PLC(prog)
+    plc.patch({"A": True, "B": True})
+    plc.step()
+    assert plc.current_state.tags["T"] is False
+    assert plc.current_state.tags["U"] is True
+
+    # The rung's own contacts are read before any of its writes.
+    top = prog.rungs[0]
+    assert _contacts_read_after_write(top, top._branches[1], (), "Q") == [False]
+    assert _contacts_read_after_write(top, top._branches[1], (2,), "Q") == [False, True]
+    assert _contacts_read_after_write(top, top._branches[1], (0,), "Q") == [False, False]

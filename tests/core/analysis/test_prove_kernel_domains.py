@@ -16,10 +16,10 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
-    calc,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
 )
@@ -32,6 +32,7 @@ from pyrung.core.analysis.prove import (
     _has_data_feedback,
     _pilot_sweep_domains,
     always,
+    never,
     reachable_states,
 )
 
@@ -95,36 +96,37 @@ class TestKernelDomainDiscovery:
         assert isinstance(result, Proven)
 
     def test_calc_identity_inherits_domain(self):
-        """calc(Step, StoredStep) identity-style assignment becomes tractable."""
+        """math(Step, StoredStep) identity-style assignment becomes tractable."""
         Step = Int("Step", external=True, choices={0: "Off", 1: "On"})
         StoredStep = Int("StoredStep")
         Active = Bool("Active")
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Step, StoredStep)
+                math(Step, StoredStep)
             with Rung(StoredStep == 1):
                 out(Active)
 
         result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
-    def test_large_comparison_only_calc_tag_is_absorbed(self):
-        """Large written comparison-only tags use vector keying instead of exact state."""
+    def test_large_comparison_only_calc_tag_is_tracked(self):
+        """The search keys a large written comparison-only tag exactly (no
+        absorption) and still decides both outcomes of its comparison."""
         source = Int("Source", external=True, min=0, max=300)
         stored = Int("Stored")
         alarm = Bool("Alarm")
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(source, stored)
+                math(source, stored)
             with Rung(stored > 150):
                 out(alarm)
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "Stored" not in stateful
+        assert "Stored" in stateful
 
         states = reachable_states(logic, project=["Alarm"], depth_budget=2)
         assert not isinstance(states, Intractable)
@@ -168,7 +170,7 @@ class TestKernelDomainDiscovery:
         assert "H2" not in comparison.comparison_tags
 
     def test_self_feeding_calc_is_excluded_from_comparison_only(self):
-        """calc(X + N, X) reads X via _reads — _has_forbidden_data_read excludes it."""
+        """math(X + N, X) reads X via _reads — _has_forbidden_data_read excludes it."""
         from pyrung.core.analysis.pdg import build_program_graph
         from pyrung.core.analysis.prove.absorb import (
             _find_comparison_absorptions,
@@ -184,9 +186,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(boost):
-                calc(counter + 2, counter)
+                math(counter + 2, counter)
             with Rung(~boost):
-                calc(counter + 1, counter)
+                math(counter + 1, counter)
             with Rung(counter > 50):
                 out(flag)
 
@@ -215,9 +217,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(boost):
-                calc(counter + 3, counter)
+                math(counter + 3, counter)
             with Rung(~boost):
-                calc(counter + 1, counter)
+                math(counter + 1, counter)
             with Rung(reset_btn):
                 copy(0, counter)
             with Rung(counter > 50):
@@ -245,9 +247,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(step % 2, odd)
+                math(step % 2, odd)
             with Rung(odd != 1):
-                calc(step + 1, step)
+                math(step + 1, step)
             with Rung(step != stored):
                 copy(step, stored)
             with Rung(step == 3):
@@ -255,7 +257,7 @@ class TestKernelDomainDiscovery:
 
         graph = build_program_graph(logic)
         all_exprs = _collect_all_exprs(logic, graph)
-        domains, _blockers = _collect_structural_domain_info(
+        domains, _blockers, _carry = _collect_structural_domain_info(
             logic,
             graph,
             all_exprs,
@@ -306,9 +308,9 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(boost):
-                calc(counter + 2, counter)
+                math(counter + 2, counter)
             with Rung(~boost):
-                calc(counter + 1, counter)
+                math(counter + 1, counter)
             with Rung(counter > 20):
                 out(alarm)
 
@@ -339,7 +341,7 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(source / 10, stored)
+                math(source / 10, stored)
             with Rung(limit > stored):
                 out(alarm)
 
@@ -350,6 +352,8 @@ class TestKernelDomainDiscovery:
             graph,
             all_exprs,
             project=("Stored",),
+            abstract_timers=True,
+            _skip_absorptions=True,
         )
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
@@ -388,8 +392,9 @@ class TestKernelDomainDiscovery:
         result = always(logic, lambda s: True)
         assert isinstance(result, Proven)
 
-    def test_direct_self_feed_threshold_only_progress_becomes_tractable(self):
-        """Monotone self-feed is tractable when the only consumer is a threshold."""
+    def test_direct_self_feed_against_an_unbounded_threshold_is_intractable(self):
+        """Monotone self-feed compared with an HMI threshold: nothing absorbs
+        the progress any more, so both need a domain and the search names them."""
         from pyrung.core.analysis.pdg import build_program_graph
 
         trigger = Bool("Trigger", external=True)
@@ -399,7 +404,7 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(count + 1, count)
+                math(count + 1, count)
             with Rung(count > threshold):
                 out(flag)
 
@@ -407,9 +412,9 @@ class TestKernelDomainDiscovery:
         assert _has_data_feedback("Count", graph)
 
         states = reachable_states(logic, project=["Flag"], depth_budget=5)
-        assert not isinstance(states, Intractable)
-        assert frozenset({("Flag", False)}) in states
-        assert frozenset({("Flag", True)}) in states
+        assert isinstance(states, Intractable)
+        assert states.kind == "search"
+        assert {"Count", "Threshold"} <= set(states.tags)
 
     def test_transitive_feedback_remains_intractable(self):
         """Transitive feedback A→B→A remains intractable."""
@@ -423,7 +428,7 @@ class TestKernelDomainDiscovery:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(a + 1, b)
+                math(a + 1, b)
             with Rung(trigger):
                 copy(b, a)
             with Rung(a > threshold):
@@ -496,7 +501,7 @@ class TestKernelDomainDiscovery:
         with Program(strict=False) as logic:
             for i, inp in enumerate(inputs):
                 with Rung():
-                    calc(inp + i, dest)
+                    math(inp + i, dest)
             with Rung(dest > 0):
                 out(flag)
 
@@ -525,7 +530,7 @@ class TestKernelDomainDiscovery:
             with Rung(Stored > Other):
                 out(Flag)
 
-        result = always(logic, lambda s: True)
+        result = never(logic, Flag, ~Flag)
         assert isinstance(result, Proven)
 
     def test_copy_with_reset_from_bounded_source(self):
@@ -584,7 +589,7 @@ class TestValidateDeclaredBounds:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Src + 0, Dest)
+                math(Src + 0, Dest)
             with Rung(Dest > 0):
                 out(Flag)
 
@@ -599,7 +604,7 @@ class TestValidateDeclaredBounds:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Src + 0, Dest)
+                math(Src + 0, Dest)
             with Rung(Dest > 5):
                 out(Flag)
 
@@ -629,9 +634,9 @@ class TestValidateDeclaredBounds:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(Src + 0, Dest)
+                math(Src + 0, Dest)
             with Rung(Dest > 3):
                 out(Flag)
 
-        result = always(logic, lambda s: True)
+        result = never(logic, Flag, ~Flag)
         assert isinstance(result, Proven)

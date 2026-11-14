@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import operator
 import re
 from typing import Any
 
@@ -22,14 +24,25 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
 )
 from pyrung.core.expression import (
+    ABS_FLOORS,
+    ABS_OF_TYPE,
+    CALC_OPS,
+    DOMAIN_LIMITED_MATH_FUNCS,
+    DOUBLE_EXACT_LIMIT,
     BinaryExpr,
+    CalcBinaryExpr,
+    CalcUnaryExpr,
     Expression,
     LiteralExpr,
     MathFuncExpr,
+    RandIntExpr,
+    RangeAggregateExpr,
     ShiftFuncExpr,
     SumExpr,
     TagExpr,
     UnaryExpr,
+    _op_pow,
+    may_be_float,
 )
 from pyrung.core.memory_block import (
     BlockRange,
@@ -37,7 +50,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 
 
@@ -81,11 +94,13 @@ def _block_name_expr(
 
 
 def _range_item_read_expr(
-    range_value: BlockRange | IndirectBlockRange,
+    range_value: Any,
     symbol: str,
     key_expr: str,
     ctx: CodegenContext,
 ) -> str:
+    if isinstance(range_value, ImmediateRef):
+        range_value = range_value.value
     if isinstance(range_value, BlockRange):
         layout = ctx.static_range_layout(range_value)
         if not layout.uses_backing_storage:
@@ -107,8 +122,16 @@ def _compile_expression_impl(
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    strict: bool = False,
 ) -> str:
-    """Return a Python expression string with explicit parentheses."""
+    """Return a Python expression string with explicit parentheses.
+
+    An operation that can fail is 0 and the rest runs, as the core's: it goes
+    through ``_permissive_op``, ``_permissive_math`` or a helper of its own.
+    *strict* is for calc, where the operation also appends its flag's code to
+    the calc's ``_calc_flags`` (:data:`CALC_FLAGS`, core ``CALC_FAULTS``),
+    which the calc sets after the formula; nothing in the formula raises.
+    """
     if isinstance(expr, TagExpr):
         return _snapshot_tag_symbol(
             expr.tag,
@@ -125,16 +148,80 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         right = _compile_expression_impl(
             expr.right,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
+        calc_op = expr.op is CALC_OPS.get(_PYTHON_OPS.get(expr.symbol))
+        flags = CALC_FLAGS if strict else None
+        if (not strict or not isinstance(expr, CalcBinaryExpr)) and (
+            _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
+        ):
+            # Outside calc; in one, a randint() bound (calc_form keeps its ops).
+            symbol = {"%": "mod", "**": "pow0"}[expr.symbol] if calc_op else expr.symbol
+            return _permissive_op(symbol, left, right, ctx, flags)
         if expr.symbol in _BITWISE_SYMBOLS:
-            return f"(int({left}) {expr.symbol} int({right}))"
-        return f"({left} {expr.symbol} {right})"
+            if _binary_may_raise(expr) or (strict and _may_be_double(left, right)):
+                # A calc's: an Inf or NaN operand, or a negative shift count, is
+                # 0 with SC43.  A calc's integer step past 2 ** 53 is a double
+                # (_dbl), which may be Inf or NaN too (lsh(1, 2000)); an operand
+                # with none is an integer of at most 2 ** 53, so int() is safe.
+                compiled = _permissive_op(expr.symbol, left, right, ctx, flags)
+                return _calc_step(expr, compiled, ctx, strict)
+            left_int = _bit_int_expr(expr.left, left, ctx)
+            right_int = _bit_int_expr(expr.right, right, ctx)
+            if expr.symbol in ("<<", ">>"):
+                right_int = _shift_count_expr(expr.right, right_int, ctx)
+            return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
+        if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
+            # A calc's ** (core _op_pow_calc): 0 ^ 0 is 0 with no flag, 0 to a
+            # negative power is +Inf, and a complex result is 0 with SC46.
+            ctx.mark_helper("_math_func")
+            ctx.mark_helper("_pow")
+            ctx.mark_helper("_pow_calc")
+            ctx.mark_helper("_term_fail")
+            return _calc_step(expr, f"_pow_calc({left}, {right}, {flags})", ctx, strict)
+        if expr.symbol == "**" and (
+            _may_be_float(expr.left)
+            or _may_be_float(expr.right)
+            or (strict and _may_be_double(left, right))
+        ):
+            # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
+            # raises _MathDomainError for a complex result; an integer power is
+            # exact and never overflows.  A calc's stepped double (_dbl) is a
+            # float: lsh(1, 1000) ** 2 is Inf, not an OverflowError.
+            ctx.mark_helper("_math_func")
+            ctx.mark_helper("_pow")
+            return _calc_step(expr, f"_pow({left}, {right})", ctx, strict)
+        if (
+            calc_op
+            and expr.symbol == "%"
+            and not (_non_negative(expr.left) and _positive_literal(expr.right))
+        ):
+            # A calc's MOD truncates (the dividend's sign) and a MOD by 0 is 0
+            # with no flag, as the core's _op_mod; Python's % floors.
+            ctx.mark_helper("_mod")
+            return f"_mod({left}, {right})"
+        if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
+            # A calc's division by 0 is 0 with SC40.  By a tag, the test is
+            # inline, unless the dividend appends flags of its own, which a
+            # skipped dividend would lose; else a helper reads the divisor once.
+            ctx.mark_helper("_term_fail")
+            if isinstance(expr.right, TagExpr) and not _appends_flags(left):
+                compiled = (
+                    f"(({left} {expr.symbol} {right}) if {right} else _term_fail({flags}, 40))"
+                )
+            else:
+                helper = "_calc_div" if expr.symbol == "/" else "_calc_floordiv"
+                ctx.mark_helper(helper)
+                compiled = f"{helper}({left}, {right}, {flags})"
+            return _calc_step(expr, compiled, ctx, strict)
+        return _calc_step(expr, f"({left} {expr.symbol} {right})", ctx, strict)
 
     if isinstance(expr, UnaryExpr):
         inner = _compile_expression_impl(
@@ -142,21 +229,44 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
+        flags = CALC_FLAGS if strict else None
         if expr.symbol == "abs":
-            return f"abs({inner})"
+            floor = _abs_floor(expr)
+            if floor is not None:
+                # abs() of an Int or Dint tag in a calc (calc_form): the bottom of
+                # the range is 0, with SC43.
+                ctx.mark_helper("_abs_int")
+                ctx.mark_helper("_term_fail")
+                return f"_abs_int({inner}, {floor}, {flags})"
+            return _calc_step(expr, f"abs({inner})", ctx, strict)
         if expr.symbol == "~":
-            return f"(~int({inner}))"
-        return f"({expr.symbol}({inner}))"
+            if _may_be_float(expr.operand) or (strict and _may_be_double(inner)):
+                compiled = _permissive_op("~", inner, "0", ctx, flags)
+                return _calc_step(expr, compiled, ctx, strict) if strict else compiled
+            return _calc_step(expr, f"(~{_bit_int_expr(expr.operand, inner, ctx)})", ctx, strict)
+        return _calc_step(expr, f"({expr.symbol}({inner}))", ctx, strict)
 
     if isinstance(expr, MathFuncExpr):
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
-        return (
-            f"math.{expr.name}("
-            f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
-            ")"
+        # _math_func passes a non-finite operand through, as MathFuncExpr.evaluate
+        # does; _permissive_math also gives 0 for a domain error (SC46 in a
+        # calc) and for an integer too large for a float (SC43).
+        operand = _compile_expression_impl(
+            expr.operand,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
         )
+        if expr.name in DOMAIN_LIMITED_MATH_FUNCS or _may_be_huge(expr.operand):
+            ctx.mark_helper("_permissive_math")
+            tail = f", {CALC_FLAGS}" if strict else ""
+            return f"_permissive_math(math.{expr.name}, {operand}{tail})"
+        ctx.mark_helper("_math_func")
+        return f"_math_func(math.{expr.name}, {operand})"
 
     if isinstance(expr, ShiftFuncExpr):
         value = _compile_expression_impl(
@@ -164,26 +274,40 @@ def _compile_expression_impl(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
         count = _compile_expression_impl(
             expr.count,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
+        if (
+            _may_be_float(expr.value)
+            or _may_be_float(expr.count)
+            or (expr.name in ("lsh", "rsh") and not _non_negative_literal(expr.count))
+            or (strict and _may_be_double(value, count))
+        ):
+            compiled = _permissive_op(expr.name, value, count, ctx, CALC_FLAGS if strict else None)
+            return _calc_step(expr, compiled, ctx, strict) if strict else compiled
+        value_int = _bit_int_expr(expr.value, value, ctx)
+        count_int = _bit_int_expr(expr.count, count, ctx)
+        if expr.name in ("lsh", "rsh"):
+            count_int = _shift_count_expr(expr.count, count_int, ctx)
         if expr.name == "lsh":
-            return f"(int({value}) << int({count}))"
+            return _calc_step(expr, f"({value_int} << {count_int})", ctx, strict)
         if expr.name == "rsh":
-            return f"(int({value}) >> int({count}))"
+            return _calc_step(expr, f"({value_int} >> {count_int})", ctx, strict)
         if expr.name == "lro":
             return (
-                f"((((int({value}) & 0xFFFF) << (int({count}) % 16)) | "
-                f"((int({value}) & 0xFFFF) >> (16 - (int({count}) % 16)))) & 0xFFFF)"
+                f"(((({value_int} & 0xFFFF) << ({count_int} % 16)) | "
+                f"(({value_int} & 0xFFFF) >> (16 - ({count_int} % 16)))) & 0xFFFF)"
             )
         if expr.name == "rro":
             return (
-                f"((((int({value}) & 0xFFFF) >> (int({count}) % 16)) | "
-                f"((int({value}) & 0xFFFF) << (16 - (int({count}) % 16)))) & 0xFFFF)"
+                f"(((({value_int} & 0xFFFF) >> ({count_int} % 16)) | "
+                f"(({value_int} & 0xFFFF) << (16 - ({count_int} % 16)))) & 0xFFFF)"
             )
         raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
 
@@ -199,10 +323,364 @@ def _compile_expression_impl(
         ]
         return f"({' + '.join(terms)})"
 
+    if isinstance(expr, RandIntExpr):
+        # As RandIntExpr.evaluate: a bare Real tag as a bound reads 0, and equal
+        # bounds, or one holding Inf or NaN, make the site 0.  In a calc the site
+        # appends its flag to the calc's _calc_flags (CALC_FLAGS), as any failing
+        # operation does: only the site is zeroed.
+        if expr.real_bounds:
+            return "0"
+        flags = CALC_FLAGS if strict else "None"
+        if expr.equal_bounds:
+            if not strict:
+                return "0"
+            ctx.mark_helper("_term_fail")
+            return f"_term_fail({flags}, 46)"
+        draw = ""
+        if ctx.kernel_runtime:
+            # The runner's input drain wrote this scan's draw into the site tag.
+            draw = _snapshot_tag_symbol(
+                expr.tag,
+                ctx,
+                scalar_snapshots=scalar_snapshots,
+                block_snapshots=block_snapshots,
+            )
+            if not expr.reads_bounds:
+                return draw
+        lo = _compile_expression_impl(
+            expr.lo,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
+        )
+        hi = _compile_expression_impl(
+            expr.hi,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+            strict=strict,
+        )
+        if expr.reads_bounds:
+            ctx.mark_helper("_bit_int")
+            ctx.mark_helper("_term_fail")
+            if ctx.kernel_runtime:
+                ctx.mark_helper("_rand_term")
+                return f"_rand_term({flags}, {draw}, {lo}, {hi})"
+            ctx.uses_random = True
+            ctx.mark_helper("_rand_draw")
+            return f"_rand_draw({flags}, {lo}, {hi})"
+        ctx.uses_random = True
+        lo, hi = _bit_int_expr(expr.lo, lo, ctx), _bit_int_expr(expr.hi, hi, ctx)
+        return f"random.randint(min({lo}, {hi}), max({lo}, {hi}))"
+
+    if isinstance(expr, RangeAggregateExpr):
+        return _compile_range_aggregate(
+            expr,
+            [
+                _snapshot_tag_symbol(
+                    tag,
+                    ctx,
+                    scalar_snapshots=scalar_snapshots,
+                    block_snapshots=block_snapshots,
+                )
+                for tag in expr.block_range
+            ],
+        )
+
     raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
 
 
+def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
+    """Inline ``max``/``min``/``median``/``mean`` over a static range.
+
+    Mirrors :func:`pyrung.core.expression.aggregate_values` operation for
+    operation (same member order, same left-to-right sum), so the interpreted
+    and compiled backends store identical values. CircuitPython has no
+    ``statistics`` module, so median and mean are spelled out.
+    """
+    if not terms:
+        return "0"
+    count = len(terms)
+    members = f"({', '.join(terms)},)"
+    if expr.kind == "max":
+        return f"max({members})"
+    if expr.kind == "min":
+        return f"min({members})"
+    if expr.kind == "mean":
+        return f"(({' + '.join(terms)}) / {count})"
+    if expr.kind == "median":
+        mid = count // 2
+        if count % 2:
+            return f"sorted({members})[{mid}]"
+        return (
+            f"((lambda _s: (lambda _t: (_t // 2 if _t >= 0 else -(-_t // 2)) "
+            f"if type(_t) is int else _t / 2)(_s[{mid - 1}] + _s[{mid}]))(sorted({members})))"
+        )
+    raise TypeError(f"Unsupported range aggregate kind: {expr.kind!r}")
+
+
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
+
+#: The op each symbol runs outside ``calc``; ``calc_form`` swaps it for its CALC_OPS one.
+_PYTHON_OPS = {"%": operator.mod, "**": _op_pow}
+
+
+def _non_zero_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value != 0
+
+
+def _positive_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value > 0
+
+
+def _non_negative_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and expr.value >= 0
+
+
+def _non_negative_int_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value >= 0
+
+
+def _positive_int_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value > 0
+
+
+#: The list a calc's failing operations append their flags' codes to (``_term_fail``).
+CALC_FLAGS = "_calc_flags"
+
+_CALC_FLAGS_RE = re.compile(rf"\b{CALC_FLAGS}\b")
+
+
+def _appends_flags(compiled: str) -> bool:
+    """Whether the compiled calc code *compiled* can append to :data:`CALC_FLAGS`."""
+    return _CALC_FLAGS_RE.search(compiled) is not None
+
+
+_DOUBLE_RE = re.compile(r"\b_dbl\(")
+
+
+def _may_be_double(*compiled: str) -> bool:
+    """Whether a compiled calc operand can hold a double from an integer step.
+
+    A calc's integer step past 2 ** 53 is a double (:func:`_calc_step`, ``_dbl``),
+    and so may be +/-Inf or NaN (``lsh(1, 2000)``, Inf - Inf), where
+    :func:`_may_be_float` sees an integer.  ``int()`` of one raises, so a bitwise,
+    shift or address use of such an operand needs its guard, and a float's ``**``
+    raises past the float range, so a power of one needs ``_pow``.  An integer
+    operand without ``_dbl`` is at most 2 ** 53 in size.
+    """
+    return any(_DOUBLE_RE.search(code) is not None for code in compiled)
+
+
+#: Tag types whose value is never negative.
+_UNSIGNED_TYPES = frozenset({TagType.BOOL, TagType.WORD})
+
+
+def _non_negative(expr: Any) -> bool:
+    """Whether *expr* is a non-negative constant or a Bool or Word tag."""
+    if isinstance(expr, LiteralExpr):
+        return expr.value >= 0
+    return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
+
+
+def _abs_floor(expr: UnaryExpr) -> int | None:
+    """The range bottom an ``abs()`` that calc_form swapped (ABS_OF_TYPE) refuses."""
+    for type_name, op in ABS_OF_TYPE.items():
+        if expr.op is op:
+            return ABS_FLOORS[type_name]
+    return None
+
+
+#: The largest magnitude of each integer tag type.
+_TYPE_BOUNDS = {
+    TagType.BOOL: 1,
+    TagType.INT: 1 << 15,
+    TagType.DINT: 1 << 31,
+    TagType.WORD: 0xFFFF,
+    TagType.REAL: 0,  # a Real holds a float (an int default is stored as one)
+}
+
+
+def _int_bound(expr: Any) -> float:
+    """A bound on the magnitude of *expr* when it is an integer (inf if unknown).
+
+    A step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl`` in a
+    calc, as the core's ``_calc_step``; a float result needs no bound (0).
+    """
+    if isinstance(expr, bool):
+        return 1
+    if isinstance(expr, int):
+        return abs(expr)
+    if isinstance(expr, float):
+        return 0
+    if isinstance(expr, LiteralExpr):
+        return _int_bound(expr.value)
+    if isinstance(expr, TagExpr):
+        return _TYPE_BOUNDS.get(expr.tag.type, math.inf)
+    if isinstance(expr, BinaryExpr):
+        left, right = _int_bound(expr.left), _int_bound(expr.right)
+        symbol = expr.symbol
+        if symbol in ("+", "-"):
+            return left + right
+        if symbol == "*":
+            # A 0 bound is a 0 or a float: so is the product (and inf * 0 is NaN).
+            return 0 if left == 0 or right == 0 else left * right
+        if symbol == "/":
+            return 0
+        if symbol in ("//", "%", ">>"):
+            return left
+        if symbol in ("&", "|", "^"):
+            return 2 * max(left, right) + 1
+        if symbol == "<<" and _small_count_literal(expr.right):
+            return left * (1 << expr.right.value)
+        if symbol == "**" and _small_count_literal(expr.right):
+            return left**expr.right.value
+        return math.inf
+    if isinstance(expr, UnaryExpr):
+        return _int_bound(expr.operand) + (1 if expr.symbol == "~" else 0)
+    if isinstance(expr, MathFuncExpr):
+        return 0
+    if isinstance(expr, ShiftFuncExpr):
+        if expr.name in ("lro", "rro"):
+            return 0xFFFF
+        if expr.name == "rsh":
+            return _int_bound(expr.value)
+        if _small_count_literal(expr.count):
+            return _int_bound(expr.value) * (1 << expr.count.value)
+        return math.inf
+    if isinstance(expr, RandIntExpr):
+        return 1 << 31
+    if isinstance(expr, SumExpr):
+        return sum(_TYPE_BOUNDS.get(tag.type, math.inf) for tag in expr.block_range)
+    if isinstance(expr, RangeAggregateExpr):
+        return max((_TYPE_BOUNDS.get(tag.type, math.inf) for tag in expr.block_range), default=0)
+    return math.inf
+
+
+def _small_count_literal(expr: Any) -> bool:
+    return _non_negative_int_literal(expr) and expr.value <= 64
+
+
+def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
+    """*compiled*, a step of a calc, as a double past 2 ** 53 (core ``_calc_step``).
+
+    As the core decides it: a ``CalcBinaryExpr`` or ``CalcUnaryExpr`` (what
+    ``calc_form`` builds), or a shift in a calc.
+    """
+    if isinstance(expr, (BinaryExpr, UnaryExpr)):
+        stepped = isinstance(expr, (CalcBinaryExpr, CalcUnaryExpr))
+    else:
+        stepped = strict
+    if not stepped or _int_bound(expr) <= DOUBLE_EXACT_LIMIT:
+        return compiled
+    ctx.mark_helper("_dbl")
+    return f"_dbl({compiled})"
+
+
+def _binary_may_raise(expr: BinaryExpr) -> bool:
+    """Whether *expr* can raise on a math error (and so, outside calc, give 0).
+
+    A division by a non-zero constant, a power with a non-negative integer
+    constant exponent (positive in a calc), a bitwise operation on integers and a shift by a
+    non-negative constant cannot; ``+``, ``-`` and ``*`` never do (a float
+    overflow is Inf).  Each of them can raise when an operand is an integer too
+    large for a float (:func:`_may_be_huge`), which the caller checks.
+    """
+    symbol = expr.symbol
+    if symbol in ("/", "//", "%"):
+        return not _non_zero_literal(expr.right)
+    if symbol == "**":
+        # A negative exponent of 0 divides by zero (in a calc, 0 ** 0 is an
+        # error too); a fractional one of a negative base is complex.
+        if expr.op is CALC_OPS[_op_pow]:
+            return not _positive_int_literal(expr.right)
+        return not _non_negative_int_literal(expr.right)
+    if symbol in ("&", "|", "^"):
+        return _may_be_float(expr.left) or _may_be_float(expr.right)
+    if symbol in ("<<", ">>"):
+        return (
+            _may_be_float(expr.left)
+            or _may_be_float(expr.right)
+            or not _non_negative_literal(expr.right)
+        )
+    return False
+
+
+def _may_be_huge(expr: Any) -> bool:
+    """Whether *expr* may be an integer too large for a float (past 2 ** 1024).
+
+    A ``**`` makes one from tags (``2 ** E``, ``BD ** 40``), and so can a left
+    shift by more than a literal 64.  Such an integer is exact, but an operation
+    that turns it into a float (``* 0.5``, ``/``, ``sin``) raises
+    ``OverflowError``.  ``+``, ``-``, ``*`` of tags alone stay far below it.
+    """
+    if isinstance(expr, BinaryExpr):
+        if expr.symbol == "**":
+            return True
+        if expr.symbol == "<<" and not _small_shift_literal(expr.right):
+            return True
+        return _may_be_huge(expr.left) or _may_be_huge(expr.right)
+    if isinstance(expr, ShiftFuncExpr):
+        if expr.name == "lsh" and not _small_shift_literal(expr.count):
+            return True
+        return _may_be_huge(expr.value) or _may_be_huge(expr.count)
+    if isinstance(expr, UnaryExpr):
+        return _may_be_huge(expr.operand)
+    return False
+
+
+def _small_shift_literal(expr: Any) -> bool:
+    return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value <= 64
+
+
+def _shift_count_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
+    """A shift count; a negative one raises OverflowError (core ``shift_count``)."""
+    if _non_negative_literal(expr):
+        return compiled
+    ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_shift_count")
+    return f"_shift_count({compiled})"
+
+
+def _permissive_op(
+    op: str, left: str, right: str, ctx: CodegenContext, flags: str | None = None
+) -> str:
+    """``_permissive_op(op, left, right)``: the operation, or 0 for a math error.
+
+    The core's expressions give 0 where an operation raises (``_permissive`` in
+    pyrung.core.expression).  In a calc (*flags*, :data:`CALC_FLAGS`) the
+    error's flag is appended too.
+    """
+    ctx.mark_helper("_bit_int")
+    ctx.mark_helper("_shift_count")
+    ctx.mark_helper("_math_func")
+    ctx.mark_helper("_mod")
+    ctx.mark_helper("_pow")
+    ctx.mark_helper("_pow_calc")
+    ctx.mark_helper("_term_fail")
+    ctx.mark_helper("_permissive_op")
+    tail = f", {flags}" if flags else ""
+    return f"_permissive_op({op!r}, {left}, {right}{tail})"
+
+
+_may_be_float = may_be_float
+
+
+def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
+    """``int(compiled)`` for a bitwise or shift operand.
+
+    An operand that may be NaN goes through ``_bit_int``, which raises
+    ``OverflowError`` for NaN as ``int()`` does for Inf (the core's
+    ``bit_operand``), not the ``ValueError`` of ``int(nan)``.  An operation whose
+    operand may be Inf or NaN is guarded by ``_permissive_op`` or ``_rand_*``,
+    which make it 0, with the out-of-range flag in a calc.
+    """
+    if _may_be_float(expr):
+        ctx.mark_helper("_bit_int")
+        return f"_bit_int({compiled})"
+    return f"int({compiled})"
+
 
 _ALLOWED_MATH_FUNCS = frozenset(
     {
@@ -311,12 +789,28 @@ def _parse_sequential_tag_name(name: str) -> tuple[str, int, int] | None:
 def _compute_sequential_reloads(
     target_name: str,
     ctx: CodegenContext,
+    following_names: list[str] | None = None,
 ) -> list[tuple[int, str]] | None:
+    """The referenced scalars a store of several elements from *target_name* writes.
+
+    *following_names* are the elements after the target in its block
+    (``element_names_after``); a tag in no block counts on by name.
+    """
+    if following_names is not None:
+        reloads = [
+            (offset, ctx.symbol_for_tag(ctx.referenced_tags[name]))
+            for offset, name in enumerate(following_names, start=1)
+            if name in ctx.referenced_tags
+            and name != target_name
+            and name not in ctx.tag_block_addresses
+            and name not in ctx.dict_backed_tag_names
+        ]
+        return reloads or None
     seq = _parse_sequential_tag_name(target_name)
     if seq is None:
         return None
     prefix, base, width = seq
-    reloads: list[tuple[int, str]] = []
+    reloads = []
     for tag_name in list(ctx.referenced_tags):
         if (
             tag_name == target_name
@@ -343,6 +837,75 @@ def _compute_sequential_reloads(
     return sorted(reloads) if reloads else None
 
 
+def _counted_names(following_names: list[str]) -> tuple[str, int, int] | None:
+    """The ``prefix``, base and width most of *following_names* count on from.
+
+    Offset 1 is ``f"{prefix}{base + 1:0{width}d}"``.  Tried from the first, middle
+    and last name, as one of them may be a named slot or a mapped tag.
+    """
+    best: tuple[int, tuple[str, int, int]] | None = None
+    for offset in sorted({1, (len(following_names) + 1) // 2, len(following_names)}):
+        seq = _parse_sequential_tag_name(following_names[offset - 1])
+        if seq is None:
+            continue
+        prefix, number, digits = seq
+        suffix = following_names[offset - 1][len(prefix) :]
+        width = digits if suffix.startswith("0") and digits > 1 else 1
+        counted = (prefix, number - offset, width)
+        misses = sum(
+            name != f"{prefix}{counted[1] + i:0{width}d}"
+            for i, name in enumerate(following_names, start=1)
+        )
+        if best is None or misses < best[0]:
+            best = (misses, counted)
+    return None if best is None else best[1]
+
+
+def _counted_name_expr(prefix: str, base: int, width: int) -> str:
+    """Kernel source for the name ``f"{prefix}{base + _seq_i:0{width}d}"``.
+
+    The prefix is a user's block name, so it goes in as a literal (``repr``), never
+    into an f-string, where a brace, a backslash or a quote would change it.
+    """
+    number = f'f"{{{base} + _seq_i}}"' if width <= 1 else f'f"{{{base} + _seq_i:0{width}d}}"'
+    return f"{prefix!r} + {number}"
+
+
+def _kernel_following_store_lines(values_var: str, following_names: list[str]) -> list[str]:
+    """The kernel's stores of the elements after a static target, by their names.
+
+    Most of them count on by address; the rest (a named slot, a tag mapped onto
+    the address) are listed.
+    """
+    if not following_names:
+        return []
+    stop = f"min(len({values_var}), {len(following_names) + 1})"
+    counted = _counted_names(following_names)
+    if counted is None:
+        return [
+            f"    _seq_names = {tuple(following_names)!r}",
+            f"    for _seq_i in range(1, {stop}):",
+            f"        tags[_seq_names[_seq_i - 1]] = {values_var}[_seq_i]",
+        ]
+    prefix, base, width = counted
+    renamed = {
+        offset: name
+        for offset, name in enumerate(following_names, start=1)
+        if name != f"{prefix}{base + offset:0{width}d}"
+    }
+    name_expr = _counted_name_expr(prefix, base, width)
+    if not renamed:
+        return [
+            f"    for _seq_i in range(1, {stop}):",
+            f"        tags[{name_expr}] = {values_var}[_seq_i]",
+        ]
+    return [
+        f"    _seq_names = {renamed!r}",
+        f"    for _seq_i in range(1, {stop}):",
+        f"        tags[_seq_names.get(_seq_i) or {name_expr}] = {values_var}[_seq_i]",
+    ]
+
+
 def _copy_converter_write_lines(
     *,
     values_var: str,
@@ -352,21 +915,47 @@ def _copy_converter_write_lines(
     fault_body: list[str],
     target_name: str | None = None,
     sequential_reloads: list[tuple[int, str]] | None = None,
+    kernel: bool = False,
+    fit: int | None = None,
+    following_names: list[str] | None = None,
 ) -> list[str]:
+    """Write *values_var*'s elements from the target on, as many as its block holds.
+
+    *fit* is how many elements a static target's block holds from it
+    (``block_room``), ``None`` for a tag in no block, and *following_names* the
+    elements after a scalar one (``element_names_after``); an indexed target's
+    block array ends where its block does.  The rest are dropped, with no flag.
+    """
     if target_kind == "scalar":
+        first = [
+            f"if len({values_var}) >= 1:",
+            f"    {target_symbol} = {values_var}[0]",
+        ]
+        reloads = sequential_reloads or []
+        if following_names is not None:
+            # A target in a block: the elements after it are the block's own.
+            lines = list(first)
+            if kernel:
+                # The kernel keeps every tag in ``tags``; generated board code has
+                # no such dict and stores only the registers it references (below).
+                lines += _kernel_following_store_lines(values_var, following_names)
+            for offset, symbol in reloads:
+                if offset <= len(following_names):
+                    lines.append(f"    if len({values_var}) > {offset}:")
+                    lines.append(f"        {symbol} = {values_var}[{offset}]")
+            return lines
         seq = _parse_sequential_tag_name(target_name) if target_name else None
         if seq is not None:
             prefix, base, width = seq
-            lines = [
-                f"if len({values_var}) >= 1:",
-                f"    {target_symbol} = {values_var}[0]",
-                f"    for _seq_i in range(1, len({values_var})):",
-                f'        tags[f"{prefix}{{{base} + _seq_i:0{width}d}}"] = {values_var}[_seq_i]',
-            ]
-            if sequential_reloads:
-                for offset, symbol in sequential_reloads:
-                    lines.append(f"    if len({values_var}) > {offset}:")
-                    lines.append(f"        {symbol} = {values_var}[{offset}]")
+            lines = list(first)
+            if kernel:
+                lines += [
+                    f"    for _seq_i in range(1, len({values_var})):",
+                    f"        tags[{_counted_name_expr(prefix, base, width)}] = {values_var}[_seq_i]",
+                ]
+            for offset, symbol in reloads:
+                lines.append(f"    if len({values_var}) > {offset}:")
+                lines.append(f"        {symbol} = {values_var}[{offset}]")
             return lines
         return [
             f"if len({values_var}) > 1:",
@@ -375,32 +964,30 @@ def _copy_converter_write_lines(
             f"    {target_symbol} = {values_var}[0]",
         ]
 
-    if target_kind == "blockless_dynamic":
-        if target_start_var is None:
-            raise RuntimeError("blockless dynamic target is missing start index")
-        return [
-            f"_copy_count = len({values_var})",
-            "if _copy_count == 0:",
-            "    pass",
-            f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
-            *_indent_body(fault_body, 4),
-            "else:",
-            f"    for _copy_offset, _copy_value in enumerate({values_var}):",
-            f"        tags[{target_symbol}[{target_start_var} + _copy_offset]] = _copy_value",
-        ]
-
     if target_start_var is None:
-        raise RuntimeError("copy modifier block target is missing start index")
+        raise RuntimeError(f"copy modifier {target_kind} target is missing start index")
+    count = f"min(len({values_var}), len({target_symbol}) - {target_start_var})"
+    if fit is not None:
+        count = f"min(len({values_var}), {fit}, len({target_symbol}) - {target_start_var})"
+    store = (
+        f"tags[{target_symbol}[{target_start_var} + _copy_offset]]"
+        if target_kind == "blockless_dynamic"
+        else f"{target_symbol}[{target_start_var} + _copy_offset]"
+    )
     return [
-        f"_copy_count = len({values_var})",
-        "if _copy_count == 0:",
-        "    pass",
-        f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
-        *_indent_body(fault_body, 4),
-        "else:",
-        f"    for _copy_offset, _copy_value in enumerate({values_var}):",
-        f"        {target_symbol}[{target_start_var} + _copy_offset] = _copy_value",
+        f"for _copy_offset in range({count}):",
+        f"    {store} = {values_var}[_copy_offset]",
     ]
+
+
+def _fault_follow_lines(instr: Any, ctx: CodegenContext) -> list[str]:
+    """Clear *instr*'s followed flags as it starts, before it reads: a raise in its body sets them.
+
+    A source naming one of the flags reads it off.  The lines run each scan the
+    instruction runs.  For a Math they also run on a scan its rung is false or
+    its one-shot does not fire (``guard_oneshot_execution``).
+    """
+    return [f"{ctx.symbol_if_referenced(name)} = False" for name in instr._fault_follows]
 
 
 def _compile_guarded_instruction(
@@ -413,7 +1000,13 @@ def _compile_guarded_instruction(
     disabled_body: list[str] | None = None,
 ) -> list[str]:
     sp = " " * indent
+    inner = " " * (indent + 4)
     lines: list[str] = []
+    settle = _fault_follow_lines(instr, ctx)
+    # A Math clears its flags on every path, so the lines go ahead of the
+    # one-shot test.  Any other instruction clears them only as its body runs.
+    idle = settle if instr._fault_settles_idle else []
+    run_settle = [] if instr._fault_settles_idle else settle
     if ctx.used_indirect_blocks:
         enabled_body = [
             "try:",
@@ -421,6 +1014,7 @@ def _compile_guarded_instruction(
             "except IndexError:",
             "    pass",
         ]
+    disabled = [*idle, *(disabled_body or ())]
     enabled_literal = _bool_literal(enabled_expr)
     if getattr(instr, "oneshot", False):
         key = f"_oneshot:{ctx.state_key_for(instr)}"
@@ -428,41 +1022,45 @@ def _compile_guarded_instruction(
             ctx.mark_function_global(ctx._current_function, "_mem")
         if enabled_literal is False:
             lines.append(f"{sp}_mem[{key!r}] = False")
-            if disabled_body:
-                lines.extend(f"{sp}{line}" for line in disabled_body)
+            lines.extend(f"{sp}{line}" for line in disabled)
             return lines
+        fire = [
+            f"if not bool(_mem.get({key!r}, False)):",
+            *[f"    {line}" for line in (*run_settle, *enabled_body)],
+            f"    _mem[{key!r}] = True",
+        ]
         if enabled_literal is True:
-            lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
-            lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
-            lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+            lines.extend(f"{sp}{line}" for line in (*idle, *fire))
             return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
-        if disabled_body:
-            lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
-        lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
-        lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+        lines.append(f"{inner}_mem[{key!r}] = False")
+        lines.extend(f"{inner}{line}" for line in disabled)
+        if idle:
+            lines.append(f"{sp}else:")
+            lines.extend(f"{inner}{line}" for line in (*idle, *fire))
+        else:
+            lines.append(f"{sp}el{fire[0]}")
+            lines.extend(f"{sp}{line}" for line in fire[1:])
         return lines
 
+    enabled_body = [*settle, *enabled_body]
     if enabled_literal is True:
         lines.extend(f"{sp}{line}" for line in enabled_body)
         return lines
     if enabled_literal is False:
-        if disabled_body is not None:
-            lines.extend(f"{sp}{line}" for line in disabled_body)
+        lines.extend(f"{sp}{line}" for line in disabled)
         return lines
 
     lines.append(f"{sp}if {enabled_expr}:")
-    lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
-    if disabled_body:
+    lines.extend(f"{inner}{line}" for line in enabled_body)
+    if disabled:
         lines.append(f"{sp}else:")
-        lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
+        lines.extend(f"{inner}{line}" for line in disabled)
     return lines
 
 
 def _compile_assignment_lines(
-    target: Tag | IndirectRef | IndirectExprRef,
+    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef,
     value_expr: str,
     ctx: CodegenContext,
     *,
@@ -472,7 +1070,11 @@ def _compile_assignment_lines(
     return [f"{' ' * indent}{lvalue} = {value_expr}"]
 
 
-def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
+def _compile_lvalue(
+    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef, ctx: CodegenContext
+) -> str:
+    if isinstance(target, ImmediateRef):
+        target = target.tag
     if isinstance(target, Tag):
         if ctx.blockless and (
             target.name in ctx.tag_block_addresses or target.name in ctx.dict_backed_tag_names
@@ -515,6 +1117,8 @@ def _compile_range_setup(
     stem: str,
     include_addresses: bool,
 ) -> tuple[list[str], str, str, str]:
+    if isinstance(range_value, ImmediateRef):
+        range_value = range_value.value
     if not isinstance(range_value, (BlockRange, IndirectBlockRange)):
         raise TypeError(
             f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}"
@@ -552,7 +1156,7 @@ def _compile_range_setup(
 
     binding = ctx.block_bindings[id(range_value.block)]
     symbol = "tags" if ctx.blockless else ctx.symbol_for_block(range_value.block)
-    helper = ctx.use_indirect_block(binding.block_id)
+    helper = ctx.use_window_addrs_block(binding.block_id)
     name = ctx.next_name(stem)
     start_var = f"_{name}_start"
     end_var = f"_{name}_end"
@@ -568,13 +1172,13 @@ def _compile_range_setup(
         f"if {start_var} > {end_var}:",
         '    raise ValueError("Indirect range start must be <= end")',
         f"{indices_var} = []",
-        f"for {addr_var} in range({start_var}, {end_var} + 1):",
     ]
     if include_addresses:
         lines.append(f"{addrs_var} = []")
     else:
         addrs_var = "[]"
-    resolved_expr = f"{helper}(int({addr_var}))"
+    lines.append(f"for {addr_var} in {helper}({start_var}, {end_var}):")
+    resolved_expr = f"{addr_var} - {binding.start}"
     if ctx.blockless:
         name_expr = _block_name_expr(binding.block_id, resolved_expr, ctx)
         lines.append(f"    {idx_var} = {name_expr}")
@@ -591,12 +1195,14 @@ def _compile_range_setup(
 
 
 def _compile_range_flush(
-    range_value: BlockRange | IndirectBlockRange,
+    range_value: Any,
     symbol: str,
     ctx: CodegenContext,
 ) -> list[str]:
     """Flush a specialized static range's value list to its semantic tags."""
 
+    if isinstance(range_value, ImmediateRef):
+        range_value = range_value.value
     if not isinstance(range_value, BlockRange):
         return []
     layout = ctx.static_range_layout(range_value)
@@ -670,18 +1276,19 @@ def _calc_store_expr(value_expr: str, dest_type: str, mode: str, ctx: CodegenCon
     return value_expr
 
 
-def _timer_dt_to_units_expr(unit: TimeUnit, dt_expr: str, frac_expr: str) -> str:
-    if unit == TimeUnit.Tms:
-        return f"(({dt_expr} * 1000.0) + {frac_expr})"
-    if unit == TimeUnit.Ts:
-        return f"(({dt_expr}) + {frac_expr})"
-    if unit == TimeUnit.Tm:
-        return f"(({dt_expr} / 60.0) + {frac_expr})"
-    if unit == TimeUnit.Th:
-        return f"(({dt_expr} / 3600.0) + {frac_expr})"
-    if unit == TimeUnit.Td:
-        return f"(({dt_expr} / 86400.0) + {frac_expr})"
-    raise ValueError(f"Unsupported timer unit: {unit}")
+def _timer_carry_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -> list[str]:
+    """This scan's time into ``_int_units`` whole units and a ``_new_frac`` remainder.
+
+    Integer nanoseconds, as ``instruction.utils.elapsed_units``.  A board's clock reads them
+    directly, and its floats are too short to hold a time.  The kernel has only ``dt``.
+    """
+    ctx.timer_unit_ns[acc.name] = unit.ns
+    dt_ns = '_dt_to_ns(_mem.get("_dt", 0.0))' if ctx.kernel_runtime else '_mem.get("_dt_ns", 0)'
+    return [
+        f'{sp}_carry = _mem.get("_frac:{acc.name}", 0) + {dt_ns}',
+        f"{sp}_int_units = _carry // {unit.ns}",
+        f"{sp}_new_frac = _carry % {unit.ns}",
+    ]
 
 
 def _load_cast_expr(value_expr: str, tag_type: str) -> str:
@@ -696,7 +1303,8 @@ def _load_cast_expr(value_expr: str, tag_type: str) -> str:
     if tag_type == "REAL":
         return f"float({value_expr})"
     if tag_type == "CHAR":
-        return f"({value_expr} if isinstance({value_expr}, str) else '')"
+        # A blank TXT is NUL; a saved "" (or a non-string) loads as one.
+        return f"(({value_expr} or '\\x00') if isinstance({value_expr}, str) else '\\x00')"
     return value_expr
 
 
@@ -705,6 +1313,26 @@ def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
     if fault_symbol is None:
         return ["pass"]
     return [f"{fault_symbol} = True"]
+
+
+def _copy_clamp_condition(value_var: str, dest_type: str, source_type: str | None) -> str | None:
+    """The test that a Copy of *value_var* into *dest_type* stops at a limit, if it can.
+
+    It holds what the store truncates: 32767.5 into an INT stores 32767 without
+    clamping.  +/-Inf passes and NaN compares false, as a clamp pins Inf and
+    stores NaN as 0.  Text converts in the store and never clamps here, a Word
+    into an INT keeps its bits, and a REAL register clamps into a DINT with no
+    flag (``_copy_clamps``).
+    """
+    bounds = {"INT": (-32768, 32767), "DINT": (-2147483648, 2147483647)}.get(dest_type)
+    if bounds is None or source_type == "CHAR":
+        return None
+    if dest_type == "DINT" and source_type == "REAL":
+        return None
+    if dest_type == "INT" and source_type == "WORD":
+        return None
+    lower, upper = bounds
+    return f"{value_var} >= {upper + 1} or {value_var} <= {lower - 1}"
 
 
 def _compile_set_address_error_fault_body(ctx: CodegenContext) -> list[str]:
@@ -759,7 +1387,7 @@ def _compile_target_write_lines(
 
     binding = ctx.block_bindings[id(target.block)]
     symbol = ctx.symbol_for_block(target.block)
-    helper = ctx.use_indirect_block(binding.block_id)
+    helper = ctx.use_window_addrs_block(binding.block_id)
     name = ctx.next_name("irange")
     start_var = f"_{name}_start"
     end_var = f"_{name}_end"
@@ -774,9 +1402,8 @@ def _compile_target_write_lines(
         f"{sp}if {start_var} > {end_var}:",
         f'{sp}    raise ValueError("Indirect range start must be <= end")',
         f"{sp}{addr_list} = []",
-        f"{sp}for {addr_var} in range({start_var}, {end_var} + 1):",
-        f"{sp}    {idx_var} = {helper}(int({addr_var}))",
-        f"{sp}    {addr_list}.append({idx_var})",
+        f"{sp}for {addr_var} in {helper}({start_var}, {end_var}):",
+        f"{sp}    {addr_list}.append({addr_var} - {binding.start})",
     ]
     if target.reverse_order:
         lines.append(f"{sp}{addr_list}.reverse()")
@@ -815,34 +1442,96 @@ def _compile_address_expr(
     raise TypeError(f"Unsupported indirect address expression type: {type(addr).__name__}")
 
 
+def _compile_condition_element_read(
+    block: Any,
+    binding: Any,
+    addr_expr: str,
+    ctx: CodegenContext,
+    block_snapshots: dict[int, str] | None,
+) -> str:
+    """A rung condition's read of ``block[addr]``: outside the block it reads 0, no flag."""
+    index_expr = f"{ctx.use_condition_index_block(binding.block_id)}(int({addr_expr}))"
+    return _element_read_or_default(block, binding, index_expr, ctx, block_snapshots)
+
+
+def _compile_source_element_read(
+    block: Any,
+    binding: Any,
+    addr_expr: str,
+    ctx: CodegenContext,
+    block_snapshots: dict[int, str] | None,
+) -> str:
+    """An instruction's read of ``block[addr]``: past the block 0, no flag; below it
+    the address-error flag and an IndexError (``_read_index_*``)."""
+    index_expr = f"{ctx.use_read_index_block(binding.block_id)}(int({addr_expr}))"
+    return _element_read_or_default(block, binding, index_expr, ctx, block_snapshots)
+
+
+def _past_end_keeps(value: Any) -> bool:
+    """True for a pointer into a bank whose Copy writes nothing past its end."""
+    return isinstance(value, (IndirectRef, IndirectExprRef)) and value.block._past_end_keeps
+
+
+def _compile_copy_source(value: Any, ctx: CodegenContext) -> str:
+    """A Copy's source, as :func:`_compile_value` reads it, except a pointer into a bank
+    whose Copy writes nothing past its end (``Block._past_end_keeps``): past the end it
+    raises IndexError with no flag (``_resolve_index_*``), and the guard drops the copy."""
+    if not _past_end_keeps(value):
+        return _compile_value(value, ctx)
+    binding = ctx.block_bindings.get(id(value.block))
+    if binding is None:
+        raise RuntimeError(f"Missing block binding for indirect ref {value.block.name!r}")
+    if isinstance(value, IndirectRef):
+        addr_expr = _compile_value(value.pointer, ctx)
+    else:
+        addr_expr = _compile_expression_impl(value.expr, ctx)
+    index_expr = f"{ctx.use_indirect_block(binding.block_id)}(int({addr_expr}))"
+    return _element_read_or_default(value.block, binding, index_expr, ctx, None)
+
+
+def _element_read_or_default(
+    block: Any,
+    binding: Any,
+    index_expr: str,
+    ctx: CodegenContext,
+    block_snapshots: dict[int, str] | None,
+) -> str:
+    """Read the element at *index_expr*, or the type's zero if it is -1."""
+    block_id = id(block)
+    default = _TYPE_DEFAULTS[binding.tag_type]
+    if block_snapshots is not None and block_id in block_snapshots:
+        ctx.mark_helper("_cond_elem")
+        return f"_cond_elem({block_snapshots[block_id]}, {index_expr}, {default!r})"
+    if ctx.blockless:
+        ctx.mark_helper("_cond_tag_elem")
+        names = ctx.block_name_tuple_symbol(binding.block_id)
+        return f"_cond_tag_elem(tags, {names}, {index_expr}, {default!r})"
+    ctx.mark_helper("_cond_elem")
+    return f"_cond_elem({ctx.symbol_for_block(block)}, {index_expr}, {default!r})"
+
+
 def _compile_indirect_value(
     indirect_ref: IndirectRef,
     ctx: CodegenContext,
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    condition: bool = False,
 ) -> str:
-    block_id = id(indirect_ref.block)
-    binding = ctx.block_bindings.get(block_id)
+    binding = ctx.block_bindings.get(id(indirect_ref.block))
     if binding is None:
         raise RuntimeError(f"Missing block binding for indirect ref {indirect_ref.block.name!r}")
-    helper = ctx.use_indirect_block(binding.block_id)
     ptr = _compile_value(
         indirect_ref.pointer,
         ctx,
         scalar_snapshots=scalar_snapshots,
         block_snapshots=block_snapshots,
     )
-    index_expr = f"{helper}(int({ptr}))"
-    if block_snapshots is not None and block_id in block_snapshots:
-        block_symbol = block_snapshots[block_id]
-        return f"{block_symbol}[{index_expr}]"
-    if ctx.blockless:
-        name_expr = _block_name_expr(binding.block_id, index_expr, ctx)
-        default = _TYPE_DEFAULTS[binding.tag_type]
-        return f"tags.get({name_expr}, {default!r})"
-    block_symbol = ctx.symbol_for_block(indirect_ref.block)
-    return f"{block_symbol}[{index_expr}]"
+    if condition:
+        return _compile_condition_element_read(
+            indirect_ref.block, binding, ptr, ctx, block_snapshots
+        )
+    return _compile_source_element_read(indirect_ref.block, binding, ptr, ctx, block_snapshots)
 
 
 def _compile_value(
@@ -851,7 +1540,16 @@ def _compile_value(
     *,
     scalar_snapshots: dict[str, str] | None = None,
     block_snapshots: dict[int, str] | None = None,
+    strict: bool = False,
+    condition: bool = False,
 ) -> str:
+    """*value* as a Python expression; *strict* for calc (see _compile_expression_impl).
+
+    *condition* for a rung condition's operand: an indexed element outside its
+    block reads as 0, with no fault flag.
+    """
+    if isinstance(value, ImmediateRef):
+        value = value.value
     if isinstance(value, Tag):
         return _snapshot_tag_symbol(
             value,
@@ -865,36 +1563,36 @@ def _compile_value(
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            condition=condition,
         )
     if isinstance(value, IndirectExprRef):
-        block_id = id(value.block)
-        binding = ctx.block_bindings.get(block_id)
+        binding = ctx.block_bindings.get(id(value.block))
         if binding is None:
             raise RuntimeError(
                 f"Missing block binding for indirect expression ref {value.block.name!r}"
             )
-        helper = ctx.use_indirect_block(binding.block_id)
         expr = _compile_expression_impl(
             value.expr,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
-        index_expr = f"{helper}(int({expr}))"
-        if block_snapshots is not None and block_id in block_snapshots:
-            block_symbol = block_snapshots[block_id]
-            return f"{block_symbol}[{index_expr}]"
-        if ctx.blockless:
-            name_expr = _block_name_expr(binding.block_id, index_expr, ctx)
-            default = _TYPE_DEFAULTS[binding.tag_type]
-            return f"tags.get({name_expr}, {default!r})"
-        block_symbol = ctx.symbol_for_block(value.block)
-        return f"{block_symbol}[{index_expr}]"
+        if condition:
+            return _compile_condition_element_read(value.block, binding, expr, ctx, block_snapshots)
+        if strict and _may_be_double(expr):
+            # A calc's integer step past 2 ** 53 is a double (_dbl), so the address
+            # can be +/-Inf or NaN, which _addr_int makes -1: below every block,
+            # the address error and nothing written (core IndirectExprRef.resolve_ctx).
+            ctx.mark_helper("_addr_int")
+            expr = f"_addr_int({expr})"
+        return _compile_source_element_read(value.block, binding, expr, ctx, block_snapshots)
     if isinstance(value, Expression):
         return _compile_expression_impl(
             value,
             ctx,
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
+            strict=strict,
         )
     return repr(value)

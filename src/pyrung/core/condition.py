@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 
 if TYPE_CHECKING:
     from pyrung.core.context import ConditionView, ScanContext
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import ImmediateRef, Tag
 
 
@@ -44,13 +44,20 @@ class Condition(ABC):
 
     source_file: str | None = None
     source_line: int | None = None
+    # Edge contacts: the site key ``bind_sites`` stamps (``e{N}``); see
+    # :mod:`pyrung.core.site_memory`.
+    _site_key: str | None = None
+    _site_program_owned: bool = False
+    # The binding that stamped ``_site_key`` (a ``Program``, or one token for
+    # every binding no program owns); another binding copies the object first.
+    _site_owner: object | None = None
 
     @abstractmethod
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         """Evaluate this condition against a ScanContext or ConditionView.
 
         Accepts either a live ScanContext (read-after-write within a scan)
-        or a frozen ConditionView (rung-entry snapshot for branch conditions).
+        or a ConditionView of one row, taken as the solve reaches it.
         """
         pass
 
@@ -130,31 +137,30 @@ _VALUE_INDIRECT = 3
 
 def _classify_value(value: Any) -> int:
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import Tag
 
     if isinstance(value, Expression):
         return _VALUE_EXPR
     if isinstance(value, Tag):
         return _VALUE_TAG
-    if isinstance(value, IndirectRef):
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
         return _VALUE_INDIRECT
     return _VALUE_LITERAL
 
 
 def _resolve_value(value: Any, ctx: ScanContext | ConditionView) -> Any:
-    """Resolve a value that may be a Tag, IndirectRef, Expression, or literal."""
+    """Resolve a Tag, IndirectRef, IndirectExprRef, Expression, or literal value."""
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import Tag
 
     if isinstance(value, Expression):
         return value.evaluate(ctx)
     if isinstance(value, Tag):
         return ctx.get_tag(value.name, value.default)
-    if isinstance(value, IndirectRef):
-        resolved_tag = value.resolve_ctx(ctx)
-        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
+        return value.read_ctx(ctx)
     return value
 
 
@@ -164,8 +170,7 @@ def _resolve_classified(value: Any, kind: int, ctx: ScanContext | ConditionView)
     if kind == _VALUE_TAG:
         return ctx.get_tag(value.name, value.default)
     if kind == _VALUE_INDIRECT:
-        resolved_tag = value.resolve_ctx(ctx)
-        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        return value.read_ctx(ctx)
     return value
 
 
@@ -263,67 +268,74 @@ class NormallyClosedCondition(Condition):
         return not bool(ctx.get_tag(self._resolved_tag.name, False))
 
 
-class RisingEdgeCondition(Condition):
-    """Rising edge detection - true only on 0->1 transition.
+class _EdgeCondition(Condition):
+    """An edge contact: a site with memory of its own (``_edge:e{N}``).
 
-    Reads previous value from state.memory["_prev:{tag.name}"].
+    The memory holds the bit as this contact last saw it, stored whenever the
+    contact's row is scanned, powered or not, and off at RUN (CLICK).  Two
+    contacts on one tag, the same contact in a subroutine called twice, or in a
+    For body on successive iterations each compare against their own last
+    look.  The row stores the memory after taking its condition view
+    (:func:`pyrung.core.site_memory.scan_edge_frame`), so ``evaluate()`` only
+    reads: the bit and the memory both come from the view.
     """
+
+    _memory_key: str | None = None
 
     def __init__(self, tag: Tag | ImmediateRef):
         self.tag = tag
-        resolved = _contact_tag(tag)
-        self._resolved_tag = resolved
-        self._prev_key = f"_prev:{resolved.name}"
-        from pyrung.core.system_points import _DERIVED_EDGE_TAGS
+        self._resolved_tag = _contact_tag(tag)
 
-        self._edge_fn = _DERIVED_EDGE_TAGS.get(resolved.name)
+    @property
+    def _site_key(self) -> str | None:  # type: ignore[override]
+        key = self._memory_key
+        return None if key is None else key[len("_edge:") :]
+
+    @_site_key.setter
+    def _site_key(self, key: str | None) -> None:
+        self._memory_key = None if key is None else f"_edge:{key}"
+
+    def _edges(self, ctx: ScanContext | ConditionView) -> tuple[bool, bool]:
+        key = self._memory_key
+        if key is None:
+            from pyrung.core.site_memory import edge_memory_key
+
+            key = edge_memory_key(self)  # raises: never bound
+        current = bool(ctx.get_tag(self._resolved_tag.name, False))
+        previous = bool(ctx.get_memory(key, False))
+        return current, previous
+
+
+class RisingEdgeCondition(_EdgeCondition):
+    """Rising edge: the bit is on and was off when this contact last saw it."""
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        edge_fn = self._edge_fn
-        if edge_fn is not None:
-            rise, _fall = edge_fn(ctx.scan_id)
-            return rise
-        tag = self._resolved_tag
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(self._prev_key, False))
+        current, previous = self._edges(ctx)
         return current and not previous
 
 
-class FallingEdgeCondition(Condition):
-    """Falling edge detection - true only on 1->0 transition.
-
-    Reads previous value from state.memory["_prev:{tag.name}"].
-    """
-
-    def __init__(self, tag: Tag | ImmediateRef):
-        self.tag = tag
-        resolved = _contact_tag(tag)
-        self._resolved_tag = resolved
-        self._prev_key = f"_prev:{resolved.name}"
-        from pyrung.core.system_points import _DERIVED_EDGE_TAGS
-
-        self._edge_fn = _DERIVED_EDGE_TAGS.get(resolved.name)
+class FallingEdgeCondition(_EdgeCondition):
+    """Falling edge: the bit is off and was on when this contact last saw it."""
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        edge_fn = self._edge_fn
-        if edge_fn is not None:
-            _rise, fall = edge_fn(ctx.scan_id)
-            return fall
-        tag = self._resolved_tag
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(self._prev_key, False))
-        return not current and previous
+        current, previous = self._edges(ctx)
+        return previous and not current
 
 
 # =============================================================================
 # Indirect Comparison Conditions
 # =============================================================================
+#
+# The left operand is a block element addressed at scan time: an IndirectRef
+# (``block[pointer_tag]``) or an IndirectExprRef (``block[expr]``).  Both
+# read through ``read_ctx``: an address outside the block reads as 0, with no
+# fault flag.
 
 
 class IndirectCompareEq(Condition):
-    """Equality comparison for IndirectRef: indirect_ref == value or indirect_ref == tag."""
+    """Equality comparison: ``block[index] == value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         from pyrung.core.tag import Tag as _Tag
 
         self.indirect_ref = indirect_ref
@@ -331,8 +343,7 @@ class IndirectCompareEq(Condition):
         self._value_is_tag = isinstance(value, _Tag)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        resolved_value = self.indirect_ref.read_ctx(ctx)
         if self._value_is_tag:
             other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
@@ -341,9 +352,9 @@ class IndirectCompareEq(Condition):
 
 
 class IndirectCompareNe(Condition):
-    """Inequality comparison for IndirectRef: indirect_ref != value or indirect_ref != tag."""
+    """Inequality comparison: ``block[index] != value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         from pyrung.core.tag import Tag as _Tag
 
         self.indirect_ref = indirect_ref
@@ -351,8 +362,7 @@ class IndirectCompareNe(Condition):
         self._value_is_tag = isinstance(value, _Tag)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        resolved_value = self.indirect_ref.read_ctx(ctx)
         if self._value_is_tag:
             other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
@@ -361,54 +371,50 @@ class IndirectCompareNe(Condition):
 
 
 class IndirectCompareLt(Condition):
-    """Less-than comparison for IndirectRef: indirect_ref < value."""
+    """Less-than comparison: ``block[index] < value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value < _resolve_value(self.value, ctx)
 
 
 class IndirectCompareLe(Condition):
-    """Less-than-or-equal comparison for IndirectRef: indirect_ref <= value."""
+    """Less-than-or-equal comparison: ``block[index] <= value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value <= _resolve_value(self.value, ctx)
 
 
 class IndirectCompareGt(Condition):
-    """Greater-than comparison for IndirectRef: indirect_ref > value."""
+    """Greater-than comparison: ``block[index] > value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value > _resolve_value(self.value, ctx)
 
 
 class IndirectCompareGe(Condition):
-    """Greater-than-or-equal comparison for IndirectRef: indirect_ref >= value."""
+    """Greater-than-or-equal comparison: ``block[index] >= value``."""
 
-    def __init__(self, indirect_ref: IndirectRef, value: Any):
+    def __init__(self, indirect_ref: IndirectRef | IndirectExprRef, value: Any):
         self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
-        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        tag_value = self.indirect_ref.read_ctx(ctx)
         return tag_value >= _resolve_value(self.value, ctx)
 
 
@@ -517,6 +523,83 @@ class AnyCondition(Condition):
             if cond.evaluate(ctx):
                 return True
         return False
+
+
+def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | None:
+    """``txt[771] == "AB"``: a CHAR of a block against a longer literal, as CLICK reads it.
+
+    CLICK compares the literal over the TXT and the ones after it, one character
+    each, so the compare is the And of each character's (``!=``: the Or of each
+    ``!=``), and every analysis reads it as that.  The compare as written is kept
+    on it as ``_text_window``, for the exporter (:func:`text_window_of`).  ``None``
+    for any other compare, and where the block ends before the literal does.
+
+    A tag mapped onto a bank slot reads the slots after the one it was mapped
+    to, ``bank[addr + 1]`` on, whichever tags hold them; the mapping is recorded
+    when it is made (``Tag.map_to``, ``Block.map_to``, a TagMap), so how the
+    bank was read before does not matter.  A tag with no mapping reads the next
+    elements of the block that declared it, or, in a ``named_array``, the next
+    slots of its layout (the other fields of the instance first), and a
+    ``Char`` of no block is compared as written.
+
+    A logical compare mapped before the program is built is CLICK-exact, with
+    no finding.  One mapped after the program is built reads the layout, and
+    export refuses it where it differs (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
+    """
+    from pyrung.core.tag import TagType
+
+    if tag.type is not TagType.CHAR or not isinstance(value, str) or len(value) < 2:
+        return None
+    hw_slot = getattr(tag, "_pyrung_hw_slot", None)
+    # Held weakly: once the bank is gone, nothing maps the tag there.
+    block, addr = (hw_slot[0](), hw_slot[1]) if hw_slot is not None else (None, None)
+    mapped = block is not None
+    if not mapped:
+        block = getattr(tag, "_pyrung_home_block", None)
+        addr = getattr(tag, "_pyrung_home_addr", None)
+    if block is None or not isinstance(addr, int):
+        return None
+    try:
+        if mapped:
+            tags = [block._tag_at(addr + offset) for offset in range(len(value))]
+        else:
+            tags = _text_window_tags(block, addr, len(value))
+    except (IndexError, KeyError, ValueError):
+        return None
+    if tags is None:
+        return None
+    cond: Condition
+    if equal:
+        cond = AllCondition(*(CompareEq(t, char) for t, char in zip(tags, value, strict=True)))
+        written: Condition = CompareEq(tag, value)
+    else:
+        cond = AnyCondition(*(CompareNe(t, char) for t, char in zip(tags, value, strict=True)))
+        written = CompareNe(tag, value)
+    setattr(cond, "_text_window", written)  # noqa: B010 - not a field of the condition
+    return cond
+
+
+def _text_window_tags(block: Any, addr: int, length: int) -> list[Tag] | None:
+    """The *length* Chars from ``block[addr]`` on, in the order they map to TXT."""
+    runtime = getattr(block, "_pyrung_structure_runtime", None)
+    if getattr(block, "_pyrung_structure_kind", None) != "named_array" or runtime is None:
+        return [block._tag_at(addr + offset) for offset in range(length)]
+    # Instance-major: each instance takes ``stride`` slots, its fields first in order.
+    fields: tuple[str, ...] = runtime._field_order
+    stride: int = runtime.stride
+    start = (addr - 1) * stride + fields.index(block._pyrung_structure_field)
+    tags: list[Tag] = []
+    for position in range(start, start + length):
+        instance, offset = divmod(position, stride)
+        if instance >= runtime.count or offset >= len(fields):
+            return None  # past the last instance, or a slot no field holds
+        tags.append(runtime._blocks[fields[offset]]._tag_at(instance + 1))
+    return tags
+
+
+def text_window_of(condition: Condition) -> Condition:
+    """*condition* as written: the one compare of a :func:`text_window_condition`."""
+    return getattr(condition, "_text_window", condition)
 
 
 def _normalize_and_condition(

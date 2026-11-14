@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -17,11 +16,11 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
-    calc,
     call,
     copy,
     fill,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -36,34 +35,28 @@ from pyrung.core.analysis.prove import (
     Proven,
     _bfs_explore,
     _build_explore_context,
+    _build_prior_facts,
     always,
     never,
 )
+from pyrung.core.analysis.prove import passes as passes_module
 from pyrung.core.analysis.prove.elision import (
     _elide_scan_local_stateful_dims,
 )
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
-from pyrung.core.analysis.prove.kernel import (
-    _EdgeCompressor,
-    _restore_kernel,
-    _seed_synthetic_presets,
-    _snapshot_kernel,
-    _step_kernel,
-)
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
+    _PRIOR_FIELDS,
     _BFSConfig,
-    _OptConfig,
     _pass_build_graph,
     _pass_classify_dimensions,
     _pass_diagnose_unwritten_tags,
-    _pass_find_threshold_absorptions,
     _PassContext,
+    _passes_answering,
+    _PreBFSPass,
     _run_pre_bfs_pipeline,
     _validate_pass_dag,
 )
-
-events_module = importlib.import_module("pyrung.core.analysis.prove.events")
 
 
 def _make_pass_context(
@@ -72,6 +65,7 @@ def _make_pass_context(
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
     progress_info: Callable[[str], None] | None = None,
+    domains_only: bool = False,
 ) -> _PassContext:
     return _PassContext(
         program=program,
@@ -81,6 +75,7 @@ def _make_pass_context(
         dt=0.010,
         compiled=None,
         progress_info=progress_info,
+        domains_only=domains_only,
     )
 
 
@@ -117,24 +112,6 @@ def _settle_pending_program() -> Program:
     return logic
 
 
-def _chained_settle_pending_program() -> Program:
-    cmd = Bool("Cmd", external=True)
-    fb = Bool("Fb", external=True)
-    stage1 = Timer.clone("Stage1")
-    stage2 = Timer.clone("Stage2")
-    alarm = Bool("Alarm")
-
-    with Program(strict=False) as logic:
-        with Rung(cmd, ~fb):
-            on_delay(stage1, preset=30)
-        with Rung(stage1.Done):
-            on_delay(stage2, preset=30)
-        with Rung(stage2.Done):
-            latch(alarm)
-
-    return logic
-
-
 def _literal_copy_program() -> Program:
     trig_a = Bool("TrigA", external=True)
     trig_b = Bool("TrigB", external=True)
@@ -162,27 +139,6 @@ def _literal_fill_program() -> Program:
             fill(7, ds.select(1, 3))
         with Rung(ds[1] == 7):
             out(flag)
-
-    return logic
-
-
-def _hidden_event_memo_program() -> Program:
-    enable = Bool("Enable", external=True)
-    exact_threshold = Int("ExactThreshold", final=True)
-    hmi_threshold = Int("HmiThreshold", external=True, default=1000)
-    t = Timer.clone("MemoTmr")
-    exact_alarm = Bool("ExactAlarm")
-    hmi_alarm = Bool("HmiAlarm")
-
-    with Program(strict=False) as logic:
-        with Rung():
-            copy(500, exact_threshold)
-        with Rung(enable):
-            on_delay(t, preset=1000)
-        with Rung(t.Acc > exact_threshold):
-            out(exact_alarm)
-        with Rung(t.Acc > hmi_threshold):
-            out(hmi_alarm)
 
     return logic
 
@@ -257,10 +213,8 @@ class TestPassManifest:
             "detect_functional_dependencies",
             "detect_init_constants",
             "compile_kernel",
-            "collect_done_acc_pairs",
-            "find_redundant_absorptions",
-            "find_threshold_absorptions",
-            "build_event_specs",
+            "build_timer_model",
+            "build_prior_key_specs",
             "collect_edge_exprs",
             "discover_memory_keys",
         ]
@@ -270,8 +224,6 @@ class TestPassManifest:
             "live_input_pruning",
             "exclusive_input_grouping",
             "edge_compression",
-            "hidden_event_jumping",
-            "pending_settlement",
             "free_input_factoring",
         )
 
@@ -298,6 +250,51 @@ class TestPassManifest:
             _validate_pass_dag(passes)
 
 
+class TestHowPrior:
+    """how() runs only the passes that decide the fields it reads."""
+
+    def test_prior_fields_are_what_how_reads(self) -> None:
+        assert _PRIOR_FIELDS == {
+            "nondeterministic_dims",
+            "stateful_dims",
+            "stateful_names",
+            "elided_tags",
+            "functional_dep_projections",
+            "stepping_tags",
+            "state_key_done_specs",
+            "threshold_vector_specs",
+        }
+
+    def test_prior_runs_only_the_passes_that_decide_its_fields(self) -> None:
+        assert [p.name for p in _passes_answering(_PRIOR_FIELDS)] == [
+            "build_graph",
+            "classify_dimensions",
+            "apply_split_at",
+            "elide_scan_local_state",
+            "detect_functional_dependencies",
+            "detect_init_constants",
+            "compile_kernel",
+            "build_prior_key_specs",
+        ]
+
+    def test_a_pass_added_for_the_search_costs_the_prior_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(_ctx: _PassContext) -> None:
+            raise AssertionError("a search-only pass ran for how()'s prior")
+
+        search_only = _PreBFSPass(
+            "search_only", "", fail, requires=frozenset({"graph", "classification"})
+        )
+        monkeypatch.setattr(
+            passes_module, "_DEFAULT_PRE_BFS_PASSES", (*_DEFAULT_PRE_BFS_PASSES, search_only)
+        )
+        monkeypatch.setattr(_PassContext, "freeze", fail)
+        prior = _build_prior_facts(_discovery_program())
+        assert not isinstance(prior, Intractable)
+        assert prior.nondeterministic_dims == {"Step": (0, 1, 2), "ThresholdIn": (0, 1)}
+
+
 class TestDiagnoseUnwrittenTagsProgressInfo:
     def test_unwritten_tags_emitted_via_progress_info(self) -> None:
         threshold = Int("Threshold")
@@ -320,7 +317,8 @@ class TestPassReuse:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        ctx = _make_pass_context(_discovery_program())
+        # How()'s domain prior absorbs; the search does not.
+        ctx = _make_pass_context(_discovery_program(), domains_only=True)
         _pass_build_graph(ctx)
 
         def fail(*_args: object, **_kwargs: object) -> None:
@@ -331,26 +329,6 @@ class TestPassReuse:
         _pass_classify_dimensions(ctx)
 
         assert ctx.stateful_dims is not None
-
-    def test_find_threshold_absorptions_reuses_classification_result(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        ctx = _make_pass_context(_discovery_program())
-        _pass_build_graph(ctx)
-        _pass_classify_dimensions(ctx)
-        precomputed = ctx.threshold_absorptions
-        assert precomputed is not None
-
-        def fail(*_args: object, **_kwargs: object) -> None:
-            raise AssertionError("threshold absorptions should have been reused")
-
-        monkeypatch.setattr("pyrung.core.analysis.prove.passes._find_threshold_absorptions", fail)
-        monkeypatch.setattr("pyrung.core.analysis.prove.passes._find_comparison_absorptions", fail)
-
-        _pass_find_threshold_absorptions(ctx)
-
-        assert ctx.threshold_absorptions is precomputed
 
 
 class TestPassDisabling:
@@ -397,24 +375,17 @@ class TestPassDisabling:
 
         assert not isinstance(result, Intractable)
 
-    def test_disable_hidden_event_jumping_still_proves(self) -> None:
+    def test_settled_judges_only_states_with_no_open_timer(self) -> None:
+        # While the fault timer runs, Cmd and ~Fb hold without the alarm; a
+        # timer whose Done may still flip is no settled state.
         context = _build_explore_context(_settle_pending_program())
         assert not isinstance(context, Intractable)
         predicate = lambda s: (not s["Cmd"]) or bool(s["Fb"]) or bool(s["Alarm"])  # noqa: E731
 
-        unsettled = _bfs_explore(
-            context,
-            predicates=[predicate],
-            bfs_config=_BFSConfig(hidden_event_jumping=False),
-        )[0]
+        unsettled = _bfs_explore(context, predicates=[predicate])[0]
         assert isinstance(unsettled, Counterexample)
 
-        result = _bfs_explore(
-            context,
-            predicates=[predicate],
-            bfs_config=_BFSConfig(hidden_event_jumping=False),
-            settled=True,
-        )[0]
+        result = _bfs_explore(context, predicates=[predicate], settled=True)[0]
         assert isinstance(result, Proven)
 
     def test_disable_edge_compression_still_proves_and_explores_more(self) -> None:
@@ -495,115 +466,6 @@ class TestIndividualPasses:
             (("CmdA", False), ("CmdB", False), ("CmdC", True)),
         }
 
-    def test_hidden_event_jump_memoizes_repeated_pending_plateaus(self, monkeypatch) -> None:
-        context = _build_explore_context(
-            _hidden_event_memo_program(),
-            project=("ExactAlarm", "HmiAlarm"),
-        )
-        assert not isinstance(context, Intractable)
-
-        kernel = context.compiled.create_kernel()
-        _seed_synthetic_presets(context, kernel)
-        edge_comp = _EdgeCompressor(context)
-        cache = events_module._HiddenEventCache(context)
-
-        snap = _snapshot_kernel(kernel)
-        kernel.tags["Enable"] = True
-        _step_kernel(context, kernel)
-        new_key = edge_comp.state_key(kernel)
-        visited = {new_key}
-
-        calls = {"collect": 0}
-        collect_orig = events_module._collect_all_pending_sources
-
-        def _count_collect(*args, **kwargs):
-            calls["collect"] += 1
-            return collect_orig(*args, **kwargs)
-
-        monkeypatch.setattr(events_module, "_collect_all_pending_sources", _count_collect)
-
-        first = events_module._maybe_jump_hidden_event(
-            context,
-            kernel,
-            snap,
-            visited,
-            new_key,
-            edge_comp,
-            cache,
-        )
-        first_count = calls["collect"]
-        assert first_count >= 1
-
-        second = events_module._maybe_jump_hidden_event(
-            context,
-            kernel,
-            snap,
-            visited,
-            new_key,
-            edge_comp,
-            cache,
-        )
-
-        assert len(first) == 2
-        assert {outcome.key for outcome in first} == {outcome.key for outcome in second}
-        assert calls["collect"] == first_count
-
-    def test_hidden_event_cache_key_tracks_hidden_progress(self) -> None:
-        context = _build_explore_context(_settle_pending_program())
-        assert not isinstance(context, Intractable)
-
-        kernel = context.compiled.create_kernel()
-        _seed_synthetic_presets(context, kernel)
-        edge_comp = _EdgeCompressor(context)
-        cache = events_module._HiddenEventCache(context)
-
-        initial_snap = _snapshot_kernel(kernel)
-        kernel.tags["Cmd"] = True
-        kernel.tags["Fb"] = False
-        _step_kernel(context, kernel)
-        first_key = edge_comp.state_key(kernel)
-        first_jump_key = cache.plateau_key(context, initial_snap, kernel, first_key)
-
-        second_before = _snapshot_kernel(kernel)
-        kernel.tags["Cmd"] = True
-        kernel.tags["Fb"] = False
-        _step_kernel(context, kernel)
-        second_key = edge_comp.state_key(kernel)
-        second_jump_key = cache.plateau_key(context, second_before, kernel, second_key)
-
-        assert first_key == second_key
-        assert first_jump_key != second_jump_key
-
-    def test_settle_pending_fully_resolves_chained_exact_timer_plateau(self) -> None:
-        context = _build_explore_context(_chained_settle_pending_program())
-        assert not isinstance(context, Intractable)
-
-        kernel = context.compiled.create_kernel()
-        _seed_synthetic_presets(context, kernel)
-        edge_comp = _EdgeCompressor(context)
-
-        before = _snapshot_kernel(kernel)
-        kernel.tags["Cmd"] = True
-        kernel.tags["Fb"] = False
-        _step_kernel(context, kernel)
-        first_key = edge_comp.state_key(kernel)
-        assert events_module._has_pending_hidden_event(context, first_key)
-
-        outcomes = events_module._settle_pending(
-            context,
-            kernel,
-            before,
-            edge_comp,
-        )
-
-        assert len(outcomes) == 1
-        outcome = outcomes[0]
-        assert outcome.additional_scans == 4
-        assert not events_module._has_pending_hidden_event(context, outcome.key)
-
-        _restore_kernel(kernel, outcome.snapshot)
-        assert kernel.tags["Alarm"] is True
-
 
 def _elide_stateful_dims(
     program: Program,
@@ -655,7 +517,7 @@ class TestScanLocalStateElision:
                 copy(20, table[2])
                 copy(1, init_done)
             with Rung():
-                calc(selector, idx)
+                math(selector, idx)
             with Rung():
                 copy(table[idx], tmp)
 
@@ -675,7 +537,7 @@ class TestScanLocalStateElision:
             with Rung():
                 copy(0, idx)
             with Rung():
-                calc(idx + 1, idx)
+                math(idx + 1, idx)
             with Rung(idx == 1):
                 out(flag)
 
@@ -826,7 +688,7 @@ class TestScanLocalStateElision:
 class TestDomainsOnlyFunctionalDepAdvice:
     """``domains_only`` admits slice-elided / ordering-violating scratch as
     advice-grade functional-dep projections (the jump-table pointer idiom:
-    ``calc(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
+    ``math(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
     touching dims; default-opt behavior is unchanged."""
 
     @staticmethod
@@ -841,7 +703,7 @@ class TestDomainsOnlyFunctionalDepAdvice:
             with Rung(adv):
                 copy(3, req)
             with Rung():
-                calc(req + 2, scratch)
+                math(req + 2, scratch)
             with Rung():
                 copy(table[scratch], dest)
             with Rung(dest != 0):
@@ -850,16 +712,12 @@ class TestDomainsOnlyFunctionalDepAdvice:
         return logic
 
     def test_default_context_has_no_advice_projection(self) -> None:
-        context = _build_explore_context(self._jump_pointer_program(), allow_partial=True)
+        context = _build_explore_context(self._jump_pointer_program())
         assert not isinstance(context, Intractable)
         assert "Scratch" not in context.functional_dep_projections
 
     def test_domains_only_records_advice_without_touching_dims(self) -> None:
-        context = _build_explore_context(
-            self._jump_pointer_program(),
-            _opt_config=replace(_OptConfig(), domains_only=True),
-            allow_partial=True,
-        )
+        context = _build_prior_facts(self._jump_pointer_program())
         assert not isinstance(context, Intractable)
         assert context.functional_dep_projections.get("Scratch") == ("Req", 1, 2)
         # Advice only: the scratch keeps its slice-elision classification
@@ -1057,7 +915,6 @@ class TestJournal:
             assert has_absorption
 
     def test_explain_threshold_absorption_blocked(self):
-
         inp = Bool("Inp", external=True)
         t = Timer.clone("T")
         out_tag = Bool("Out")

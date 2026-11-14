@@ -189,6 +189,9 @@ class ExecutionSpan:
 
     owner: EpochQuery = field(repr=False)
     kernel_scan_ids: tuple[int, ...]
+    # The scans the ledger prices as loop scans.  Each ran interpreted inside a wait, after its
+    # first two scans and before its last.
+    loop_priced: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:
         scans = tuple(self.kernel_scan_ids)
@@ -227,6 +230,7 @@ def capture_execution_spans(
         raise ValueError("execution scan stream must be strictly increasing")
 
     lineage = fork._causal_lineage
+    priced = getattr(fork, "_loop_priced_scans", frozenset())
     spans: list[ExecutionSpan] = []
     for epoch, first_scan, last_scan in lineage.epochs_covering(scans[0], scans[-1]):
         owned = tuple(scan for scan in scans if first_scan <= scan <= last_scan)
@@ -235,6 +239,7 @@ def capture_execution_spans(
                 ExecutionSpan(
                     owner=lineage._detached_query_for(epoch),
                     kernel_scan_ids=owned,
+                    loop_priced=frozenset(scan for scan in owned if scan in priced),
                 )
             )
     if tuple(scan for span in spans for scan in span.kernel_scan_ids) != scans:
@@ -284,10 +289,6 @@ class ExecutionReceipt:
             raise ValueError("execution receipt scans must follow their source")
 
     @property
-    def accelerators(self) -> tuple[tuple[str, Any], ...]:
-        return self.coast_receipt.advances if self.coast_receipt is not None else ()
-
-    @property
     def kernel_scan_ids(self) -> tuple[int, ...]:
         return tuple(scan for span in self.spans for scan in span.kernel_scan_ids)
 
@@ -303,8 +304,9 @@ class ExecutionReceipt:
         return self.stop.consumer_boundary_reached if self.stop is not None else None
 
     def owner_at(self, scan_id: int) -> EpochQuery | None:
+        # A span owns its range: scans a stretch ran between two kernel scans are real too.
         return next(
-            (span.owner for span in self.spans if scan_id in span.kernel_scan_ids),
+            (span.owner for span in self.spans if span.first_scan <= scan_id <= span.last_scan),
             None,
         )
 

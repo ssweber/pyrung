@@ -7,6 +7,18 @@ watchdogs, the terminal settling timer, the active-low interruption rung,
 the late error writers, the reconnect repair followed by its adjacent-scan
 status overwrite, and the unconditional reporting copy which observes the
 structural sequence channel without becoming another route.
+
+Each instruction reads its conditions when the scan reaches it, as on a
+CLICK, so a branch sees what earlier instructions in its rung wrote.
+``logic`` keeps the field program's order, so its reconnect repair is
+overwritten on the same scan (98 -> 10 -> 94 in one scan) and each
+transition-delay and dwell branch sees its timer's Done on the scan the timer
+sets it.  ``adjacent_logic`` is the same program with each of those branches
+moved above the instructions whose writes it must not see: the Done branches
+above their timers, and the interruption and status branches above the
+sibling step writes.  It keeps the adjacent-scan lifecycle
+(98 -> 10, then 10 -> 94 on the next scan) that the lifecycle contracts over
+this fixture were built around.
 """
 
 from pyrung import (
@@ -74,173 +86,212 @@ SettleDelay = Timer.clone("RouteSettleDelay")
 RecoveryCounter = Counter.clone("RouteRecoveryCounter")
 
 
-with Program() as logic:
-    # R7/R9: the pre-route handoff that makes the disconnected-state writer's
-    # <=20 source depend on the communication transaction.
-    with rung(SequenceStep <= 10, RouteEnabled == 1):
-        copy(11, SequenceStep)
+def _build(*, field_order: bool) -> Program:
+    """The route program, in the field order or as ``adjacent_logic``."""
 
-    with rung(ReadyCommand, SequenceStep == 11):
-        copy(20, SequenceStep, oneshot=True)
-
-    # R16: the ordinary route into the same-scan sequence cascade.
-    with rung(
-        Or(SequenceStep == 22, And(ReadyCommand, RouteControl == 100)),
-        BaseSensor,
-    ):
-        copy(40, SequenceStep, oneshot=True)
-
-    # R17-R23: same order and branch structure as the field program.
-    with rung(
-        Or(
-            And(SequenceStep >= 40, SequenceStep < 50),
-            And(SequenceStep >= 60, SequenceStep < 70),
-        )
-    ):
-        out(MovingPositive)
-
-    with rung(SequenceStep == 40):
-        with branch(CheckpointSensor):
-            copy(41, SequenceStep, oneshot=True)
-        on_delay(FirstWatchdog, FirstWatchdogPresetMs)
-
-    with rung(SequenceStep == 41):
-        on_delay(FirstTransitionDelay, FirstTransitionDelayMs)
-        with branch(FirstTransitionDelay.Done):
-            copy(50, SequenceStep, oneshot=True)
-
-    with rung(SequenceStep == 50):
-        on_delay(FirstDwell, FirstDwellSeconds, "sec")
-        with branch(FirstDwell.Done):
-            copy(60, SequenceStep, oneshot=True)
-
-    with rung(SequenceStep == 60):
-        copy(61, SequenceStep, oneshot=True)
-        on_delay(SecondWatchdog, SecondWatchdogPresetMs)
-
-    with rung(SequenceStep == 61):
-        on_delay(SecondTransitionDelay, SecondTransitionDelayMs)
-        with branch(SecondTransitionDelay.Done):
-            copy(70, SequenceStep, oneshot=True)
-
-    with rung(SequenceStep == 70):
-        on_delay(SecondDwell, SecondDwellSeconds, "sec")
-        with branch(SecondDwell.Done):
-            copy(80, SequenceStep, oneshot=True)
-
-    # R24-R27: terminal approach and settling receipt.
-    with rung(Or(SequenceStep == 80, And(SequenceStep >= 90, ~SettleDelay.Done))):
-        out(MovingNegative)
-
-    with rung(Or(SequenceStep == 80, SequenceStep >= 90), BaseSensor):
-        on_delay(SettleDelay, SettleSeconds, "sec")
-
-    with rung(SequenceStep == 80):
-        latch(PositionSeen)
-
-    with rung(SequenceStep == 80, SettleDelay.Done):
-        copy(81, SequenceStep, oneshot=True)
-
-    # R28: terminal-value validity check.
-    with rung(
-        Or(
-            PositionReading < PositionThreshold,
-            BypassPositionCheck,
-            SequenceInterrupted == 1,
-        ),
-        SequenceStep == 81,
-    ):
-        copy(10, SequenceStep, oneshot=True)
-
-    # R29: active-low interruption.  With BaseSensor true this is the exact
-    # late writer that destroys the terminal value and timer enable after the
-    # input has gone true long enough to re-arm its one-shot.  The cold-start
-    # scan executes it once while false; preserving that spent state is part of
-    # the adjacent-scan route receipt.
-    with rung(~InterruptionInput):
+    def base_branch() -> None:
         with branch(BaseSensor):
             copy(10, SequenceStep, oneshot=True)
-        with branch(
-            Or(
-                And(SequenceStep == 50, FirstDwell.Acc < 10),
-                And(SequenceStep == 70, SecondDwell.Acc < 10),
-                SequenceStep < 50,
-                And(SequenceStep >= 60, SequenceStep < 70),
-            ),
-            ~BaseSensor,
-        ):
-            copy(2, LocalSequenceStep)
-            copy(80, SequenceStep, oneshot=True)
-            copy(1, SequenceInterrupted, oneshot=True)
 
-    # The relevant late error writers retain their original ordering.
-    with rung(FirstWatchdog.Done):
-        copy(91, SequenceStep, oneshot=True)
-
-    with rung(SecondWatchdog.Done):
-        copy(92, SequenceStep, oneshot=True)
-
-    with rung(~NetworkAvailable, SequenceStep <= 20):
-        copy(98, SequenceStep, oneshot=True)
-
-    # A durable reconnect first repairs the disconnected state. The sibling
-    # status branch does not see that newly written value until the following
-    # scan, where it can replace the productive 10 unless the program has
-    # advanced beyond the local handoff or one of the program-owned status
-    # alternatives changed. This is the neutral 98 -> 10 -> 94 mechanism.
-    with rung(NetworkAvailable):
+    def repair_branch() -> None:
         with branch(SequenceStep == 98):
             copy(10, SequenceStep, oneshot=True)
-        with branch(SequenceStep <= 20):
-            with branch(RecoveryCounter.Done):
-                copy(97, SequenceStep, oneshot=True)
-            with branch(~RecoveryCounter.Done, ServiceStatus == 0):
-                copy(94, SequenceStep, oneshot=True)
 
-    with rung(~SafetyPermit):
-        copy(99, SequenceStep, oneshot=True)
+    # Python if-statements pick the row order at build time.
+    with Program(strict=False) as logic:
+        # R7/R9: the pre-route handoff that makes the disconnected-state writer's
+        # <=20 source depend on the communication transaction.
+        with rung(SequenceStep <= 10, RouteEnabled == 1):
+            copy(11, SequenceStep)
 
-    with rung(SequenceStep == 99, SafetyPermit):
-        copy(0, SequenceStep, oneshot=True)
+        with rung(ReadyCommand, SequenceStep == 11):
+            copy(20, SequenceStep, oneshot=True)
 
-    # The field communication transaction shares NetworkAvailable with a
-    # peer-ready contact. This relationship is intentionally included even
-    # though CommunicationPulse does not directly drive SequenceStep: it is
-    # what lets ProgramStep attach communication context to the reconnect act.
-    with rung(system.sys.clock_500ms, NetworkPeerReady, NetworkAvailable):
-        out(CommunicationPulse)
+        # R16: the ordinary route into the same-scan sequence cascade.
+        with rung(
+            Or(SequenceStep == 22, And(ReadyCommand, RouteControl == 100)),
+            BaseSensor,
+        ):
+            copy(40, SequenceStep, oneshot=True)
 
-    with rung(RouteControl == 0, CommunicationPulse):
-        out(CommunicationSuccess)
+        # R17-R23: same order and branch structure as the field program
+        # (adjacent_logic: each Done branch above its timer, so it sees the
+        # timer's Done of the scan before).
+        with rung(
+            Or(
+                And(SequenceStep >= 40, SequenceStep < 50),
+                And(SequenceStep >= 60, SequenceStep < 70),
+            )
+        ):
+            out(MovingPositive)
 
-    with rung(CommunicationSuccess):
-        copy(10, RouteControl)
+        with rung(SequenceStep == 40):
+            with branch(CheckpointSensor):
+                copy(41, SequenceStep, oneshot=True)
+            on_delay(FirstWatchdog, FirstWatchdogPresetMs)
 
-    with rung(RouteControl == 10, CommunicationPulse):
-        copy(1, RouteEnabled)
+        with rung(SequenceStep == 41):
+            if field_order:
+                on_delay(FirstTransitionDelay, FirstTransitionDelayMs)
+            with branch(FirstTransitionDelay.Done):
+                copy(50, SequenceStep, oneshot=True)
+            if not field_order:
+                on_delay(FirstTransitionDelay, FirstTransitionDelayMs)
 
-    # As in the source program, the simulation override is evaluated after
-    # the sequence and error rungs, so its route effect starts next scan.
-    with rung(SimulationMode):
-        copy(100, RouteControl)
+        with rung(SequenceStep == 50):
+            if field_order:
+                on_delay(FirstDwell, FirstDwellSeconds, "sec")
+            with branch(FirstDwell.Done):
+                copy(60, SequenceStep, oneshot=True)
+            if not field_order:
+                on_delay(FirstDwell, FirstDwellSeconds, "sec")
 
-    with rung(~SimulationMode):
-        copy(0, RouteControl, oneshot=True)
+        with rung(SequenceStep == 60):
+            copy(61, SequenceStep, oneshot=True)
+            on_delay(SecondWatchdog, SecondWatchdogPresetMs)
 
-    # These writers occur after the recovery reads, matching the field
-    # program's later communication subroutine. They make the counter/status
-    # terms program-owned without turning the recovery chart into action
-    # authority.
-    with rung(CommunicationError):
-        count_up(RecoveryCounter, 60).reset(~CommunicationError)
+        with rung(SequenceStep == 61):
+            if field_order:
+                on_delay(SecondTransitionDelay, SecondTransitionDelayMs)
+            with branch(SecondTransitionDelay.Done):
+                copy(70, SequenceStep, oneshot=True)
+            if not field_order:
+                on_delay(SecondTransitionDelay, SecondTransitionDelayMs)
 
-    with rung():
-        copy(ServiceStatusInput, ServiceStatus)
+        with rung(SequenceStep == 70):
+            if field_order:
+                on_delay(SecondDwell, SecondDwellSeconds, "sec")
+            with branch(SecondDwell.Done):
+                copy(80, SequenceStep, oneshot=True)
+            if not field_order:
+                on_delay(SecondDwell, SecondDwellSeconds, "sec")
 
-    # The field program copies its live sequence register unconditionally to
-    # a later reporting register. This is a one-way observation handoff, not a
-    # second navigated channel. Keeping it here ensures Compass preserves that
-    # distinction while still seeing the same receipt topology as the field
-    # program.
-    with rung():
-        copy(SequenceStep, ReportedSequenceStep)
+        # R24-R27: terminal approach and settling receipt.
+        with rung(Or(SequenceStep == 80, And(SequenceStep >= 90, ~SettleDelay.Done))):
+            out(MovingNegative)
+
+        with rung(Or(SequenceStep == 80, SequenceStep >= 90), BaseSensor):
+            on_delay(SettleDelay, SettleSeconds, "sec")
+
+        with rung(SequenceStep == 80):
+            latch(PositionSeen)
+
+        with rung(SequenceStep == 80, SettleDelay.Done):
+            copy(81, SequenceStep, oneshot=True)
+
+        # R28: terminal-value validity check.
+        with rung(
+            Or(
+                PositionReading < PositionThreshold,
+                BypassPositionCheck,
+                SequenceInterrupted == 1,
+            ),
+            SequenceStep == 81,
+        ):
+            copy(10, SequenceStep, oneshot=True)
+
+        # R29: active-low interruption.  With BaseSensor true this is the exact
+        # late writer that destroys the terminal value and timer enable after the
+        # input has gone true long enough to re-arm its one-shot.  The cold-start
+        # scan executes it once while false; preserving that spent state is part of
+        # the adjacent-scan route receipt.
+        with rung(~InterruptionInput):
+            if field_order:
+                base_branch()
+            with branch(
+                Or(
+                    And(SequenceStep == 50, FirstDwell.Acc < 10),
+                    And(SequenceStep == 70, SecondDwell.Acc < 10),
+                    SequenceStep < 50,
+                    And(SequenceStep >= 60, SequenceStep < 70),
+                ),
+                ~BaseSensor,
+            ):
+                copy(2, LocalSequenceStep)
+                copy(80, SequenceStep, oneshot=True)
+                copy(1, SequenceInterrupted, oneshot=True)
+            if not field_order:
+                base_branch()
+
+        # The relevant late error writers retain their original ordering.
+        with rung(FirstWatchdog.Done):
+            copy(91, SequenceStep, oneshot=True)
+
+        with rung(SecondWatchdog.Done):
+            copy(92, SequenceStep, oneshot=True)
+
+        with rung(~NetworkAvailable, SequenceStep <= 20):
+            copy(98, SequenceStep, oneshot=True)
+
+        # A durable reconnect first repairs the disconnected state, and the
+        # sibling status branch can replace the productive 10 unless the program
+        # has advanced beyond the local handoff or one of the program-owned status
+        # alternatives changed.  This is the neutral 98 -> 10 -> 94 mechanism: in
+        # the field order the status branch, below the repair, sees its 10 on the
+        # same scan; in adjacent_logic it sits above the repair and sees the 10 on
+        # the following scan.
+        with rung(NetworkAvailable):
+            if field_order:
+                repair_branch()
+            with branch(SequenceStep <= 20):
+                with branch(RecoveryCounter.Done):
+                    copy(97, SequenceStep, oneshot=True)
+                with branch(~RecoveryCounter.Done, ServiceStatus == 0):
+                    copy(94, SequenceStep, oneshot=True)
+            if not field_order:
+                repair_branch()
+
+        with rung(~SafetyPermit):
+            copy(99, SequenceStep, oneshot=True)
+
+        with rung(SequenceStep == 99, SafetyPermit):
+            copy(0, SequenceStep, oneshot=True)
+
+        # The field communication transaction shares NetworkAvailable with a
+        # peer-ready contact. This relationship is intentionally included even
+        # though CommunicationPulse does not directly drive SequenceStep: it is
+        # what lets ProgramStep attach communication context to the reconnect act.
+        with rung(system.sys.clock_500ms, NetworkPeerReady, NetworkAvailable):
+            out(CommunicationPulse)
+
+        with rung(RouteControl == 0, CommunicationPulse):
+            out(CommunicationSuccess)
+
+        with rung(CommunicationSuccess):
+            copy(10, RouteControl)
+
+        with rung(RouteControl == 10, CommunicationPulse):
+            copy(1, RouteEnabled)
+
+        # As in the source program, the simulation override is evaluated after
+        # the sequence and error rungs, so its route effect starts next scan.
+        with rung(SimulationMode):
+            copy(100, RouteControl)
+
+        with rung(~SimulationMode):
+            copy(0, RouteControl, oneshot=True)
+
+        # These writers occur after the recovery reads, matching the field
+        # program's later communication subroutine. They make the counter/status
+        # terms program-owned without turning the recovery chart into action
+        # authority.
+        with rung(CommunicationError):
+            count_up(RecoveryCounter, 60).reset(~CommunicationError)
+
+        with rung():
+            copy(ServiceStatusInput, ServiceStatus)
+
+        # The field program copies its live sequence register unconditionally to
+        # a later reporting register. This is a one-way observation handoff, not a
+        # second navigated channel. Keeping it here ensures Compass preserves that
+        # distinction while still seeing the same receipt topology as the field
+        # program.
+        with rung():
+            copy(SequenceStep, ReportedSequenceStep)
+    return logic
+
+
+#: The field program's order.
+logic = _build(field_order=True)
+#: The read branches above the rows they must not see (the adjacent-scan lifecycle).
+adjacent_logic = _build(field_order=False)

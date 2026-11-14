@@ -58,19 +58,22 @@ def test_condition_trace_engine_evaluates_basic_contacts_and_edges() -> None:
     assert _detail_map(nc_details) == {"tag": "Button", "value": False}
     assert engine.expression(nc_cond) == "!Button"
 
+    # An edge contact reads its own site's memory, ``_edge:e{N}``.
     rise_cond = RisingEdgeCondition(button)
+    rise_cond._site_key = "e1"
     rise_value, rise_details = engine.evaluate(
         rise_cond,
-        _ctx({"Button": True}, {"_prev:Button": False}),
+        _ctx({"Button": True}, {"_edge:e1": False}),
     )
     assert rise_value is True
     assert _detail_map(rise_details) == {"tag": "Button", "current": True, "previous": False}
     assert engine.expression(rise_cond) == "rise(Button)"
 
     fall_cond = FallingEdgeCondition(button)
+    fall_cond._site_key = "e2"
     fall_value, fall_details = engine.evaluate(
         fall_cond,
-        _ctx({"Button": False}, {"_prev:Button": True}),
+        _ctx({"Button": False}, {"_edge:e2": True}),
     )
     assert fall_value is True
     assert _detail_map(fall_details) == {"tag": "Button", "current": False, "previous": True}
@@ -184,3 +187,59 @@ def test_condition_trace_engine_unknown_condition_uses_fallbacks() -> None:
         )
         == "[T] AlwaysTrueCondition"
     )
+
+
+def test_a_text_window_traces_as_the_compare_written() -> None:
+    # ``Txt[1] == "AB"`` runs as the And of one compare per character; the trace
+    # shows the one compare, the characters it reads, and its truth.
+    engine = ConditionTraceEngine(formatter=TraceFormatter())
+    txt = Block("TXT", TagType.CHAR, 1, 10)
+    equal, unequal = txt[1] == "AB", txt[1] != "AB"
+
+    value, details = engine.evaluate(equal, _ctx({"TXT1": "A", "TXT2": "B"}))
+    assert value is True
+    assert _detail_map(details) == {"left": "TXT1", "left_value": "AB", "right_value": "AB"}
+    assert engine.expression(equal) == "TXT1 == 'AB'"
+    assert engine.summary(equal, details) == "TXT1(AB) == 'AB'"
+
+    value, details = engine.evaluate(unequal, _ctx({"TXT1": "A", "TXT2": "C"}))
+    assert value is True
+    assert _detail_map(details)["left_value"] == "AC"
+    assert engine.expression(unequal) == "TXT1 != 'AB'"
+
+    ready = Bool("Ready")
+    nested = And(ready, equal)
+    value, details = engine.evaluate(nested, _ctx({"Ready": True, "TXT1": "A", "TXT2": "X"}))
+    assert value is False
+    assert _detail_map(details)["terms"] == "Ready(True)(true) & TXT1(AX) == 'AB'(false)"
+    assert engine.expression(nested) == "(Ready & TXT1 == 'AB')"
+    value, details = engine.evaluate(nested, _ctx({"Ready": False}))
+    assert _detail_map(details)["terms"] == "Ready(False)(false) & TXT1 == 'AB'(skipped)"
+
+
+def test_the_debugger_shows_a_text_window_on_its_source_line() -> None:
+    from pyrung.core import PLC, Program, Rung, out
+
+    txt = Block("TXT", TagType.CHAR, 1, 10)
+    hit = Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung(txt[1] == "AB"):
+            out(hit)
+    line = logic.rungs[0]._conditions[0].source_line
+
+    runner = PLC(logic)
+    runner.patch({"TXT1": "A", "TXT2": "B"})
+    shown = [
+        condition
+        for step in runner.debug.scan_steps_debug()
+        if step.trace is not None
+        for region in step.trace.regions
+        for condition in region.conditions
+    ]
+    assert shown
+    assert {c.expression for c in shown} == {"TXT1 == 'AB'"}
+    assert {(c.source_line, c.status, c.annotation) for c in shown} == {
+        (line, "true", "[T] TXT1(AB) == 'AB'")
+    }
+    assert line is not None
+    assert runner.current_state.tags["Hit"] is True

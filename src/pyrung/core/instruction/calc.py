@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.expression import Expression
+from pyrung.core.expression import (
+    ABS_OF_TYPE,
+    CALC_FAULTS,
+    CALC_OPS,
+    BinaryExpr,
+    CalcBinaryExpr,
+    CalcUnaryExpr,
+    Expression,
+    LiteralExpr,
+    MathFuncExpr,
+    RandIntExpr,
+    ShiftFuncExpr,
+    TagExpr,
+    UnaryExpr,
+    _op_and,
+)
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.storage import check_real_value
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .base import Instruction, OneShotMixin
@@ -16,7 +31,8 @@ from .conversions import (
     _truncate_to_tag_type,
 )
 from .resolvers import (
-    _set_fault_division_error,
+    _raise_fault,
+    _set_fault_address_error,
     _set_fault_out_of_range,
     resolve_tag_name_ctx,
     resolve_tag_or_value_ctx,
@@ -70,6 +86,12 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
         found.add(value.block.type)
         return
 
+    if isinstance(value, RandIntExpr):
+        # The draw's hidden DINT tag holds the result; the bounds set the family.
+        _collect_calc_tag_types(value.lo, found, seen)
+        _collect_calc_tag_types(value.hi, found, seen)
+        return
+
     if isinstance(value, Expression):
         for child in vars(value).values():
             _collect_calc_tag_types(child, found, seen)
@@ -83,6 +105,160 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
     if isinstance(value, (list, tuple, set, frozenset)):
         for item in value:
             _collect_calc_tag_types(item, found, seen)
+
+
+def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
+    """Refuse a float constant in a calc expression outside CLICK's REAL range."""
+    if seen is None:
+        seen = set()
+    if id(value) in seen:
+        return
+    seen.add(id(value))
+    if isinstance(value, float):
+        check_real_value(value, "math() constant")
+    elif isinstance(value, Expression):
+        for child in vars(value).values():
+            check_float_literals(child, seen)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            check_float_literals(item, seen)
+
+
+def _int32(value: int) -> int:
+    """*value* cut to its low 32 bits, read as a signed Dint."""
+    return ((value + 0x8000_0000) & 0xFFFF_FFFF) - 0x8000_0000
+
+
+@dataclass(frozen=True)
+class _CalcForm:
+    """How :func:`calc_form` rewrites a formula: see there."""
+
+    unsigned: bool = False
+    abs_ops: bool = False
+    mask_shifts: bool = False
+    calc_ops: bool = True
+
+    def cut(self, value: int) -> int:
+        return value & 0xFFFF if self.unsigned else _int32(value)
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Whether bounds *a* and *b* are one constant, or one node (``==`` on an
+    expression builds a condition, not a bool)."""
+    a = a.value if isinstance(a, LiteralExpr) else a
+    b = b.value if isinstance(b, LiteralExpr) else b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    return a is b
+
+
+def _rebuild(value: Any, form: _CalcForm) -> Any:
+    """*value* rewritten by *form*: itself when nothing changes, else a copy of the
+    tree with the changed nodes rebuilt."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return form.cut(value)
+    if isinstance(value, LiteralExpr):
+        cut = _rebuild(value.value, form)
+        return value if cut == value.value else LiteralExpr(cut)
+    if isinstance(value, BinaryExpr):
+        left = _rebuild(value.left, form)
+        right = _rebuild(value.right, form)
+        op = CALC_OPS.get(value.op, value.op) if form.calc_ops else value.op
+        cls = CalcBinaryExpr if form.calc_ops else type(value)
+        node = value
+        if (
+            left is not value.left
+            or right is not value.right
+            or op is not value.op
+            or type(value) is not cls
+        ):
+            node = cls(left, right, op, value.symbol)
+        if form.mask_shifts and value.symbol == "<<":
+            node = cls(node, LiteralExpr(0xFFFF), _op_and, "&")
+        return node
+    if isinstance(value, UnaryExpr):
+        operand = _rebuild(value.operand, form)
+        op = value.op
+        if form.abs_ops and value.symbol == "abs" and isinstance(operand, TagExpr):
+            op = ABS_OF_TYPE.get(operand.tag.type.name, op)
+        cls = CalcUnaryExpr if form.calc_ops else type(value)
+        if operand is value.operand and op is value.op and type(value) is cls:
+            return value
+        return cls(operand, op, value.symbol)
+    if isinstance(value, MathFuncExpr):
+        operand = _rebuild(value.operand, form)
+        if operand is value.operand:
+            return value
+        return type(value)(operand, value.func, value.name)
+    if isinstance(value, ShiftFuncExpr):
+        shifted = _rebuild(value.value, form)
+        count = _rebuild(value.count, form)
+        node = value
+        if shifted is not value.value or count is not value.count:
+            node = type(value)(shifted, count, value.func, value.name)
+        if form.mask_shifts and value.name == "lsh":
+            return BinaryExpr(node, LiteralExpr(0xFFFF), _op_and, "&")
+        return node
+    if isinstance(value, RandIntExpr):
+        # A bound keeps its ops: only its constants are cut (CLICK's editor takes
+        # no formula as a bound, CLK_MATH_ARG_NOT_PLAIN).
+        form = replace(form, calc_ops=False)
+        lo = _rebuild(value.lo, form)
+        hi = _rebuild(value.hi, form)
+        if lo is value.lo and hi is value.hi:
+            return value
+        # A hex Math's cut is its own draw only where it differs from a decimal one's.
+        signed = _CalcForm(calc_ops=False)
+        unsigned = form.unsigned and not (
+            _same(_rebuild(value.lo, signed), lo) and _same(_rebuild(value.hi, signed), hi)
+        )
+        return value.with_cut_bounds(lo, hi, unsigned=unsigned)
+    return value
+
+
+def cut_int_constants(value: Any) -> Any:
+    """*value* (a calc expression) with each integer constant cut to 32 bits, signed.
+
+    What a decimal Math runs (:func:`calc_form`), the bounds of a ``randint()``
+    included.  Only a constant past a Dint's range changes.
+    """
+    return _rebuild(value, _CalcForm(calc_ops=False))
+
+
+def calc_form(expression: Any, mode: CalcMode) -> Any:
+    """*expression* as a CLICK Math in *mode* runs it (measured, 2026-11-11).
+
+    - A decimal Math keeps each integer constant whole, whatever the destination
+      (``DD1 / 65536`` divides by 65536).  CLICK's editor refuses a constant past
+      a Dint's range.  pyrung cuts one to its low 32 bits, as a CLICK ran a pasted one.
+    - A hex Math cuts each integer constant to 16 bits, unsigned (the export's
+      ``1170h`` for 70000).
+    - The constant bounds of a ``randint()`` are cut as the other constants are, so
+      ``randint(70000, 70002)`` draws 70000..70002 in decimal mode and 4464..4466 in
+      hex mode.
+    - Each ``BinaryExpr`` and ``UnaryExpr`` becomes a ``CalcBinaryExpr`` or
+      ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
+    - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
+      a negative power is +Inf (:data:`~pyrung.core.expression.CALC_OPS`).
+      Outside ``calc`` they stay Python's.
+    - ``abs()`` of an Int or Dint tag cannot take the bottom of its range:
+      ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43, and so is ``abs(DD1)``
+      with DD1 = -2147483648.  Keyed on the operand's type, so into a wider
+      destination too (``abs(DS1)`` into a Dint read 0 on a CLICK).
+    - In hex mode a left shift keeps 16 bits: the bits shifted out are gone, so
+      ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
+      are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
+      not yet read.
+
+    Returns *expression* itself when nothing changes (no operation in it).
+    """
+    if mode == "hex":
+        form = _CalcForm(unsigned=True, mask_shifts=True)
+    else:
+        form = _CalcForm(abs_ops=True)
+    return _rebuild(expression, form)
 
 
 def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
@@ -115,8 +291,44 @@ class CalcInstruction(OneShotMixin, Instruction):
     **Wrapping semantics:** Overflow wraps — e.g. storing 32 768 into an INT
     tag produces −32 768. This differs from `CopyInstruction`, which clamps.
 
-    **Division by zero:** Result is forced to 0 and the division-error fault
-    flag is set. The instruction completes normally.
+    **Math errors are the failing operation's:** it is 0, its flag is set, and
+    the formula carries on, as a CLICK's Math does (``DD1 / DD2 + 5`` with DD2 =
+    0 stores 5, into a REAL 5.0).  A division by zero sets the division-error
+    flag (``system.fault.division_error``, CLICK's SC40).  The instruction
+    completes normally.
+
+    **Flags:** every Math the scan reaches clears SC40, SC43, SC44 and SC46 as
+    it starts, before it reads.  That holds on a false rung and for a one-shot
+    that does not fire too.  A flag left on carries into the next scan.
+
+    **REAL overflow:** a result past +/-3.4028235E+38 stores +/-Inf and sets
+    the out-of-range flag (``system.fault.out_of_range``, CLICK's SC43), as a
+    CLICK's float32 Math does.  An Inf operand follows IEEE 754 (``Inf / 2`` is
+    Inf, ``Inf - Inf`` is NaN); a REAL result of +/-Inf sets the flag too, and
+    NaN is stored with no flag.  Into an INT, DINT or WORD, a result of +/-Inf
+    stores 0 and sets the flag, and NaN stores 0 with no flag.  A bitwise or
+    shift operation on an Inf or NaN operand is 0 and sets the flag, whatever
+    the destination.  The range is checked on the stored
+    result only: a step of the formula is a double, as on a CLICK (an integer
+    step past 2 ** 53 is rounded to one, and ``**`` past the double range is
+    +/-Inf).
+
+    **Math domain error** (``sqrt`` of a negative, ``log``/``log10`` of 0 or a
+    negative, ``asin``/``acos`` outside -1..1, a negative base to a fractional
+    power): the function is 0 and the math-operation error flag
+    (``system.fault.math_operation_error``, CLICK's SC46) is set until the next
+    Math clears it, as SC40 is.  The PLC stays in RUN, as a
+    CLICK does (its help says SC50 turns on and the PLC goes to STOP; the
+    hardware does not).  ``0 ** 0`` and a MOD by 0 are 0 and set no flag (into
+    a REAL 0.0).  0 to a negative power is +Inf, so into an INT, DINT or WORD
+    the formula stores 0 and sets the out-of-range flag.  MOD truncates: the
+    result has the dividend's sign.
+
+    **Constants:** a decimal Math keeps each integer constant whole, as a CLICK
+    Math does, so ``math(DD1 / 65536, DS1)`` divides by 65536.  A hex Math cuts
+    each one to 16 bits, unsigned.  See :func:`calc_form`.  ``expression`` holds
+    the formula as it runs, and ``source_expression`` the one written, which the
+    CLICK export writes.
 
     **Mode inference:**
     - Uses ``"hex"`` only when all referenced tags (plus destination) are WORD.
@@ -132,6 +344,16 @@ class CalcInstruction(OneShotMixin, Instruction):
 
     _reads = ("expression",)
     _writes = ("dest",)
+    _fault_writes: tuple[str, ...] = (
+        "fault.division_error",
+        "fault.out_of_range",
+        "fault.address_error",
+        "fault.math_operation_error",
+    )
+    _fault_follows = _fault_writes
+    # A CLICK Math clears its four flags even on a false rung, or as a one-shot
+    # that does not fire (``flag_steps``, ``flag_reads``).
+    _fault_settles_idle = True
     _conditions = ()
     _structural_fields = ("mode",)
 
@@ -142,28 +364,41 @@ class CalcInstruction(OneShotMixin, Instruction):
         *,
         oneshot: bool = False,
     ):
+        if isinstance(dest, (IndirectRef, IndirectExprRef)):
+            raise TypeError(
+                "math() writes a tag, not a pointer address: "
+                "math() into a tag, then copy() it to the pointer destination"
+            )
         OneShotMixin.__init__(self, oneshot)
-        self.expression = expression
+        check_float_literals(expression)
+        self.source_expression = expression
         self.dest = dest
         self.mode_inference = infer_calc_mode(expression, dest)
         self.mode = self.mode_inference.mode
+        self.expression = calc_form(expression, self.mode)
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        # Evaluate expression (handles Tag, Expression, IndirectRef, literal)
+        # Evaluate expression (handles Tag, Expression, IndirectRef, literal).
+        # A failing operation is 0 and notes its flag in *faults* (CALC_FAULTS):
+        # the formula carries on, and a division by zero is 0, not Inf, so a
+        # result that is not finite comes from an Inf or NaN operand, or an overflow.
+        faults: list[str] = []
+        token = CALC_FAULTS.set(faults)
         try:
             value = resolve_tag_or_value_ctx(self.expression, ctx)
-        except ZeroDivisionError:
-            _set_fault_division_error(ctx)
-            value = 0
-        except OverflowError:
-            _set_fault_out_of_range(ctx)
-            value = 0
-
-        # Expression division may return non-finite sentinels for divide-by-zero.
-        if isinstance(value, float) and not math.isfinite(value):
-            _set_fault_division_error(ctx)
-            value = 0
+        except IndexError:
+            # An indexed source below its block: the address-error flag,
+            # nothing written (as copy(), the kernel and CircuitPython do),
+            # after the flags of its address's failing operations.
+            value = None
+        finally:
+            CALC_FAULTS.reset(token)
+        for name in faults:
+            _raise_fault(ctx, name)
+        if value is None:
+            _set_fault_address_error(ctx)
+            return
 
         if _math_out_of_range_for_dest(value, self.dest, self.mode):
             _set_fault_out_of_range(ctx)

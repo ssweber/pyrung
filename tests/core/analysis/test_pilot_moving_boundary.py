@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung import PLC, Int, Program, Timer, calc, copy, on_delay, rung
+from pyrung import PLC, Int, Program, Timer, copy, math, on_delay, rung
 from pyrung.core.analysis.pilot.api import pilot_events
 
 
@@ -21,8 +21,8 @@ def _oven_ramp_program() -> tuple[Program, dict[str, Any]]:
         with rung(state == 0, step < 5):
             on_delay(tick, 20, "ms")
         with rung(state == 0, tick.Done, pv >= sv, step < 5):
-            calc(sv + 10, sv)
-            calc(step + 1, step)
+            math(sv + 10, sv)
+            math(step + 1, step)
             copy(0, tick.Acc)
 
         # Fault is the only externally visible symptom of falling behind.  The

@@ -37,7 +37,10 @@ from pyrung.core.analysis.pilot.requirement_derivation import (
     derive_advance_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
 )
-from pyrung.core.analysis.pilot.requirement_evidence import _bind_guard_derivation_authority
+from pyrung.core.analysis.pilot.requirement_evidence import (
+    _bind_guard_derivation_authority,
+    _walk_program_guard_to_inputs,
+)
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     ExpectationReceipt,
@@ -547,7 +550,7 @@ def _exact_correction_requirement_from_regression(
         if not constraints:
             refined_holds.append(candidate)
             continue
-        tag = source_checkpoint.world.work._known_tags_by_name.get(candidate.dest)
+        tag = source_checkpoint.world.work._tag_known_or_reached(candidate.dest)
         values = (
             satisfying_values(
                 tag,
@@ -878,7 +881,7 @@ def _delayed_requirement_from_regression(
     )
     source_work = source_checkpoint.world.work
     source_tags = source_work.state.tags
-    known = source_work._known_tags_by_name
+    known = source_work.tags
     configured = getattr(source_checkpoint, "configured_inputs", None)
     if configured is None:
         # Lightweight unit-test checkpoints predate the immutable provenance
@@ -942,6 +945,13 @@ def _delayed_requirement_from_regression(
             ),
             source_checkpoint,
             ctx,
+        )
+        derivation = _walk_program_guard_to_inputs(
+            derivation,
+            projection,
+            source_checkpoint,
+            ctx,
+            ((obligation.tag, obligation.value),),
         )
     if derivation.requirement is None:
         return None

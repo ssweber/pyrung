@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import itertools
+
 from pyrung import call, subroutine
-from pyrung.core import Bool, Int, Program, Rung, branch, latch, out, reset
+from pyrung.core import PLC, Bool, Int, Program, Rung, branch, latch, out, reset
+from pyrung.core import And as AllOf
+from pyrung.core import Or as AnyOf
 from pyrung.core.analysis.simplified import (
     And,
     Atom,
@@ -85,11 +89,25 @@ def test_and_chain() -> None:
     assert render(forms["T"].expr) == "A, B"
 
 
-def test_or_topology_via_branches() -> None:
+def test_or_topology_via_an_or_contact() -> None:
     A = Bool("A")
     B = Bool("B")
     T = Bool("T")
     with Program() as prog:
+        with Rung(AnyOf(A, B)):
+            out(T)
+
+    forms = simplified_forms(prog)
+    assert render(forms["T"].expr) == "Or(A, B)"
+
+
+def test_last_out_in_a_rung_wins() -> None:
+    """An ``out`` writes its power whether on or off, so of two ``out(T)`` in
+    one rung the last decides T, as stepping the program does."""
+    A = Bool("A")
+    B = Bool("B")
+    T = Bool("T")
+    with Program(strict=False) as prog:
         with Rung():
             with branch(A):
                 out(T)
@@ -97,21 +115,27 @@ def test_or_topology_via_branches() -> None:
                 out(T)
 
     forms = simplified_forms(prog)
-    assert render(forms["T"].expr) == "Or(A, B)"
+    assert render(forms["T"].expr) == "B"
+    for a, b in itertools.product([False, True], repeat=2):
+        plc = PLC(prog)
+        plc.patch({"A": a, "B": b})
+        plc.step()
+        assert plc.current_state.tags["T"] is b
 
 
 def test_branches_preserve_factored_form() -> None:
-    """Sibling branches factor as And(parent, Or(local₁, local₂))."""
+    """Sibling branches that both drive T (an ``out``, then a ``latch`` after
+    it) factor as And(parent, Or(local₁, local₂))."""
     P = Bool("P")
     X = Bool("X")
     Y = Bool("Y")
     T = Bool("T")
-    with Program() as prog:
+    with Program(strict=False) as prog:
         with Rung(P):
             with branch(X):
                 out(T)
             with branch(Y):
-                out(T)
+                latch(T)
 
     forms = simplified_forms(prog)
     result = render(forms["T"].expr)
@@ -119,14 +143,15 @@ def test_branches_preserve_factored_form() -> None:
 
 
 def test_pivot_resolution_preserves_branch_topology() -> None:
-    """Resolved pivots with branches produce factored form, not flat DNF."""
+    """A resolved pivot keeps its rung's trunk; of its two ``out``s in that
+    rung, the last decides it."""
     A = Bool("A")
     B = Bool("B")
     P = Bool("P")
     X = Bool("X")
     Y = Bool("Y")
     T = Bool("T")
-    with Program() as prog:
+    with Program(strict=False) as prog:
         with Rung(A, B):
             with branch(X):
                 out(P)
@@ -137,22 +162,87 @@ def test_pivot_resolution_preserves_branch_topology() -> None:
 
     forms = simplified_forms(prog)
     result = render(forms["T"].expr)
-    assert result == "A, B, Or(X, Y)"
+    assert result == "A, B, Y"
+
+
+def test_pivot_written_below_a_branch_is_not_seen_by_it() -> None:
+    """A branch reads its contacts when the solve reaches it: a write of the
+    pivot by an instruction below that branch has not happened yet."""
+    A = Bool("A")
+    B = Bool("B")
+    P = Bool("P")
+    T = Bool("T")
+    with Program(strict=False) as prog:
+        with Rung(A):
+            out(P)
+        with Rung(B):
+            with branch(P):
+                out(T)
+            out(P)
+
+    forms = simplified_forms(prog)
+    assert render(forms["T"].expr) == "B, A"
+
+
+def test_trunk_contact_keeps_its_first_solved_value() -> None:
+    """A branch's inherited trunk contact keeps the value it was solved with
+    when the scan entered the rung, even after an earlier branch rewrote it;
+    only the branch's own contacts see that write."""
+    A = Bool("A")
+    C = Bool("C")
+    D = Bool("D")
+    Q = Bool("Q")
+    T = Bool("T")
+    with Program(strict=False) as prog:
+        with Rung(A):
+            out(Q)
+        with Rung(Q):
+            with branch(C):
+                out(Q)
+            with branch(D):
+                out(T)
+
+    forms = simplified_forms(prog)
+    assert render(forms["T"].expr) == "A, D"
+    for a, c, d in itertools.product([False, True], repeat=3):
+        plc = PLC(prog)
+        plc.patch({"A": a, "C": c, "D": d})
+        plc.step()
+        assert plc.current_state.tags["T"] is (a and d)
+
+
+def test_branches_of_different_parents_do_not_factor() -> None:
+    """Writers at the same depth under different parent branches inherit
+    different contacts, so they OR whole paths instead of sharing one parent."""
+    G = Bool("G")
+    X = Bool("X")
+    Y = Bool("Y")
+    Q = Bool("Q")
+    R = Bool("R")
+    U = Bool("U")
+    with Program() as prog:
+        with Rung(G):
+            with branch(X):
+                with branch(Q):
+                    latch(U)
+            with branch(Y):
+                with branch(R):
+                    latch(U)
+
+    forms = simplified_forms(prog)
+    assert render(forms["U"].expr) == "Or(And(G, X, Q), And(G, Y, R))"
 
 
 def test_and_or_combined() -> None:
-    """A, Or(B, C) topology via rung condition + OR branches."""
+    """A, Or(B, C) topology via a rung condition and an Or contact."""
     A = Bool("A")
     B = Bool("B")
     C = Bool("C")
     P = Bool("P")
     T = Bool("T")
     with Program() as prog:
-        with Rung():
-            with branch(B):
-                out(P)
-            with branch(C):
-                out(P)
+        with Rung(AnyOf(B, C)):
+            out(P)
         with Rung(A, P):
             out(T)
 
@@ -237,11 +327,8 @@ def test_seal_in_does_not_infinite_loop() -> None:
     Running = Bool("Running")
     T = Bool("T")
     with Program() as prog:
-        with Rung():
-            with branch(Start):
-                out(Running)
-            with branch(SealIn):
-                out(Running)
+        with Rung(AnyOf(Start, SealIn)):
+            out(Running)
         with Rung(Running):
             out(SealIn)
         with Rung(Running):
@@ -523,19 +610,14 @@ def test_realistic_motor_circuit() -> None:
             out(SafetyOK)
         with Rung(RunPermit, SafetyOK):
             out(Permitted)
-        with Rung(Permitted):
-            with branch(StartBtn):
-                out(Running)
-            with branch(SealIn):
-                out(Running)
+        with Rung(Permitted, AnyOf(StartBtn, SealIn)):
+            out(Running)
         with Rung(Running):
             out(SealIn)
-        # Both paths in same rung via branches (correct OR topology)
-        with Rung():
-            with branch(Running, ~Fault):
-                out(MotorOut)
-            with branch(MaintOverride):
-                out(MotorOut)
+        # Both paths into one coil (an Or contact; two out(MotorOut) would be
+        # two coils, the last one deciding)
+        with Rung(AnyOf(AllOf(Running, ~Fault), MaintOverride)):
+            out(MotorOut)
 
     forms = simplified_forms(prog)
     result = render(forms["MotorOut"].expr)
@@ -569,11 +651,8 @@ class TestTerminalFormPermissives:
         Jog = Bool("Jog")
         Motor = Bool("Motor")
         with Program(strict=False) as logic:
-            with Rung(SafetyOK):
-                with branch(Start):
-                    out(Motor)
-                with branch(Jog):
-                    out(Motor)
+            with Rung(SafetyOK, AnyOf(Start, Jog)):
+                out(Motor)
 
         permissives = logic.simplified()["Motor"].permissives
         assert SafetyOK in permissives

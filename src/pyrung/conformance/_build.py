@@ -1,0 +1,451 @@
+"""The canonical conformance program: one CLICK subroutine per group on fixed DS blocks.
+
+The main program writes the layout hash to ``DS1`` every scan and keeps the
+longest scan time in ``DS2``.  It calls every group's subroutine unconditionally.
+Each subroutine writes its own hash (of its exported case rungs) to its group
+header every scan, then runs its cases.
+Each case starts with its commented reset rung (see ``_ladder.py``), then its
+ladder, gated by its slot's ``Cmd``/``Fired``.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import shutil
+import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from pyclickplc.validation import NICKNAME_MAX_LENGTH
+
+from pyrung.conformance._case import Case, Group
+from pyrung.conformance._ladder import check_disjoint, emit_case
+from pyrung.conformance._manifest import GroupLayout, Manifest
+from pyrung.conformance._slot import (
+    LONGEST_SCAN_REGISTER,
+    PROGRAM_HASH_REGISTER,
+    SLOT_FIELDS,
+    SLOT_STRIDE,
+    make_slot,
+    slot_register,
+)
+from pyrung.conformance._tee import draw_tees
+from pyrung.core import Int, Program, Rung, call, copy, subroutine, system
+
+if TYPE_CHECKING:
+    from pyrung.click import TagMap
+    from pyrung.core.structure import _NamedArrayRuntime
+    from pyrung.core.tag import Tag
+
+#: Bump when the header protocol changes, so an old program bails as a mismatch.
+#: 3: slots gained ``Ready``, raised by each case's reset rung.
+#: 4: main keeps the longest scan in ``DS2`` (``LONGEST_SCAN_REGISTER``).
+LAYOUT_VERSION = 4
+
+#: Findings the export lets through: the suite pastes RAND with DF and equal
+#: bounds, and hex Math constants past 16 bits, and measures what CLICK does with them.
+#: ``past_write`` and ``past_clean`` run a pointer past DD1000 on purpose, so the export's
+#: warning for it is let through too.
+PASTE_PROBE_FINDINGS = (
+    "CLK_RAND_BOUND_TYPE",
+    "CLK_RAND_EQUAL_BOUNDS",
+    "CLK_MATH_WIDE_CONSTANT",
+    "CLK_PTR_PAST_BANK",
+)
+
+
+@dataclass(frozen=True)
+class GroupBuild:
+    """One group as built: its subroutine, its DS block, and its hash."""
+
+    group: Group
+    layout: GroupLayout
+    #: Cases that run over the wire, with their slot index, in group order.
+    cases: tuple[tuple[int, Case], ...]
+    slot: _NamedArrayRuntime
+    hash_tag: Tag
+    #: What the subroutine writes to its group header every scan (1..32767).
+    group_hash: int
+    #: Case id -> hash of the case's own exported rows (comment, reset, ladder).
+    #: A hardware confirmation holds while it matches (``confirmed.toml``).
+    case_hashes: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def name(self) -> str:
+        return self.group.name
+
+    @property
+    def subroutine(self) -> str:
+        return self.group.subroutine
+
+    @property
+    def base(self) -> int:
+        return self.layout.base
+
+    @property
+    def hash_register(self) -> int:
+        return self.layout.base
+
+    def register(self, index: int, field: str = "Cmd") -> int:
+        return slot_register(self.layout.base, index, field)
+
+    @property
+    def span(self) -> tuple[int, int]:
+        """First register of the lowest used slot and register count up to the highest."""
+        indexes = [i for i, _ in self.cases]
+        first = self.register(min(indexes))
+        return first, (max(indexes) - min(indexes) + 1) * SLOT_STRIDE
+
+
+@dataclass(frozen=True)
+class ConformanceProgram:
+    """The program a Modbus run talks to, and the layout it was built with.
+
+    ``groups`` are the groups with at least one case on the wire, in the order
+    given.  ``skipped`` holds every in-process-only case as
+    ``(group name, case)``; they are left out of the program.  ``names`` is
+    every group name given, wire or not.
+    """
+
+    groups: tuple[GroupBuild, ...]
+    skipped: tuple[tuple[str, Case], ...]
+    names: tuple[str, ...]
+    program: Program
+    tag_map: TagMap
+    #: What the main program writes to ``DS1`` every scan (1..32767).
+    program_hash: int
+    #: The part this program is, for messages (``None``: no part).
+    part: str | None = None
+    #: The longest scan, in ms, the cases assume.  On a real PLC, a run whose longest scan is past it
+    #: is void (``None``: no limit).
+    scan_limit_ms: int | None = None
+
+    def group(self, name: str) -> GroupBuild:
+        for g in self.groups:
+            if g.name == name:
+                return g
+        raise KeyError(name)
+
+    def export(self, directory: str | Path, *, drawn: bool = True) -> Path:
+        """Write the whole CLICK project: ``main.csv``, one CSV per group subroutine
+        under ``subroutines/``, and ``nicknames.csv``.
+
+        Cases with a ``tee`` are drawn with their pins teeing off the box's
+        input wire; ``drawn=False`` writes the exporter's rail drawing for them.
+
+        Returns the directory.  Load it once; afterwards replace one group's
+        subroutine at a time.
+        """
+        from pyrung.click.ladder import pyrung_to_ladder
+
+        out = Path(directory)
+        out.mkdir(parents=True, exist_ok=True)
+        # A subroutine left by an earlier export into *out* would be pasted too.
+        for stale in (out / "subroutines").glob("*.csv"):
+            stale.unlink()
+        bundle = pyrung_to_ladder(self.program, self.tag_map, allow=PASTE_PROBE_FINDINGS)
+        if drawn:
+            bundle = _draw_tees(bundle, self.groups)
+        bundle.write(out)
+        self.tag_map.to_nickname_file(out / "nicknames.csv")
+        return out
+
+    def export_workspace(self, workspace: str | Path) -> Path:
+        """Replace ``src/plc/`` in a ClickNick workspace with this program as pyrung source.
+
+        The source is generated the way ClickNick generates it after a CLICK
+        save: the exported ladder CSVs go through
+        :func:`~pyrung.click.ladder_to_pyrung_project` (``index=True``, with
+        this program's nicknames), so rungs that did not change export to the
+        same CSV and ClickNick's Preview Changes shows only the ones that did.
+        Nothing else in the workspace is touched: ``csv/`` stays CLICK's
+        accepted snapshot, the baseline Preview Changes diffs against.
+
+        ``src/plc/`` is swapped in whole, so a reader never sees half of it.
+        Returns the new ``src/plc`` directory.
+        """
+        from pyrung.click import ladder_to_pyrung_project
+
+        root = Path(workspace)
+        if not root.is_dir():
+            raise FileNotFoundError(f"Workspace not found: {root}")
+        destination = root / "src" / "plc"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        previous = destination.with_name(".plc.conformance-previous")
+        with tempfile.TemporaryDirectory(prefix=".conformance-export-", dir=root) as stage:
+            csv_dir = self.export(Path(stage) / "csv")
+            project = Path(stage) / "project"
+            ladder_to_pyrung_project(
+                csv_dir,
+                nickname_csv=csv_dir / "nicknames.csv",
+                output_dir=project,
+                index=True,
+                workspace_kind="persistent",
+            )
+            if previous.exists():
+                shutil.rmtree(previous)
+            if destination.exists():
+                destination.replace(previous)
+            try:
+                (project / "src" / "plc").replace(destination)
+            except Exception:
+                if previous.exists() and not destination.exists():
+                    previous.replace(destination)
+                raise
+        if previous.exists():
+            shutil.rmtree(previous)
+        return destination
+
+
+def build_program(
+    groups: Group | Sequence[Group],
+    manifest: Manifest | None = None,
+    *,
+    part: str | None = None,
+    scan_limit_ms: int | None = None,
+) -> ConformanceProgram:
+    """Build the canonical program for *groups* on *manifest*'s fixed DS blocks.
+
+    Without a manifest the groups are packed in order (:meth:`Manifest.packed`),
+    which is fine for a local sim but moves registers whenever a case is added.
+    *part* names the program in messages.  On a real PLC, a run whose longest scan is
+    past *scan_limit_ms* is void (``ScanTimeError``).
+
+    Raises:
+        ManifestError: A wire case or group has no manifest entry; the message
+            says what to add.
+        ValueError: No case can run over Modbus, group names repeat, two cases
+            share memory, or a nickname would be longer than CLICK allows.
+    """
+    from pyrung.click import ClickBlocks, TagMap
+    from pyrung.click.ladder import pyrung_to_ladder
+
+    group_list = [groups] if isinstance(groups, Group) else list(groups)
+    names = tuple(g.name for g in group_list)
+    if len(set(names)) != len(names):
+        raise ValueError(f"Group names repeat: {names}")
+    if manifest is None:
+        manifest = Manifest.packed(group_list)
+
+    skipped = tuple((g.name, c) for g in group_list for c in g.cases if c.in_process_only)
+    wire_groups = [g for g in group_list if any(c.in_process_only is None for c in g.cases)]
+    if not wire_groups:
+        raise ValueError("No cases can run over Modbus.")
+    check_disjoint([(g.name, c) for g in wire_groups for c in g.cases if c.in_process_only is None])
+
+    ds = ClickBlocks().ds
+    program_hash_tag = Int("Conf_ProgramHash")
+    longest_scan_tag = Int("Conf_LongestScan")
+    mappings = [
+        program_hash_tag.map_to(ds[PROGRAM_HASH_REGISTER]),
+        longest_scan_tag.map_to(ds[LONGEST_SCAN_REGISTER]),
+    ]
+    staged: list[
+        tuple[Group, GroupLayout, tuple[tuple[int, Case], ...], _NamedArrayRuntime, Tag]
+    ] = []
+    for g in wire_groups:
+        layout = manifest.layout_for(g)
+        cases = tuple((layout.cases[c.id], c) for c in g.cases if c.in_process_only is None)
+        slot = make_slot(layout.slots, name=g.title)
+        hash_tag = Int(f"{g.title}_Hash")
+        _check_nicknames(g, hash_tag, slot, layout.slots)
+        first_slot = slot_register(layout.base, 1)
+        mappings.append(hash_tag.map_to(ds[layout.base]))
+        mappings.extend(slot.map_to(ds.select(first_slot, layout.last_register)))
+        # Each slot's spare register is part of the group's reserved block: the
+        # harness reads and zeroes slots in runs, so a target must serve it.  A
+        # tag named after its own address exports with no nickname, so the
+        # slot's named array still owns every nickname in its block.
+        for i in range(1, layout.slots + 1):
+            spare = slot_register(layout.base, i) + len(SLOT_FIELDS)
+            mappings.append(Int(f"DS{spare}").map_to(ds[spare]))
+        staged.append((g, layout, cases, slot, hash_tag))
+    tag_map = TagMap(mappings)
+
+    built: list[GroupBuild] = []
+    for g, layout, cases, slot, hash_tag in staged:
+        with Program(strict=False) as body:
+            if g.in_main:
+                _case_rungs(g.name, cases, slot)
+            else:
+                with subroutine(g.subroutine):
+                    _case_rungs(g.name, cases, slot)
+        # Validated export: a case the CLICK exporter rejects fails here, before
+        # any wire traffic.  Mark such a case ``in_process_only``.
+        bundle = _draw_tees(
+            pyrung_to_ladder(body, tag_map, allow=PASTE_PROBE_FINDINGS), [_Drawn(g, cases)]
+        )
+        if g.in_main:
+            # The rungs are main's, and the helper subroutines they call.
+            rows = (("main", bundle.main_rows), *bundle.subroutine_rows)
+            group_hash = _fold(repr(rows))
+            case_hashes = _case_hashes(g.name, rows, _helper_owners(cases, slot))
+        else:
+            group_hash = _fold(repr(bundle.subroutine_rows))
+            case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
+        built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash, case_hashes))
+
+    program_hash = _fold(
+        repr(
+            (
+                LAYOUT_VERSION,
+                [_layout_entry(g) for g in built],
+            )
+        )
+    )
+
+    with Program(strict=False) as program:
+        with Rung():
+            copy(program_hash, program_hash_tag)
+        # The harness writes 0 here before a run and reads it after.
+        scan_ms = system.sys.scan_time_current_ms
+        with Rung(scan_ms > longest_scan_tag):
+            copy(scan_ms, longest_scan_tag)
+        for gb in built:
+            if gb.group.in_main:
+                continue
+            for _ in range(gb.group.calls):
+                with Rung():
+                    call(gb.subroutine)
+        for gb in built:
+            if gb.group.in_main:
+                continue
+            with subroutine(gb.subroutine):
+                with Rung():
+                    copy(gb.group_hash, gb.hash_tag)
+                _case_rungs(gb.name, gb.cases, gb.slot)
+        # In-main groups last: their rungs follow every call rung of main.
+        for gb in built:
+            if gb.group.in_main:
+                with Rung():
+                    copy(gb.group_hash, gb.hash_tag)
+                _case_rungs(gb.name, gb.cases, gb.slot)
+
+    return ConformanceProgram(
+        groups=tuple(built),
+        skipped=skipped,
+        names=names,
+        program=program,
+        tag_map=tag_map,
+        program_hash=program_hash,
+        part=part,
+        scan_limit_ms=scan_limit_ms,
+    )
+
+
+@dataclass(frozen=True)
+class _Drawn:
+    group: Group
+    cases: tuple[tuple[int, Case], ...]
+
+
+def _draw_tees(bundle, groups):
+    """*bundle* with every ``tee`` case's pins redrawn as tees off the box's input wire."""
+    main_rows = bundle.main_rows
+    subroutines = list(bundle.subroutine_rows)
+    for g in groups:
+        group = g.group
+        for _index, c in g.cases:
+            if c.tee is None:
+                continue
+            marker = f"{group.name}/{c.id}"
+            if group.in_main:
+                main_rows = draw_tees(main_rows, marker, c.tee)
+                continue
+            at = next(
+                (i for i, (name, _) in enumerate(subroutines) if name == group.subroutine), None
+            )
+            if at is None:
+                raise ValueError(f"Case {marker} has tee= but no subroutine {group.subroutine}")
+            subroutines[at] = (group.subroutine, draw_tees(subroutines[at][1], marker, c.tee))
+    return dataclasses.replace(bundle, main_rows=main_rows, subroutine_rows=tuple(subroutines))
+
+
+def _layout_entry(g: GroupBuild) -> tuple[str | int, ...]:
+    """What the group adds to the layout hash (a plain group: name and base)."""
+    if g.group.in_main:
+        return (g.subroutine, g.base, "main")
+    if g.group.calls == 1:
+        return (g.subroutine, g.base)
+    return (g.subroutine, g.base, g.group.calls)
+
+
+def _case_rungs(group: str, cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> None:
+    for index, c in cases:
+        emit_case(group, c, slot, index)
+
+
+def _check_nicknames(group: Group, hash_tag: Tag, slot: _NamedArrayRuntime, slots: int) -> None:
+    longest_field = max(SLOT_FIELDS, key=len)
+    for name in (hash_tag.name, getattr(slot[slots], longest_field).name):
+        if len(name) > NICKNAME_MAX_LENGTH:
+            raise ValueError(
+                f"Group {group.name!r} makes nickname {name!r} ({len(name)} chars); CLICK allows "
+                f"{NICKNAME_MAX_LENGTH}. Use a shorter group name."
+            )
+
+
+def _helper_owners(cases: Sequence[tuple[int, Case]], slot: _NamedArrayRuntime) -> dict[str, str]:
+    """Helper subroutine name -> id of the case of an in-main group that defines it."""
+    owners: dict[str, str] = {}
+    for index, c in cases:
+        with Program(strict=False) as alone:
+            _case_rungs("", [(index, c)], slot)
+        for name in alone.subroutines:
+            owners[name] = c.id
+    return owners
+
+
+def _case_hashes(
+    group: str,
+    subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]],
+    owners: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Case id -> SHA-256 (12 hex digits) of its rows, from its ``Case`` comment to the next.
+
+    *owners* (an in-main group) names the case that defines each helper
+    subroutine: its rows belong to that case, not to the one before them.
+
+    The last case's span stops before the subroutine's closing tail: the exporter ends every
+    subroutine with one unconditional ``return()`` rung (``_ensure_subroutine_return_tail``),
+    so that row belongs to the group, not to the case before it.  Without that, appending a
+    case would re-hash the previous last case.
+    """
+    marker = f"Case {group}/"
+    spans: dict[str, list[Sequence[str]]] = {}
+    for name, rows in subroutine_rows:
+        body = list(rows)
+        if body and _is_return_tail(body[-1]):
+            body.pop()
+        current: list[Sequence[str]] | None = None
+        if owners is not None and name in owners:
+            current = spans.setdefault(owners[name], [])
+        for row in body:
+            text = row[1] if row and row[0] == "#" and len(row) > 1 else ""
+            if text.startswith(marker):
+                current = spans.setdefault(text[len(marker) :], [])
+            if current is not None:
+                current.append(tuple(row))
+    return {
+        case_id: hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()[:12]
+        for case_id, rows in spans.items()
+    }
+
+
+def _is_return_tail(row: Sequence[str]) -> bool:
+    """True for the unconditional ``return()`` rung the exporter closes a subroutine with."""
+    return (
+        len(row) > 2
+        and row[0].startswith("R")
+        and row[-1] == "return()"
+        and all(cell == "-" for cell in row[1:-1])
+    )
+
+
+def _fold(payload: str) -> int:
+    """Fold *payload* into a nonzero value that fits a DS register (1..32767)."""
+    digest = hashlib.sha256(payload.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % 32767 + 1

@@ -84,7 +84,7 @@ _SPECS: tuple[RuleSpec, ...] = (
     RuleSpec(
         "PTR_UNGUARDED_ACCESS", "PTR", "advisory", "pointer", "Pointer Bounds Not Established"
     ),
-    RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Physical Profile"),
+    RuleSpec("PHYS_MISSING_PROFILE", "PHYS", "info", "physical", "Missing Analog Physical"),
     RuleSpec(
         "PHYS_ANTITOGGLE",
         "PHYS",
@@ -92,11 +92,20 @@ _SPECS: tuple[RuleSpec, ...] = (
         "physical",
         "Command Changes Too Fast for Feedback",
     ),
+    RuleSpec("PHYS_LINK_UNKNOWN", "PHYS", "warning", "physical", "Link Enable Never Used"),
     RuleSpec(
         "RUNG_CONTRADICTION", "RUNG", "error", "rung", "Rung Never Fires (Contradiction)", True
     ),
     RuleSpec("RUNG_TAUTOLOGY", "RUNG", "warning", "rung", "Or() Condition Is Always True", True),
     RuleSpec("RUNG_REDUNDANT_TERM", "RUNG", "info", "rung", "Redundant Rung Condition"),
+    RuleSpec(
+        "RUNG_ORDER_DEPENDENT",
+        "RUNG",
+        "warning",
+        "order",
+        "Row Reads a Tag Written Above It in the Rung",
+        True,
+    ),
     RuleSpec("CMP_ALWAYS_FALSE", "CMP", "warning", "cmp", "Comparison Always False", True),
     RuleSpec("CMP_ALWAYS_TRUE", "CMP", "info", "cmp", "Comparison Always True"),
     RuleSpec(
@@ -129,6 +138,13 @@ _SPECS: tuple[RuleSpec, ...] = (
         "advisory",
         "cmp",
         "Repeated Literal Comparisons",
+    ),
+    RuleSpec(
+        "CMP_EQ_ON_COMPUTED_REAL",
+        "CMP",
+        "advisory",
+        "cmp",
+        "Equality on a Computed REAL",
     ),
     RuleSpec(
         "CMP_TRUE_AT_RESET",
@@ -174,6 +190,7 @@ VALIDATOR_ORDER: tuple[str, ...] = (
     "final",
     "physical",
     "rung",
+    "order",
     "cmp",
     "call",
     "math",

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable, Collection
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
@@ -12,22 +14,21 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
 from pyrung.core.instruction.base import Instruction
-from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-from pyrung.core.instruction.data_transfer import BlockCopyInstruction, CopyInstruction
-from pyrung.core.instruction.packing import PackTextInstruction
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
     IndirectBlockRange,
     IndirectExprRef,
     IndirectRef,
+    InputBlock,
 )
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
-from .write_sites import instruction_write_targets
+from .affine import extract_affine_expression
+from .write_sites import instruction_fault_writes, instruction_write_targets
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -50,6 +51,32 @@ class IndirectWriteRef:
     pointer_tag: str
     source_tags: frozenset[str]
     block: Block
+
+
+@dataclass(frozen=True)
+class PointerUse:
+    """One indexed access ``block[scale * pointer + offset]``.
+
+    ``DS[Ptr]`` is ``scale=1, offset=0``; ``DS[Ptr + 2]`` and ``DS[4 - Ptr]``
+    are the affine forms ``_indirect_affine`` accepts.
+    """
+
+    pointer: str
+    block: str
+    start: int
+    end: int
+    scale: int = 1
+    offset: int = 0
+
+    def address(self, value: Any) -> int:
+        """The block address the access resolves to when the pointer is *value*."""
+        return int(self.scale * value + self.offset)
+
+    def pointer_span(self) -> tuple[int, int]:
+        """The pointer values whose address lands in ``start..end``."""
+        if self.scale == 1:
+            return self.start - self.offset, self.end - self.offset
+        return self.offset - self.end, self.offset - self.start
 
 
 class TagRole(Enum):
@@ -78,6 +105,11 @@ class RungNode:
     calls: tuple[str, ...]
     source_file: str | None
     source_line: int | None
+    # The node's own condition reads, before ``_augment_return_early_guards``
+    # folds return-guard reads into ``condition_reads``.  It is not
+    # ``condition_reads - guard_reads``: a tag the node's own contacts read can
+    # be a guard read too.
+    own_condition_reads: frozenset[str]
     guard_reads: frozenset[str] = frozenset()
 
     @property
@@ -133,6 +165,30 @@ class ProgramGraph:
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
+    # In an ``unbounded_index_reads`` graph, the elements each over-cap write
+    # through an unbounded index reaches, by ``id`` of its destination ref
+    # (refs overload ``==``).  Empty otherwise.
+    indirect_reach: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    # Likewise the elements each read through an unbounded index reaches
+    # (``unbounded_read_names``).
+    indirect_read_reach: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    # Every indexed access with a single affine pointer, and the blocks indexed
+    # by any other expression (``DS[Ptr * 2]``), whose elements no pointer
+    # range bounds.
+    pointer_uses: tuple[PointerUse, ...] = ()
+    opaque_index_blocks: frozenset[str] = frozenset()
+    # Every tag an index reads: pointers, the tags of index expressions, and
+    # ``IndirectBlockRange`` bounds.
+    index_tags: frozenset[str] = frozenset()
+    # Fault flags whose implicit writes (``RungNode.implicit_writes``) count as
+    # writes here: the ones a rung reads, plus any the caller observes
+    # (``build_program_graph(observed_system=...)``).  A fault write nothing
+    # reads is dead, so it stays out of ``writers_of`` and the cones.
+    fault_writes: frozenset[str] = frozenset()
+    unread_fault_writes: frozenset[str] = frozenset()
+    _observed_variants: (
+        dict[tuple[frozenset[str], tuple[tuple[str, int], ...], bool], ProgramGraph] | None
+    ) = field(default=None, init=False, repr=False)
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
     _call_sites_cache: tuple[CallSite, ...] | None = field(default=None, init=False, repr=False)
@@ -160,6 +216,12 @@ class ProgramGraph:
     @classmethod
     def from_program(cls, program: Program) -> ProgramGraph:
         return build_program_graph(program)
+
+    def node_writes(self, node: RungNode) -> frozenset[str]:
+        """Tags *node* writes: its destinations plus the fault flags that count."""
+        if node.implicit_writes and self.fault_writes:
+            return node.writes | (node.implicit_writes & self.fault_writes)
+        return node.writes
 
     def main_node_by_rung(self) -> dict[int, int]:
         """Map main-program rung_index → node index for top-level nodes."""
@@ -359,10 +421,20 @@ class ProgramGraph:
         that is unconditional in its own right but guarded by a preceding
         ``return_early()`` is treated as unconditional, because all
         subsequent reads in the same subroutine share the same guard and
-        guards grow monotonically down the subroutine.
+        guards grow monotonically down the subroutine.  Only (A) survives a
+        guard: a reader outside the subroutine runs after the return and
+        reads the value the skipped write left standing, however the
+        subroutine is called.
+
+        A fault flag is never written before it is read.  The chains count each
+        implicit fault write (``_fault_writes``) as a full write, but most of
+        those instructions clear the flag only when they run, or only ever set
+        it, and the flag carries from scan to scan.
         """
         chain = self.def_use_chains.get(tag_name)
         if not chain:
+            return False
+        if any(tag_name in node.implicit_writes for node in self.rung_nodes):
             return False
         entry_version = chain[0]
         if entry_version.defined_at is not None or entry_version.read_by:
@@ -374,15 +446,14 @@ class ProgramGraph:
             return False
         node = self.rung_nodes[first_write.defined_at]
         # Strip return_early guards: both the write and all subsequent reads
-        # share the same monotonically-accumulated guard, so if the write is
-        # skipped (guard fired), every read is also skipped.
-        own_conditions = node.condition_reads - node.guard_reads
-        if own_conditions:
+        # in the subroutine share the same monotonically-accumulated guard, so
+        # if the write is skipped (guard fired), every such read is skipped.
+        if node.own_condition_reads:
             return False
         if node.scope == "main":
             return True
         sub = node.subroutine
-        if sub in _always_run_subroutines(self):
+        if not node.guard_reads and sub in _always_run_subroutines(self):
             return True
         return all(
             self.rung_nodes[ri].subroutine == sub
@@ -429,17 +500,23 @@ class ProgramGraph:
                 for read_tag in node.condition_reads | node.data_reads | node.exclusive_reads:
                     if read_tag not in visited_tags:
                         queue.append(read_tag)
-                if (
-                    follow_calls
-                    and node.subroutine is not None
-                    and node.subroutine not in visited_subs
-                ):
-                    visited_subs.add(node.subroutine)
-                    for caller in self.rung_nodes:
-                        if node.subroutine in caller.calls:
-                            for read_tag in caller.condition_reads:
-                                if read_tag not in visited_tags:
-                                    queue.append(read_tag)
+                if not follow_calls or node.subroutine is None:
+                    continue
+                # The call guards on every path into the subroutine: a caller
+                # rung in another subroutine runs only when that one is called.
+                pending_subs = [node.subroutine]
+                while pending_subs:
+                    sub_name = pending_subs.pop()
+                    if sub_name in visited_subs:
+                        continue
+                    visited_subs.add(sub_name)
+                    for caller_idx in self._subroutine_caller_indices().get(sub_name, ()):
+                        caller = self.rung_nodes[caller_idx]
+                        for read_tag in caller.condition_reads:
+                            if read_tag not in visited_tags:
+                                queue.append(read_tag)
+                        if caller.subroutine is not None:
+                            pending_subs.append(caller.subroutine)
 
         visited_tags.discard(tag_name)
         result = frozenset(visited_tags)
@@ -486,7 +563,7 @@ class ProgramGraph:
             node = self.rung_nodes[rung_idx]
             read_tags.update(node.condition_reads)
             read_tags.update(node.data_reads)
-            for written_tag in node.writes:
+            for written_tag in self.node_writes(node):
                 write_tags.add(written_tag)
                 if written_tag not in visited_tags and written_tag not in barrier_tags:
                     tag_queue.append(written_tag)
@@ -556,7 +633,7 @@ class ProgramGraph:
                     continue
                 visited_rungs.add(rung_idx)
                 node = self.rung_nodes[rung_idx]
-                for written_tag in node.writes:
+                for written_tag in self.node_writes(node):
                     if written_tag not in visited_tags:
                         queue.append(written_tag)
 
@@ -658,21 +735,66 @@ def _full_block_tags(block: Block) -> list[Tag]:
     return [block._get_tag(addr) for addr in range(block.start, block.end + 1)]
 
 
-def _indirect_ref_tags(block: Block, pointer: Tag) -> list[Tag] | None:
+def _indirect_ref_tags(
+    block: Block, pointer: Tag, scale: int = 1, offset: int = 0
+) -> list[Tag] | None:
     """Narrow an indirect block access using pointer tag metadata.
 
-    Returns the bounded tag list when choices or min/max constrain the
-    pointer, or ``None`` when the address is statically unbounded.
+    The access is ``block[scale * pointer + offset]``.  Returns the bounded tag
+    list when choices or min/max constrain the pointer, or ``None`` when the
+    address is statically unbounded.
     """
     if pointer.choices is not None:
-        addrs = sorted(int(k) for k in pointer.choices if block.start <= int(k) <= block.end)
+        addrs = sorted(
+            {
+                addr
+                for addr in (int(scale * float(k) + offset) for k in pointer.choices)
+                if block.start <= addr <= block.end
+            }
+        )
         return [block._get_tag(a) for a in addrs]
     if pointer.min is not None and pointer.max is not None:
-        lo = max(int(pointer.min), block.start)
-        hi = min(int(pointer.max), block.end)
+        # int() truncates monotonically, so the end points bound every address.
+        lo_v, hi_v = sorted((scale * pointer.min + offset, scale * pointer.max + offset))
+        lo = max(int(lo_v), block.start)
+        hi = min(int(hi_v), block.end)
         if lo <= hi:
             return _block_tags(block.select(lo, hi))
     return None
+
+
+def _indirect_affine(expr: Any) -> tuple[Tag, int, int] | None:
+    """``(pointer, scale, offset)`` when *expr* is ``scale * pointer + offset``.
+
+    Accepts a bare tag and the single-tag forms of ``extract_affine_expression``
+    with an integer offset; ``None`` for anything else (``Ptr * 2``,
+    ``Ptr + Other``), whose addresses no pointer range bounds.
+    """
+    from pyrung.core.expression import TagExpr
+
+    if isinstance(expr, Tag):
+        return expr, 1, 0
+    if isinstance(expr, TagExpr):
+        return expr.tag, 1, 0
+    affine = extract_affine_expression(expr)
+    if affine is None:
+        return None
+    name, scale, offset = affine
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        return None
+    pointer = _indirect_expr_base_tag(expr)
+    if pointer is None or pointer.name != name:
+        return None
+    return pointer, scale, offset
+
+
+def _indirect_expr_tags(block: Block, expr: Any) -> list[Tag] | None:
+    """The bounded tags ``block[expr]`` can touch, or ``None`` when unbounded."""
+    affine = _indirect_affine(expr)
+    if affine is None:
+        return None
+    pointer, scale, offset = affine
+    return _indirect_ref_tags(block, pointer, scale, offset)
 
 
 def _indirect_expr_base_tag(expr: Any) -> Tag | None:
@@ -693,6 +815,139 @@ def _indirect_expr_base_tag(expr: Any) -> Tag | None:
 
 
 _RANGE_COLLAPSE_THRESHOLD = 3
+
+
+class _UnboundedReads:
+    """What an index with no declared bounds reads, in an ``unbounded_index_reads`` graph.
+
+    The elements of its block that can change (some instruction writes them,
+    they belong to an ``InputBlock``, or they are ``external``), narrowed to
+    the addresses the pointer's writers can produce when the value-set
+    fixpoint bounds them (``DS[HistorianId * 10 + 2991]`` with ``HistorianId``
+    clamped to 0..4).  Every other element holds its power-on value, so which
+    one the index picks is decided by the pointer alone.
+
+    A write through an unbounded index into a block past
+    ``_INDIRECT_BLOCK_CAP`` has no element list of its own (``indirect_writes``
+    keeps it for the recorded walk); here it writes the elements its value set
+    reaches (``reached``, by id of the destination ref), so they join
+    ``writers_of`` and the reads above.  A write whose addresses are unbounded
+    too writes none of them: its pointer has no domain, and the verifier
+    reports it Intractable.  An indexed window (``block.select(Ptr, Ptr + 1)``)
+    past the cap writes from its lowest start to its highest end, or, unbounded,
+    the whole block as in any graph.
+    """
+
+    def __init__(self, program: Program, graph: ProgramGraph) -> None:
+        from pyrung.core.validation._common import walk_instructions
+
+        from .value_sets import _ValueSets
+
+        # An unwritten tag is an input to the verifier (any value may reach
+        # it) unless it is readonly, a constant at its default.
+        unwritten = frozenset(
+            name
+            for name, tag in graph.tags.items()
+            if name not in graph.writers_of and not tag.readonly
+        )
+        instructions = list(walk_instructions(program))
+        self._values = _ValueSets(
+            instructions,
+            graph.tags,
+            unwritten,
+            None,
+            follow_indirect_reads=True,
+            declared_inputs=True,
+            written_first=frozenset(
+                name for name in graph.writers_of if graph.unconditional_write_before_read(name)
+            ),
+        )
+        self._written: dict[str, list[Tag]] = defaultdict(list)
+        for name in sorted(graph.writers_of):
+            tag = graph.tags.get(name)
+            block = getattr(tag, "_pyrung_block", None)
+            if tag is not None and block is not None:
+                self._written[block.name].append(tag)
+        # Elements an over-cap write through an unbounded index reaches, and
+        # what each read through one reaches, by id of the ref.
+        self.reached: dict[int, list[Tag]] = {}
+        self.read_reach: dict[int, tuple[str, ...]] = {}
+        for instr in instructions:
+            for dest in instruction_write_targets(instr):
+                if isinstance(dest, ImmediateRef):
+                    dest = dest.value
+                if not isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
+                    continue
+                block = dest.block
+                if block.end - block.start + 1 <= _INDIRECT_BLOCK_CAP:
+                    continue  # writes the whole block
+                if isinstance(dest, IndirectBlockRange):
+                    addresses = self._values.window(dest)
+                elif isinstance(dest, IndirectRef):
+                    bounded = _indirect_ref_tags(block, dest.pointer)
+                    addresses = None if bounded is not None else self._values.addresses(dest)
+                else:
+                    bounded = _indirect_expr_tags(block, dest.expr)
+                    addresses = None if bounded is not None else self._values.addresses(dest)
+                if addresses is None:
+                    continue
+                tags: list[Tag] = [
+                    block._get_tag(addr)
+                    for addr in sorted(addresses)
+                    if block.start <= addr <= block.end
+                ]
+                self.reached[id(dest)] = tags
+                self._written[block.name].extend(tags)
+
+    def tags(self, ref: IndirectRef | IndirectExprRef) -> list[Tag]:
+        block = ref.block
+        changing = {tag.name: tag for tag in self._written.get(block.name, ())}
+        for tag in _input_slots(block):
+            changing.setdefault(tag.name, tag)
+        addresses = self._values.addresses(ref)
+        tags = list(changing.values())
+        if addresses is not None:
+            tags = [tag for tag in tags if getattr(tag, "_pyrung_block_addr", None) in addresses]
+        self.read_reach[id(ref)] = tuple(tag.name for tag in tags)
+        return tags
+
+
+_UNBOUNDED_READS: ContextVar[_UnboundedReads | None] = ContextVar("_UNBOUNDED_READS", default=None)
+
+
+def _unbounded_read_tags(ref: IndirectRef | IndirectExprRef) -> list[Tag] | None:
+    """What *ref* reads in an ``unbounded_index_reads`` build; ``None`` outside one."""
+    reads = _UNBOUNDED_READS.get()
+    return None if reads is None else reads.tags(ref)
+
+
+def _unbounded_write_reach() -> dict[int, tuple[str, ...]]:
+    """``ProgramGraph.indirect_reach`` for the graph being built."""
+    reads = _UNBOUNDED_READS.get()
+    if reads is None:
+        return {}
+    return {key: tuple(tag.name for tag in tags) for key, tags in reads.reached.items()}
+
+
+def _unbounded_read_reach() -> dict[int, tuple[str, ...]]:
+    """``ProgramGraph.indirect_read_reach`` for the graph being built."""
+    reads = _UNBOUNDED_READS.get()
+    return {} if reads is None else dict(reads.read_reach)
+
+
+def _unbounded_write_tags(ref: IndirectRef | IndirectExprRef | IndirectBlockRange) -> list[Tag]:
+    """What an over-cap *ref* writes in an ``unbounded_index_reads`` build."""
+    reads = _UNBOUNDED_READS.get()
+    return [] if reads is None else reads.reached.get(id(ref), [])
+
+
+def _input_slots(block: Block) -> list[Tag]:
+    """The elements of *block* that change with nothing in the program writing them."""
+    if isinstance(block, InputBlock) or block._pyrung_field_external:
+        return _full_block_tags(block)
+    addrs = {addr for addr, entry in block._slot_config.items() if entry.external is True}
+    addrs.update(addr for addr, tag in block._mapped_tags.items() if tag.external)
+    return [block._get_tag(addr) for addr in sorted(addrs) if block.start <= addr <= block.end]
 
 
 def _record_range(
@@ -763,6 +1018,8 @@ def _extract_tag_names(
         if isinstance(current, IndirectRef):
             walk(current.pointer)
             tags = _indirect_ref_tags(current.block, current.pointer)
+            if tags is None:
+                tags = _unbounded_read_tags(current)
             if tags is not None:
                 for tag in tags:
                     _register_tag(tag, tag_refs, found)
@@ -772,8 +1029,12 @@ def _extract_tag_names(
 
         if isinstance(current, IndirectExprRef):
             walk(current.expr)
-            base = _indirect_expr_base_tag(current.expr)
-            tags = _indirect_ref_tags(current.block, base) if base is not None else None
+            tags = _indirect_expr_tags(current.block, current.expr)
+            if tags is None and _indirect_affine(current.expr) is None:
+                # No pointer range bounds a non-affine index: it may read any element.
+                tags = _full_block_tags(current.block)
+            if not tags:
+                tags = _unbounded_read_tags(current) or tags
             if tags is not None:
                 for tag in tags:
                     _register_tag(tag, tag_refs, found)
@@ -848,7 +1109,9 @@ def _extract_write_targets(
             return
 
         if isinstance(current, BlockRange | IndirectBlockRange):
-            tags = _block_tags(current)
+            tags = (
+                isinstance(current, IndirectBlockRange) and _unbounded_write_tags(current)
+            ) or _block_tags(current)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if (
@@ -866,7 +1129,7 @@ def _extract_write_targets(
             reads.update(_extract_tag_names(current.pointer, tag_refs, ranges=ranges))
             tags = _indirect_ref_tags(current.block, current.pointer)
             if tags is None:
-                tags = _full_block_tags(current.block)
+                tags = _full_block_tags(current.block) or _unbounded_write_tags(current)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
@@ -875,10 +1138,9 @@ def _extract_write_targets(
 
         if isinstance(current, IndirectExprRef):
             reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
-            base = _indirect_expr_base_tag(current.expr)
-            tags = _indirect_ref_tags(current.block, base) if base is not None else None
+            tags = _indirect_expr_tags(current.block, current.expr)
             if tags is None:
-                tags = _full_block_tags(current.block)
+                tags = _full_block_tags(current.block) or _unbounded_write_tags(current)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
@@ -936,7 +1198,7 @@ def _extract_rung_node(
     for condition in rung._conditions:
         condition_reads.update(_extract_reads_from_condition(condition, tag_refs))
 
-    def walk_instruction(instr: Any) -> None:
+    def walk_instruction(instr: Any, *, in_loop: bool = False) -> None:
         if isinstance(instr, CallInstruction):
             calls.append(instr.subroutine_name)
 
@@ -957,7 +1219,11 @@ def _extract_rung_node(
         writes.update(instruction_writes)
         implicit_writes.update(instr_implicit_writes)
         data_reads.update(target_reads)
-        if isinstance(instr, OutInstruction):
+        # An out() in a forloop body is not a level follower of this node's
+        # guard: a false For rung skips the body (the coil holds), a count of 0
+        # runs no iteration, and in a body rung it follows that rung's contacts
+        # on the last iteration.
+        if isinstance(instr, OutInstruction) and not in_loop:
             ote_writes.update(instruction_writes)
 
         for field_name in getattr(cls, "_exclusive_fields", ()):
@@ -969,8 +1235,16 @@ def _extract_rung_node(
             condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
         if isinstance(instr, ForLoopInstruction):
-            for child_instr in instr.instructions:
-                walk_instruction(child_instr)
+            # Body-rung contacts gate their writes and, through break/continue,
+            # every later body instruction.  The node has one guard, so they
+            # all join it (over-approximate, the safe direction).
+            for body_rung in instr.body_rungs:
+                condition_reads.update(_rung_condition_reads(body_rung, tag_refs, local_only=True))
+            # A count read from a tag gates the whole body too: one that
+            # resolves to 0 runs no iteration.
+            condition_reads.update(_extract_tag_names(instr.count, tag_refs))
+            for child_instr, _local in instr.iter_body():
+                walk_instruction(child_instr, in_loop=True)
 
     for instruction in rung._instructions:
         walk_instruction(instruction)
@@ -989,11 +1263,15 @@ def _extract_rung_node(
         calls=tuple(calls),
         source_file=getattr(rung, "source_file", None),
         source_line=getattr(rung, "source_line", None),
+        own_condition_reads=frozenset(condition_reads),
     )
 
 
 def _extract_instruction_event(
-    instr: Any, node_index: int, tag_refs: dict[str, Tag]
+    instr: Any,
+    node_index: int,
+    tag_refs: dict[str, Tag],
+    fault_writes: frozenset[str] = frozenset(),
 ) -> _AccessEvent:
     """Extract one instruction's ordered reads/writes."""
     condition_reads: set[str] = set()
@@ -1004,10 +1282,9 @@ def _extract_instruction_event(
     for field_name in getattr(cls, "_reads", ()):
         data_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
-    instruction_writes, target_reads, _implicit_writes = _extract_instruction_writes(
-        instr, tag_refs
-    )
+    instruction_writes, target_reads, implicit_writes = _extract_instruction_writes(instr, tag_refs)
     writes.update(instruction_writes)
+    writes.update(implicit_writes & fault_writes)
     data_reads.update(target_reads)
 
     for field_name in getattr(cls, "_conditions", ()):
@@ -1031,8 +1308,12 @@ def _extract_instruction_writes(
     Declared writes, declared status fields, and static sequential-copy fan-out
     come from :mod:`write_sites`.  This PDG-specific layer retains indirect
     address reads and conservative regions.  Returns
-    ``(writes, reads, implicit_writes)`` — fault writes are tracked separately
-    so they don't pollute ``writers_of`` or cone computations.
+    ``(writes, reads, implicit_writes)``.  The implicit writes are the fault
+    flags the instruction can set (``_fault_writes``); they stay out of the
+    node's ``writes`` (an instruction's declared destinations) and count in
+    ``writers_of``, the def-use chains and the cones for the flags a rung reads
+    (``ProgramGraph.fault_writes``), so ``Rung(fault.division_error)`` depends
+    on the divisor.
     """
     writes: set[str] = set()
     reads: set[str] = set()
@@ -1052,23 +1333,11 @@ def _extract_instruction_writes(
 
 def _implicit_fault_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
     """Return implicit system fault tags written by *instr*."""
-    from pyrung.core.system_points import system
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
     writes: set[str] = set()
-    if isinstance(instr, CalcInstruction):
-        _register_tag(system.fault.division_error, tag_refs, writes)
-        _register_tag(system.fault.out_of_range, tag_refs, writes)
-        return writes
-
-    if isinstance(instr, CopyInstruction):
-        _register_tag(system.fault.address_error, tag_refs, writes)
-        _register_tag(system.fault.out_of_range, tag_refs, writes)
-        return writes
-
-    if isinstance(instr, BlockCopyInstruction | PackTextInstruction):
-        _register_tag(system.fault.out_of_range, tag_refs, writes)
-        return writes
-
+    for name in instruction_fault_writes(instr):
+        _register_tag(SYSTEM_TAGS_BY_NAME[name], tag_refs, writes)
     return writes
 
 
@@ -1081,7 +1350,7 @@ def _rung_condition_reads(
     """Extract rung condition reads.
 
     Branch rungs store inherited parent conditions first; ``local_only=True``
-    returns just the branch-local slice used during the branch prepass.
+    returns just the branch-local slice, read when the solve reaches the branch.
     """
     conditions = (
         rung._conditions[rung._branch_condition_start :] if local_only else rung._conditions
@@ -1096,44 +1365,29 @@ def _build_access_sequence(
     program: Program,
     node_index_by_rung: dict[int, int],
     tag_refs: dict[str, Tag],
+    fault_writes: frozenset[str] = frozenset(),
 ) -> tuple[_AccessEvent, ...]:
     """Build execution-ordered access events following runner semantics.
 
     Subroutines are inlined at their call sites so that def-use chains
     correctly reflect cross-subroutine ordering (e.g. a main-program rung
     after a ``call()`` reads the version written by the subroutine, not the
-    scan-entry version).
+    scan-entry version).  Implicit fault writes count for *fault_writes* only.
     """
     from pyrung.core.rung import Rung as RungClass
 
     events: list[_AccessEvent] = []
     active_calls: set[str] = set()
 
-    def emit_condition_prepass(rung: Rung, *, emit_own_conditions: bool) -> None:
-        node_index = node_index_by_rung[id(rung)]
-
-        if emit_own_conditions:
-            own_condition_reads = _rung_condition_reads(rung, tag_refs)
-            if own_condition_reads:
-                events.append(
-                    _AccessEvent(node_index=node_index, condition_reads=own_condition_reads)
+    def emit_rung_conditions(rung: Rung) -> None:
+        # A top-level rung's trunk is read once, as the rung starts.
+        own_condition_reads = _rung_condition_reads(rung, tag_refs)
+        if own_condition_reads:
+            events.append(
+                _AccessEvent(
+                    node_index=node_index_by_rung[id(rung)], condition_reads=own_condition_reads
                 )
-
-        # All branch local conditions conceptually read the same rung-entry
-        # snapshot, so we emit the whole branch tree's condition prepass before
-        # any instruction events in this rung execute.
-        for item in rung._execution_items:
-            if not isinstance(item, RungClass):
-                continue
-            local_condition_reads = _rung_condition_reads(item, tag_refs, local_only=True)
-            if local_condition_reads:
-                events.append(
-                    _AccessEvent(
-                        node_index=node_index_by_rung[id(item)],
-                        condition_reads=local_condition_reads,
-                    )
-                )
-            emit_condition_prepass(item, emit_own_conditions=False)
+            )
 
     def inline_subroutine(name: str) -> None:
         if name in active_calls:
@@ -1143,36 +1397,60 @@ def _build_access_sequence(
             return
         active_calls.add(name)
         for sub_rung in sub_rungs:
-            emit_condition_prepass(sub_rung, emit_own_conditions=True)
+            emit_rung_conditions(sub_rung)
             walk_execution(sub_rung)
         active_calls.discard(name)
 
+    def walk_instruction(item: Any, node_index: int) -> None:
+        instruction_event = _extract_instruction_event(item, node_index, tag_refs, fault_writes)
+        if (
+            instruction_event.condition_reads
+            or instruction_event.data_reads
+            or instruction_event.writes
+        ):
+            events.append(instruction_event)
+
+        if isinstance(item, ForLoopInstruction):
+            for child in item.body:
+                if isinstance(child, RungClass):
+                    # A body rung reads its contacts when it runs, in body order.
+                    local_reads = _rung_condition_reads(child, tag_refs, local_only=True)
+                    if local_reads:
+                        events.append(
+                            _AccessEvent(node_index=node_index, condition_reads=local_reads)
+                        )
+                    for body_instr in child._instructions:
+                        walk_instruction(body_instr, node_index)
+                else:
+                    walk_instruction(child, node_index)
+
+        if isinstance(item, CallInstruction):
+            inline_subroutine(item.subroutine_name)
+
     def walk_execution(rung: Rung) -> None:
         node_index = node_index_by_rung[id(rung)]
+
+        def emit_branch_conditions(branch: Rung) -> None:
+            local_condition_reads = _rung_condition_reads(branch, tag_refs, local_only=True)
+            if local_condition_reads:
+                events.append(
+                    _AccessEvent(
+                        node_index=node_index_by_rung[id(branch)],
+                        condition_reads=local_condition_reads,
+                    )
+                )
+
         for item in rung._execution_items:
             if isinstance(item, RungClass):
+                # A branch reads its own contacts when the solve reaches it,
+                # after the instructions above it have run.
+                emit_branch_conditions(item)
                 walk_execution(item)
                 continue
-
-            instruction_event = _extract_instruction_event(item, node_index, tag_refs)
-            if (
-                instruction_event.condition_reads
-                or instruction_event.data_reads
-                or instruction_event.writes
-            ):
-                events.append(instruction_event)
-
-            if isinstance(item, ForLoopInstruction):
-                for child_instr in item.instructions:
-                    child_event = _extract_instruction_event(child_instr, node_index, tag_refs)
-                    if child_event.condition_reads or child_event.data_reads or child_event.writes:
-                        events.append(child_event)
-
-            if isinstance(item, CallInstruction):
-                inline_subroutine(item.subroutine_name)
+            walk_instruction(item, node_index)
 
     for rung in program.rungs:
-        emit_condition_prepass(rung, emit_own_conditions=True)
+        emit_rung_conditions(rung)
         walk_execution(rung)
 
     return tuple(events)
@@ -1285,35 +1563,156 @@ def _augment_return_early_guards(
     nodes: list[RungNode],
     program: Program,
     tag_refs: dict[str, Tag],
+    node_index_by_rung: dict[int, int],
 ) -> None:
-    """Propagate return_early guard condition_reads to subsequent write nodes.
+    """Propagate return_early guard condition_reads to the nodes it can skip.
 
-    When a subroutine rung fires return_early(), all subsequent rungs only
-    execute if the guard condition was False.  Their writes therefore depend
-    on the guard's condition_reads — make that visible in the graph so
-    upstream_slice discovers the dependency.
+    When a subroutine rung fires return_early(), the rest of the subroutine
+    is skipped: the later rungs, and the items of the same rung that follow
+    the return in execution order, branches included (a return in a branch
+    leaves the subroutine, not just the branch).  Their writes, and the
+    subroutines they call, therefore depend on the guard's condition_reads,
+    and an ``out()`` among them holds its value instead of following its
+    contacts — make that visible in the graph (``guard_reads``) so
+    upstream_slice discovers the dependency.  The node's own reads stay in
+    ``own_condition_reads``.
+    """
+    for sub_name in sorted(program.subroutines):
+        guard_reads: frozenset[str] = frozenset()
+        for rung in program.subroutines[sub_name]:
+            return_reads = _rung_return_condition_reads(rung, tag_refs)
+            same_rung = (
+                _nodes_after_first_return(rung, node_index_by_rung)
+                if return_reads is not None
+                else frozenset()
+            )
+            for node_idx in _rung_tree_node_indices(rung, node_index_by_rung):
+                node = nodes[node_idx]
+                if not (node.all_writes or node.calls):
+                    continue
+                reads = guard_reads
+                if node_idx in same_rung:
+                    assert return_reads is not None
+                    reads = reads | return_reads
+                if reads:
+                    nodes[node_idx] = _dc_replace(
+                        node,
+                        condition_reads=node.condition_reads | reads,
+                        guard_reads=node.guard_reads | reads,
+                    )
+            if return_reads is not None:
+                guard_reads = guard_reads | return_reads
+
+
+def _rung_tree_node_indices(rung: Rung, node_index_by_rung: dict[int, int]) -> list[int]:
+    """PDG node indices of a top-level rung and its branches, at any depth."""
+    out = [node_index_by_rung[id(rung)]]
+    for branch in rung._branches:
+        out.extend(_rung_tree_node_indices(branch, node_index_by_rung))
+    return out
+
+
+def _nodes_after_first_return(rung: Rung, node_index_by_rung: dict[int, int]) -> frozenset[int]:
+    """Nodes of *rung*'s tree with an item a return earlier in the rung can skip.
+
+    The rung's items run in source order, a branch's in place (its contacts
+    were read up front, with the rung's).  Everything after the first item
+    that holds a return is skipped when it fires; a loop holding one can also
+    skip its own body's later iterations, so the loop counts as after it.
+    """
+    from pyrung.core.rung import Rung as RungClass
+
+    order: list[tuple[int, Any]] = []
+
+    def walk(current: Rung) -> None:
+        for item in current._execution_items:
+            if isinstance(item, RungClass):
+                walk(item)
+            else:
+                order.append((node_index_by_rung[id(current)], item))
+
+    walk(rung)
+    skipped: set[int] = set()
+    seen_return = False
+    for node_idx, item in order:
+        holds = _items_hold_return((item,))
+        if seen_return or (holds and isinstance(item, ForLoopInstruction)):
+            skipped.add(node_idx)
+        seen_return = seen_return or holds
+    return frozenset(skipped)
+
+
+def _items_hold_return(items: Any) -> bool:
+    """Whether a return sits among *items*, in a rung among them or in a loop body."""
+    from pyrung.core.instruction.control import ReturnInstruction
+    from pyrung.core.rung import Rung as RungClass
+
+    for item in items:
+        if isinstance(item, ReturnInstruction):
+            return True
+        if isinstance(item, RungClass):
+            if _items_hold_return(item._execution_items):
+                return True
+        elif isinstance(item, ForLoopInstruction) and _items_hold_return(item.body):
+            return True
+    return False
+
+
+def _rung_has_return(rung: Rung) -> bool:
+    """Whether ``return_early()`` sits anywhere in the rung: its own items,
+    its branches (at any depth), or a loop body in either."""
+    return _rung_return_condition_reads(rung, {}) is not None
+
+
+def _rung_return_condition_reads(rung: Rung, tag_refs: dict[str, Tag]) -> frozenset[str] | None:
+    """Reads that decide whether a ``return_early()`` in this rung fires.
+
+    ``None`` when the rung holds no return.  A return can sit in the rung's
+    own items, in a branch at any depth, or in a loop body (a bare item or a
+    body rung) in either; the reads are the conditions on the path to each
+    one.  A branch's conditions hold its parents' first, so its full reads
+    are its path.  A loop holding a return adds its count (a count of 0 runs
+    no iteration) and every body rung's contacts (a ``break_loop()`` or
+    ``continue_loop()`` in one can skip the return).
     """
     from pyrung.core.instruction.control import ReturnInstruction
+    from pyrung.core.rung import Rung as RungClass
 
-    for sub_name in sorted(program.subroutines):
-        sub_rungs = program.subroutines[sub_name]
-        sub_indices = [
-            i for i, n in enumerate(nodes) if n.subroutine == sub_name and n.branch_path == ()
-        ]
-        if len(sub_indices) != len(sub_rungs):
-            continue
+    reads: set[str] = set()
 
-        guard_reads: frozenset[str] = frozenset()
-        for node_idx, rung in zip(sub_indices, sub_rungs, strict=True):
-            node = nodes[node_idx]
-            if guard_reads and node.writes:
-                nodes[node_idx] = _dc_replace(
-                    node,
-                    condition_reads=node.condition_reads | guard_reads,
-                    guard_reads=guard_reads,
-                )
-            if any(isinstance(instr, ReturnInstruction) for instr in rung._instructions):
-                guard_reads = guard_reads | _rung_condition_reads(rung, tag_refs)
+    def visit_items(items: Any) -> bool:
+        found = False
+        for item in items:
+            if isinstance(item, ReturnInstruction):
+                found = True
+            elif isinstance(item, ForLoopInstruction):
+                found = visit_loop(item) or found
+        return found
+
+    def visit_loop(loop: ForLoopInstruction) -> bool:
+        found = False
+        for item in loop.body:
+            if isinstance(item, RungClass):
+                found = visit_rung(item) or found
+            else:
+                found = visit_items((item,)) or found
+        if found:
+            for body_rung in loop.body_rungs:
+                reads.update(_rung_condition_reads(body_rung, tag_refs))
+            reads.update(_extract_tag_names(loop.count, tag_refs))
+        return found
+
+    def visit_rung(current: Rung) -> bool:
+        found = visit_items(current._instructions)
+        for branch in current._branches:
+            found = visit_rung(branch) or found
+        if found:
+            reads.update(_rung_condition_reads(current, tag_refs))
+        return found
+
+    if not visit_rung(rung):
+        return None
+    return frozenset(reads)
 
 
 def _always_run_subroutines(graph: ProgramGraph) -> frozenset[str]:
@@ -1400,11 +1799,74 @@ def collect_program_tags(program: Program) -> tuple[Tag, ...]:
     return tuple(tag_refs[name] for name in sorted(tag_refs))
 
 
-def build_program_graph(program: Program) -> ProgramGraph:
-    """Build the static PDG summary for a Program."""
+def build_program_graph(
+    program: Program,
+    *,
+    observed_system: Collection[str] = (),
+    observed_tags: Collection[Tag] = (),
+    unbounded_index_reads: bool = False,
+) -> ProgramGraph:
+    """Build the static PDG summary for a Program.
+
+    An instruction's implicit fault writes (``_fault_writes``) count as writes
+    for the fault flags some rung reads.  *observed_system* names system tags
+    read from outside the program (a verifier property or projection): they
+    join ``tags`` and, for fault flags, their implicit writes count too, in a
+    graph variant cached beside the program's own.  *observed_tags* are other
+    tags read from outside: the ones no rung reads or writes join ``tags`` the
+    same way, with no readers or writers.
+
+    An index with no bounds (``DS[Ptr]``, ``Ptr`` without min/max/choices)
+    registers no reads by default.  *unbounded_index_reads* makes it read the
+    elements of its block that can change, as the verifier needs (see
+    ``_UnboundedReads``).
+    """
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
     cached_graph = getattr(program, "_cached_graph", None)
-    if cached_graph is not None:
+    if cached_graph is None:
+        cached_graph = _build_program_graph(program, frozenset(), ())
+        program._cached_graph = cached_graph
+    extra = frozenset(
+        name
+        for name in observed_system
+        if name in cached_graph.unread_fault_writes
+        or (name in SYSTEM_TAGS_BY_NAME and name not in cached_graph.tags)
+    )
+    outside: dict[str, Tag] = {}
+    for tag in observed_tags:
+        if tag.name not in cached_graph.tags and tag.name not in SYSTEM_TAGS_BY_NAME:
+            outside.setdefault(tag.name, tag)
+    if not extra and not outside and not unbounded_index_reads:
         return cached_graph
+    variants = cached_graph._observed_variants
+    if variants is None:
+        variants = cached_graph._observed_variants = {}
+    # The variant holds its tags, so their ids stay unique while it is cached.
+    key = (
+        extra,
+        tuple(sorted((name, id(tag)) for name, tag in outside.items())),
+        unbounded_index_reads,
+    )
+    graph = variants.get(key)
+    if graph is None:
+        reads = _UnboundedReads(program, cached_graph) if unbounded_index_reads else None
+        token = _UNBOUNDED_READS.set(reads)
+        try:
+            graph = variants[key] = _build_program_graph(
+                program, extra, tuple(outside[name] for name in sorted(outside))
+            )
+        finally:
+            _UNBOUNDED_READS.reset(token)
+    return graph
+
+
+def _build_program_graph(
+    program: Program,
+    observed_system: frozenset[str],
+    observed_tags: tuple[Tag, ...],
+) -> ProgramGraph:
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
     tag_refs: dict[str, Tag] = {}
     rung_nodes: list[RungNode] = []
@@ -1467,8 +1929,8 @@ def build_program_graph(program: Program) -> ProgramGraph:
     readers_of_mut: dict[str, set[int]] = defaultdict(set)
     all_readers_of_mut: dict[str, set[int]] = defaultdict(set)
     writers_of_mut: dict[str, set[int]] = defaultdict(set)
-    access_events = _build_access_sequence(program, node_index_by_rung, tag_refs)
 
+    implicit: set[str] = set()
     for node_index, node in enumerate(rung_nodes):
         for tag_name in node.condition_reads | node.data_reads:
             readers_of_mut[tag_name].add(node_index)
@@ -1476,9 +1938,24 @@ def build_program_graph(program: Program) -> ProgramGraph:
             all_readers_of_mut[tag_name].add(node_index)
         for tag_name in node.writes:
             writers_of_mut[tag_name].add(node_index)
+        implicit.update(node.implicit_writes)
+    fault_writes = frozenset(
+        name for name in implicit if name in all_readers_of_mut or name in observed_system
+    )
+    for name in observed_system:
+        if name in SYSTEM_TAGS_BY_NAME:
+            tag_refs.setdefault(name, SYSTEM_TAGS_BY_NAME[name])
+    for tag in observed_tags:
+        tag_refs.setdefault(tag.name, tag)
+    if fault_writes:
+        for node_index, node in enumerate(rung_nodes):
+            for tag_name in node.implicit_writes & fault_writes:
+                writers_of_mut[tag_name].add(node_index)
+    access_events = _build_access_sequence(program, node_index_by_rung, tag_refs, fault_writes)
 
-    _augment_return_early_guards(rung_nodes, program, tag_refs)
+    _augment_return_early_guards(rung_nodes, program, tag_refs, node_index_by_rung)
     frozen_nodes = tuple(rung_nodes)
+    pointer_tags, pointer_uses, opaque_index_blocks, index_tags = _collect_pointer_uses(program)
 
     graph = ProgramGraph(
         rung_nodes=frozen_nodes,
@@ -1489,76 +1966,137 @@ def build_program_graph(program: Program) -> ProgramGraph:
         writers_of={name: frozenset(indices) for name, indices in writers_of_mut.items()},
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,
-        pointer_tags=_collect_pointer_tags(program),
+        pointer_tags=pointer_tags,
         indirect_writes=indirect_writes,
+        indirect_reach=_unbounded_write_reach(),
+        indirect_read_reach=_unbounded_read_reach(),
+        pointer_uses=pointer_uses,
+        opaque_index_blocks=opaque_index_blocks,
+        index_tags=index_tags,
+        fault_writes=fault_writes,
+        unread_fault_writes=frozenset(implicit) - fault_writes,
     )
     graph.tag_roles = classify_tags(graph)
-    program._cached_graph = graph
+    for tag in observed_tags:
+        # Read from outside and written by no rung: an input.
+        graph.tag_roles.setdefault(tag.name, TagRole.INPUT)
     return graph
 
 
-def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
-    """Find tags used as pointers in IndirectRef/IndirectExprRef accesses."""
+def _visit_indirect_refs(
+    obj: Any,
+    visit: Callable[[Any], None],
+    seen: set[int],
+    visit_range: Callable[[IndirectBlockRange], None] | None = None,
+) -> None:
+    """Call *visit* on every IndirectRef/IndirectExprRef reachable from *obj*.
+
+    *visit_range*, when given, is also called on every ``IndirectBlockRange``.
+    """
+    if obj is None or isinstance(
+        obj,
+        (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType, Tag, Block),
+    ):
+        return  # a tag or block holds no index, only every other tag of its block
+    obj_id = id(obj)
+    if obj_id in seen:
+        return
+    seen.add(obj_id)
+    if isinstance(obj, (IndirectRef, IndirectExprRef)):
+        visit(obj)
+        return
+    if visit_range is not None and isinstance(obj, IndirectBlockRange):
+        visit_range(obj)
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        for item in obj:
+            _visit_indirect_refs(item, visit, seen, visit_range)
+        return
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _visit_indirect_refs(v, visit, seen, visit_range)
+        return
+    if isinstance(obj, Instruction):
+        fields = _instruction_fields(obj)
+        if fields is not None:
+            for field_name in fields:
+                _visit_indirect_refs(getattr(obj, field_name, None), visit, seen, visit_range)
+            return
+    if isinstance(obj, Condition):
+        for _child_name, child_value in _condition_children(obj):
+            _visit_indirect_refs(child_value, visit, seen, visit_range)
+        return
+    if hasattr(obj, "__dict__"):
+        for v in vars(obj).values():
+            _visit_indirect_refs(v, visit, seen, visit_range)
+
+
+def unbounded_read_names(obj: Any, graph: ProgramGraph) -> frozenset[str]:
+    """Tags the unbounded indexes in *obj* read, per *graph*'s ``indirect_read_reach``.
+
+    ``_extract_tag_names`` outside a graph build resolves an index with no
+    declared bounds to nothing; this is what the ``unbounded_index_reads``
+    graph found it reads.  Empty for any other graph.
+    """
+    reach = graph.indirect_read_reach
+    if not reach:
+        return frozenset()
+    out: set[str] = set()
+    _visit_indirect_refs(obj, lambda ref: out.update(reach.get(id(ref), ())), set())
+    return frozenset(out)
+
+
+def _collect_pointer_uses(
+    program: Program,
+) -> tuple[dict[str, tuple[str, int, int]], tuple[PointerUse, ...], frozenset[str], frozenset[str]]:
+    """Find the indexed accesses in a program.
+
+    Returns ``pointer_tags`` (each pointer's first block span), every affine
+    ``PointerUse``, the blocks indexed by a non-affine expression, and every tag
+    an index reads.
+    """
     from pyrung.core.validation._common import walk_instructions
 
     pointers: dict[str, tuple[str, int, int]] = {}
+    uses: dict[PointerUse, None] = {}
+    opaque: set[str] = set()
+    index_tags: set[str] = set()
+    scratch_refs: dict[str, Tag] = {}
 
-    def _scan(obj: Any, seen: set[int]) -> None:
-        if obj is None or isinstance(
-            obj,
-            (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType),
-        ):
+    def _visit(ref: Any) -> None:
+        block = ref.block
+        if isinstance(ref, IndirectRef):
+            index_tags.update(_extract_tag_names(ref.pointer, scratch_refs))
+            affine: tuple[Tag, int, int] | None = (ref.pointer, 1, 0)
+        else:
+            index_tags.update(_extract_tag_names(ref.expr, scratch_refs))
+            affine = _indirect_affine(ref.expr)
+        if affine is None:
+            opaque.add(block.name)
             return
-        obj_id = id(obj)
-        if obj_id in seen:
-            return
-        seen.add(obj_id)
-        if isinstance(obj, IndirectRef):
-            pointers.setdefault(obj.pointer.name, (obj.block.name, obj.block.start, obj.block.end))
-            return
-        if isinstance(obj, IndirectExprRef):
-            base = _indirect_expr_base_tag(obj.expr)
-            if base is not None:
-                pointers.setdefault(base.name, (obj.block.name, obj.block.start, obj.block.end))
-            return
-        if isinstance(obj, (list, tuple, set, frozenset)):
-            for item in obj:
-                _scan(item, seen)
-            return
-        if isinstance(obj, dict):
-            for v in obj.values():
-                _scan(v, seen)
-            return
-        if isinstance(obj, Instruction):
-            fields = _instruction_fields(obj)
-            if fields is not None:
-                for field_name in fields:
-                    _scan(getattr(obj, field_name, None), seen)
-                return
-        if isinstance(obj, Condition):
-            for _child_name, child_value in _condition_children(obj):
-                _scan(child_value, seen)
-            return
-        if hasattr(obj, "__dict__"):
-            for v in vars(obj).values():
-                _scan(v, seen)
+        pointer, scale, offset = affine
+        pointers.setdefault(pointer.name, (block.name, block.start, block.end))
+        uses.setdefault(PointerUse(pointer.name, block.name, block.start, block.end, scale, offset))
+
+    def _visit_range(ref: IndirectBlockRange) -> None:
+        index_tags.update(_extract_tag_names(ref.start_expr, scratch_refs))
+        index_tags.update(_extract_tag_names(ref.end_expr, scratch_refs))
 
     def _scan_rung_conditions(rung: Rung) -> None:
         for cond in rung._conditions:
-            _scan(cond, seen)
+            _visit_indirect_refs(cond, _visit, seen, _visit_range)
         for branch in rung._branches:
             _scan_rung_conditions(branch)
 
     seen: set[int] = set()
     for instr in walk_instructions(program):
-        _scan(instr, seen)
+        _visit_indirect_refs(instr, _visit, seen, _visit_range)
     for rung in program.rungs:
         _scan_rung_conditions(rung)
     for subroutine_rungs in program.subroutines.values():
         for rung in subroutine_rungs:
             _scan_rung_conditions(rung)
 
-    return pointers
+    return pointers, tuple(uses), frozenset(opaque), frozenset(index_tags)
 
 
 def _named_write_dests(instr: Any) -> list[str]:
@@ -1582,7 +2120,7 @@ def _build_writer_instrs(program: Program) -> dict[str, list[Any]]:
     """Map each named-``Tag`` destination to the instructions that write it.
 
     Consumed by the indirect-destination region crossing to hop an affine pointer
-    (``calc(root ± k)``) back to its root and read that root's literal-write
+    (``math(root ± k)``) back to its root and read that root's literal-write
     domain.  Whole-program (main + branches + subroutines + ForLoop bodies)."""
     from pyrung.core.validation._common import walk_instructions
 
@@ -1633,12 +2171,12 @@ def _collect_indirect_writes(
                     continue
                 pointer_name = dest.pointer.name
             else:
-                base = _indirect_expr_base_tag(dest.expr)
-                if base is None:
+                affine = _indirect_affine(dest.expr)
+                if affine is None:
                     continue
-                if _indirect_ref_tags(block, base) is not None:
+                if _indirect_ref_tags(block, *affine) is not None:
                     continue
-                pointer_name = base.name
+                pointer_name = affine[0].name
             source_tags: set[str] = set()
             for read_field in getattr(cls, "_reads", ()):
                 source_tags.update(_extract_tag_names(getattr(instr, read_field), tag_refs))
@@ -1658,11 +2196,12 @@ def _collect_indirect_writes(
         rung = resolve_rung(program, node)
         if rung is None:
             continue
-        for instr in rung._instructions:
+        pending = list(rung._instructions)
+        while pending:
+            instr = pending.pop(0)
             _check_instruction(instr, node_index)
             if isinstance(instr, ForLoopInstruction):
-                for child in instr.instructions:
-                    _check_instruction(child, node_index)
+                pending[:0] = instr.instructions
 
     return tuple(refs), {ni: frozenset(slots) for ni, slots in attribution.items()}
 

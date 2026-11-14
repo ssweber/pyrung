@@ -4,22 +4,27 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pyclickplc
-from pyclickplc.addresses import AddressRecord, format_address_display, get_addr_key
+from pyclickplc.addresses import (
+    AddressRecord,
+    format_address_display,
+    get_addr_key,
+    parse_address,
+)
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, MEMORY_TYPE_BASES
 from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
 from pyrung.core import Block, Physical, Tag
-from pyrung.core.physical import parse_profile_spec, profile_to_token
 from pyrung.core.tag import MappingEntry, _normalize_choices
 
-from ._errors import SystemNicknameRepair, SystemNicknameRepairRequired
+from ._errors import OldCommentFormError, SystemNicknameRepair, SystemNicknameRepairRequired
 from ._parsers import (
     _HARDWARE_BLOCK_CACHE,
     TagMeta,
@@ -68,18 +73,12 @@ def _tag_meta_from_hints(
     physical_obj = cast(Physical | None, physical)
     link_text = cast(str | None, link)
     physical_name: str | None = None
-    on_delay: str | None = None
-    off_delay: str | None = None
-    profile: str | None = None
+    response: dict[str, str | bool] = {}
     system: str | None = None
     if physical_obj is not None:
         if owner_name is None or physical_obj.name != owner_name:
             physical_name = physical_obj.name
-        on_delay = physical_obj.on_delay
-        off_delay = physical_obj.off_delay
-        profile = (
-            profile_to_token(physical_obj.profile) if physical_obj.profile is not None else None
-        )
+        response = physical_obj.comment_text()
         system = physical_obj.system
     if (
         choices is None
@@ -104,31 +103,43 @@ def _tag_meta_from_hints(
         lock=lk,
         physical=physical_name,
         link=link_text,
-        on_delay=on_delay,
-        off_delay=off_delay,
-        profile=profile,
         system=system,
         min=cast(int | float | None, min),
         max=cast(int | float | None, max),
         uom=cast(str | None, uom),
+        **response,  # ty: ignore[invalid-argument-type]
     )
 
 
 def _tag_meta_has_physical_details(meta: TagMeta | None) -> bool:
-    return bool(
-        meta is not None
-        and (meta.on_delay is not None or meta.off_delay is not None or meta.profile is not None)
-    )
+    return meta is not None and bool(meta.physical_values())
+
+
+def _row_label(row: AddressRecord) -> str:
+    return f"{row.nickname or '(no nickname)'} at {format_address_display(row.memory_type, row.address)}"
+
+
+@contextmanager
+def _naming(row: AddressRecord) -> Iterator[None]:
+    """Prefix a ``ValueError`` with *row*'s nickname and address, so a project load says where."""
+    try:
+        yield
+    except ValueError as exc:
+        prefix = f"{_row_label(row)}: "
+        if str(exc).startswith(prefix):
+            raise
+        if isinstance(exc, OldCommentFormError):
+            raise OldCommentFormError(exc.token, _row_label(row)) from exc
+        raise ValueError(f"{prefix}{exc}") from exc
+
+
+def _row_comment(row: AddressRecord) -> tuple[str, TagMeta | None, str | None]:
+    with _naming(row):
+        return _extract_address_comment(row.comment)
 
 
 def _physical_from_meta_details(meta: TagMeta, *, name: str) -> Physical:
-    return Physical(
-        name,
-        on_delay=meta.on_delay,
-        off_delay=meta.off_delay,
-        profile=parse_profile_spec(meta.profile) if meta.profile is not None else None,
-        system=meta.system,
-    )
+    return Physical.from_text(name, meta.physical_values(), system=meta.system)
 
 
 def tag_map_from_nickname_file(
@@ -211,12 +222,13 @@ def tag_map_from_nickname_file(
     physical_defs: dict[str, Physical] = {}
 
     for row in rows:
-        _, tag_meta, _ = _extract_address_comment(row.comment)
+        _, tag_meta, _ = _row_comment(row)
         if tag_meta is None or tag_meta.physical is None:
             continue
         if not _tag_meta_has_physical_details(tag_meta):
             continue
-        physical = _physical_from_meta_details(tag_meta, name=tag_meta.physical)
+        with _naming(row):
+            physical = _physical_from_meta_details(tag_meta, name=tag_meta.physical)
         existing = physical_defs.get(tag_meta.physical)
         if existing is not None and existing != physical:
             display = format_address_display(row.memory_type, row.address)
@@ -243,6 +255,32 @@ def tag_map_from_nickname_file(
                 f"Physical reference {tag_meta.physical!r} has no definition in this nickname CSV."
             )
         return physical
+
+    nickname_at = {
+        format_address_display(row.memory_type, row.address): row.nickname
+        for row in rows
+        if row.nickname
+    }
+    nicknames = frozenset(nickname_at.values())
+
+    def link_for_meta(tag_meta: TagMeta | None) -> str | None:
+        """The meta's ``link=``, with a Click-address enable named by its nickname.
+
+        ``link=Y001`` reads as the nickname at Y001.  Nicknames win, so one that
+        looks like an address is kept; an address with no nickname keeps its
+        display form, which is the name codegen gives that slot.
+        """
+        if tag_meta is None or tag_meta.link is None:
+            return None
+        nc = "~" if tag_meta.link.startswith("~") else ""
+        enable, sep, trigger = tag_meta.link.removeprefix(nc).partition(":")
+        if enable in nicknames:
+            return tag_meta.link
+        try:
+            display = format_address_display(*parse_address(enable))
+        except ValueError:
+            return tag_meta.link
+        return f"{nc}{nickname_at.get(display, display)}{sep}{trigger}"
 
     def physical_owner_name(logical_block: Block, slot_name: str) -> str:
         struct_name = getattr(logical_block, "_pyrung_structure_name", None)
@@ -309,18 +347,19 @@ def tag_map_from_nickname_file(
                     logical_block.slot(logical_addr, name=row.nickname)
 
             default = _parse_default(row.initial_value, logical_block.type)
-            comment, tag_meta, _ = _extract_address_comment(row.comment)
+            comment, tag_meta, _ = _row_comment(row)
             choices = tag_meta.choices if tag_meta is not None else None
             readonly = tag_meta.readonly if tag_meta is not None else False
             external = tag_meta.external if tag_meta is not None else False
             final = tag_meta.final if tag_meta is not None else False
             public = tag_meta.public if tag_meta is not None else False
             lock = tag_meta.lock if tag_meta is not None else False
-            physical = physical_for_meta(
-                tag_meta,
-                owner_name=physical_owner_name(logical_block, sv.name),
-            )
-            link = tag_meta.link if tag_meta is not None else None
+            with _naming(row):
+                physical = physical_for_meta(
+                    tag_meta,
+                    owner_name=physical_owner_name(logical_block, sv.name),
+                )
+            link = link_for_meta(tag_meta)
             min_val = tag_meta.min if tag_meta is not None else None
             max_val = tag_meta.max if tag_meta is not None else None
             uom = tag_meta.uom if tag_meta is not None else None
@@ -383,7 +422,8 @@ def tag_map_from_nickname_file(
                     slot_kw["max"] = max_val
                 if uom_changed:
                     slot_kw["uom"] = uom
-                logical_block.slot(logical_addr, **slot_kw)
+                with _naming(row):
+                    logical_block.slot(logical_addr, **slot_kw)
 
     def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
         if explicit_start is not None:
@@ -646,18 +686,19 @@ def tag_map_from_nickname_file(
                         block.slot(instance, name=row.nickname)
 
                     default = _parse_default(row.initial_value, block.type)
-                    comment, tag_meta, _ = _extract_address_comment(row.comment)
+                    comment, tag_meta, _ = _row_comment(row)
                     choices = tag_meta.choices if tag_meta is not None else None
                     readonly = tag_meta.readonly if tag_meta is not None else False
                     external = tag_meta.external if tag_meta is not None else False
                     final = tag_meta.final if tag_meta is not None else False
                     public = tag_meta.public if tag_meta is not None else False
                     lock = tag_meta.lock if tag_meta is not None else False
-                    physical = physical_for_meta(
-                        tag_meta,
-                        owner_name=physical_owner_name(block, sv.name),
-                    )
-                    link = tag_meta.link if tag_meta is not None else None
+                    with _naming(row):
+                        physical = physical_for_meta(
+                            tag_meta,
+                            owner_name=physical_owner_name(block, sv.name),
+                        )
+                    link = link_for_meta(tag_meta)
                     min_val = tag_meta.min if tag_meta is not None else None
                     max_val = tag_meta.max if tag_meta is not None else None
                     uom = tag_meta.uom if tag_meta is not None else None
@@ -720,7 +761,8 @@ def tag_map_from_nickname_file(
                             slot_kw["max"] = max_val
                         if uom_changed:
                             slot_kw["uom"] = uom
-                        block.slot(instance, **slot_kw)
+                        with _naming(row):
+                            block.slot(instance, **slot_kw)
 
             mappings.extend(runtime.map_to(spec.hardware_range))
             append_structure(
@@ -828,29 +870,30 @@ def tag_map_from_nickname_file(
 
         memory_type = row.memory_type
         logical_type = _tag_type_for_memory_type(memory_type)
-        comment, tag_meta, _ = _extract_address_comment(row.comment)
-        logical = Tag(
-            name=row.nickname,
-            type=logical_type,
-            retentive=row.retentive,
-            default=_parse_default(row.initial_value, logical_type),
-            comment=comment,
-            choices=_normalize_choices(
-                tag_meta.choices if tag_meta is not None else None,
-                tag_type=logical_type,
-                owner=f"{row.nickname!r} choices",
-            ),
-            readonly=tag_meta.readonly if tag_meta is not None else False,
-            external=tag_meta.external if tag_meta is not None else False,
-            final=tag_meta.final if tag_meta is not None else False,
-            public=tag_meta.public if tag_meta is not None else False,
-            lock=tag_meta.lock if tag_meta is not None else False,
-            physical=physical_for_meta(tag_meta, owner_name=row.nickname),
-            link=tag_meta.link if tag_meta is not None else None,
-            min=tag_meta.min if tag_meta is not None else None,
-            max=tag_meta.max if tag_meta is not None else None,
-            uom=tag_meta.uom if tag_meta is not None else None,
-        )
+        comment, tag_meta, _ = _row_comment(row)
+        with _naming(row):
+            logical = Tag(
+                name=row.nickname,
+                type=logical_type,
+                retentive=row.retentive,
+                default=_parse_default(row.initial_value, logical_type),
+                comment=comment,
+                choices=_normalize_choices(
+                    tag_meta.choices if tag_meta is not None else None,
+                    tag_type=logical_type,
+                    owner=f"{row.nickname!r} choices",
+                ),
+                readonly=tag_meta.readonly if tag_meta is not None else False,
+                external=tag_meta.external if tag_meta is not None else False,
+                final=tag_meta.final if tag_meta is not None else False,
+                public=tag_meta.public if tag_meta is not None else False,
+                lock=tag_meta.lock if tag_meta is not None else False,
+                physical=physical_for_meta(tag_meta, owner_name=row.nickname),
+                link=link_for_meta(tag_meta),
+                min=tag_meta.min if tag_meta is not None else None,
+                max=tag_meta.max if tag_meta is not None else None,
+                uom=tag_meta.uom if tag_meta is not None else None,
+            )
         hardware = _hardware_block_for(memory_type)[row.address]
         mappings.append(logical.map_to(hardware))
 
@@ -889,6 +932,15 @@ def write_tag_map_to_nickname_file(
     Returns:
         Number of rows written.
     """
+    return pyclickplc.write_csv(path, nickname_records(self, blocks=blocks))
+
+
+def nickname_records(
+    self,
+    *,
+    blocks: Iterable[Any] | None = None,
+) -> dict[int, AddressRecord]:
+    """Build the nickname CSV rows ``write_tag_map_to_nickname_file`` writes, keyed by address."""
     records: dict[int, AddressRecord] = {}
 
     def block_tag_name_for_entry(entry: _BlockEntry) -> str | None:
@@ -922,11 +974,19 @@ def write_tag_map_to_nickname_file(
             uom=getattr(entry.logical, "uom", None),
             owner_name=entry.logical.name,
         )
+        comment = _compose_address_comment(entry.logical.comment, tag_meta=tag_meta)
+        # A tag named after its own address (``T101`` at T101) and carrying no
+        # metadata has no nickname; its comment, default and retentive flag still
+        # round-trip as the row's.  One with metadata keeps the name, since a row
+        # without a nickname is read back as no tag.
+        nickname = entry.logical.name
+        if tag_meta is None and nickname == self._hardware_address_name(entry.hardware):
+            nickname = ""
         records[get_addr_key(memory_type, address)] = AddressRecord(
             memory_type=memory_type,
             address=address,
-            nickname=entry.logical.name,
-            comment=_compose_address_comment(entry.logical.comment, tag_meta=tag_meta),
+            nickname=nickname,
+            comment=comment,
             initial_value=_format_default(entry.logical.default, entry.logical.type),
             retentive=entry.logical.retentive,
             data_type=BANKS[memory_type].data_type,
@@ -944,13 +1004,15 @@ def write_tag_map_to_nickname_file(
             if kind in {"udt", "named_array"}:
                 field_name = cast(str, entry.logical._pyrung_structure_field)
                 structure_owner_name = f"{name}.{field_name}"
-        memory_type, _ = self._parse_hardware_tag(entry.hardware.block[entry.hardware_addresses[0]])
+        memory_type, _ = self._parse_hardware_tag(
+            entry.hardware.block._tag_at(entry.hardware_addresses[0])
+        )
         block_len = len(entry.hardware_addresses)
 
         for i, (logical_addr, hardware_addr) in enumerate(
             zip(entry.logical_addresses, entry.hardware_addresses, strict=True)
         ):
-            slot = entry.logical[logical_addr]
+            slot = entry.logical._tag_at(logical_addr)
             block_tag = ""
             if block_tag_name is not None:
                 if block_len == 1:
@@ -1059,7 +1121,7 @@ def write_tag_map_to_nickname_file(
                 data_type=BANKS[memory_type].data_type,
             )
             return
-        existing_comment, existing_meta, _ = _extract_address_comment(existing.comment)
+        existing_comment, existing_meta, _ = _row_comment(existing)
         records[addr_key] = replace(
             existing,
             comment=_compose_address_comment(existing_comment, block_tag, existing_meta),
@@ -1098,7 +1160,7 @@ def write_tag_map_to_nickname_file(
         )
         write_boundary_comment(memory_type, end_address, format_block_tag(block_name, "close"))
 
-    return pyclickplc.write_csv(path, records)
+    return records
 
 
-__all__ = ["tag_map_from_nickname_file", "write_tag_map_to_nickname_file"]
+__all__ = ["nickname_records", "tag_map_from_nickname_file", "write_tag_map_to_nickname_file"]

@@ -8,6 +8,7 @@ do not choose an action, apply knowledge, or mutate the drive world.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.graph import PlanStep
@@ -24,7 +25,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
-from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt
+from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt, pilot_logic_at
 from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
@@ -42,9 +43,9 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.world import _RecoveryOrigin
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.state import value_changed
 from pyrung.core.validation.render import (
     caret_of,
-    operand_name,
     render_condition,
     with_rung_line,
 )
@@ -208,7 +209,7 @@ def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
     for tag in sorted((set(before_snap) | set(after_snap)) & channel_tags):
         before = before_snap.get(tag)
         after = after_snap.get(tag)
-        if before != after:
+        if value_changed(before, after):
             return f"{tag} {_display_value(before)} -> {_display_value(after)}"
     return ""
 
@@ -307,12 +308,6 @@ def _build_plan_journal(
             )
 
         if is_coast:
-            known_tags = getattr(fork, "_known_tags_by_name", {}) if fork is not None else {}
-            display_accel = tuple(
-                (operand_name(known_tags.get(tag, tag)), value)
-                for tag, value in sc.execution.accelerators
-            )
-
             entries.append(
                 (
                     first_step.scan_before,
@@ -326,7 +321,6 @@ def _build_plan_journal(
                         transition=transition,
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
-                        accelerators=display_accel,
                         rungs=sc.pilot_rungs,
                     ),
                 )
@@ -420,7 +414,29 @@ def _build_plan_journal(
             )
 
     entries.sort(key=lambda e: (e[0], e[1]))
-    return tuple(step for _, _, step in entries)
+    return tuple(with_logic(fork, step) for _, _, step in entries)
+
+
+def with_logic(fork: Any, step: PlanStep) -> PlanStep:
+    """*step* with the temporary logic it put in or took out, printed from the rung that ran.
+
+    An install prints the logic from its own scan on.  A removal prints the logic it ended, and
+    the logic from its scan on, which is not empty when some of a tag's rules stay in.  Only the
+    rows writing the step's inputs print, with the rule bits they read.
+    """
+    from pyrung.core.synthesis import bracket_lines
+
+    if fork is None or step.kind not in ("force", "revoke") or not step.rungs:
+        return step
+    dests = {rung.dest for rung in step.rungs}
+
+    def printed(scan: int) -> tuple[str, ...]:
+        ran = pilot_logic_at(fork, scan)
+        return () if ran is None else bracket_lines(ran, dests)
+
+    if step.kind == "force":
+        return replace(step, logic=printed(step.scan))
+    return replace(step, logic=printed(step.scan - 1), kept_logic=printed(step.scan))
 
 
 def _iteration_payload(
@@ -714,11 +730,8 @@ def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
         "scan_after": pulse.fork.state.scan_id,
         "coast_logical_scans": receipt.logical_scans if receipt is not None else None,
         "coast_kernel_scans": receipt.kernel_scans if receipt is not None else None,
-        "coast_skipped_scans": receipt.skipped_scans if receipt is not None else None,
-        "coast_macro_folds": receipt.macro_folds if receipt is not None else None,
-        "coast_timer_quanta_replayed": (
-            receipt.timer_quanta_replayed if receipt is not None else None
-        ),
+        "coast_stretched_scans": receipt.stretched_scans if receipt is not None else None,
+        "coast_stretches": receipt.stretches if receipt is not None else None,
         "snapshot": dict(execution.after_snap),
         "effect_observations": execution.effect_observations,
     }

@@ -17,7 +17,7 @@ with PLC(logic) as plc:
 
 Cold rungs are dead code or untested paths. Hot rungs may indicate always-true conditions worth reviewing.
 
-Rung numbers are **1-indexed** — the first rung is `1`, matching the `Rung N` labels shown by `why()`/`cause()` and the debugger. The same 1-indexed numbers appear in the coverage report and the whitelist.
+Rung numbers are **1-indexed**. The first rung is `1`, matching the `Rung N` labels shown by `why()`/`cause()` and the debugger. The same 1-indexed numbers appear in the coverage report and the whitelist.
 
 ## Stranded bits
 
@@ -27,7 +27,7 @@ stranded = plc.query.stranded_bits()
 
 Returns `CausalChain` objects for each latched tag with no reachable reset path. Each chain carries blocker diagnostics pointing at the specific inputs that would need to transition.
 
-The ladder lint [`COIL_STUCK_HIGH`](ladder-lints.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
+The ladder lint [`COIL_STUCK_HIGH`](ladder-lints.md#rule-reference) checks structure. It asks "is there a reset rung at all?" `stranded_bits()` checks reachability. It asks "is there a reset rung *and can it actually fire*?"
 
 ## Wait edges without escape
 
@@ -39,19 +39,22 @@ for finding in plc.query.wait_edges_without_escape():
     # (rests at 0)
 ```
 
-A step that only advances when something outside the program arrives is a *wait edge*. If nothing else can fire while the step waits, the machine sits there looking fine. This survey is static — no history needed — and reports the absence of an escape the program can fire unaided.
+A step that only advances when something outside the program arrives is a *wait edge*. If nothing else can fire while the step waits, the machine sits there looking fine. This survey is static, so it needs no history. It reports the absence of an escape the program can fire unaided.
 
-One rule decides both halves: a guard clause on a tag the ladder does not author holds only if the tag's resting value already satisfies it. That makes the advance a wait (`i_RotateFB` may never arrive) and disqualifies escapes gated the same way — a timeout switched off by a register nobody set and an abort waiting on a button nobody pressed fail for the same reason. An escape whose guard excludes the waiting step fails separately, on range.
+The survey assumes a tag that nothing in the program sets stays at its resting value. A guard on such a tag makes the advance a wait. An escape doesn't count if:
 
-The survey deliberately does not guess *why* nobody sets a tag. A config register someone should have set at commissioning and a button someone would press are indistinguishable from a declaration — `Bool("EnableLimit")` is an ordinary way to write a config flag — so it reports the fact it proved ("nothing sets this") and leaves the intent to you.
+- its guard needs such a tag to change, like a timeout enabled by a config register nobody set, or an abort waiting on a button
+- its step guard leaves out the waiting step
 
-It reports the design decision; it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding surfaces as the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint, so `logic.check()` picks it up with no extra call.
+A config register and a button look the same in a declaration. So the survey reports "nothing sets this" and leaves the reason to you.
 
-**Reach.** It recognizes step machines that advance by `calc(Step + 1, Step)` or by stamping a literal in (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read — a `fall()`-gated advance, an `Or` guard, a drum — rather than guessing.
+The survey never edits the program. The same finding is the [`STEP_NO_ESCAPE`](ladder-lints.md#rule-reference) ladder lint. It is opt-in. `logic.check(extend_select={"STEP_NO_ESCAPE"})` turns it on.
+
+**Reach.** It recognizes step machines that advance by `math(Step + 1, Step)` or by copying a constant into it (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read, such as a `fall()`-gated advance, an `Or` guard or a drum. It does not guess.
 
 ## Coverage reports and merge
 
-Individual test findings are mostly noise — a single test only exercises a slice of the program. The signal emerges when you merge findings across a test suite.
+Individual test findings are mostly noise, because a single test only exercises a slice of the program. The signal emerges when you merge findings across a test suite.
 
 ```python
 from pyrung.core.analysis.query import CoverageReport
@@ -75,7 +78,7 @@ def test_fault_handling(plc):
 merged = report_a.merge(report_b)
 ```
 
-Negative findings (cold rungs, stranded bits) merge by **intersection** — a rung is only cold in the merged view if *no* test fired it. Each test you add can only shrink the residuals. What remains after the full suite is what you actually need to investigate.
+Negative findings (cold rungs, stranded bits) merge by **intersection**. A rung is only cold in the merged view if *no* test fired it. Each test you add can only shrink the residuals. What remains after the full suite is what you actually need to investigate.
 
 Stranded bits merge by chain identity (tag + blocker fingerprint), so "stranded for a different reason" after a refactor is a distinct signal from "still stranded."
 
@@ -116,7 +119,7 @@ pytest --pyrung-coverage-json=                       # disable output
 
 ## Whitelist and CI gating
 
-A TOML whitelist declares known-acceptable findings — cold rungs you've decided are dormant by design, stranded bits that are operator-only and not testable from software:
+A TOML whitelist declares known-acceptable findings. Examples are cold rungs you've decided are dormant by design, and stranded bits that are operator-only and not testable from software:
 
 ```toml
 # pyrung_whitelist.toml
@@ -142,7 +145,7 @@ New cold rungs not in whitelist: [200, 201]
 New stranded bits not in whitelist: ['Sts_NewFault']
 ```
 
-The whitelist keys stranded bits by tag name only — not by blocker fingerprint. If a refactor changes *why* a bit is stranded, the whitelist still covers it, but the JSON report's chain identity will differ, surfacing the change for review.
+The whitelist keys stranded bits by tag name only, not by blocker fingerprint. If a refactor changes *why* a bit is stranded, the whitelist still covers it. The JSON report's chain identity will differ, which surfaces the change for review.
 
 With one test, cold rungs and stranded bits are mostly noise. After hundreds of tests, anything still in the residual has had hundreds of chances to be exercised and wasn't. That's where the whitelist becomes a short list of deliberate decisions rather than a pile of false positives.
 

@@ -16,13 +16,13 @@ from pyrung.core import (
     TagType,
     Timer,
     branch,
-    calc,
     call,
     copy,
     count_down,
     count_up,
     event_drum,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -462,7 +462,7 @@ class TestCounterConflict:
     def test_data_write_to_accumulator_is_not_duplicate_owner(self):
         with Program() as prog:
             with Rung(ButtonA):
-                calc(Counter[1].Acc + 5, Counter[1].Acc)
+                math(Counter[1].Acc + 5, Counter[1].Acc)
             with Rung(ButtonB):
                 count_up(Counter[1], preset=10).reset(ResetBtn)
 
@@ -493,7 +493,7 @@ class TestTimerOutConflict:
             with Rung(ButtonA):
                 on_delay(Timer2, preset=1000)
             with Rung(ButtonB):
-                out(Timer2.Done)
+                on_delay(Timer2, preset=2000)
 
         report = validate_conflicting_outputs(prog)
         assert any(f.target_name == "Timer2_Done" for f in report.findings)

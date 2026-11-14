@@ -4,14 +4,14 @@ These exercise ``CoastSession.seek`` and the trigger helpers
 (``value_trigger`` / ``departure_trigger`` / ``predicate_trigger``) directly.
 
 Coverage targets (per the CoastSession v2 design):
-- Receipt basics + fold/no-fold landing-scan parity (perfect reaction)
+- Receipt basics + loop/stepped landing-scan parity (perfect reaction)
 - Departure terminal + recorded (tag, before, after) transition
 - Simultaneous terminal triggers (target wins classification)
 - Timeout stop_reason
 - Nonterminal re-arm timeline, one_shot vs re-arm (perfect recall)
 - Accumulator-comparison crossing exactness through the session
 - predicate_trigger (opaque callable) plateau-guard landing
-- cyclefold dispatch under oscillating conditional holds
+- coasts under oscillating conditional holds
 - seek([]) guard
 """
 
@@ -21,7 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, count_up, on_delay, out
+from pyrung import Bool, Dint, Int, Program, Rung, Timer, copy, count_up, math, on_delay, out
 from pyrung.core import Counter
 from pyrung.core.analysis.pilot.coast import (
     AVOID,
@@ -103,12 +103,21 @@ def _dual_output_program():
 
 
 def _counter_program():
-    """A per-scan integer counter: Acc increments by 1 every enabled scan."""
+    """A per-scan integer count: ``Count`` increments by 1 every scan.
+
+    (A ``count_up`` counts rising edges, so a held rung counts once: the
+    per-scan source is an unconditional self-calc, read against a limit as a
+    counter's preset was.  ``Enable`` only mirrors the old counter's rung.)
+    """
     Enable = Bool("Enable", external=True)
-    Reset = Bool("Reset", external=True)
+    Count = Dint("Count")
     with Program() as prog:
+        with Rung():
+            math(Count + 1, Count)
         with Rung(Enable):
-            count_up(Counter[1], preset=1000).reset(Reset)
+            out(Bool("Enabled"))
+        with Rung(Count >= 1000):
+            out(Bool("CountDone"))
     return prog
 
 
@@ -118,7 +127,7 @@ def _ramp_program():
     Temp = Int("Temp")
     with Program() as prog:
         with Rung(Enable):
-            calc(Temp + 1, Temp)
+            math(Temp + 1, Temp)
     return prog
 
 
@@ -226,7 +235,7 @@ def _runaway_channel_program():
     Chan = Int("Chan")
     with Program() as prog:
         with Rung(Enable):
-            calc(Chan + 1, Chan)
+            math(Chan + 1, Chan)
     return prog
 
 
@@ -246,7 +255,7 @@ def _static_channel_long_timer_program():
 
 
 def _step_until(plc: PLC, pred, cap: int = 20_000) -> int:
-    """Drive a fold=False fork scan-by-scan; return the first scan pred holds."""
+    """Drive a jit=False fork scan-by-scan; return the first scan pred holds."""
     start = plc.state.scan_id
     while not pred(plc.state):
         plc.step()
@@ -255,7 +264,7 @@ def _step_until(plc: PLC, pred, cap: int = 20_000) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 1. Receipt basics + fold/no-fold parity
+# 1. Receipt basics + loop/stepped parity
 # ---------------------------------------------------------------------------
 
 
@@ -265,7 +274,7 @@ class TestReceiptBasics:
         plc.patch({"Enable": True})
         plc.step()
 
-        manual = plc.fork()  # fold=False reference
+        manual = plc.fork()  # jit=False reference
         target = value_trigger(plc, "target", TARGET, "Done", True)
         receipt = CoastSession(plc, kind="bearing_coast").seek([target], budget=500)
 
@@ -492,24 +501,53 @@ class TestCrossingExactness:
     def test_accumulator_compare_folds_to_exact_crossing_scan(self):
         plc = PLC(_counter_program(), dt=0.010)
         plc.patch({"Enable": True})
-        plc.step()  # Counter_Acc == 1
+        plc.step()  # Count == 1
 
         manual = plc.fork()
-        acc = plc._known_tags_by_name["Counter_Acc"]
+        acc = plc._known_tags_by_name["Count"]
         n = 7
         trigger = CoastTrigger(
             name="target",
             kind=TARGET,
-            predicate=lambda s: (s.tags.get("Counter_Acc") or 0) >= n,
+            predicate=lambda s: (s.tags.get("Count") or 0) >= n,
             condition=CompareGe(acc, n),
-            watched=("Counter_Acc",),
+            watched=("Count",),
         )
         receipt = CoastSession(plc).seek([trigger], budget=200)
 
         assert receipt.stop_reason == "reached"
-        landing = _step_until(manual, lambda s: (s.tags.get("Counter_Acc") or 0) >= n)
+        landing = _step_until(manual, lambda s: (s.tags.get("Count") or 0) >= n)
         assert receipt.end_scan == landing
-        assert plc.state.tags["Counter_Acc"] == n
+        assert plc.state.tags["Count"] == n
+
+    def test_self_feeding_calc_lands_on_stepped_scan(self):
+        """``math(f(X), X)`` moves every scan with no accumulator behind it.
+        The coast must not treat ``X`` as frozen and skip its sequence."""
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        X = Int("X", default=1)
+        Hit = Bool("Hit")
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung():
+                math((X * 3) % 7, X)
+            with Rung(Tmr.Done, X == 5):
+                out(Hit)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+
+        manual = plc.fork()
+        target = value_trigger(plc, "target", TARGET, "Hit", True)
+        receipt = CoastSession(plc).seek([target], budget=500)
+
+        assert receipt.stop_reason == "reached"
+        landing = _step_until(manual, lambda s: s.tags.get("Hit") is True)
+        assert receipt.end_scan == landing
+        assert plc.state.tags["X"] == manual.state.tags["X"] == 5
+        assert plc.state.tags["Tmr_Acc"] == manual.state.tags["Tmr_Acc"]
 
 
 # ---------------------------------------------------------------------------
@@ -546,12 +584,17 @@ class TestPredicateBump:
         landing = _step_until(manual, lambda s: (s.tags.get("Temp") or 0) >= threshold)
         assert receipt.end_scan == landing
 
-    def test_equivalent_condition_makes_relational_target_foldable(self):
-        plc = PLC(_counter_program(), dt=0.010)
+    def test_equivalent_condition_keeps_a_relational_target_in_the_loop(self):
+        # A timer's accumulator: a counter counts edges, so no held counter moves.
+        Enable = Bool("Enable", external=True)
+        with Program() as prog:
+            with Rung(Enable):
+                on_delay(Timer.clone("Ramp"), 100_000)
+        plc = PLC(prog, dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
-        acc = plc._known_tags_by_name["Counter_Acc"]
-        threshold = 700
+        acc = plc._known_tags_by_name["Ramp_Acc"]
+        threshold = 7000
         trigger = predicate_trigger(
             "target",
             TARGET,
@@ -565,7 +608,7 @@ class TestPredicateBump:
 
         assert receipt.stop_reason == "reached"
         assert plc.state.tags[acc.name] == threshold
-        assert session._last_cyclefold_stats["ordinary_folds"] >= 1
+        assert session._last_coast_stats["stretches"] >= 1
         assert receipt.kernel_scans <= 10
 
 
@@ -822,12 +865,12 @@ class TestPenCondition:
 
 
 # ---------------------------------------------------------------------------
-# 8. cyclefold dispatch
+# 8. coasts under pilot rungs
 # ---------------------------------------------------------------------------
 
 
-class TestCyclefoldDispatch:
-    def test_ordinary_fold_analyzes_pilot_rung_crossings(self):
+class TestCoastUnderPilotRungs:
+    def test_a_stretch_stops_at_a_pilot_rungs_crossing(self):
         Input = Bool("HoldAwareInput", external=True)
         Tmr = Timer.clone("HoldAwareTmr")
         Output = Bool("HoldAwareOutput")
@@ -849,7 +892,7 @@ class TestCyclefoldDispatch:
 
         reference = PLC(program, dt=0.010)
         install(reference)
-        reference.run_until(Tmr.Done, max_cycles=500, fold=False)
+        reference.run_until(Tmr.Done, max_cycles=500, jit=False)
 
         folded = PLC(program, dt=0.010)
         install(folded)
@@ -864,7 +907,7 @@ class TestCyclefoldDispatch:
         assert folded.state.tags[Input.name] == reference.state.tags[Input.name] is False
         assert folded.state.tags[Output.name] == reference.state.tags[Output.name] is False
         assert folded.state.tags[Tmr.Acc.name] == reference.state.tags[Tmr.Acc.name]
-        assert session._last_cyclefold_stats["ordinary_folds"] >= 1
+        assert session._last_coast_stats["stretches"] >= 1
         assert session.kernel_scan_ids == tuple(sorted(set(session.kernel_scan_ids)))
         assert len(session.kernel_scan_ids) == receipt.kernel_scans
         assert all(
@@ -876,7 +919,7 @@ class TestCyclefoldDispatch:
         )
         assert folded_gap
 
-    def test_oscillating_holds_dispatch_to_cyclefold(self):
+    def test_oscillating_holds(self):
         plc = PLC(_free_timer_program(), dt=0.010)
         plc.step()
         start_scan = plc.state.scan_id
@@ -897,7 +940,6 @@ class TestCyclefoldDispatch:
 
         assert receipt.stop_reason == "reached"
         assert plc.state.tags["Target"] is True
-        # Cyclefold ran kernel scans (it can't dt-jump past the pet oscillation).
         assert receipt.kernel_scans > 0
         # The held input actually oscillated during the coast.
         seen = {
@@ -981,10 +1023,10 @@ class TestSettleTimeout:
     def test_free_running_watched_tags_exhaust_ceiling_and_are_named(self):
         plc = PLC(_counter_program(), dt=0.010)
         plc.patch({"Enable": True})
-        plc.step()  # Counter_Acc == 1, climbing every scan hereafter
+        plc.step()  # Count == 1, climbing every scan hereafter
         start = plc.state.scan_id
 
-        receipt = CoastSession(plc, kind="settle").settle(frozenset({"Counter_Acc"}))
+        receipt = CoastSession(plc, kind="settle").settle(frozenset({"Count"}))
 
         # Watched tags that never quiesce exhaust the ceiling, and the receipt
         # names the result "timeout"; settlement is never passed off as reached.
@@ -994,7 +1036,7 @@ class TestSettleTimeout:
         assert len(receipt.trajectory) == LIMITS.cone_ceiling
         assert receipt.end_scan == start + LIMITS.cone_ceiling
         # Every snapshot genuinely moved (proving it was no false plateau).
-        acc = [s.get("Counter_Acc") for s in receipt.trajectory]
+        acc = [s.get("Count") for s in receipt.trajectory]
         assert acc == sorted(acc)
         assert len(set(acc)) == len(acc)
 
@@ -1237,7 +1279,7 @@ class TestSettleLandingCapHonesty:
 
 
 class TestSettleLandingFolds:
-    def test_departure_settlement_receipt_owns_only_actual_kernel_scans(self):
+    def test_departure_settlement_receipt_owns_the_scans_of_its_range(self):
         from pyrung.core.analysis.pilot.departure import _settle_departure
 
         plc = PLC(_static_channel_long_timer_program(), dt=0.010)
@@ -1260,11 +1302,13 @@ class TestSettleLandingFolds:
             for scan in range(receipt.start_scan + 1, receipt.end_scan + 1)
             if scan not in execution.kernel_scan_ids
         )
-        assert execution.point_at(skipped) is None
+        assert execution.point_at(skipped) is not None
+        assert execution.point_at(receipt.start_scan) is None
+        assert execution.point_at(receipt.end_scan + 1) is None
 
-    def test_confirmation_window_folds_scan_ids_still_elapse(self):
+    def test_confirmation_window_scan_ids_elapse_in_the_loop(self):
         plc = PLC(_static_channel_long_timer_program(), dt=0.010)
-        plc.patch({"Enable": True})  # long timer runs -> a foldable window
+        plc.patch({"Enable": True})  # long timer runs
         start = plc.state.scan_id
 
         receipt = CoastSession(plc, kind="departure-settle").settle_landing(
@@ -1272,24 +1316,27 @@ class TestSettleLandingFolds:
         )
 
         assert receipt.stop_reason == "quiescent"
-        # The confirmation window's scan-ids elapse in a single folded seek
-        # (a quiet 200-scan second, not 200 stepped scans).
+        # The confirmation window's scan-ids elapse in one seek, in the loop.
         assert receipt.end_scan - start == 200
         # The composite receipt retains the inner seek's actual work.
         assert 0 < receipt.kernel_scans < receipt.logical_scans
-        assert receipt.macro_folds >= 1
-        assert receipt.skipped_scans == receipt.logical_scans - receipt.kernel_scans
+        assert receipt.stretches >= 1
+        assert receipt.stretched_scans == receipt.logical_scans - receipt.kernel_scans
 
-    def test_composite_receipt_aggregates_nested_ordinary_fold_edits(self):
+    def test_composite_receipt_aggregates_nested_stretches(self):
         Enable = Bool("SettleAdvanceEnable", external=True)
         Reset = Bool("SettleAdvanceReset", external=True)
-        Ctr = Counter.clone("SettleAdvance")
+        Count = Dint("SettleAdvanceCount")
         Chan = Int("SettleAdvanceChan", default=5)
         with Program() as program:
             with Rung():
                 copy(5, Chan)
-            with Rung(Enable):
-                count_up(Ctr, preset=1000).reset(Reset)
+            with Rung():
+                math(Count + 1, Count)
+            with Rung(Enable, ~Reset):
+                out(Bool("SettleAdvanceEnabled"))
+            with Rung(Count >= 1000):
+                out(Bool("SettleAdvanceDone"))
 
         plc = PLC(program, dt=0.010)
         plc.patch({Enable.name: True})
@@ -1301,9 +1348,7 @@ class TestSettleLandingFolds:
         )
 
         assert receipt.stop_reason == "quiescent"
-        assert receipt.advances
-        assert receipt.advances == tuple(sorted(receipt.advances, key=lambda edit: edit[1]))
-        assert {tag for tag, _value in receipt.advances} == {Ctr.Acc.name}
+        assert receipt.stretches >= 1
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ class OccurrenceBoundary:
     """Exact dynamic rung boundary immediately before its condition snapshot."""
 
     rung_id: RungId
-    execution_kind: Literal["rung", "branch", "subroutine", "synthetic"]
+    execution_kind: Literal["rung", "branch", "subroutine", "synthetic", "loop_body"]
     caller_rung: int
     call_stack: tuple[str, ...]
     depth: int
@@ -58,6 +58,10 @@ class OccurrenceBoundary:
                 else self.run_order is None or self.run_order == observed.run_order
             )
         )
+
+
+class UnaddressableBoundaryError(ValueError):
+    """A patch boundary that names more than one occurrence in a scan."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +167,11 @@ class _CounterfactualPatchObserver:
             if branch_index is None:
                 raise RuntimeError("counterfactual branch is absent from its parent rung")
             branch_path = (*parent.branch_path, branch_index)
+        elif kind == "loop_body":
+            # Same address as the rung or branch that holds the loop.
+            if not self._rung_frames:
+                raise RuntimeError("counterfactual loop body has no parent rung scope")
+            branch_path = self._rung_frames[-1].branch_path
         boundary = OccurrenceBoundary(
             rung_id=ctx._current_node_id or RungId(None, rung_index),
             execution_kind=kind,
@@ -196,20 +205,10 @@ class _CounterfactualPatchObserver:
         for patch, enabled in zip(matching, active, strict=True):
             if enabled:
                 before = ctx._get_tag_internal(patch.dest)
+                # Written before the row's view is taken (the executor opens
+                # the rung scope first), so the row -- a rung or a branch --
+                # reads the hypothetical value like any write above it.
                 ctx.set_tag(patch.dest, patch.value)
-                # A branch reuses its outer rung's frozen ConditionView. Keep
-                # that disposable snapshot aligned with the hypothetical write
-                # so this exact branch read—and only analysis—observes it.
-                condition_view = ctx._condition_snapshot
-                if kind == "branch" and condition_view is not None:
-                    condition_view._tags_snapshot[patch.dest] = ctx._get_tag_internal(patch.dest)
-                    if (
-                        condition_view._tag_source_snapshot is not None
-                        and ctx._tag_write_sources is not None
-                    ):
-                        condition_view._tag_source_snapshot[patch.dest] = (
-                            ctx._tag_write_sources.get(patch.dest)
-                        )
                 self.applications.append(
                     CounterfactualPatchApplication(
                         patch=patch,
@@ -327,6 +326,13 @@ def execute_counterfactual_program(
 
     from pyrung.core.executor import CompositeExecutionObserver, execute_program
 
+    for patch in patches:
+        if patch.boundary.execution_kind == "loop_body":
+            # Body rungs of one loop and all their iterations share a boundary,
+            # so the patch would match every one of them.
+            raise UnaddressableBoundaryError(
+                "a forloop body rung boundary has no body or iteration coordinate"
+            )
     hypothetical = _CounterfactualPatchObserver(
         patches,
         run_order_offset=len(capture.runs) if capture is not None else 0,

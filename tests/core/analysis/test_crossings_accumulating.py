@@ -68,10 +68,11 @@ def test_on_delay_done_true_falls_through_without_dt_constraint() -> None:
 def test_count_down_done_true_includes_one_scan_frontier() -> None:
     instr = CountDownInstruction(Bool("Done"), Dint("Acc"), 5, Bool("Dn"), Bool("Rst"))
     r = CountDownDoneCrossing().reverse(instr, None, eq_target("Done", True), _ctx())
-    assert _only(r) == (Cmp("Acc", "<=", -4, bound_is_tag=False),)
+    # Done at Acc <= 5, one count down from Acc == 6.
+    assert _only(r) == (Cmp("Acc", "<=", 6, bound_is_tag=False),)
 
 
-def test_count_down_done_true_tag_preset_preserves_negation_and_frontier() -> None:
+def test_count_down_done_true_tag_preset_keeps_the_frontier() -> None:
     instr = CountDownInstruction(Bool("Done"), Dint("Acc"), Dint("Preset"), Bool("Dn"), Bool("Rst"))
     result = CountDownDoneCrossing().reverse(
         instr,
@@ -79,7 +80,7 @@ def test_count_down_done_true_tag_preset_preserves_negation_and_frontier() -> No
         eq_target("Done", True),
         _ctx(),
     )
-    assert _only(result) == (AffineCmp("Acc", "<=", "Preset", scale=-1, offset=1),)
+    assert _only(result) == (AffineCmp("Acc", "<=", "Preset", offset=1),)
 
 
 # --- off_delay (no clean inversion) -------------------------------------------

@@ -2,23 +2,42 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.click.capabilities import CONVERTER_COMPATIBILITY
+from pyclickplc.banks import BANKS
+
+from pyrung.click.capabilities import CONVERTER_COMPATIBILITY, single_register_fill_dest
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.instruction.conversions import (
+    LITERAL,
+    _render_text_from_numeric,
+    copy_source_kind,
+)
+from pyrung.core.instruction.send_receive import is_modbus_status_tag
+from pyrung.core.memory_block import _element_name, _store_block, block_room
+from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import ProgramLocation, _condition_children
 
 from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
-    CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
+    CLK_MATH_DEST_BANK,
+    CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
+    CLK_SEARCH_RANGE_BANK,
+    CLK_SEARCH_RESULT_NOT_DS,
+    CLK_TEXT_PAST_BANK,
+    CLK_TEXT_PAST_BLOCK,
+    CLK_TIMER_PAIR_MISMATCH,
     CLK_TIMER_PRESET_OVERFLOW,
+    CLK_TIMER_PRESET_TOO_LOW,
     ClickFinding,
     ValidationMode,
     _build_suggestion,
@@ -62,6 +81,13 @@ _WRITE_TARGET_FIELDS: frozenset[tuple[str, str]] = frozenset(
         ("TimeDrumInstruction", "current_step"),
         ("TimeDrumInstruction", "accumulator"),
         ("TimeDrumInstruction", "completion_flag"),
+        ("TimeEventDrumInstruction", "current_step"),
+        ("TimeEventDrumInstruction", "accumulator"),
+        ("TimeEventDrumInstruction", "completion_flag"),
+        ("ToggleInstruction", "target"),
+        ("DebounceInstruction", "target"),
+        ("FlasherInstruction", "target"),
+        ("TimedInstruction", "target"),
     }
 )
 
@@ -85,6 +111,26 @@ _ROLE_ASSIGNMENT_FIELDS: dict[tuple[str, str], str] = {
     ("TimeDrumInstruction", "accumulator"): "drum_accumulator",
     ("TimeDrumInstruction", "completion_flag"): "drum_completion_flag",
     ("TimeDrumInstruction", "jump_step"): "drum_jump_step",
+    ("TimeEventDrumInstruction", "current_step"): "drum_current_step",
+    ("TimeEventDrumInstruction", "accumulator"): "drum_accumulator",
+    ("TimeEventDrumInstruction", "completion_flag"): "drum_completion_flag",
+    ("TimeEventDrumInstruction", "jump_step"): "drum_jump_step",
+    # The Out coil variants claim each phase's whole Timer, as on_delay does.
+    ("DebounceInstruction", "on_done"): "timer_done_bit",
+    ("DebounceInstruction", "on_acc"): "timer_accumulator",
+    ("DebounceInstruction", "on_preset"): "timer_preset",
+    ("DebounceInstruction", "off_done"): "timer_done_bit",
+    ("DebounceInstruction", "off_acc"): "timer_accumulator",
+    ("DebounceInstruction", "off_preset"): "timer_preset",
+    ("FlasherInstruction", "on_done"): "timer_done_bit",
+    ("FlasherInstruction", "on_acc"): "timer_accumulator",
+    ("FlasherInstruction", "on_preset"): "timer_preset",
+    ("FlasherInstruction", "off_done"): "timer_done_bit",
+    ("FlasherInstruction", "off_acc"): "timer_accumulator",
+    ("FlasherInstruction", "off_preset"): "timer_preset",
+    ("TimedInstruction", "timer_done"): "timer_done_bit",
+    ("TimedInstruction", "timer_acc"): "timer_accumulator",
+    ("TimedInstruction", "on_preset"): "timer_preset",
 }
 
 _COPY_COMPATIBILITY_FIELDS: dict[str, tuple[str, str, str]] = {
@@ -166,7 +212,11 @@ def _evaluate_role_assignments(
             continue
 
         value = getattr(instruction, field_name)
-        if field_name in {"preset", "jump_step"} and not isinstance(value, Tag):
+        if value is None:
+            continue
+        if (field_name == "jump_step" or field_name.endswith("preset")) and not isinstance(
+            value, Tag
+        ):
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
@@ -194,6 +244,89 @@ def _evaluate_role_assignments(
     return findings
 
 
+# Coil instructions -> (pyrung verb, CLICK coil name).  Their target must be
+# bit memory; toggle() and the Out variants already take only a Bool tag.
+_COIL_TARGET_INSTRUCTIONS: dict[str, tuple[str, str]] = {
+    "OutInstruction": ("out", "Out"),
+    "LatchInstruction": ("latch", "Set"),
+    "ResetInstruction": ("reset", "Reset"),
+}
+
+
+def _evaluate_coil_targets(
+    instruction: Any,
+    base_location: ProgramLocation,
+    profile: HardwareProfile,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    names = _COIL_TARGET_INSTRUCTIONS.get(type(instruction).__name__)
+    if names is None:
+        return []
+    verb, coil = names
+    # An unresolved target is reported by the write-target check.
+    resolution = resolver.resolve_operand_slots(instruction.target)
+    bad = [
+        _bank_label(slot)
+        for slot in resolution.slots
+        if not profile.valid_for_role(slot.memory_type, "coil_target")
+    ]
+    if not bad:
+        return []
+    target = bad[0] if len(bad) == 1 else f"{bad[0]}..{bad[-1]}"
+    location_text = _format_location(_instruction_location(base_location, "instruction.target"))
+    return [
+        ClickFinding(
+            code=CLK_BANK_WRONG_ROLE,
+            severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
+            message=(
+                f"{verb}({target}) at {location_text}: CLICK's {coil} coil takes bit "
+                "memory only (X, Y, C, T, CT, SC). Write a register with copy() or fill()."
+            ),
+            location=location_text,
+        )
+    ]
+
+
+_BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
+# The copy operations whose source may be a constant, with the CLICK instruction's name.
+_CONSTANT_COPY_VERBS = {"single": ("copy", "Copy"), "fill": ("fill", "Fill")}
+
+
+def _constant_into_bit(
+    operation: str,
+    value: Any,
+    dest_memory_types: tuple[str, ...],
+    dest_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """CLK_COPY_CONSTANT_INTO_BIT: CLICK's Copy and Fill dialogs refuse a constant
+    into bit memory (checked in the v4 editor, 2026-11-06)."""
+    bits = [memory_type for memory_type in dest_memory_types if memory_type in _BIT_BANKS]
+    if not bits:
+        return []
+    verb, box = _CONSTANT_COPY_VERBS[operation]
+    if isinstance(value, ImmediateRef):
+        value = value.value
+    location_text = _format_location(dest_location)
+    return [
+        ClickFinding(
+            code=CLK_COPY_CONSTANT_INTO_BIT,
+            severity=_route_severity(CLK_COPY_CONSTANT_INTO_BIT, mode),
+            message=(
+                f"{verb}({value!r}, ...) into {', '.join(bits)} at {location_text}: CLICK's "
+                f"{box} takes no constant into bit memory."
+            ),
+            location=location_text,
+            suggestion=(
+                "Set or clear the bit with out(), latch() or reset(), or copy a bit into it."
+                if operation == "single"
+                else "Set or clear the bits with latch() or reset() on the range."
+            ),
+        )
+    ]
+
+
 def _evaluate_copy_compatibility(
     instruction: Any,
     base_location: ProgramLocation,
@@ -209,6 +342,12 @@ def _evaluate_copy_compatibility(
         return findings
 
     operation, source_field, dest_field = mapping
+    # CLICK has no Fill of one register, so the export is a Copy. It must pass
+    # the Fill table too, so nothing a Fill refused becomes accepted.
+    operations = (operation,)
+    if operation == "fill" and single_register_fill_dest(instruction.dest) is not None:
+        operations = ("fill", "single")
+        operation = "single"
     source_location = _instruction_location(base_location, f"instruction.{source_field}")
     dest_location = _instruction_location(base_location, f"instruction.{dest_field}")
 
@@ -222,22 +361,36 @@ def _evaluate_copy_compatibility(
     if source_resolution.unresolved or dest_resolution.unresolved:
         return findings
 
+    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
+    source = getattr(instruction, source_field)
+    if operation in _CONSTANT_COPY_VERBS and copy_source_kind(source) == LITERAL:
+        findings.extend(
+            _constant_into_bit(operation, source, dest_memory_types, dest_location, mode)
+        )
+
     if not source_resolution.slots or not dest_resolution.slots:
         return findings
 
     source_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in source_resolution.slots))
-    dest_memory_types = tuple(dict.fromkeys(slot.memory_type for slot in dest_resolution.slots))
 
     for source_memory_type in source_memory_types:
         for dest_memory_type in dest_memory_types:
-            if not profile.copy_compatible(operation, source_memory_type, dest_memory_type):
+            refused = next(
+                (
+                    op
+                    for op in operations
+                    if not profile.copy_compatible(op, source_memory_type, dest_memory_type)
+                ),
+                None,
+            )
+            if refused is not None:
                 location_text = _format_location(dest_location)
                 findings.append(
                     ClickFinding(
                         code=CLK_COPY_BANK_INCOMPATIBLE,
                         severity=_route_severity(CLK_COPY_BANK_INCOMPATIBLE, mode),
                         message=(
-                            f"Copy operation {operation} is incompatible for "
+                            f"Copy operation {refused} is incompatible for "
                             f"{source_memory_type} -> {dest_memory_type} "
                             f"at {location_text}."
                         ),
@@ -246,7 +399,8 @@ def _evaluate_copy_compatibility(
                 )
 
     # --- Converter / bank compatibility ---
-    converter = getattr(instruction, "convert", None)
+    # A plain Copy across text converts on its own; the bank check above covers it.
+    converter = getattr(instruction, "authored_convert", getattr(instruction, "convert", None))
     if isinstance(converter, CopyConverter):
         compat = CONVERTER_COMPATIBILITY.get(converter.mode)
         if compat is not None:
@@ -341,6 +495,266 @@ def _evaluate_pack_text(
     return findings
 
 
+# What CLICK v4's Search dialog takes (checked in the editor, 2026-11-06).
+_SEARCH_RANGE_BANKS = ("DS", "DD", "DH", "DF", "TD", "CTD", "TXT")
+_SEARCH_RESULT_BANKS = ("DS",)
+
+
+def _evaluate_search_banks(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """CLK_SEARCH_RANGE_BANK and CLK_SEARCH_RESULT_NOT_DS: a Search range in a bank
+    CLICK's Search does not take, or a Result that is not a DS.  An unresolved
+    operand is reported by the write-target and bank checks."""
+    if type(instruction).__name__ != "SearchInstruction":
+        return []
+    findings: list[ClickFinding] = []
+    checks = (
+        ("search_range", _SEARCH_RANGE_BANKS, CLK_SEARCH_RANGE_BANK),
+        ("result", _SEARCH_RESULT_BANKS, CLK_SEARCH_RESULT_NOT_DS),
+    )
+    for field_name, allowed, code in checks:
+        resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
+        banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
+        bad = [bank for bank in banks if bank not in allowed]
+        if not bad:
+            continue
+        location_text = _format_location(
+            _instruction_location(base_location, f"instruction.{field_name}")
+        )
+        if code == CLK_SEARCH_RANGE_BANK:
+            message = (
+                f"search() range in {', '.join(bad)} at {location_text}; CLICK's Search "
+                f"takes a range in {', '.join(allowed)} only."
+            )
+            suggestion = "Copy the values into a range in one of those banks and search that."
+        else:
+            message = (
+                f"search() result in {', '.join(bad)} at {location_text}; CLICK's Search "
+                "takes a DS Result only."
+            )
+            suggestion = "Map the result to a DS address, and copy it on from there if needed."
+        findings.append(
+            ClickFinding(
+                code=code,
+                severity=_route_severity(code, mode),
+                message=message,
+                location=location_text,
+                suggestion=suggestion,
+            )
+        )
+    return findings
+
+
+# The banks CLICK v4's Math dialog takes as its Result (checked in the editor,
+# 2026-11-06): DS, DD, DF, TD, CTD, and DH in a hex Math.  A decimal Math into
+# DH is refused (the dialog answer of 2026-11-06).  A Word destination makes the
+# Math decimal only when an operand is not a Word, a mixed Math that
+# CLK_MATH_MODE_MIXED flags (``infer_calc_mode`` in calc.py), so DH stays in the
+# table and the mixed Math gets its own finding.
+_MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "DH")
+
+
+def _evaluate_math_dest_bank(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """CLK_MATH_DEST_BANK: a math() into a bank CLICK's Math Result does not take
+    (a bit, XD, YD, SD, TXT).  An unresolved destination is reported by the
+    write-target check."""
+    if type(instruction).__name__ != "CalcInstruction":
+        return []
+    resolution = resolver.resolve_operand_slots(instruction.dest)
+    banks = list(dict.fromkeys(slot.memory_type for slot in resolution.slots))
+    bad = [bank for bank in banks if bank not in _MATH_DEST_BANKS]
+    if not bad:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.dest"))
+    return [
+        ClickFinding(
+            code=CLK_MATH_DEST_BANK,
+            severity=_route_severity(CLK_MATH_DEST_BANK, mode),
+            message=(
+                f"math() into {', '.join(bad)} at {location_text}; CLICK's Math takes a "
+                "Result in DS, DD, DF, TD or CTD, or DH in a hex Math."
+            ),
+            location=location_text,
+            suggestion=(
+                "Store the result in a register of one of those banks, and test or copy "
+                "it on from there."
+            ),
+        )
+    ]
+
+
+# The fewest characters ``to_text()`` writes of a tag of each type, and whether that
+# is every value's length: zero suppressed, one or more; else an Int's five digits
+# (six with a sign), a Dint's ten (eleven), a Word's four hex digits.  A finite Real
+# has seven decimals, "0.0000000" or "0.0000000E+00" in exponential form, the
+# shortest; NaN and infinity are "nan", "inf" and "-inf".
+_FIXED_TEXT_WIDTH = {TagType.INT: (5, False), TagType.DINT: (10, False), TagType.WORD: (4, True)}
+_REAL_TEXT_WIDTH = 9
+_REAL_EXPONENTIAL_TEXT_WIDTH = 13
+
+
+@dataclass(frozen=True)
+class _Written:
+    """How many elements a Copy writes from its destination on.
+
+    *count* is every value's length when *exact*, else the fewest, for a finite
+    value only when *finite_only*.
+    """
+
+    count: int
+    exact: bool
+    finite_only: bool = False
+
+    def describe(self, what: str) -> str:
+        if self.exact:
+            return f"{self.count} {what}"
+        finite = " for a finite value" if self.finite_only else ""
+        return f"{self.count} {what} or more{finite}"
+
+    def dropped(self, room: int) -> str:
+        """What a store with *room* elements left drops."""
+        if self.exact:
+            lost = self.count - room
+            return "the last one" if lost == 1 else f"the last {lost}"
+        return "all but the first" if room == 1 else f"all but the first {room}"
+
+    def dropped_verb(self, room: int) -> str:
+        return "is" if self.exact and self.count - room == 1 else "are"
+
+    def kept(self) -> str:
+        return "every one" if self.exact else f"the first {self.count}"
+
+
+def _fewest_elements_written(instruction: Any) -> _Written | None:
+    """How many elements a Copy writes from its destination on, or ``None`` for one."""
+    source = instruction.source
+    converter = instruction.convert
+    if converter is None:
+        target = instruction.target
+        is_text = isinstance(target, Tag) and target.type is TagType.CHAR
+        return _Written(len(source), True) if isinstance(source, str) and is_text else None
+    if converter.mode in {"value", "ascii"}:
+        return _Written(len(source), True) if isinstance(source, str) else None
+    if converter.mode != "text":
+        return None
+    tail = 0 if converter.termination_code is None else 1
+    kind = copy_source_kind(source)
+    if kind == LITERAL:
+        try:
+            text = _render_text_from_numeric(
+                source,
+                source_tag=None,
+                suppress_zero=converter.suppress_zero,
+                exponential=converter.exponential,
+            )
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return _Written(len(text) + tail, True)
+    if kind is TagType.REAL:
+        width = _REAL_EXPONENTIAL_TEXT_WIDTH if converter.exponential else _REAL_TEXT_WIDTH
+        return _Written(width + tail, False, finite_only=True)
+    if converter.suppress_zero:
+        return _Written(1 + tail, False)
+    fixed = _FIXED_TEXT_WIDTH.get(kind)
+    return None if fixed is None else _Written(fixed[0] + tail, fixed[1])
+
+
+def _evaluate_text_past_bank(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    """CLK_TEXT_PAST_BANK and CLK_TEXT_PAST_BLOCK: a Copy by address whose text runs
+    past the end of its bank, or of its own block while the bank goes on.
+
+    pyrung writes the elements its block holds and drops the rest.  Past the bank
+    it warns, as the store is one a CLICK takes; past a block mapped inside a bank
+    it warns that a CLICK writes on into the bank where pyrung stops.  Only a store
+    whose shortest text runs past is reported.
+    """
+    if type(instruction).__name__ != "CopyInstruction":
+        return []
+    target = instruction.target
+    if isinstance(target, ImmediateRef):
+        target = target.value
+    if not isinstance(target, Tag):
+        return []
+    written = _fewest_elements_written(instruction)
+    if written is None or written.count < 2:
+        return []
+    resolution = resolver.resolve_operand_slots(target)
+    if resolution.unresolved or len(resolution.slots) != 1:
+        return []
+    slot = resolution.slots[0]
+    bank = BANKS.get(slot.memory_type)
+    if bank is None or slot.address is None:
+        return []
+    count = written.count
+    bank_room = bank.max_addr - slot.address + 1
+    block_room_ = block_room(target)
+    location_text = _format_location(_instruction_location(base_location, "instruction.target"))
+    memory_type = slot.memory_type
+    start = f"{memory_type}{slot.address}"
+    what = "characters" if memory_type == "TXT" else "elements"
+    severity = "error" if mode == "strict" else "warning"
+
+    if block_room_ is not None and block_room_ < min(count, bank_room):
+        home = _store_block(target)
+        assert home is not None
+        block = home[0]
+        named = target.name if target.name == start else f"{target.name} ({start})"
+        lowest = block.end - count + 1
+        return [
+            ClickFinding(
+                code=CLK_TEXT_PAST_BLOCK,
+                severity=severity,
+                message=(
+                    f"copy() into {named} at {location_text} writes "
+                    f"{written.describe(what)}, past {_element_name(block, block.end)} at the "
+                    f"end of its block {block.name}: pyrung drops "
+                    f"{written.dropped(block_room_)}, where a "
+                    f"CLICK writes on into {memory_type}{slot.address + block_room_}."
+                ),
+                location=location_text,
+                suggestion=(
+                    f"Start it at {_element_name(block, lowest)} or lower to keep {written.kept()}."
+                    if lowest >= block.start
+                    else f"Map {block.name} onto more of {memory_type} to keep {written.kept()}."
+                ),
+            )
+        ]
+    if count <= bank_room:
+        return []
+    lowest = bank.max_addr - count + 1
+    return [
+        ClickFinding(
+            code=CLK_TEXT_PAST_BANK,
+            severity=severity,
+            message=(
+                f"copy() into {start} at {location_text} writes {written.describe(what)}, "
+                f"past {memory_type}{bank.max_addr} at the end of the bank: "
+                f"{written.dropped(bank_room)} {written.dropped_verb(bank_room)} dropped."
+            ),
+            location=location_text,
+            suggestion=(
+                f"Start it at {memory_type}{lowest} or lower to keep {written.kept()}."
+                if lowest >= bank.min_addr
+                else None
+            ),
+        )
+    ]
+
+
 def _iter_condition_tags(root: Any) -> tuple[Tag, ...]:
     found: list[Tag] = []
     seen_values: set[int] = set()
@@ -381,7 +795,11 @@ def _evaluate_drums(
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     instruction_type = type(instruction).__name__
-    if instruction_type not in {"EventDrumInstruction", "TimeDrumInstruction"}:
+    if instruction_type not in {
+        "EventDrumInstruction",
+        "TimeDrumInstruction",
+        "TimeEventDrumInstruction",
+    }:
         return []
 
     findings: list[ClickFinding] = []
@@ -446,9 +864,11 @@ def _evaluate_drums(
                     )
                 )
 
-    if instruction_type == "EventDrumInstruction":
+    if instruction_type in {"EventDrumInstruction", "TimeEventDrumInstruction"}:
         events = getattr(instruction, "events", ())
         for idx, event_condition in enumerate(events):
+            if event_condition is None:
+                continue
             event_location = _instruction_location(base_location, f"instruction.events[{idx}]")
             event_tags = _iter_condition_tags(event_condition)
             for event_tag in event_tags:
@@ -457,24 +877,6 @@ def _evaluate_drums(
                     role="drum_event_condition",
                     location=event_location,
                     unresolved_reason="event condition bank unresolved",
-                )
-
-    if instruction_type == "TimeDrumInstruction":
-        presets = getattr(instruction, "presets", ())
-        for idx, preset in enumerate(presets):
-            if isinstance(preset, Tag):
-                location = _instruction_location(base_location, f"instruction.presets[{idx}]")
-                location_text = _format_location(location)
-                findings.append(
-                    ClickFinding(
-                        code=CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
-                        severity=_route_severity(CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED, mode),
-                        message=(
-                            "time_drum preset must be a literal integer for Click portability "
-                            f"at {location_text}."
-                        ),
-                        location=location_text,
-                    )
                 )
 
     jump_step = getattr(instruction, "jump_step", None)
@@ -498,7 +900,13 @@ def _evaluate_drums(
 
 _INT16_MAX = 32_767
 
-_TIMER_INSTRUCTION_TYPES = frozenset({"OnDelayInstruction", "OffDelayInstruction"})
+_TIMER_PRESET_FIELDS: dict[str, tuple[str, ...]] = {
+    "OnDelayInstruction": ("preset",),
+    "OffDelayInstruction": ("preset",),
+    "DebounceInstruction": ("on_preset", "off_preset"),
+    "FlasherInstruction": ("on_preset", "off_preset"),
+    "TimedInstruction": ("on_preset",),
+}
 
 
 def _evaluate_timer_preset_overflow(
@@ -507,29 +915,236 @@ def _evaluate_timer_preset_overflow(
     tag_map: TagMap,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
-    instruction_type = type(instruction).__name__
-    if instruction_type not in _TIMER_INSTRUCTION_TYPES:
-        return []
+    findings: list[ClickFinding] = []
+    for field_name in _TIMER_PRESET_FIELDS.get(type(instruction).__name__, ()):
+        preset = getattr(instruction, field_name, None)
+        if isinstance(preset, Tag) or preset is None or preset <= _INT16_MAX:
+            continue
+        location = _instruction_location(base_location, f"instruction.{field_name}")
+        location_text = _format_location(location)
+        findings.append(
+            ClickFinding(
+                code=CLK_TIMER_PRESET_OVERFLOW,
+                severity=_route_severity(CLK_TIMER_PRESET_OVERFLOW, mode),
+                message=(
+                    f"Timer preset {preset} exceeds Click INT range (max {_INT16_MAX}) "
+                    f"at {location_text}."
+                ),
+                location=location_text,
+                suggestion=_build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map),
+            )
+        )
+    return findings
 
-    preset = getattr(instruction, "preset", None)
-    if isinstance(preset, Tag) or preset is None:
-        return []
 
-    if preset <= _INT16_MAX:
-        return []
+# The least constant preset CLICK v4's dialogs take (checked in the editor, 2026-11-06):
+# a flasher or a timed coil refuses 0, a debounce and a drum step take 0 and refuse
+# a negative one.  A register preset takes any value.
+_CONSTANT_PRESET_FLOORS: dict[str, tuple[str, int, tuple[str, ...]]] = {
+    "DebounceInstruction": ("debounce", 0, ("on_preset", "off_preset")),
+    "FlasherInstruction": ("flasher", 1, ("on_preset", "off_preset")),
+    "TimedInstruction": ("timed", 1, ("on_preset",)),
+    "TimeDrumInstruction": ("time_drum", 0, ()),
+    "TimeEventDrumInstruction": ("time_event_drum", 0, ()),
+}
 
-    location = _instruction_location(base_location, "instruction.preset")
-    location_text = _format_location(location)
-    suggestion = _build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map)
+
+def _evaluate_timer_preset_floor(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """CLK_TIMER_PRESET_TOO_LOW: a constant preset below what CLICK's dialog takes."""
+    spec = _CONSTANT_PRESET_FLOORS.get(type(instruction).__name__)
+    if spec is None:
+        return []
+    verb, floor, fields = spec
+    presets = (
+        [(field, getattr(instruction, field)) for field in fields]
+        if fields
+        else [(f"presets[{index}]", p) for index, p in enumerate(instruction.presets)]
+    )
+    least = "1 or more" if floor == 1 else "0 or more"
+    findings: list[ClickFinding] = []
+    for field_name, preset in presets:
+        if not isinstance(preset, int) or isinstance(preset, bool) or preset >= floor:
+            continue
+        location_text = _format_location(
+            _instruction_location(base_location, f"instruction.{field_name}")
+        )
+        findings.append(
+            ClickFinding(
+                code=CLK_TIMER_PRESET_TOO_LOW,
+                severity=_route_severity(CLK_TIMER_PRESET_TOO_LOW, mode),
+                message=(
+                    f"{verb}() preset {preset} at {location_text}: CLICK's editor takes a "
+                    f"constant preset of {least} there."
+                ),
+                location=location_text,
+                suggestion=(
+                    f"Use a constant of {least}, or a DS tag holding the value: a register "
+                    "preset takes any value."
+                ),
+            )
+        )
+    return findings
+
+
+# A CLICK timer or counter is one number: its instruction names T<n> (or CT<n>)
+# and the accumulator TD<n> (CTD<n>) comes with it.  The Out coils name only TD<n>.
+_TIMER_PAIR_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
+    "OnDelayInstruction": (("done_bit", "accumulator"),),
+    "OffDelayInstruction": (("done_bit", "accumulator"),),
+    "CountUpInstruction": (("done_bit", "accumulator"),),
+    "CountDownInstruction": (("done_bit", "accumulator"),),
+    "DebounceInstruction": (("on_done", "on_acc"), ("off_done", "off_acc")),
+    "FlasherInstruction": (("on_done", "on_acc"), ("off_done", "off_acc")),
+    "TimedInstruction": (("timer_done", "timer_acc"),),
+}
+_PAIRED_BANKS = {"T": "TD", "CT": "CTD"}
+
+
+def _evaluate_timer_pairs(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    findings: list[ClickFinding] = []
+    for done_field, acc_field in _TIMER_PAIR_FIELDS.get(type(instruction).__name__, ()):
+        done, acc = getattr(instruction, done_field), getattr(instruction, acc_field)
+        done_slots = resolver.resolve_operand_slots(done).slots
+        acc_slots = resolver.resolve_operand_slots(acc).slots
+        if len(done_slots) != 1 or len(acc_slots) != 1:
+            continue
+        done_slot, acc_slot = done_slots[0], acc_slots[0]
+        if _PAIRED_BANKS.get(done_slot.memory_type) != acc_slot.memory_type:
+            continue  # a wrong bank is a role finding
+        if done_slot.address == acc_slot.address:
+            continue
+        location_text = _format_location(
+            _instruction_location(base_location, f"instruction.{acc_field}")
+        )
+        findings.append(
+            ClickFinding(
+                code=CLK_TIMER_PAIR_MISMATCH,
+                severity=_route_severity(CLK_TIMER_PAIR_MISMATCH, mode),
+                message=(
+                    f"{_bank_label(done_slot)} and {_bank_label(acc_slot)} are different "
+                    f"CLICK timers or counters at {location_text}; Done and Acc must share "
+                    "one number."
+                ),
+                location=location_text,
+                suggestion="Map Done and Acc to the same number, e.g. T5 with TD5.",
+            )
+        )
+    return findings
+
+
+# CLICK v4's Out dialog offers fewer units than its timers do.
+_OUT_VARIANT_UNITS: dict[str, tuple[str, frozenset[TimeUnit]]] = {
+    "DebounceInstruction": ("debounce", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
+    "FlasherInstruction": ("flasher", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
+    "TimedInstruction": ("timed", frozenset({TimeUnit.Tms, TimeUnit.Ts, TimeUnit.Tm})),
+}
+_UNIT_NAMES = {
+    TimeUnit.Tms: "ms",
+    TimeUnit.Ts: "sec",
+    TimeUnit.Tm: "min",
+    TimeUnit.Th: "hour",
+    TimeUnit.Td: "day",
+}
+
+
+def _evaluate_out_variant_unit(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    spec = _OUT_VARIANT_UNITS.get(type(instruction).__name__)
+    if spec is None:
+        return []
+    verb, allowed = spec
+    unit = instruction.unit
+    if unit in allowed:
+        return []
+    location_text = _format_location(_instruction_location(base_location, "instruction.unit"))
+    choices = "/".join(_UNIT_NAMES[u] for u in TimeUnit if u in allowed)
     return [
         ClickFinding(
-            code=CLK_TIMER_PRESET_OVERFLOW,
-            severity=_route_severity(CLK_TIMER_PRESET_OVERFLOW, mode),
+            code=CLK_OUT_UNIT_UNSUPPORTED,
+            severity=_route_severity(CLK_OUT_UNIT_UNSUPPORTED, mode),
             message=(
-                f"Timer preset {preset} exceeds Click INT range (max {_INT16_MAX}) "
+                f"CLICK's {verb} coil times in {choices}, not {_UNIT_NAMES[unit]}, "
                 f"at {location_text}."
             ),
             location=location_text,
-            suggestion=suggestion,
+            suggestion=f"Use unit= one of {choices} and scale the preset.",
         )
     ]
+
+
+# The banks a Send or Receive may write, from CLICK's help pages for them (the MODBUS
+# TCP and RTU pages agree).  Not probed on hardware: no conformance case runs them.
+# SD is a Receive destination there whole, so this does not apply copy()'s writable
+# SD subset.
+_MODBUS_FLAG_BANKS = frozenset({"C"})
+_MODBUS_EXCEPTION_BANKS = frozenset({"DS", "DD"})
+_MODBUS_RECEIVE_DEST_BANKS = frozenset(
+    {"Y", "C", "CTD", "DS", "DD", "DH", "DF", "SD", "TD", "YD", "TXT"}
+)
+_MODBUS_WRITE_BANKS: dict[tuple[str, str], frozenset[str]] = {
+    ("ModbusReceiveInstruction", "dest"): _MODBUS_RECEIVE_DEST_BANKS,
+    ("ModbusReceiveInstruction", "receiving"): _MODBUS_FLAG_BANKS,
+    ("ModbusReceiveInstruction", "success"): _MODBUS_FLAG_BANKS,
+    ("ModbusReceiveInstruction", "error"): _MODBUS_FLAG_BANKS,
+    ("ModbusReceiveInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
+    ("ModbusSendInstruction", "sending"): _MODBUS_FLAG_BANKS,
+    ("ModbusSendInstruction", "success"): _MODBUS_FLAG_BANKS,
+    ("ModbusSendInstruction", "error"): _MODBUS_FLAG_BANKS,
+    ("ModbusSendInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
+}
+
+
+def _evaluate_modbus_banks(
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
+) -> list[ClickFinding]:
+    findings: list[ClickFinding] = []
+    instruction_type = type(instruction).__name__
+
+    for (candidate_type, field_name), banks in _MODBUS_WRITE_BANKS.items():
+        if instruction_type != candidate_type:
+            continue
+
+        value = getattr(instruction, field_name)
+        # A status bit left off is a hidden tag that never reaches the CLICK project.
+        if isinstance(value, Tag) and is_modbus_status_tag(value.name):
+            continue
+
+        location = _instruction_location(base_location, f"instruction.{field_name}")
+        resolution = resolver.resolve_operand_slots(value)
+        if resolution.unresolved:
+            findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
+            continue
+
+        for slot in resolution.slots:
+            if slot.memory_type in banks:
+                continue
+            location_text = _format_location(location)
+            choices = ", ".join(sorted(banks))
+            findings.append(
+                ClickFinding(
+                    code=CLK_BANK_WRONG_ROLE,
+                    severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
+                    message=(
+                        f"Bank {_bank_label(slot)} is invalid for {field_name} "
+                        f"at {location_text}; CLICK takes {choices}."
+                    ),
+                    location=location_text,
+                )
+            )
+
+    return findings

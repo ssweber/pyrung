@@ -13,6 +13,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.state import value_changed
+
 from .models import Transition
 
 if TYPE_CHECKING:
@@ -156,6 +158,10 @@ class ScanRungWriteProjection:
         order = self._run_order_by_identity.get(id(run))
         return self._writes_by_run.get(order, ()) if order is not None else ()
 
+    def reads_of(self, tag_name: str) -> tuple[RungRead, ...]:
+        """Exact reads of one tag, in execution order."""
+        return self._reads_by_tag.get(tag_name, ())
+
     def reads_for_run(self, run: RungRun) -> tuple[RungRead, ...]:
         """Exact direct reads attributed to this dynamic run."""
         order = self._run_order_by_identity.get(id(run))
@@ -253,7 +259,8 @@ class ScanRungWriteProjection:
         appeared = tuple(
             write
             for write in self._writes_by_tag.get(tag_name, ())
-            if write.run.rung is producer_rung and write.transition.to_value == expected_value
+            if write.run.rung is producer_rung
+            and not value_changed(write.transition.to_value, expected_value)
         )
         return tuple(
             self._observe_exact_handoff(
@@ -355,7 +362,7 @@ class ScanRungWriteProjection:
         if effect_read is None:
             incomplete_source = any(
                 read.occurrence.name == tag_name
-                and read.occurrence.value == effect_write.transition.to_value
+                and not value_changed(read.occurrence.value, effect_write.transition.to_value)
                 and self.transition_observed_by_read(read) is None
                 for read in consumer_reads
             )
@@ -375,7 +382,7 @@ class ScanRungWriteProjection:
         for required_tag, required_value in required_shape:
             if (
                 required_tag == tag_name
-                and required_value == effect_write.transition.to_value
+                and not value_changed(required_value, effect_write.transition.to_value)
                 and effect_read.ordinal > next_ordinal
             ):
                 observed = effect_read
@@ -398,7 +405,7 @@ class ScanRungWriteProjection:
                 )
             next_ordinal = observed.ordinal
             matched_shape.append(observed)
-            if observed.occurrence.value == required_value:
+            if not value_changed(observed.occurrence.value, required_value):
                 continue
             transition = self.transition_observed_by_read(observed)
             displaced_by = (
@@ -545,7 +552,7 @@ class ScanRungWriteProjection:
         candidates = self._writes_by_tag.get(tag_name, ())
         exit_value = self.exit_tags.get(tag_name) if value is _UNSET else value
         for candidate in reversed(candidates):
-            if candidate.transition.to_value == exit_value:
+            if not value_changed(candidate.transition.to_value, exit_value):
                 return candidate
         return None
 
@@ -553,7 +560,7 @@ class ScanRungWriteProjection:
         """Committed transition attributed when a retained final write exists."""
         before = self.entry_tags.get(tag_name)
         after = self.exit_tags.get(tag_name)
-        if before == after:
+        if not value_changed(before, after):
             return None
         winner = self.final_write(tag_name, after)
         return Transition(
@@ -577,7 +584,7 @@ class ScanRungWriteProjection:
                 candidate
                 for candidate in self.reads_for_run(run)
                 if candidate.occurrence.name == tag_name
-                and candidate.occurrence.value == observed_value
+                and not value_changed(candidate.occurrence.value, observed_value)
             ),
             None,
         )
@@ -593,7 +600,11 @@ class ScanRungWriteProjection:
         observed_value = read.occurrence.value
         source = read.occurrence.source
         if isinstance(source, WriteOccurrence):
-            if source.domain != "tag" or source.name != tag_name or source.after != observed_value:
+            if (
+                source.domain != "tag"
+                or source.name != tag_name
+                or value_changed(source.after, observed_value)
+            ):
                 raise RuntimeError("observed read carries an inconsistent write definition")
             return Transition(
                 tag_name,
@@ -608,7 +619,7 @@ class ScanRungWriteProjection:
             # pending value was established. Selected historical replay
             # attaches before all observable scan phases and never lands here.
             entry = self.entry_tags.get(tag_name)
-            if entry != observed_value:
+            if value_changed(entry, observed_value):
                 return Transition(tag_name, self.scan_id, entry, observed_value)
         return None
 
@@ -728,10 +739,11 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
     The projection's exact direct guard-read occurrences are authoritative.
     This function deliberately never rereads a live view's tag or memory maps:
     the runner may already have updated its fast-read cache during commit.
-    Views shared by a parent/branch or continued rung are compacted once from
-    the union of all their direct condition reads.
+    Each row (a rung, a branch, a For-body rung) has a view of its own, taken
+    as the solve reached it; a view is compacted once from the union of all
+    its direct condition reads.
 
-    Raises ``ValueError`` when one shared view cannot represent its recorded
+    Raises ``ValueError`` when one view cannot represent its recorded
     reads with a single frozen value/source surface. The session owner treats
     that as an all-or-nothing capture-stream failure and falls back to exact
     historical replay.
@@ -778,12 +790,10 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
             previous = definitions.get(address)
             if previous is not None:
                 previous_origin, previous_value, previous_source = previous
-                same_value = previous_value is occurrence.value
-                if not same_value:
-                    try:
-                        same_value = previous_value == occurrence.value
-                    except (TypeError, ValueError):
-                        same_value = False
+                try:
+                    same_value = not value_changed(previous_value, occurrence.value)
+                except (TypeError, ValueError):
+                    same_value = False
                 same_source = (
                     previous_source is definition_source
                     if isinstance(definition_source, WriteOccurrence)
@@ -828,6 +838,8 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
         view._resolver = _RecordedResolver(resolved_tags) if resolved_tags else None
         view._scope_token = scope_token
         view._read_sink = None
+        view._live = False
+        view._edge_prior = None
         view._tag_source_snapshot = tag_sources or None
         view._memory_source_snapshot = memory_sources or None
 
@@ -927,6 +939,10 @@ def _dynamic_branch_paths(runs: tuple[RungRun, ...]) -> dict[int, tuple[int, ...
                     if branch_index is None:
                         raise RuntimeError("captured branch is absent from its parent rung")
                     path = (*parent_path, branch_index)
+                elif item.kind == "loop_body":
+                    # The program graph folds a body rung into the rung or
+                    # branch that holds its loop, so it shares that address.
+                    path = parent_path
                 result[id(item)] = path
                 _walk(item.body, item, path)
             elif isinstance(item, (InstructionRun, LoopIterationRun)):

@@ -21,7 +21,6 @@ from pyrung.click.tag_map._parsers import (
     parse_tag_meta,
 )
 from pyrung.core import Block, Bool, Physical, Tag, TagType
-from pyrung.core.physical import Approach, Pulse, Ramp
 
 
 def test_resolve_standalone_tag():
@@ -403,6 +402,32 @@ def test_tag_meta_parser_round_trips_physical_metadata():
     )
 
 
+def test_tag_meta_link_takes_a_trigger():
+    meta, remaining = parse_tag_meta("[link=State:SORTING, on_delay=1s] Sorted")
+
+    assert remaining == "Sorted"
+    assert meta == TagMeta(link="State:SORTING", on_delay="1s")
+    assert format_tag_meta(meta) == "[link=State:SORTING, on_delay=1s]"
+
+
+def test_tag_meta_link_takes_a_normally_closed_enable():
+    meta, remaining = parse_tag_meta("[link=~Vent_Sol, on_delay=1s] Vent")
+
+    assert remaining == "Vent"
+    assert meta == TagMeta(link="~Vent_Sol", on_delay="1s")
+    assert format_tag_meta(meta) == "[link=~Vent_Sol, on_delay=1s]"
+
+
+def test_tag_meta_link_rejects_normally_closed_with_a_trigger():
+    with pytest.raises(ValueError, match="Invalid TagMeta link value"):
+        parse_tag_meta("[link=~State:A, on_delay=1s] Sorted")
+
+
+def test_tag_meta_link_rejects_a_second_trigger():
+    with pytest.raises(ValueError, match="Invalid TagMeta link value"):
+        parse_tag_meta("[link=State:A:B, on_delay=1s] Sorted")
+
+
 def test_tag_meta_rejects_system_without_physical_details():
     with pytest.raises(ValueError, match="system requires"):
         parse_tag_meta("[system=Line1] Feedback")
@@ -530,48 +555,49 @@ def test_nickname_file_round_trip_preserves_physical_tag_meta(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("spec", "tag_type", "addr", "expected_token"),
+    ("keywords", "tag_type", "addr", "expected_tokens"),
     [
-        (Ramp(up=0.8, down=-0.05), TagType.REAL, df[101], "profile=ramp:up=0.8|down=-0.05"),
+        (dict(ramp_on=0.8, ramp_off=-0.05), TagType.REAL, df[101], "ramp_on=0.8, ramp_off=-0.05"),
+        (dict(ramp_on=2.5), TagType.REAL, df[104], "ramp_on=2.5]"),
         (
-            Approach(toward=180.0, rate=0.3),
+            dict(approach_to=180.0, approach_rate=0.3),
             TagType.REAL,
             df[102],
-            "profile=approach:toward=180.0|rate=0.3",
+            "approach_to=180, approach_rate=0.3",
         ),
         (
-            Approach(toward="SetPt", rate=0.3),
+            dict(approach_to="SetPt", approach_rate=0.3),
             TagType.REAL,
             df[103],
-            "profile=approach:toward=SetPt|rate=0.3",
+            "approach_to=SetPt, approach_rate=0.3",
         ),
         (
-            Pulse(on_dwell="8ms", off_dwell="8ms"),
+            dict(flasher_on="8ms", flasher_off="8ms"),
             TagType.BOOL,
             c[201],
-            "profile=pulse:on_dwell=8ms|off_dwell=8ms",
+            "flasher_on=8ms, flasher_off=8ms",
         ),
+        (dict(timed="200ms", maintained=True), TagType.BOOL, c[202], "timed=200ms, maintained"),
+        (dict(timed="1s"), TagType.BOOL, c[203], "timed=1s]"),
+        (dict(toggle=True), TagType.BOOL, c[204], "link=Enable, toggle]"),
     ],
 )
-def test_nickname_file_round_trip_preserves_profile_tag_meta(
-    tmp_path, spec, tag_type, addr, expected_token
+def test_nickname_file_round_trip_preserves_physical_keys(
+    tmp_path, keywords, tag_type, addr, expected_tokens
 ):
-    # A declarative profile spec must survive to_nickname_file -> from_nickname_file.
-    # Its comment token carries ``:`` and ``|`` (spec grammar), which the scalar
-    # ``_CHOICE_VALUE_RE`` forbids; the writer must accept it as the reader already does.
-    profile_physical = Physical("Fb", profile=spec)
-    fb = Tag("Fb", tag_type, physical=profile_physical, link="Enable")
+    # Every kind must survive to_nickname_file -> from_nickname_file, written as its own keys.
+    physical = Physical("Fb", **keywords)
+    fb = Tag("Fb", tag_type, physical=physical, link="Enable")
     mapping = TagMap({fb: addr}, include_system=False)
 
-    path = tmp_path / "profile_meta_round_trip.csv"
+    path = tmp_path / "physical_keys_round_trip.csv"
     mapping.to_nickname_file(path)
     record = next(r for r in pyclickplc.read_csv(path).values() if r.nickname == "Fb")
-    assert expected_token in record.comment
+    assert expected_tokens in record.comment
 
     restored = TagMap.from_nickname_file(path)
     restored_tag = next(e.logical for e in restored.tags() if e.logical.name == "Fb")
-    # Physical is a frozen dataclass, so == compares the profile field too.
-    assert restored_tag.physical == profile_physical
+    assert restored_tag.physical == physical
 
 
 def test_from_nickname_file_resolves_named_physical_reference(tmp_path):
@@ -2527,3 +2553,67 @@ def test_named_array_map_to_stamps_slot_identity_onto_bank():
 
     assert ds[1001] is Alarm[1].id
     assert ds[1002] is Alarm[2].id
+
+
+def test_from_nickname_file_names_an_address_link_by_its_nickname(tmp_path):
+    path = tmp_path / "address_link.csv"
+
+    def bit(memory_type: str, address: int, nickname: str, comment: str = "") -> AddressRecord:
+        return AddressRecord(
+            memory_type=memory_type,
+            address=address,
+            nickname=nickname,
+            comment=comment,
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        )
+
+    records = {
+        get_addr_key("Y", 1): bit("Y", 1, "Motor_Run"),
+        get_addr_key("X", 2): bit("X", 2, "Motor_Aux", "[on_delay=2s, link=Y001]"),
+        get_addr_key("X", 3): bit("X", 3, "Valve_Open", "[on_delay=1s, link=y5]"),
+        get_addr_key("X", 4): bit("X", 4, "Pump_Aux", "[on_delay=1s, link=Motor_Run]"),
+        get_addr_key("X", 5): bit("X", 5, "Motor_Off", "[on_delay=1s, link=~Y001]"),
+    }
+    pyclickplc.write_csv(path, records)
+
+    links = {
+        entry.logical.name: entry.logical.link for entry in TagMap.from_nickname_file(path).tags()
+    }
+
+    assert links["Motor_Aux"] == "Motor_Run"
+    assert links["Valve_Open"] == "Y005"  # no nickname: the name codegen gives the slot
+    assert links["Pump_Aux"] == "Motor_Run"
+    assert links["Motor_Off"] == "~Motor_Run"
+
+
+def test_tag_named_after_its_address_exports_without_a_nickname(tmp_path):
+    """Nothing to say about T7/TD7 beyond the address, so no nickname is written;
+    a tag named after its address that carries metadata keeps the name so the
+    row reads back as that tag."""
+    from pyrung import Int, Timer
+
+    timer = Timer.clone("T7", nicknames={"Done": "T7", "Acc": "TD7"})
+    speed = Int("DS1", min=0, max=100, comment="speed", readonly=True, default=5)
+    start = Bool("X001", external=True, comment="start pb")
+    mapping = TagMap(
+        [
+            timer.Done.map_to(t[7]),
+            timer.Acc.map_to(td[7]),
+            speed.map_to(ds[1]),
+            start.map_to(x[1]),
+        ],
+        include_system=False,
+    )
+    path = tmp_path / "nicknames.csv"
+    mapping.to_nickname_file(path)
+
+    rows = pyclickplc.read_csv(path)
+    assert get_addr_key("T", 7) not in rows
+    assert get_addr_key("TD", 7) not in rows
+
+    back = {e.logical.name: e.logical for e in TagMap.from_nickname_file(path).tags()}
+    assert (back["DS1"].readonly, back["DS1"].min, back["DS1"].max) == (True, 0, 100)
+    assert back["DS1"].comment == "speed"
+    assert back["X001"].external is True

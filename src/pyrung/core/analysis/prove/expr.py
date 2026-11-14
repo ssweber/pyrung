@@ -70,7 +70,11 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         return None
 
     eval_atom = atom
-    if atom.operand_is_tag and atom.operand in state:
+    if atom.operand_is_tag:
+        # An operand tag the state lacks leaves the atom undecided, as a missing left-hand tag
+        # does.  Comparing with the operand's name would give a wrong answer or raise TypeError.
+        if atom.operand not in state:
+            return None
         try:
             operand = atom.operand_scale * state[atom.operand] + atom.operand_offset
         except TypeError:
@@ -308,7 +312,11 @@ def _walk_implicit_edge_inputs(
     from pyrung.core.analysis.simplified import _condition_to_expr
     from pyrung.core.instruction.advanced import ShiftInstruction
     from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.drums import (
+        EventDrumInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
 
     result: set[str] = set()
     nd_keys = frozenset(nd_dims)
@@ -321,11 +329,20 @@ def _walk_implicit_edge_inputs(
 
     def _walk(instructions: list[Any]) -> None:
         for instr in instructions:
+            # An instruction's own condition (``count_up(...).down(rise(Y))``,
+            # ``.reset(rise(R))``) is in no rung expression.
+            for field_name in getattr(instr, "_conditions", ()):
+                own = getattr(instr, field_name, None)
+                if own is not None:
+                    _collect_edge_atoms(_condition_to_expr(own), nd_dims, result)
             if isinstance(instr, ShiftInstruction):
                 _check(instr.clock_condition)
-            elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)):
+            elif isinstance(
+                instr, (EventDrumInstruction, TimeDrumInstruction, TimeEventDrumInstruction)
+            ):
                 _check(instr.jog_condition)
                 _check(instr.jump_condition)
+                # A time & event drum's events are levels, not edges.
                 if isinstance(instr, EventDrumInstruction):
                     for event_cond in instr.events:
                         _check(event_cond)
@@ -369,6 +386,7 @@ def _partition_edge_bearing_inputs(
 
 def _edge_source_tags(program: Any) -> frozenset[str]:
     from pyrung.core.analysis.simplified import _condition_to_expr
+    from pyrung.core.instruction.control import iter_loop_body_rungs
 
     result: set[str] = set()
 
@@ -386,6 +404,8 @@ def _edge_source_tags(program: Any) -> frozenset[str]:
             _walk_expr(_condition_to_expr(condition))
         for branch in rung._branches:
             _walk_rung(branch)
+        for body_rung in iter_loop_body_rungs(rung._instructions):
+            _walk_rung(body_rung)
 
     for rung in program.rungs:
         _walk_rung(rung)

@@ -16,6 +16,8 @@ from pyrung.core.analysis.sp_values import (
 )
 from pyrung.core.context import ScanContext
 from pyrung.core.crossing import CrossingContext, Eq, eq_target
+from pyrung.core.site_memory import edge_memory_seeding
+from pyrung.core.state import value_changed
 
 from .history import _find_last_transition_scan
 from .models import (
@@ -212,7 +214,8 @@ def _condition_relation(
     seen_moves: set[tuple[str, Any]] = set()
 
     def add_move(tag: str, value: Any, source: str) -> None:
-        key = (tag, value)
+        # Each NaN hashes apart, so every NaN shares one key.
+        key = (tag, _NAN_KEY if _values_equal(value, _NAN) else value)
         if key in seen_moves or _values_equal(state.tags.get(tag), value):
             return
         seen_moves.add(key)
@@ -262,9 +265,13 @@ def _relation_rhs_repr(rhs: Any) -> str:
     return repr(rhs)
 
 
+_NAN = float("nan")
+_NAN_KEY = object()
+
+
 def _values_equal(left: Any, right: Any) -> bool:
     try:
-        return left == right
+        return not value_changed(left, right)
     except Exception:
         return False
 
@@ -334,7 +341,8 @@ def _simulate_scan(
 
     The caller is responsible for all state preparation:
 
-    * Injecting ``_prev:{tag}`` memory entries for edge-sensitive triggers.
+    * Seeding edge memory (``_edge:e{N}``) for edge-sensitive triggers
+      (:func:`~pyrung.core.site_memory.edge_memory_seeding`).
     * Setting ``_dt`` in memory if timer behaviour matters (default is
       whatever the state already carries; hypothetical scans typically
       inherit ``_dt=0.0``).
@@ -381,7 +389,7 @@ def _rung_produces_value(
             # rest of the subroutine, not this rung's earlier instructions).
             pass
     writes = ctx._rung_firings.get(rung_idx, {})
-    if writes.get(tag_name) == value:
+    if not value_changed(writes.get(tag_name), value):
         return True
     # Timer/counter done_bit is temporal: the single-scan simulation may
     # write False (accumulator below preset) but the rung WILL produce True
@@ -731,7 +739,7 @@ def projected_cause(
         to_value=to_value,
     )
 
-    if current_value == to_value:
+    if not value_changed(current_value, to_value):
         # Already at desired value — projected with empty steps
         return CausalChain(effect=effect_transition, mode="projected")
 
@@ -813,7 +821,10 @@ def projected_cause(
                     if (
                         isinstance(constraint, Eq)
                         and len(constraint.values) == 1
-                        and constraint != eq_target(tag_name, to_value)
+                        and (
+                            constraint.tag != tag_name
+                            or value_changed(next(iter(constraint.values)), to_value)
+                        )
                     ):
                         source_req = (
                             constraint.tag,
@@ -887,7 +898,7 @@ def projected_cause(
             src_tag, src_needed = source_req
             seen_tags.add(src_tag)
             src_value = cand_state.tags.get(src_tag)
-            if src_value == src_needed:
+            if not value_changed(src_value, src_needed):
                 held_since = None
                 if not structural:
                     held_since = _find_last_transition_scan(history, src_tag, latest_scan + 1)
@@ -1079,7 +1090,7 @@ def projected_effect(
 
     # Check trigger reachability
     current_value = base_state.tags.get(tag_name)
-    if current_value != from_value:
+    if value_changed(current_value, from_value):
         trigger_chain = projected_cause(logic, history, tag, from_value, pdg, assume=assume)
         if trigger_chain.mode == "unreachable":
             return CausalChain(
@@ -1099,9 +1110,10 @@ def projected_effect(
     seen_effects: set[str] = {tag_name}
     frontier: dict[str, Transition] = {tag_name: cause_transition}
 
-    # Build hypothetical state: inject trigger + _prev: for edge detection
+    # Build hypothetical state: inject the trigger, and seed the memory of every
+    # edge contact on it with the value it moves from.
     hyp_state = base_state.with_tags({tag_name: to_value}).with_memory(
-        {f"_prev:{tag_name}": from_value}
+        edge_memory_seeding(use_logic, {tag_name: from_value})
     )
 
     changed = True
@@ -1131,13 +1143,13 @@ def projected_effect(
                 hyp_val = hyp_writes.get(written_tag)
                 cf_val = cf_writes.get(written_tag)
 
-                if hyp_val == cf_val:
+                if not value_changed(hyp_val, cf_val):
                     continue
 
                 original_value = base_state.tags.get(written_tag)
                 written_value = hyp_val if hyp_val is not None else original_value
 
-                if written_value == original_value:
+                if not value_changed(written_value, original_value):
                     continue
 
                 seen_effects.add(written_tag)
@@ -1181,11 +1193,13 @@ def projected_effect(
 
         # Update hypothetical state with newly discovered effects
         new_tags: dict[str, Any] = {}
-        new_memory: dict[str, Any] = {}
+        from_values: dict[str, Any] = {}
         for ft_name, ft_trans in frontier.items():
             new_tags[ft_name] = ft_trans.to_value
-            new_memory[f"_prev:{ft_name}"] = ft_trans.from_value
-        hyp_state = base_state.with_tags(new_tags).with_memory(new_memory)
+            from_values[ft_name] = ft_trans.from_value
+        hyp_state = base_state.with_tags(new_tags).with_memory(
+            edge_memory_seeding(use_logic, from_values)
+        )
 
     return CausalChain(
         effect=cause_transition,

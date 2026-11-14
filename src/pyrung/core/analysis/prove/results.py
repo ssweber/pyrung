@@ -124,6 +124,11 @@ class TraceStep:
     inputs: dict[str, Any]
     scans: int = 1
     prev: dict[str, Any] = field(default_factory=dict)
+    # Black-box timers (blackbox.py): the ticks this step moved, as
+    # ``(accumulator, value)``.  Empty in a trace that replays as recorded.
+    timers: tuple[tuple[str, Any], ...] = ()
+    # The search's tick choices for this step, to re-run it exactly.
+    _choices: tuple[int, ...] = field(default=(), repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -133,11 +138,31 @@ class _ParentLink:
     scans: int
     caveats: tuple[str, ...] = ()
     prev: dict[str, Any] = field(default_factory=dict)
+    # Black-box timer choices of this link (see TraceStep).
+    timers: tuple[tuple[str, Any], ...] = ()
+    choices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
 class Intractable:
-    """Verification cannot complete within resource bounds."""
+    """Verification cannot complete within resource bounds.
+
+    ``kind`` says which: ``"search"`` (the state space is too big or
+    unbounded: narrow it with ``choices=``/``min=``/``max=``), ``"timing"``
+    (unconfirmed: the search found a violation, but replaying it on the
+    concrete PLC diverged because it needs a timer to finish on a scan the
+    PLC's timing does not give; check the timing with a ``run_for()`` test),
+    ``"timers"`` (so many timers run at once that the ways they can finish
+    on one scan pass the verifier's cap: prove a property whose scope reaches
+    fewer of them, or test the timing with ``run_for()``), ``"property"``
+    (the property's ``rise()``/``fall()``, which the search leaves undecided,
+    gave a counterexample the concrete PLC did not reproduce) or ``"function"``
+    (a ``run_function`` whose answer may not follow from its inputs, which the
+    search does not call: ``hints`` names each one and why).
+    A timing result carries the search's ``trace`` (each step's ``timers``
+    names the ticks it moved; empty for the search kind) and
+    ``diverged_at``, the index of the step where replay left it.
+    """
 
     reason: str
     dimensions: int
@@ -146,6 +171,44 @@ class Intractable:
     hints: list[str] = field(default_factory=list)
     journal: Journal | None = None
     _debug_context: Any = None
+    kind: str = "search"
+    trace: list[TraceStep] = field(default_factory=list)
+    diverged_at: int | None = None
+
+
+class ReachableStates(frozenset):
+    """The states ``reachable_states()`` found, as a frozenset of projected states.
+
+    ``truncated`` is True when ``depth_budget`` stopped the search before it
+    ran out of new states.  The set then holds only the states found within
+    the budget, so a state past it may be missing.  A ``ReachableStates(states)``
+    built directly carries no mark, so its ``truncated`` is False.
+    """
+
+    _truncated: bool = False
+    _depth_budget: int = 0
+    _debug_context: Any = None
+
+    @property
+    def truncated(self) -> bool:
+        return self._truncated
+
+    @property
+    def depth_budget(self) -> int:
+        return self._depth_budget
+
+    @classmethod
+    def _mark(
+        cls,
+        states: frozenset[frozenset[tuple[str, Any]]],
+        *,
+        truncated: bool,
+        depth_budget: int,
+    ) -> ReachableStates:
+        marked = cls(states)
+        marked._truncated = truncated
+        marked._depth_budget = depth_budget
+        return marked
 
 
 @dataclass(frozen=True)
@@ -156,4 +219,6 @@ class StateDiff:
     removed: frozenset[frozenset[tuple[str, Any]]]
 
 
+# A timer's Done between off and done in how()'s domain prior and PILOT's
+# world key (``absorb._done_acc_state``).  The search keys Done as a Bool.
 PENDING = "Pending"

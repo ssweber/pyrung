@@ -12,7 +12,6 @@ from pyrung.core.analysis.pilot.overlay import PilotRung
 
 
 def test_candidate_composition_combines_sources() -> None:
-
     active = Bool("CandidateActive", external=True)
     first = CorrectionHypothesis(
         "precise-cause",

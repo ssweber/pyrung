@@ -62,13 +62,16 @@ nav:
       - Platform:
         - CLICK Quickstart: guides/click-quickstart.md
         - CLICK Cheatsheet: guides/click-cheatsheet.md
+        - CLICK Conformance: guides/conformance.md
         - CircuitPython Quickstart: guides/circuitpy-quickstart.md
       - Tools:
         - VS Code Debugger: guides/dap-vscode.md
+        - Console: guides/console.md
         - Architecture: guides/architecture.md
   - Dialects:
       - CLICK PLC: dialects/click.md
       - CLICK Python Codegen: dialects/click-codegen.md
+      - CLICK Internals: dialects/click-internals.md
       - CircuitPython: dialects/circuitpy.md
       - CircuitPython Modbus TCP: dialects/circuitpy-modbus.md
   - API Reference:

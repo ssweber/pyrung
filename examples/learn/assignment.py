@@ -2,7 +2,7 @@
 
 # --- The ladder logic way ---
 
-from pyrung import PLC, Bool, Int, Program, rung, calc, copy, rise
+from pyrung import PLC, Bool, Int, Program, rung, math, copy, rise
 
 EntrySensor = Bool()
 BoxSize = Int()  # Raw sensor reading
@@ -13,10 +13,10 @@ CycleCount = Int()  # Scans since startup
 with Program() as logic:
     with rung(rise(EntrySensor)):
         copy(BoxSize, CurrentSize)  # Snapshot the size reading
-        calc(SortCount + 1, SortCount)  # Increment total
+        math(SortCount + 1, SortCount)  # Increment total
 
     with rung():
-        calc(CycleCount + 1, CycleCount)  # Always counting (every scan)
+        math(CycleCount + 1, CycleCount)  # Always counting (every scan)
 
 # --- Try it ---
 

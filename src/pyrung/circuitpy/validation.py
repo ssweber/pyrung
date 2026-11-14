@@ -286,7 +286,13 @@ def _evaluate_timer_resolution(
     mode: ValidationMode,
 ) -> list[CircuitPyFinding]:
     instruction_type = type(instruction).__name__
-    if instruction_type not in {"OnDelayInstruction", "OffDelayInstruction"}:
+    if instruction_type not in {
+        "OnDelayInstruction",
+        "OffDelayInstruction",
+        "DebounceInstruction",
+        "FlasherInstruction",
+        "TimedInstruction",
+    }:
         return []
 
     if getattr(instruction, "unit", None) != TimeUnit.Tms:

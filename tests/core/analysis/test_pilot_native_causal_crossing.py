@@ -29,9 +29,9 @@ from pyrung import (
     Program,
     Rung,
     Timer,
-    calc,
     copy,
     latch,
+    math,
     on_delay,
     rung,
 )
@@ -97,7 +97,7 @@ def _pipeline_watchdog_program() -> tuple[Program, Any]:
             copy(0, StateRequested)
             copy(0, StateEnableYes)
         with rung():
-            calc(150 + StateRequested, StateJumpIdx)
+            math(150 + StateRequested, StateJumpIdx)
         with rung(StateRequested != 0):
             copy(1, StateEnableYes)
         # Same-scan collateral: the state-8 shared-init resets progress at

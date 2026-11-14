@@ -309,7 +309,7 @@ def test_traffic_light_red_reachable():
 def test_counter_done_reachable():
     """Done latches at ``Acc == preset``.  PILOT recognizes the counter Done bit
     as a self-advancing accumulator frontier (a coast leaf on ``Acc`` plus its
-    advance driver) and, because the driver is ``rise(BinASensor)``, oscillates
+    advance driver) and, because a counter counts rising edges of ``BinASensor``, oscillates
     that input — a toggling ``PilotRung`` — so the let-run coast walks the
     accumulator to preset.  The recorded step carries the oscillator as a
     ``reactive_holds`` entry, which the replay re-installs."""

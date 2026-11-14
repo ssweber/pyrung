@@ -1,0 +1,699 @@
+# Fixed DS layout of the conformance program (see AGENTS.md, "Manifest").
+#
+# Each group owns a block: its header at DS<base> (the subroutine writes its
+# hash there every scan), slot N at DS(base + 10*N)..DS(base + 10*N + 7).
+# Never renumber or move anything: a new case takes the next index in its
+# group, a removed case leaves a gap, a new group takes the next free block.
+# `make test-conformance` (and build_program) prints the exact lines to add.
+# Blocks end below DS3901: DS3901..DS4500 is raw staging (tests/conformance/memory.py).
+
+[groups.rungs]
+base = 101 # Conf_Rungs: DS101..DS220; DS221..DS300 went to drum_close
+slots = 11
+
+[groups.rungs.cases]
+memory_is_immediate = 1
+source_order = 2 # retired: no model read it differently; branch_sees_rung_entry asks it
+global_mutation = 3
+branch_sees_rung_entry = 4
+nested_branches_see_rung_entry = 5
+branch_and_with_parent = 6
+last_rung_wins_shared_coil = 7
+continued_shares_snapshot = 8
+continued_chain_breaks = 9
+nop_rung_takes_snapshot = 10 # retired: CLICK deletes a NOP row that shares its rung, so the shape cannot be built
+box_leg_reads_rows_above = 11 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+
+[groups.math]
+base = 301 # Conf_Math: DS301..DS390; DS391..DS500 went to drum_settle
+slots = 8
+
+[groups.math.cases]
+avg_mdn_positive = 1
+avg_mdn_negative = 2
+avg_odd_count = 3
+avg_dint_no_overflow = 4
+mdn_even_count = 5
+max_min_word_unsigned = 6
+rand_range = 7
+mdn_real_range = 8
+
+[groups.drum]
+base = 501 # Conf_Drum: DS501..DS700
+slots = 19
+
+[groups.drum.cases]
+te_acc_counts_while_waiting = 1
+te_level_event_already_on = 2
+events_are_edges = 3
+jump_jog_edge_triggered = 4
+jump_jog_keep_completion = 5
+reset_no_stale_outputs = 6
+reset_jump_jog_order = 7
+pause_holds_and_drops_jog = 8 # retired: a CLICK drum takes a jog while paused; paused_drum_jogs_and_resets asks it
+invalid_step_corrects_to_1 = 9
+time_acc_clears_on_every_transition = 10
+paused_drum_jogs_and_resets = 11
+completion_turns_outputs_off = 12
+paused_drum_jumps = 13
+reset_swallows_held_jog = 14
+pins_read_before_step_fix = 15
+pins_read_before_step_fix_tee = 16
+correction_without_jog = 17
+jump_to_own_step_register = 18 # retired: moved to paste_risk (part control) before any CLICK ran it
+jog_on_last_step = 19
+
+[groups.out]
+base = 701 # Conf_Out: DS701..DS770; DS771..DS900 went to the grey-area probes
+slots = 6
+
+[groups.out.cases]
+toggle_flips_once_per_edge = 1
+debounce_td_keeps_counting = 2
+debounce_bounce_restarts_on_side = 3
+flasher_restarts_with_on_phase = 4
+timed_needs_fresh_edge = 5
+out_coil_sets_timer_done = 6
+
+[groups.loop]
+base = 901 # Conf_Loop: DS901..DS1100
+slots = 19
+
+[groups.loop.cases]
+loop_runs_n_times = 1
+false_for_rung_turns_body_outs_off = 2 # retired: a false For rung skips its body (CLICK)
+zero_or_negative_count_runs_once = 3 # retired: CLICK reads the count as unsigned 16-bit
+count_read_once = 4
+body_rung_contact_per_iteration = 5
+edge_contact_inside_loop = 6
+timer_inside_loop = 7
+counter_inside_loop = 8
+break_leaves_innermost_loop = 9
+break_runs_earlier_body_rungs = 10
+continue_skips_rest_of_iteration = 11
+continue_on_last_iteration = 12
+break_on_same_iteration_write = 13
+oneshot_inside_loop = 14
+false_for_rung_skips_body = 15
+zero_count = 16
+body_oneshot_holds_while_for_false = 17
+edge_memory_across_iterations = 18
+skipped_body_holds_timer_and_counter = 19
+
+[groups.timers]
+base = 1101 # Conf_Timers: DS1101..DS1220; DS1221..DS1300 went to the grey-area probes
+slots = 11
+
+[groups.timers.cases]
+ton_auto_reset = 1
+ton_done_on_enabling_scan = 2
+rton_holds_across_rung_false = 3
+rton_reset_gap = 4
+tof_never_enabled = 5
+tof_times_only_when_false = 6
+tof_enable_atomic = 7
+preset_raised_resumes = 8
+preset_lowered_fires_at_once = 9
+fractional_accumulation = 10
+acc_clamps_at_32767 = 11
+
+[groups.counters]
+base = 1301 # Conf_Counters: DS1301..DS1460; DS1461..DS1500 went to for_more
+slots = 15
+
+[groups.counters.cases]
+level_vs_edge = 1
+survives_rung_false = 2
+preset_raised_resumes = 3
+preset_lowered_while_idle = 4
+reset_wins_over_count = 5
+reset_zero_preset = 6
+count_down_negative = 7
+up_down_same_scan = 8
+acc_clamps_at_dint_range = 9
+held_input_not_recounted = 10
+count_down_done_at_preset = 11
+edge_on_reset_scan = 12
+first_scan_input_already_on = 13
+pins_read_before_count = 14
+pins_read_before_count_tee = 15
+
+[groups.coils]
+base = 1501 # Conf_Coils: DS1501..DS1610
+slots = 10
+
+[groups.coils.cases]
+out_follows_rung = 1
+out_oneshot_fires_one_scan = 2
+out_oneshot_refires = 3
+rise_fall_fire_one_scan = 4
+edge_sees_previous_scan_end = 5
+edge_before_its_writer = 6
+latch_reset_sticky = 7
+edge_behind_open_contact = 8
+edge_in_false_rung_branch = 9
+edge_on_first_scan = 10
+
+[groups.numeric]
+base = 1701 # Conf_Numeric: DS1701..DS1900
+slots = 19
+
+[groups.numeric.cases]
+int_calc_wraps = 1
+dint_calc_wraps = 2
+word_calc_wraps = 3
+copy_clamps_calc_wraps = 4
+copy_source_to_dest = 5
+real_to_int_truncates = 6
+int_division_truncates = 7
+word_math_unsigned = 8
+hex_literal_is_decimal = 9
+intermediate_fits_32_bits = 10
+intermediate_exceeds_32_bits = 11
+real_is_64_bit_in_pyrung = 12 # in-process only since round 1: a documented deviation, not wired
+real_overflow_stays_finite = 13
+div_by_zero = 14
+real_div_by_zero = 15
+dint_quotient_into_int = 16
+int_math_wide_constant = 17
+int_math_rand_wide_bounds = 18
+int_math_real_operand_constant = 19
+
+[groups.text]
+base = 1901 # Conf_Text: DS1901..DS2060
+slots = 15
+
+[groups.text.cases]
+value_vs_ascii = 1
+null_ascii = 2
+to_value_rejects = 3
+to_text_suppress = 4
+to_text_fixed = 5
+to_text_fixed_negative = 6
+to_text_termination = 7
+literal_fanout = 8
+to_binary = 9
+pack_text_word_hex = 10
+pack_text_int = 11
+pack_text_dint = 12
+pack_text_whitespace = 13
+fill_blank_ascii = 14
+pack_text_int_fraction = 15
+
+[groups.block]
+base = 2101 # Conf_Block: DS2101..DS2210
+slots = 10
+
+[groups.block.cases]
+blockcopy_range = 1
+blockcopy_overlap = 2
+blockcopy_types = 3
+fill_constant = 4
+every_scan = 5
+pack_bits_int = 6
+pack_bits_real = 7
+unpack_bits = 8
+pack_words = 9
+unpack_words = 10
+
+[groups.shift]
+base = 2301 # Conf_Shift: DS2301..DS2380
+slots = 7
+
+[groups.shift.cases]
+forward_range_shifts_up = 1
+clock_is_a_rising_edge = 2
+data_is_the_rung_at_the_edge = 3
+bit_leaves_the_end = 4
+reset_beats_clock = 5
+reset_swallows_the_edge = 6
+reversed_range_shifts_down = 7
+
+[groups.search]
+base = 2501 # Conf_Search: DS2501..DS2640; DS2641..DS2700 went to copy_more
+slots = 13
+
+[groups.search.cases]
+hit_returns_address = 1
+miss_writes_minus_one = 2
+operators_signed = 3
+range_ends_inclusive = 4
+false_rung_preserves = 5
+continuous_walks = 6
+continuous_exhausted = 7
+continuous_zero_restarts = 8
+plain_search_ignores_result = 9
+continuous_cursor_is_address = 10
+dint_real_tables = 11
+text_windows = 12
+continuous_cursor_outside_range = 13
+
+[groups.system]
+base = 2701 # Conf_System: DS2701..DS2850; DS2851..DS2900 went to out_more
+slots = 14
+
+[groups.system.cases]
+division_flag_clears_each_scan = 1
+out_of_range_flag_clears_each_scan = 2
+address_flag_clears_each_scan = 3
+scan_counter_steps_by_one = 4
+scan_clock_follows_counter = 5
+clock_bits_toggle_at_their_rate = 6
+mode_bits_on_in_run = 7
+rtc_seconds_advance = 8
+first_scan_counter_and_clock = 9
+scan_counter_wraps_to_zero = 10
+out_of_range_flag_vs_other_instructions = 11 # retired: a CLICK read 0 in every field (2026-10-31). out_of_range_int_vs_other_instructions and faults/math_store_out_of_range ask its questions (a Dint wrap raises SC43)
+address_flag_vs_other_instructions = 12
+division_flag_vs_hex_math = 13
+out_of_range_int_vs_other_instructions = 14
+
+# Retired groups: each stopped the PLC on one math error.  A CLICK keeps running
+# (hardware round 1), so the seven errors are one case of math_error.  The
+# blocks stay reserved, never reused -- except DS2901..DS2980, the first four
+# (stop_sqrt, stop_ln0, stop_ln_neg, stop_log0): no CLICK project
+# ever held them as groups with more than a retired case, and the staging area has
+# no 70 registers left in one run, so the probes flag_probe and
+# past_write take them.  Their case lines are gone with the entries:
+# sqrt_negative, ln_zero, ln_negative, log_zero were slot 1 each.  The same goes
+# for DS2981..DS3040 (stop_log_neg, stop_asin, stop_acos; log_negative, asin_above_1
+# and acos_above_1 were slot 1 each): for_wide, rtc_set and coil_range take them.
+
+[groups.flag_probe]
+base = 2901 # Conf_FlagProbe: DS2901..DS2960; part system, the fault-flag model's unmeasured choices
+slots = 5
+
+[groups.flag_probe.cases]
+bulk_ops_clear_flags = 1
+oneshot_that_does_not_fire = 2
+boxes_leave_flags = 3
+source_flag_is_read_before_the_copy_settles = 4
+source_flag_in_a_math = 5
+
+[groups.past_write]
+base = 2961 # Conf_PastWrite: DS2961..DS2980; part copy, last: WRITES PAST THE DD BANK, can be left out
+slots = 1
+
+[groups.past_write.cases]
+past_bank_write = 1
+
+[groups.for_wide]
+base = 2981 # Conf_ForWide: DS2981..DS3000; part boot, a For's count past 16 bits
+slots = 1
+
+[groups.for_wide.cases]
+count_forms = 1
+
+[groups.rtc_set]
+base = 3001 # Conf_RtcSet: DS3001..DS3020; part boot, the clock set from the ladder
+slots = 1
+
+[groups.rtc_set.cases]
+date_and_time_apply = 1
+
+[groups.coil_range]
+base = 3021 # Conf_CoilRange: DS3021..DS3040; part coils, a coil over a range, a search over a Word table
+slots = 1
+
+[groups.coil_range.cases]
+ranges_and_search = 1
+
+[groups.math_error]
+base = 3041 # Conf_MathError: DS3041..DS3060
+slots = 1
+
+[groups.math_error.cases]
+math_errors_do_not_stop = 1
+
+[groups.call_twice]
+base = 3091 # Conf_CallTwice: DS3091..DS3110; main calls it twice a scan; DS3111..DS3140 went to compare
+slots = 1
+
+[groups.call_twice.cases]
+rise_once_per_scan = 1
+
+[groups.solve_order]
+base = 3141 # Conf_SolveOrder: DS3141..DS3340
+slots = 19
+
+[groups.solve_order.cases]
+row_series_reads_rows_above = 1
+row_reads_row_below = 2
+sibling_branch_reads_sibling_above = 3
+outer_row_reads_inner_branch_write = 4
+input_or_legs_read_before_outputs = 5
+branch_or_reads_row_above = 6
+bus_operand_sees_coil = 7
+bus_coils_last_write_wins = 8
+continued_reads_later_wire = 9
+rton_reset_leg = 10 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+count_down_leg = 11 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+shift_clock_leg = 12 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+shift_reset_leg = 13 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+drum_reset_leg = 14 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+drum_jump_leg = 15 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+drum_jog_leg = 16 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+box_leg_reads_row_below = 17
+for_body_box_leg_reads_row_above = 18 # retired: CLICK does not allow it (C000A: all inputs (pins) of a box must start from the same branch)
+for_body_rung_reads_body_rung_above = 19
+
+[groups.ret_branch]
+base = 3441 # Conf_RetBranch: DS3441..DS3460; part control, a probe CLICK may refuse
+slots = 1
+
+[groups.ret_branch.cases]
+branch_return_stops_subroutine = 1
+
+[groups.loop_call]
+base = 3461 # Conf_LoopCall: DS3461..DS3500; part control, rungs in main
+slots = 3
+
+[groups.loop_call.cases]
+call_inside_loop = 1
+body_contact_after_call = 2
+loop_in_called_subroutine = 3
+
+[groups.row_solve]
+base = 3501 # Conf_RowSolve: DS3501..DS3570; part control; DS3571..DS3600 went to boot_read
+slots = 6
+
+[groups.row_solve.cases]
+edge_on_branch_reads_row_above = 1
+edge_under_unpowered_branch = 2
+continued_after_box_rereads_trunk = 3
+edge_on_box_path_after_false_contact = 4
+edge_after_false_contact_in_branch = 5
+correction_scan_with_free_enable = 6
+
+[groups.cont_box]
+base = 3601 # Conf_ContBox: DS3601..DS3650; part control, a drawing CLICK may refuse
+slots = 4
+
+[groups.cont_box.cases]
+box_pin_on_continued_wire = 1
+box_enable_on_continued_wire = 2
+box_pin_on_own_rung = 3
+box_tee_without_trunk = 4
+
+[groups.faults]
+base = 3651 # Conf_Faults: DS3651..DS3810; part system
+slots = 15
+
+[groups.faults.cases]
+math_store_out_of_range = 1
+copy_clamp_out_of_range = 2
+rand_wide_bounds_flags = 3
+rand_real_bounds = 4 # retired: moved to paste_risk (part control) before any CLICK ran it
+pointer_past_bank = 5
+power_overflow_is_inf = 6
+real_intermediate_range = 7
+inf_and_nan_arithmetic = 8
+non_finite_math_into_int = 9
+copy_non_finite_to_int = 10
+copy_inf_to_text = 11
+non_finite_functions = 12
+rand_unequal_bounds = 13
+pointer_past_bank_lands = 14
+
+[groups.for_count]
+base = 3811 # DS3811..DS3830 unused: for_count stops a CLICK, so it runs in-process only
+slots = 1
+
+[groups.for_count.cases]
+non_finite_count = 1 # retired from the wire
+
+[groups.paste_risk]
+base = 3831 # Conf_PasteRisk: DS3831..DS3870; part control, probes a CLICK may refuse at paste
+slots = 3
+
+[groups.paste_risk.cases]
+jump_to_own_step_register = 1
+rand_real_bounds = 2
+loop_body_split = 3
+
+[groups.drum_trace]
+base = 11 # Conf_DrumTrace: DS11..DS100; part drum1, below the first block, the free room left
+slots = 8
+
+[groups.drum_trace.cases]
+tied_jog = 1
+free_jog = 2
+free_no_jog = 3
+jog_again_after_last_step = 4
+output_reset_while_running = 5
+step_written_while_running = 6
+step_written_while_paused = 7
+
+# S6 probes.  The DS blocks sit in staging DS that no group's cases use
+# (tests/conformance/memory.py, STAGING_DS): between the text, block, search and
+# math groups' staged registers and past faults' block.
+
+[groups.drum_idle]
+base = 3871 # Conf_DrumIdle: DS3871..DS3900; part drum2, a drum not reached; rungs in main
+slots = 2
+
+[groups.drum_idle.cases]
+uncalled_subroutine = 1
+drum_in_skipped_loop = 2
+
+[groups.drum_rule]
+base = 3933 # Conf_DrumRule: DS3933..DS3992; part drum1, the drum rule on time and time & event drums
+slots = 5
+
+[groups.drum_rule.cases]
+writes_on_move_only = 1
+writes_on_return = 2
+bad_step_and_first_scan_jog = 3
+correction_moves = 4
+last_step_jog = 5
+
+[groups.store_probe]
+base = 4111 # Conf_StoreProbe: DS4111..DS4190; part math, RAND and non-finite stores
+slots = 7
+
+[groups.store_probe.cases]
+rand_int_cuts = 1
+rand_other_stores = 2
+rand_tag_bounds = 3
+inf_and_nan_to_text = 4
+non_finite_into_word = 5
+real_into_text_and_fill = 6
+rand_bound_forms = 7 # retired: the editor takes only an integer constant or a DS/DD address as a RAND bound; the paste stopped at RAND ( DD615 / 2 , 10 ) (2026-11-05), and a float literal, ABS and DF are refused the same way (CLK_RAND_BOUND_TYPE, CLK_MATH_ARG_NOT_PLAIN)
+
+[groups.drum_jump]
+base = 4439 # Conf_DrumJump: DS4439..DS4498; part drum1, jog, jump and pause on time and time & event drums
+slots = 5
+
+[groups.drum_jump.cases]
+paused_jog_cases = 1
+jump_with_jog_and_to_own_step = 2
+jump_after_completion = 3
+completed_drum_fires_again = 4
+acc_through_jog_completion = 5
+
+# On math's unused slots: no hash holds a block's size, so math's cases are untouched.
+[groups.drum_settle]
+base = 391 # Conf_DrumSettle: DS391..DS500; part drum2, what the S6 drum probes left open
+slots = 10
+
+[groups.drum_settle.cases]
+te_event_on_return_scan = 1
+te_event_after_reset = 2
+te_event_on_entry = 3
+te_level_from_scan_1 = 4
+te_event_with_acc_staged = 5
+after_jump_jog_alone = 6
+acc_in_completed_drum = 7
+event_drum_after_completion = 8
+correction_with_acc_staged = 9
+
+# On rungs' unused slots: no hash holds a block's size, so rungs' cases are untouched.
+[groups.drum_close]
+base = 221 # Conf_DrumClose: DS221..DS300; part drum2, what the fix of the drums has to know
+slots = 7
+
+[groups.drum_close.cases]
+return_scan_ticks = 1
+flag_cleared_from_outside = 2
+flag_set_from_outside = 3
+return_after_jog_back = 4
+return_after_jump = 5
+return_scan_moves = 6
+te_acc_by_step_kind = 7
+
+# Grey-area probes, on slots the groups above never used: no hash holds a
+# block's size, so their cases are untouched.
+[groups.word_store]
+base = 771 # Conf_WordStore: DS771..DS850; part copy, what a Word holds after a store
+slots = 7
+
+[groups.word_store.cases]
+word_below_zero = 1
+word_above_top = 2
+word_into_signed = 3
+block_into_word = 4
+block_from_word = 5
+fill_into_word = 6
+word_literals = 7
+
+[groups.real_sum]
+base = 851 # Conf_RealSum: DS851..DS900; part math, order and width of a Real SUM
+slots = 4
+
+[groups.real_sum.cases]
+f32_row = 1
+f64_row = 2
+sum_absorbs = 3
+math_keeps_the_one = 4
+
+[groups.real_bits]
+base = 1221 # Conf_RealBits: DS1221..DS1280; part copy, a Real's raw bits
+slots = 5
+
+[groups.real_bits.cases]
+minus_zero_math = 1
+minus_zero_shapes = 2
+non_finite_raw_bits = 3
+underflow = 4
+float32_equality = 5
+
+
+[groups.drum_pins]
+base = 3341 # Conf_DrumPins: DS3341..DS3440; part drum2, a pin and own end
+slots = 9
+
+[groups.drum_pins.cases]
+event_and_jog = 1
+time_and_jog = 2
+end_and_jog_on_last = 3
+last_time_and_jump = 4
+last_event_and_jump = 5
+acc_jog_completing = 6
+paused_jog_with_flag = 7
+paused_jog_with_flag_mid = 8
+paused_flag_moves = 9
+
+[groups.drum_branch]
+base = 2381 # Conf_DrumBranch: DS2381..DS2480; part drum3, the routine branches
+slots = 9
+
+[groups.drum_branch.cases]
+jump_to_bad_step = 1
+jump_on_bad_step = 2
+correction_with_flag = 3
+flag_cleared = 4
+reset_paths = 5
+written_and_paused_acc = 6
+event_rises_in_pause = 7
+te_event_before_time = 8
+drum_in_loop = 9
+
+[groups.drum_limits]
+base = 2061 # Conf_DrumLimits: DS2061..DS2100; part drum1, may be refused at paste
+slots = 3
+
+[groups.drum_limits.cases]
+preset_from_ds = 1
+units = 2
+single_step = 3
+
+[groups.math_more]
+base = 1611 # Conf_MathMore: DS1611..DS1700; part math
+slots = 8
+
+[groups.math_more.cases]
+int_div_mid_formula = 1
+wide_constant_into_dint = 2
+real_past_int = 3
+abs_and_precision = 4
+mod_signs = 5
+power_edges = 6
+math_errors = 7
+functions = 8
+
+[groups.hex_math]
+base = 3061 # Conf_HexMath: DS3061..DS3090; part math
+slots = 2
+
+[groups.hex_math.cases]
+shifts = 1
+rotates_and_bits = 2
+
+[groups.agg_more]
+base = 2211 # Conf_AggMore: DS2211..DS2280; part math
+slots = 6
+
+[groups.agg_more.cases]
+sum_int_wrap = 1
+sum_bits = 2
+agg_signed = 3
+agg_nan_order = 4
+agg_inf = 5
+rand_sites = 6
+
+[groups.copy_more]
+base = 2641 # Conf_CopyMore: DS2641..DS2700; part copy, Copy forms nothing has read
+slots = 5
+
+[groups.copy_more.cases]
+across_types = 1
+pointer_limits = 2
+to_text_real = 3
+to_text_ints = 4
+pack_text_forms = 5
+
+[groups.block_more]
+base = 2281 # Conf_BlockMore: DS2281..DS2300; part copy, a block copy's converter and a Fill across types
+slots = 1
+
+[groups.block_more.cases]
+block_forms = 1
+
+[groups.compare]
+base = 3111 # Conf_Compare: DS3111..DS3140; part coils, compare across types, CHAR with a 2-char literal
+slots = 2
+
+[groups.compare.cases]
+word_and_wide_compare = 1
+char_two_char_literal = 2
+
+[groups.out_more]
+base = 2851 # Conf_OutMore: DS2851..DS2900; part coils, the v4 Out family past out
+slots = 4
+
+[groups.out_more.cases]
+toggle_and_timed = 1
+timed_maintained = 2
+zero_and_below = 3
+preset_mid_phase = 4
+
+[groups.for_more]
+base = 1461 # Conf_ForMore: DS1461..DS1500; part control, one-shot For, timers at their limits
+slots = 3
+
+[groups.for_more.cases]
+oneshot_and_edges = 1
+timers_at_limits = 2
+clock_edges_in_a_body = 3
+
+[groups.call_more]
+base = 1281 # Conf_CallMore: DS1281..DS1300; part control, per call or per scan; main calls it twice a scan
+slots = 1
+
+[groups.call_more.cases]
+called_twice = 1
+
+[groups.boot_read]
+base = 3571 # Conf_BootRead: DS3571..DS3600; part boot, what a boot keeps and the first scan's edges
+slots = 2
+
+[groups.boot_read.cases]
+what_survives = 1
+first_scan_edges = 2
+
+[groups.flag_scan]
+base = 2481 # Conf_FlagScan: DS2481..DS2500; part boot, SC40 and SC46 over a scan
+slots = 1
+
+[groups.flag_scan.cases]
+math_flags_over_a_scan = 1

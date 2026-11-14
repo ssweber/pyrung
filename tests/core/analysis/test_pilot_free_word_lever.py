@@ -3,7 +3,7 @@
 The fill shape: a step register advances through an ``on_delay`` gated on
 ``PV < Lower`` where both compare operands are internal calc registers.  ``PV``'s
 writer is a two-tag calc (``Raw - Level``) so the equality chase can't invert it;
-``Lower = calc(SetPoint - Band)`` where ``Band`` is a steerable Real with **no
+``Lower = math(SetPoint - Band)`` where ``Band`` is a steerable Real with **no
 declared domain** — the "free word".  Statically every resolution punts, so
 pre-fix the drive stops without finding the relational boundary for ``Band``.
 
@@ -14,13 +14,12 @@ normal Act→Verify pipeline, reported relationally (the relation is the
 requirement; the value is an example).  Equality/mask-shaped free-word gates keep
 the honest ``choices=`` decline (``test_pilot_sandbox_gate.py``).
 
-The machine-local fill project is the live tier of this gate
-(``scratchpad/burner/repro_fill_free_word.py``, not CI).
+The machine-local fill project is the live tier of this gate (not CI).
 """
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Or, Program, Real, Rung, Timer, calc, copy, on_delay, out
+from pyrung import PLC, Bool, Int, Or, Program, Real, Rung, Timer, copy, math, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.simplified import Atom
@@ -30,10 +29,10 @@ from pyrung.core.analysis.sp_values import _writer_projection, _written_value_fo
 def _fill_band_program() -> tuple[Program, object]:
     """Synthetic replica of the live fill-station free-word shape.
 
-    ``PV = calc(Raw - Level)`` (``Raw`` pinned to 100 by logic, ``Level`` a
-    bounded external Real) mirrors ``pv_LevelHt = calc(100 - systemLevel)``;
+    ``PV = math(Raw - Level)`` (``Raw`` pinned to 100 by logic, ``Level`` a
+    bounded external Real) mirrors ``pv_LevelHt = math(100 - systemLevel)``;
     the two-tag writer keeps the equality chase honest (no single-source affine
-    inversion escape).  ``Lower = calc(SetPoint - Band)`` with ``Band``
+    inversion escape).  ``Lower = math(SetPoint - Band)`` with ``Band``
     undeclared is the free word.  The dwell + step register is the fill stepper
     in miniature.
     """
@@ -51,8 +50,8 @@ def _fill_band_program() -> tuple[Program, object]:
     with Program() as prog:
         with Rung():
             copy(100.0, Raw)
-            calc(Raw - Level, PV)
-            calc(SetPoint - Band, Lower)
+            math(Raw - Level, PV)
+            math(SetPoint - Band, Lower)
         with Rung(HMI_on, Step == 1, PV < Lower):
             on_delay(Dwell, 50, "ms")
         with Rung(Dwell.Done):
@@ -138,13 +137,13 @@ def _transient_stepper_program() -> tuple[Program, object, dict[str, object]]:
 
     with Program() as prog:
         with Rung():
-            calc(100.0 - Level, PV)
-            calc(SetPoint - Band, Lower)
-            calc(Step % 2, IsEven)
+            math(100.0 - Level, PV)
+            math(SetPoint - Band, Lower)
+            math(Step % 2, IsEven)
         with Rung(Status == 1):
             out(StatusShot, oneshot=True)
         with Rung(Or(StatusShot, IsEven != 1)):
-            calc(Step + 1, Step)
+            math(Step + 1, Step)
         with Rung(StatusShot):
             copy(0, Status)
         with Rung(Step == 1):
@@ -154,7 +153,7 @@ def _transient_stepper_program() -> tuple[Program, object, dict[str, object]]:
         with Rung(Step == 5):
             out(SubFilling)
         with Rung(Step == 5, Reset):
-            calc(Step - 1, Step, oneshot=True)
+            math(Step - 1, Step, oneshot=True)
         with Rung(SubOff, HMI_on):
             copy(1, Status, oneshot=True)
         with Rung(SubOn, PV < Lower):

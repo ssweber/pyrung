@@ -3,169 +3,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from pyrung.core.validation.render import operand_name, render_condition
-
-if TYPE_CHECKING:
-    from collections.abc import Callable as _Callable
-
-    from pyrung.core.analysis.simplified import Atom
-
-    StateKey = tuple[Any, ...]
-
-
-_COMPARISON_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
-
-
-def _enrich_atom_index(
-    atom_index: dict[str, list[Atom]],
-    reverse_edge_map: dict[str, list[tuple[str, _Callable[[Any], Any]]]],
-) -> dict[str, list[Atom]]:
-    """Propagate comparison atoms backward through copy/calc chains.
-
-    Given ``copy(Source, Target)`` and ``Target > 50``, adds an effective
-    atom ``Source > 50`` so the path renderer can display constraints in
-    terms of the input the user controls, not an intermediate variable.
-
-    Tag-vs-tag operands only propagate through identity transforms (copy);
-    literal operands are transformed via the inverse function (calc).
-    """
-    from pyrung.core.analysis.reverse_edges import IDENTITY, compose_invert
-    from pyrung.core.analysis.simplified import Atom
-
-    target_to_sources: dict[str, list[tuple[str, _Callable[[Any], Any]]]] = {}
-    for source, edges in reverse_edge_map.items():
-        for target, invert in edges:
-            target_to_sources.setdefault(target, []).append((source, invert))
-
-    if not target_to_sources:
-        return atom_index
-
-    enriched: dict[str, list[Atom]] = {tag: list(atoms) for tag, atoms in atom_index.items()}
-    existing_keys: dict[str, set[tuple[str, str, Any, bool, int | float, int | float]]] = {
-        tag: {a._key() for a in atoms} for tag, atoms in enriched.items()
-    }
-
-    for tag, atoms in atom_index.items():
-        for atom in atoms:
-            if atom.form not in _COMPARISON_FORMS or atom.tag != tag:
-                continue
-
-            queue: list[tuple[str, _Callable[[Any], Any]]] = list(target_to_sources.get(tag, []))
-            visited: set[str] = {tag}
-
-            while queue:
-                source, composed_invert = queue.pop(0)
-                if source in visited:
-                    continue
-                visited.add(source)
-
-                if atom.operand_is_tag:
-                    if composed_invert is not IDENTITY:
-                        continue
-                    new_atom = Atom(
-                        tag=source,
-                        form=atom.form,
-                        operand=atom.operand,
-                        operand_is_tag=True,
-                        operand_scale=atom.operand_scale,
-                        operand_offset=atom.operand_offset,
-                    )
-                else:
-                    new_threshold = composed_invert(atom.operand)
-                    if new_threshold is None or not isinstance(new_threshold, (int, float)):
-                        continue
-                    new_atom = Atom(tag=source, form=atom.form, operand=new_threshold)
-
-                key = new_atom._key()
-                if key not in existing_keys.get(source, set()):
-                    enriched.setdefault(source, []).append(new_atom)
-                    existing_keys.setdefault(source, set()).add(key)
-                    if new_atom.operand_is_tag:
-                        enriched.setdefault(new_atom.operand, []).append(new_atom)
-                        existing_keys.setdefault(new_atom.operand, set()).add(key)
-
-                for next_src, next_inv in target_to_sources.get(source, []):
-                    if next_src not in visited:
-                        queue.append((next_src, compose_invert(next_inv, composed_invert)))
-
-    return enriched
-
-
-def _enrich_from_relational_calcs(
-    atom_index: dict[str, list[Atom]],
-    program: Any,
-) -> dict[str, list]:
-    """Synthesize relational atoms from two-tag arithmetic calc expressions.
-
-    Given ``calc(A - B, C)`` and ``C > 0`` in the atom index, adds
-    ``Atom(tag="A", form="gt", operand="B")`` so the path shows ``A > B``.
-    For non-zero thresholds or non-subtraction operators, produces an
-    ``ArithAtom`` instead (e.g. ``A - B > 5``, ``A + B > 100``).
-    """
-    from pyrung.core.analysis.reverse_edges import tag_name_from_value
-    from pyrung.core.analysis.simplified import ArithAtom, Atom
-    from pyrung.core.expression import BinaryExpr
-    from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    enriched: dict[str, list[Atom | ArithAtom]] = {
-        tag: list(atoms) for tag, atoms in atom_index.items()
-    }
-    existing_keys: dict[str, set[tuple]] = {
-        tag: {a._key() for a in atoms} for tag, atoms in enriched.items()
-    }
-
-    def _add(tag_name: str, new_atom: Atom | ArithAtom) -> None:
-        key = new_atom._key()
-        if key not in existing_keys.get(tag_name, set()):
-            enriched.setdefault(tag_name, []).append(new_atom)
-            existing_keys.setdefault(tag_name, set()).add(key)
-
-    for instr in walk_instructions(program):
-        if not isinstance(instr, CalcInstruction):
-            continue
-        expr = instr.expression
-        if not isinstance(expr, BinaryExpr) or expr.symbol not in ("+", "-", "*"):
-            continue
-        left_name = tag_name_from_value(expr.left)
-        right_name = tag_name_from_value(expr.right)
-        if left_name is None or right_name is None:
-            continue
-        target_name = tag_name_from_value(instr.dest)
-        if target_name is None:
-            continue
-
-        for atom in atom_index.get(target_name, []):
-            if atom.form not in _COMPARISON_FORMS:
-                continue
-            if not isinstance(atom.operand, (int, float)):
-                continue
-
-            if expr.symbol == "-" and atom.operand == 0:
-                new_atom = Atom(
-                    tag=left_name,
-                    form=atom.form,
-                    operand=right_name,
-                    operand_is_tag=True,
-                )
-                _add(left_name, new_atom)
-                _add(right_name, new_atom)
-            else:
-                new_atom = ArithAtom(
-                    left=left_name,
-                    arith_op=expr.symbol,
-                    right=right_name,
-                    form=atom.form,
-                    operand=atom.operand,
-                )
-                _add(left_name, new_atom)
-                _add(right_name, new_atom)
-
-    return enriched
+from pyrung.core.validation.render import operand_name
 
 
 @dataclass(frozen=True)
@@ -177,7 +19,6 @@ class PlanStep:
     - ``"patch"`` — user-style configuration applied before one execution.
     - ``"force"`` — a temporary-logic installation (discovered prerequisite).
     - ``"coast"``   — a bearing coast or let-run dwell (waiting for timers/sequences).
-    - ``"accelerator"`` — a timer/counter accumulator patch (proved-safe skip).
     """
 
     kind: str
@@ -189,7 +30,6 @@ class PlanStep:
     waiting_for: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
-    accelerators: tuple[tuple[str, Any], ...] = ()
     # Relational lever reports for inputs on this step — "held Band < -100.0 to
     # satisfy PV < Lower (e.g., Band = -100.000001; heuristic value — relation is
     # the requirement, not this number)".  The relation is the requirement; the
@@ -200,6 +40,12 @@ class PlanStep:
     # summary; the renderer prefers this lossless representation.
     rungs: tuple[Any, ...] = ()
     source: str = ""
+    # The temporary logic this step put in (or took out), printed from the rung that ran, so the
+    # text cannot drift from it.  A step built by hand leaves it empty, and the text builds its
+    # rules alone.
+    logic: tuple[str, ...] = ()
+    # The logic that runs after a removal that leaves some of a tag's rules in.
+    kept_logic: tuple[str, ...] = ()
 
 
 def _format_value(value: Any) -> str:
@@ -286,22 +132,13 @@ def _format_plan_note(note: str) -> str:
     return note[:1].upper() + note[1:]
 
 
-def _rung_guard(rung: Any) -> str:
-    return render_condition(rung.guard)
+def rules_logic(rungs: tuple[Any, ...]) -> tuple[str, ...]:
+    """*rungs* built into a rung on their own and printed, for logic no recording ran."""
+    from pyrung.core.analysis.pilot.overlay import pilot_rules_rung
+    from pyrung.core.synthesis import bracket_lines
 
-
-def _format_synthesis_instruction(rung: Any) -> str:
-    """Render the instruction shape used by the synthesis rung factory."""
-    if rung.value is True:
-        return f"latch({rung.dest})"
-    if rung.value is False:
-        return f"reset({rung.dest})"
-    return f"copy({operand_name(rung.value)}, {rung.dest})"
-
-
-def _display_rung_key(rung: Any) -> tuple[str, str]:
-    """Identity of one installed rung as presented in the plan."""
-    return (_rung_guard(rung), _format_synthesis_instruction(rung))
+    built = pilot_rules_rung(rungs, {})
+    return () if built is None else bracket_lines(built)
 
 
 def _format_step_refs(steps: tuple[int, ...]) -> str:
@@ -315,42 +152,61 @@ def _format_step_refs(steps: tuple[int, ...]) -> str:
 
 def _format_rung_install(
     prefix: str,
-    rungs: tuple[Any, ...],
-    source: str,
-    notes: tuple[str, ...],
+    step: PlanStep,
+    replaced: dict[str, int] | None = None,
     *,
     next_step: int | None = None,
 ) -> str:
-    """Render the actual guarded rungs installed by PILOT."""
-    by_guard: dict[str, list[Any]] = {}
-    for rung in rungs:
-        by_guard.setdefault(_rung_guard(rung), []).append(rung)
+    """Print the temporary logic a step put in, as it ran."""
+    source = _source_suffix(step.source, next_step=next_step)
+    logic = step.logic or rules_logic(step.rungs)
+    if logic:
+        line = f"{prefix} Install temporary logic{source}:"
+    else:
+        # A non-Bool tag whose every condition is never true gets no row at all.
+        whose = "their" if len(dict.fromkeys(rung.dest for rung in step.rungs)) > 1 else "its"
+        line = (
+            f"{prefix} Install temporary logic for {_step_tags(step)}{source}."
+            f" None of {whose} conditions can be true, so it writes nothing."
+        )
+    detail = [f"   {row}" for row in logic]
+    for tag, earlier in (replaced or {}).items():
+        detail.append(f"   This replaces the logic for {tag} from step {earlier}.")
+    detail.extend(f"   {_format_plan_note(note)}" for note in step.notes)
+    return "\n".join((line, *detail))
 
-    line = f"{prefix} Install temporary logic{_source_suffix(source, next_step=next_step)}:"
-    detail: list[str] = []
-    for guard, guarded_rungs in by_guard.items():
-        detail.append(f"   with rung({guard}):")
-        detail.extend(f"     {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
-    detail.extend(f"   {_format_plan_note(note)}" for note in notes)
-    return line + "\n" + "\n".join(detail)
+
+def _step_tags(step: PlanStep) -> str:
+    return ", ".join(dict.fromkeys(rung.dest for rung in step.rungs))
 
 
 def _format_rung_revoke(
     prefix: str,
-    rungs: tuple[Any, ...],
+    step: PlanStep,
     installed_steps: tuple[int, ...],
+    *,
+    ran: tuple[Any, ...] = (),
+    kept: tuple[str, ...] = (),
 ) -> str:
-    """Render the actual removal of previously installed temporary logic."""
+    """Print the temporary logic a step took out, as it ran until then.
+
+    *ran* is every rule of the step's tags until then, for a step no recording printed.  With
+    *kept*, some of those rules stay in, and the text shows the logic before and after.
+    """
     origin = f" from {_format_step_refs(installed_steps)}" if installed_steps else ""
-    line = f"{prefix} Remove temporary logic{origin}:"
-    by_guard: dict[str, list[Any]] = {}
-    for rung in rungs:
-        by_guard.setdefault(_rung_guard(rung), []).append(rung)
-    detail: list[str] = []
-    for guard, guarded_rungs in by_guard.items():
-        detail.append(f"   with rung({guard}):")
-        detail.extend(f"     {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
-    return line + "\n" + "\n".join(detail)
+    logic = step.logic or rules_logic(ran or step.rungs)
+    if kept:
+        return "\n".join(
+            (
+                f"{prefix} Remove some of the temporary logic{origin}. Until now it ran as:",
+                *(f"   {row}" for row in logic),
+                "   From here on it runs as:",
+                *(f"   {row}" for row in kept),
+            )
+        )
+    if not logic:
+        return f"{prefix} Remove temporary logic for {_step_tags(step)}{origin}. It wrote nothing."
+    return "\n".join((f"{prefix} Remove temporary logic{origin}:", *(f"   {row}" for row in logic)))
 
 
 def _rung_coast_summary(rungs: tuple[Any, ...], *, same_holds: bool = False) -> list[str]:
@@ -467,6 +323,9 @@ def _format_plan_step(
     dt: float | None = None,
     same_holds: bool = False,
     control_steps: tuple[int, ...] = (),
+    replaced: dict[str, int] | None = None,
+    ran: tuple[Any, ...] = (),
+    kept: tuple[str, ...] = (),
 ) -> str:
     prefix = f"{idx}."
 
@@ -478,18 +337,12 @@ def _format_plan_step(
 
     if step.kind == "force":
         if step.rungs:
-            return _format_rung_install(
-                prefix,
-                step.rungs,
-                step.source,
-                step.notes,
-                next_step=idx + 1,
-            )
+            return _format_rung_install(prefix, step, replaced, next_step=idx + 1)
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
         return _with_notes(f"{prefix} Keep {tags}.")
 
     if step.kind == "revoke":
-        return _format_rung_revoke(prefix, step.rungs, control_steps)
+        return _format_rung_revoke(prefix, step, control_steps, ran=ran, kept=kept)
 
     if step.kind == "patch":
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
@@ -526,22 +379,23 @@ def _format_plan_step(
                 sub.append(f"   Keep: {keep}.")
             if step.pulsing_holds:
                 sub.append(f"   Pulse: {', '.join(step.pulsing_holds)}.")
-        if step.accelerators:
-            skip_items = ", ".join(f"{t}={_format_value(v)}" for t, v in step.accelerators)
-            sub.append(f"   Jump ahead: set {skip_items}.")
         if sub:
             return line + "\n" + "\n".join(sub)
         return line
-
-    if step.kind == "accelerator":
-        tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-        return f"{prefix} Jump ahead: set {tags}."
 
     inputs = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
     line = f"{prefix} Set {inputs}."
     if step.transition:
         line += f"\n   Observed: {step.transition}."
     return _with_notes(line)
+
+
+MODBUS_NOT_SIMULATED = (
+    "how() does not simulate Modbus send()/receive(). Their status bits and destinations"
+    " keep their values unless a step sets them."
+)
+# A step's note on a tag a Modbus device would supply.
+MODBUS_STEP_NOTE = "This value stands for the Modbus device's answer."
 
 
 class PlanStatus(Enum):
@@ -599,6 +453,22 @@ class Plan:
     # Preserve relational and conjunctive goal semantics in the public result;
     # the scalar pairs above are display representatives for such predicates.
     target_predicate: Any = None
+    # How a restart went, when how() tried one because nothing worked from the session.  On a
+    # reached plan the restart is its first step, and ``fork`` and ``anchor_scan`` are the new
+    # run: scan 0 is the restart, not the session's.
+    restart: Any = None
+    # The forces this plan releases, when nothing worked with them on.  Its first step.
+    released: Any = None
+    # The move this plan rests on, which nothing in the trace pointed to.  how() tried it because
+    # it was about to stop, and a plan that has one says so.
+    last_resort: Any = None
+    # The session's own forces and pending patches.  They run in the plan but are not its steps.
+    session_inputs: dict[str, Any] = field(default_factory=dict)
+    # Those of them no scan had applied, so the plan's first scan is theirs.
+    waiting_overrides: tuple[str, ...] = ()
+    # The tags a Modbus device would supply, which how() may set.  None means the program
+    # has no send() or receive().  Otherwise the text ends by saying how() did no Modbus I/O.
+    modbus_levers: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         status = self.status
@@ -630,12 +500,9 @@ class Plan:
         """
         if self.fork is None:
             return {}
-        snap = self.fork._scan_log.snapshot()
         out: dict[str, Any] = {}
-        scans = set(snap.patches_by_scan) | set(snap.force_changes_by_scan)
-        for scan_id in sorted(s for s in scans if s > self.anchor_scan):
-            out.update(snap.patches_by_scan.get(scan_id, {}))
-            out.update(snap.force_changes_by_scan.get(scan_id, {}))
+        for _scan_id, inputs in self.ordered_steps:
+            out.update(inputs)
         return out
 
     @property
@@ -663,11 +530,22 @@ class Plan:
         result: list[tuple[int, dict[str, Any]]] = []
         for scan_id in scans:
             inputs: dict[str, Any] = {}
-            inputs.update(snap.patches_by_scan.get(scan_id, {}))
-            inputs.update(snap.force_changes_by_scan.get(scan_id, {}))
+            inputs.update(self._not_the_sessions(snap.patches_by_scan.get(scan_id, {}), scan_id))
+            inputs.update(self._not_the_sessions(snap.force_changes_by_scan.get(scan_id, {})))
             if inputs:
                 result.append((scan_id, inputs))
         return result
+
+    def _not_the_sessions(
+        self, inputs: dict[str, Any], patched_on: int | None = None
+    ) -> dict[str, Any]:
+        """Drop what the session set itself: its forces on any scan, its patches on the first."""
+        if patched_on is not None and patched_on != self.anchor_scan + 1:
+            return dict(inputs)
+        own = self.session_inputs
+        return {
+            name: value for name, value in inputs.items() if name not in own or own[name] != value
+        }
 
     @property
     def tags(self) -> Any:
@@ -691,6 +569,13 @@ class Plan:
         return getattr(self.fork, "_dt", None) if self.fork is not None else None
 
     def __str__(self) -> str:
+        text = self._text()
+        return text if self.modbus_levers is None else f"{text}\n\n{MODBUS_NOT_SIMULATED}"
+
+    def _sets_a_modbus_lever(self, inputs: Any) -> bool:
+        return any(name in (self.modbus_levers or ()) for name, _value in inputs)
+
+    def _text(self) -> str:
         if self.target_predicate is not None:
             from pyrung.core.analysis.simplified import And, render
 
@@ -712,12 +597,17 @@ class Plan:
             )
             reason = self.reason or "No productive next action was found."
             reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
+            restart = (
+                "".join(f"\n  {line}" for line in self.restart.lines())
+                if self.restart is not None
+                else ""
+            )
             if "; still waiting on " in reason:
                 reason, waiting = reason.split("; still waiting on ", 1)
                 reason = reason if reason.endswith((".", "!", "?")) else reason + "."
-                return f"{headline}\n  Reason: {reason}\n  Waiting for: {waiting}"
+                return f"{headline}\n  Reason: {reason}\n  Waiting for: {waiting}{restart}"
             reason = reason if reason.endswith((".", "!", "?")) else reason + "."
-            return f"{headline}\n  Reason: {reason}"
+            return f"{headline}\n  Reason: {reason}{restart}"
 
         dt = self.dt
         elapsed = ""
@@ -736,42 +626,105 @@ class Plan:
                     redirects.extend(redirect.split(" | "))
             if redirects:
                 lines.append(f"  Other routes: {' | '.join(dict.fromkeys(redirects))}")
+        leading = self._leading_steps()
+        first_step = len(leading) + 1
+        if leading:
+            lines.extend(("", "Steps:"))
+            for step_line in leading:
+                lines.extend(("", step_line))
         if self.journal:
-            lines.extend(("", "Steps:", ""))
+            lines.extend(("",) if leading else ("", "Steps:", ""))
+            from pyrung.core.analysis.pilot.world_key import _rung_identity
+
             previous_holds: tuple[Any, ...] | None = None
-            installed_at: dict[tuple[str, str], int] = {}
-            for i, step in enumerate(self.journal, 1):
+            # The step whose text last showed each tag's logic.  A later step that changes the
+            # tag's logic says which step's logic it replaces.
+            installed_at: dict[str, int] = {}
+            # Each rule in so far, with the step that put it in.  A removal can take out some of
+            # a tag's rules and leave the rest.
+            rules_in: dict[tuple[Any, ...], tuple[Any, int]] = {}
+            for j, (i, step) in enumerate(enumerate(self.journal, first_step)):
+                dests = dict.fromkeys(rung.dest for rung in step.rungs)
+                earlier = {dest: installed_at[dest] for dest in dests if dest in installed_at}
+                control = tuple(sorted(set(earlier.values())))
+                ran: tuple[Any, ...] = ()
+                kept: tuple[str, ...] = ()
                 if step.kind == "force":
+                    for dest in dests:
+                        installed_at[dest] = i
                     for rung in step.rungs:
-                        installed_at.setdefault(_display_rung_key(rung), i)
+                        rules_in[_rung_identity(rung)] = (rung, i)
+                elif step.kind == "revoke":
+                    ran = tuple(rung for rung, _i in rules_in.values() if rung.dest in dests)
+                    gone = [_rung_identity(rung) for rung in step.rungs]
+                    # The steps that put in the rules this one takes out.
+                    put_in_by = {rules_in[key][1] for key in gone if key in rules_in}
+                    if put_in_by:
+                        control = tuple(sorted(put_in_by))
+                    for key in gone:
+                        rules_in.pop(key, None)
+                    left = tuple(rung for rung, _i in rules_in.values() if rung.dest in dests)
+                    # Logic put in on the same scan prints the tag's whole logic itself.
+                    rebuilt = any(
+                        later.kind == "force"
+                        and later.scan == step.scan
+                        and any(rung.dest in dests for rung in later.rungs)
+                        for later in self.journal[j + 1 :]
+                    )
+                    # The recording also knows rules put in before the plan's first step.  On a
+                    # rebuilt scan its rows after the removal are the new logic's, not kept ones.
+                    kept_dests = {rung.dest for rung in left} or (
+                        set(dests) if step.kept_logic and not rebuilt else set()
+                    )
+                    if kept_dests and not rebuilt:
+                        kept = step.kept_logic or rules_logic(left)
+                    for dest in dests:
+                        if dest in kept_dests:
+                            if not rebuilt:
+                                installed_at[dest] = i
+                        else:
+                            installed_at.pop(dest, None)
                 holds = step.rungs or tuple(step.steady_holds)
                 same_holds = step.kind == "coast" and bool(holds) and holds == previous_holds
-                control_steps = tuple(
-                    sorted(
-                        {
-                            installed_at[key]
-                            for rung in step.rungs
-                            if (key := _display_rung_key(rung)) in installed_at
-                        }
-                    )
-                )
                 lines.append(
                     _format_plan_step(
                         i,
-                        step,
+                        replace(step, notes=(*step.notes, MODBUS_STEP_NOTE))
+                        if self._sets_a_modbus_lever(step.inputs)
+                        else step,
                         dt=dt,
                         same_holds=same_holds,
-                        control_steps=control_steps,
+                        control_steps=control,
+                        replaced=earlier,
+                        ran=ran,
+                        kept=kept,
                     )
                 )
-                if step.kind == "revoke":
-                    for rung in step.rungs:
-                        installed_at.pop(_display_rung_key(rung), None)
                 if step.kind == "coast" and holds:
                     previous_holds = holds
-                if i != len(self.journal):
+                if i != len(self.journal) + first_step - 1:
                     lines.append("")
         return "\n".join(lines)
+
+    def _leading_steps(self) -> list[str]:
+        """What a plan has to do before PILOT's own steps, each numbered in order."""
+        steps: list[str] = []
+        if self.restart is not None:
+            steps.append(self.restart.step_line(len(steps) + 1))
+        if self.released is not None:
+            steps.append(self.released.step_line(len(steps) + 1))
+        if self.waiting_overrides:
+            names = ", ".join(self.waiting_overrides)
+            steps.append(
+                f"{len(steps) + 1}. Let one scan run, so the session's own patch or force on"
+                f" {names} takes effect."
+            )
+        if self.last_resort is not None:
+            line = self.last_resort.step_line(len(steps) + 1)
+            if self._sets_a_modbus_lever(((self.last_resort.tag, self.last_resort.value),)):
+                line += f"\n   {MODBUS_STEP_NOTE}"
+            steps.append(line)
+        return steps
 
     def __repr__(self) -> str:
         return (

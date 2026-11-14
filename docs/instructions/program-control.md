@@ -58,8 +58,20 @@ with rung():
         copy(Counter + 1, Counter)
 ```
 
-The count can be a positive literal or a tag (resolved each scan). If a tag
-resolves to 0 or a negative value, the loop executes once.
+The count can be a positive literal or a tag, read once when the loop starts.
+As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
+iterations (a scan of a second or more on a CLICK). A `Dint` count is read whole
+and signed, so 65536 runs 65536 and -1 runs none. A literal is read whole, so
+`forloop(70000)` runs 70000. A count of 0 runs none.
+The verifier (`always()`, `never()`, `pyrung lock`) answers `Intractable` when
+a loop can run more than 1,000,000 iterations in a scan, or when its count
+comes from an input without `choices=` or a `min=`/`max=` range of 1000
+values or fewer.
+
+For CLICK, the count must be a constant or a `DS`, `DD`, `TD`, `CTD` or `SD`
+tag. CLICK validation reports `CLK_FORLOOP_COUNT_BANK` for a count in any other
+bank. Copy the
+count into a `DS` or `DD` tag and loop on that.
 
 ```python
 with rung():
@@ -75,4 +87,47 @@ with rung():
         copy(Src[loop.idx + 1], Dst[loop.idx + 1])
 ```
 
-End and return instructions aren't needed — Python indentation handles scope.
+End and return instructions aren't needed. Python indentation handles scope.
+
+### Body rungs
+
+The loop body is a run of rungs between For and Next. A bare instruction is a
+body rung with no contacts. A body rung with contacts is a `with rung(...)`
+inside the loop. Its contacts are evaluated on every iteration, against the
+values the earlier body rungs just wrote:
+
+```python
+with rung(Enable):
+    with forloop(10) as loop:
+        with rung(Src[loop.idx] == 0):
+            continue_loop()
+        copy(Src[loop.idx], Dst[loop.idx])
+        with rung(Fault):
+            break_loop()
+```
+
+`continue_loop()` skips the rest of the current iteration. `break_loop()` leaves
+the innermost loop. The scan carries on after its Next. Both need a body rung
+with at least one contact, as in CLICK. When the loop's own rung is false, the
+body does not run at all, as on CLICK. Its `out()` coils keep their values. Its
+timers and counters neither time, count nor reset. Its one-shots do not
+re-arm (only the For's own `oneshot=True` does). To turn a body coil off when
+the loop stops, `reset()` it from a rung of its own.
+
+`branch()` is not allowed inside a loop, and a body rung cannot hold another
+`with rung()`.
+
+### Nested loops
+
+Loops nest up to three deep. Each one has its own `loop.idx`, and
+`break_loop()` / `continue_loop()` act on the innermost:
+
+```python
+with rung(Enable):
+    with forloop(Rows) as row:
+        with forloop(Cols) as col:
+            math(Total + Grid[row.idx * 8 + col.idx], Total)
+```
+
+A nested loop is a body rung of the outer loop, so it can have contacts:
+`with rung(Ready): with forloop(3): ...` inside the outer loop.

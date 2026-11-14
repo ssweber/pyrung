@@ -9,12 +9,14 @@ from pyrung.core.instruction import SubroutineReturnSignal
 from pyrung.core.rung import Rung as RungLogic
 
 from ..validation import _check_with_body_from_frame
+from . import _state
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.dataview import DataView
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.simplified import TerminalForm
     from pyrung.core.context import ScanContext
+    from pyrung.core.site_memory import SiteTable
     from pyrung.core.validation.report import ValidationReport
 
     from ..validation import DialectValidator
@@ -38,8 +40,10 @@ class Program:
         runner = PLC(logic)
     """
 
-    _active: Program | None = None
     _dialect_validators: ClassVar[dict[str, DialectValidator]] = {}
+    # A runner's soft program (``PLC._soft_exec_program``) keeps here the user's
+    # program that its plant and hold rungs run ahead of.
+    _bare_program: Program | None = None
 
     def __init__(self, *, strict: bool = True) -> None:
         self._strict = strict
@@ -47,7 +51,11 @@ class Program:
         self.subroutines: dict[str, list[RungLogic]] = {}
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
         self._pending_comment: str | None = None
-        self._cached_graph: ProgramGraph | None = None
+        self._graph: ProgramGraph | None = None
+        self._graph_edits = 0
+        # how()'s prover facts, with the graph they were built from.
+        self._cached_prover_context: Any = None
+        self._site_table: SiteTable | None = None
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -58,42 +66,50 @@ class Program:
                     _check_with_body_from_frame(caller, opt_out_hint="Program(strict=False)")
             finally:
                 del frame
-        Program._active = self
+        _state._building.programs.append(self)
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        Program._active = None
+        # The program this one was built inside is current again.
+        programs = _state._building.programs
+        if programs and programs[-1] is self:
+            programs.pop()
         if exc_type is None:
             self._assign_state_keys()
             self._validate_call_targets()
+            from pyrung.core.validation.owned_bit_coil import check_owned_bit_coils
+
+            check_owned_bit_coils(self)
+
+    @property
+    def _cached_graph(self) -> ProgramGraph | None:
+        """The built graph, or None once a tag's settings changed since it was built.
+
+        The graph reads tags' settings, so an edit to one makes it stale.
+        """
+        from pyrung.core.tag import metadata_edits
+
+        if self._graph is not None and self._graph_edits != metadata_edits():
+            self._graph = None
+        return self._graph
+
+    @_cached_graph.setter
+    def _cached_graph(self, graph: ProgramGraph | None) -> None:
+        from pyrung.core.tag import metadata_edits
+
+        self._graph = graph
+        self._graph_edits = metadata_edits()
 
     def _invalidate_graph_cache(self) -> None:
         self._cached_graph = None
+        self._cached_prover_context = None
 
     def _assign_state_keys(self) -> None:
-        from pyrung.core.instruction.base import Instruction
-        from pyrung.core.instruction.control import ForLoopInstruction
+        """Bind every memory-keeping site (see :mod:`pyrung.core.site_memory`)."""
+        from pyrung.core.site_memory import bind_sites
 
-        counter = 0
-
-        def _walk_instructions(instructions: list[Instruction]) -> None:
-            nonlocal counter
-            for instr in instructions:
-                counter += 1
-                instr._state_key = f"i{counter}"
-                if isinstance(instr, ForLoopInstruction):
-                    _walk_instructions(instr.instructions)
-
-        def _walk_rung(rung: RungLogic) -> None:
-            _walk_instructions(rung._instructions)
-            for branch_rung in rung._branches:
-                _walk_rung(branch_rung)
-
-        for rung in self.rungs:
-            _walk_rung(rung)
-        for subroutine_rungs in self.subroutines.values():
-            for rung in subroutine_rungs:
-                _walk_rung(rung)
+        self._site_table = bind_sites(self.rungs, self.subroutines, program_owned=True, owner=self)
+        self._invalidate_graph_cache()
 
     def _add_rung(self, rung: RungLogic) -> None:
         """Add a rung to the program or current subroutine."""
@@ -110,7 +126,7 @@ class Program:
             )
             raise RuntimeError(
                 f"Rung.continued() cannot be the first rung in a {scope}. "
-                "It can only reuse the prior rung snapshot in the same execution scope."
+                "It continues the rung above it, in the same execution scope."
             )
         target.append(rung)
         self._invalidate_graph_cache()
@@ -173,9 +189,7 @@ class Program:
         """Execute a subroutine by name within a ScanContext."""
         if name not in self.subroutines:
             raise KeyError(f"Subroutine '{name}' not defined")
-        saved_snapshot = ctx._condition_snapshot
         saved_scope_token = ctx._condition_scope_token
-        ctx._condition_snapshot = None
         ctx._condition_scope_token = object()
         try:
             for rung in self.subroutines[name]:
@@ -183,13 +197,13 @@ class Program:
         except SubroutineReturnSignal:
             pass
         finally:
-            ctx._condition_snapshot = saved_snapshot
             ctx._condition_scope_token = saved_scope_token
 
     @classmethod
     def _current(cls) -> Program | None:
         """Get the current program context (if any)."""
-        return cls._active
+        programs = _state._building.programs
+        return programs[-1] if programs else None
 
     @classmethod
     def register_dialect(cls, name: str, validator: DialectValidator) -> None:
@@ -259,13 +273,14 @@ class Program:
 
         The graph is built lazily on first call and cached.
         """
-        if self._cached_graph is None:
+        graph = self._cached_graph
+        if graph is None:
             from pyrung.core.analysis import build_program_graph
 
-            self._cached_graph = build_program_graph(self)
+            graph = self._cached_graph = build_program_graph(self)
         from pyrung.core.analysis.dataview import DataView
 
-        return DataView.from_graph(self._cached_graph)
+        return DataView.from_graph(graph)
 
     def simplified(self) -> dict[str, TerminalForm]:
         """Compute the simplified Boolean form for every terminal tag."""

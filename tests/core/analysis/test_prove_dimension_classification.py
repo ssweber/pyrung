@@ -20,7 +20,6 @@ from pyrung.core import (
     reset,
 )
 from pyrung.core.analysis.prove import (
-    PENDING,
     Intractable,
     TraceStep,
     _classify_dimensions,
@@ -203,4 +202,4 @@ class TestDimensionClassification:
         assert not isinstance(result, Intractable)
         stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "T1_Done" in stateful
-        assert stateful["T1_Done"] == (False, PENDING, True)
+        assert stateful["T1_Done"] == (False, True)

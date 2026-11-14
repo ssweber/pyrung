@@ -14,16 +14,22 @@ from pyrung.core.condition import (
 from pyrung.core.instruction import (
     CountDownInstruction,
     CountUpInstruction,
+    DebounceInstruction,
     DebugInstructionSubStep,
     EventDrumInstruction,
+    FlasherInstruction,
     OffDelayInstruction,
     OnDelayInstruction,
     ShiftInstruction,
+    TimedInstruction,
     TimeDrumInstruction,
+    TimeEventDrumInstruction,
+    ToggleInstruction,
 )
+from pyrung.core.instruction.utils import validate_preset
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import DoneAccUDT
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import normalize_unit
 
 from .context import _require_rung_context
@@ -281,7 +287,9 @@ class _DrumBuilderBase(_BuilderBase):
     ) -> None:
         super().__init__(func_name=func_name, source_file=source_file, source_line=source_line)
         self._register_required_builder(descriptor)
-        self._instruction: EventDrumInstruction | TimeDrumInstruction | None = None
+        self._instruction: (
+            EventDrumInstruction | TimeDrumInstruction | TimeEventDrumInstruction | None
+        ) = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
         self._jump_source_file: str | None = None
@@ -495,6 +503,89 @@ class TimeDrumBuilder(_DrumBuilderBase):
         return self
 
 
+class TimeEventDrumBuilder(_DrumBuilderBase):
+    def __init__(
+        self,
+        outputs: Sequence[Tag],
+        presets: Sequence[Tag | int | None],
+        events: Sequence[Condition | Tag | None],
+        unit: str,
+        pattern: Sequence[Sequence[bool | int]],
+        current_step: Tag,
+        accumulator: Tag,
+        completion_flag: Tag,
+        auto_condition: Any,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
+        super().__init__(
+            func_name="time_event_drum",
+            descriptor="time_event_drum(...).reset(...)",
+            source_file=source_file,
+            source_line=source_line,
+        )
+        self._outputs = outputs
+        self._presets = presets
+        self._events = events
+        self._unit = unit
+        self._pattern = pattern
+        self._current_step = current_step
+        self._accumulator = accumulator
+        self._completion_flag = completion_flag
+        self._auto_condition = auto_condition
+
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> TimeEventDrumBuilder:
+        self._assert_required_builder_owner("reset")
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
+        try:
+            instr = TimeEventDrumInstruction(
+                outputs=self._outputs,
+                presets=self._presets,
+                events=self._events,
+                unit=self._unit,
+                pattern=self._pattern,
+                current_step=self._current_step,
+                accumulator=self._accumulator,
+                completion_flag=self._completion_flag,
+                auto_condition=self._auto_condition,
+                reset_condition=_coalesce_condition_args("reset", conditions),
+            )
+            self._instruction = instr
+            self._refresh_debug_substeps()
+            self._append_instruction(instr)
+        except Exception:
+            self._resolve_required_builder()
+            raise
+        self._resolve_required_builder()
+        return self
+
+    def jump(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        step: Tag | int,
+    ) -> TimeEventDrumBuilder:
+        self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
+        self._assert_finalized("jump")
+        assert self._instruction is not None
+        self._instruction.set_jump(_coalesce_condition_args("jump", conditions), step)
+        self._refresh_debug_substeps()
+        return self
+
+    def jog(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> TimeEventDrumBuilder:
+        self._jog_source_file, self._jog_source_line = _capture_chained_method_source()
+        self._assert_finalized("jog")
+        assert self._instruction is not None
+        self._instruction.set_jog(_coalesce_condition_args("jog", conditions))
+        self._refresh_debug_substeps()
+        return self
+
+
 def event_drum(
     *,
     outputs: Sequence[Tag],
@@ -531,6 +622,41 @@ def time_drum(
     return TimeDrumBuilder(
         outputs,
         presets,
+        canonical_unit,
+        pattern,
+        current_step,
+        accumulator,
+        completion_flag,
+        auto_condition,
+        source_file=source_file,
+        source_line=source_line,
+    )
+
+
+def time_event_drum(
+    *,
+    outputs: Sequence[Tag],
+    presets: Sequence[Tag | int | None],
+    events: Sequence[Condition | Tag | None],
+    unit: TimeUnitStr = "ms",
+    pattern: Sequence[Sequence[bool | int]],
+    current_step: Tag,
+    accumulator: Tag,
+    completion_flag: Tag,
+) -> TimeEventDrumBuilder:
+    """CLICK's Time & Event drum: each step ends when its time is up and its event is on.
+
+    A step's preset or event may be ``None`` (event-only or time-only step), not both.
+    Events are **levels**, unlike ``event_drum``'s rising edges: an event already on
+    when the time comes up ends the step on that scan.  The accumulator keeps
+    counting while a timed step waits for its event.
+    """
+    canonical_unit = normalize_unit(unit)
+    auto_condition, source_file, source_line = _capture_rung_condition_and_source("time_event_drum")
+    return TimeEventDrumBuilder(
+        outputs,
+        presets,
+        events,
         canonical_unit,
         pattern,
         current_step,
@@ -666,7 +792,7 @@ class CountDownBuilder(_BuilderBase):
     """Builder for count_down instruction with chaining API.
 
     Supports required .reset() chaining:
-        count_down(Counter[1], preset=25).reset(reset_tag)
+        count_down(Counter[1], preset=-25).reset(reset_tag)
     """
 
     def __init__(
@@ -698,8 +824,8 @@ class CountDownBuilder(_BuilderBase):
     ) -> Tag:
         """Add reset condition (required).
 
-        When reset condition is true, loads preset into accumulator
-        and clears done bit.
+        When reset condition is true, sets the accumulator to 0 and clears
+        the done bit.
 
         Args:
             *conditions: Condition(s) for resetting the counter.
@@ -751,14 +877,15 @@ def count_up(
 ) -> CountUpBuilder:
     """Count Up instruction (CTU).
 
-    Creates a counter that increments every scan while the rung condition is True.
-    Use `rise()` on the condition for edge-triggered counting.
+    Creates a counter that counts the rising edges of the rung condition (as
+    a CLICK does): one count each time it goes True, however long it stays
+    True.  Done is True while acc >= preset.
 
     Example:
-        with Rung(rise(PartSensor)):
+        with Rung(PartSensor):
             count_up(Counter[1], preset=100).reset(ResetBtn)
 
-    This is a terminal instruction. Requires .reset() chaining.
+    A box with pins: it ends its rung. Requires .reset() chaining.
 
     Args:
         counter: Counter instance (must have ``done`` and ``acc`` fields).
@@ -768,6 +895,7 @@ def count_up(
         Builder for chaining .down() and .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_up")
+    validate_preset(preset, label="count_up() preset")
     cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     up_condition, source_file, source_line = _capture_rung_condition_and_source("count_up")
     return CountUpBuilder(
@@ -788,14 +916,16 @@ def count_down(
 ) -> CountDownBuilder:
     """Count Down instruction (CTD).
 
-    Creates a counter that decrements every scan while the rung condition is True.
-    Use `rise()` on the condition for edge-triggered counting.
+    Creates a counter that counts down on the rising edges of the rung
+    condition (as a CLICK does), from 0.  Done is True while acc <= preset, so
+    a positive preset is done from the start; stage acc above the preset with
+    ``copy()`` to count down to it.
 
     Example:
-        with Rung(rise(Dispense)):
-            count_down(Counter[1], preset=25).reset(Reload)
+        with Rung(Dispense):
+            count_down(Counter[1], preset=-25).reset(Reload)
 
-    This is a terminal instruction. Requires .reset() chaining.
+    A box with pins: it ends its rung. Requires .reset() chaining.
 
     Args:
         counter: Counter instance (must have ``done`` and ``acc`` fields).
@@ -805,6 +935,7 @@ def count_down(
         Builder for chaining .reset().
     """
     done_bit, accumulator = _extract_done_acc(counter, "count_down")
+    validate_preset(preset, label="count_down() preset")
     cu_bit, cd_bit = _extract_status_tags(counter, "CU", "CD")
     down_condition, source_file, source_line = _capture_rung_condition_and_source("count_down")
     return CountDownBuilder(
@@ -822,8 +953,8 @@ def count_down(
 class OnDelayBuilder(_AutoFinalizeBuilderBase):
     """Builder for on_delay instruction with optional .reset() chaining (Click-style).
 
-    Without .reset(): TON behavior (auto-reset on rung false, non-terminal)
-    With .reset(): RTON behavior (manual reset required, terminal)
+    Without .reset(): TON behavior (auto-reset on rung false, shares its rung)
+    With .reset(): RTON behavior (manual reset required, ends its rung)
     """
 
     def __init__(
@@ -973,7 +1104,7 @@ def on_delay(
             on_delay(Timer[1], preset=5000).reset(ResetBtn) # RTON
 
     Without .reset(), this is TON and remains composable in-rung.
-    With .reset(), this is RTON and becomes terminal in the current flow.
+    With .reset(), this is RTON, a box with pins, and it ends its rung.
 
     Args:
         timer: Timer instance (must have ``done`` and ``acc`` fields).
@@ -987,6 +1118,7 @@ def on_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "on_delay")
+    validate_preset(preset, label="on_delay() preset")
     en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("on_delay")
     return OnDelayBuilder(
@@ -1017,7 +1149,7 @@ def off_delay(
             off_delay(Timer[2], preset=10000)
             off_delay(Timer[2], 10, "s")       # 10 seconds
 
-    Off-delay timers are composable in-rung (not terminal).
+    Off-delay timers are composable in-rung (no pins, so they share their rung).
 
     Args:
         timer: Timer instance (must have ``done`` and ``acc`` fields).
@@ -1031,6 +1163,7 @@ def off_delay(
     """
     canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "off_delay")
+    validate_preset(preset, label="off_delay() preset")
     en_bit, tt_bit = _extract_status_tags(timer, "EN", "TT")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("off_delay")
     return OffDelayBuilder(
@@ -1044,3 +1177,200 @@ def off_delay(
         en_bit=en_bit,
         tt_bit=tt_bit,
     )
+
+
+def _out_target(target: Tag | ImmediateRef, func_name: str, *, immediate: bool) -> Tag:
+    """Return the single Bool tag an Out coil variant writes.
+
+    Only toggle takes an ``immediate(...)`` target: CLICK's Debounce, Flasher
+    and Timed coils have no Immediate option.
+    """
+    if isinstance(target, ImmediateRef) and not immediate:
+        raise TypeError(
+            f"{func_name}() takes no immediate(...) target; only out() and toggle() "
+            "coils write immediately."
+        )
+    tag = target.value if isinstance(target, ImmediateRef) else target
+    if not isinstance(tag, Tag) or tag.type is not TagType.BOOL:
+        raise TypeError(f"{func_name}() writes one Bool tag, got {target!r}.")
+    return tag
+
+
+def _out_phase(phase: Any, func_name: str, side: str) -> tuple[Tag, Tag, Tag | int] | None:
+    """Unpack an ``(timer, preset)`` phase into its Done, Acc and preset."""
+    if phase is None:
+        return None
+    if not isinstance(phase, tuple) or len(phase) != 2:
+        raise TypeError(f"{func_name}() {side}= takes (timer, preset), got {phase!r}.")
+    timer, preset = phase
+    done_bit, accumulator = _extract_done_acc(timer, func_name)
+    validate_preset(preset, label=f"{func_name}() {side} preset")
+    return done_bit, accumulator, preset
+
+
+def _distinct_phases(
+    on: tuple[Tag, Tag, Tag | int] | None,
+    off: tuple[Tag, Tag, Tag | int] | None,
+    func_name: str,
+) -> None:
+    if on is not None and off is not None and on[1].name == off[1].name:
+        raise ValueError(f"{func_name}() on= and off= need two different timers.")
+
+
+def toggle(target: Tag | ImmediateRef) -> Tag | ImmediateRef:
+    """Toggle coil (CLICK Out with Toggle).
+
+    Inverts the target on each OFF->ON transition of the rung and keeps its
+    value while the rung is false.
+
+    Example:
+        with Rung(PushButton):
+            toggle(Light)
+            toggle(Y[1].immediate)
+    """
+    _out_target(target, "toggle", immediate=True)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("toggle")
+    instruction = ToggleInstruction(target, enable_condition)
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("toggle")._rung.add_instruction(instruction)
+    return target
+
+
+def debounce(
+    target: Tag,
+    *,
+    on: tuple[DoneAccUDT, Tag | int],
+    off: tuple[DoneAccUDT, Tag | int],
+    unit: TimeUnitStr = "ms",
+) -> Tag:
+    """Debounce coil (CLICK Out, Debounce).
+
+    The target follows the rung once the rung has held steady: it turns on
+    after the rung has been true for the ``on`` time and off after it has been
+    false for the ``off`` time.  CLICK requires both sides.
+
+    Example:
+        with Rung(LevelSwitch):
+            debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
+
+    Args:
+        target: Bool tag driven by the coil.
+        on: ``(timer, preset)`` for the on side.
+        off: ``(timer, preset)`` for the off side.
+        unit: Time unit for both presets (default ``"ms"``).
+    """
+    _out_target(target, "debounce", immediate=False)
+    on_phase = _out_phase(on, "debounce", "on")
+    off_phase = _out_phase(off, "debounce", "off")
+    if on_phase is None or off_phase is None:
+        raise ValueError("debounce() needs both on=(timer, preset) and off=(timer, preset).")
+    _distinct_phases(on_phase, off_phase, "debounce")
+    canonical_unit = normalize_unit(unit)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("debounce")
+    instruction = DebounceInstruction(
+        target,
+        on_done=on_phase[0],
+        on_acc=on_phase[1],
+        on_preset=on_phase[2],
+        off_done=off_phase[0],
+        off_acc=off_phase[1],
+        off_preset=off_phase[2],
+        unit=canonical_unit,
+        enable_condition=enable_condition,
+    )
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("debounce")._rung.add_instruction(instruction)
+    return target
+
+
+def flasher(
+    target: Tag,
+    *,
+    on: tuple[DoneAccUDT, Tag | int],
+    off: tuple[DoneAccUDT, Tag | int],
+    unit: TimeUnitStr = "ms",
+) -> Tag:
+    """Flasher coil (CLICK Out, Flasher).
+
+    While the rung is true the target alternates: on for the ``on`` time, then
+    off for the ``off`` time, starting with the on phase.  The rung going false
+    turns it off at once.
+
+    Example:
+        with Rung(Alarm):
+            flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
+
+    Args:
+        target: Bool tag driven by the coil.
+        on: ``(timer, preset)`` for the on phase.
+        off: ``(timer, preset)`` for the off phase.
+        unit: Time unit for both presets (default ``"ms"``).
+    """
+    _out_target(target, "flasher", immediate=False)
+    on_phase = _out_phase(on, "flasher", "on")
+    off_phase = _out_phase(off, "flasher", "off")
+    if on_phase is None or off_phase is None:
+        raise ValueError("flasher() needs both on=(timer, preset) and off=(timer, preset).")
+    _distinct_phases(on_phase, off_phase, "flasher")
+    canonical_unit = normalize_unit(unit)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("flasher")
+    instruction = FlasherInstruction(
+        target,
+        on_done=on_phase[0],
+        on_acc=on_phase[1],
+        on_preset=on_phase[2],
+        off_done=off_phase[0],
+        off_acc=off_phase[1],
+        off_preset=off_phase[2],
+        unit=canonical_unit,
+        enable_condition=enable_condition,
+    )
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("flasher")._rung.add_instruction(instruction)
+    return target
+
+
+def timed(
+    target: Tag,
+    timer: DoneAccUDT,
+    preset: Tag | int,
+    unit: TimeUnitStr = "ms",
+    *,
+    maintained: bool = False,
+) -> Tag:
+    """Timed coil (CLICK Out, Timed).
+
+    A rung edge turns the target on for ``preset``.  Not maintained, it then
+    goes off even if the rung is still true, and the next pulse needs the rung
+    to go false and true again.  Maintained, it stays on for at least
+    ``preset`` and then follows the rung.
+
+    Example:
+        with Rung(CallButton):
+            timed(Horn, Timer[5], 1000)
+            timed(Lamp, Timer[6], 3, "sec", maintained=True)
+
+    Args:
+        target: Bool tag driven by the coil.
+        timer: Timer instance that times the on time.
+        preset: On time in ``unit`` (Tag or int).
+        unit: Time unit (default ``"ms"``).
+        maintained: Keep the target on while the rung stays true after the on time.
+    """
+    _out_target(target, "timed", immediate=False)
+    phase = _out_phase((timer, preset), "timed", "on")
+    assert phase is not None
+    canonical_unit = normalize_unit(unit)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("timed")
+    instruction = TimedInstruction(
+        target,
+        timer_done=phase[0],
+        timer_acc=phase[1],
+        on_preset=phase[2],
+        unit=canonical_unit,
+        maintained=bool(maintained),
+        enable_condition=enable_condition,
+    )
+    instruction.source_file, instruction.source_line = source_file, source_line
+    _require_rung_context("timed")._rung.add_instruction(instruction)
+    return target

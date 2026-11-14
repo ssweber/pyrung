@@ -20,10 +20,37 @@ module.
 ## Public contract
 
 - PILOT never drives the caller's PLC. It works on forks.
+- A drive's forks carry the session's forces and pending patches
+  (`fork_with_pilot_rungs`), so a plan holds on the session as it is. Those are
+  not the plan's steps. A plan that needs a force off says so as its first step
+  (`restart.try_release`); the public `PLC.fork()` still starts clean.
 - `PlanStatus.REACHED` carries the reached fork. Its scan log and synthesis
   holds are the replayable witness; replay does not re-plan.
+- Once a drive reaches, `trim.py` runs it again from the anchor with each hold
+  left out, then as a plain Set, and keeps the simpler run when it reaches on the
+  same scan with nothing avoided. The kept run is the plan's fork, so text and
+  replay stay one recording. The per-scan holds come from the fork's epochs (each
+  compiled hold carries the PilotRungs it was built from), not from `hold_log`,
+  which keeps reverted installs too. Each wait of a try arms the avoid checks
+  where it starts and judges every member where it ends, so a member true at
+  the anchor is watched again once the plan has left it. An avoid check raising
+  on a try's state ends that try only: the state is not the returned plan's. A
+  release (a hold of False) is tried as a Set before a drop, so a momentary
+  command stays let go of. A person can't make two moves less than a second
+  apart (`_HUMAN_FLOOR_S`), so a Set isn't tried when another printed Set
+  comes less than a second before or after it. Sets on one scan count as one
+  move. The hold is then tried only as a drop, as for an input that can't be
+  Set, so a release may be dropped and its command stay pressed. A one-rung
+  install's lever notes move to its Set; a noted install of several rungs is
+  not trimmed. The text hides a patch of a held input (`_controlled_at`), so a
+  hold whose input the recording patches to its value where it goes in is only
+  ever that Set, or stays when that Set comes too soon. One whose input is
+  patched on another scan it is in stays.
 - `PlanStatus.CANNOT_REACH` requires a proof of incompatibility or
-  unreachability.
+  unreachability, over every write to the tags involved and not one traced route
+  (`static_proofs.py`). What a proof cannot enumerate is `STOPPED`. Two writes it
+  does not see yet: a text Copy spilling past its first slot from a tag source, and
+  a block write onto a plain tag named like the slot.
 - `PlanStatus.STOPPED` means PILOT exhausted its bounded supply of safe,
   evidence-backed actions. It is not a proof that no path exists.
 - `Plan.journal`, `journey`, and the event stream explain the drive. They do not
@@ -151,7 +178,11 @@ Fork-consuming instruments remain typed, bounded requests.
 
 An actionless read authorizes program motion only through a positive
 `ContinuationRead`, currently an exact prerequisite, self-advancing frontier,
-ready writer, or satisfied trace awaiting its writer. Absence of a diagnosis
+ready writer, or satisfied trace awaiting its writer. A self-advancing frontier
+is either an advance profile on the leaf or, where the trace stops at a
+program-written numeric value, an unchanged four-scan projection
+(`read_frontier_motion`) in which that value only closes on the traced one: a
+calc fed its own result reads like a timer. Absence of a diagnosis
 does not authorize motion. Orientation lowers positive evidence to the named
 `ProgramContinuation` act; its `seek` and `settle` modes reuse the bounded coast
 mechanics and ordinary verification gates without representing the decision as
@@ -207,16 +238,48 @@ parallel fields.
 Pulse execution may distinguish the source scan, productive assertion scan,
 and a retained look-ahead or exact consumer boundary. A productive scan does
 not imply that the landing still owns its progress; `ScanProgressReceipt`
-records that distinction. Logical coast folding is an execution optimization,
-not permission to invent physical occurrences.
+records that distinction. A coast runs every scan, its long stretches in the guarded
+scan loop (`core/coast_run.py`); a span owns all the scans of its range, whichever
+engine ran them. The loop is an execution optimization, not permission to invent
+physical occurrences.
 
 Invocation search work and productive simulated dwell are separate quantities.
 `SearchBudget` is shared by disposable experiments and lives outside `_World`:
-discarding an attempt or restoring a checkpoint never refunds work. Receipted
-kernel scans are charged once by epoch ownership; folded logical time is not a
-kernel evaluation. Research requests consume at least one work unit and retain
-their local caps. The allowance is not a wall-clock deadline. The assignment
-survey and frontier probes check the remaining allowance before scans.
+discarding an attempt or restoring a checkpoint never refunds work. Receipted scans are
+charged once by epoch ownership. A scan's price depends on its place in the search and never
+on which engine ran it (`coast_run.UNIT_SCANS_AT_START`). So a change to the loop cannot move
+an answer through the ledger. A stepped scan is a unit. So are a coast's first two scans
+and its landing. Its other scans are one unit per `STRETCH_SCANS_PER_UNIT`, interpreted or
+not. The runner names the interpreted ones (`_loop_priced_scans`), and
+`ExecutionSpan.loop_priced` carries them to the ledger. A coast no loop may ever run pays a
+unit a scan. The coast settles that after its first two scans, from the kernel gate
+(`_kernel_for`), a force and its stop predicate. When a stop predicate starts to read what no
+loop can watch, the rest of the coast pays a unit a scan. The scans at the loop's price are charged when their
+seek returns and never stop it (charging them by the scan would turn right answers into
+declines). A seek's unit scans stop at what the ledger has left. A seek's own budget counts scans, except a live wait under the plan's holds with a ledger that can pay for it
+(`CoastSession.loop_scans_per_unit`), which counts them as the ledger does: its timers' length
+is not what should end it, and the wall clock and the memory cap bound it. Research requests consume at least one
+work unit and retain their local caps. The allowance is not a wall-clock deadline;
+`WallClock` is one, on by default in `how()` and off in tests that assert answers. The
+assignment survey and frontier probes check the remaining allowance before scans.
+
+What a coast leaves behind has its cap in `coast_run.py`: kernels and paths in the memo,
+checkpoints on the runner (spaced wider inside a stretch, thinned past `MAX_CHECKPOINTS`),
+record runs (past `MAX_RECORD_RUNS` a stretch's scans settle when asked, or a named error
+past `SETTLE_SCAN_LIMIT`). What ends a search from under a question is a BaseException
+(`SearchOutOfTime`, `SearchOutOfMemory`, `SearchQuestionRefused`), so the `except Exception`
+around causal reads means only "no evidence" and cannot turn one of those into a verdict.
+An avoid check that raises on a real state travels the same way (`_AvoidCheckRaised`, from
+`avoid.py`), and `api.py` names it `AvoidCheckError` for the caller. A real state is the one
+how() starts from or a scan a trial really ran, failed trials included: a check that raised on
+one has not said it is clear, so no gate may read it as a pass. Any other state is only weighed,
+and a raise on it says nothing about the route: a hold or a route's demands laid over a state,
+the resting baseline, the state a trial stands on before it scans, and the state a restart lands
+on (`restart.py`). That member is not violated, the others keep their answers, and the gates
+judge the scans those choices lead to. Evaluate avoid
+through `avoid.py`, not by calling it, and pick by the state you hold: `_avoid_scan_names` and
+`_member_on_scan` for a real state, `_avoid_weighed_names`, `_member_weighed` and what is built
+on them (`_avoid_violations`, `route_forces`) for the rest.
 
 ## Attempt transaction
 
@@ -372,6 +435,25 @@ Prefer changes that make authority easier to see:
 Do not introduce a broad manager/facade merely to hide lifecycle complexity.
 When a decision moves, update the affected module docstrings and this document
 only if the cross-cutting contract changed.
+
+### When a stop turns out to be passable
+
+The pilot's tools mostly exist; what fails is how they compose. So when something
+gets past a `STOPPED` (a plain wait, one input change, a last-resort move), first
+ask which existing tool should have answered and why it was not asked. That is a
+fix to the normal pilot, not a new reader or engine. So far: a wait chose a timer
+that was not running although `AdvanceStep.progress` names the live one; `Pulse`
+feedback had no `AdvanceProfile`; intrascan interprets only failed effect
+expectations, so a prerequisite hold that promises nothing never asks it.
+
+A last resort is planned, not built, and these are its limits:
+
+- It stays small: wait, set an input, and later restart. It runs only when the
+  pilot is about to stop, so a plan that reaches without it cannot change.
+- It relaxes "absence of a diagnosis does not authorize motion" there and nowhere
+  else. Anything may be tried on a fork; only the result keeps it.
+- A `REACHED` plan must say when it relied on these moves, in `str(plan)`. Each
+  such plan names a gap to teach the normal pilot.
 
 Run:
 

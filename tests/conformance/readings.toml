@@ -1,0 +1,1748 @@
+# What the probes with no answer yet read on a real CLICK, oldest first, written by
+# `make test-conformance PLC=...`.  A case here is not confirmed: its range holds every
+# candidate, so a pass says nothing.  hash: the case's exported rows when it read this.
+# note: why a reading no longer counts (a bad paste).
+
+[[reading]]
+case = "out_more/zero_and_below"
+hash = "098fbd29c048"
+on = "2026-11-05"
+read = { Result1 = 3, Result2 = 7, ErrorCode = 0 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "baseline"
+read = { Result1 = 0, Result2 = 0, Result3 = 0 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "baseline"
+read = { Result1 = 95, Result2 = 0, Result3 = 3, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "baseline-battery-set"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "baseline-battery-set"
+read = { Result1 = 95, Result2 = 0, Result3 = 0, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "stop-run"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "stop-run"
+read = { Result1 = 95, Result2 = 0, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "power-cycle-battery"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "power-cycle-battery"
+read = { Result1 = 95, Result2 = 0, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+step = "power-cycle-no-battery"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+step = "power-cycle-no-battery"
+read = { Result1 = 95, Result2 = 0, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-05"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-05"
+read = { Result1 = 95, Result2 = 0, Result3 = 0, Result4 = 1 }
+
+[[reading]]
+case = "rtc_set/date_and_time_apply"
+hash = "d869d11c9355"
+on = "2026-11-05"
+read = { Result1 = 1, Result2 = 1, Result3 = 11, Result4 = 1, ErrorCode = 1 }
+
+[[reading]]
+case = "drum_limits/preset_from_ds"
+hash = "197d29eb89fa"
+on = "2026-11-05"
+note = "laddercodec mis-encoded the drum's DS presets in this paste (before a057062)"
+read = { Result2 = 1111, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "drum_limits/units"
+hash = "b229f1f7ef51"
+on = "2026-11-05"
+read = { Result2 = 2, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "drum_limits/single_step"
+hash = "b084f665e745"
+on = "2026-11-05"
+read = { Result2 = 1411, Result3 = 1414, Result4 = 14 }
+
+[[reading]]
+case = "drum_pins/event_and_jog"
+hash = "d17c8e9b5977"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 2222, Result3 = 2222 }
+
+[[reading]]
+case = "drum_pins/time_and_jog"
+hash = "9179854b5f82"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 2222, Result3 = 2222 }
+
+[[reading]]
+case = "drum_pins/end_and_jog_on_last"
+hash = "d1af1c7f35f0"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 2222, Result3 = 2222 }
+
+[[reading]]
+case = "drum_pins/last_time_and_jump"
+hash = "0dbda9ddcef4"
+on = "2026-11-05"
+read = { Result1 = 2222, Result2 = 1111, Result3 = 1111, Result4 = 0 }
+
+[[reading]]
+case = "drum_pins/last_event_and_jump"
+hash = "5fcbae70a997"
+on = "2026-11-05"
+read = { Result1 = 2222, Result2 = 1111, Result3 = 1111 }
+
+[[reading]]
+case = "drum_pins/acc_jog_completing"
+hash = "bc2828f9ca58"
+on = "2026-11-05"
+read = { Result2 = 0, Result3 = 9, Result4 = 0, ErrorCode = 2422 }
+
+[[reading]]
+case = "drum_pins/paused_jog_with_flag"
+hash = "aaadae683fe6"
+on = "2026-11-05"
+read = { Result1 = 1414, Result2 = 2424, Result3 = 2424, Result4 = 2424 }
+
+[[reading]]
+case = "drum_pins/paused_jog_with_flag_mid"
+hash = "6bc36f08e159"
+on = "2026-11-05"
+read = { Result1 = 1414, Result2 = 2424, Result3 = 2424, Result4 = 2424 }
+
+[[reading]]
+case = "drum_pins/paused_flag_moves"
+hash = "79b85ff89c39"
+on = "2026-11-05"
+read = { Result2 = 1414, Result3 = 1414, Result4 = 2424, ErrorCode = 2424 }
+
+[[reading]]
+case = "drum_branch/jump_to_bad_step"
+hash = "69efb9df2a64"
+on = "2026-11-05"
+read = { Result1 = 1111, Result2 = 1111, Result3 = 1111, ErrorCode = 9 }
+
+[[reading]]
+case = "drum_branch/jump_on_bad_step"
+hash = "c7b2c3d42a18"
+on = "2026-11-05"
+read = { Result1 = 2222, Result2 = 2222, Result3 = 2222, Result4 = 2222, ErrorCode = 5252 }
+
+[[reading]]
+case = "drum_branch/correction_with_flag"
+hash = "1c4fdc6c4bac"
+on = "2026-11-05"
+read = { Result2 = 1414, Result3 = 1414, Result4 = 5454, ErrorCode = 1414 }
+
+[[reading]]
+case = "drum_branch/flag_cleared"
+hash = "7f04a17fe297"
+on = "2026-11-05"
+read = { Result2 = 1010, Result3 = 2222, Result4 = 2222 }
+
+[[reading]]
+case = "drum_branch/reset_paths"
+hash = "f7bba5fd42fc"
+on = "2026-11-05"
+read = { Result2 = 1010, Result3 = 1111, Result4 = 1111, ErrorCode = 1111 }
+
+[[reading]]
+case = "drum_branch/written_and_paused_acc"
+hash = "ec902c90547e"
+on = "2026-11-05"
+read = { Result2 = 3333, Result3 = 9, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "drum_branch/event_rises_in_pause"
+hash = "97f89b78f612"
+on = "2026-11-05"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1122 }
+
+[[reading]]
+case = "drum_branch/te_event_before_time"
+hash = "839de1312cff"
+on = "2026-11-05"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1 }
+
+[[reading]]
+case = "drum_branch/drum_in_loop"
+hash = "b8eaae081f30"
+on = "2026-11-05"
+read = { Result2 = 30, Result3 = 2, Result4 = 2 }
+
+[[reading]]
+case = "fixed_scan/scan_setup"
+hash = "a02928677ee4"
+on = "2026-11-05"
+read = { Result1 = 1, Result2 = 100, Result3 = 100, Result4 = 100 }
+
+[[reading]]
+case = "fixed_scan/seconds_and_ms"
+hash = "99679db70be0"
+on = "2026-11-05"
+read = { Result1 = 10, Result2 = 10, Result3 = 100, Result4 = 100, ErrorCode = 1 }
+
+[[reading]]
+case = "fixed_scan/off_delay_and_drum"
+hash = "2f1b2471ec30"
+on = "2026-11-05"
+read = { Result1 = 10, Result2 = 11, Result3 = 100, Result4 = 100, ErrorCode = 1 }
+
+[[reading]]
+case = "real_sum/f64_row"
+hash = "efaaae94f85e"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "agg_more/rand_sites"
+hash = "eeb469b70006"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 7, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "real_sum/f64_row"
+hash = "efaaae94f85e"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "agg_more/rand_sites"
+hash = "eeb469b70006"
+on = "2026-11-05"
+read = { Result1 = 0, Result2 = 7, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "td_write/debounce_on_td_write"
+hash = "6932f80626b7"
+on = "2026-11-06"
+read = { Result1 = 102, Result2 = 551, Result3 = 1101 }
+
+[[reading]]
+case = "td_write/flasher_on_td_write"
+hash = "fe5403c1b564"
+on = "2026-11-06"
+read = { Result1 = 104, Result2 = 48, Result3 = 602, ErrorCode = 1 }
+
+[[reading]]
+case = "td_write/flasher_off_td_write"
+hash = "132547c76734"
+on = "2026-11-06"
+read = { Result1 = 354, Result2 = 602, Result3 = 69 }
+
+[[reading]]
+case = "flasher_off/ds_zero"
+hash = "aaa5cd0701fb"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 0, Result3 = 59, Result4 = 10, ErrorCode = 0 }
+
+[[reading]]
+case = "flasher_off/ds_minus_five"
+hash = "657f5a11dd65"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 0, Result3 = 60, Result4 = 10, ErrorCode = 0 }
+
+[[reading]]
+case = "txt_end/by_pointer"
+hash = "9ac86deb6611"
+on = "2026-11-06"
+read = { Result1 = 6318, Result2 = 6832, Result3 = 6192, Result4 = 12, ErrorCode = 90 }
+
+[[reading]]
+case = "flag_boxes/boxes_by_pointer"
+hash = "ea2810b23b50"
+on = "2026-11-06"
+read = { Result1 = 31, Result2 = 0, Result3 = 0, Result4 = 7 }
+
+[[reading]]
+case = "flag_boxes/ton_ctu_by_pointer"
+hash = "2d5b7aea4626"
+on = "2026-11-06"
+read = { Result1 = 1, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/bulk_ops_settle_sc43"
+hash = "e0212f018121"
+on = "2026-11-06"
+read = { Result1 = 127, Result2 = 1 }
+
+[[reading]]
+case = "flag_halves/oneshot_settles_sc43"
+hash = "628531fc6aae"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/source_sc43"
+hash = "6210bddfeeda"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/df_into_dd"
+hash = "0cc3cee5e95f"
+on = "2026-11-06"
+read = { Result1 = 1, Result2 = 21474, Result3 = 0 }
+
+[[reading]]
+case = "bad_jump/bad_target_takes_the_scan"
+hash = "9fd17b878fe1"
+on = "2026-11-06"
+read = { Result1 = 1111, Result2 = 2222, Result3 = 5252, Result4 = 1212, ErrorCode = 1212 }
+
+[[reading]]
+case = "drum_preset/entry_or_first_timing_scan"
+hash = "2a12e58df5b2"
+on = "2026-11-06"
+note = "laddercodec mis-encoded the drum's DS presets in this paste (before a057062)"
+read = { Result1 = 2, Result2 = 2, Result3 = 1 }
+
+[[reading]]
+case = "drum_preset/literal_zero"
+hash = "f8dbd835f910"
+on = "2026-11-06"
+read = { Result1 = 2, Result2 = 2 }
+
+[[reading]]
+case = "deb_zero/off_side_lag"
+hash = "c956c3e4e705"
+on = "2026-11-06"
+read = { Result1 = 4076, Result2 = 3784, Result3 = 3784, ErrorCode = 3784 }
+
+[[reading]]
+case = "coil_timing/off_td_held"
+hash = "5964c0847ba9"
+on = "2026-11-06"
+read = { Result1 = 1, Result2 = 2, Result3 = 101 }
+
+[[reading]]
+case = "coil_timing/deb_off_against_tof"
+hash = "e89e49dc5d9f"
+on = "2026-11-06"
+read = { Result1 = 6, Result2 = 5, ErrorCode = 1 }
+
+[[reading]]
+case = "word_floor/below_int_and_nan"
+hash = "d6712610f662"
+on = "2026-11-06"
+read = { Result1 = 2, Result2 = 2, Result3 = 1, Result4 = 1, ErrorCode = 0 }
+
+[[reading]]
+case = "math_terms/wide_values"
+hash = "ffda29ef697c"
+on = "2026-11-06"
+read = { Result1 = 3, Result2 = 0, Result3 = 3, Result4 = 1, ErrorCode = 24 }
+
+[[reading]]
+case = "math_terms/error_terms"
+hash = "2686cc91e0c4"
+on = "2026-11-06"
+read = { Result1 = 5, Result2 = 5, Result3 = 5, Result4 = 0, ErrorCode = 7 }
+
+[[reading]]
+case = "math_terms/error_terms_real"
+hash = "d383712164f5"
+on = "2026-11-06"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 50, ErrorCode = 50 }
+
+[[reading]]
+case = "search_more/oneshot_against_dd_result"
+hash = "e6b28f16a22c"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 11, Result3 = 0, Result4 = 13, ErrorCode = 10 }
+
+[[reading]]
+case = "real_text/one_and_a_half_first"
+hash = "31729bcf8c0f"
+on = "2026-11-06"
+read = { Result1 = 6318, Result2 = 6832, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/one_and_a_half_past"
+hash = "e4f7ffe032fe"
+on = "2026-11-06"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/minus_quarter_first"
+hash = "14197c1b118f"
+on = "2026-11-06"
+read = { Result1 = 5808, Result2 = 5938, Result3 = 6832, Result4 = 6192, ErrorCode = 6192 }
+
+[[reading]]
+case = "real_text/minus_quarter_past"
+hash = "614570fe0435"
+on = "2026-11-06"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/zero_first"
+hash = "9c88b0f5449e"
+on = "2026-11-06"
+read = { Result1 = 6190, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/six_digits_first"
+hash = "c8312e830713"
+on = "2026-11-06"
+read = { Result1 = 6322, Result2 = 6580, Result3 = 6838, Result4 = 5943, ErrorCode = 6195 }
+
+[[reading]]
+case = "real_text/six_digits_past"
+hash = "6f764024e7b0"
+on = "2026-11-06"
+read = { Result1 = 6322, Result2 = 6832, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/ten_billion_first"
+hash = "b8f0aaf85f1c"
+on = "2026-11-06"
+read = { Result1 = 6320, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6192 }
+
+[[reading]]
+case = "real_text/ten_billion_past"
+hash = "0e978b9961ad"
+on = "2026-11-06"
+read = { Result1 = 6190, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/round_value_past"
+hash = "28e0058f3e60"
+on = "2026-11-06"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "past_clean/clear_then_write"
+hash = "52e6caa4e8a6"
+on = "2026-11-06"
+read = { Result1 = 0, Result2 = 1234, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "for_dd_minus/minus_one_count"
+hash = "354a0eb0e644"
+on = "2026-11-06"
+read = { Result1 = 1, Result2 = 1, Result3 = 0 }
+
+[[reading]]
+case = "boot_read/what_survives"
+hash = "6edfe50f0cbb"
+on = "2026-11-07"
+step = "load 2026-11-07"
+read = { Result1 = 764, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "boot_read/first_scan_edges"
+hash = "c7f3d8233e4c"
+on = "2026-11-07"
+step = "load 2026-11-07"
+read = { Result1 = 95, Result2 = 0, Result3 = 35, Result4 = 1 }
+
+[[reading]]
+case = "rtc_set/date_and_time_apply"
+hash = "efe7146a9620"
+on = "2026-11-07"
+step = "load 2026-11-07"
+read = { Result1 = 1, Result2 = 1, Result3 = 11, Result4 = 1, ErrorCode = 1 }
+
+[[reading]]
+case = "real_sum/f64_row"
+hash = "efaaae94f85e"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "drum_branch/correction_with_flag"
+hash = "1c4fdc6c4bac"
+on = "2026-11-09"
+read = { Result2 = 1414, Result3 = 1414, Result4 = 5454, ErrorCode = 1414 }
+
+[[reading]]
+case = "drum_branch/flag_cleared"
+hash = "7f04a17fe297"
+on = "2026-11-09"
+read = { Result2 = 1010, Result3 = 2222, Result4 = 2222 }
+
+[[reading]]
+case = "drum_branch/reset_paths"
+hash = "f7bba5fd42fc"
+on = "2026-11-09"
+read = { Result2 = 1010, Result3 = 1111, Result4 = 1111, ErrorCode = 1111 }
+
+[[reading]]
+case = "drum_branch/written_and_paused_acc"
+hash = "ec902c90547e"
+on = "2026-11-09"
+read = { Result2 = 3333, Result3 = 9, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "drum_branch/event_rises_in_pause"
+hash = "97f89b78f612"
+on = "2026-11-09"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1122 }
+
+[[reading]]
+case = "drum_branch/te_event_before_time"
+hash = "839de1312cff"
+on = "2026-11-09"
+read = { Result2 = 1111, Result3 = 1122, Result4 = 1 }
+
+[[reading]]
+case = "drum_branch/drum_in_loop"
+hash = "b8eaae081f30"
+on = "2026-11-09"
+read = { Result2 = 30, Result3 = 2, Result4 = 2 }
+
+[[reading]]
+case = "flag_boxes/boxes_by_pointer"
+hash = "4581e8852792"
+on = "2026-11-09"
+read = { Result1 = 31, Result2 = 0, Result3 = 0, Result4 = 7 }
+
+[[reading]]
+case = "flag_boxes/ton_ctu_by_pointer"
+hash = "2d5b7aea4626"
+on = "2026-11-09"
+read = { Result1 = 1, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/bulk_ops_settle_sc43"
+hash = "e0212f018121"
+on = "2026-11-09"
+read = { Result1 = 127, Result2 = 1 }
+
+[[reading]]
+case = "flag_halves/oneshot_settles_sc43"
+hash = "628531fc6aae"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/source_sc43"
+hash = "6210bddfeeda"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 1, Result3 = 1 }
+
+[[reading]]
+case = "flag_halves/df_into_dd"
+hash = "0cc3cee5e95f"
+on = "2026-11-09"
+read = { Result1 = 1, Result2 = 21474, Result3 = 0 }
+
+[[reading]]
+case = "real_text/one_and_a_half_first"
+hash = "31729bcf8c0f"
+on = "2026-11-09"
+read = { Result1 = 6318, Result2 = 6832, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/one_and_a_half_past"
+hash = "e4f7ffe032fe"
+on = "2026-11-09"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/minus_quarter_first"
+hash = "14197c1b118f"
+on = "2026-11-09"
+read = { Result1 = 5808, Result2 = 5938, Result3 = 6832, Result4 = 6192, ErrorCode = 6192 }
+
+[[reading]]
+case = "real_text/minus_quarter_past"
+hash = "614570fe0435"
+on = "2026-11-09"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/zero_first"
+hash = "9c88b0f5449e"
+on = "2026-11-09"
+read = { Result1 = 6190, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/six_digits_first"
+hash = "c8312e830713"
+on = "2026-11-09"
+read = { Result1 = 6322, Result2 = 6580, Result3 = 6838, Result4 = 5943, ErrorCode = 6195 }
+
+[[reading]]
+case = "real_text/six_digits_past"
+hash = "6f764024e7b0"
+on = "2026-11-09"
+read = { Result1 = 6322, Result2 = 6832, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "real_text/ten_billion_first"
+hash = "b8f0aaf85f1c"
+on = "2026-11-09"
+read = { Result1 = 6320, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6192 }
+
+[[reading]]
+case = "real_text/ten_billion_past"
+hash = "0e978b9961ad"
+on = "2026-11-09"
+read = { Result1 = 6190, Result2 = 6192, Result3 = 6192, Result4 = 6192, ErrorCode = 6234 }
+
+[[reading]]
+case = "real_text/round_value_past"
+hash = "28e0058f3e60"
+on = "2026-11-09"
+read = { Result1 = 11610, Result2 = 11610, Result3 = 11610, Result4 = 11610, ErrorCode = 11610 }
+
+[[reading]]
+case = "past_clean/clear_then_write"
+hash = "52e6caa4e8a6"
+on = "2026-11-09"
+read = { Result1 = 0, Result2 = 1234, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "modbus_raw/raw_values"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { Result1 = 65, Result2 = 200, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "modbus_raw/staged_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH101" = 0, "DH102" = 32640 } } }
+
+[[reading]]
+case = "modbus_raw/staged_minus_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0xFF80"], "decoded" = "-inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFF80"], "decoded" = { "DH103" = 0, "DH104" = 65408 } } }
+
+[[reading]]
+case = "modbus_raw/staged_nan"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH105" = 65535, "DH106" = 65535 } } }
+
+[[reading]]
+case = "modbus_raw/staged_df"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x4020"], "decoded" = { "DH107" = 0, "DH108" = 16416 } } }
+
+[[reading]]
+case = "modbus_raw/staged_dd"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "dd" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "echo" = { "bank" = "DH", "raw" = ["0x0002", "0x0001"], "decoded" = { "DH109" = 2, "DH110" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/staged_txt"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "txt" = { "bank" = "TXT", "raw" = ["0x4241", "0x00C8"], "decoded" = { "TXT401" = "'A'", "TXT402" = "'B'", "TXT403" = "'\\xc8'", "TXT404" = "'\\x00'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x0042"], "decoded" = 66 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/df_all_ones"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF111 [0xFFFF, 0xFFFF]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH111" = 65535, "DH112" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_quiet_nan"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF112 [0x0000, 0x7FC0]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7FC0"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7FC0"], "decoded" = { "DH113" = 0, "DH114" = 32704 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF113 [0x0000, 0x7F80]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH115" = 0, "DH116" = 32640 } }, "score" = { "bank" = "DS", "raw" = ["0x0003"], "decoded" = 3 } }
+
+[[reading]]
+case = "modbus_raw/df_half_first"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DF114 first register 0x0000, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFFFF"], "decoded" = { "DH117" = 0, "DH118" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_half_second"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DF115 second register 0x4020, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0x4020"], "decoded" = "2.515624761581421" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0x4020"], "decoded" = { "DH119" = 65535, "DH120" = 16416 } }, "score" = { "bank" = "DS", "raw" = ["0x0001"], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/txt_high_byte"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 TXT405/TXT406 register 0xC841", "before" = { "bank" = "TXT", "raw" = ["0x5A59"], "decoded" = { "TXT405" = "'Y'", "TXT406" = "'Z'" } }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "TXT", "raw" = ["0xC841"], "decoded" = { "TXT405" = "'A'", "TXT406" = "'\\xc8'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/dd_half"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DD203 first register 0x0005", "before" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DD", "raw" = ["0x0005", "0x0001"], "decoded" = 65541 }, "echo" = { "bank" = "DH", "raw" = ["0x0005", "0x0001"], "decoded" = { "DH121" = 5, "DH122" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/dd_straddle"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 [0x0009, 0x0008] at the second register of DD205", "before" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, { "bank" = "DD", "raw" = ["0x0004", "0x0003"], "decoded" = 196612 }], "answer" = "ok", "settled" = 1, "after" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0009"], "decoded" = 589826 }, { "bank" = "DD", "raw" = ["0x0008", "0x0003"], "decoded" = 196616 }], "echo" = [{ "bank" = "DH", "raw" = ["0x0002", "0x0009"], "decoded" = { "DH123" = 2, "DH124" = 9 } }, { "bank" = "DH", "raw" = ["0x0008", "0x0003"], "decoded" = { "DH125" = 8, "DH126" = 3 } }] }
+
+[[reading]]
+case = "modbus_raw/fc16_past_ds"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 [7, 8] at DS4500 and the register past it", "before" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/fc15_sc53_sc54"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "before" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "today" = { "SD19" = { "bank" = "SD", "raw" = ["0x07EA"], "decoded" = 2026 }, "SD21" = { "bank" = "SD", "raw" = ["0x000B"], "decoded" = 11 }, "SD22" = { "bank" = "SD", "raw" = ["0x000A"], "decoded" = 10 } }, "date_before" = { "SD29" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD31" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD32" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 } }, "date_set" = ["ok", "ok", "ok"], "date_set_to_today" = 1, "request" = "FC15 [1, 0] at SC53..SC54", "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "sc53_off" = "ok", "date_restored" = ["ok", "ok", "ok"] }
+
+[[reading]]
+case = "modbus_raw/fc05_sc1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC05 OFF to SC1", "before" = { "bank" = "SC", "raw" = [1], "decoded" = 1 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [1], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/fc06_sd_read_only"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD5 = 0x0001", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/fc03_past_ds"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc03_across_ds_end"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc01_past_c2000"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "C", "raw" = "exception 02", "decoded" = "error ValueError: C must be in [1, 2000]" }
+
+[[reading]]
+case = "modbus_raw/fc01_y_gap"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "Y", "raw" = [0], "decoded" = "error ValueError: Y address must be *01-*16." }
+
+[[reading]]
+case = "modbus_raw/fc15_across_c_end"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC15 four ON at C1999..C2002", "before" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/fc03_at_xd"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc04_at_ds1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = ["0x10AC"], "decoded" = 4268 }
+
+[[reading]]
+case = "modbus_raw/fc01_at_x001"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "X", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc02_at_c1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "C", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/xd_x17"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "XD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "XD0" = 0, "XD1" = 0, "XD2" = 0, "XD3" = 0, "XD4" = 0, "XD5" = 0, "XD6" = 0, "XD7" = 0, "XD8" = 0 }, "upper" = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = { "XD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_x17"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "YD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "YD0" = 0, "YD1" = 0, "YD2" = 0, "YD3" = 0, "YD4" = 0, "YD5" = 0, "YD6" = 0, "YD7" = 0, "YD8" = 0 }, "upper" = { "bank" = "YD", "raw" = ["0x0000"], "decoded" = { "YD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_odd_write"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "skipped" = "not sent: set PYRUNG_CONFORMANCE_OUTPUTS=1 to send it" }
+
+[[reading]]
+case = "modbus_raw/sd29_write"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "sc53" = { "bank" = "SC", "raw" = [0], "decoded" = 0 }, "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD29 = 1", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/past_bank_alias"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "dd1001_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "dd1531_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_found" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "after_dd" = { "dh_pattern" = { "bank" = "DH", "raw" = ["0x1357", "0x2468"], "decoded" = { "DH127" = 4951, "DH128" = 9320 } }, "dd1064_by_pointer" = { "bank" = "DD", "raw" = ["0x1357", "0x0000"], "decoded" = 4951 }, "if_dh_low_word_first" = 610800471, "if_dh_high_word_first" = 324478056 }, "dd1001_after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "fc16" = "exception 02", "after_fc16" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_fc16" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "after_clear" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_clear" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "settled" = 1 }
+
+[[reading]]
+case = "modbus_raw/fc03_x126"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "raw" = "exception 03", "decoded" = "error ValueError: 1 < count 126 < 125 !" }
+
+[[reading]]
+case = "modbus_raw/fc15_x1969"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "read" = { "raw" = { "count" = 1969, "first" = 0 }, "decoded" = { "count" = 1969, "first" = 0 } }, "values" = "C1..C1969 as read", "answer" = "exception 03" }
+
+[[reading]]
+case = "modbus_raw/fc03_x200"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "raw" = "exception 03", "decoded" = "error ValueError: 1 < count 200 < 125 !" }
+
+[[reading]]
+case = "modbus_raw/disagree"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "lines" = ["fc01_y_gap: raw [0], pyclickplc error ValueError: Y address must be *01-*16."] }
+
+[[reading]]
+case = "modbus_raw/raw_values"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { Result1 = 65, Result2 = 200, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "modbus_raw/staged_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH101" = 0, "DH102" = 32640 } } }
+
+[[reading]]
+case = "modbus_raw/staged_minus_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0xFF80"], "decoded" = "-inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFF80"], "decoded" = { "DH103" = 0, "DH104" = 65408 } } }
+
+[[reading]]
+case = "modbus_raw/staged_nan"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH105" = 65535, "DH106" = 65535 } } }
+
+[[reading]]
+case = "modbus_raw/staged_df"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x4020"], "decoded" = { "DH107" = 0, "DH108" = 16416 } } }
+
+[[reading]]
+case = "modbus_raw/staged_dd"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "dd" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "echo" = { "bank" = "DH", "raw" = ["0x0002", "0x0001"], "decoded" = { "DH109" = 2, "DH110" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/staged_txt"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "txt" = { "bank" = "TXT", "raw" = ["0x4241", "0x00C8"], "decoded" = { "TXT401" = "'A'", "TXT402" = "'B'", "TXT403" = "'\\xc8'", "TXT404" = "'\\x00'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x0042"], "decoded" = 66 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/df_all_ones"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF111 [0xFFFF, 0xFFFF]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH111" = 65535, "DH112" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_quiet_nan"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF112 [0x0000, 0x7FC0]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7FC0"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7FC0"], "decoded" = { "DH113" = 0, "DH114" = 32704 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF113 [0x0000, 0x7F80]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH115" = 0, "DH116" = 32640 } }, "score" = { "bank" = "DS", "raw" = ["0x0003"], "decoded" = 3 } }
+
+[[reading]]
+case = "modbus_raw/df_half_first"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DF114 first register 0x0000, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFFFF"], "decoded" = { "DH117" = 0, "DH118" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_half_second"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DF115 second register 0x4020, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0x4020"], "decoded" = "2.515624761581421" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0x4020"], "decoded" = { "DH119" = 65535, "DH120" = 16416 } }, "score" = { "bank" = "DS", "raw" = ["0x0001"], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/txt_high_byte"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 TXT405/TXT406 register 0xC841", "before" = { "bank" = "TXT", "raw" = ["0x5A59"], "decoded" = { "TXT405" = "'Y'", "TXT406" = "'Z'" } }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "TXT", "raw" = ["0xC841"], "decoded" = { "TXT405" = "'A'", "TXT406" = "'\\xc8'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/dd_half"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DD203 first register 0x0005", "before" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DD", "raw" = ["0x0005", "0x0001"], "decoded" = 65541 }, "echo" = { "bank" = "DH", "raw" = ["0x0005", "0x0001"], "decoded" = { "DH121" = 5, "DH122" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/dd_straddle"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 [0x0009, 0x0008] at the second register of DD205", "before" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, { "bank" = "DD", "raw" = ["0x0004", "0x0003"], "decoded" = 196612 }], "answer" = "ok", "settled" = 1, "after" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0009"], "decoded" = 589826 }, { "bank" = "DD", "raw" = ["0x0008", "0x0003"], "decoded" = 196616 }], "echo" = [{ "bank" = "DH", "raw" = ["0x0002", "0x0009"], "decoded" = { "DH123" = 2, "DH124" = 9 } }, { "bank" = "DH", "raw" = ["0x0008", "0x0003"], "decoded" = { "DH125" = 8, "DH126" = 3 } }] }
+
+[[reading]]
+case = "modbus_raw/fc16_past_ds"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 [7, 8] at DS4500 and the register past it", "before" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/fc15_sc53_sc54"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "before" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "today" = { "SD19" = { "bank" = "SD", "raw" = ["0x07EA"], "decoded" = 2026 }, "SD21" = { "bank" = "SD", "raw" = ["0x000B"], "decoded" = 11 }, "SD22" = { "bank" = "SD", "raw" = ["0x000A"], "decoded" = 10 } }, "date_before" = { "SD29" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD31" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD32" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 } }, "date_set" = ["ok", "ok", "ok"], "date_set_to_today" = 1, "request" = "FC15 [1, 0] at SC53..SC54", "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "sc53_off" = "ok", "date_restored" = ["ok", "ok", "ok"] }
+
+[[reading]]
+case = "modbus_raw/fc05_sc1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC05 OFF to SC1", "before" = { "bank" = "SC", "raw" = [1], "decoded" = 1 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [1], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/fc06_sd_read_only"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD5 = 0x0001", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/fc03_past_ds"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc03_across_ds_end"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc01_past_c2000"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "C", "raw" = "exception 02", "decoded" = "error ValueError: C must be in [1, 2000]" }
+
+[[reading]]
+case = "modbus_raw/fc01_y_gap"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "Y", "raw" = [0], "decoded" = "error ValueError: Y address must be *01-*16." }
+
+[[reading]]
+case = "modbus_raw/fc15_across_c_end"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC15 four ON at C1999..C2002", "before" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/fc03_at_xd"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc04_at_ds1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = ["0x10AC"], "decoded" = 4268 }
+
+[[reading]]
+case = "modbus_raw/fc01_at_x001"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "X", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc02_at_c1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "C", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/xd_x17"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "XD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "XD0" = 0, "XD1" = 0, "XD2" = 0, "XD3" = 0, "XD4" = 0, "XD5" = 0, "XD6" = 0, "XD7" = 0, "XD8" = 0 }, "upper" = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = { "XD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_x17"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "YD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "YD0" = 0, "YD1" = 0, "YD2" = 0, "YD3" = 0, "YD4" = 0, "YD5" = 0, "YD6" = 0, "YD7" = 0, "YD8" = 0 }, "upper" = { "bank" = "YD", "raw" = ["0x0000"], "decoded" = { "YD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_odd_write"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 0x8000 to YD register 3", "before" = { "yd1" = { "bank" = "YD", "raw" = ["0x0000"], "decoded" = 0 }, "register_3" = { "raw" = ["0x0000"], "decoded" = "none: pyclickplc names no register here" } }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "YD", "raw" = ["0x0000", "0x8000"], "decoded" = 0 }, "restored" = ["ok", "ok"] }
+
+[[reading]]
+case = "modbus_raw/sd29_write"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "sc53" = { "bank" = "SC", "raw" = [0], "decoded" = 0 }, "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD29 = 1", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/past_bank_alias"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "dd1001_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "dd1531_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_found" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "after_dd" = { "dh_pattern" = { "bank" = "DH", "raw" = ["0x1357", "0x2468"], "decoded" = { "DH127" = 4951, "DH128" = 9320 } }, "dd1064_by_pointer" = { "bank" = "DD", "raw" = ["0x1357", "0x0000"], "decoded" = 4951 }, "if_dh_low_word_first" = 610800471, "if_dh_high_word_first" = 324478056 }, "dd1001_after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "fc16" = "exception 02", "after_fc16" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_fc16" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "after_clear" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_clear" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "settled" = 1 }
+
+[[reading]]
+case = "modbus_raw/fc03_x126"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "raw" = "exception 03", "decoded" = "error ValueError: 1 < count 126 < 125 !" }
+
+[[reading]]
+case = "modbus_raw/fc15_x1969"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "read" = { "raw" = { "count" = 1969, "first" = 0 }, "decoded" = { "count" = 1969, "first" = 0 } }, "values" = "C1..C1969 as read", "answer" = "exception 03" }
+
+[[reading]]
+case = "modbus_raw/fc03_x200"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "raw" = "exception 03", "decoded" = "error ValueError: 1 < count 200 < 125 !" }
+
+[[reading]]
+case = "modbus_raw/disagree"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "lines" = ["fc01_y_gap: raw [0], pyclickplc error ValueError: Y address must be *01-*16."] }
+
+[[reading]]
+case = "modbus_raw/raw_values"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { Result1 = 65, Result2 = 200, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "modbus_raw/staged_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH101" = 0, "DH102" = 32640 } } }
+
+[[reading]]
+case = "modbus_raw/staged_minus_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0xFF80"], "decoded" = "-inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFF80"], "decoded" = { "DH103" = 0, "DH104" = 65408 } } }
+
+[[reading]]
+case = "modbus_raw/staged_nan"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH105" = 65535, "DH106" = 65535 } } }
+
+[[reading]]
+case = "modbus_raw/staged_df"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x4020"], "decoded" = { "DH107" = 0, "DH108" = 16416 } } }
+
+[[reading]]
+case = "modbus_raw/staged_dd"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "dd" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "echo" = { "bank" = "DH", "raw" = ["0x0002", "0x0001"], "decoded" = { "DH109" = 2, "DH110" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/staged_txt"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "txt" = { "bank" = "TXT", "raw" = ["0x4241", "0x00C8"], "decoded" = { "TXT401" = "'A'", "TXT402" = "'B'", "TXT403" = "'\\xc8'", "TXT404" = "'\\x00'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x0042"], "decoded" = 66 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/df_all_ones"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF111 [0xFFFF, 0xFFFF]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH111" = 65535, "DH112" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_quiet_nan"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF112 [0x0000, 0x7FC0]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7FC0"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7FC0"], "decoded" = { "DH113" = 0, "DH114" = 32704 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_inf"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 DF113 [0x0000, 0x7F80]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH115" = 0, "DH116" = 32640 } }, "score" = { "bank" = "DS", "raw" = ["0x0003"], "decoded" = 3 } }
+
+[[reading]]
+case = "modbus_raw/df_half_first"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DF114 first register 0x0000, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFFFF"], "decoded" = { "DH117" = 0, "DH118" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_half_second"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DF115 second register 0x4020, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0x4020"], "decoded" = "2.515624761581421" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0x4020"], "decoded" = { "DH119" = 65535, "DH120" = 16416 } }, "score" = { "bank" = "DS", "raw" = ["0x0001"], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/txt_high_byte"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 TXT405/TXT406 register 0xC841", "before" = { "bank" = "TXT", "raw" = ["0x5A59"], "decoded" = { "TXT405" = "'Y'", "TXT406" = "'Z'" } }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "TXT", "raw" = ["0xC841"], "decoded" = { "TXT405" = "'A'", "TXT406" = "'\\xc8'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/dd_half"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC06 DD203 first register 0x0005", "before" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DD", "raw" = ["0x0005", "0x0001"], "decoded" = 65541 }, "echo" = { "bank" = "DH", "raw" = ["0x0005", "0x0001"], "decoded" = { "DH121" = 5, "DH122" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/dd_straddle"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 [0x0009, 0x0008] at the second register of DD205", "before" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, { "bank" = "DD", "raw" = ["0x0004", "0x0003"], "decoded" = 196612 }], "answer" = "ok", "settled" = 1, "after" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0009"], "decoded" = 589826 }, { "bank" = "DD", "raw" = ["0x0008", "0x0003"], "decoded" = 196616 }], "echo" = [{ "bank" = "DH", "raw" = ["0x0002", "0x0009"], "decoded" = { "DH123" = 2, "DH124" = 9 } }, { "bank" = "DH", "raw" = ["0x0008", "0x0003"], "decoded" = { "DH125" = 8, "DH126" = 3 } }] }
+
+[[reading]]
+case = "modbus_raw/fc16_past_ds"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC16 [7, 8] at DS4500 and the register past it", "before" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/fc15_sc53_sc54"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "before" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "today" = { "SD19" = { "bank" = "SD", "raw" = ["0x07EA"], "decoded" = 2026 }, "SD21" = { "bank" = "SD", "raw" = ["0x000B"], "decoded" = 11 }, "SD22" = { "bank" = "SD", "raw" = ["0x000A"], "decoded" = 10 } }, "date_before" = { "SD29" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD31" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD32" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 } }, "date_set" = ["ok", "ok", "ok"], "date_set_to_today" = 1, "request" = "FC15 [1, 0] at SC53..SC54", "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "sc53_off" = "ok", "date_restored" = ["ok", "ok", "ok"] }
+
+[[reading]]
+case = "modbus_raw/fc05_sc1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC05 OFF to SC1", "before" = { "bank" = "SC", "raw" = [1], "decoded" = 1 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [1], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/fc06_sd_read_only"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD5 = 0x0001", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/fc03_past_ds"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc03_across_ds_end"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc01_past_c2000"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "C", "raw" = "exception 02", "decoded" = "error ValueError: C must be in [1, 2000]" }
+
+[[reading]]
+case = "modbus_raw/fc01_y_gap"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "Y", "raw" = [0], "decoded" = "error ValueError: Y address must be *01-*16." }
+
+[[reading]]
+case = "modbus_raw/fc15_across_c_end"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "request" = "FC15 four ON at C1999..C2002", "before" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/fc03_at_xd"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc04_at_ds1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "DS", "raw" = ["0x10AC"], "decoded" = 4268 }
+
+[[reading]]
+case = "modbus_raw/fc01_at_x001"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "X", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc02_at_c1"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "C", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/xd_x17"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "XD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "XD0" = 0, "XD1" = 0, "XD2" = 0, "XD3" = 0, "XD4" = 0, "XD5" = 0, "XD6" = 0, "XD7" = 0, "XD8" = 0 }, "upper" = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = { "XD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_x17"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "bank" = "YD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "YD0" = 0, "YD1" = 0, "YD2" = 0, "YD3" = 0, "YD4" = 0, "YD5" = 0, "YD6" = 0, "YD7" = 0, "YD8" = 0 }, "upper" = { "bank" = "YD", "raw" = ["0x0000"], "decoded" = { "YD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_odd_write"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "skipped" = "not sent: set PYRUNG_CONFORMANCE_OUTPUTS=1 to send it" }
+
+[[reading]]
+case = "modbus_raw/sd29_write"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "sc53" = { "bank" = "SC", "raw" = [0], "decoded" = 0 }, "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD29 = 1", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/past_bank_alias"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "dd1001_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "dd1531_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_found" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "after_dd" = { "dh_pattern" = { "bank" = "DH", "raw" = ["0x1357", "0x2468"], "decoded" = { "DH127" = 4951, "DH128" = 9320 } }, "dd1064_by_pointer" = { "bank" = "DD", "raw" = ["0x1357", "0x0000"], "decoded" = 4951 }, "if_dh_low_word_first" = 610800471, "if_dh_high_word_first" = 324478056 }, "dd1001_after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "fc16" = "exception 02", "after_fc16" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_fc16" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "after_clear" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_clear" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "settled" = 1 }
+
+[[reading]]
+case = "modbus_raw/fc03_x126"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "raw" = "exception 03", "decoded" = "error ValueError: 1 < count 126 < 125 !" }
+
+[[reading]]
+case = "modbus_raw/fc15_x1969"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "read" = { "raw" = { "count" = 1969, "first" = 0 }, "decoded" = { "count" = 1969, "first" = 0 } }, "values" = "C1..C1969 as read", "answer" = "exception 03" }
+
+[[reading]]
+case = "modbus_raw/fc03_x200"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "raw" = "exception 03", "decoded" = "error ValueError: 1 < count 200 < 125 !" }
+
+[[reading]]
+case = "modbus_raw/sc51_watchdog_reset"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "answer" = "exception 02", "off" = "exception 02", "sc11" = { "bank" = "SC", "raw" = [1], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/sc50_stop"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "answer" = "exception 02", "sc11" = { "bank" = "SC", "raw" = [1], "decoded" = 1 }, "off" = "exception 02" }
+
+[[reading]]
+case = "modbus_raw/disagree"
+hash = "2f80cef5effa"
+on = "2026-11-10"
+read = { "lines" = ["fc01_y_gap: raw [0], pyclickplc error ValueError: Y address must be *01-*16."] }
+
+[[reading]]
+case = "flag_carry/math_flags_carry"
+hash = "a7ab8555c3ed"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "deb_fall/off_td_at_fall"
+hash = "7b890481b0aa"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flash_zero/off_zero_first_phase"
+hash = "a232bccf8b91"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/on_zero_tds"
+hash = "a766ced20531"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/lowered_to_zero"
+hash = "bc13c7a0b990"
+on = "2026-11-10"
+read = { Result1 = 1260, Result2 = 1260, Result3 = 907, Result4 = 907, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/short_first_phase"
+hash = "450542b15add"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 2 }
+
+[[reading]]
+case = "tof_rewrite/done_after_td_zeroed"
+hash = "07e090c7e750"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 1, Result3 = 1, Result4 = 34 }
+
+[[reading]]
+case = "deb_fall/off_td_at_fall"
+hash = "7b890481b0aa"
+on = "2026-11-10"
+read = { Result1 = 2, Result2 = 3, Result3 = 1 }
+
+[[reading]]
+case = "flash_zero/off_zero_first_phase"
+hash = "a232bccf8b91"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/on_zero_tds"
+hash = "a766ced20531"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/lowered_to_zero"
+hash = "bc13c7a0b990"
+on = "2026-11-10"
+read = { Result1 = 1260, Result2 = 1260, Result3 = 908, Result4 = 908, ErrorCode = 0 }
+
+[[reading]]
+case = "flash_zero/short_first_phase"
+hash = "450542b15add"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "tof_rewrite/done_after_td_zeroed"
+hash = "07e090c7e750"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 1, Result3 = 2, Result4 = 33 }
+
+[[reading]]
+case = "drum_ds/ds_preset_ends"
+hash = "7226a50f5a69"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 2, Result4 = 2 }
+
+[[reading]]
+case = "jump_return/bad_jump_on_return"
+hash = "7f673e8ef774"
+on = "2026-11-10"
+read = { Result1 = 2222, Result2 = 2020, Result3 = 2020, Result4 = 2020, ErrorCode = 2222 }
+
+[[reading]]
+case = "flag_steps/sc44_steps"
+hash = "19d6320f69d0"
+on = "2026-11-10"
+read = { Result1 = 1005, Result2 = 1005, Result3 = 0 }
+
+[[reading]]
+case = "flag_steps/sc43_steps"
+hash = "498f241238ae"
+on = "2026-11-10"
+read = { Result1 = 1005, Result2 = 1005, Result3 = 0 }
+
+[[reading]]
+case = "flag_steps/sc40_steps"
+hash = "d2643c0b871e"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 0 }
+
+[[reading]]
+case = "for_signed/minus_counts"
+hash = "3a508c407b9b"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 1, Result3 = 1, Result4 = 1, ErrorCode = 1 }
+
+[[reading]]
+case = "flag_reads/unpowered_division"
+hash = "18e158aefb39"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 0, Result3 = 1 }
+
+[[reading]]
+case = "flag_reads/oneshot_held"
+hash = "bf5888d3d92f"
+on = "2026-11-10"
+read = { Result1 = 5, Result2 = 7, Result3 = 0 }
+
+[[reading]]
+case = "flag_reads/pointer_minus_one"
+hash = "682c99d9efeb"
+on = "2026-11-10"
+read = { Result1 = 7, Result2 = 7, Result3 = 1 }
+
+[[reading]]
+case = "flag_reads/math_after_sqrt"
+hash = "b0b647e1dad8"
+on = "2026-11-10"
+read = { Result1 = 0, Result2 = 1, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "term_zero/quiet_terms"
+hash = "29f25526b31d"
+on = "2026-11-10"
+read = { Result1 = 5, Result2 = 5, Result3 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "term_zero/abs_int_min"
+hash = "e0b789fae639"
+on = "2026-11-10"
+read = { Result1 = 1, Result2 = 2, ErrorCode = 3 }
+
+[[reading]]
+case = "term_zero/real_quiet_terms"
+hash = "574c98a361a0"
+on = "2026-11-10"
+read = { Result1 = 4, Result2 = 1, Result3 = 0, Result4 = 0 }
+
+[[reading]]
+case = "pack_point/point_into_dd"
+hash = "7708a81c2c65"
+on = "2026-11-10"
+read = { Result1 = 12, Result2 = 12, Result3 = 12, Result4 = 0, ErrorCode = 0 }
+
+[[reading]]
+case = "drum_preset/entry_or_first_timing_scan"
+hash = "fa749323281e"
+on = "2026-11-12"
+read = { Result1 = 2, Result2 = 3, Result3 = 2 }
+
+[[reading]]
+case = "drum_preset/entry_or_first_timing_scan"
+hash = "fa749323281e"
+on = "2026-11-12"
+read = { Result1 = 2, Result2 = 3, Result3 = 2 }
+
+[[reading]]
+case = "drum_ds/ds_preset_ends"
+hash = "2cffe3371893"
+on = "2026-11-12"
+read = { Result1 = 2, Result2 = 1, Result3 = 3, Result4 = 2 }
+
+[[reading]]
+case = "drum_limits/preset_from_ds"
+hash = "b5e701d59fb4"
+on = "2026-11-12"
+read = { Result2 = 2222, Result3 = 2, Result4 = 2 }
+
+# T275 and T276 held 164 and 1000 from an earlier program, and the case did not clear them.
+[[reading]]
+case = "flash_zero/on_zero_tds"
+hash = "a766ced20531"
+on = "2026-11-12"
+read = { Result1 = 0, Result2 = 0, Result3 = 0, Result4 = 164, ErrorCode = 1000 }
+
+[[reading]]
+case = "deb_off/off_td_with_coil_off"
+hash = "5d41600a3ea8"
+on = "2026-11-12"
+read = { ErrorCode = 50, Result1 = 0, Result2 = 50, Result3 = 50, Result4 = 201 }
+
+[[reading]]
+case = "modbus_raw/raw_values"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { Result1 = 65, Result2 = 200, Result3 = 1, Result4 = 1 }
+
+[[reading]]
+case = "modbus_raw/staged_inf"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH101" = 0, "DH102" = 32640 } } }
+
+[[reading]]
+case = "modbus_raw/staged_minus_inf"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0xFF80"], "decoded" = "-inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFF80"], "decoded" = { "DH103" = 0, "DH104" = 65408 } } }
+
+[[reading]]
+case = "modbus_raw/staged_nan"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "df" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH105" = 65535, "DH106" = 65535 } } }
+
+[[reading]]
+case = "modbus_raw/staged_df"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "df" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x4020"], "decoded" = { "DH107" = 0, "DH108" = 16416 } } }
+
+[[reading]]
+case = "modbus_raw/staged_dd"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "dd" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "echo" = { "bank" = "DH", "raw" = ["0x0002", "0x0001"], "decoded" = { "DH109" = 2, "DH110" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/staged_txt"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "txt" = { "bank" = "TXT", "raw" = ["0x4241", "0x00C8"], "decoded" = { "TXT401" = "'A'", "TXT402" = "'B'", "TXT403" = "'\\xc8'", "TXT404" = "'\\x00'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x0042"], "decoded" = 66 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/df_all_ones"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC16 DF111 [0xFFFF, 0xFFFF]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = { "DH111" = 65535, "DH112" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_quiet_nan"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC16 DF112 [0x0000, 0x7FC0]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7FC0"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7FC0"], "decoded" = { "DH113" = 0, "DH114" = 32704 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_inf"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC16 DF113 [0x0000, 0x7F80]", "before" = { "bank" = "DF", "raw" = ["0x0000", "0x4020"], "decoded" = "2.5" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0x7F80"], "decoded" = "inf" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0x7F80"], "decoded" = { "DH115" = 0, "DH116" = 32640 } }, "score" = { "bank" = "DS", "raw" = ["0x0003"], "decoded" = 3 } }
+
+[[reading]]
+case = "modbus_raw/df_half_first"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC06 DF114 first register 0x0000, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0x0000", "0xFFFF"], "decoded" = "nan" }, "echo" = { "bank" = "DH", "raw" = ["0x0000", "0xFFFF"], "decoded" = { "DH117" = 0, "DH118" = 65535 } }, "score" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/df_half_second"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC06 DF115 second register 0x4020, over NaN", "before" = { "bank" = "DF", "raw" = ["0xFFFF", "0xFFFF"], "decoded" = "nan" }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DF", "raw" = ["0xFFFF", "0x4020"], "decoded" = "2.515624761581421" }, "echo" = { "bank" = "DH", "raw" = ["0xFFFF", "0x4020"], "decoded" = { "DH119" = 65535, "DH120" = 16416 } }, "score" = { "bank" = "DS", "raw" = ["0x0001"], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/txt_high_byte"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC06 TXT405/TXT406 register 0xC841", "before" = { "bank" = "TXT", "raw" = ["0x5A59"], "decoded" = { "TXT405" = "'Y'", "TXT406" = "'Z'" } }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "TXT", "raw" = ["0xC841"], "decoded" = { "TXT405" = "'A'", "TXT406" = "'\\xc8'" } }, "echo" = [{ "bank" = "DS", "raw" = ["0x0041"], "decoded" = 65 }, { "bank" = "DS", "raw" = ["0x00C8"], "decoded" = 200 }] }
+
+[[reading]]
+case = "modbus_raw/dd_half"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC06 DD203 first register 0x0005", "before" = { "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, "answer" = "ok", "settled" = 1, "after" = { "bank" = "DD", "raw" = ["0x0005", "0x0001"], "decoded" = 65541 }, "echo" = { "bank" = "DH", "raw" = ["0x0005", "0x0001"], "decoded" = { "DH121" = 5, "DH122" = 1 } } }
+
+[[reading]]
+case = "modbus_raw/dd_straddle"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC16 [0x0009, 0x0008] at the second register of DD205", "before" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0001"], "decoded" = 65538 }, { "bank" = "DD", "raw" = ["0x0004", "0x0003"], "decoded" = 196612 }], "answer" = "ok", "settled" = 1, "after" = [{ "bank" = "DD", "raw" = ["0x0002", "0x0009"], "decoded" = 589826 }, { "bank" = "DD", "raw" = ["0x0008", "0x0003"], "decoded" = 196616 }], "echo" = [{ "bank" = "DH", "raw" = ["0x0002", "0x0009"], "decoded" = { "DH123" = 2, "DH124" = 9 } }, { "bank" = "DH", "raw" = ["0x0008", "0x0003"], "decoded" = { "DH125" = 8, "DH126" = 3 } }] }
+
+[[reading]]
+case = "modbus_raw/fc16_past_ds"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC16 [7, 8] at DS4500 and the register past it", "before" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 } }
+
+[[reading]]
+case = "modbus_raw/fc15_sc53_sc54"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "before" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "today" = { "SD19" = { "bank" = "SD", "raw" = ["0x07EA"], "decoded" = 2026 }, "SD21" = { "bank" = "SD", "raw" = ["0x000B"], "decoded" = 11 }, "SD22" = { "bank" = "SD", "raw" = ["0x000D"], "decoded" = 13 } }, "date_before" = { "SD29" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD31" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "SD32" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 } }, "date_set" = ["ok", "ok", "ok"], "date_set_to_today" = 1, "request" = "FC15 [1, 0] at SC53..SC54", "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [0, 0], "decoded" = { "SC53" = 0, "SC54" = 0 } }, "sc53_off" = "ok", "date_restored" = ["ok", "ok", "ok"] }
+
+[[reading]]
+case = "modbus_raw/fc05_sc1"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC05 OFF to SC1", "before" = { "bank" = "SC", "raw" = [1], "decoded" = 1 }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "SC", "raw" = [1], "decoded" = 1 } }
+
+[[reading]]
+case = "modbus_raw/fc06_sd_read_only"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD5 = 0x0001", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/fc03_past_ds"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc03_across_ds_end"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "DS", "raw" = "exception 02", "decoded" = "error ValueError: DS must be in [1, 4500]" }
+
+[[reading]]
+case = "modbus_raw/fc01_past_c2000"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "C", "raw" = "exception 02", "decoded" = "error ValueError: C must be in [1, 2000]" }
+
+[[reading]]
+case = "modbus_raw/fc01_y_gap"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "Y", "raw" = [0], "decoded" = "error ValueError: Y address must be *01-*16." }
+
+[[reading]]
+case = "modbus_raw/fc15_across_c_end"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "request" = "FC15 four ON at C1999..C2002", "before" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } }, "answer" = "exception 02", "settled" = 1, "after" = { "bank" = "C", "raw" = [0, 0], "decoded" = { "C1999" = 0, "C2000" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/fc03_at_xd"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc04_at_ds1"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "DS", "raw" = ["0x3115"], "decoded" = 12565 }
+
+[[reading]]
+case = "modbus_raw/fc01_at_x001"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "X", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/fc02_at_c1"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "C", "raw" = [0], "decoded" = 0 }
+
+[[reading]]
+case = "modbus_raw/xd_x17"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "XD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "XD0" = 0, "XD1" = 0, "XD2" = 0, "XD3" = 0, "XD4" = 0, "XD5" = 0, "XD6" = 0, "XD7" = 0, "XD8" = 0 }, "upper" = { "bank" = "XD", "raw" = ["0x0000"], "decoded" = { "XD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_x17"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "bank" = "YD", "raw" = ["0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000", "0x0000"], "decoded" = { "YD0" = 0, "YD1" = 0, "YD2" = 0, "YD3" = 0, "YD4" = 0, "YD5" = 0, "YD6" = 0, "YD7" = 0, "YD8" = 0 }, "upper" = { "bank" = "YD", "raw" = ["0x0000"], "decoded" = { "YD0u" = 0 } } }
+
+[[reading]]
+case = "modbus_raw/yd_odd_write"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "skipped" = "not sent: set PYRUNG_CONFORMANCE_OUTPUTS=1 to send it" }
+
+[[reading]]
+case = "modbus_raw/sd29_write"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "sc53" = { "bank" = "SC", "raw" = [0], "decoded" = 0 }, "before" = { "bank" = "SD", "raw" = ["0x0000"], "decoded" = 0 }, "request" = "FC06 SD29 = 1", "answer" = "ok", "settled" = 1, "after" = { "bank" = "SD", "raw" = ["0x0001"], "decoded" = 1 }, "restored" = "ok" }
+
+[[reading]]
+case = "modbus_raw/past_bank_alias"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "dd1001_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "dd1531_before" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_found" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "after_dd" = { "dh_pattern" = { "bank" = "DH", "raw" = ["0x1357", "0x2468"], "decoded" = { "DH127" = 4951, "DH128" = 9320 } }, "dd1064_by_pointer" = { "bank" = "DD", "raw" = ["0x1357", "0x0000"], "decoded" = 4951 }, "if_dh_low_word_first" = 610800471, "if_dh_high_word_first" = 324478056 }, "dd1001_after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "after_ladder_write" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "fc16" = "exception 02", "after_fc16" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_fc16" = { "bank" = "DS", "raw" = ["0x04D2"], "decoded" = 1234 }, "after_clear" = { "bank" = "DD", "raw" = "exception 02", "decoded" = "error ValueError: DD must be in [1, 1000]" }, "ladder_back_after_clear" = { "bank" = "DS", "raw" = ["0x0000"], "decoded" = 0 }, "settled" = 1 }
+
+[[reading]]
+case = "modbus_raw/fc03_x126"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "raw" = "exception 03", "decoded" = { "count" = 126, "first" = 12565 } }
+
+[[reading]]
+case = "modbus_raw/fc15_x1969"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "read" = { "raw" = { "count" = 1969, "first" = 0 }, "decoded" = { "count" = 1969, "first" = 0 } }, "values" = "C1..C1969 as read", "answer" = "exception 03" }
+
+[[reading]]
+case = "modbus_raw/fc03_x200"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "raw" = "exception 03", "decoded" = { "count" = 200, "first" = 12565 } }
+
+[[reading]]
+case = "modbus_raw/disagree"
+hash = "56aa6a07e3d9"
+on = "2026-11-13"
+read = { "lines" = ["fc01_y_gap: raw [0], pyclickplc error ValueError: Y address must be *01-*16.", "fc03_x126: raw exception 03, pyclickplc {'count': 126, 'first': 12565}", "fc03_x200: raw exception 03, pyclickplc {'count': 200, 'first': 12565}"] }

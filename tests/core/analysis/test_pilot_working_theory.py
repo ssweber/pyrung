@@ -88,6 +88,7 @@ from pyrung.core.analysis.pilot.world import _Checkpoint, _World
 from pyrung.core.context import RungId
 from pyrung.core.intrascan_counterfactual import OccurrenceBoundary
 from pyrung.core.runner import EpochRef
+from pyrung.core.state import SystemState
 
 
 def _execution_ref(label: str) -> EpochRef:
@@ -1123,6 +1124,13 @@ def test_detached_validation_visits_shared_identity_ancestry_once() -> None:
         shared = ("identity", shared, shared)
 
     assert_detached_theory_value(shared)
+
+
+def test_detached_validation_reads_a_state_as_its_fields() -> None:
+    assert_detached_theory_value(SystemState().with_tags({"Run": True}))
+
+    with pytest.raises(TheoryInvariantError, match=r"\['tags'\]\['Bad'\] retains a callable"):
+        assert_detached_theory_value(SystemState().with_tags({"Bad": print}))  # type: ignore[dict-item]
 
 
 def _effect_occurrence(

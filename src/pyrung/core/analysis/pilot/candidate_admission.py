@@ -13,6 +13,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.candidate_read as _candidate_read
+from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pilot.advance import demand_holds
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.candidate_policy import (
@@ -36,6 +38,7 @@ from pyrung.core.analysis.pilot.route_options import (
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.wait_options import _boundary_heading
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.executor import WriteOccurrence
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.trace_tree import TraceAction
@@ -325,6 +328,39 @@ def _admit_wait_read(
     )
 
 
+def _consumer_already_reads_it(detail: TraceAction, plc: Any, snapshot: Any, ctx: Any) -> bool:
+    """Whether the rung that needs this value read it in the last scan, from a write in that scan.
+
+    The trace judges a need on the value the scan ended with.  A rung reads what is there when
+    it runs: reset a bit at the top of the program and every rung below reads it off, whatever it
+    ends the scan as.  Then the need is already met and nothing should be held to meet it, and a
+    hold can do harm: the plant reads the end of the scan.  A read of the scan's entry value says
+    nothing about the next scan, so only one that saw a write in the same scan counts.
+    """
+
+    boundary = detail.operation_boundary
+    if boundary is None or detail.until is None:
+        return False
+    tag, wanted = boundary
+    if _values_match(snapshot.get(tag), wanted):
+        return False
+    consumers = ctx.pdg.writers_of.get(detail.until.tag, frozenset()) & ctx.pdg.readers_of.get(
+        tag, frozenset()
+    )
+    if not consumers:
+        return False
+    projection = plc._replay_rung_write_projection_at(plc.state.scan_id)
+    if projection is None:
+        return False
+    rungs = {id(resolve_rung(ctx.program, ctx.pdg.rung_nodes[index])) for index in consumers}
+    reads = tuple(read for read in projection.reads_of(tag) if id(read.run.rung) in rungs)
+    return bool(reads) and all(
+        isinstance(read.occurrence.source, WriteOccurrence)
+        and _values_match(read.occurrence.value, wanted)
+        for read in reads
+    )
+
+
 def _separate_prerequisites(
     route_and_wait: _candidate_read._RouteAndCompletionRead,
     frame: Any,
@@ -342,7 +378,19 @@ def _separate_prerequisites(
     instruction_boundary: ChannelHeading | None = None
     instruction_node: Any | None = None
     if is_coast:
-        for node in frame.tree.leaves():
+        # Two owners can be waiting at once, one on the other: a timer chain's second timer
+        # needs the first one's Done.  The wait belongs to the one the program is running now,
+        # which its own progress witness says; the stable sort leaves every other order alone.
+        for node in sorted(
+            frame.tree.leaves(),
+            key=lambda leaf: (
+                not (
+                    getattr(leaf, "advance", None) is not None
+                    and leaf.advance.progress is not None
+                    and demand_holds(leaf.advance.progress, frame.snap)
+                )
+            ),
+        ):
             step = getattr(node, "advance", None)
             if step is None or node.satisfied:
                 continue
@@ -428,11 +476,15 @@ def _separate_prerequisites(
         ]
         pulse_tags = {detail.tag for detail in trace_action_details if detail.pulse}
         seen_prereq: set[str] = set()
+        needs_no_hold: set[str] = set()
         for tag, value in trace_actions:
             if tag in seen_prereq or tag in {rung.dest for rung in state.pilot_rungs}:
                 continue
             detail = admission.detail_by_pair.get((tag, value))
             if detail is None or detail.until is None:
+                continue
+            if _consumer_already_reads_it(detail, state.work, frame.snap, ctx):
+                needs_no_hold.add(tag)
                 continue
             if (
                 detail.availability > _WriterAvailability.AFTER_PREREQ
@@ -453,7 +505,9 @@ def _separate_prerequisites(
             if tag in pulse_tags:
                 seen_prereq.add(tag)
                 if _action_allowed(ctx, (tag, value)):
-                    prerequisite_pilot_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
+                    prerequisite_pilot_rungs.extend(
+                        _oscillating_rungs(tag, ctx, scope, state.work, value)
+                    )
             elif (
                 tag not in ctx.edge_tags
                 and tag not in ctx.clear_only
@@ -467,7 +521,7 @@ def _separate_prerequisites(
                     ctx, [(tag, value)], frame.snap
                 ):
                     prerequisite_pilot_rungs.append(PilotRung(tag, value, scope))
-        prereq_tags = {rung.dest for rung in prerequisite_pilot_rungs}
+        prereq_tags = {rung.dest for rung in prerequisite_pilot_rungs} | needs_no_hold
         trace_actions = tuple(pair for pair in trace_actions if pair[0] not in prereq_tags)
         active_trace_actions = tuple(
             pair for pair in active_trace_actions if pair[0] not in prereq_tags

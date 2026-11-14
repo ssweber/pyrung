@@ -4,7 +4,7 @@ from pyrsistent import pmap
 
 from pyrung.core.context import RungId
 from pyrung.core.rung_firings import (
-    _VALUE_VARIETY_THRESHOLD,
+    _ENTRY_LIMIT,
     Alternating,
     Arithmetic,
     Constant,
@@ -125,29 +125,29 @@ def test_value_or_varied_scans_queries_compressed_columns() -> None:
 
 def test_unknown_degrades_only_one_high_complexity_column() -> None:
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    for scan_id in range(1, _VALUE_VARIETY_THRESHOLD + 2):
+    for scan_id in range(1, _ENTRY_LIMIT + 2):
         timelines.append(0, scan_id, {"noisy": scan_id * scan_id, "stable": True})
 
     assert isinstance(timelines._value_timelines[(0, "noisy")][-1].payload, Unknown)
     assert isinstance(timelines._value_timelines[(0, "stable")][0].payload, Constant)
-    assert timelines.value_at(0, "stable", _VALUE_VARIETY_THRESHOLD + 1) is True
+    assert timelines.value_at(0, "stable", _ENTRY_LIMIT + 1) is True
     assert not timelines.value_is_known(0, "noisy")
     assert timelines.value_is_known(0, "stable")
 
     # Missing firings may compact with unknown values, but are not themselves
     # writes. The unknown side remains a conservative transition candidate.
-    timelines.append(0, _VALUE_VARIETY_THRESHOLD + 2, {"stable": True})
+    timelines.append(0, _ENTRY_LIMIT + 2, {"stable": True})
     timelines.append(
         0,
-        _VALUE_VARIETY_THRESHOLD + 3,
+        _ENTRY_LIMIT + 3,
         {"noisy": -1, "stable": True},
     )
     assert timelines.latest_value_transition_scan_at_or_before(
         frozenset({0}),
         "noisy",
         "any possible lost value",
-        _VALUE_VARIETY_THRESHOLD + 3,
-    ) == (_VALUE_VARIETY_THRESHOLD + 3)
+        _ENTRY_LIMIT + 3,
+    ) == (_ENTRY_LIMIT + 3)
 
 
 def test_fragmented_low_cardinality_column_stays_exact() -> None:
@@ -191,7 +191,7 @@ def test_transition_queries_use_scalar_ranges() -> None:
 
 
 def test_trim_before_rebases_alternating_and_arithmetic_columns() -> None:
-    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines: RungFiringTimelines[int] = RungFiringTimelines(capped=False)
     for scan_id in range(1, 8):
         timelines.append(0, scan_id, {"A": scan_id % 2, "N": scan_id * 2})
 

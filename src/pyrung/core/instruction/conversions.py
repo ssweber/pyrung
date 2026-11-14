@@ -7,8 +7,8 @@ import re
 import struct
 from typing import Any
 
-from pyrung.core.storage import StoreTransform, store_value
-from pyrung.core.tag import Tag
+from pyrung.core.storage import StoreTransform, real_in_range, store_char, store_value
+from pyrung.core.tag import Tag, TagType
 
 _DINT_MIN = -2147483648
 
@@ -22,15 +22,56 @@ _INT_MIN = -32768
 _INT_MAX = 32767
 
 
-def copy_store_transform(tag_type: Any) -> StoreTransform | None:
-    """Destination conversion used by copy, blockcopy, and fill."""
+#: A store's source that is a constant written in the instruction (``copy(70000, Word)``).
+LITERAL = "literal"
+
+_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL})
+
+
+def copy_source_kind(source: Any) -> Any:
+    """What a Copy, Block copy or Fill store depends on of its *source* operand.
+
+    The source's ``TagType`` for a tag or a pointer, :data:`LITERAL` for a constant,
+    and ``None`` for anything else (an expression), which stores as a register does.
+    """
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(source, ImmediateRef):
+        source = source.value
+    if isinstance(source, Tag):
+        return source.type
+    if isinstance(source, (IndirectRef, IndirectExprRef)):
+        return source.block.type
+    if isinstance(source, (bool, int, float, str)):
+        return LITERAL
+    return None
+
+
+def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | None:
+    """Destination conversion used by copy, blockcopy, and fill.
+
+    *source* is :func:`copy_source_kind` of the source.  ``None`` (not known, or not a
+    Copy: a patch, a receive) keeps the plain store: a Word wraps.  From a known
+    source, CLICK's rules:
+
+    - Into a Word, a constant keeps its low 16 bits (70000 is 4464).  From a DINT or
+      a REAL, past 65535 it clamps and below 0 keeps the low 16 bits (``"word"``).
+    - Into an Int, a Word keeps its bits (0xFFFF is -1); anything else clamps.
+
+    A bit is truthy from any source (CLICK's editor refuses a number into a bit).
+    """
     from pyrung.core.tag import TagType
 
     if tag_type is TagType.INT:
+        if source is TagType.WORD:
+            return StoreTransform("wrap", _INT_MIN, _INT_MAX)
         return StoreTransform("clamp", _INT_MIN, _INT_MAX)
     if tag_type is TagType.DINT:
         return StoreTransform("clamp", _DINT_MIN, _DINT_MAX)
     if tag_type is TagType.WORD:
+        if source in (TagType.DINT, TagType.REAL):
+            return StoreTransform("word", 0, 0xFFFF)
         return StoreTransform("wrap", 0, 0xFFFF)
     if tag_type is TagType.REAL:
         return StoreTransform("real")
@@ -67,66 +108,83 @@ def _clamp_dint(value: int) -> int:
     return max(_DINT_MIN, min(_DINT_MAX, value))
 
 
-def _clamp_int(value: int) -> int:
-    """Clamp integer to INT (16-bit signed) range."""
-    return max(_INT_MIN, min(_INT_MAX, value))
-
-
 def _int_to_float_bits(n: int) -> float:
     """Reinterpret a 32-bit unsigned integer bit pattern as IEEE 754 float."""
     return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]
 
 
 def _float_to_int_bits(f: float) -> int:
-    """Reinterpret an IEEE 754 float bit pattern as 32-bit unsigned integer."""
-    return struct.unpack("<I", struct.pack("<f", float(f)))[0]
+    """Reinterpret an IEEE 754 float bit pattern as 32-bit unsigned integer.
+
+    A NaN is 0xFFFFFFFF, whichever NaN it is: what a CLICK's DF holds for one.
+    """
+    f = float(f)
+    if f != f:
+        return 0xFFFFFFFF
+    return struct.unpack("<I", struct.pack("<f", f))[0]
 
 
 def _ascii_char_from_code(code: int) -> str:
-    if code < 0 or code > 127:
-        raise ValueError("ASCII code out of range")
+    if code < 0 or code > 255:
+        raise ValueError("character code out of range")
     return chr(code)
 
 
 def _as_single_ascii_char(value: Any) -> str:
+    """The CHAR *value* stores as: one 8-bit character, a blank stored as NUL.
+
+    A CLICK TXT is one byte: codes 128..255 are stored as they are.
+    """
     if not isinstance(value, str):
         raise ValueError("CHAR value must be a string")
     if value == "":
-        return value
-    if len(value) != 1 or ord(value) > 127:
-        raise ValueError("CHAR value must be blank or one ASCII character")
+        return store_char(value)
+    if len(value) != 1 or ord(value) > 255:
+        raise ValueError("CHAR value must be blank or one 8-bit character")
     return value
 
 
 def _text_from_source_value(value: Any) -> str:
+    """Source text for a text->numeric copy; a blank reads as one NUL."""
     if isinstance(value, str):
-        return value
+        return store_char(value)
     raise ValueError("text conversion source must resolve to str")
 
 
 def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> dict[str, Any]:
+    """Each character of *text* as a number, into *targets* in turn.
+
+    *targets* may be shorter, where the block ends first: every character is still
+    checked, and the ones past the last target are dropped.
+    """
     updates: dict[str, Any] = {}
-    if len(text) != len(targets):
+    if len(targets) > len(text):
         raise ValueError("source/destination text length mismatch")
 
-    for char, target in zip(text, targets, strict=True):
+    for index, char in enumerate(text):
         if mode == "value":
-            if char < "0" or char > "9":
+            if char == "\x00":
+                numeric = 0  # CLICK: Character Value of NUL writes 0, no fault
+            elif char < "0" or char > "9":
                 raise ValueError("Copy Character Value accepts only digits 0-9")
-            numeric = ord(char) - ord("0")
+            else:
+                numeric = ord(char) - ord("0")
         elif mode == "ascii":
-            if ord(char) > 127:
-                raise ValueError("Copy ASCII Code Value accepts ASCII only")
+            if ord(char) > 255:
+                raise ValueError("Copy ASCII Code Value accepts 8-bit characters only")
             numeric = ord(char)
         else:
             raise ValueError(f"Unsupported text->numeric mode: {mode}")
-        updates[target.name] = _store_copy_value_to_tag_type(numeric, target)
+        if index < len(targets):
+            target = targets[index]
+            updates[target.name] = _store_copy_value_to_tag_type(numeric, target)
     return updates
 
 
 def _format_int_text(value: int, width: int, suppress_zero: bool, *, signed: bool = True) -> str:
+    """A number's text; *signed* False for a Word, which is hex (0xAB is "AB" or "00AB")."""
     if suppress_zero:
-        return str(value)
+        return str(value) if signed else f"{value:X}"
     if not signed:
         return f"{value:0{width}X}"
     if value < 0:
@@ -148,7 +206,8 @@ def _render_text_from_numeric(
     if source_type == TagType.REAL or isinstance(value, float):
         numeric = float(value)
         if not math.isfinite(numeric):
-            raise ValueError("REAL source is not finite")
+            # CLICK writes these as text, lowercase, with no flag.
+            return "nan" if numeric != numeric else ("inf" if numeric > 0 else "-inf")
         return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"
 
     number = int(value)
@@ -177,14 +236,13 @@ def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
         raise ValueError("empty text cannot be parsed")
 
     if dest_tag.type in {TagType.INT, TagType.DINT}:
-        if not re.fullmatch(r"[+-]?\d+", text):
+        # CLICK: the parse stops at a decimal point ("12.5" is 12); any other
+        # character that is not a digit refuses the text.  A value past the
+        # destination clamps in the store, and the store raises the fault.
+        match = re.fullmatch(r"([+-]?\d+)(?:\.\d*)?", text)
+        if match is None:
             raise ValueError("integer parse failed")
-        parsed = int(text, 10)
-        if dest_tag.type == TagType.INT and (parsed < _INT_MIN or parsed > _INT_MAX):
-            raise ValueError("integer out of INT range")
-        if dest_tag.type == TagType.DINT and (parsed < _DINT_MIN or parsed > _DINT_MAX):
-            raise ValueError("integer out of DINT range")
-        return parsed
+        return int(match.group(1), 10)
 
     if dest_tag.type == TagType.WORD:
         if not re.fullmatch(r"[0-9A-Fa-f]+", text):
@@ -207,24 +265,41 @@ def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
     )
 
 
-def _store_copy_value_to_tag_type(value: Any, tag: Tag) -> Any:
+def _store_copy_value_to_tag_type(value: Any, tag: Tag, source: Any = None) -> Any:
     """Store value using copy/blockcopy/fill conversion semantics.
 
-    - INT and DINT use saturating clamp.
-    - Other destination types preserve current conversion behavior.
+    *source* is :func:`copy_source_kind` of the source (see :func:`copy_store_transform`).
     """
-    storage = copy_store_transform(tag.type)
+    storage = copy_store_transform(tag.type, source)
     return value if storage is None else store_value(value, storage)
+
+
+def _copy_clamps(value: Any, tag: Tag, source: Any = None) -> bool:
+    """True when a Copy of the number *value* into *tag* stops at a limit, raising SC43.
+
+    Only an INT or DINT clamps with the flag; a Word's clamp raises none, and nor
+    does a REAL register's into a DINT (CLICK: DF 1.0E+10 into a DD,
+    ``flag_probe/bulk_ops_clear_flags``).  +/-Inf clamps; NaN stores 0 and does not.
+    """
+    storage = copy_store_transform(tag.type, source)
+    if storage is None or storage.kind != "clamp" or not isinstance(value, (int, float)):
+        return False
+    if source is TagType.REAL and tag.type is TagType.DINT:
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return not math.isnan(value)
+    assert storage.lower is not None and storage.upper is not None
+    return not storage.lower <= int(value) <= storage.upper
 
 
 def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     """Truncate a value to fit the destination tag's type.
 
-    Implements hardware-verified modular wrapping used by calc() result stores:
+    Implements hardware-verified modular wrapping used by math() result stores:
     - INT: 16-bit signed (-32768 to 32767)
     - DINT: 32-bit signed (-2147483648 to 2147483647)
     - WORD: 16-bit unsigned (0 to 65535)
-    - REAL: 32-bit float (no truncation, just cast)
+    - REAL: float; past CLICK's range (+/-3.4028235E+38) it is +/-Inf
     - BOOL: truthiness
     - CHAR: no truncation
 
@@ -243,11 +318,20 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
 
 
 def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
-    """Return True if math result exceeds destination storage range."""
+    """Return True if math result exceeds destination storage range.
+
+    A REAL result past +/-3.4028235E+38 (stored as +/-Inf) or already +/-Inf
+    is out of range; so is +/-Inf headed for an integer register (stored as
+    0).  NaN is in range everywhere: a REAL holds it, an integer stores 0.
+    """
     from pyrung.core.tag import TagType
 
-    if isinstance(value, float) and not math.isfinite(value):
+    if isinstance(value, float) and math.isnan(value):
         return False
+    if dest.type == TagType.REAL and mode != "hex":
+        return isinstance(value, (int, float)) and not real_in_range(value)
+    if isinstance(value, float) and math.isinf(value):
+        return mode == "hex" or dest.type in (TagType.INT, TagType.DINT, TagType.WORD)
 
     try:
         int_value = int(value)

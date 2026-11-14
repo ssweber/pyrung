@@ -17,6 +17,7 @@ from pyrung.click import (
     LadderExportError,
     ModbusTcpTarget,
     TagMap,
+    ladder_to_pyrung,
     pyrung_to_ladder,
     receive,
     send,
@@ -38,6 +39,7 @@ from pyrung.core import (
     TagType,
     Timer,
     immediate,
+    randint,
 )
 from pyrung.core.program import (
     blockcopy,
@@ -50,6 +52,7 @@ from pyrung.core.program import (
     event_drum,
     fill,
     forloop,
+    math,
     off_delay,
     on_delay,
     out,
@@ -64,7 +67,8 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
-from tests.click.helpers import build_program, normalize_csv
+from tests.click.drawing_rule import check_scope
+from tests.click.helpers import build_program, exec_with_source, normalize_csv
 
 Counter3 = Counter.clone("Counter3")
 Timer2 = Timer.clone("Timer2")
@@ -110,6 +114,7 @@ def _assert_export_main_rows(source: str, expected_csv: str) -> None:
     logic, mapping = build_program(source)
     bundle = pyrung_to_ladder(logic, mapping)
     assert normalize_csv(bundle.main_rows) == _literal_csv_rows(expected_csv)
+    check_scope(bundle.main_rows)
 
 
 def test_header_and_width_invariants():
@@ -220,9 +225,222 @@ def test_or_expansion_with_trailing_and_golden():
                 out(Y1)
         """,
         """
-        R,X001,T,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        R,X001,T:C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
         ,X002,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         """,
+    )
+
+
+def _rows(*rows: str) -> list[tuple[str, ...]]:
+    """Rows from their leading cells: ``out(...)`` is reached by wires, others stop."""
+    expanded = []
+    for row in rows:
+        *cells, last = row.split(",")
+        if last.startswith("out("):
+            cells.extend(["-"] * (32 - len(cells)))
+            expanded.append((*cells, last))
+        else:
+            cells.append(last)
+            expanded.append((*cells, *[""] * (33 - len(cells))))
+    return expanded
+
+
+def _assert_or_merge(source: str, expected: list[tuple[str, ...]]) -> None:
+    """The rows export as drawn, and read back to a program that exports them again."""
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert list(bundle.main_rows[1:-1]) == expected
+    check_scope(bundle.main_rows)
+    namespace: dict[str, object] = {}
+    exec_with_source(ladder_to_pyrung(bundle), namespace)
+    again = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
+    assert again.main_rows == bundle.main_rows
+
+
+@pytest.mark.parametrize(
+    ("conditions", "rows"),
+    [
+        pytest.param(
+            "X1, Or(X2, X3), X4",
+            ["R,X001,T:X002,T:X004,out(Y001)", ",,X003,"],
+            id="bit-after-mid-rung-or",
+        ),
+        pytest.param(
+            "Or(X1, X2), ~X3", ["R,X001,T:~X003,out(Y001)", ",X002,"], id="normally-closed"
+        ),
+        pytest.param(
+            "Or(X1, X2), rise(X3)", ["R,X001,T:rise(X003),out(Y001)", ",X002,"], id="rise"
+        ),
+        pytest.param(
+            "Or(X1, X2), fall(X3)", ["R,X001,T:fall(X003),out(Y001)", ",X002,"], id="fall"
+        ),
+        pytest.param(
+            "Or(X1, X2), DS1 >= 4", ["R,X001,T:DS1>=4,out(Y001)", ",X002,"], id="comparison"
+        ),
+        pytest.param(
+            "Or(X1, X2), And(X3, X4)",
+            ["R,X001,T:X003,X004,out(Y001)", ",X002,"],
+            id="and-group",
+        ),
+        pytest.param(
+            "Or(X1, X2), Or(X3), X4",
+            ["R,X001,T:X003,X004,out(Y001)", ",X002,"],
+            id="one-way-or-is-a-contact",
+        ),
+        pytest.param(
+            "Or(And(X1, X2), X3), X4",
+            ["R,X001,X002,T:X004,out(Y001)", ",X003,-,"],
+            id="unequal-branches",
+        ),
+        pytest.param(
+            "Or(X1, X2, X3), X4",
+            ["R,X001,T:X004,out(Y001)", ",X002,|,", ",X003,"],
+            id="three-way",
+        ),
+        pytest.param(
+            "X1, Or(X2, X3, X4), X5",
+            ["R,X001,T:X002,T:X005,out(Y001)", ",,T:X003,|,", ",,X004,"],
+            id="three-way-mid-rung",
+        ),
+        pytest.param(
+            "Or(X1, X2), Or(X3, X4), X5",
+            ["R,X001,T:X003,T:X005,out(Y001)", ",X002,X004,"],
+            id="series-ors-on-the-rail-share-the-merge-column",
+        ),
+        pytest.param(
+            "X1, Or(X2, X3), Or(X4, X5)",
+            ["R,X001,T:X002,T:X004,T,out(Y001)", ",,X003,X005,"],
+            id="series-ors-after-a-contact-share-the-merge-column",
+        ),
+        pytest.param(
+            "X1, Or(Or(X2, X3), X4)",
+            ["R,X001,T:X002,T,out(Y001)", ",,T:X003,|,", ",,X004,"],
+            id="or-inside-an-or-is-one-or",
+        ),
+        pytest.param(
+            "Or(X1, X2), X3, Or(X4, X5)",
+            ["R,X001,T:X003,T:X004,T,out(Y001)", ",X002,,X005,"],
+            id="contact-between-ors",
+        ),
+    ],
+)
+def test_contact_after_or_merge_shares_the_merge_cell(conditions: str, rows: list[str]):
+    _assert_or_merge(
+        f"""
+        with Program() as p:
+            with Rung({conditions}):
+                out(Y1)
+        """,
+        _rows(*rows),
+    )
+
+
+@pytest.mark.parametrize(
+    ("build", "rows"),
+    [
+        pytest.param(
+            lambda: (x[1], Or(txt[1] != "AB", x[5])),
+            ['R,X001,T:TXT1!="AB",T,out(C1)', ",,X005,"],
+            id="in-an-or",
+        ),
+        pytest.param(
+            lambda: (x[1], Or(txt[1] != "AB", x[5])),
+            ['R,X001,T:TXT1!="AB",T,out(C1)', ",,X005,out(C2)"],
+            id="in-an-or-with-two-outputs",
+        ),
+        pytest.param(
+            lambda: (x[1], Or(x[2], x[3]), Or(txt[1] != "AB", x[5])),
+            ['R,X001,T:X002,T:TXT1!="AB",T,out(C1)', ",,X003,X005,"],
+            id="in-ors-in-series",
+        ),
+    ],
+)
+def test_a_text_compare_with_a_longer_literal_stays_one_compare_in_an_or(build, rows):
+    # TXT1 != "AB" is an Or of one compare per character underneath.
+    outputs = sum(row.split(",")[-1].startswith("out(") for row in rows)
+    with Program(strict=False) as logic:
+        with Rung(*build()):
+            for index in range(outputs):
+                out(c[index + 1])
+    bundle = pyrung_to_ladder(logic, TagMap({}, include_system=False))
+    assert list(bundle.main_rows[1:-1]) == _rows(*rows)
+    namespace: dict[str, object] = {}
+    exec_with_source(ladder_to_pyrung(bundle), namespace)
+    again = pyrung_to_ladder(namespace["logic"], namespace["mapping"])
+    assert again.main_rows == bundle.main_rows
+
+
+@pytest.mark.parametrize(
+    ("conditions", "rows"),
+    [
+        pytest.param(
+            "X1, Or(X2, X3)", ["R,X001,T:X002,T,out(Y001)", ",,X003,"], id="merge-ends-the-rung"
+        ),
+        pytest.param(
+            "Or(X1, X2), Or(X3, X4)",
+            ["R,X001,T:X003,T,out(Y001)", ",X002,X004,"],
+            id="series-ors-on-the-rail",
+        ),
+    ],
+)
+def test_or_merge_keeps_its_bare_t(conditions: str, rows: list[str]):
+    _assert_or_merge(
+        f"""
+        with Program() as p:
+            with Rung({conditions}):
+                out(Y1)
+        """,
+        _rows(*rows),
+    )
+
+
+def test_or_merge_carries_a_branch_split():
+    # A branch hangs from the Or's merge column, as in R34 of the CLICK's save
+    # (test_ladder_topology.py).
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(Or(X1, X2)):
+                out(Y1)
+                with branch(C1):
+                    out(Y2)
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
+    )
+
+
+def test_contact_merged_with_or_then_split_keeps_the_split_marker():
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(Or(X1, X2), X3):
+                out(Y1)
+                out(Y2)
+        """,
+        """
+        R,X001,T:X003,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
+    )
+
+
+def test_merged_contact_reads_back_as_the_or_it_was_written_as():
+    logic, mapping = build_program(
+        """
+        with Program() as p:
+            with Rung(DS1 != 0, Or(DS2 == 2, DS2 >= 4), DS2 <= 6):
+                out(C1)
+        """
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    # Conf_Drum's rung, as CLICK has it saved.
+    assert bundle.main_rows[1][:5] == ("R", "DS1!=0", "T:DS2==2", "T:DS2<=6", "-")
+    assert bundle.main_rows[2][:4] == ("", "", "DS2>=4", "")
+    assert "Rung(DS1 != 0, Or(DS2 == 2, DS2 >= 4), DS2 <= 6)" in ladder_to_pyrung(bundle).replace(
+        "with rung(", "Rung("
     )
 
 
@@ -307,7 +525,7 @@ def test_branch_local_or_with_series_suffix_stays_mechanical():
         """,
         """
         R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,T:X002,T:X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
         ,,X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         """,
     )
@@ -325,7 +543,7 @@ def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
         """,
         """
         R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,T:X002,T:X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
         ,,T:X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
         ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
         """,
@@ -433,7 +651,7 @@ def test_vertical_wire_stack_for_three_or_branches():
                 out(Y1)
         """,
         """
-        R,X001,T,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        R,X001,T:C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
         ,X002,|
         ,X003
         """,
@@ -518,7 +736,7 @@ def test_subroutine_files_sorted_and_return_tailed(tmp_path: Path):
     assert (out_dir / "subroutines" / "beta-two.csv").exists()
 
 
-def test_bundle_writes_rung_source_manifest_and_groups_continued_rungs(tmp_path: Path):
+def test_bundle_writes_one_rung_source_entry_per_click_rung(tmp_path: Path):
     Enable = Bool("Enable")
     Light1 = Bool("Light1")
     Light2 = Bool("Light2")
@@ -535,12 +753,13 @@ def test_bundle_writes_rung_source_manifest_and_groups_continued_rungs(tmp_path:
     )
     bundle = pyrung_to_ladder(logic, mapping)
 
-    assert len(bundle.main_sources) == 2
-    assert bundle.main_sources[0].rung == 1
-    assert len(bundle.main_sources[0].sources) == 2
-    assert bundle.main_sources[1].rung == 2
-    assert bundle.main_sources[1].sources == ()  # Synthetic end().
-    for source in bundle.main_sources[0].sources:
+    # The continued rung is a CLICK rung of its own, with its own source span.
+    assert [entry.rung for entry in bundle.main_sources] == [1, 2, 3]
+    assert [len(entry.sources) for entry in bundle.main_sources] == [1, 1, 0]  # 3 is end()
+    first, second = bundle.main_sources[0].sources[0], bundle.main_sources[1].sources[0]
+    assert first.source_line is not None and second.source_line is not None
+    assert first.source_line < second.source_line
+    for source in (first, second):
         assert source.source_file is not None
         assert Path(source.source_file).samefile(__file__)
         assert source.source_line is not None
@@ -551,9 +770,24 @@ def test_bundle_writes_rung_source_manifest_and_groups_continued_rungs(tmp_path:
     bundle.write(out_dir)
     manifest = json.loads((out_dir / "rung_sources.json").read_text(encoding="utf-8"))
     assert manifest["version"] == 1
-    assert [entry["rung"] for entry in manifest["main"]] == [1, 2]
-    assert len(manifest["main"][0]["sources"]) == 2
-    assert manifest["main"][1]["sources"] == []
+    assert [entry["rung"] for entry in manifest["main"]] == [1, 2, 3]
+    assert [len(entry["sources"]) for entry in manifest["main"]] == [1, 1, 0]
+
+
+def test_the_click_rungs_of_a_rung_with_no_contact_share_its_source_span():
+    with Program() as logic:
+        with Rung():
+            out(y[1])
+            out(y[2])
+        with Rung(x[1]):
+            out(y[3])
+
+    bundle = pyrung_to_ladder(logic, TagMap(include_system=False))
+    first, second, third, _end = bundle.main_sources
+    assert first.sources == second.sources
+    line, next_line = first.sources[0].source_line, third.sources[0].source_line
+    assert line is not None and next_line is not None
+    assert next_line > line
 
 
 def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
@@ -653,7 +887,7 @@ def test_tokens_include_explicit_defaults_and_oneshot():
         with Rung(Enable):
             copy(5, Dest1)
         with Rung(Enable):
-            calc(Dest1 + 1, Dest2)
+            math(Dest1 + 1, Dest2)
         with Rung(Enable):
             search(Data.select(1, 2) == 1, result=Result, found=Found)
         with Rung(Enable):
@@ -691,11 +925,34 @@ def test_calc_hex_token_uses_inferred_hex_mode():
         """
         with Program() as p:
             with Rung(X1):
-                calc(DH1 | DH2, DH3)
+                math(DH1 | DH2, DH3)
         """,
         """
         R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DH1 OR DH2,DH3,mode=hex)
         """,
+    )
+
+
+def test_calc_exports_wide_constants_as_written_once_allowed():
+    # pyrung runs the 3000000000 as its low 32 bits, as a pasted one ran on a CLICK.
+    # Validation refuses it (CLK_MATH_WIDE_CONSTANT), since CLICK's editor does.  Once
+    # allowed, the export writes the formula as written.
+    from pyrung.click.ladder import LadderExportError
+
+    logic, mapping = build_program(
+        """
+        with Program() as p:
+            with Rung(X1):
+                math(DD1 / 3000000000, DS1)
+        """
+    )
+    with pytest.raises(LadderExportError, match="CLK_MATH_WIDE_CONSTANT"):
+        pyrung_to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping, allow=("CLK_MATH_WIDE_CONSTANT",))
+    assert normalize_csv(bundle.main_rows) == _literal_csv_rows(
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DD1 / 3000000000,DS1,mode=decimal)
+        """
     )
 
 
@@ -714,28 +971,28 @@ def test_calc_token_uses_click_native_operators():
     with Program() as logic:
         # Decimal-mode operators
         with Rung(Enable):
-            calc(A**2, Result)  # Power → ^
+            math(A**2, Result)  # Power → ^
         with Rung(Enable):
-            calc(A % B, Result)  # Modulo → MOD
+            math(A % B, Result)  # Modulo → MOD
         with Rung(Enable):
-            calc(A + B, Result)  # Addition with spaces
+            math(A + B, Result)  # Addition with spaces
         with Rung(Enable):
-            calc(sqrt(A), Result)  # MathFuncExpr → uppercase Click name
+            math(sqrt(A), Result)  # MathFuncExpr → uppercase Click name
         # Hex-mode operators (WORD tags)
         with Rung(Enable):
-            calc(H1[1] << 3, HDest[1])  # Left shift operator → LSH
+            math(H1[1] << 3, HDest[1])  # Left shift operator → LSH
         with Rung(Enable):
-            calc(H1[1] >> 1, HDest[1])  # Right shift operator → RSH
+            math(H1[1] >> 1, HDest[1])  # Right shift operator → RSH
         with Rung(Enable):
-            calc(lsh(H1[1], 4), HDest[1])  # ShiftFuncExpr
+            math(lsh(H1[1], 4), HDest[1])  # ShiftFuncExpr
         with Rung(Enable):
-            calc(rsh(H1[1], 2), HDest[1])  # ShiftFuncExpr
+            math(rsh(H1[1], 2), HDest[1])  # ShiftFuncExpr
         with Rung(Enable):
-            calc(H1[1] & H2[1], HDest[1])  # AND
+            math(H1[1] & H2[1], HDest[1])  # AND
         with Rung(Enable):
-            calc(H1[1] | H2[1], HDest[1])  # OR
+            math(H1[1] | H2[1], HDest[1])  # OR
         with Rung(Enable):
-            calc(H1[1] ^ H2[1], HDest[1])  # XOR
+            math(H1[1] ^ H2[1], HDest[1])  # XOR
 
     mapping = TagMap(
         {
@@ -756,11 +1013,11 @@ def test_calc_token_uses_click_native_operators():
         "math(DS1 ^ 2,DS3,mode=decimal)",
         "math(DS1 MOD DS2,DS3,mode=decimal)",
         "math(DS1 + DS2,DS3,mode=decimal)",
-        "math(SQRT(DS1),DS3,mode=decimal)",
-        "math(LSH(DH1,3),DH3,mode=hex)",
-        "math(RSH(DH1,1),DH3,mode=hex)",
-        "math(LSH(DH1,4),DH3,mode=hex)",
-        "math(RSH(DH1,2),DH3,mode=hex)",
+        "math(SQRT ( DS1 ),DS3,mode=decimal)",
+        "math(LSH ( DH1 , 3h ),DH3,mode=hex)",
+        "math(RSH ( DH1 , 1h ),DH3,mode=hex)",
+        "math(LSH ( DH1 , 4h ),DH3,mode=hex)",
+        "math(RSH ( DH1 , 2h ),DH3,mode=hex)",
         "math(DH1 AND DH2,DH3,mode=hex)",
         "math(DH1 OR DH2,DH3,mode=hex)",
         "math(DH1 XOR DH2,DH3,mode=hex)",
@@ -806,7 +1063,7 @@ def test_calc_math_func_names_use_click_convention():
     for func, click_name in func_and_click_name:
         with Program() as logic:
             with Rung(Enable):
-                calc(func(A), Result)
+                math(func(A), Result)
 
         mapping = TagMap(
             {Enable: x[1], A: df[1], Result: df[2]},
@@ -814,7 +1071,7 @@ def test_calc_math_func_names_use_click_convention():
         )
         bundle = pyrung_to_ladder(logic, mapping)
         tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-        assert tokens == [f"math({click_name}(DF1),DF2,mode=decimal)", "end()"], (
+        assert tokens == [f"math({click_name} ( DF1 ),DF2,mode=decimal)", "end()"], (
             f"{func.__name__} should export as {click_name}, tokens={tokens}"
         )
 
@@ -827,7 +1084,7 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(A + H[1], Dest)
+            math(A + H[1], Dest)
 
     mapping = TagMap(
         {
@@ -846,7 +1103,7 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
         {
             "path": "main.rung[0].instruction[0](CalcInstruction).instruction.expression",
             "message": (
-                "CLK_CALC_MODE_MIXED: calc() mixes WORD (hex-family) and non-WORD "
+                "CLK_MATH_MODE_MIXED: math() mixes WORD (hex-family) and non-WORD "
                 "(decimal-family) operands at "
                 "main.rung[0].instruction[0](CalcInstruction).instruction.expression."
             ),
@@ -1043,7 +1300,7 @@ def test_precheck_and_issue_payload():
         {
             "path": "main.rung[0].instruction[0](CopyInstruction).instruction.source",
             "message": (
-                "CLK_EXPR_ONLY_IN_CALC: Expression used outside calc instruction at "
+                "CLK_EXPR_ONLY_IN_MATH: Expression used outside a math() instruction at "
                 "main.rung[0].instruction[0](CopyInstruction).instruction.source."
             ),
             "source_file": None,
@@ -1085,6 +1342,25 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
             "source_file": None,
             "source_line": None,
         }
+    ]
+
+
+def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
+    Sensor = Bool("Sensor")
+    Coil = Bool("Coil")
+
+    with Program() as logic:
+        with Rung(immediate(Sensor)):
+            out(Coil)
+
+    mapping = TagMap({Sensor: c[1], Coil: y[1]}, include_system=False)
+
+    with pytest.raises(LadderExportError) as exc_info:
+        pyrung_to_ladder(logic, mapping)
+
+    assert [issue["message"] for issue in exc_info.value.issues] == [
+        "CLK_IMMEDIATE_CONTACT_MUST_BE_X: Immediate contact on Sensor (C1) at "
+        "main.rung[0].condition; an immediate contact must read an input mapped to X."
     ]
 
 
@@ -1238,7 +1514,7 @@ def test_empty_branch_comment_fails_round_trip_validation():
     )
 
 
-# --- Native topology golden suite (source: tests/fixtures/click_or_topology.csv) ---
+# --- Hand-drawn Or patterns (tests/fixtures/click_or_topology.csv), importer only ---
 
 
 _NATIVE_OR_TOPOLOGY_FIXTURE = (
@@ -1275,11 +1551,26 @@ def _native_or_topology_rows() -> dict[int, tuple[tuple[str, ...], ...]]:
 def _assert_native_pattern(
     *,
     pattern_id: int,
-    bundle_rows: tuple[tuple[str, ...], ...],
+    logic: Program,
+    mapping: TagMap,
     expected_rows: tuple[tuple[str, ...], ...],
 ) -> None:
-    assert _native_or_topology_rows()[pattern_id] == expected_rows
-    assert bundle_rows == (_header(), *expected_rows, _END_ROW)
+    """The hand-drawn pattern imports as *logic*, and *logic* exports as *expected_rows*.
+
+    The fixture was drawn by hand and never saved by a CLICK, so it pins only what the importer
+    reads.  The export draws the form CLICK's syntax check keeps (test_ladder_topology.py).
+    """
+    from pyrung.click.ladder._exporter import _LadderExporter
+
+    exporter = _LadderExporter(tag_map=mapping, program=logic)
+    exporter._validate_scope_roundtrip(
+        source_rungs=logic.rungs,
+        rendered_rows=list(_native_or_topology_rows()[pattern_id]),
+        scope="main",
+        subroutine_name=None,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert bundle.main_rows == (_header(), *expected_rows, _END_ROW)
 
 
 def test_native_or_topology_fixture_shape():
@@ -1299,12 +1590,11 @@ def test_native_pattern_1_mid_rung_or():
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], Y001: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
         _blank_row("", ["", "C1"]),
     )
-    _assert_native_pattern(pattern_id=1, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=1, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_2_series_ors():
@@ -1319,12 +1609,11 @@ def test_native_pattern_2_series_ors():
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T:C1", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "", "C2"]),
+        _row("R", ["X001", "T:C1", "T"], "out(Y001)"),
+        _blank_row("", ["X002", "C2"]),
     )
-    _assert_native_pattern(pattern_id=2, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=2, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_3_or_plus_branch():
@@ -1344,12 +1633,11 @@ def test_native_pattern_3_or_plus_branch():
         {X001: x[1], X002: x[2], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "", "C1"], "out(Y002)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["X002", "C1"], "out(Y002)"),
     )
-    _assert_native_pattern(pattern_id=3, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=3, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_4_three_way_or_plus_branch():
@@ -1370,13 +1658,12 @@ def test_native_pattern_4_three_way_or_plus_branch():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "|", "C1"], "out(Y002)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["X002", "T:C1"], "out(Y002)"),
         _blank_row("", ["X003"]),
     )
-    _assert_native_pattern(pattern_id=4, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=4, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_5_combined_or_multi_output_branch():
@@ -1409,13 +1696,12 @@ def test_native_pattern_5_combined_or_multi_output_branch():
         },
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T:X002", "T", "T"], "out(Y001)"),
-        _row("", ["", "T:X003", "|", "T:C1"], "out(Y002)"),
-        _row("", ["", "X004", "", "-"], "out(Y003)"),
+        _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
+        _row("", ["", "T:X003", "T:C1"], "out(Y002)"),
+        _row("", ["", "X004"], "out(Y003)"),
     )
-    _assert_native_pattern(pattern_id=5, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=5, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_6_mid_rung_or_with_nested_all_of():
@@ -1435,13 +1721,12 @@ def test_native_pattern_6_mid_rung_or_with_nested_all_of():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], C3: c[3], Y001: y[1]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T:X002", "-", "-", "T"], "out(Y001)"),
         _blank_row("", ["", "T:C1", "C2", "C3", "|"]),
         _blank_row("", ["", "X003", "-", "-"]),
     )
-    _assert_native_pattern(pattern_id=6, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=6, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_7_or_with_two_branches():
@@ -1465,13 +1750,12 @@ def test_native_pattern_7_or_with_two_branches():
         {X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2], Y003: y[3]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "", "T:C1"], "out(Y002)"),
-        _row("", ["", "", "C2"], "out(Y003)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["X002", "T:C1"], "out(Y002)"),
+        _row("", ["", "C2"], "out(Y003)"),
     )
-    _assert_native_pattern(pattern_id=7, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=7, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_native_pattern_8_series_ors_plus_branch():
@@ -1493,12 +1777,11 @@ def test_native_pattern_8_series_ors_plus_branch():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T", "T:C1", "T", "T"], "out(Y001)"),
-        _row("", ["X002", "", "C2", "", "X003"], "out(Y002)"),
+        _row("R", ["X001", "T:C1", "T"], "out(Y001)"),
+        _row("", ["X002", "C2", "X003"], "out(Y002)"),
     )
-    _assert_native_pattern(pattern_id=8, bundle_rows=bundle.main_rows, expected_rows=expected)
+    _assert_native_pattern(pattern_id=8, logic=logic, mapping=mapping, expected_rows=expected)
 
 
 def test_calc_sum_expr_renders_colon_range():
@@ -1509,7 +1792,7 @@ def test_calc_sum_expr_renders_colon_range():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DH.select(1, 5).sum(), Dest[1])
+            math(DH.select(1, 5).sum(), Dest[1])
 
     mapping = TagMap(
         {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
@@ -1528,7 +1811,7 @@ def test_calc_sum_expr_hex_mode():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DH.select(1, 3).sum(), Dest[1])
+            math(DH.select(1, 3).sum(), Dest[1])
 
     mapping = TagMap(
         {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
@@ -1547,7 +1830,7 @@ def test_calc_sum_expr_decimal_mode():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(DS.select(1, 5).sum(), Result)
+            math(DS.select(1, 5).sum(), Result)
 
     mapping = TagMap(
         {Enable: x[1], Result: ds[100], **{DS[i]: ds[i] for i in range(1, 11)}},
@@ -1558,11 +1841,135 @@ def test_calc_sum_expr_decimal_mode():
     assert tokens == ["math(SUM ( DS1 : DS5 ),DS100,mode=decimal)", "end()"]
 
 
-# ---- ExportSummary tests ----
+@pytest.mark.parametrize(
+    ("method", "click_name"),
+    [("max", "MAX"), ("min", "MIN"), ("median", "MDN"), ("mean", "AVG")],
+)
+def test_calc_range_aggregate_renders_click_name(method, click_name):
+    """max/min/median/mean render like SUM, with CLICK's MAX/MIN/MDN/AVG names."""
+    Enable = Bool("Enable")
+    DS = Block("DS", TagType.INT, 1, 10)
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(getattr(DS.select(1, 5), method)(), Result)
+
+    mapping = TagMap(
+        {Enable: x[1], Result: ds[100], **{DS[i]: ds[i] for i in range(1, 11)}},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [f"math({click_name} ( DS1 : DS5 ),DS100,mode=decimal)", "end()"]
 
 
-def test_summary_includes_calc_rename():
-    """Summary reports calc → math when program uses calc."""
+def test_calc_range_aggregate_hex_mode():
+    """MAX over a WORD range stays in hex mode (CLICK allows MAX/MIN/MDN/AVG in hex)."""
+    Enable = Bool("Enable")
+    DH = Block("DH", TagType.WORD, 1, 10)
+    Dest = Block("Dest", TagType.WORD, 1, 1)
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(DH.select(1, 3).max(), Dest[1])
+
+    mapping = TagMap(
+        {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(MAX ( DH1 : DH3 ),DH100,mode=hex)", "end()"]
+
+
+def test_calc_bool_range_sum_renders_plain_sum():
+    """SUM over a bit bank renders as plain SUM; CLICK has no separate spelling."""
+    Enable = Bool("Enable")
+    Flags = Block("Flags", TagType.BOOL, 1, 8)
+    Count = Int("Count")
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(Flags.select(1, 8).sum(), Count)
+
+    mapping = TagMap(
+        {Enable: x[1], Count: ds[100], **{Flags[i]: c[i] for i in range(1, 9)}},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(SUM ( C1 : C8 ),DS100,mode=decimal)", "end()"]
+
+
+def test_calc_abs_renders_uppercase():
+    """abs(x) renders as CLICK's ABS ( x ), spaced the way CLICK's formula editor writes it."""
+    Enable = Bool("Enable")
+    Delta = Int("Delta")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(abs(Delta), Result)
+            math(abs(Delta - 5) * 2, Result)
+
+    mapping = TagMap({Enable: x[1], Delta: ds[50], Result: ds[100]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [
+        "math(ABS ( DS50 ),DS100,mode=decimal)",
+        "math(ABS ( DS50 - 5 ) * 2,DS100,mode=decimal)",
+        "end()",
+    ]
+
+
+def test_calc_randint_renders_rand():
+    """randint(lo, hi) renders as CLICK's RAND ( lo , hi ); the hidden draw tag never shows."""
+    Enable = Bool("Enable")
+    Lo = Int("Lo")
+    Hi = Int("Hi")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(randint(1, 100), Result)
+            math(randint(Lo, Hi) * 2, Result)
+
+    mapping = TagMap({Enable: x[1], Lo: ds[1], Hi: ds[2], Result: ds[100]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [
+        "math(RAND ( 1 , 100 ),DS100,mode=decimal)",
+        "math(RAND ( DS1 , DS2 ) * 2,DS100,mode=decimal)",
+        "end()",
+    ]
+
+
+def test_calc_randint_of_words_is_hex():
+    """The hidden draw tag is not an operand: RAND of WORD bounds into a WORD is hex mode.
+
+    The editor refuses WORD bounds (CLK_RAND_BOUND_TYPE), so the finding is allowed here
+    to reach the mode inference.
+    """
+    Enable = Bool("Enable")
+    Lo = Tag("Lo", TagType.WORD)
+    Hi = Tag("Hi", TagType.WORD)
+    Result = Tag("Result", TagType.WORD)
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(randint(Lo, Hi), Result)
+
+    mapping = TagMap(
+        {Enable: x[1], Lo: dh[105], Hi: dh[106], Result: dh[205]}, include_system=False
+    )
+    bundle = pyrung_to_ladder(logic, mapping, allow=("CLK_RAND_BOUND_TYPE",))
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(RAND ( DH105 , DH106 ),DH205,mode=hex)", "end()"]
+
+
+def test_calc_grouping_parens_render_spaced():
+    """Grouping parens are spaced like a call's: CLICK writes ( a + b ) and - ( a + b )."""
     Enable = Bool("Enable")
     A = Int("A")
     B = Int("B")
@@ -1570,7 +1977,56 @@ def test_summary_includes_calc_rename():
 
     with Program() as logic:
         with Rung(Enable):
-            calc(A + B, Result)
+            math(A * (B + 1), Result)
+            math(-(A + 2), Result)
+
+    mapping = TagMap({Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == [
+        "math(DS1 * ( DS2 + 1 ),DS3,mode=decimal)",
+        "math(- ( DS1 + 2 ),DS3,mode=decimal)",
+        "end()",
+    ]
+
+
+def test_calc_range_aggregate_composes_with_abs():
+    Enable = Bool("Enable")
+    DS = Block("DS", TagType.INT, 1, 10)
+    Delta = Int("Delta")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(DS.select(1, 5).max() + abs(Delta), Result)
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Delta: ds[50],
+            Result: ds[100],
+            **{DS[i]: ds[i] for i in range(1, 11)},
+        },
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens == ["math(MAX ( DS1 : DS5 ) + ABS ( DS50 ),DS100,mode=decimal)", "end()"]
+
+
+# ---- ExportSummary tests ----
+
+
+def test_summary_has_no_rename_for_math():
+    """math() is CLICK's Math by name: the summary reports no rename, nor for calc()."""
+    Enable = Bool("Enable")
+    A = Int("A")
+    B = Int("B")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            math(A + B, Result)
 
     mapping = TagMap(
         {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
@@ -1578,13 +2034,18 @@ def test_summary_includes_calc_rename():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     s = bundle.export_summary
-    assert s.renames == (("calc", "math"),)
+    assert s.renames == ()
     assert s.added_end is True
-    assert s.summary() == "Renamed: calc -> math\nAdded:   end() on main"
+    assert s.summary() == "Added:   end() on main"
+
+    with pytest.warns(FutureWarning), Program() as old:
+        with Rung(Enable):
+            calc(A + B, Result)
+    assert pyrung_to_ladder(old, mapping).export_summary.renames == ()
 
 
-def test_summary_omits_calc_rename_when_unused():
-    """Summary does not include calc → math when program has no calc."""
+def test_summary_has_no_renames_without_one():
+    """A program with nothing CLICK names differently reports no rename."""
     Enable = Bool("Enable")
     Light = Bool("Light")
 
@@ -1673,6 +2134,31 @@ def test_summary_return_not_counted_when_explicit():
     assert s.added_return == 0
 
 
+def test_conditional_return_at_end_still_gets_tail():
+    """A subroutine ending in a conditional return() still needs CLICK's unconditional RET."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            call("MySub")
+        with subroutine("MySub"):
+            with Rung(Enable):
+                out(Light)
+            with Rung(Enable):
+                return_early()
+
+    mapping = TagMap({Enable: x[1], Light: y[1]}, include_system=False)
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert bundle.export_summary.added_return == 1
+    assert normalize_csv(dict(bundle.subroutine_rows)["MySub"])[-2:] == _literal_csv_rows(
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+        R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+        """
+    )
+
+
 def test_summary_end_always_present():
     """Summary always reports end() on main."""
     Enable = Bool("Enable")
@@ -1697,26 +2183,27 @@ def test_summary_str_format():
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
+    Coil = Bool("Coil")
 
     with Program() as logic:
         with Rung(Enable):
-            calc(A + B, Result)
+            math(A + B, Result)
         with Rung(Enable):
             with forloop(3):
-                out(A)
+                out(Coil)
         with Rung(Enable):
             call("MySub")
         with subroutine("MySub"):
             with Rung(Enable):
-                out(A)
+                out(Coil)
 
     mapping = TagMap(
-        {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
+        {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3], Coil: c[1]},
         include_system=False,
     )
     bundle = pyrung_to_ladder(logic, mapping)
     assert str(bundle.export_summary) == (
-        "Renamed: calc -> math, forloop -> for\n"
+        "Renamed: forloop -> for\n"
         "Added:   next() closing 1 for-loop, return() on 1 subroutine, end() on main"
     )
 
@@ -1847,6 +2334,39 @@ def test_receive_rtu_modbus_address_token():
     )
 
 
+@pytest.mark.parametrize(
+    ("remote_start", "dest", "csv_address"),
+    [
+        ('ModbusAddress("50eh")', "DS1", "address=50Eh,register_type=holding"),
+        ('ModbusAddress("10h", RegisterType.COIL)', "C11", "address=10h,register_type=coil"),
+        ("ModbusAddress(300005)", "DS1", "address=300005"),
+        ("ModbusAddress(0x50E)", "DS1", "address=401295"),
+        ("ModbusAddress(16, RegisterType.COIL)", "C11", "address=17"),
+    ],
+    ids=["hex", "hex-coil", "984", "raw", "raw-coil"],
+)
+def test_receive_modbus_address_keeps_its_notation(remote_start, dest, csv_address):
+    """Hex stays hex; 984 and raw offsets export as MODBUS 984."""
+    _assert_export_main_rows(
+        f"""
+        with Program() as p:
+            with Rung(X1):
+                receive(
+                    target=ModbusTcpTarget("plc2", "192.168.1.2", device_id=1),
+                    remote_start={remote_start},
+                    dest={dest},
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        f"""
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start=ModbusAddress({csv_address}),dest={dest},receiving=C1,success=C2,error=C3,exception_response=DS2)
+        """,
+    )
+
+
 def test_send_block_range_token():
     _assert_export_main_rows(
         """
@@ -1948,10 +2468,9 @@ def test_branch_rendered_height_over_32_rows_raises_clear_error():
 
 
 class TestContinuedExport:
-    """Ladder export for .continued() rungs."""
+    """Each continued rung exports as a CLICK rung of its own, as CLICK's syntax check draws it."""
 
-    def test_continued_rung_blank_marker(self):
-        """Continued rung rows use blank marker instead of R."""
+    def test_continued_rung_is_its_own_click_rung(self):
         _assert_export_main_rows(
             """
             with Program() as p:
@@ -1962,7 +2481,7 @@ class TestContinuedExport:
             """,
             """
             R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            R,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
             """,
         )
 
@@ -1981,7 +2500,7 @@ class TestContinuedExport:
             """
             R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
             ,,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
-            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+            R,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
             """,
         )
 
@@ -1997,7 +2516,7 @@ class TestContinuedExport:
             """,
             """
             R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
-            ,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            R,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
             """,
         )
 
@@ -2042,7 +2561,7 @@ class TestIndexedMarkers:
         assert markers[1] == "R2"
         assert markers[2] == "R3"  # end()
 
-    def test_index_true_continued_rung_blank_marker(self):
+    def test_index_true_numbers_a_continued_rung(self):
         A = Bool("A")
         B = Bool("B")
         C = Bool("C")
@@ -2055,8 +2574,8 @@ class TestIndexedMarkers:
         bundle = pyrung_to_ladder(logic, mapping, index=True)
         markers = _markers(bundle.main_rows)
         assert markers[0] == "R1"
-        assert markers[1] == ""  # continued
-        assert markers[2] == "R2"  # end()
+        assert markers[1] == "R2"  # continued
+        assert markers[2] == "R3"  # end()
 
     def test_index_true_forloop_sequential(self):
         A = Bool("A")
@@ -2099,3 +2618,121 @@ class TestIndexedMarkers:
         assert sub_markers[0] == "R1"  # restarts at 1
         assert sub_markers[1] == "R2"
         assert sub_markers[2] == "R3"  # return()
+
+
+# --- A fill() of one register exports as a Copy ---------------------------------------
+#
+# CLICK's Fill dialog needs a range of at least two registers (checked on the editor,
+# 2026-11-07), so a one-register Fill is pasted as the Single Copy of the same value.
+
+
+def _single_fill_tokens(body, *, allow: tuple[str, ...] = ()) -> list[str]:
+    with Program(strict=False) as logic:
+        with Rung(x[1]):
+            body()
+    bundle = pyrung_to_ladder(logic, TagMap(), allow=allow)
+    return [row[-1] for row in bundle.main_rows[1:] if row[-1] not in ("", "end()")]
+
+
+def test_one_register_fill_exports_the_full_row_of_a_single_copy():
+    with Program(strict=False) as logic:
+        with Rung(x[1]):
+            fill(7, ds.select(5, 5), oneshot=True)
+    rows = pyrung_to_ladder(logic, TagMap()).main_rows
+    expected = _literal_csv_rows(
+        "R,X001," + ",".join(["-"] * 30) + ',"copy(7,DS5,oneshot=1)"\n'
+        "R," + ",".join(["-"] * 31) + ",end()"
+    )
+    assert normalize_csv(rows) == expected
+
+
+def test_two_register_fill_is_still_a_fill():
+    assert _single_fill_tokens(lambda: fill(7, ds.select(5, 6), oneshot=True)) == [
+        "fill(7,DS5..DS6,oneshot=1)"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("build", "token"),
+    [
+        (lambda: fill(7, ds.select(5, 5)), "copy(7,DS5)"),
+        (lambda: fill(ds[1], ds.select(5, 5)), "copy(DS1,DS5)"),
+        (lambda: fill(2.5, df.select(3, 3)), "copy(2.5,DF3)"),
+        (lambda: fill(10, dh.select(7, 7)), "copy(Ah,DH7)"),
+        (lambda: fill("A", txt.select(5, 5)), 'copy("A",TXT5)'),
+        (lambda: fill("", txt.select(5, 5)), "copy($00,TXT5)"),
+        (lambda: fill("\x00", txt.select(5, 5)), "copy($00,TXT5)"),
+        (lambda: fill(txt[1], txt.select(5, 5)), "copy(TXT1,TXT5)"),
+    ],
+)
+def test_one_register_fill_exports_a_copy_of_the_same_value(build, token):
+    assert _single_fill_tokens(build) == [token]
+
+
+def test_one_register_fill_into_text_from_a_number_register_is_still_refused():
+    # A Fill takes no number register into TXT, and a one-register Fill must pass
+    # the Fill table as well as the Copy one.
+    with pytest.raises(LadderExportError, match="Copy operation fill is incompatible"):
+        _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5)))
+
+
+def test_one_register_fill_keeps_the_checks_of_a_copy():
+    with pytest.raises(LadderExportError, match="CLK_COPY_CONSTANT_INTO_BIT") as exc_info:
+        _single_fill_tokens(lambda: fill(1, c.select(1, 1)))
+    assert "copy(1, ...) into C" in str(exc_info.value)
+    with pytest.raises(LadderExportError, match="CLK_EXPR_ONLY_IN_MATH"):
+        _single_fill_tokens(lambda: fill(ds[1] + 1, ds.select(5, 5)))
+
+
+def test_one_register_fill_refuses_text_that_a_copy_would_convert():
+    # The bank check refuses these first, so allow it to reach the export's own refusal.
+    allow = ("CLK_COPY_BANK_INCOMPATIBLE",)
+    with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
+        _single_fill_tokens(lambda: fill(df[1], txt.select(5, 5)), allow=allow)
+    with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
+        _single_fill_tokens(lambda: fill(txt[1], ds.select(5, 5)), allow=allow)
+
+
+def test_one_register_fill_refuses_several_characters():
+    with pytest.raises(LadderExportError, match="several characters"):
+        _single_fill_tokens(lambda: fill("AB", txt.select(5, 5)))
+
+
+def test_pointer_range_fill_is_still_refused():
+    # Its length is unknown at export, so it is never turned into a Copy.
+    ptr = Int("Ptr")
+    with pytest.raises(LadderExportError, match="CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"):
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                fill(1, ds.select(ptr, ptr))
+        pyrung_to_ladder(logic, TagMap({ptr: ds[1]}, include_system=False))
+
+
+@pytest.mark.parametrize("value", [7, 40000, -40000])
+def test_one_register_fill_and_its_copy_store_alike(value):
+    from pyrung import PLC
+
+    def run(build):
+        with Program(strict=False) as logic:
+            with Rung():
+                build()
+        runner = PLC(logic)
+        runner.step()
+        return runner.current_state.tags
+
+    filled = run(lambda: fill(value, ds.select(5, 5)))
+    copied = run(lambda: copy(value, ds[5]))
+    assert filled["DS5"] == copied["DS5"]
+    assert filled.get("SC43") == copied.get("SC43")
+
+
+def test_one_register_fill_costs_what_the_copy_costs():
+    from pyrung.click.ladder.steps import estimate_steps
+
+    def total(build):
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                build()
+        return estimate_steps(pyrung_to_ladder(logic, TagMap())).total
+
+    assert total(lambda: fill(7, ds.select(5, 5))) == total(lambda: copy(7, ds[5]))

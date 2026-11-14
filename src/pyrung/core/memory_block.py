@@ -7,11 +7,13 @@ BlockRange represents contiguous ranges for block operations.
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Never, cast, overload
 
 from pyrung.core.physical import Physical
+from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.tag import (
     ChoiceMap,
     LiveInputTag,
@@ -20,6 +22,8 @@ from pyrung.core.tag import (
     Tag,
     TagType,
     _normalize_choices,
+    note_metadata_edit,
+    refuse_system_point_in_block,
 )
 
 if TYPE_CHECKING:
@@ -31,7 +35,7 @@ if TYPE_CHECKING:
         IndirectCompareLt,
     )
     from pyrung.core.context import ConditionView, ScanContext
-    from pyrung.core.expression import Expression, SumExpr
+    from pyrung.core.expression import Expression, RangeAggregateExpr, SumExpr
     from pyrung.core.state import SystemState
     from pyrung.core.tag import MappingEntry
 
@@ -215,7 +219,9 @@ class SlotView:
     def reset(self) -> None:
         """Clear all overrides, restoring inherited defaults."""
         self._block._assert_not_materialized(self._addr, action="reset slot")
-        self._block._slot_config.pop(self._addr, None)
+        self._block._drop_slot_config(self._addr)
+        self._block._slot_names_changed += 1
+        note_metadata_edit()
 
     def __repr__(self) -> str:
         return (
@@ -244,7 +250,9 @@ class RangeSlotView:
         for addr in addresses:
             self._block._assert_not_materialized(addr, action="reset slot")
         for addr in addresses:
-            self._block._slot_config.pop(addr, None)
+            self._block._drop_slot_config(addr)
+        self._block._slot_names_changed += 1
+        note_metadata_edit()
 
     def __repr__(self) -> str:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
@@ -256,8 +264,102 @@ _TYPE_DEFAULTS: dict[TagType, Any] = {
     TagType.DINT: 0,
     TagType.REAL: 0.0,
     TagType.WORD: 0,
-    TagType.CHAR: "",
+    TagType.CHAR: BLANK_CHAR,
 }
+
+
+class PastBankError(IndexError):
+    """A pointer past the end of its block.
+
+    Not an address error: instructions raise no flag for it.  A read gives the
+    type's zero and a write is dropped.
+    """
+
+
+def _store_block(tag: Tag) -> tuple[Block, int] | None:
+    """The block and address a store of several elements from *tag* counts in.
+
+    In order: the block that made the tag (``_pyrung_home_block``, which a bank
+    reading it as a mapped slot does not move); else the bank slot a tag was mapped
+    onto (``_pyrung_hw_slot``, from ``Tag.map_to`` or a TagMap); else the block it
+    is stamped with.  So how the bank was read before does not matter.  ``None``
+    for a tag in no block, and for a field of a UDT or named array, whose block is
+    the field's own and not the memory the structure lies in.
+    """
+    block = getattr(tag, "_pyrung_home_block", None)
+    addr = getattr(tag, "_pyrung_home_addr", None)
+    if block is None:
+        hw_slot = getattr(tag, "_pyrung_hw_slot", None)
+        # Held weakly: once the bank is gone, nothing maps the tag there.
+        if hw_slot is not None and hw_slot[0]() is not None:
+            block, addr = hw_slot[0](), hw_slot[1]
+        else:
+            block = getattr(tag, "_pyrung_block", None)
+            addr = getattr(tag, "_pyrung_block_addr", None)
+    if not isinstance(block, Block) or not isinstance(addr, int):
+        return None
+    if block._pyrung_structure_kind is not None:
+        return None
+    return block, addr
+
+
+def block_room(tag: Tag) -> int | None:
+    """How many elements *tag*'s block holds from *tag* to its end, *tag* included.
+
+    ``None`` for a tag ``_store_block`` finds in no block.
+    """
+    found = _store_block(tag)
+    if found is None:
+        return None
+    block, addr = found
+    return max(0, block.end - addr + 1)
+
+
+def elements_that_fit(tag: Tag, count: int) -> int:
+    """How many of *count* consecutive elements from *tag* on are in its block.
+
+    A store of several elements (a text, its digits) writes the ones that fit and
+    drops the rest, with no flag, as a write past the end of the block is dropped.
+    Every engine counts the elements here (``block_room``).
+    """
+    room = block_room(tag)
+    return count if room is None else min(count, room)
+
+
+def _element_at(block: Block, addr: int) -> Tag:
+    # The tag mapped onto the address, as ``block[addr]`` gives it, is returned as
+    # it is: ``_get_tag`` would stamp it with this block (``_annotate_tag``).  An
+    # address nothing is mapped onto gets this block's own tag, made and cached as
+    # ``block[addr]`` makes it.
+    mapped = block._mapped_tags.get(addr)
+    return mapped if mapped is not None else block._get_tag(addr)
+
+
+def _element_name(block: Block, addr: int) -> str:
+    mapped = block._mapped_tags.get(addr)
+    return mapped.name if mapped is not None else block._effective_slot_name(addr)
+
+
+def elements_after(tag: Tag, count: int) -> list[Tag] | None:
+    """The block elements after *tag*, up to *count* elements from *tag* on in all.
+
+    Each is the tag that holds its address: a slot's own name, or a tag mapped
+    onto it (``map_to``).  ``None`` for a tag ``block_room`` does not count in.
+    """
+    found = _store_block(tag)
+    if found is None:
+        return None
+    block, addr = found
+    return [_element_at(block, addr + offset) for offset in range(1, count)]
+
+
+def element_names_after(tag: Tag, count: int) -> list[str] | None:
+    """The names of ``elements_after(tag, count)``, without making the tags."""
+    found = _store_block(tag)
+    if found is None:
+        return None
+    block, addr = found
+    return [_element_name(block, addr + offset) for offset in range(1, count)]
 
 
 @dataclass(eq=False)
@@ -323,6 +425,16 @@ class Block:
     # block is mapped onto a hardware bank range. The bank owns the register;
     # this block is a named window into it.
     _hw_alias: dict[int, tuple[Block, int]] = field(default_factory=dict, repr=False)
+    # Bumped whenever a slot's name can have changed, for whatever indexes slots by name.
+    _slot_names_changed: int = field(default=0, init=False, repr=False, compare=False)
+    _factory_given: dict[int, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    _factory_asked_through: int = field(default=-1, init=False, repr=False, compare=False)
+    # The addresses the user's code wrote as ``block[n]``.  ``_tag_cache`` also holds every
+    # slot a scan or an analysis asked for, so a runner reads only these from it.  pyrung's
+    # own code asks with ``_get_tag`` or ``_tag_at`` and leaves this alone.
+    _indexed: set[int] = field(default_factory=set, init=False, repr=False, compare=False)
     _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
     _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
         default=None, init=False, repr=False
@@ -341,8 +453,12 @@ class Block:
     _pyrung_field_max: int | float | None = field(default=None, init=False, repr=False)
     _pyrung_field_uom: str | None = field(default=None, init=False, repr=False)
     _pyrung_click_bg_color: str | None = field(default=None, init=False, repr=False)
+    # A Copy whose source pointer is past the end writes nothing (CLICK's DS, DH, DF
+    # and TXT); otherwise the read is the type's zero.  Set by the dialect's banks.
+    _past_end_keeps: bool = field(default=False, init=False, repr=False, compare=False)
 
-    _all_instances: ClassVar[set[Block]] = set()
+    # Weak: a Block must not outlive its program just for being listed here.
+    _all_instances: ClassVar[weakref.WeakSet[Block]] = weakref.WeakSet()
 
     def __post_init__(self):
         Block._all_instances.add(self)
@@ -395,6 +511,7 @@ class Block:
 
         if isinstance(key, int):
             self._validate_address(key)
+            self._indexed.add(key)
             return self._get_tag(key)
         elif isinstance(key, slice):
             raise TypeError("Use .select(start, end) instead of slice syntax")
@@ -406,6 +523,14 @@ class Block:
             raise TypeError(
                 f"Invalid key type: {type(key).__name__}. Expected int, Tag, or Expression."
             )
+
+    def _tag_at(self, addr: int) -> LiveTag:
+        """``block[addr]`` for pyrung's own code.
+
+        A runner built later does not learn of a slot asked for here.
+        """
+        self._validate_address(addr)
+        return self._get_tag(addr)
 
     def _get_tag(self, addr: int) -> LiveTag:
         """Get or create a Tag for the given address."""
@@ -443,6 +568,10 @@ class Block:
                     configured_default is not UNSET or self.default_factory is not None
                 )
                 object.__setattr__(tag, "_default_explicit", default_explicit)
+                # The block that made the tag; ``_pyrung_block`` moves to a bank
+                # that reads it as a mapped slot, this does not.
+                object.__setattr__(tag, "_pyrung_home_block", self)
+                object.__setattr__(tag, "_pyrung_home_addr", addr)
                 self._tag_cache[addr] = tag
         # _tag_cache is typed dict[int, LiveTag]; both assignment sites store a
         # LiveTag, so no runtime cast is needed here (this runs on every access).
@@ -520,10 +649,41 @@ class Block:
             if mapped is not None and not retentive:
                 default = mapped.default
             elif self.default_factory is not None:
-                default = self.default_factory(addr)
+                default = self._factory_default(addr)
             else:
                 default = self._type_default()
         return retentive, default
+
+    def _factory_default(self, addr: int) -> Any:
+        """What the factory gives a slot, asked once however often the answer is wanted.
+
+        Before it answers a slot, the factory answers each lower slot, in address order.
+        A slot's own default or mapping only decides whether its answer is used.  So a
+        factory that counts gives slot n its nth answer, whatever was asked first and
+        whatever the other slots override.  A lower slot the factory raises for is skipped.
+        """
+        if addr not in self._factory_given:
+            factory = self.default_factory
+            assert factory is not None
+            lower = max(self.start, self._factory_asked_through + 1)
+            for earlier in self._window_addresses(lower, addr - 1):
+                if earlier not in self._factory_given:
+                    try:
+                        self._factory_given[earlier] = factory(earlier)
+                    except Exception:
+                        pass
+            self._factory_asked_through = max(self._factory_asked_through, addr)
+            self._factory_given[addr] = factory(addr)
+        return self._factory_given[addr]
+
+    def _slot_asks_factory(self, addr: int) -> bool:
+        """Whether making this slot into a tag would ask the factory for its default."""
+        return (
+            self.default_factory is not None
+            and addr not in self._tag_cache
+            and addr not in self._mapped_tags
+            and self._slot_field(addr, "default", UNSET) is UNSET
+        )
 
     def _effective_slot_comment(self, addr: int) -> str:
         comment = self._slot_field(addr, "comment", UNSET)
@@ -561,11 +721,39 @@ class Block:
         )
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
-        if addr in self._tag_cache:
+        # Only a slot the user's code indexed or mapped refuses a reset.  A tag a scan or an
+        # analysis made takes the reset in place (``_drop_slot_config``), so whether a reset
+        # works never depends on what ran.
+        if addr in self._tag_cache and (addr in self._indexed or addr in self._mapped_tags):
             raise ValueError(
                 f"Cannot {action} {self.name}[{addr}] after tag materialization. "
                 "Configure slot metadata before reading/indexing that slot."
             )
+
+    def _drop_slot_config(self, addr: int) -> None:
+        """Clear a slot's overrides, and give a tag already made for it what it inherits.
+
+        Setting a field changes such a tag in place (``_apply_slot_override``), and so does
+        this, so the tag holds what a tag made after the reset would hold.
+        """
+        entry = self._slot_config.pop(addr, None)
+        tag = self._tag_cache.get(addr)
+        if entry is None or tag is None or addr in self._mapped_tags:
+            return
+        retentive, default = self._effective_slot_policy(addr)
+        inherited = {
+            **self._effective_slot_hints(addr)._asdict(),
+            "name": self._effective_slot_name(addr),
+            "retentive": retentive,
+            "default": default,
+            "comment": self._effective_slot_comment(addr),
+        }
+        for field_name, value in inherited.items():
+            if getattr(entry, field_name) is not UNSET:
+                object.__setattr__(tag, field_name, value)
+        if entry.default is not UNSET:
+            explicit = default is not None and self.default_factory is not None
+            object.__setattr__(tag, "_default_explicit", explicit)
 
     def _apply_slot_override(
         self,
@@ -573,6 +761,9 @@ class Block:
         field_name: str,
         new_value: Any,
     ) -> None:
+        if field_name == "name":
+            refuse_system_point_in_block(new_value, self.name, addr)
+            self._slot_names_changed += 1
         entry = self._slot_config.get(addr)
         if entry is None:
             entry = SlotConfig()
@@ -586,6 +777,7 @@ class Block:
                 f"already set to {existing!r}, cannot change to {new_value!r}."
             )
         setattr(entry, field_name, new_value)
+        note_metadata_edit()
         if addr in self._tag_cache:
             object.__setattr__(self._tag_cache[addr], field_name, new_value)
 
@@ -595,10 +787,16 @@ class Block:
 
     def reset(self) -> None:
         """Clear all slot overrides, cached tags, and mapped-tag registrations."""
+        if self._slot_config or self._mapped_tags or self._hw_alias:
+            note_metadata_edit()
         self._tag_cache.clear()
         self._slot_config.clear()
         self._mapped_tags.clear()
         self._hw_alias.clear()
+        self._factory_given.clear()
+        self._factory_asked_through = -1
+        self._indexed.clear()
+        self._slot_names_changed += 1
 
     @overload
     def slot(self, addr: int) -> SlotView: ...
@@ -801,8 +999,13 @@ class Block:
         return any(lo <= addr <= hi for lo, hi in self.valid_ranges)
 
     def _validate_address(self, addr: int) -> None:
-        if addr < self.start or addr > self.end:
+        if addr < self.start:
             raise IndexError(
+                f"Address {addr} out of range for {self.name} block "
+                f"(valid: {self.start}-{self.end})"
+            )
+        if addr > self.end:
+            raise PastBankError(
                 f"Address {addr} out of range for {self.name} block "
                 f"(valid: {self.start}-{self.end})"
             )
@@ -811,6 +1014,16 @@ class Block:
                 f"Address {addr} is not valid for {self.name} block "
                 f"(valid window: {self.start}-{self.end}, sparse-ranged)"
             )
+
+    def _element_or_none(self, addr: int) -> Tag | None:
+        """The element at *addr*, or ``None`` if *addr* is outside the block.
+
+        A rung condition reads an element outside the block as the type's
+        zero (see ``IndirectRef.read_ctx``).
+        """
+        if addr < self.start or addr > self.end or not self._is_sparse_address_valid(addr):
+            return None
+        return self._get_tag(addr)
 
     def _validate_window_bound(self, addr: int, label: str) -> None:
         if addr < self.start or addr > self.end:
@@ -923,8 +1136,14 @@ class Block:
                     # TagMap report it as a hardware address conflict.
                     continue
                 hw_block._mapped_tags[hw_addr] = slot_tag
+                hw_block._slot_names_changed += 1
+                note_metadata_edit()
                 hw_block._tag_cache.pop(hw_addr, None)
                 self._hw_alias[logical_addr] = (hw_block, hw_addr)
+                # The slot, for a text compare's window (`text_window_condition`)
+                # and a store of several elements (`_store_block`); weak, so the
+                # mapping alone does not keep the bank alive.
+                object.__setattr__(slot_tag, "_pyrung_hw_slot", (weakref.ref(hw_block), hw_addr))
 
         return MappingEntry(source=self, target=target)
 
@@ -949,7 +1168,7 @@ class InputBlock(Block):
         ```python
         X = InputBlock("X", TagType.BOOL, 1, 16)
         X[1]           # → LiveInputTag("X1", BOOL)
-        X[1].immediate # → ImmediateRef — bypass image table
+        X[1].immediate # → ImmediateRef: immediate I/O on a CLICK
         X.select(1, 8) # → BlockRange for bulk operations
         ```
     """
@@ -1055,7 +1274,7 @@ class OutputBlock(Block):
         ```python
         Y = OutputBlock("Y", TagType.BOOL, 1, 16)
         Y[1]           # → LiveOutputTag("Y1", BOOL)
-        Y[1].immediate # → ImmediateRef — bypass image table
+        Y[1].immediate # → ImmediateRef: immediate I/O on a CLICK
         Y.select(1, 8) # → BlockRange for bulk operations
         ```
     """
@@ -1183,6 +1402,34 @@ class BlockRange:
 
         return SumExpr(self)
 
+    def max(self) -> RangeAggregateExpr:
+        """Return an expression for the largest tag value in this range (CLICK ``MAX``)."""
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("max", self)
+
+    def min(self) -> RangeAggregateExpr:
+        """Return an expression for the smallest tag value in this range (CLICK ``MIN``)."""
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("min", self)
+
+    def median(self) -> RangeAggregateExpr:
+        """Return an expression for the median tag value in this range (CLICK ``MDN``).
+
+        An even count gives the mean of the two middle values; for an integer
+        range that mean is truncated toward zero, as on a CLICK.
+        """
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("median", self)
+
+    def mean(self) -> RangeAggregateExpr:
+        """Return an expression for the mean of the tag values in this range (CLICK ``AVG``)."""
+        from pyrung.core.expression import RangeAggregateExpr
+
+        return RangeAggregateExpr("mean", self)
+
     def __len__(self) -> int:
         return len(self.addresses)
 
@@ -1239,6 +1486,10 @@ class IndirectBlockRange:
     start_expr: int | Tag | Any
     end_expr: int | Tag | Any
     reverse_order: bool = False
+
+    def __post_init__(self) -> None:
+        _check_range_bound(self.block, self.start_expr, "start")
+        _check_range_bound(self.block, self.end_expr, "end")
 
     def resolve_ctx(self, ctx: ScanContext | ConditionView) -> BlockRange:
         """Resolve expressions to concrete BlockRange using ScanContext."""
@@ -1313,6 +1564,56 @@ class RangeComparison:
     value: Any
 
 
+#: Tag types a pointer may have: a pointer holds an address, an integer.
+POINTER_TAG_TYPES = frozenset({TagType.INT, TagType.DINT})
+
+
+def _check_pointer_tag(block: Block, pointer: Any) -> None:
+    """Refuse a pointer tag that is not an Int or Dint (``DS[R]`` with R a Real)."""
+    tag_type = getattr(pointer, "type", None)
+    if tag_type is None or tag_type in POINTER_TAG_TYPES:
+        return
+    raise TypeError(
+        f"Pointer {getattr(pointer, 'name', pointer)!r} into block {block.name!r} is "
+        f"{tag_type.name}; a pointer must be an Int or Dint tag."
+    )
+
+
+def _check_pointer_expression(block: Block, expr: Any, what: str = "Index expression") -> None:
+    """Refuse an index expression that is not integer-valued (``DS[R + 1]``, ``DS[I / 2]``)."""
+    from pyrung.core.expression import format_expr, is_integer_index
+
+    if is_integer_index(expr):
+        return
+    raise TypeError(
+        f"{what} {format_expr(expr)!r} into block {block.name!r} is not integer-valued; "
+        "an index expression may use only Int or Dint tags, integer constants and "
+        "integer operators ('//', not '/'; no '**' or math function)."
+    )
+
+
+def _check_range_bound(block: Block, bound: Any, which: str) -> None:
+    """Refuse a ``select()`` bound that is not an int, an Int/Dint tag or an index expression."""
+    from pyrung.core.expression import Expression
+
+    if isinstance(bound, int):
+        return
+    if isinstance(bound, Expression):
+        _check_pointer_expression(block, bound, f"select() {which} bound")
+        return
+    if isinstance(bound, Tag):
+        if bound.type in POINTER_TAG_TYPES:
+            return
+        raise TypeError(
+            f"select() {which} bound {bound.name!r} into block {block.name!r} is "
+            f"{bound.type.name}; a bound must be an int or an Int or Dint tag."
+        )
+    raise TypeError(
+        f"select() {which} bound into block {block.name!r} is a {type(bound).__name__}; "
+        "a bound must be an int, an Int or Dint tag or an integer index expression."
+    )
+
+
 @dataclass(frozen=True)
 class IndirectRef:
     """Tag with runtime-resolved address via pointer.
@@ -1327,6 +1628,9 @@ class IndirectRef:
 
     block: Block
     pointer: Tag
+
+    def __post_init__(self) -> None:
+        _check_pointer_tag(self.block, self.pointer)
 
     def resolve(self, state: SystemState) -> Tag:
         """Resolve pointer value to concrete Tag.
@@ -1354,11 +1658,30 @@ class IndirectRef:
             Concrete Tag at the resolved address.
 
         Raises:
-            IndexError: If resolved address is out of range.
+            IndexError: If resolved address is out of range (``PastBankError``
+                past the end of the block).
         """
         ptr_value = ctx.get_tag(self.pointer.name, self.pointer.default)
         self.block._validate_address(ptr_value)
         return self.block._get_tag(ptr_value)
+
+    def address_ctx(self, ctx: ScanContext | ConditionView) -> int:
+        """The address the pointer holds this scan."""
+        return int(ctx.get_tag(self.pointer.name, self.pointer.default))
+
+    def read_ctx(self, ctx: ScanContext | ConditionView) -> Any:
+        """The element's value as a rung condition reads it.
+
+        An address outside the block reads as the type's zero (``0``,
+        ``0.0``, ``False``) with no fault flag: a condition never stops the
+        scan.  Instructions resolve through ``resolve_ctx`` instead: below the
+        block they set the address-error flag, past it they read the type's
+        zero and drop a write, with no flag (``PastBankError``).
+        """
+        tag = self.block._element_or_none(self.address_ctx(ctx))
+        if tag is None:
+            return self.block._type_default()
+        return ctx.get_tag(tag.name, tag.default)
 
     def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""
@@ -1420,6 +1743,9 @@ class IndirectExprRef:
     block: Block
     expr: Any  # Expression type - use Any to avoid circular import
 
+    def __post_init__(self) -> None:
+        _check_pointer_expression(self.block, self.expr)
+
     def resolve_ctx(self, ctx: ScanContext | ConditionView) -> Tag:
         """Resolve expression value to concrete Tag using ScanContext.
 
@@ -1430,11 +1756,70 @@ class IndirectExprRef:
             Concrete Tag at the computed address.
 
         Raises:
-            IndexError: If resolved address is out of range.
+            IndexError: If resolved address is out of range (``PastBankError``
+                past the end of the block).
         """
-        addr = int(self.expr.evaluate(ctx))
+        value = self.expr.evaluate(ctx)
+        if value != value or value in (float("inf"), float("-inf")):
+            # In a Math an integer step past 2 ** 53 is a double, so the address
+            # can be +/-Inf or NaN (``lsh(P1, 2000)``): no element, an address
+            # outside the block, as one below it (the address error, nothing
+            # written).
+            raise IndexError(f"Address {value} out of range for {self.block.name} block")
+        addr = int(value)
         self.block._validate_address(addr)
         return self.block._get_tag(addr)
+
+    def address_ctx(self, ctx: ScanContext | ConditionView) -> int:
+        """The address the expression gives this scan."""
+        return int(self.expr.evaluate(ctx))
+
+    def read_ctx(self, ctx: ScanContext | ConditionView) -> Any:
+        """The element's value as a rung condition reads it (see ``IndirectRef.read_ctx``)."""
+        tag = self.block._element_or_none(self.address_ctx(ctx))
+        if tag is None:
+            return self.block._type_default()
+        return ctx.get_tag(tag.name, tag.default)
+
+    # Comparisons build the same conditions as ``IndirectRef``'s.  Without
+    # them, ``DS[idx + 1] == 5`` fell back to the dataclass ``__eq__`` and
+    # produced a plain ``bool``.
+
+    def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
+        """Create equality comparison condition."""
+        from pyrung.core.condition import IndirectCompareEq
+
+        return IndirectCompareEq(self, other)
+
+    def __ne__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
+        """Create inequality comparison condition."""
+        from pyrung.core.condition import IndirectCompareNe
+
+        return IndirectCompareNe(self, other)
+
+    def __lt__(self, other: Any) -> IndirectCompareLt:
+        """Create less-than comparison condition."""
+        from pyrung.core.condition import IndirectCompareLt
+
+        return IndirectCompareLt(self, other)
+
+    def __le__(self, other: Any) -> IndirectCompareLe:
+        """Create less-than-or-equal comparison condition."""
+        from pyrung.core.condition import IndirectCompareLe
+
+        return IndirectCompareLe(self, other)
+
+    def __gt__(self, other: Any) -> IndirectCompareGt:
+        """Create greater-than comparison condition."""
+        from pyrung.core.condition import IndirectCompareGt
+
+        return IndirectCompareGt(self, other)
+
+    def __ge__(self, other: Any) -> IndirectCompareGe:
+        """Create greater-than-or-equal comparison condition."""
+        from pyrung.core.condition import IndirectCompareGe
+
+        return IndirectCompareGe(self, other)
 
     def __repr__(self) -> str:
         return f"IndirectExprRef({self.block.name}[{self.expr}])"

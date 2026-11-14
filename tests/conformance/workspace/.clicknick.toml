@@ -1,0 +1,7 @@
+# ClickNick uses this as the active workspace for the named CLICK PLC.
+# ClickNick owns generated PLC source/data and preserves tests, docs, and tooling.
+
+version = 1
+
+[plc]
+name = "PYRUNG_CONFORMANCE"

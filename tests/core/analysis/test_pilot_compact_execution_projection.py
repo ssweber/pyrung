@@ -50,10 +50,18 @@ def _guard_surface_program():
     return program, pending, entry, edge
 
 
-def _captured_projection():
+def _captured_projection(*, pulse: bool = True):
     program, pending, entry, edge = _guard_surface_program()
     plc = PLC(program)
     plc.step()
+    if pulse:
+        # Pulse the edge once so its contact's memory is written (an entry
+        # read, not the unwritten default) when the captured scan sees it rise
+        # again.
+        plc.patch({edge.name: True})
+        plc.step()
+        plc.patch({edge.name: False})
+        plc.step()
     plc.patch({edge.name: True})
     captures: dict[int, ConditionViewCapture] = {}
     plc._run_single_scan(
@@ -159,7 +167,8 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
         if run.kind == "rung" and run is not anchor and run.rung._use_prior_snapshot
     )
     branch_run = next(run for run in projection.runs if run.kind == "branch")
-    assert anchor.view is continued.view is branch_run.view
+    # Each row has a view of its own, taken as the solve reached it.
+    assert len({id(anchor.view), id(continued.view), id(branch_run.view)}) == 3
 
     guard_reads = tuple(
         read
@@ -177,7 +186,16 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
     assert entry_read.occurrence.source == "entry"
     assert resolved_read.occurrence.source == "resolved"
     assert default_read.occurrence.source == "default"
-    assert memory_read.occurrence.name.endswith(edge.name)
+    # The edge contact reads its tag, then its own memory (``_edge:e{N}``,
+    # the contact's site key; it was ``_prev:<tag>`` when memory was per tag).
+    edge_contact = anchor.rung._conditions[4]
+    assert memory_read.occurrence.name == edge_contact._memory_key
+    edge_reads = [
+        read.occurrence.name
+        for read in guard_reads
+        if read.occurrence.name in {edge.name, edge_contact._memory_key}
+    ]
+    assert edge_reads == [edge.name, edge_contact._memory_key]
 
     compact_projection_condition_views(projection)
 
@@ -187,6 +205,28 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
     assert anchor.view._memory == {memory_read.occurrence.name: memory_read.occurrence.value}
     assert "CompactMissing" not in anchor.view._tags
     assert capture not in gc.get_referents(projection)
+
+
+def test_compaction_keeps_guards_when_the_edge_memory_read_is_a_default() -> None:
+    # The edge's memory is unwritten: its read is a default, which compaction
+    # keeps as an absence.  The guards must judge the same after it.
+    _plc, _capture, projection, _pending, _entry, _edge = _captured_projection(pulse=False)
+    anchor = next(run for run in projection.runs if len(run.rung._conditions) == 5)
+    memory_read = next(
+        read
+        for read in projection.reads
+        if read.instruction is None
+        and read.run.view is anchor.view
+        and read.occurrence.domain == "memory"
+    )
+    assert memory_read.occurrence.source == "default"
+    selected_runs = tuple(run for run in projection.runs if run.rung._conditions)
+    before = tuple(_evaluate_run_guard(run, projection) for run in selected_runs)
+
+    compact_projection_condition_views(projection)
+
+    after = tuple(_evaluate_run_guard(run, projection) for run in selected_runs)
+    assert after == before
 
 
 def test_write_enabling_read_closure_includes_only_its_dynamic_ancestors() -> None:

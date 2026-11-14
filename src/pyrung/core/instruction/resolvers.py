@@ -39,7 +39,7 @@ def resolve_tag_or_value_ctx(
     """
     # Import here to avoid circular imports
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_block import IndirectExprRef
+    from pyrung.core.memory_block import IndirectExprRef, PastBankError
     from pyrung.core.memory_block import IndirectRef as IndirectRefType
 
     # Check for immediate wrapper first.
@@ -48,13 +48,13 @@ def resolve_tag_or_value_ctx(
     # Check for Expression first (includes TagExpr)
     if isinstance(source, Expression):
         return source.evaluate(ctx)
-    # Check for IndirectExprRef
-    if isinstance(source, IndirectExprRef):
-        resolved_tag = source.resolve_ctx(ctx)
-        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
-    # Check for IndirectRef
-    if isinstance(source, IndirectRefType):
-        resolved_tag = source.resolve_ctx(ctx)
+    # Check for IndirectExprRef or IndirectRef
+    if isinstance(source, (IndirectExprRef, IndirectRefType)):
+        try:
+            resolved_tag = source.resolve_ctx(ctx)
+        except PastBankError:
+            # pyrung has no memory past a bank: the read is the type's zero.
+            return source.block._type_default()
         return ctx.get_tag(resolved_tag.name, resolved_tag.default)
     # Check for Tag
     if isinstance(source, Tag):
@@ -94,6 +94,43 @@ def resolve_tag_ctx(
         return target.value
     # Regular Tag
     return target
+
+
+def reads_indexed_element(value: Any, seen: set[int] | None = None) -> bool:
+    """True when *value* (a source or an expression) reads a block element
+    addressed at scan time (``Tbl[P]``, ``Tbl[Q + 1]``), which can fall below the
+    block."""
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectExprRef
+    from pyrung.core.memory_block import IndirectRef as IndirectRefType
+
+    if seen is None:
+        seen = set()
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    if isinstance(value, (IndirectRefType, IndirectExprRef)):
+        return True
+    if isinstance(value, Expression):
+        return any(reads_indexed_element(child, seen) for child in vars(value).values())
+    if isinstance(value, (list, tuple)):
+        return any(reads_indexed_element(item, seen) for item in value)
+    return False
+
+
+def resolve_source_type_tag_ctx(source: IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
+    """A Tag with the type of the element *source* reads.
+
+    Past its bank there is no element, and the read is the type's zero: the
+    bank's first element carries the type.  Read the value through
+    ``resolve_tag_or_value_ctx``, not from this Tag.
+    """
+    from pyrung.core.memory_block import PastBankError
+
+    try:
+        return source.resolve_ctx(ctx)
+    except PastBankError:
+        return source.block._get_tag(source.block.start)
 
 
 def resolve_tag_name_ctx(
@@ -166,29 +203,38 @@ def resolve_coil_targets_ctx(
     )
 
 
+def _raise_fault(ctx: ScanContext, name: str) -> None:
+    ctx._set_tag_internal(name, True)
+
+
 def _set_fault_out_of_range(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
-    ctx._set_tag_internal(system.fault.out_of_range.name, True)
-
-
-def _set_fault_division_error(ctx: ScanContext) -> None:
-    from pyrung.core.system_points import system
-
-    ctx._set_tag_internal(system.fault.division_error.name, True)
+    _raise_fault(ctx, system.fault.out_of_range.name)
 
 
 def _set_fault_address_error(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
-    ctx._set_tag_internal(system.fault.address_error.name, True)
+    _raise_fault(ctx, system.fault.address_error.name)
 
 
 def _sequential_tags(start_tag: Tag, count: int) -> list[Tag]:
+    """*start_tag* and the tags after it, *count* in all, but none past its block's end.
+
+    In a block they are the tags that hold the addresses (``elements_after``); a tag
+    in no block counts on by name.
+    """
+    from pyrung.core.memory_block import elements_after, elements_that_fit
+
+    count = elements_that_fit(start_tag, count)
     if count <= 0:
         return []
     if count == 1:
         return [start_tag]
+    following = elements_after(start_tag, count)
+    if following is not None:
+        return [start_tag, *following]
 
     match = _TAG_SUFFIX_RE.match(start_tag.name)
     if match is None:

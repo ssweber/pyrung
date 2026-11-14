@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy as pycopy
 import importlib
+import pickle
 from dataclasses import replace
 
 import pytest
@@ -25,7 +27,6 @@ from pyrung.core import (
     Word,
     blockcopy,
     branch,
-    calc,
     call,
     copy,
     count_down,
@@ -35,6 +36,7 @@ from pyrung.core import (
     forloop,
     latch,
     lsh,
+    math,
     off_delay,
     on_delay,
     out,
@@ -173,7 +175,7 @@ def test_fuzz_internal_edge_source_is_not_elided():
         with Rung(In0, W0 == 0):
             reset(B0)
             copy(R0, R0)
-            calc(R0 + 1, W0)
+            math(R0 + 1, W0)
 
     optimized = always(logic, B0 == False, max_states=10_000, depth_budget=20)  # noqa: E712
     unoptimized = always(
@@ -196,7 +198,7 @@ def test_fuzz_entry_sensitive_hidden_word_is_not_elided():
 
     with Program(strict=False) as logic:
         with Rung(In0):
-            calc(R0 + 1, R0)
+            math(R0 + 1, R0)
         with Rung(In0):
             out(B0)
         with Rung(In0):
@@ -205,7 +207,7 @@ def test_fuzz_entry_sensitive_hidden_word_is_not_elided():
             copy(0, R0)
         with Rung(W0 == 0):
             reset(B0)
-            calc(R0 + 1, W0)
+            math(R0 + 1, W0)
 
     _assert_soundness(logic, ~B0)
 
@@ -229,13 +231,34 @@ def test_fuzz_entry_dependent_exit_value_is_not_concrete_elided():
         with Rung(In1, W0 == 0):
             reset(B0)
             copy(1, R0)
-            calc(R0 + R0, W0)
+            math(R0 + R0, W0)
 
     _assert_soundness(logic, R0 < 3)
 
 
 def test_fuzz_counter_reset_from_oneshot_does_not_poison_hidden_event_cache():
     """count_up with combinational reset (oneshot B0) must still reach Done."""
+    B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung(Tick):
+            count_up(C0, 3).reset(B0)
+        with Rung():
+            with forloop(Int("N0", min=-27, max=6)):
+                out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("C0_Done", True)}) in states
+
+
+def test_fuzz_counter_on_a_held_rung_counts_once():
+    """The reproducer's counter as it was written, on an always-true rung: it
+    counts the rung's one rising edge (the first scan) and never reaches 3."""
     B0 = Bool("B0")
     C0 = Counter.clone("C0")
 
@@ -246,9 +269,31 @@ def test_fuzz_counter_reset_from_oneshot_does_not_poison_hidden_event_cache():
             with forloop(Int("N0", min=-27, max=6)):
                 out(B0, oneshot=True)
 
+    plc = PLC(logic, dt=0.010)
+    plc.run(cycles=10)
+    assert plc.current_state.tags["C0_Acc"] == 1
+
     states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
-    assert frozenset({("B0", False), ("C0_Done", True)}) in states
+    assert not any(("C0_Done", True) in state for state in states)
+
+
+def test_fuzz_timer_reset_from_oneshot_does_not_poison_hidden_event_cache():
+    """The hidden-event shape of the counter reproducer above, on a timer
+    (counters are no hidden-event source now that they count edges)."""
+    B0 = Bool("B0")
+    T0 = Timer.clone("T0")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            on_delay(T0, 30).reset(B0)
+        with Rung():
+            with forloop(Int("N0", min=-27, max=6)):
+                out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=10)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("T0_Done", True)}) in states
 
 
 @pytest.mark.parametrize("decrement", [10, 100])
@@ -265,7 +310,7 @@ def test_fuzz_timer_preset_overwritten_after_owner_scan_reaches_done(decrement: 
             on_delay(t0, n0)
         with Rung():
             with forloop(n2):
-                calc(n0 - decrement, n0)
+                math(n0 - decrement, n0)
 
     states = reachable_states(logic, project=["T0_Done"], max_states=10_000, depth_budget=20)
     assert not isinstance(states, Intractable)
@@ -298,7 +343,8 @@ def test_fuzz_latched_rise_count_down_initial_state_reachable():
         with Rung():
             latch(b2)
         with Rung(rise(b2)):
-            count_down(c1, 4).reset(b0)
+            # Done at Acc <= preset: a negative preset is not done at once.
+            count_down(c1, -4).reset(b0)
 
     states = reachable_states(
         logic, project=["B0", "B2", "C1_Done"], max_states=10_000, depth_budget=20
@@ -317,7 +363,7 @@ def test_fuzz_unconditional_timer_and_output_initial_projected_state():
         with Rung():
             out(b0)
 
-    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=10)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("T0_Done", False)}) in states
 
@@ -351,9 +397,18 @@ def test_fuzz_count_down_reset_reachability():
         with Rung(C1.Done):
             out(B0)
         with Rung(In0):
-            count_down(C0, 5).reset(B0)
+            # Done at Acc <= preset, on In0's 4th rise; C1 is done on its 5th,
+            # which resets C0 through B0 on the same scan.
+            count_down(C0, -4).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
+
+    plc = PLC(logic, dt=0.010)
+    for scan in range(8):
+        plc.patch({"In0": scan % 2 == 0})
+        plc.step()
+    tags = plc.current_state.tags
+    assert (tags["B0"], tags["C0_Done"], tags["C1_Done"]) == (True, True, False)
 
     states = reachable_states(
         logic, project=["B0", "C0_Done", "C1_Done"], max_states=10_000, depth_budget=20
@@ -379,9 +434,9 @@ def test_fuzz_internal_edge_prev_keeps_counter_gate_stateful():
         with Rung():
             out(B0, oneshot=True)
         with Rung(N0 != 0, fall(B0)):
-            count_down(C0, 1).reset(B0)
+            count_down(C0, -1).reset(B0)
         with Rung(In0):
-            calc(N0 + 1, N0)
+            math(N0 + 1, N0)
         with Rung():
             out(B0)
 
@@ -391,10 +446,10 @@ def test_fuzz_internal_edge_prev_keeps_counter_gate_stateful():
 
 
 def test_fuzz_calc_from_choices_domain_reaches_truthy_guard():
-    """choices= source domains must bound calc() targets used as truthy guards.
+    """choices= source domains must bound math() targets used as truthy guards.
 
     Reproducer family: reachability_20260514_152443_001/_002.  ExtN0 has
-    choices but no min/max; D0 is written by calc(ExtN0 * -100, D0) and must
+    choices but no min/max; D0 is written by math(ExtN0 * -100, D0) and must
     stay in the BFS state key so a later scan can enter the D0-gated rung.
     """
     In2 = Bool("In2", external=True)
@@ -406,7 +461,7 @@ def test_fuzz_calc_from_choices_domain_reaches_truthy_guard():
         with Rung():
             call("sub_0")
         with Rung(~In2):
-            calc(ExtN0 * -100, D0)
+            math(ExtN0 * -100, D0)
         with subroutine("sub_0"):
             with Rung(rise(B1)):
                 return_early()
@@ -433,7 +488,7 @@ def test_fuzz_call_guard_reaches_subroutine_writes_in_slice():
         with Rung(D0):
             call("sub_0")
         with Rung():
-            calc(ExtN0 * -100, D0)
+            math(ExtN0 * -100, D0)
         with subroutine("sub_0"):
             with Rung(rise(B1)):
                 return_early()
@@ -566,7 +621,7 @@ def test_search_result_domain_inference():
     with Program(strict=False) as logic:
         with Rung():
             out(B0)
-            calc(N0 + N0, W0)
+            math(N0 + N0, W0)
         with Rung(In0):
             search(DS.select(1, 1) == 0, result=N0, found=B0)
 
@@ -591,7 +646,7 @@ def test_concrete_elision_includes_default_value():
             out(B0)
         with Rung(~In0):
             out(B0)
-            calc(N0 + N0, W0)
+            math(N0 + N0, W0)
         with Rung(B0):
             out(B0)
             out(B0)
@@ -619,6 +674,7 @@ def test_nd_timer_preset_live_input_pruning():
                 out(B0)
         with Rung(~In0):
             out(B0)
+        with Rung(~In0).continued():
             on_delay(T0, ExtN0, unit="sec").reset(B0)
 
     projection = ["B0", "T0_Done"]
@@ -642,7 +698,7 @@ def test_fuzz_oneshot_out_elision_false_convergence():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -658,6 +714,31 @@ def test_fuzz_oneshot_out_elision_with_bidirectional_counter():
     """Oneshot out(B0) feeding count_up .down/.reset — B0 elision hides
     the Done=True state."""
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
+    B1 = Bool("B1")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung(Tick):
+            count_up(C0, 10).down(B0).reset(B1)
+        with Rung():
+            out(B0, oneshot=True)
+
+    # Ten Tick edges, two scans each: the budget is a plain BFS depth.
+    states = reachable_states(
+        logic, project=["B0", "B1", "C0_Done"], max_states=10_000, depth_budget=40
+    )
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", False), ("B1", False), ("C0_Done", True)}) in states
+
+
+def test_fuzz_oneshot_out_with_held_bidirectional_counter_never_done():
+    """The reproducer above as it was written, on an always-true rung: the up
+    input rises once (first scan) and the one-shot B0 counts it back down on
+    the next, so C0 never reaches 10."""
+    B0 = Bool("B0")
     B1 = Bool("B1")
     C0 = Counter.clone("C0")
 
@@ -671,13 +752,31 @@ def test_fuzz_oneshot_out_elision_with_bidirectional_counter():
         logic, project=["B0", "B1", "C0_Done"], max_states=10_000, depth_budget=20
     )
     assert not isinstance(states, Intractable)
-    assert frozenset({("B0", False), ("B1", False), ("C0_Done", True)}) in states
+    assert frozenset({("B0", True), ("B1", False), ("C0_Done", False)}) in states
+    assert not any(("C0_Done", True) in state for state in states)
+
+
+def test_fuzz_oneshot_out_elision_with_timer_reset():
+    """Oneshot out(B0) resetting a timer: B0's elision must keep the
+    Done=True state the hidden-event jump reaches with B0 off."""
+    B0 = Bool("B0")
+    T1 = Timer.clone("T1")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            on_delay(T1, 100).reset(B0)
+        with Rung():
+            out(B0, oneshot=True)
+
+    states = reachable_states(logic, project=["B0", "T1_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert frozenset({("B0", True), ("T1_Done", False)}) in states
+    assert frozenset({("B0", False), ("T1_Done", True)}) in states
 
 
 def test_fuzz_same_rung_branch_reader_not_combinational():
-    """out(B0) + branch(B0): out(B1) — B0 must not be classified as
-    combinational because the branch reads the rung-entry snapshot, not
-    the freshly-written value."""
+    """out(B0) + branch(B0): out(B1) — the branch reads B0 on its own row,
+    after out(B0) above it has written it, so B0 and B1 are True together."""
     B0 = Bool("B0")
     B1 = Bool("B1")
 
@@ -706,7 +805,7 @@ def test_fuzz_return_early_guard_in_scope():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(N0 + 1, N0)
+            math(N0 + 1, N0)
         with Rung():
             call("sub_0")
         with subroutine("sub_0"):
@@ -752,7 +851,12 @@ def test_fuzz_latch_target_not_classified_combinational():
 
 
 def test_fuzz_off_delay_completion_with_accumulating_condition():
-    """off_delay completion must be reachable when R0 accumulates past the enable threshold."""
+    """off_delay completion must be reachable when R0 accumulates past the enable threshold.
+
+    The reproducer's threshold was 76, ~40 scans of a Real counted concretely,
+    each scan against every ExtN1 preset; with no hidden-event jump the budget
+    must cover the climb, so it is 2 here.
+    """
     ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
     ExtN1 = Int("ExtN1", external=True, min=-10, max=100)
     B0 = Bool("B0")
@@ -760,14 +864,14 @@ def test_fuzz_off_delay_completion_with_accumulating_condition():
     T0 = Timer.clone("T0")
 
     with Program(strict=False) as logic:
-        with Rung(R0 <= 76):
+        with Rung(R0 <= 2):
             off_delay(T0, ExtN1)
         with Rung():
-            calc(R0 + ExtN0, R0)
+            math(R0 + ExtN0, R0)
         with Rung():
             out(B0)
 
-    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=20)
+    states = reachable_states(logic, project=["B0", "T0_Done"], max_states=10_000, depth_budget=6)
     assert not isinstance(states, Intractable)
     assert frozenset({("B0", True), ("T0_Done", False)}) in states
 
@@ -788,7 +892,7 @@ def test_fuzz_counter_acc_conditional_calc_not_elided():
 
     with Program(strict=False) as logic:
         with Rung(In0):
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung(C0.Acc >= 5):
@@ -813,19 +917,22 @@ def test_fuzz_counter_acc_count_up_not_elided():
     In0 = Bool("In0", external=True)
     ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     N0 = Int("N0", min=-6, max=41)
     C0 = Counter.clone("C0")
     DS = Block("DS", TagType.INT, 1, 6)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with Rung(Tick):
             count_up(C0, 10).reset(B0)
         with Rung(C0.Acc >= 5):
             out(B0)
         with Rung():
             copy(ExtN0, N0)
         with Rung(In0):
-            calc(DS.select(1, 2).sum(), N0)
+            math(DS.select(1, 2).sum(), N0)
         with Rung(N0 != 0):
             out(B0)
 
@@ -842,11 +949,14 @@ def test_fuzz_counter_acc_count_down_not_elided():
     """
     ExtN0 = Int("ExtN0", external=True, choices={1: "A", 2: "B"})
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
-        with Rung():
-            count_down(C0, 5).reset(B0)
+        with Rung(Tick):
+            count_down(C0, -5).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
         with Rung(ExtN0 <= 0):
@@ -920,7 +1030,7 @@ def test_fuzz_indirect_block_write_not_excluded():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(DS.select(1, 2).sum(), D0)
+            math(DS.select(1, 2).sum(), D0)
         with Rung(D0 != 0):
             out(B0)
         with Rung():
@@ -967,13 +1077,16 @@ def test_fuzz_counter_acc_elided_when_done_projected():
     Reproducer: reachability_20260516_194933_000.
     """
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
         with Rung():
             out(B0, oneshot=True)
-        with Rung():
-            count_down(C0, 5).reset(B0)
+        with Rung(Tick):
+            count_down(C0, -5).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
 
@@ -996,7 +1109,7 @@ def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, R0)
+            math(ExtN0 + 0, R0)
         with Rung(R0 == 0):
             out(B0)
         with Rung(~B0):
@@ -1012,7 +1125,7 @@ def test_fuzz_oneshot_out_traced_elision_misses_memory_state():
 def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shift: int):
     """N0 written by unconditional copy(ExtN0, N0) must not be elided.
 
-    The traced influence cone sees N0 read only by calc(lsh(N0, X), N1)
+    The traced influence cone sees N0 read only by math(lsh(N0, X), N1)
     which writes N1, concluding N0's entry value is unobservable. But N0
     IS the property target — its exit value is directly observed.
     Reproducer: soundness_20260516_201852_000/_001.
@@ -1023,7 +1136,7 @@ def test_fuzz_traced_elision_does_not_elide_property_target_written_by_copy(shif
 
     with Program(strict=False) as logic:
         with Rung(N1 != 0):
-            calc(lsh(N0, shift), N1)
+            math(lsh(N0, shift), N1)
         with Rung():
             copy(ExtN0, N0)
 
@@ -1118,7 +1231,7 @@ def test_fuzz_self_copy_carry_over_not_dead_input():
         with Rung(N0):
             out(B0)
         with Rung():
-            calc(D0 + ExtN0, N0)
+            math(D0 + ExtN0, N0)
 
     projection = ["B0"]
     bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
@@ -1136,7 +1249,7 @@ def test_fuzz_self_copy_carry_over_not_dead_input():
 def test_fuzz_band_tagged_range_sum_dest_not_elided():
     """Band-tagged calc dest from range-sum must not be elided.
 
-    BandTotal is written by calc(DS.select(1,2).sum(), BandTotal) and
+    BandTotal is written by math(DS.select(1,2).sum(), BandTotal) and
     gates B0 via BandTotal != 0.  The optimizer incorrectly proves
     Or(~B1, ~B0) when unoptimized finds a counterexample.
     Reproducer: soundness_20260517_191754_001.
@@ -1152,7 +1265,7 @@ def test_fuzz_band_tagged_range_sum_dest_not_elided():
         with Rung():
             unpack_to_words(D0, DS.select(1, 2))
         with Rung():
-            calc(DS.select(1, 2).sum(), BandTotal)
+            math(DS.select(1, 2).sum(), BandTotal)
         with Rung(BandTotal != 0):
             out(B0)
         with Rung():
@@ -1163,22 +1276,26 @@ def test_fuzz_band_tagged_range_sum_dest_not_elided():
     _assert_soundness(logic, Or(~B1, ~B0))
 
 
-def test_fuzz_indirect_block_write_band_sum_reachability():
+@pytest.mark.parametrize(
+    "bounds", [{}, {"min": 0, "max": 3}], ids=["undeclared index", "declared index"]
+)
+def test_fuzz_indirect_block_write_band_sum_reachability(bounds):
     """Indirect DS write feeds a band-tagged range sum on the next scan.
 
     Reproducer: reachability_20260517_192740_000.  copy(66, DS[N1 + 1])
     writes DS1 with default N1=0.  On the following scan, BandTotal becomes
     positive and B0 is set, but reachable_states currently reports only
-    B0=False.
+    B0=False.  An undeclared N1 reaches only an index, which answers for
+    nothing: the search says so.
     """
     B0 = Bool("B0")
-    N1 = Int("N1")
+    N1 = Int("N1", **bounds)
     BandTotal = Int("BandTotal", band={"ZERO": 0, "POSITIVE": ">0"})
     DS = Block("DS", TagType.INT, 1, 4)
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(DS.select(1, 2).sum(), BandTotal)
+            math(DS.select(1, 2).sum(), BandTotal)
         with Rung(BandTotal != 0):
             out(B0)
         with Rung():
@@ -1188,6 +1305,10 @@ def test_fuzz_indirect_block_write_band_sum_reachability():
 
     projection = ["B0"]
     bfs = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    if not bounds:
+        assert isinstance(bfs, Intractable)
+        assert bfs.tags == ["N1"]
+        return
     assert not isinstance(bfs, Intractable)
 
     plc = PLC(logic, dt=0.010)
@@ -1203,7 +1324,7 @@ def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
 
     copy(N0, N2, oneshot=True) writes N2 on scan 0, then becomes inert.
     On scan 1+, Rung(N2) reads the entry value (set by the prior scan's
-    calc(DS.select(2,2).sum(), N2)), which determines whether latch(B1)
+    math(DS.select(2,2).sum(), N2)), which determines whether latch(B1)
     fires.  Without warming natural traces with oneshot-fired memory
     state, the entry:N2 dependency is invisible and N2 is wrongly elided.
     Reproducer: reachability_20260517_191754_000.
@@ -1218,9 +1339,9 @@ def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
             copy(N0, N2, oneshot=True)
         with Rung(N2):
             latch(B1)
-            calc(N2 + 0, N2)
+            math(N2 + 0, N2)
         with Rung():
-            calc(DS.select(2, 2).sum(), N2)
+            math(DS.select(2, 2).sum(), N2)
         with Rung():
             fill(-55, DS.select(2, 4), oneshot=True)
 
@@ -1233,7 +1354,7 @@ def test_fuzz_oneshot_masks_entry_dependency_in_traced_elision():
 def test_fuzz_backward_propagation_drops_choices_values():
     """Backward propagation through calc narrows choices domain to comparison boundaries.
 
-    calc(ExtN0 + 0, N0) with N0 == 0 back-propagates boundary {-1, 0, 1}
+    math(ExtN0 + 0, N0) with N0 == 0 back-propagates boundary {-1, 0, 1}
     to ExtN0.  Intersection with choices={0,1,2} yielded {0,1}, dropping
     value 2.  Without ExtN0=2 the BFS never writes -1 to DS[4], so
     pack_words cannot make D1 nonzero and B0=True is unreachable.
@@ -1248,7 +1369,7 @@ def test_fuzz_backward_propagation_drops_choices_values():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung(N0 == 0):
             out(B0)
         with Rung():
@@ -1355,11 +1476,15 @@ def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
     Reproducer: reachability_20260518_175626_009.
     """
     B0 = Bool("B0")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C0 = Counter.clone("C0")
 
     with Program(strict=False) as logic:
-        with Rung():
-            count_down(C0, 5).reset(B0)
+        with Rung(Tick):
+            # Done at Acc <= preset: -5 stays undone through the -3 reset.
+            count_down(C0, -5).reset(B0)
         with Rung(C0.Acc <= -3):
             out(B0)
 
@@ -1369,7 +1494,7 @@ def test_fuzz_self_resetting_count_down_traced_elision_drops_cycle():
 
 
 def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
-    """calc(ExtN0 + 0, N0) with copy chain N0→N1→N2→D0, D0 >= 5 gates B0.
+    """math(ExtN0 + 0, N0) with copy chain N0→N1→N2→D0, D0 >= 5 gates B0.
 
     The copy chain must propagate the full domain so BFS reaches B0=True.
     Reproducer: reachability_20260518_175626_010.
@@ -1383,7 +1508,7 @@ def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung():
             copy(N0, N1)
         with Rung():
@@ -1399,7 +1524,7 @@ def test_fuzz_calc_into_choices_tag_copy_chain_domain_loss():
 
 
 def test_fuzz_copy_chain_expression_partition_domain_collapse():
-    """calc(ExtN0 + 0, N0) with copy chain, two out(B0) writers, no choices.
+    """math(ExtN0 + 0, N0) with copy chain, two out(B0) writers, no choices.
 
     N0–N2 elided as traced, D0 absorbed as comparison-only.  ExtN0's
     expression_partition collapses to {0,1} (from N0 == 0 boundary),
@@ -1415,7 +1540,7 @@ def test_fuzz_copy_chain_expression_partition_domain_collapse():
 
     with Program(strict=False) as logic:
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung(N0 == 0):
             out(B0)
         with Rung():
@@ -1524,7 +1649,7 @@ def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
     B0 = (ExtN0 < 5), so the timer only accumulates while ExtN0 >= 5.
 
     ExtN0 feeds two comparisons: its own rung condition (ExtN0 < 5) and,
-    through calc(ExtN0 + 0, N0), the downstream test N0 == 0.  Backward
+    through math(ExtN0 + 0, N0), the downstream test N0 == 0.  Backward
     propagation seeded ExtN0's domain from the N0 == 0 boundary only,
     producing {0, 1} and suppressing ExtN0's own < 5 partition.  With no
     representative >= 5 the timer never accumulated, so BFS never reached
@@ -1544,7 +1669,7 @@ def test_fuzz_unconditional_timer_reset_coil_bfs_misses_done():
         with Rung():
             on_delay(T0, 100).reset(B0)
         with Rung():
-            calc(ExtN0 + 0, N0)
+            math(ExtN0 + 0, N0)
         with Rung(N0 == 0):
             out(B0)
 
@@ -1570,10 +1695,13 @@ def test_fuzz_consumed_acc_with_atoms_not_combinational():
     from the state key, BFS explored one state, and returned Proven — unsound.
     """
     B1 = Bool("B1")
+    # A counter counts rising edges: an external Tick pulses it where the
+    # reproducer counted every scan.
+    Tick = Bool("Tick", external=True)
     C1 = Counter.clone("C1")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with Rung(Tick):
             count_up(C1, 10).reset(B1)
 
     baseline = always(
@@ -1729,16 +1857,13 @@ def test_return_early_guard_expr_keeps_projected_input_live():
 
 
 def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
-    """Threshold absorption of self-resetting counter produces false counterexample.
+    """A self-resetting counter never passes its preset.
 
-    count_up(C1, 5).reset(C1.Done) cycles C1_Acc through 0-5.  The property
-    C1.Acc < 41 is trivially true.  But accumulator_absorption absorbed C1_Acc
-    with only the property boundary (>=41) in the threshold vector, missing the
-    preset boundary at 5.  The event scheduler projected 41 scans of unbounded
-    counting and reported a false counterexample.
-
-    Fix: block threshold absorption when the reset condition references the
-    counter's own Done bit (self-resetting cycle).
+    count_up(C1, 5).reset(C1.Done) cycles C1_Acc through 0-5, so the property
+    C1.Acc < 41 is true.  The exact-timing layer once absorbed C1_Acc with only
+    the property boundary (>=41) in a threshold vector, missed the preset at
+    5, and projected 41 scans of counting into a false counterexample.  The
+    search now counts concretely; the default and the baseline agree.
     Reproducer: soundness_subset_20260520_143926_000.
     """
     B0 = Bool("B0")
@@ -1749,7 +1874,7 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
         with Rung():
             out(B0)
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -1757,8 +1882,7 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
         with Rung(C1.Done):
             out(B0)
 
-    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20)
     baseline = always(
         logic,
         C1.Acc < 41,
@@ -1771,12 +1895,7 @@ def test_fuzz_self_resetting_counter_threshold_absorption_unsound():
 
 
 def test_fuzz_self_resetting_counter_tag_preset_bounded():
-    """Tag preset with min/max, counter resets on own Done — absorption must not lose cycle.
-
-    Same structure as the constant-preset variant but with an external Int
-    preset.  The preset boundary atom must be injected into the threshold
-    vector (or absorption blocked) so the event scheduler sees the cycle.
-    """
+    """Tag preset with min/max, counter resets on own Done: the cycle is kept."""
     Preset = Int("Preset", external=True, min=1, max=10)
     B0 = Bool("B0")
     C0 = Counter.clone("C0")
@@ -1786,7 +1905,7 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
         with Rung():
             out(B0)
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -1794,8 +1913,7 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
         with Rung(C1.Done):
             out(B0)
 
-    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20)
     baseline = always(
         logic,
         C1.Acc < 41,
@@ -1808,11 +1926,8 @@ def test_fuzz_self_resetting_counter_tag_preset_bounded():
 
 
 def test_fuzz_self_resetting_counter_tag_preset_unbounded():
-    """Tag preset with no domain, counter resets on own Done.
-
-    When the preset tag has no declared bounds, absorption must still
-    not produce a false counterexample for the bounded accumulator.
-    """
+    """Tag preset with a wide domain, counter resets on own Done: no false
+    counterexample for the bounded accumulator."""
     Preset = Int("Preset", external=True, min=0, max=100)
     B0 = Bool("B0")
     C0 = Counter.clone("C0")
@@ -1822,7 +1937,7 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
         with Rung():
             out(B0)
         with Rung():
-            calc(C0.Acc + 5, C0.Acc)
+            math(C0.Acc + 5, C0.Acc)
         with Rung():
             count_up(C0, 10).reset(B0)
         with Rung():
@@ -1830,8 +1945,7 @@ def test_fuzz_self_resetting_counter_tag_preset_unbounded():
         with Rung(C1.Done):
             out(B0)
 
-    cfg = replace(_OptConfig.sound_baseline(), accumulator_absorption=True)
-    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20, _opt_config=cfg)
+    candidate = always(logic, C1.Acc < 41, max_states=10_000, depth_budget=20)
     baseline = always(
         logic,
         C1.Acc < 41,
@@ -1849,10 +1963,11 @@ def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
     D0 is absorbed as comparison-only (only appears in the property D0 < 43).
     Rung 0's condition is D0 (truthy), so when D0=0 at default the rung never
     fires in natural traces.  This hides the entry:R0 → D0 dependency behind
-    calc(R0 * 32768, D0), causing R0 to be incorrectly elided.
+    math(R0 * 32767, D0), causing R0 to be incorrectly elided.
 
     The counterexample: scan 1 sets R0=5.93 (via copy) and D0=2 (via copy),
-    then scan 2 fires calc(5.93 * 32768, D0) = 194318 >= 43.
+    then scan 2 fires math(5.93 * 32767, D0) = 194312 >= 43.  (32767, not
+    32768: a Math cuts 32768 to -32768.)
     """
     In0 = Bool("In0", external=True)
     In2 = Bool("In2", external=True)
@@ -1861,10 +1976,88 @@ def test_fuzz_absorbed_condition_gate_hides_entry_read_from_elision():
 
     with Program(strict=False) as logic:
         with Rung(D0):
-            calc(R0 * 32768, D0)
+            math(R0 * 32767, D0)
         with Rung(In2):
             copy(5.930127848501925, R0)
         with Rung(In0):
             copy(2, D0)
 
     _assert_soundness(logic, D0 < 43)
+    assert isinstance(always(logic, D0 < 43, max_states=10_000, depth_budget=20), Counterexample)
+
+
+def _counter_with_a_down_count():
+    """B0 rises once on scan 2 and takes a count away, so Done needs 11 rising edges of In0."""
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+    B1 = Bool("B1")
+    C0 = Counter.clone("C0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            count_up(C0, 10).down(B0).reset(B1)
+        with Rung():
+            out(B0)
+    return logic
+
+
+def test_fuzz_reachable_states_cut_short_by_the_budget_says_so():
+    """Reproducer: reachability_20261112_165128_000.  Done is 21 scans away."""
+    logic = _counter_with_a_down_count()
+    projection = ["B0", "B1", "C0_Done"]
+
+    short = reachable_states(logic, project=projection, max_states=10_000, depth_budget=20)
+    assert not isinstance(short, Intractable)
+    assert short.truncated
+    assert short.depth_budget == 20
+    assert not any(("C0_Done", True) in state for state in short)
+
+    full = reachable_states(logic, project=projection, max_states=10_000, depth_budget=21)
+    assert not isinstance(full, Intractable)
+    # Acc keeps counting past the preset, so the search never runs out of states.
+    assert full.truncated
+    assert full == {
+        frozenset({("B0", False), ("B1", False), ("C0_Done", False)}),
+        frozenset({("B0", True), ("B1", False), ("C0_Done", False)}),
+        frozenset({("B0", True), ("B1", False), ("C0_Done", True)}),
+        frozenset({("B0", True), ("B1", True), ("C0_Done", False)}),
+    }
+
+
+def test_fuzz_reachable_states_debug_set_carries_the_truncation():
+    logic = _counter_with_a_down_count()
+    states = reachable_states(
+        logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20, _debug=True
+    )
+    assert not isinstance(states, Intractable)
+    assert states.truncated
+    assert states._debug_context is not None
+
+
+def test_fuzz_reachable_states_a_finished_search_is_not_truncated():
+    In0 = Bool("In0", external=True)
+    B0 = Bool("B0")
+
+    with Program(strict=False) as logic:
+        with Rung(In0):
+            out(B0)
+
+    states = reachable_states(logic, project=["B0"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    assert not states.truncated
+    assert states == {frozenset({("B0", False)}), frozenset({("B0", True)})}
+
+
+def test_fuzz_reachable_states_mark_is_read_only_and_survives_a_copy():
+    logic = _counter_with_a_down_count()
+    states = reachable_states(logic, project=["B0", "C0_Done"], max_states=10_000, depth_budget=20)
+    assert not isinstance(states, Intractable)
+    with pytest.raises(AttributeError):
+        states.truncated = False  # ty: ignore[invalid-assignment]
+    with pytest.raises(AttributeError):
+        states.depth_budget = 50  # ty: ignore[invalid-assignment]
+    for copied in (pickle.loads(pickle.dumps(states)), pycopy.deepcopy(states)):
+        assert type(copied) is type(states)
+        assert copied == states
+        assert copied.truncated
+        assert copied.depth_budget == 20

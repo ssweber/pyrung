@@ -16,10 +16,10 @@ from pyrung import (
     Program,
     Rung,
     Timer,
-    calc,
     call,
     copy,
     latch,
+    math,
     on_delay,
     out,
     rise,
@@ -1418,7 +1418,7 @@ def _liveword_clobber_program() -> Program:
         with Rung(~Sel):
             copy(0, RawMask)
         with Rung():
-            calc(RawMask & 4, Mask)
+            math(RawMask & 4, Mask)
         with Rung(Mask != 0):
             copy(0, State)
         with Rung(rise(Command)):

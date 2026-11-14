@@ -15,9 +15,9 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
-    calc,
     copy,
     latch,
+    math,
     out,
     reset,
 )
@@ -483,7 +483,7 @@ class TestBackPropagation:
     def _build():
         """Program with a calc chain: Scaled = Raw + 10.
 
-        Rung 0: (unconditional) calc(Raw + 10, Scaled)
+        Rung 0: (unconditional) math(Raw + 10, Scaled)
         Rung 1: Enable → out(Output)
         """
         Raw = Int("Raw")
@@ -493,7 +493,7 @@ class TestBackPropagation:
 
         with Program() as logic:
             with Rung():
-                calc(Raw + 10, Scaled)
+                math(Raw + 10, Scaled)
             with Rung(Enable):
                 out(Output)
 
@@ -676,6 +676,164 @@ class TestKind:
         assert reset_step.instruction == "reset"
         trigger_tags = [t.tag_name for t in reset_step.triggers]
         assert "FlowAlarm" in trigger_tags
+
+
+# ---------------------------------------------------------------------------
+# Forces: the answer names them
+# ---------------------------------------------------------------------------
+
+
+class TestForced:
+    def _plc(self):
+        go = Bool("Go", external=True)
+        lamp = Bool("Lamp")
+        relay = Bool("Relay")
+        motor = Bool("Motor")
+        clear = Bool("Clear", external=True)
+        sealed = Bool("Sealed")
+        with Program(strict=False) as logic:
+            with Rung(go):
+                out(lamp)
+            with Rung(go):
+                out(relay)
+            with Rung(relay):
+                out(motor)
+            with Rung(go):
+                latch(sealed)
+            with Rung(clear):
+                reset(sealed)
+        return PLC(logic, dt=0.01)
+
+    def test_a_tag_forced_off_with_its_rung_true_says_so(self) -> None:
+        plc = self._plc()
+        plc.force("Go", True)
+        plc.step()
+        plc.force("Lamp", False)
+        plc.step()
+
+        chain = plc.why("Lamp")
+
+        assert chain.forced == {"Lamp": False, "Go": True}
+        text = str(chain)
+        assert "Lamp is forced False" in text
+        assert "no writer is firing now" not in text
+        assert "  r1: out(Lamp) -- Go" in text
+
+    def test_a_tag_forced_on_with_its_rung_false_says_so(self) -> None:
+        plc = self._plc()
+        plc.force("Lamp", True)
+        plc.step()
+
+        text = str(plc.why("Lamp"))
+
+        assert "Lamp = True  [why]" in text
+        assert "Lamp is forced True" in text
+        assert "no writer is firing now" not in text
+        assert "  r1: out(Lamp) -- Go(False)" in text
+
+    def test_a_forced_latch_is_not_called_blocked(self) -> None:
+        plc = self._plc()
+        plc.force("Sealed", True)
+        plc.step()
+
+        text = str(plc.why("Sealed"))
+
+        assert "Sealed is forced True" in text
+        assert "no writer is firing now" not in text
+        assert "*" not in text
+
+    def test_a_forced_input_is_marked_among_the_roots(self) -> None:
+        plc = self._plc()
+        plc.force("Go", True)
+        plc.step()
+
+        text = str(plc.why("Lamp"))
+
+        assert "roots: Go forced" in text
+        assert "  r1: out(Lamp) -- Go" in text
+        assert "is forced" not in text
+
+    def test_the_force_on_a_contact_explains_a_rung_that_disagrees_with_it(self) -> None:
+        """Relay's rung writes it True mid-scan, the next rung reads that, then
+        the force puts it back: Motor is True beside a Relay that reads False."""
+        plc = self._plc()
+        plc.force("Go", True)
+        plc.force("Relay", False)
+        plc.step()
+
+        chain = plc.why("Motor")
+
+        assert plc.current_state.tags["Motor"] is True
+        assert chain.forced == {"Relay": False, "Go": True}
+        text = str(chain)
+        assert "Relay is forced False" in text
+        assert "no writer is firing now" not in text
+        assert "*" not in text
+        assert "  r2: out(Relay) -- Go" in text
+
+    def test_a_force_no_scan_has_applied_is_pending(self) -> None:
+        plc = self._plc()
+        plc.step()
+        plc.force("Lamp", True)
+
+        chain = plc.why("Lamp")
+
+        assert chain.forced == {}
+        assert chain.force_pending == {"Lamp": True}
+        text = str(chain)
+        assert "Lamp = False  [why]" in text
+        assert "Lamp is forced True from the next scan" in text
+        assert chain.to_dict()["force_pending"] == {"Lamp": True}
+
+    def test_a_force_outside_the_chain_stays_out_of_it(self) -> None:
+        plc = self._plc()
+        plc.force("Clear", True)
+        plc.step()
+
+        chain = plc.why("Lamp")
+
+        assert chain.forced == {}
+        assert chain.force_pending == {}
+        assert "forced" not in chain.to_dict()
+        assert "forced" not in str(chain)
+
+    def test_a_forced_value_does_not_feed_back_propagation(self) -> None:
+        source = Int("Source")
+        copied = Int("Copied")
+        go = Bool("Go", external=True)
+        with Program(strict=False) as logic:
+            with Rung(go):
+                copy(source, copied)
+        plc = PLC(logic, dt=0.01)
+        plc.force("Copied", 42)
+        plc.step()
+
+        chain = plc.why("Copied")
+
+        assert chain.forced == {"Copied": 42}
+        assert all(r.to_value != 42 for r in chain.conjunctive_roots if r.tag_name == "Source")
+
+    def test_no_force_leaves_the_answer_as_it_was(self) -> None:
+        plc = self._plc()
+        plc.step()
+
+        chain = plc.why("Sealed")
+
+        assert chain.forced == {}
+        assert "no writer is firing now" in str(chain)
+
+    def test_a_latch_that_fired_and_holds_does_not_claim_it_never_fired(self) -> None:
+        plc = self._plc()
+        plc.patch({"Go": True})
+        plc.step()
+        plc.patch({"Go": False})
+        plc.step()
+
+        text = str(plc.why("Sealed"))
+
+        assert "Sealed = True  [why]" in text
+        assert "no writer is firing now (2 blocked)" in text
+        assert "has fired" not in text
 
 
 # ---------------------------------------------------------------------------

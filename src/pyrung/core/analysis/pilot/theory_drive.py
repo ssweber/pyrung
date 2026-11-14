@@ -57,6 +57,7 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.working_theory import (
     TemporalNeedRequest,
     TheoryBoundaryIdentity,
+    TheoryInvariantError,
     TheoryPhaseKind,
     TheoryPhaseReceipt,
     TheoryRequirementSnapshot,
@@ -227,13 +228,15 @@ def _rebase_restored_theory_world(
         return None
     overlay_delta = theory_boundary_overlay_delta(request.source, live)
     if overlay_delta is None:
-        raise ValueError("restored temporal source changed its physical execution boundary")
+        raise TheoryInvariantError(
+            "restored temporal source changed its physical execution boundary"
+        )
     retained, superseded = overlay_delta
     owned_superseded = active_theory_superseded_pilot_rung_identities(state.theory_state)
     if not set(superseded) <= owned_superseded:
-        raise ValueError("restored temporal source lost an unowned overlay")
+        raise TheoryInvariantError("restored temporal source lost an unowned overlay")
     if not retained and not superseded:
-        raise ValueError("restored temporal source changed without overlay evidence")
+        raise TheoryInvariantError("restored temporal source changed without overlay evidence")
     _theory_recording._record_controlling_theory_fact(
         state,
         RebaseTheoryWorld(

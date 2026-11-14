@@ -332,7 +332,8 @@ def test_compiled_replay_applies_io_tag_writes():
     simple_runner._scan_log.record_io_drain(2, "send:test:Sending", drain_rec)
 
     kernel = compile_kernel(simple_logic)
-    fork = simple_runner._replay_to_compiled(2, kernel)
+    # replay_to() steps its last scan interpreted, so this runs the kernel itself.
+    fork = simple_runner._compiled_fork_at(2, kernel)
 
     assert fork.current_state.tags["Sending"] is False
     assert fork.current_state.tags["Success"] is True
@@ -392,3 +393,61 @@ def test_bytes_estimate_includes_io():
     empty_size = log.bytes_estimate()
     log.record_io_submit(1, "k", IoSubmitRecord(tag_writes=(("A", True),)))
     assert log.bytes_estimate() > empty_size
+
+
+def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
+    """CLICK lets any status bit be left off; each gets its own hidden tag and still runs."""
+    futures = _fake_send_submit(monkeypatch)
+    Enable = Bool("Enable")
+    Source = Int("Source")
+    Success = Bool("Success")
+    with Program(strict=False) as logic:
+        with Rung(Enable):
+            _sr.send(target=_TARGET, remote_start="DS1", source=Source, success=Success)
+            _sr.send(target=_TARGET, remote_start="DS2", source=Source)
+
+    first, second = logic.rungs[0]._instructions
+    assert first.success is Success
+    hidden = [first.sending, first.error, first.exception_response, second.sending]
+    assert all(_sr.is_modbus_status_tag(tag.name) for tag in hidden)
+    assert len({tag.name for tag in hidden}) == len(hidden)
+    assert first._io_key != second._io_key
+
+    runner = PLC(logic=logic)
+    runner.patch({"Enable": True, "Source": 42})
+    runner.step()  # submit
+    assert runner.current_state.tags[first.sending.name] is True
+    for future in futures:
+        future.set_result(_sr._RequestResult(ok=True, exception_code=0))
+    runner.patch({"Enable": True})
+    runner.step()  # drain
+    assert runner.current_state.tags["Success"] is True
+    assert runner.replay_to(2).current_state.tags["Success"] is True
+
+
+def test_two_programs_in_one_plc_each_replay_their_own_receive(monkeypatch: pytest.MonkeyPatch):
+    """Two programs' receives with every status bit left off keep apart in one PLC."""
+    futures = _fake_recv_submit(monkeypatch)
+
+    def build(dest: str) -> Program:
+        with Program(strict=False) as logic:
+            with Rung():
+                _sr.receive(target=_TARGET, remote_start="DS1", dest=Int(dest))
+        return logic
+
+    first, second = build("DestA"), build("DestB")
+    runner = PLC([*first.rungs, *second.rungs])
+    a, b = (rung._instructions[0] for rung in (*first.rungs, *second.rungs))
+    assert a.receiving.name != b.receiving.name
+    assert a._io_key != b._io_key
+
+    runner.step()  # submit both
+    futures[0].set_result(_sr._RequestResult(ok=True, exception_code=0, values=(111,)))
+    futures[1].set_result(_sr._RequestResult(ok=True, exception_code=0, values=(222,)))
+    runner.step()  # drain both
+    stepped = runner.current_state.tags
+    assert (stepped["DestA"], stepped["DestB"]) == (111, 222)
+
+    replayed = runner.replay_to(2).current_state.tags
+    assert (replayed["DestA"], replayed["DestB"]) == (111, 222)
+    assert replayed == stepped

@@ -29,26 +29,29 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 
 from pyrung.click._topology import (
     Leaf,
     Parallel,
     Series,
     SPNode,
+    as_series_children,
     factor_outputs,
     make_compound,
     trees_equal,
 )
-from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
+from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _FUNC_RE, _PIN_RE
 from pyrung.click.codegen.models import (
     RungRole,
     _AnalyzedRung,
     _InstructionInfo,
     _PinInfo,
     _RawRung,
+    _SourceOutput,
 )
+from pyrung.click.codegen.shaping import NOP
 
 # ---------------------------------------------------------------------------
 # Rung Analysis
@@ -645,7 +648,13 @@ _trees_equal = trees_equal
 def _group_outputs(
     trees: list[tuple[SPNode | None, str, int]],
 ) -> tuple[SPNode | None, list[_InstructionInfo], list[int]]:
-    """Group per-output SP trees into top-level condition_tree + instructions."""
+    """Group per-output SP trees into top-level condition_tree + instructions.
+
+    Outputs share a leading contact only where the drawing has one cell for it,
+    teed off to each (:func:`factor_outputs` by cell): that cell is read once,
+    at the first of them, in pyrung as on a CLICK.  Two cells with the same
+    label stay two contacts.
+    """
     if not trees:
         return None, [], []
 
@@ -653,14 +662,15 @@ def _group_outputs(
         tree, af, af_row = trees[0]
         return tree, [_InstructionInfo(af, None, [])], [af_row]
 
-    result = factor_outputs([t[0] for t in trees])
+    result = factor_outputs([t[0] for t in trees], cells=True)
+    count = len(result.shared)
 
-    if result.shared:
+    if count:
         cond_tree = make_compound(result.shared, Series)
         instructions: list[_InstructionInfo] = []
         af_rows: list[int] = []
-        for idx, (_tree, af, af_row) in enumerate(trees):
-            remaining = result.branches[idx]
+        for tree, af, af_row in trees:
+            remaining = as_series_children(tree)[count:]
             branch_tree = make_compound(remaining, Series) if remaining else None
             instructions.append(_InstructionInfo(af, branch_tree, []))
             af_rows.append(af_row)
@@ -678,83 +688,74 @@ def _group_outputs(
 # --- Analyzer entry points --------------------------------------------------
 
 
-def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
-    """Split a rung with continued-style wires into primary + continued rungs.
+def _row_wires(rows: Sequence[Sequence[str]]) -> list[int]:
+    """The wire each row of a CLICK rung sits on: 0, 1, ... from the top.
 
-    The motivating Click-only shape is a shared wire that feeds a terminal
-    instruction pin and also drives a sibling output. In pyrung, counters and
-    RTON-style ``on_delay(...).reset(...)`` are terminal in-flow, and their
-    reset conditions render inside the call rather than as peer rows, so that
-    layout cannot live in one DSL rung. Splitting off the sibling as
-    ``.continued()`` preserves the shared snapshot and stays expressible.
-
-    The current trigger is still a structural proxy: no shared
-    ``condition_tree`` and every instruction carries its own ``branch_tree``.
-    That matches exporter-produced continued rows and the terminal-pin case,
-    but hand-authored CSV can still over- or under-trigger it.
+    A wire is rows joined by verticals (a ``T``, ``|`` or ``T:`` cell reaching
+    the row below); a row no vertical reaches from the row above starts the
+    next wire at the rail.
     """
-    if rung.condition_tree is not None:
-        return [rung]
-    if len(rung.instructions) < 2:
-        return [rung]
-    if not all(instr.branch_tree is not None for instr in rung.instructions):
-        return [rung]
+    wires: list[int] = []
+    for index, row in enumerate(rows):
+        if index == 0:
+            wires.append(0)
+            continue
+        above = rows[index - 1]
+        linked = False
+        for col in range(_CONDITION_COLS):
+            cell = above[col + 1] if col + 1 < len(above) else ""
+            if cell not in {"T", "|"} and not cell.startswith("T:"):
+                continue
+            below = row[col + 1] if col + 1 < len(row) else ""
+            diagonal = row[col] if col > 0 and col < len(row) else ""
+            if below or diagonal:
+                linked = True
+                break
+        wires.append(wires[-1] if linked else wires[-1] + 1)
+    return wires
 
-    # First instruction → primary rung
-    first = rung.instructions[0]
-    result: list[_AnalyzedRung] = [
-        _AnalyzedRung(
-            comment=rung.comment,
-            condition_tree=first.branch_tree,
-            instructions=[_InstructionInfo(first.af_token, None, first.pins)],
-        )
-    ]
 
-    remaining = rung.instructions[1:]
-    if len(remaining) == 1:
-        instr = remaining[0]
-        result.append(
-            _AnalyzedRung(
-                comment=None,
-                condition_tree=instr.branch_tree,
-                instructions=[_InstructionInfo(instr.af_token, None, instr.pins)],
-                is_continued=True,
-            )
-        )
-    else:
-        # Re-group remaining outputs — they may share a prefix (→ branches)
-        trees = [(instr.branch_tree, instr.af_token, i) for i, instr in enumerate(remaining)]
-        cond_tree, grouped, _ = _group_outputs(trees)
+def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
+    """A CLICK rung of several wires: one pyrung rung per wire, row for row.
 
-        if (
-            cond_tree is None
-            and len(grouped) > 1
-            and all(g.branch_tree is not None for g in grouped)
-        ):
-            # Still no shared prefix → each becomes its own continued rung
-            for instr in remaining:
-                result.append(
-                    _AnalyzedRung(
-                        comment=None,
-                        condition_tree=instr.branch_tree,
-                        instructions=[_InstructionInfo(instr.af_token, None, instr.pins)],
-                        is_continued=True,
-                    )
-                )
+    The first wire is the rung, each later wire a ``.continued()`` rung of its
+    own, never folded onto another: a continued rung reads its contacts where
+    it stands, as the wire's rows do, and the pyrung code draws as the CLICK
+    rung does.  ``None`` where the rung is one wire.
+    """
+    instructions = rung.instructions
+    if len(instructions) < 2:
+        return None
+    if any(instr.wire is None for instr in instructions) or rung.source_outputs is None:
+        return None
+    groups: list[list[int]] = []
+    for index, instr in enumerate(instructions):
+        if groups and instructions[groups[-1][-1]].wire == instr.wire:
+            groups[-1].append(index)
         else:
-            # Shared prefix → single continued rung (may have branches)
-            for gi, orig in zip(grouped, remaining, strict=True):
-                gi.pins = orig.pins
-            result.append(
-                _AnalyzedRung(
-                    comment=None,
-                    condition_tree=cond_tree,
-                    instructions=grouped,
-                    is_continued=True,
-                )
+            groups.append([index])
+    if len(groups) < 2:
+        return None
+    pieces: list[_AnalyzedRung] = []
+    for number, group in enumerate(groups):
+        trees = [
+            (rung.source_outputs[index].tree, instructions[index].af_token, index)
+            for index in group
+        ]
+        cond_tree, grouped, _ = _group_outputs(trees)
+        for info, index in zip(grouped, group, strict=True):
+            info.pins = instructions[index].pins
+            info.wire = instructions[index].wire
+        pieces.append(
+            _AnalyzedRung(
+                comment=rung.comment if number == 0 else None,
+                condition_tree=cond_tree,
+                instructions=grouped,
+                role=rung.role,
+                is_continued=rung.is_continued if number == 0 else True,
             )
-
-    return result
+        )
+    return pieces
 
 
 def _analyze_rungs(
@@ -798,24 +799,114 @@ def _analyze_rungs(
         af0 = rung.rows[0][-1] if rung.rows else ""
 
         if af0.startswith("for("):
-            # for/next block
+            # for/next block; nested blocks count their own for()/next() pair
             analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
             i += 1
-            # Collect body rungs until next()
+            depth = 1
             while i < len(raw_rungs):
                 body_rung = raw_rungs[i]
                 body_af = body_rung.rows[0][-1] if body_rung.rows else ""
                 if body_af == "next()":
                     analyzed.append(analyze_one(i, role=RungRole.FORLOOP_NEXT))
                     i += 1
-                    break
-                analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
+                    depth -= 1
+                    if depth == 0:
+                        break
+                    continue
+                if body_af.startswith("for("):
+                    analyzed.append(analyze_one(i, role=RungRole.FORLOOP_START))
+                    depth += 1
+                else:
+                    analyzed.append(analyze_one(i, role=RungRole.FORLOOP_BODY))
                 i += 1
         else:
-            analyzed.extend(_split_continued(analyze_one(i)))
+            whole = analyze_one(i)
+            source_outputs = whole.source_outputs
+            pieces = _split_wires(whole) or [whole]
+            for piece in pieces:
+                piece.source_outputs = None
+            pieces[0].source_outputs = source_outputs
+            analyzed.extend(pieces)
             i += 1
 
     return analyzed
+
+
+# Pin labels each instruction takes, in the fixed order CLICK draws them.
+_PIN_ORDER: dict[str, tuple[str, ...]] = {
+    "on_delay": ("reset",),
+    "count_up": ("down", "reset"),
+    "count_down": ("reset",),
+    "shift": ("clock", "reset"),
+    "event_drum": ("reset", "jump", "jog"),
+    "time_drum": ("reset", "jump", "jog"),
+    "time_event_drum": ("reset", "jump", "jog"),
+}
+
+
+def _attach_pins(
+    rows: list[list[str]],
+    pin_row_set: set[int],
+    pin_trees: dict[int, SPNode | None],
+    instructions: list[_InstructionInfo],
+    af_rows: list[int],
+) -> None:
+    """Attach each pin row to the instruction it belongs to.
+
+    A pin label (``.reset()``, ``.jump(n)``, ...) belongs to the nearest
+    instruction row above it.  Rows without an AF token (OR branches, padding)
+    may sit anywhere between an instruction's pin rows: what a pin reads comes
+    from the wiring into its row, and a row wired into nothing is reported by
+    the dropped-contact check.  Labels must follow the instruction's fixed pin
+    order, each at most once.
+    """
+    instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
+    current_instruction: int | None = None
+    current_name = ""
+    seen: list[str] = []
+
+    for row_index, row in enumerate(rows):
+        af = row[-1]
+        if row_index not in pin_row_set:
+            if af:
+                current_instruction = instruction_by_row.get(row_index)
+                match = _FUNC_RE.match(af)
+                current_name = match.group(2) if match else af
+                seen = []
+            continue
+
+        if current_instruction is None:
+            raise ValueError(
+                f"Pin row {row_index} has no instruction row above it in this rung."
+                f"\n{_annotate_rung_rows(rows, row_index)}"
+            )
+        match = _PIN_RE.match(af)
+        if not match:
+            continue
+        name = match.group(1)
+        order = _PIN_ORDER.get(current_name)
+        if order is not None:
+            if name not in order:
+                raise ValueError(
+                    f"Pin .{name}() on row {row_index} is not a pin of {current_name}() "
+                    f"(its pins are {', '.join(f'.{p}()' for p in order)})."
+                    f"\n{_annotate_rung_rows(rows, row_index)}"
+                )
+            if seen and order.index(name) <= order.index(seen[-1]):
+                raise ValueError(
+                    f"Pin .{name}() on row {row_index} is out of order: {current_name}() "
+                    f"pins come in the order {', '.join(f'.{p}()' for p in order)}."
+                    f"\n{_annotate_rung_rows(rows, row_index)}"
+                )
+        seen.append(name)
+        instructions[current_instruction].pins.append(
+            _PinInfo(
+                name=name,
+                arg=match.group(2),
+                conditions=_extract_conditions(row, 0, _CONDITION_COLS),
+                condition_tree=pin_trees.get(row_index),
+            )
+        )
 
 
 def _analyze_single_rung(
@@ -848,6 +939,7 @@ def _analyze_single_rung(
             condition_tree=None,
             instructions=[],
             role=role,
+            source_outputs=(),
         )
 
     # Separate pin rows from content rows
@@ -861,8 +953,9 @@ def _analyze_single_rung(
             return _AnalyzedRung(
                 comment=comment,
                 condition_tree=None,
-                instructions=[_InstructionInfo("NOP", None, [])],
+                instructions=[_InstructionInfo(NOP, None, [])],
                 role=role,
+                source_outputs=(_SourceOutput(NOP, None, ()),),
             )
         if _rows_have_content(rows):
             raise ValueError(
@@ -873,6 +966,7 @@ def _analyze_single_rung(
             condition_tree=None,
             instructions=[],
             role=role,
+            source_outputs=(),
         )
 
     # SP Reduction (per output)
@@ -883,6 +977,9 @@ def _analyze_single_rung(
 
     # Output Grouping
     condition_tree, instructions, af_rows = _group_outputs(output_trees)
+    wires = _row_wires(rows)
+    for instr, af_row in zip(instructions, af_rows, strict=True):
+        instr.wire = wires[af_row]
 
     if validate:
         retained_instruction_rows = set(af_rows)
@@ -899,55 +996,24 @@ def _analyze_single_rung(
                 f"Rung drops output instruction(s) present in the source during grouping: {detail}."
             )
 
-    # Exporter pins immediately follow their owning AF row. Walk the raw rows
-    # in order so malformed layouts fail loudly instead of silently attaching
-    # to the wrong instruction.
-    # Compute SP trees for pin row conditions.
+    # Compute SP trees for pin row conditions.  A pin's condition comes from
+    # the wiring into its row, so OR branches and padding rows may sit between
+    # pin rows (above or below a label); _attach_pins decides ownership.
     pin_trees: dict[int, SPNode | None] = {}
     if pin_sinks and source is not None:
         for pr, ps in pin_sinks.items():
             pin_trees[pr] = _sp_reduce(source, ps, edges)
 
-    if pin_row_set and instructions:
-        instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
-        current_instruction: int | None = None
-
-        for row_index, row in enumerate(rows):
-            af = row[-1]
-
-            if row_index in pin_row_set:
-                if current_instruction is None:
-                    raise ValueError(
-                        f"Pin row {row_index} must immediately follow its owning instruction "
-                        f"row.\n{_annotate_rung_rows(rows, row_index)}"
-                    )
-
-                match = _PIN_RE.match(af)
-                if match:
-                    pin_conds = _extract_conditions(row, 0, _CONDITION_COLS)
-                    pin_tree = pin_trees.get(row_index)
-                    instructions[current_instruction].pins.append(
-                        _PinInfo(
-                            name=match.group(1),
-                            arg=match.group(2),
-                            conditions=pin_conds,
-                            condition_tree=pin_tree,
-                        )
-                    )
-                continue
-
-            if af and not af.startswith("."):
-                current_instruction = instruction_by_row.get(row_index)
-                continue
-
-            current_instruction = None
+    if pin_row_set:
+        _attach_pins(rows, pin_row_set, pin_trees, instructions, af_rows)
 
     # Dropped-condition detection: every content edge's Leaf should reach at
-    # least one output or pin tree before output grouping. Grouping may safely
-    # merge equal conditions from different source positions, so checking its
-    # factored trees would mistake that merge for a dropped source occurrence.
-    # Positions absent from every pre-group tree were pruned as dead-end edges
-    # (unwired conditions) and silently omitted from the logic.
+    # least one output or pin tree before output grouping (the pre-group trees
+    # hold every cell each output reads).  Positions absent from every
+    # pre-group tree were pruned as dead-end edges (unwired conditions) and
+    # silently omitted from the logic.  This only sees
+    # drops made here; a contact lost later (splitting, emission) is caught by
+    # shaping.emitted_logic_mismatch against source_outputs.
     present: set[tuple[int, int]] = set()
     for tree, _af_token, _af_row in output_trees:
         for leaf in _walk_tree_leaves(tree):
@@ -972,9 +1038,32 @@ def _analyze_single_rung(
                 "invalid topology."
             )
 
+    # Record each output as the source wired it (full condition + pins) so the
+    # logic check can compare the generated code against it after grouping,
+    # splitting and emission (see shaping.emitted_logic_mismatch).
+    instruction_index_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
+    source_outputs = tuple(
+        _SourceOutput(
+            af_token,
+            tree,
+            tuple(replace(pin) for pin in instructions[instruction_index_by_row[af_row]].pins)
+            if af_row in instruction_index_by_row
+            else (),
+            wires[af_row],
+        )
+        for tree, af_token, af_row in output_trees
+    )
+
+    if len(instructions) > 1 and any(instr.af_token == NOP for instr in instructions):
+        raise ValueError(
+            "NOP shares this rung with other outputs; CLICK deletes a NOP row that "
+            "shares its rung. Remove the NOP row."
+        )
+
     return _AnalyzedRung(
         comment=comment,
         condition_tree=condition_tree,
         instructions=instructions,
         role=role,
+        source_outputs=source_outputs,
     )

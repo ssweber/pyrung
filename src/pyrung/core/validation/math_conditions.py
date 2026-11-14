@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.condition import CompareNe
-from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
+from pyrung.core.expression import (
+    BinaryExpr,
+    LiteralExpr,
+    MathFuncExpr,
+    ShiftFuncExpr,
+    TagExpr,
+    UnaryExpr,
+)
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
 from pyrung.core.validation._common import (
@@ -57,8 +64,11 @@ def _division_nodes(value: Any) -> Iterator[BinaryExpr]:
         yield from _division_nodes(value.right)
         if value.symbol in ("/", "//", "%"):
             yield value
-    elif isinstance(value, UnaryExpr):
+    elif isinstance(value, (UnaryExpr, MathFuncExpr)):
         yield from _division_nodes(value.operand)
+    elif isinstance(value, ShiftFuncExpr):
+        yield from _division_nodes(value.value)
+        yield from _division_nodes(value.count)
 
 
 def _constant_value(value: Any) -> int | float | None:
@@ -124,10 +134,19 @@ def _definitely_zero(
     )
 
 
-def _display(loc: RungLoc, instr: CalcInstruction, denominator: Any) -> FindingDisplay:
+def _display(loc: RungLoc, instr: CalcInstruction, denominator: Any, index: int) -> FindingDisplay:
     dest = operand_name(instr.dest)
     code, _ = render_instruction(instr, dest)
+    # The formula runs its constants as a CLICK Math cuts them (calc_form).
+    # Show the divisor as written.
+    written = list(_division_nodes(instr.source_expression))
     token = render_expr(denominator)
+    label = "divisor is always 0"
+    if len(written) == len(list(_division_nodes(instr.expression))):
+        written_token = render_expr(written[index].right)
+        if written_token != token:
+            label = f"{written_token} is cut to {token} in a CLICK Math, so the divisor is always 0"
+            token = written_token
     span = caret_of(code, token)
     return FindingDisplay(
         code=MATH_DIV_ZERO,
@@ -137,10 +156,10 @@ def _display(loc: RungLoc, instr: CalcInstruction, denominator: Any) -> FindingD
                 location=loc.compact,
                 lines=(code,),
                 caret=(0, span[0], span[1]) if span else None,
-                caret_label="divisor is always 0" if span else "",
+                caret_label=label if span else "",
             ),
         ),
-        hint="make the divisor nonzero before this calc executes",
+        hint="make the divisor nonzero before this math() executes",
     )
 
 
@@ -183,7 +202,7 @@ def validate_math_conditions(
             continue
         chains = effective_reach_chains(program, graph, node, scope_chains=reach)
         for instr in _calc_instructions(rung._instructions):
-            for division in _division_nodes(instr.expression):
+            for index, division in enumerate(_division_nodes(instr.expression)):
                 guards_stable = not (
                     isinstance(division.right, TagExpr)
                     and graph.writers_of.get(division.right.tag.name)
@@ -199,7 +218,7 @@ def validate_math_conditions(
                     MathConditionFinding(
                         code=MATH_DIV_ZERO,
                         target_name=operand_name(instr.dest),
-                        display=_display(loc, instr, division.right),
+                        display=_display(loc, instr, division.right, index),
                     )
                 )
 

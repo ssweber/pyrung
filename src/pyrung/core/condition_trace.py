@@ -25,11 +25,13 @@ from pyrung.core.condition import (
     IntTruthyCondition,
     NormallyClosedCondition,
     RisingEdgeCondition,
+    text_window_of,
 )
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.expression import (
     ExprCompare,
     Expression,
+    format_expr,
 )
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
@@ -76,9 +78,17 @@ class ConditionTraceEngine:
         if isinstance(value, Tag):
             return ctx.get_tag(value.name, value.default)
         if isinstance(value, (IndirectRef, IndirectExprRef)):
-            target = value.resolve_ctx(ctx)
-            return ctx.get_tag(target.name, target.default)
+            return value.read_ctx(ctx)
         return value
+
+    @staticmethod
+    def _element_label(ref: IndirectRef | IndirectExprRef, ctx: ScanContext) -> str:
+        """The element's tag name, or its address marked out of range (reads as 0)."""
+        addr = ref.address_ctx(ctx)
+        target = ref.block._element_or_none(addr)
+        if target is None:
+            return f"{ref.block._format_tag_name(addr)} (out of range)"
+        return target.name
 
     def _right_operand_details(self, right_operand: Any, ctx: ScanContext) -> list[dict[str, Any]]:
         right_details: list[dict[str, Any]] = []
@@ -86,12 +96,12 @@ class ConditionTraceEngine:
             right_details.append(self._detail("right", right_operand.name))
             return right_details
         if isinstance(right_operand, IndirectRef):
-            right_target = right_operand.resolve_ctx(ctx)
+            right_label = self._element_label(right_operand, ctx)
             right_pointer_name = right_operand.pointer.name
             right_pointer_value = ctx.get_tag(right_pointer_name, right_operand.pointer.default)
             right_details.extend(
                 [
-                    self._detail("right", right_target.name),
+                    self._detail("right", right_label),
                     self._detail(
                         "right_pointer_expr",
                         f"{right_operand.block.name}[{right_pointer_name}]",
@@ -103,8 +113,7 @@ class ConditionTraceEngine:
             return right_details
         if isinstance(right_operand, IndirectExprRef):
             # Collapse expression refs to concrete resolved tag labels (for concise trace display).
-            right_target = right_operand.resolve_ctx(ctx)
-            right_details.append(self._detail("right", right_target.name))
+            right_details.append(self._detail("right", self._element_label(right_operand, ctx)))
             return right_details
         if isinstance(right_operand, Expression):
             right_details.append(self._detail("right", repr(right_operand)))
@@ -114,7 +123,24 @@ class ConditionTraceEngine:
         self, condition: Any, ctx: ScanContext | ConditionView
     ) -> tuple[bool, list[dict[str, Any]]]:
         """Return condition value with trace details for debugger display."""
+        written = text_window_of(condition)
+        if written is not condition:
+            return self._evaluate_text_window(condition, written, ctx)
         return self._evaluate(condition, ctx)
+
+    def _evaluate_text_window(
+        self, window: Any, written: Any, ctx: ScanContext | ConditionView
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """``Txt[1] == "AB"`` as written: the window's characters against the literal."""
+        text = "".join(
+            str(ctx.get_tag(child.tag.name, child.tag.default)) for child in window.conditions
+        )
+        value = bool(window.evaluate(ctx))
+        return value, [
+            self._detail("left", written.tag.name),
+            self._detail("left_value", text),
+            self._detail("right_value", written.value),
+        ]
 
     @singledispatchmethod
     def _evaluate(
@@ -151,8 +177,7 @@ class ConditionTraceEngine:
         self, condition: RisingEdgeCondition, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
         tag = self._contact_tag(condition.tag)
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
+        current, previous = condition._edges(ctx)
         value = current and not previous
         return value, [
             self._detail("tag", tag.name),
@@ -165,8 +190,7 @@ class ConditionTraceEngine:
         self, condition: FallingEdgeCondition, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
         tag = self._contact_tag(condition.tag)
-        current = bool(ctx.get_tag(tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
+        current, previous = condition._edges(ctx)
         value = (not current) and previous
         return value, [
             self._detail("tag", tag.name),
@@ -204,18 +228,19 @@ class ConditionTraceEngine:
     def _evaluate_indirect_compare(
         self, condition: Any, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
-        target = condition.indirect_ref.resolve_ctx(ctx)
-        left_label = target.name
-        left_value = ctx.get_tag(target.name, target.default)
-        pointer_name = condition.indirect_ref.pointer.name
-        pointer_value = ctx.get_tag(pointer_name, condition.indirect_ref.pointer.default)
-        extra_details = [
-            self._detail(
-                "left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"
-            ),
-            self._detail("left_pointer", pointer_name),
-            self._detail("left_pointer_value", pointer_value),
-        ]
+        indirect_ref = condition.indirect_ref
+        left_label = self._element_label(indirect_ref, ctx)
+        left_value = indirect_ref.read_ctx(ctx)
+        extra_details = [self._detail("left_pointer_expr", self._value_text(indirect_ref))]
+        if isinstance(indirect_ref, IndirectRef):
+            pointer_name = indirect_ref.pointer.name
+            pointer_value = ctx.get_tag(pointer_name, indirect_ref.pointer.default)
+            extra_details.extend(
+                [
+                    self._detail("left_pointer", pointer_name),
+                    self._detail("left_pointer_value", pointer_value),
+                ]
+            )
         right_details = self._right_operand_details(condition.value, ctx)
         right_value = self._resolve_operand(condition.value, ctx)
         value = bool(condition.evaluate(ctx))
@@ -278,16 +303,12 @@ class ConditionTraceEngine:
         if isinstance(value, IndirectRef):
             return f"{value.block.name}[{value.pointer.name}]"
         if isinstance(value, IndirectExprRef):
-            return f"{value.block.name}[{value.expr!r}]"
+            return f"{value.block.name}[{format_expr(value.expr)}]"
         return repr(value)
-
-    @staticmethod
-    def _indirect_ref_text(value: IndirectRef) -> str:
-        return f"{value.block.name}[{value.pointer.name}]"
 
     def expression(self, condition: Any) -> str:
         """Render a stable, user-facing condition expression."""
-        return self._expression(condition)
+        return self._expression(text_window_of(condition))
 
     @singledispatchmethod
     def _expression(self, condition: Any) -> str:
@@ -332,8 +353,7 @@ class ConditionTraceEngine:
     def _expression_indirect_compare(self, condition: Any) -> str:
         op = _INDIRECT_COMPARE_OPERATOR_BY_CLASS_NAME[type(condition).__name__]
         return (
-            f"{self._indirect_ref_text(condition.indirect_ref)} "
-            f"{op} {self._value_text(condition.value)}"
+            f"{self._value_text(condition.indirect_ref)} {op} {self._value_text(condition.value)}"
         )
 
     @_expression.register(ExprCompare)

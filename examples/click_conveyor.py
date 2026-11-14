@@ -11,6 +11,9 @@ Demonstrates the full pyrung -> Click workflow:
 
 This is the completed version of the conveyor built across the
 "Know Python? Learn Ladder Logic" tutorial.  See ``devtools/build_release_assets.py``.
+
+Uses X001-X008 (8 inputs, built in or in Slot 0) and X101 (an input module
+at expansion module 1).
 """
 
 import os
@@ -52,7 +55,7 @@ Manual = Bool(public=True)  # X005 — manual mode selector
 EntrySensor = Bool()  # X006 — photo-eye at conveyor entry
 DiverterBtn = Bool(public=True)  # X007 — manual diverter button
 BinASensor = Bool()  # X008 — small-box bin exit sensor
-BinBSensor = Bool()  # X009 — large-box bin exit sensor
+BinBSensor = Bool()  # X101 — large-box bin exit sensor
 
 # ---------------------------------------------------------------------------
 # Tags — outputs
@@ -107,7 +110,7 @@ mapping = TagMap(
         EntrySensor.map_to(x[6]),
         DiverterBtn.map_to(x[7]),
         BinASensor.map_to(x[8]),
-        BinBSensor.map_to(x[9]),
+        BinBSensor.map_to(x[101]),
         # Outputs
         ConveyorMotor.map_to(y[1]),
         DiverterCmd.map_to(y[2]),
@@ -143,7 +146,7 @@ mapping = TagMap(
 
 @program
 def logic():
-    comment("Start/stop — NC stop button resets when pressed or wire broken")
+    comment("Start/stop - NC stop button resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with rung(~StopCircuitOK):
@@ -151,14 +154,14 @@ def logic():
     with rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
-    comment("Sort state machine — IDLE to DETECTING: box arrives")
+    comment("Sort state machine - IDLE to DETECTING: box arrives")
     with rung(State == SortState.IDLE, rise(EntrySensor)):
         copy(SortState.DETECTING, State)
 
@@ -181,7 +184,7 @@ def logic():
         reset(IsLarge)
         copy(SortState.IDLE, State)
 
-    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    comment("Diverter output - auto sort OR manual button, gated by EstopOK")
     with rung(
         EstopOK,
         Or(
@@ -192,9 +195,9 @@ def logic():
         out(DiverterCmd)
 
     comment("Bin counters")
-    with rung(rise(BinASensor)):
+    with rung(BinASensor):
         count_up(BinACounter, preset=9999).reset(CountReset)
-    with rung(rise(BinBSensor)):
+    with rung(BinBSensor):
         count_up(BinBCounter, preset=9999).reset(CountReset)
 
 

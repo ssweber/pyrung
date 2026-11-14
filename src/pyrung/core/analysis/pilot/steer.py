@@ -96,6 +96,8 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.verify import verify_gates
 from pyrung.core.analysis.pilot.world_key import ReadIdentity, _pilot_world_key, _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.input_overrides import refuses_value
+from pyrung.core.state import value_changed
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import TransitionCause
@@ -597,7 +599,7 @@ def _pen_tags(state: _PilotState, ctx: _PilotContext) -> frozenset[str]:
     transitions, not a net no-op) plus the loop's watch tags and pipeline role
     channels (bearing departures land as recorded events with exact scans).
     Accumulator registers are excluded: a change-pen on a per-scan-churny tag
-    would collapse every fold to step-mode, and acc membership in the
+    would end every stretch of the loop, and acc membership in the
     incident's changed set is served by endpoint diff instead.
     """
     from pyrung.core.analysis.pilot.advance import iter_advance_owners
@@ -656,7 +658,6 @@ def _apply_actions(
     session = CoastSession(
         fork,
         kind="pulse",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -825,7 +826,7 @@ def _compass_observations(
         observed_tags.add(n.tag)
         old_v = before_snap.get(n.tag)
         new_v = after_snap.get(n.tag)
-        if old_v != new_v and new_v is not None:
+        if value_changed(old_v, new_v) and new_v is not None:
             if (
                 action_tag is not None
                 and fork is not None
@@ -893,6 +894,27 @@ def _try_action_batch(
     observation_action: ActionPair | None = None,
 ) -> _AttemptResult:
     policy = bearing.act.policy
+    # ── Action gate (what the tag can hold) ──────────────────────────────
+    # A trace reads its literal off the rung as written, and a patch refuses what the
+    # tag's type cannot hold ("AB" on a CHAR).  No scan can see it hold that value, so
+    # the action is out of reach, not a failure of the run.
+    refused = frozenset(
+        (name, value)
+        for name, value in policy.applied
+        if (tag := ctx.pdg.tags.get(name)) is not None and refuses_value(tag, value)
+    )
+    if refused:
+        return _AttemptResult(
+            trial=None,
+            gate_events=(
+                PilotGateEvent(
+                    "unholdable",
+                    "tag cannot hold "
+                    + ", ".join(f"{name}={value!r}" for name, value in sorted(refused, key=repr)),
+                ),
+            ),
+            nogood_pairs=refused,
+        )
     # ── Action gate (avoid=) ──────────────────────────────────────────────
     # Before the pulse: a candidate whose overlaid action makes the avoid
     # predicate true is a path that depends on the avoided condition — reject it
@@ -1071,7 +1093,6 @@ def _try_single_program_scan(
     session = CoastSession(
         fork,
         kind=("observe_scan" if isinstance(bearing.act, ObserveScan) else "program_scan"),
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -1168,11 +1189,7 @@ def _try_bearing_coast(
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as program continuation — fork_with_pilot_rungs installs
     # only the steady half.
-    session = CoastSession(
-        fork,
-        kind="bearing_coast",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
-    )
+    session = CoastSession(fork, kind="bearing_coast", waits_on_work=True)
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     global_target_trigger = _terminal_target_trigger(fork, ctx.target)
@@ -1312,8 +1329,7 @@ def _try_program_continuation_seek(
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
     # Confirmed conditional holds animate during the coast as oscillating rungs
-    # in the holds overlay (cyclefold dispatch inside the coast session); they
-    # are never forced steady.
+    # in the holds overlay; they are never forced steady.
 
     # A relational target (Temp >= 5.0) is reached when its predicate holds, not
     # when the register hits an exact value — coast on the predicate so a sensor
@@ -1339,11 +1355,7 @@ def _try_program_continuation_seek(
             ),
         )
     )
-    session = CoastSession(
-        fork,
-        kind="letrun",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
-    )
+    session = CoastSession(fork, kind="letrun", waits_on_work=True)
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     letrun_receipt = _coast_holding_state(
@@ -1525,7 +1537,6 @@ def _try_program_continuation_settle(
     session = CoastSession(
         fork,
         kind="settle",
-        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_pens(_pen_tags(state, ctx))
     dwell = _settle_watched_tags(
@@ -1661,7 +1672,13 @@ def _coast_to_bearing(
         # horizon explicitly; a counterfactual that makes the distant boundary
         # unreachable must not turn that bounded proof into a fresh long coast.
         if estimate is not None and budget is None:
-            coast_budget = max(coast_budget, estimate + 2)
+            # The loop's scans are what the estimate counts, at their price; the interpreted
+            # scans around them cost a unit each.  No charge exceeds the scans themselves.
+            scans_per_unit = session.loop_scans_per_unit() if session else 1
+            coast_budget = max(
+                coast_budget,
+                min(estimate + 3, estimate // scans_per_unit + _COAST_BUDGET),
+            )
         heading_target = predicate_trigger(
             "target",
             TARGET,

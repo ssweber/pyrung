@@ -15,6 +15,7 @@ from pyrung.core import (
 )
 from pyrung.core.validation import (
     PHYS_ANTITOGGLE,
+    PHYS_LINK_UNKNOWN,
     PHYS_MISSING_PROFILE,
     TAG_RANGE_VIOLATION,
     validate_physical_realism,
@@ -165,3 +166,38 @@ def test_opposing_writes_recommend_tracking_desired_state_separately():
     finding = next(f for f in report.findings if f.code == PHYS_ANTITOGGLE)
     assert "Enable is set on and off in one scan" in finding.message
     assert "track the desired state separately, then drive Enable from one out()" in finding.message
+
+
+def test_link_to_an_enable_the_program_never_uses():
+    feedback = Bool("Running", physical=Physical("Running", on_delay="2s"), link="Enabel")
+    seen = Bool("Seen")
+
+    with Program() as prog:
+        with Rung(feedback):
+            out(seen)
+
+    report = validate_physical_realism(prog)
+    assert [f.code for f in report.findings] == [PHYS_LINK_UNKNOWN]
+    assert report.findings[0].target_name == "Running"
+    assert "links to Enabel, which the program never uses" in report.findings[0].message
+
+
+def test_normally_closed_link_resolves_its_enable():
+    start = Bool("Start")
+    enable = Bool("Enable")
+    feedback = Bool(
+        "Open",
+        physical=Physical("Open", on_delay="2s", off_delay="500ms"),
+        link="~Enable",
+    )
+    seen = Bool("Seen")
+
+    with Program() as prog:
+        with Rung(rise(start)):
+            out(enable)
+        with Rung(feedback):
+            out(seen)
+
+    report = validate_physical_realism(prog, dt=0.010)
+    assert [f.code for f in report.findings] == [PHYS_ANTITOGGLE]
+    assert report.findings[0].target_name == "Enable"

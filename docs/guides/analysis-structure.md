@@ -6,7 +6,7 @@ See also: [Diagnosis](analysis-diagnosis.md) (snapshot-based debugging), [Cause 
 
 ## DataView: what does my program touch?
 
-`plc.dataview` returns a chainable query over the program's static dependency graph. No scans needed — it reads the program structure directly.
+`plc.dataview` returns a chainable query over the program's static dependency graph. No scans are needed. It reads the program structure directly.
 
 ```python
 from pyrung import Bool, PLC, Program, rung, And, latch, reset, out
@@ -51,7 +51,7 @@ dv.contains("cmd")      # finds CommandRun, Cmd_Reset, etc.
 dv.contains("motor")    # finds MotorOut, ConveyorMotor, etc.
 ```
 
-It splits on camelCase and underscores, then expands both sides into consonant abbreviations — `"cmd"` finds `CommandRun`, and `"command"` finds `Cmd_Reset`.
+It splits on camelCase and underscores, then expands both sides into consonant abbreviations. For example, `"cmd"` finds `CommandRun`, and `"command"` finds `Cmd_Reset`.
 
 ### Dependency slicing
 
@@ -95,7 +95,7 @@ Useful in test utilities or static analysis scripts that don't need to run scans
 `program.simplified()` resolves each terminal tag's condition chain back to inputs, eliminating intermediate pivots. A 14-rung interlock chain through 10 intermediate tags becomes a two-term Boolean expression over the 8 inputs that actually matter.
 
 ```python
-from pyrung import Bool, Program, rung, branch, out
+from pyrung import And, Bool, Or, Program, rung, out
 
 EStop          = Bool()
 RunPermit      = Bool()
@@ -113,18 +113,12 @@ with Program() as logic:
         out(SafetyOK)
     with rung(RunPermit, SafetyOK):
         out(Permitted)
-    with rung(Permitted):
-        with branch(StartBtn):
-            out(Running)
-        with branch(SealIn):
-            out(Running)
+    with rung(Permitted, Or(StartBtn, SealIn)):
+        out(Running)
     with rung(Running):
         out(SealIn)
-    with rung():
-        with branch(Running, ~EStop):
-            out(MotorOut)
-        with branch(MaintOverride):
-            out(MotorOut)
+    with rung(Or(And(Running, ~EStop), MaintOverride)):
+        out(MotorOut)
 
 forms = logic.simplified()
 ```
@@ -155,11 +149,8 @@ Jog = Bool()
 Motor = Bool()
 
 with Program() as logic:
-    with rung(SafetyOK):
-        with branch(Start):
-            out(Motor)
-        with branch(Jog):
-            out(Motor)
+    with rung(SafetyOK, Or(Start, Jog)):
+        out(Motor)
 
 form = logic.simplified()["Motor"]
 assert SafetyOK in form.permissives
@@ -179,29 +170,25 @@ assert RunPermit not in forms["MotorOut"].permissives  # MaintOverride bypasses 
 `pyrung live` includes the same set in `simplified` output:
 
 ```text
-Motor = And(SafetyOK, Or(Start, Jog))
+Motor = SafetyOK, Or(Start, Jog)
   permissives: SafetyOK
-  (2 writer(s), 0 pivot(s) resolved, depth 0)
+  (1 writer(s), 0 pivot(s) resolved, depth 0)
 ```
 
 These are inferred properties of the current program, not stored tag metadata,
 and they do not add contacts or otherwise change execution.
 
-### What it tells you
-
-The simplified form strips away organizational structure — the intermediate tags that exist to break logic into reviewable chunks — and shows the actual dependency. A 14-rung → 2-term reduction tells you: 8 inputs matter, there are 2 independent paths, and `MaintOverride` bypasses everything.
-
 ### Branch topology is preserved
 
-Sibling branches produce `And(parent, Or(local₁, local₂))`, not the flat DNF form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution — shared preconditions appear once, with the distinguishing triggers nested inside.
+Sibling branches that both drive a tag (an `out()`, then a `latch()` below it) produce `And(parent, Or(local₁, local₂))`, not the flattened form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution. Shared preconditions appear once, with the distinguishing triggers nested inside.
 
 ### Cycles (seal-in)
 
-Feedback loops like seal-in latches are detected and left as-is. When resolution encounters a tag it has already visited in the current chain, it stops substituting. The seal-in tag appears in the output as a leaf — indicating the latch rather than infinitely expanding.
+Feedback loops like seal-in latches are left as they are, so the seal-in tag appears in the output as itself, not expanded.
 
 ## Ladder lints
 
-[`logic.check()`](ladder-lints.md) runs static checks for contradictory rungs, conflicting outputs, stuck coils, suspicious comparisons, invalid tag writes, and other structural problems. See [Ladder Lints](ladder-lints.md) for rule selection, severities, and the complete rule reference.
+[`logic.check()`](ladder-lints.md) runs static checks for contradictory rungs, conflicting outputs, suspicious comparisons, invalid tag writes, and other structural problems. The stuck-coil checks are opt-in. See [Ladder Lints](ladder-lints.md) for rule selection, severities, and the complete rule reference.
 
 
 ## Next steps

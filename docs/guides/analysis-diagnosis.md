@@ -1,8 +1,8 @@
 # Diagnosis
 
-My machine is down. What's wrong? And once I know — how do I get it running again?
+My machine is down. What's wrong? And once I know, how do I get it running again?
 
-These tools need the program and a snapshot — a tag dump from the faulted machine. No scan history, no test suite, no workflow change. `why()` tells you what's blocking, `how()` tells you the steps to reach your target state.
+These tools need the program and a snapshot, which is a tag dump from the faulted machine. They need no scan history, no test suite and no workflow change. `why()` tells you what's blocking. `how()` tells you the steps to reach your target state.
 
 See also: [Program Structure](analysis-structure.md) (static analysis), [Cause & Effect](analysis-causal.md) (richer results with scan history), [Test Coverage](analysis-coverage.md) (test suite surveys).
 
@@ -64,16 +64,16 @@ ConveyorMotor = True  [why]
   r4: out(ConveyorMotor) -- Running, EstopOK
 ```
 
-Each step shows `rN: instruction(tag) -- contacts`. Bool True is implicit (just the tag name), False is explicit (`TagName(False)`). Tags with choices show the label (`State(IDLE)`), other non-Bool tags show the raw value (`SizeReading(185)`).
+Each step shows `rN: instruction(tag) -- contacts`. A True Bool shows as just the tag name. A False Bool shows as `TagName(False)`. Tags with choices show the label (`State(IDLE)`). Other non-Bool tags show the raw value (`SizeReading(185)`).
 
-Steps marked `*` are where something NOT happening keeps the tag in its current state. `blocked` means a contact is preventing the rung from firing — if it changed, so would the result. `held` means a latch trigger that has since cleared — the latch fired in the past but the reason is no longer active.
+Steps marked `*` are where something NOT happening keeps the tag in its current state. `blocked` means a contact is preventing the rung from firing. If that contact changed, the result would change. `held` means a latch trigger has since cleared. The latch fired in the past, but the reason is no longer active.
 
-`why()` works in both directions — "why is this ON?" and "why is this OFF?" — same call, same format. When no writer has fired (the tag is at its initial value), the per-rung detail collapses to a summary:
+`why()` works in both directions with the same call and the same format. It answers "why is this ON?" and "why is this OFF?". When no writer is firing (the tag is at its initial value, or a latch is holding), the per-rung detail collapses to a summary:
 
 ```
 State = IDLE  [why]
   roots: CmdStart(False), CmdStop(False), Fault(False), CmdReset(False)
-  no writer has fired (5 blocked)
+  no writer is firing now (5 blocked)
 ```
 
 ### Multiple tags
@@ -88,13 +88,13 @@ When tags share upstream structure (common in fault cascades), the walk merges a
 
 ### Confidence
 
-For stateless chains (`out`, `copy`, `calc`) and latches whose trigger is still active, the diagnosis is definitive. For latches where the trigger has cleared and there's only one path through the rung condition, the inference is strong. With OR conditions (multiple paths that could have set the latch), each path is equally plausible and reported separately.
+For stateless chains (`out`, `copy`, `math`) and latches whose trigger is still active, the diagnosis is definitive. For latches where the trigger has cleared and there's only one path through the rung condition, the inference is strong. With OR conditions (multiple paths that could have set the latch), each path is equally plausible and reported separately.
 
-Without history, `why()` can't distinguish triggers from enablers — it reports every contributing contact equally. If you have scan history, prefer [`cause()`](analysis-causal.md#recorded-cause-what-caused-this).
+Without history, `why()` can't distinguish triggers from enablers. It reports every contributing contact equally. If you have scan history, prefer [`cause()`](analysis-causal.md#recorded-cause-what-caused-this).
 
 ## Force and re-query
 
-`why()` is stateless — change the snapshot, get a new answer. Use `force()` to test hypotheses:
+`why()` is stateless. Change the snapshot and you get a new answer. Use `force()` to test hypotheses:
 
 ```python
 plc.why(ConveyorMotor)    # "blocked EstopOK" — is that the only problem?
@@ -103,19 +103,26 @@ plc.step()
 plc.why(ConveyorMotor)    # updated explanation with EstopOK forced True
 ```
 
-This loop — load dump, `why()`, force a tag, `why()` again — is the core interactive workflow. Each force simulates a field change; each `why()` shows what remains.
+The core interactive workflow is a loop: load the dump, call `why()`, force a tag, call `why()` again. Each force simulates a field change. Each `why()` shows what remains.
+
+`why()` names the forces in its answer. A forced input reads `roots: EstopOK forced`. A forced tag with rungs gets its own line, and the rungs below it show what the logic is doing:
+
+```
+Y001 = False  [why]
+  Y001 is forced False: its rungs can change it during a scan, the force restores it before outputs are written
+  roots: X001
+  r1: out(Y001) -- X001
+```
 
 ## `how()` — how do I reach a target state?
 
 !!! note "Experimental"
 
-    `how()` is experimental. When it finds a path, the path is a real recording you can replay. On real programs it sometimes stops without one, and it can take a minute. `Stopped` is not a proof that no path exists — see the headline meanings below.
+    `how()` is experimental. When it finds a path, the path is a real recording you can replay. On real programs it sometimes stops without one, and it can take a minute. `Stopped` is not a proof that no path exists. See the headline meanings below.
 
-    The `Plan`/`Path`/route API may still change; `avoid=` semantics and `via=` already changed between v0.10 and v0.11.
+    `how()` returns a path it has checked, not necessarily the shortest. That is what lets it wait through timer dwells and navigate multi-step machines.
 
-    `how()` was rewritten in v0.11. Earlier versions searched breadth-first and returned the shortest path. PILOT returns a path it verified, not necessarily the shortest — which is what lets it wait through timer dwells and navigate multi-step machines.
-
-`how()` drives the PLC to a target state the way an engineer would — it reads the program backward to find what needs to change, tests each command on a fork, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and returns to the last good state after a regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
+`how()` drives the PLC to a target state the way an engineer would. It reads the program backward to find what needs to change, tests each command on a fork, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and returns to the last good state after a regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
 
 Given a state machine with IDLE, RUNNING, and FAULTED states:
 
@@ -152,19 +159,11 @@ The headline is deliberately specific:
 - `Cannot reach` means `how()` proved a conflict or physical constraint.
 - `Stopped` means it could not identify another safe action. It does not call an unknown path impossible.
 
-The debug console reports long-running work as it happens. Trials and investigations are deliberately streamed as unfinished sentences, then completed by the result event:
-
-```
-Trying CmdStart=True... done.
-  State jumped 6 -> 10 Checking... unexpected.
-  Preventable? Yes -- with rung(State == 3): latch(DoorClosed).
-```
-
-`Trying CmdStart=True...` is emitted before its trial; ` done.` is appended only after acceptance. `Checking...` is emitted before stable-landing analysis. `Preventable?` is emitted before causal replay, and the replay result is appended on the same line when the investigation returns. A long investigation therefore reads as active work instead of a hung console.
+For a program with `send()` or `receive()`, see [how() and Modbus](../instructions/communication.md#how).
 
 ### Condition syntax
 
-Accepts one or more targets — each a Tag (Bool shorthand for `== True`) or a comparison. Several targets are an AND goal: `how()` reaches one state where they all hold at once.
+`how()` accepts one or more targets. Each is a Tag (Bool shorthand for `== True`) or a comparison. Several targets, or an `And(...)` of them, are an AND goal. `how()` reaches one state where they all hold at once.
 
 ```python
 plc.how(State == RUNNING)                        # comparison
@@ -172,38 +171,37 @@ plc.how(Running)                                  # Bool shorthand — target is
 plc.how(Running, State == RUNNING)               # AND — a state where both hold
 ```
 
-If the targets can't coexist — the same register at two values, or two states whose only writers clobber each other — the result says `Cannot reach` and names the conflict:
+If the targets can't coexist, the result says `Cannot reach` and names the conflict. Examples are the same register at two values, or two states whose only writers clobber each other:
 
 ```python
 plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, two values
 ```
 
-`avoid=` works with multiple targets too — the same exclusions apply while
-PILOT works toward each target.
-
 ### `avoid`
 
-`avoid X` = do not take a path that depends on X. It excludes routes, operator actions, and observed scan states that satisfy the predicate. Uses the same condition syntax:
+`avoid X` means do not take a path that depends on X. It excludes routes, operator actions, and observed scan states that satisfy the predicate. It uses the same condition syntax:
 
 ```python
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-Momentary commands are treated as actions, not just settled states — `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too: PILOT carries the condition into folded trial coasts, so there is no two-scan wink where it blips true and settles false again. An opaque Python callable has no readable condition for folding; it is checked at trial endpoints, retained real snapshots, and kernel scans the coast actually executes, but not logical scans skipped by a fold. Use condition syntax when every logical scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
+Momentary commands are treated as actions, not just settled states. `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too. A Python callable is not checked on the repeated scans of a long wait. Use a condition when every scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
 
-Pass more than one condition — a tuple or list — for a **union of exclusions**: each is avoided independently.
+Pass more than one condition, as a tuple or list, for a **union of exclusions**. Each is avoided independently.
 
 ```python
 plc.how(Burner, avoid=(ProdMode, MaintFault))   # avoid ProdMode OR MaintFault
 ```
 
-Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the combined state, not A or B on their own.
+To express a composite prohibition, write `avoid=And(A, B)`. It avoids only the combined state, not A or B on their own.
 
 When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
 
+If an `avoid=` callable raises, `how()` returns no plan and raises `AvoidCheckError` (from `pyrung.core`), with the callable's exception as its cause. A state may not have every tag yet, so read tags with `snapshot.get(name, default)`.
+
 ### The route taken
 
-When a target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Plan.route`:
+A target can have more than one route, such as two writers or an `OR` over internal coils. `how()` never asks you to choose between them. It takes a deterministic default route and tells you where it went on `Plan.route`:
 
 ```python
 plan = plc.how(Burner)
@@ -217,25 +215,21 @@ print(plan)
 # 1. Set ProdCmd=True.
 ```
 
-You already know your machine, so exclude the reported route with `avoid=` and PILOT will read the remaining current-world alternatives:
+You already know your machine, so exclude the reported route with `avoid=` and `how()` will consider the routes that remain in the current state:
 
 ```python
 plc.how(Burner, avoid=ProdMode)    # exclude production; maintenance remains
 ```
 
-The route report is the same for any concrete value target, not just `Bool == True`. A word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers both report a `Plan.route`, and the chosen route can be excluded the same way:
+Any target that asks for one exact value reports its route, such as `Running == False` with two stop rungs:
 
 ```python
 plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
 ```
 
-A relational target (`State > 5`) has no frozen value to route over, so it never carries a `Plan.route`.
-
-A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to report — so `Plan.route` is `None`.
-
 ## In a debug session
 
-`why` takes space-separated tag names. `how` takes a single condition expression with comparisons (`==`/`!=`/`<`/`>`).
+`why` takes space-separated tag names. `how` takes one or more conditions separated by commas, then optionally `avoid` and more conditions.
 
 ```
 > why Alarm_Horn

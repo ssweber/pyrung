@@ -14,17 +14,19 @@ During Continue, the adapter emits `pyrungScanFrame` compound events at ~30fps (
 
 The extension fans out `pyrungScanFrame` in `extension.js` `onDidSendMessage` to all consumers. Views never poll the adapter during continue.
 
+Frames are also sent after any state change outside continue (step, force, patch, mode/speed change, reload, `pyrung live` commands, Modbus writes). Those carry `changes: []` and, when paused, the same trace as the latest `pyrungTrace`, so decorations keep the step view. Every frame also has `mode`, `running`, `speed`, `actualSpeed`, `pendingPatches`, and `source` (see `docs/guides/dap-vscode.md`, Simulator controls).
+
 ### Request-Based When Stopped (Pull)
 
 After a `stopped` event, views that need historical data use DAP custom requests:
-- `pyrungTagChanges` — backward pagination of tag change history
+- `pyrungTagChanges` — backward pagination of tag change history. Each entry is a scan that changed a tag. Scans a compiled run didn't record are stepped again on the request, within a 3 s allowance; what's left comes back as one last entry with `window: true`, spanning `prevScanId`+1..`scanId`, whose `changes` are the net across it and claim no scan
 - `pyrungSeek` — move playhead to a historical scan
 - `pyrungForkAt` — fork a new runner from a historical scan
 - `pyrungHistoryInfo` — get retained scan range
 
-### Step Commands (Unchanged)
+### Step Commands
 
-Step handlers (next/stepIn/stepOut/pyrungStepScan) emit `pyrungTrace` events synchronously with `step` populated (per-rung, single step context). These use the existing handler — no frame involved.
+Step handlers (next/stepIn/stepOut/pyrungStepScan) emit `pyrungTrace` events synchronously with `step` populated (per-rung, single step context), then a state frame carrying that same trace.
 
 ## Adding a New Live View
 
@@ -48,4 +50,4 @@ Step handlers (next/stepIn/stepOut/pyrungStepScan) emit `pyrungTrace` events syn
 - Package with PowerShell from this folder:
   `& "$env:APPDATA\npm\vsce.cmd" package`
 - If `code` is not on `PATH`, reinstall with:
-  `& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension "$PWD\pyrung-debug-0.12.0.vsix" --force`
+  `& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension "$PWD\pyrung-debug-<version>.vsix" --force`

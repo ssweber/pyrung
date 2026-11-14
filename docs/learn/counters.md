@@ -12,12 +12,12 @@ for item in items:
 
 ## The ladder logic way
 
-There's no `for` loop. There's no "list of items." There's a sensor at the end of each bin chute that goes True every time a box drops in — and a counter that counts it.
+There's no `for` loop. There's no "list of items." There's a sensor at the end of each bin chute that goes True every time a box drops in, and a counter that counts it.
 
-But here's the catch: **a counter increments every scan while its rung is True**, not every edge. A sensor held True for 100 scans racks up 100 counts from a single box. Wrap the sensor with `rise()` — the edge detection from [Lesson 4](assignment.md) — to count edges instead. One increment per False→True transition. You'll do this almost every time you use a counter on a sensor input.
+A counter counts **edges**, not scans: one increment each time its rung goes from False to True. A sensor held True for 100 scans while a box sits in the chute still counts that box once. The counter has the edge detection from [Lesson 4](assignment.md) built in. The counter remembers what its input was the last time the counter ran, so you don't wrap the sensor in `rise()`.
 
 ```python
-from pyrung import Bool, Counter, Program, rung, PLC, count_up, rise
+from pyrung import Bool, Counter, Program, rung, PLC, count_up
 
 BinASensor  = Bool()
 BinBSensor  = Bool()
@@ -26,20 +26,20 @@ BinBCounter = Counter.clone("BinBCounter")
 CountReset  = Bool()
 
 with Program() as logic:
-    with rung(rise(BinASensor)):
+    with rung(BinASensor):
         count_up(BinACounter, preset=10) \
             .reset(CountReset)
-    with rung(rise(BinBSensor)):
+    with rung(BinBSensor):
         count_up(BinBCounter, preset=10) \
             .reset(CountReset)
 ```
 
-`rise(BinASensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the counter would increment every scan while the sensor is active, racking up hundreds of counts per box.
+Holding `BinASensor` True does nothing more after the first scan. The next count comes when the sensor goes False and then True again. The counter keeps its own memory of the input and updates it every scan it runs, even while `CountReset` holds it at 0. So a sensor still True when the reset releases does not count again.
 
-`Counter` is a built-in structured type — the mirror of `Timer`. Its `.Acc` is a Dint (32-bit) because a 16-bit integer rolls over at 32,767 — on a fast line, that's a few hours of production. Production counters in real PLCs are almost always 32-bit for the same reason.
+`Counter` is a built-in structured type, the mirror of `Timer`. Its `.Acc` is a Dint (32-bit) because a 16-bit integer rolls over at 32,767. On a fast line, that's a few hours of production. Production counters in real PLCs are almost always 32-bit for the same reason.
 
 ```
-  rise(BinASensor)? --yes--> .Acc += 1 --> .Acc >= Preset? --yes--> .Done = True
+  BinASensor rose? --yes--> .Acc += 1 --> .Acc >= Preset? --yes--> .Done = True
           |                                     |
           no                                    no
           v                                     v
@@ -50,13 +50,13 @@ with Program() as logic:
 
 !!! tip "Key concept: chips, not function calls"
 
-    Notice `.reset(CountReset)` on its own line. In Python, you'd pass all behavior into a single function call. In a ladder diagram, an instruction block is more like a **chip with multiple input pins**: the rung powers the count input, but the reset pin is a separate wire connected to its own condition. When `CountReset` goes true, the accumulator and done bit clear regardless of what the rung is doing.
+    Notice `.reset(CountReset)` on its own line. In Python, you'd pass all behavior into a single function call. In a ladder diagram, an instruction block is more like a **chip with multiple input pins**. The rung powers the count input, but the reset pin is a separate wire connected to its own condition. When `CountReset` goes true, the accumulator and done bit clear regardless of what the rung is doing.
 
-    This mental model extends to every box instruction in real PLCs — timers, PID loops, message blocks, motion instructions. The `.reset()` chain is pyrung's way of drawing those extra wires.
+    This mental model extends to every box instruction in real PLCs, such as timers, PID loops, message blocks, and motion instructions. The `.reset()` chain is pyrung's way of drawing those extra wires.
 
-If this looks familiar, it should — it's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical: both are built-in types with `.Done` and `.Acc` fields, both chain `.reset()`, and `.reset()` is terminal for the [same reason](timers.md#retentive-on-delay).
+If this looks familiar, it should. It's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical. Both are built-in types with `.Done` and `.Acc` fields. Both chain `.reset()`, and `.reset()` ends the rung for the [same reason](timers.md#retentive-on-delay).
 
-Counters can also count in both directions. A `count_up` with a `.down()` chain becomes a bidirectional counter (CTUD) — boxes entering minus boxes leaving gives boxes currently in zone:
+Counters can also count in both directions. A `count_up` with a `.down()` chain becomes a bidirectional counter (CTUD). Boxes entering minus boxes leaving gives boxes currently in zone:
 
 ```python
 ZoneCounter = Counter.clone("ZoneCounter")
@@ -105,4 +105,4 @@ We have sensors, timers, counters, and a diverter. But nothing coordinates the s
 
 !!! info "Also known as..."
 
-    Counters are `CTU`/`CTD`/`CTUD`. Done bits and accumulators follow the same naming as timers. Reset is its own input pin. Edge-counting is always "one-shot feeding the counter" — never the counter itself.
+    Counters are `CTU`/`CTD`/`CTUD`. Done bits and accumulators follow the same naming as timers. Reset is its own input pin. CLICK counters count rising edges of their inputs, as pyrung's do. On other platforms check whether the counter itself is edge-triggered before dropping the one-shot.

@@ -286,7 +286,9 @@ def test_to_ascii_inverts_to_char_exactly() -> None:
 def test_to_ascii_out_of_range_is_unsatisfiable() -> None:
     src, dest = Char("ModeChar"), Int("Code")
     instr = CopyInstruction(src, dest, convert=to_ascii)
-    r = _COPY.reverse(instr, None, eq_target("Code", 200), _ctx(src, dest))  # > 127
+    r = _COPY.reverse(instr, None, eq_target("Code", 200), _ctx(src, dest))
+    assert _only(r) == (Eq("ModeChar", frozenset({chr(200)})),)  # a TXT is a whole byte
+    r = _COPY.reverse(instr, None, eq_target("Code", 256), _ctx(src, dest))  # > one byte
     assert _only(r) == (Eq("Code", frozenset()),)
 
 
@@ -310,11 +312,11 @@ def test_to_binary_unbounded_source_falls_through() -> None:
     assert _COPY.reverse(instr, None, eq_target("Out", "{"), _ctx(src, dest)).fallthrough is True
 
 
-def test_to_binary_non_ascii_target_is_unsatisfiable() -> None:
+def test_to_binary_high_byte_target_inverts_to_code() -> None:
     src, dest = Word("Byte", min=0, max=255), Char("Out")
     instr = CopyInstruction(src, dest, convert=to_binary)
-    r = _COPY.reverse(instr, None, eq_target("Out", "é"), _ctx(src, dest))  # ord 233 > 127
-    assert _only(r) == (Eq("Out", frozenset()),)
+    r = _COPY.reverse(instr, None, eq_target("Out", chr(200)), _ctx(src, dest))
+    assert _only(r) == (Eq("Byte", frozenset({200})),)
 
 
 def test_to_value_and_to_text_fall_through() -> None:

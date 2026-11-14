@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrsistent import PVector, pvector
 
 import pyrung.core.analysis.pilot.world as _world
-from pyrung.core.analysis.pilot.budget import SearchBudget
+from pyrung.core.analysis.pilot.avoid import _member_on_scan, _member_weighed
+from pyrung.core.analysis.pilot.budget import SearchBudget, WallClock
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.execution import (
@@ -85,22 +86,15 @@ class RevisitCredential:
 # ---------------------------------------------------------------------------
 
 
-def _avoid_member_true(pred: Callable[[dict[str, Any]], bool], state: dict[str, Any]) -> bool:
-    try:
-        return bool(pred(state))
-    except Exception:
-        return False
-
-
 @dataclass(frozen=True)
 class _AvoidMember:
-    """One avoided snapshot condition and its optional coast fold metadata."""
+    """One avoided snapshot condition and, when it has one, its runtime Condition."""
 
     name: str
     pred: Callable[[dict[str, Any]], bool]
     tags: frozenset[str] = frozenset()
     # The normalized runtime Condition equivalent to ``pred``.  CoastSession
-    # uses it only as fold/read metadata; ``pred`` remains authoritative.
+    # uses it only to say what it reads; ``pred`` remains authoritative.
     # Opaque callables have none and therefore retain the narrower
     # real-observed-scan contract.
     condition: Any | None = None
@@ -120,21 +114,25 @@ class _AvoidPredicate:
     members: tuple[_AvoidMember, ...]
 
     def __call__(self, state: dict[str, Any]) -> bool:
-        return any(_avoid_member_true(m.pred, state) for m in self.members)
+        return any(_member_on_scan(m.name, m.pred, state) for m in self.members)
 
     def violated(self, state: dict[str, Any]) -> tuple[str, ...]:
-        return tuple(m.name for m in self.members if _avoid_member_true(m.pred, state))
+        return tuple(m.name for m in self.members if _member_on_scan(m.name, m.pred, state))
 
     def violated_after_clear(
         self,
         start: dict[str, Any],
         state: dict[str, Any],
     ) -> tuple[str, ...]:
-        """Members clear at trial start that are true in a later observation."""
+        """Members clear at trial start that are true on a scan the trial ran.
+
+        The start may be the state behind how()'s start, so it is only weighed.
+        """
         return tuple(
             member.name
             for member in self.members
-            if not _avoid_member_true(member.pred, start) and _avoid_member_true(member.pred, state)
+            if not _member_weighed(member.pred, start)
+            and _member_on_scan(member.name, member.pred, state)
         )
 
     @property
@@ -233,11 +231,12 @@ class _PilotContext:
     # Public ``how()`` supplies none; other navigation clients may constrain an
     # exact action without implying a retained route choice.
     blocked_actions: frozenset[_ActionPair]
-    # Invocation work allowance for kernel scans and bounded research requests.
-    # Folded simulated dwell is separate; discarded work is never refunded.
+    # Invocation work allowance, in the ledger's units (see ``budget``): every scan run,
+    # and bounded research requests.  Discarded work is never refunded.
     max_scans: int
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
+    wall_clock: WallClock | None = None
     # A disposable retained-composition continuation observes only whether it
     # exposes another retained occurrence. The outer committed attempt owns
     # action-edge learning and its deep causal attribution.
@@ -302,7 +301,7 @@ class _StepContext:
         )
 
     def point_at(self, scan_id: int) -> ExecutionPoint | None:
-        """Resolve one exact kernel scan without confusing logical fold gaps."""
+        """Resolve one exact interpreted scan; a scan inside a stretch has none."""
 
         matches = tuple(
             point
@@ -612,8 +611,8 @@ class _PulseState:
     post_pulse_key: _StateKey
     snap: dict[str, Any]
     key: _StateKey
-    # Ordered actual interpreter scans owned by this execution fork. Logical
-    # scan IDs skipped by a fold are deliberately absent.
+    # Ordered interpreted scans owned by this execution fork. Scan IDs inside a
+    # stretch of the loop are deliberately absent.
     kernel_scan_ids: tuple[int, ...]
     # Selected-scan replay memo. The immutable epoch owner is retained beside
     # each projection so a scan ID cannot reuse evidence from another fork.

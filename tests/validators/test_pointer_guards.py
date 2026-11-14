@@ -93,7 +93,9 @@ def test_branch_write_before_access_invalidates_guard():
     assert _codes(program)
 
 
-def test_branch_guard_was_evaluated_before_parent_write():
+def test_branch_guard_reads_the_parent_write_live():
+    # The branch solves after copy(101) above it: it reads 101, never 5, so
+    # the guarded access never runs with an escaping pointer.
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True, default=5)
     with Program() as program:
@@ -101,10 +103,21 @@ def test_branch_guard_was_evaluated_before_parent_write():
             copy(101, pointer)
             with branch(pointer == 5):
                 copy(block[pointer], Int("Result"))
+    assert not _codes(program)
+
+
+def test_branch_guard_after_parent_write_sees_the_written_value():
+    block = Block("Data", TagType.INT, 1, 100)
+    pointer = Int("Index", external=True, default=5)
+    with Program() as program:
+        with Rung():
+            copy(101, pointer)
+            with branch(pointer == 101):
+                copy(block[pointer], Int("Result"))
     assert _codes(program) == {"PTR_MAY_ESCAPE_BLOCK"}
 
 
-def test_continued_guard_was_evaluated_before_prior_rung_write():
+def test_continued_guard_reads_the_prior_rung_write_live():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True, default=5)
     with Program() as program:
@@ -113,10 +126,10 @@ def test_continued_guard_was_evaluated_before_prior_rung_write():
         with Rung().continued():
             with branch(pointer == 5):
                 copy(block[pointer], Int("Result"))
-    assert _codes(program) == {"PTR_MAY_ESCAPE_BLOCK"}
+    assert not _codes(program)
 
 
-def test_branch_condition_read_uses_snapshot_before_instruction_assignment():
+def test_branch_condition_read_follows_the_instruction_assignment():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index")
     with Program() as program:
@@ -124,10 +137,23 @@ def test_branch_condition_read_uses_snapshot_before_instruction_assignment():
             copy(5, pointer)
             with branch(block[pointer] == 7):
                 copy(1, Int("Result"))
+    assert not _codes(program)
+
+
+def test_inherited_contact_is_read_on_its_own_row():
+    # The trunk contact reads the default 0 as the rung starts, before
+    # copy(5) runs, even where the branch below repeats it.
+    block = Block("Data", TagType.INT, 1, 100)
+    pointer = Int("Index")
+    with Program() as program:
+        with Rung(block[pointer] == 7):
+            copy(5, pointer)
+            with branch(Bool("Extra")):
+                copy(1, Int("Result"))
     assert _codes(program) == {"PTR_DEFAULT_BEFORE_BLOCK_START"}
 
 
-def test_continued_condition_read_uses_original_snapshot():
+def test_continued_condition_read_follows_the_prior_rung():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index")
     with Program() as program:
@@ -135,4 +161,4 @@ def test_continued_condition_read_uses_original_snapshot():
             copy(5, pointer)
         with Rung(block[pointer] == 7).continued():
             copy(1, Int("Result"))
-    assert _codes(program) == {"PTR_DEFAULT_BEFORE_BLOCK_START"}
+    assert not _codes(program)

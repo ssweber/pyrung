@@ -31,15 +31,15 @@ with Program() as logic:
 
 `latch` is sticky. Once set, it stays set until explicitly `reset`. This is the bread and butter of motor control, alarm acknowledgment, and mode selection in every factory on earth.
 
-Why two rungs? Your Python instinct says "the rung went false, the output should drop." That's how `out` works. But `latch` isn't `out` — it sets the bit and *leaves it set*. After Start is pressed, `Running` stays true on its own. To clear it, you need a separate rung with `reset()`. If you only had the first rung, the motor would stop the instant you released Start — exactly the bug [Lesson 1](scan-cycle.md) ended on.
+Why two rungs? Your Python instinct says "the rung went false, the output should drop." That's how `out` works. But `latch` isn't `out`. It sets the bit and *leaves it set*. After Start is pressed, `Running` stays true on its own. To clear it, you need a separate rung with `reset()`. If you only had the first rung, the motor would stop the instant you released Start. That's exactly the bug [Lesson 1](scan-cycle.md) ended on.
 
-`StopCircuitOK` comes from a **normally-closed** circuit, so the PLC input reads True when healthy. Writing `~StopCircuitOK` means "this contact fires when the stop circuit opens" — button pressed, wire cut, or power lost. The reset rung is last because stop should always win (remember "last rung wins" from [Lesson 1](scan-cycle.md)).
+`StopCircuitOK` comes from a **normally-closed** circuit, so the PLC input reads True when healthy. Writing `~StopCircuitOK` means "this contact fires when the stop circuit opens" (button pressed, wire cut, or power lost). The reset rung is last because stop should always win (remember "last rung wins" from [Lesson 1](scan-cycle.md)).
 
 !!! note "What `~` actually means"
 
-    Your Python instinct reads `~StopCircuitOK` as "not StopCircuitOK" — a Boolean inversion. That's not what it is. In ladder logic, `~` declares the **contact type**: normally-closed (NC), conductive in its resting state. In a real ladder editor, `~` is drawn as `|/|` (NC), versus `| |` for normally-open (NO). Two different symbols, two different physical contact types — not "X" and "not X."
+    Your Python instinct reads `~StopCircuitOK` as "not StopCircuitOK", a Boolean inversion. That's not what it is. In ladder logic, `~` declares the **contact type**: normally-closed (NC), conductive in its resting state. In a real ladder editor, `~` is drawn as `|/|` (NC), versus `| |` for normally-open (NO). Two different symbols, two different physical contact types, not "X" and "not X."
 
-    Why does this matter? Because it composes naturally with how real devices are wired. Stop buttons, door interlocks, motor overload contacts, and level sensors are *typically wired NC* so that a wire break reads as "stop" instead of silently leaving the machine running. Every NC device on a real machine reads with a `~` in the rung — not because it's "alarmed" but because it's *physically wired* as normally-closed. Once you read `~` as "NC contact" instead of "not," ladder rungs start reading like wiring diagrams. Which is what they are.
+    Why does this matter? Because it composes naturally with how real devices are wired. Stop buttons, door interlocks, motor overload contacts, and level sensors are *typically wired NC* so that a wire break reads as "stop" instead of silently leaving the machine running. Every NC device on a real machine reads with a `~` in the rung, not because it's "alarmed" but because it's *physically wired* as normally-closed. Once you read `~` as "NC contact" instead of "not," ladder rungs start reading like wiring diagrams. Which is what they are.
 
 ```
               latch(Running)                reset(Running)
@@ -69,7 +69,7 @@ with PLC(logic) as plc:
 
 ## A subtlety: rung order matters
 
-What if Start and Stop are both pressed at the same time? The answer: **the last rung to write wins.** Since `reset(Running)` is below `latch(Running)`, Stop wins. This is intentional — stop always wins.
+What if Start and Stop are both pressed at the same time? The answer is that **the last rung to write wins.** Since `reset(Running)` is below `latch(Running)`, Stop wins. This is intentional. Stop always wins.
 
 ## Labeling your rungs
 
@@ -82,14 +82,14 @@ with Program() as logic:
     comment("Start the conveyor")
     with rung(StartBtn):
         latch(Running)
-    comment("Stop — NC contact resets when pressed or wire broken")
+    comment("Stop - NC contact resets when pressed or wire broken")
     with rung(~StopCircuitOK):
         reset(Running)
 ```
 
-This isn't a Python `#` comment — it's rung metadata that travels with the program. When you export to a CLICK PLC, these appear above each rung in the ladder editor. From here on, we'll use `comment()` to label rungs as the logic gets more complex.
+This isn't a Python `#` comment. It's rung metadata that travels with the program. When you export to a CLICK PLC, these appear above each rung in the ladder editor. From here on, we'll use `comment()` to label rungs as the logic gets more complex.
 
-By [Lesson 11](hardware.md) you'll meet `EstopOK` — same NC wiring, different governance story. The wiring direction you're learning here is the easy part; the hard part is who *owns* the stop.
+By [Lesson 11](hardware.md) you'll meet `EstopOK`. It has the same NC wiring but a different governance story. The wiring direction you're learning here is the easy part. The hard part is who *owns* the stop.
 
 ## Exercise
 
@@ -97,8 +97,8 @@ Build a stop-blocks-start test: start the conveyor, then press stop. Verify it s
 
 ---
 
-The conveyor runs and stops, but there's no tracking. When a box arrives, the system needs to record its size and keep a tally. That needs data movement -- `copy` and `calc`.
+The conveyor runs and stops, but there's no tracking. When a box arrives, the system needs to record its size and keep a tally. That needs data movement, with `copy` and `math`.
 
 !!! info "Also known as..."
 
-    `latch` is called `SET`, `OTL`, or `S`; `reset` is `RST`, `OTU`, or `R`. You'll see a single-rung alternative in [Lesson 8](branches.md) — the *seal-in rung*, which uses a self-holding branch instead of separate latch/reset.
+    `latch` is called `SET`, `OTL`, or `S`. `reset` is `RST`, `OTU`, or `R`. You'll see a single-rung alternative in [Lesson 8](branches.md), the *seal-in rung*, which uses a self-holding branch instead of separate latch/reset.

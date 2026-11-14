@@ -14,12 +14,15 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.simplified import Expr, _condition_to_expr
+from pyrung.core.input_overrides import held_candidates
 from pyrung.core.kernel import CompiledKernel
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+    from pyrung.core.tag import Tag
 
+    from .blackbox import _TimerModel
     from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
@@ -30,10 +33,17 @@ from .results import PENDING as PENDING
 from .results import Counterexample, Intractable, Proven
 from .results import Decision as Decision
 from .results import Journal as Journal
+from .results import ReachableStates as ReachableStates
 from .results import StateDiff as StateDiff
 from .results import TagEntry as TagEntry
 from .results import TraceStep as TraceStep
 from .results import _ParentLink as _ParentLink
+from .system_points import (
+    SystemPointModel,
+    callable_refusals,
+    guarded_state,
+    system_constants,
+)
 
 
 @dataclass(frozen=True)
@@ -46,23 +56,33 @@ class _ExploreContext:
     stateful_names: tuple[str, ...]
     edge_tag_names: tuple[str, ...]
     memory_key_names: tuple[str, ...]
+    # How()'s domain prior only (PILOT's world key, absorb.py); empty for the
+    # search, whose timers are black boxes.
     state_key_done_specs: tuple[_StateKeyDoneSpec, ...]
-    done_event_specs: tuple[_DoneEventSpec, ...]
     threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
-    threshold_event_specs: tuple[_ThresholdEventSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
+    # Inputs whose domain may miss a value that reaches a target, with that target: a search
+    # that finds nothing has shown nothing (_backward_propagate_comparison_boundaries).
+    unanswered_inputs: dict[str, str] = field(default_factory=dict)
+    # Unbounded inputs a callable property may read.  It names no comparison to carry back,
+    # so the values the search tries on them say nothing about the ones it does not.
+    inputs_a_callable_may_read: tuple[str, ...] = ()
+    # Parallel to ``memory_key_names``: the value an unwritten key reads as.
+    memory_key_defaults: tuple[Any, ...] = ()
     demoted_edge_names: tuple[str, ...] = ()
-    synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()
     free_input_names: frozenset[str] = field(default_factory=frozenset)
     always_live_input_names: tuple[str, ...] = ()
+    # Opaque condition atom name (``indirect(IndirectCompareNe)``, or an
+    # unsupported condition's class such as ``ExprCompare``) -> the
+    # nondeterministic inputs such a condition may read (_LiveInputCache).
+    opaque_atom_deps: dict[str, frozenset[str]] = field(default_factory=dict)
     exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
     joint_inputs: tuple[tuple[str, ...], ...] = ()
     caveats: tuple[str, ...] = ()
     journal: Journal | None = None
-    drum_event_meta: dict[str, _DrumEventMeta] = field(default_factory=dict)
     independence_relation: IndependenceRelation | None = None
     free_input_factoring: FreeInputFactoring | None = None
     # Tags that BFS or step_fn can mutate. When set, kernel snapshots capture
@@ -79,9 +99,24 @@ class _ExploreContext:
     )
     init_constant_projections: dict[str, tuple[str, Any]] = field(default_factory=dict)
     stepping_tags: frozenset[str] = field(default_factory=frozenset)
+    # Kernel hooks for system tags (first_scan, constants, scan-start resets),
+    # and the system tags explored as free inputs.  See system_points.py.
+    system_points: SystemPointModel | None = None
+    free_system_inputs: frozenset[str] = field(default_factory=frozenset)
+    # Tags the property reads that no rung reads or writes, with their
+    # power-on values.  The compiled kernel has no slot for them, so BFS seeds
+    # them; the nondeterministic ones among them are then assigned as inputs.
+    outside_tag_defaults: tuple[tuple[str, Any], ...] = ()
+    # Black-box timers (blackbox.py): the compiled kernel ticks by choice,
+    # and every counterexample is confirmed by concrete replay.  None for
+    # how()'s domain prior, which runs no search.
+    timer_model: _TimerModel | None = None
+    # ``(stateful index, counts up, preset)``: a counter accumulator keyed
+    # no further than its preset (``blackbox.count_clamps``).
+    count_clamps: tuple[tuple[int, bool, int], ...] = ()
 
 
-from .absorb import _DrumEventMeta, _ThresholdVectorSpec
+from .absorb import _StateKeyDoneSpec, _ThresholdVectorSpec
 from .bfs import _bfs_explore
 from .bfs import _build_trace as _build_trace
 from .bfs import _merge_caveats as _merge_caveats
@@ -97,12 +132,8 @@ from .classify import (
     _pilot_sweep_domains as _pilot_sweep_domains,
 )
 from .elision import _elide_scan_local_stateful_dims as _elide_scan_local_stateful_dims
-from .events import (
-    _DoneEventSpec,
-    _StateKeyDoneSpec,
-    _ThresholdEventSpec,
-)
 from .independence import FreeInputFactoring, IndependenceRelation
+from .lockfile import LockIntractable as LockIntractable
 from .lockfile import _apply_band as _apply_band
 from .lockfile import (
     _build_band_maps,
@@ -129,7 +160,9 @@ from .passes import (
     _PassContext,
     _passes_for_opt_config,
     _PipelineCache,
+    _PriorFacts,
     _run_pre_bfs_pipeline,
+    _run_prior_pipeline,
 )
 from .passes import _OptConfig as _OptConfig
 
@@ -138,10 +171,9 @@ def _resolve_opt_config(opt_config: _OptConfig | None, skip_optimizations: bool)
     """Resolve the effective optimization config for a prove/reachable call.
 
     An explicit ``_opt_config`` wins. Otherwise ``_skip_optimizations=True``
-    selects the maximally-reduced *sound* baseline — every soundness-optional
-    reduction off, the reach-extending optimizations left on (disabling those
-    under a finite depth_budget would under-approximate the reachable set).
-    The absence of both means the production default.
+    selects the *sound* baseline: every reduction off (``sound_baseline()``,
+    ``all_off()`` with the declared-bounds check kept).  The absence of both
+    means the production default.
     """
     if opt_config is not None:
         return opt_config
@@ -186,9 +218,10 @@ def _validate_split_at(
         if tag.type is TagType.BOOL:
             domain: tuple[Any, ...] = (False, True)
         elif tag_name in done_info.pairs:
-            domain = (False, PENDING, True)
+            # A black-box timer's Done is a plain Bool.
+            domain = (False, True)
         elif tag.choices is not None:
-            domain = tuple(sorted(tag.choices.keys()))
+            domain = tuple(sorted(held_candidates(tag, tag.choices)))
         else:
             msg = (
                 f"split_at tag {tag_name!r} has no small enumerable domain; "
@@ -198,6 +231,38 @@ def _validate_split_at(
 
         result[tag_name] = domain
     return result
+
+
+def _functions_the_search_cannot_call(program: Program) -> Intractable | None:
+    """An answer for a program whose function calls say nothing the search can use.
+
+    The search calls a function to learn what it writes, for the inputs it is exploring and
+    as many times as it likes.  A function that keeps something from call to call, or reads
+    something past its arguments, answers those calls with what stepping might never see, so
+    a verdict built on them would be a guess.  It is left uncalled, not explored.
+    """
+    from pyrung.core.runner import calls_that_depend_on_more_than_their_inputs
+
+    from .absorb import _all_write_targets
+
+    calls = calls_that_depend_on_more_than_their_inputs(program)
+    if not calls:
+        return None
+    names = sorted(
+        {getattr(call._fn, "__qualname__", type(call._fn).__name__) for call, _ in calls}
+    )
+    return Intractable(
+        reason=(f"a function whose answer may not follow from its inputs: {', '.join(names)}"),
+        dimensions=len(calls),
+        estimated_space=0,
+        tags=sorted({name for call, _ in calls for name, _itype in _all_write_targets(call)}),
+        hints=[
+            f"  {getattr(call._fn, '__qualname__', type(call._fn).__name__)}: {why}; "
+            "make it a plain def of what ins= hands it, or test it with run_for()"
+            for call, why in calls
+        ],
+        kind="function",
+    )
 
 
 def _build_explore_context(
@@ -218,10 +283,28 @@ def _build_explore_context(
     initial_state: dict[str, Any] | None = None,
     pipeline_cache: _PipelineCache | None = None,
     restrict_inputs_to_scope: bool = False,
-    allow_partial: bool = False,
+    opaque_reads: tuple[str, ...] = (),
+    opaque_reads_all: bool = False,
+    observed_tags: tuple[Tag, ...] = (),
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for always()/reachable_states()."""
     split_at_tags = _validate_split_at(program, split_at) if split_at else None
+    no_case_to_split = sorted(name for name, cases in (split_at_tags or {}).items() if not cases)
+    if no_case_to_split:
+        # A scan can still see such a tag hold its default, so no case at all is not "no state".
+        return Intractable(
+            reason=f"split_at over a tag that holds none of its choices: {', '.join(no_case_to_split)}",
+            dimensions=len(no_case_to_split),
+            estimated_space=0,
+            tags=no_case_to_split,
+            hints=[
+                f"  {name}: leave it out of split_at, or give it choices= its type can hold"
+                for name in no_case_to_split
+            ],
+        )
+    refused = _functions_the_search_cannot_call(program)
+    if refused is not None:
+        return refused
     ctx = _PassContext(
         program=program,
         scope=scope,
@@ -239,11 +322,33 @@ def _build_explore_context(
         initial_state=initial_state,
         pipeline_cache=pipeline_cache,
         restrict_inputs_to_scope=restrict_inputs_to_scope,
-        domains_only=_opt_config.domains_only,
+        opaque_reads=opaque_reads,
+        opaque_reads_all=opaque_reads_all,
+        observed_tags=observed_tags,
     )
-    return _run_pre_bfs_pipeline(
-        ctx, _passes_for_opt_config(_opt_config), allow_partial=allow_partial
+    return _run_pre_bfs_pipeline(ctx, _passes_for_opt_config(_opt_config))
+
+
+def _build_prior_facts(
+    program: Program,
+    *,
+    dt: float = 0.010,
+    compiled: CompiledKernel | None = None,
+) -> _PriorFacts | Intractable:
+    """Build the value domains and state names how() steers with.
+
+    It proves nothing and runs no search, so it skips the search's passes and freeze().
+    """
+    ctx = _PassContext(
+        program=program,
+        scope=None,
+        project=None,
+        extra_exprs=None,
+        dt=dt,
+        compiled=compiled,
+        domains_only=True,
     )
+    return _run_prior_pipeline(ctx)
 
 
 def _compile_property_spec(
@@ -289,10 +394,29 @@ def _compile_property(
     """
     if len(conditions) == 1 and callable(conditions[0]) and not _is_condition_like(conditions[0]):
         user_predicate = conditions[0]
+        # Set per search by _bfs_explore: the system constants this callable
+        # may read and the system tags it may not (see system_points).
+        system_view: list[tuple[dict[str, Any], frozenset[str]] | None] = [None]
 
         def _predicate(state: dict[str, Any]) -> bool:
-            return bool(user_predicate(dict(state)))
+            view = system_view[0]
+            if view is None:
+                return bool(user_predicate(dict(state)))
+            return bool(user_predicate(guarded_state(state, view[0], view[1])))
 
+        def _bind_system(context: _ExploreContext) -> None:
+            system_view[0] = (
+                system_constants(context.dt),
+                callable_refusals(
+                    context.nondeterministic_dims,
+                    context.stateful_dims,
+                    context.graph.writers_of,
+                    context.graph.all_readers_of,
+                    context.graph.unread_fault_writes,
+                ),
+            )
+
+        setattr(_predicate, "_pyrung_bind_system", _bind_system)  # noqa: B010
         return _predicate, None, None
 
     from pyrung.core.condition import _as_condition, _normalize_and_condition
@@ -309,7 +433,60 @@ def _compile_property(
     def _predicate(state: dict[str, Any]) -> bool:
         return _eval_expr_from_state(expr, state) is not False
 
+    setattr(_predicate, "_pyrung_tags", _condition_tags(normalized))  # noqa: B010
+    # The expression, for the black-box replay to decide rise()/fall() in it
+    # on concrete scans (blackbox.confirm); the search leaves them undecided.
+    setattr(_predicate, "_pyrung_expr", expr)  # noqa: B010
     return _predicate, tags_in_expr, expr
+
+
+def _condition_tags(condition: Any) -> tuple[Tag, ...]:
+    """The tags a property condition reads, for the ones no rung touches.
+
+    A property may name a tag the program never reads or writes.  The kernel
+    has no slot for it, and a missing tag leaves the predicate undecided,
+    which reads as holding, so the verifier must be told about it.
+    """
+    from pyrung.core.analysis.pdg import _extract_tag_names
+
+    refs: dict[str, Tag] = {}
+    _extract_tag_names(condition, refs)
+    return tuple(refs[name] for name in sorted(refs))
+
+
+def _property_tags(compiled_properties: list[_CompiledProperty]) -> tuple[Tag, ...]:
+    tags: dict[str, Tag] = {}
+    for predicate, _scope, _expr in compiled_properties:
+        for tag in getattr(predicate, "_pyrung_tags", ()):
+            tags.setdefault(tag.name, tag)
+    return tuple(tags[name] for name in sorted(tags))
+
+
+def _unknown_property_names(
+    compiled_properties: list[_CompiledProperty],
+    context: _ExploreContext,
+) -> Intractable | None:
+    """Intractable when a property names something that is not a tag.
+
+    A condition the verifier cannot lower becomes a synthetic atom named after
+    its type.  No state holds that name, so the property would read as holding.
+    """
+    unknown: set[str] = set()
+    for _predicate, _scope, expr in compiled_properties:
+        if expr is not None:
+            unknown.update(
+                name for name in _referenced_tags(expr) if name not in context.graph.tags
+            )
+    if not unknown:
+        return None
+    names = sorted(unknown)
+    return Intractable(
+        reason=f"property reads {', '.join(names)}, which the verifier cannot evaluate",
+        dimensions=0,
+        estimated_space=0,
+        tags=names,
+        journal=context.journal,
+    )
 
 
 def _is_condition_like(obj: Any) -> bool:
@@ -442,10 +619,13 @@ def always(
         Tag/Condition expressions are preferred; a callable
         ``(state_dict) -> bool`` is accepted as a fallback.
     scope : list of tag names, optional
-        Override automatic scope derivation.
+        Override automatic scope derivation.  For a callable property this
+        is its read set: every input upstream of these tags is explored.
+        A callable without ``scope=`` keeps every input in play.  It names no
+        comparison to carry back, so finding no scan on an input whose domain is not every
+        value it can hold answers Intractable.
     depth_budget : int
-        Abstract BFS depth budget. Hidden-event acceleration may cover more
-        concrete PLC scans than this budget.
+        BFS depth budget: the longest scan sequence explored.
     max_states : int
         Visited-set cap — bail with ``Intractable`` if exceeded.
     joint_inputs : tuple of tag-name tuples
@@ -453,10 +633,12 @@ def always(
     exclusive_inputs : tuple of tag-name tuples
         Mutually exclusive input groups (at most one True at a time).
     settled : bool
-        When True, evaluate predicates only on settled states (after
-        pending timers/counters have fired), not on transient base
-        states.  Use this for timer-gated alarm properties where the
-        transient period before the timer fires is expected.
+        When True, evaluate predicates only in states where no timer's
+        Done is still open (every enabled on-delay done, every disabled
+        off-delay off, every running drum step finished), not in the
+        transient states while one runs.  Use this for timer-gated alarm
+        properties where the transient period before the timer fires is
+        expected.
     paced : bool
         When True, enforce that after any input flip the next BFS step
         must hold all inputs (stutter).  This separates violations
@@ -466,26 +648,86 @@ def always(
         counterexample, the result is ``Proven`` with a populated
         ``aggressive_counterexample`` field.
     """
-    from pyrung.circuitpy.codegen import compile_kernel
-
     is_batch, property_specs = _normalize_property_specs(*conditions)
-    compiled_properties = [_compile_property_spec(spec) for spec in property_specs]
-    opt = _resolve_opt_config(_opt_config, _skip_optimizations)
+    return _always_compiled(
+        program,
+        [_compile_property_spec(spec) for spec in property_specs],
+        is_batch=is_batch,
+        scope=scope,
+        depth_budget=depth_budget,
+        max_states=max_states,
+        joint_inputs=joint_inputs,
+        exclusive_inputs=exclusive_inputs,
+        split_at=split_at,
+        settled=settled,
+        paced=paced,
+        opt=_resolve_opt_config(_opt_config, _skip_optimizations),
+        journal=journal,
+        _debug=_debug,
+    )
+
+
+_CompiledProperty = tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]
+
+
+def _opaque_read_set(
+    compiled_properties: list[_CompiledProperty],
+    scope: list[str] | None,
+) -> tuple[tuple[str, ...], bool]:
+    """What the callable properties in one search read: ``(tags, everything)``.
+
+    A callable names no expression, so the verifier cannot see which tags it
+    depends on.  ``scope=`` is taken as its read set; without one it may read
+    any tag.  Condition properties contribute nothing here, their expressions
+    already reach input liveness.
+    """
+    if all(expr is not None for _pred, _scope, expr in compiled_properties):
+        return (), False
+    if scope is None:
+        return (), True
+    return tuple(scope), False
+
+
+def _always_compiled(
+    program: Program,
+    compiled_properties: list[_CompiledProperty],
+    *,
+    is_batch: bool,
+    scope: list[str] | None,
+    depth_budget: int,
+    max_states: int,
+    joint_inputs: tuple[tuple[str, ...], ...],
+    exclusive_inputs: tuple[tuple[str, ...], ...],
+    split_at: list[str] | None,
+    settled: bool,
+    paced: bool,
+    opt: _OptConfig,
+    journal: bool,
+    _debug: bool,
+) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
+    """Shared body of :func:`always` and :func:`never` over compiled properties."""
+    from pyrung.circuitpy.codegen import compile_kernel
 
     if not is_batch:
         predicate, auto_scope, expr = compiled_properties[0]
         effective_scope = scope if scope is not None else auto_scope
         extra = [expr] if expr is not None else []
+        opaque_reads, opaque_all = _opaque_read_set(compiled_properties, effective_scope)
         context = _build_explore_context(
             program,
             scope=effective_scope,
             extra_exprs=extra,
+            opaque_reads=opaque_reads,
+            opaque_reads_all=opaque_all,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
             split_at=split_at,
             _opt_config=opt,
             journal=journal,
+            observed_tags=_property_tags(compiled_properties),
         )
+        if not isinstance(context, Intractable):
+            context = _unknown_property_names(compiled_properties, context) or context
         if isinstance(context, Intractable):
             if _debug:
                 return replace(context, _debug_context=context)
@@ -508,6 +750,7 @@ def always(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
+        result = _confirm_results(program, context, [predicate], [result], settled=settled)[0]
         if split_at and isinstance(result, Counterexample):
             names = ", ".join(sorted(split_at))
             result = replace(
@@ -533,17 +776,28 @@ def always(
         group_exprs: list[Expr] = [
             e for i in indices if (e := compiled_properties[i][2]) is not None
         ]
+        opaque_reads, opaque_all = _opaque_read_set(
+            [compiled_properties[i] for i in indices], group_scope
+        )
         context = _build_explore_context(
             program,
             scope=group_scope,
             extra_exprs=group_exprs,
+            opaque_reads=opaque_reads,
+            opaque_reads_all=opaque_all,
             compiled=compiled_kernel,
             joint_inputs=joint_inputs,
             exclusive_inputs=exclusive_inputs,
             split_at=split_at,
             _opt_config=opt,
             journal=journal,
+            observed_tags=_property_tags([compiled_properties[i] for i in indices]),
         )
+        if not isinstance(context, Intractable):
+            context = (
+                _unknown_property_names([compiled_properties[i] for i in indices], context)
+                or context
+            )
         if isinstance(context, Intractable):
             for i in indices:
                 results[i] = replace(context, _debug_context=context) if _debug else context
@@ -571,6 +825,9 @@ def always(
                 bfs_config=opt.bfs_config,
                 settled=settled,
             )
+        group_results = _confirm_results(
+            program, context, group_predicates, group_results, settled=settled
+        )
         for i, r in zip(indices, group_results, strict=True):
             if split_at and isinstance(r, Counterexample):
                 names = ", ".join(sorted(split_at))
@@ -585,6 +842,46 @@ def always(
             results[i] = replace(r, _debug_context=context) if _debug else r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
+
+
+def _confirm_results(
+    program: Program,
+    context: _ExploreContext,
+    predicates: list[Callable[[dict[str, Any]], bool]],
+    results: list[Proven | Counterexample | Intractable],
+    *,
+    settled: bool = False,
+) -> list[Proven | Counterexample | Intractable]:
+    """Replay every counterexample on the concrete PLC.
+
+    A trace the PLC follows to a violation stays a ``Counterexample`` (with
+    the concrete trace); one it cannot is an ``Intractable`` of kind
+    ``"timing"`` or ``"property"`` (blackbox.confirm).  A paced ``Proven``'s aggressive
+    counterexample is kept only if it replays.  With *settled*, the replay
+    accepts a violation only in a state no running timer leaves unsettled.
+    """
+    from .blackbox import confirm
+
+    confirmed: list[Proven | Counterexample | Intractable] = []
+    for predicate, result in zip(predicates, results, strict=True):
+        if isinstance(result, Counterexample):
+            result = confirm(program, context, predicate, result, settled=settled)
+        elif isinstance(result, Proven) and result.aggressive_counterexample is not None:
+            aggressive = confirm(
+                program,
+                context,
+                predicate,
+                result.aggressive_counterexample,
+                settled=settled,
+            )
+            result = replace(
+                result,
+                aggressive_counterexample=aggressive
+                if isinstance(aggressive, Counterexample)
+                else None,
+            )
+        confirmed.append(result)
+    return confirmed
 
 
 def never(
@@ -614,42 +911,17 @@ def never(
         never(logic, [(Cmd, ~Fb, ~Alarm), (~Running,)])  # batch prove
     """
     is_batch, specs = _normalize_property_specs(*conditions)
-
     if not is_batch:
-        spec = specs[0] if len(specs) == 1 else tuple(specs)
-        pred, auto_scope, _expr = _compile_property_spec(spec)
-        neg = (lambda p: lambda s: not p(s))(pred)
-        return always(
-            program,
-            neg,
-            scope=scope if scope is not None else auto_scope,
-            depth_budget=depth_budget,
-            max_states=max_states,
-            joint_inputs=joint_inputs,
-            exclusive_inputs=exclusive_inputs,
-            split_at=split_at,
-            settled=settled,
-            paced=paced,
-            _skip_optimizations=_skip_optimizations,
-            _opt_config=_opt_config,
-            journal=journal,
-            _debug=_debug,
-        )
-
-    compiled = [_compile_property_spec(spec) for spec in specs]
-    negated = [(lambda p: lambda s: not p(s))(pred) for pred, _, _ in compiled]
-    if scope is None:
-        all_tags: set[str] = set()
-        for _, auto_scope_i, _ in compiled:
-            if auto_scope_i is not None:
-                all_tags.update(auto_scope_i)
-        effective_scope: list[str] | None = sorted(all_tags) if all_tags else None
-    else:
-        effective_scope = scope
-    return always(
+        specs = [specs[0] if len(specs) == 1 else tuple(specs)]
+    # The negated predicate keeps the condition's expression: it names the
+    # same tags, so scope, input liveness and domain seeding see what the
+    # property reads (a bare predicate would hide them).
+    compiled = [_negated_property(_compile_property_spec(spec)) for spec in specs]
+    return _always_compiled(
         program,
-        negated,
-        scope=effective_scope,
+        compiled,
+        is_batch=is_batch,
+        scope=scope,
         depth_budget=depth_budget,
         max_states=max_states,
         joint_inputs=joint_inputs,
@@ -657,11 +929,24 @@ def never(
         split_at=split_at,
         settled=settled,
         paced=paced,
-        _skip_optimizations=_skip_optimizations,
-        _opt_config=_opt_config,
+        opt=_resolve_opt_config(_opt_config, _skip_optimizations),
         journal=journal,
         _debug=_debug,
     )
+
+
+def _negated_property(compiled: _CompiledProperty) -> _CompiledProperty:
+    predicate, auto_scope, expr = compiled
+
+    def _negated(state: dict[str, Any]) -> bool:
+        return not predicate(state)
+
+    for attr in ("_pyrung_bind_system", "_pyrung_tags", "_pyrung_expr"):
+        value = getattr(predicate, attr, None)
+        if value is not None:
+            setattr(_negated, attr, value)
+    setattr(_negated, "_pyrung_negated", True)  # noqa: B010
+    return _negated, auto_scope, expr
 
 
 def _prove_paced_single(
@@ -770,8 +1055,6 @@ class _StderrProgressReporter:
         *,
         label: str = "",
     ) -> None:
-        from .absorb import _THRESHOLD_KIND_COMPARISON_ONLY
-
         if not isinstance(context, _ExploreContext):
             return
         stateful = context.stateful_dims
@@ -801,14 +1084,6 @@ class _StderrProgressReporter:
             parts = [f"{name}: {size}" for name, size in top]
             suffix = f" ... +{len(dims) - 8} more" if len(dims) > 8 else ""
             self.info(f"  {', '.join(parts)}{suffix}", label=label)
-
-        absorbed: dict[str, int] = {}
-        for vec in context.threshold_vector_specs:
-            kind = "comparison" if vec.kind == _THRESHOLD_KIND_COMPARISON_ONLY else "threshold"
-            absorbed[kind] = absorbed.get(kind, 0) + 1
-        if absorbed:
-            parts = [f"{kind}: {count}" for kind, count in sorted(absorbed.items())]
-            self.info(f"  absorbed: {', '.join(parts)}", label=label)
 
     def prefix_builder(self, label: str = "") -> Callable[[], str]:
         def _build() -> str:
@@ -870,12 +1145,6 @@ class _BFSProgress:
         )
 
 
-def _stderr_progress(
-    label: str = "",
-) -> Callable[[int, int, float], None]:
-    return _StderrProgressReporter().bfs_callback(label)
-
-
 def _build_reachable_context(
     program: Program,
     *,
@@ -908,12 +1177,6 @@ def _build_reachable_context(
     )
 
 
-class _DebugFrozenSet(frozenset):
-    """frozenset subclass that can carry a _debug_context attribute."""
-
-    _debug_context: _ExploreContext | None = None
-
-
 def reachable_states(
     program: Program,
     scope: list[str] | None = None,
@@ -928,7 +1191,7 @@ def reachable_states(
     _opt_config: _OptConfig | None = None,
     _journal: bool = False,
     _debug: bool = False,
-) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
+) -> ReachableStates | Intractable:
     """Compute the full reachable state space.
 
     Parameters
@@ -941,8 +1204,9 @@ def reachable_states(
     project : list of tag names, optional
         Tags to project onto. Defaults to terminal tags.
     depth_budget : int
-        Abstract BFS depth budget. Hidden-event acceleration may cover more
-        concrete PLC scans than this budget.
+        BFS depth budget: the longest scan sequence explored.  When it stops
+        the search early, the result's ``truncated`` is True and it holds only
+        the states found within the budget.
     max_states : int
         Visited-set cap.
     joint_inputs : tuple of tag-name tuples
@@ -997,54 +1261,17 @@ def reachable_states(
         if _debug:
             return replace(result, _debug_context=context)
         return result
-    assert isinstance(result, frozenset)
+    assert isinstance(result, ReachableStates)
     choice_labels = _build_choice_labels(project_list, context.graph.tags)
-    result = _resolve_choice_labels(result, choice_labels)
     band_maps = _build_band_maps(project_list, context.graph.tags)
-    result = _resolve_band_labels(result, band_maps)
+    labelled = ReachableStates._mark(
+        _resolve_band_labels(_resolve_choice_labels(result, choice_labels), band_maps),
+        truncated=result.truncated,
+        depth_budget=result.depth_budget,
+    )
     if stderr_reporter is not None:
-        stderr_reporter.info(f"reachable states complete | total={len(result):,}")
+        status = f"stopped at depth_budget={depth_budget}" if labelled.truncated else "complete"
+        stderr_reporter.info(f"reachable states {status} | total={len(labelled):,}")
     if _debug:
-        debug_result = _DebugFrozenSet(result)
-        debug_result._debug_context = context
-        return debug_result
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Semantic metadata for path constraint annotations
-# ---------------------------------------------------------------------------
-
-
-def _build_semantic_metadata(
-    context: Any,
-    program: Any,
-) -> tuple[dict[str, list[Any]], dict[str, str]]:
-    """Build atom_index and domain_sources for semantic path annotations.
-
-    Returns ``(atom_index, domain_sources)`` describing the comparison atoms
-    per tag and each tag's domain source — the semantic metadata used to
-    annotate reachability output with constraint information.
-    """
-    from .expr import _build_atom_index
-    from .passes import _infer_domain_source
-
-    atom_index = _build_atom_index(context.all_exprs)
-
-    from pyrung.core.analysis.graph import _enrich_atom_index
-    from pyrung.core.analysis.reverse_edges import build_reverse_edge_map
-
-    reverse_edges = build_reverse_edge_map(program)
-    if reverse_edges:
-        atom_index = _enrich_atom_index(atom_index, reverse_edges)
-
-    from pyrung.core.analysis.graph import _enrich_from_relational_calcs
-
-    atom_index = _enrich_from_relational_calcs(atom_index, program)
-
-    domain_sources: dict[str, str] = {}
-    all_dims = {**context.stateful_dims, **context.nondeterministic_dims}
-    for tag_name, domain in all_dims.items():
-        domain_sources[tag_name] = _infer_domain_source(tag_name, domain, context.graph)
-
-    return atom_index, domain_sources
+        labelled._debug_context = context
+    return labelled

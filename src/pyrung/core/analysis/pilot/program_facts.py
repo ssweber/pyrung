@@ -6,6 +6,7 @@ choose a route, execute a scan, or own execution evidence.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pyrung.core.analysis import steerable as _steerable
@@ -16,7 +17,7 @@ from pyrung.core.analysis.sp_values import _expr_tag_names, _values_match
 
 
 def compute_reference_constants(
-    pdg: ProgramGraph, program: Any, known: dict[str, Any] | None = None
+    pdg: ProgramGraph, program: Any, known: Mapping[str, Any] | None = None
 ) -> frozenset[str]:
     """Never-written, non-external tags used as program reference values.
 
@@ -137,14 +138,13 @@ def compute_reference_constants(
     for subroutine_rungs in getattr(program, "subroutines", {}).values():
         _scan_sources(subroutine_rungs)
 
-    from pyrung.core.analysis.pdg import _indirect_expr_base_tag, _indirect_ref_tags
+    from pyrung.core.analysis.pdg import _indirect_expr_tags, _indirect_ref_tags
 
     def _indirect_read_slots(source: Any) -> list[str]:
         if isinstance(source, IndirectRef):
             tags = _indirect_ref_tags(source.block, source.pointer)
         elif isinstance(source, IndirectExprRef):
-            base = _indirect_expr_base_tag(source.expr)
-            tags = _indirect_ref_tags(source.block, base) if base is not None else None
+            tags = _indirect_expr_tags(source.block, source.expr)
         else:
             return []
         return [tag.name for tag in tags] if tags is not None else []
@@ -198,7 +198,7 @@ def compute_edge_tags(pdg: ProgramGraph, program: Any) -> set[str]:
 
 def compute_resting_values(
     steerable: frozenset[str],
-    known: dict[str, Any],
+    known: Mapping[str, Any],
     pdg: ProgramGraph,
     program: Any,
 ) -> dict[str, Any]:

@@ -1,7 +1,7 @@
 """Tests for indirect pointer default validation."""
 
 from pyrung import Bool, Rung, call, copy, return_early, subroutine
-from pyrung.core import Block, Dint, Int, Program, TagType, calc
+from pyrung.core import Block, Dint, Int, Program, TagType, math
 from pyrung.core.validation.pointer_default import (
     PTR_DEFAULT_BEFORE_BLOCK_START,
     validate_pointer_defaults,
@@ -105,7 +105,7 @@ class TestPointerDefaultValidator:
 
         with Program() as prog:
             with Rung():
-                calc(base + 1, actual_ptr)
+                math(base + 1, actual_ptr)
                 copy(ds[actual_ptr], dest)
 
         report = validate_pointer_defaults(prog)
@@ -136,7 +136,7 @@ class TestPointerDefaultValidator:
 
         with Program() as prog:
             with Rung():
-                calc(base + 1, ptr)
+                math(base + 1, ptr)
             with Rung():
                 copy(ds[ptr], dest)
 

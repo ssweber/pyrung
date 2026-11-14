@@ -1,29 +1,46 @@
-"""Tests for CoastSession phase 1 — run_until condition reads are fold-protected.
+"""A run_until condition's reads, and the landing on the first scan it can flip.
 
-Two seams land here (see scratchpad/coastsession/DESIGN.md Part 1):
-
-- ``fold._extract_condition_reads(condition)`` collects *every* tag a
-  ``run_until`` condition reads (bare contacts, edges, both sides of a
-  comparison), so the caller can thread them into the fold context.
-- ``runner.run_until`` (Tag/Condition path only) splits those reads into
-  system clocks (bounded as hard clock edges), scan-derived signals (fold
-  disabled), and ordinary tags (protected reads → ``target_names``), then
-  keyed-caches the resulting fold context per protected-read triple.
-
-The net effect: a condition's tags can no longer be folded past.  A
-churn-excluded bare-value read, or a system clock the program's rungs never
-read, used to be jumpable; now the fold lands on the exact first scan the
-condition can flip.
+``_extract_condition_reads(condition)`` collects every tag a ``run_until`` condition reads
+(bare contacts, edges, both sides of a comparison).  Past that, every program here is run
+twice from the same fork, in the guarded loop and stepped, and must land on the same scan
+with the same tags: a tag only the condition reads, a system clock no rung reads, a signal
+that changes every scan.
 """
 
 from __future__ import annotations
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from datetime import datetime
+
+import pytest
+
+from pyrung import (
+    Block,
+    Bool,
+    Counter,
+    Int,
+    Program,
+    Rung,
+    TagType,
+    Timer,
+    copy,
+    count_up,
+    latch,
+    math,
+    on_delay,
+    out,
+)
 from pyrung.core import And, Or, fall, rise, system
+from pyrung.core.analysis.pilot.coast import (
+    TARGET,
+    CoastSession,
+    CoastTrigger,
+    _trigger_reads,
+)
 from pyrung.core.condition import _as_condition
-from pyrung.core.fold import _extract_condition_reads
+from pyrung.core.read_trace import _exact_condition_reads, _extract_condition_reads
 from pyrung.core.runner import PLC
-from pyrung.core.system_points import _CLOCK_HALF_PERIODS
+
+pytestmark = pytest.mark.usefixtures("loop_from_first_scan")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,21 +54,11 @@ def _resolved(plc: PLC, name: str) -> object:
     return value
 
 
-def _behavioral_tags(plc: PLC) -> dict[str, object]:
-    """Tag snapshot minus the per-step scan-time diagnostics.
-
-    ``sys.scan_time_{current,min,max}_ms`` record a single interpreter pass's
-    ``dt*1000``.  A fold rides the dt knob — one pass spans many scans of
-    inflated dt — so these diagnostics legitimately differ from scan-by-scan
-    while every behavioral tag stays bit-equal.
-    """
-    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time_")}
-
-
 def _assert_landing_parity(folded: PLC, stepped: PLC) -> None:
-    """Fold and no-fold landed on the same scan with identical tag values."""
+    """The loop and stepping landed on the same scan with identical tag values."""
     assert folded.state.scan_id == stepped.state.scan_id
-    assert _behavioral_tags(folded) == _behavioral_tags(stepped)
+    assert dict(folded.state.tags) == dict(stepped.state.tags)
+    assert folded.state.timestamp == stepped.state.timestamp
 
 
 def _fold_nofold(
@@ -62,7 +69,7 @@ def _fold_nofold(
     presteps: int = 1,
     max_cycles: int = 40_000,
 ) -> tuple[PLC, PLC]:
-    """Run the SAME run_until from two identical forks — one folded, one not."""
+    """Run the SAME run_until from two identical forks: one in the loop, one stepped."""
     base = PLC(prog, dt=0.010)
     if patch:
         base.patch(patch)
@@ -71,8 +78,8 @@ def _fold_nofold(
 
     folded = base.fork()
     stepped = base.fork()
-    folded.run_until(condition, max_cycles=max_cycles, fold=True)
-    stepped.run_until(condition, max_cycles=max_cycles, fold=False)
+    folded.run_until(condition, max_cycles=max_cycles, jit=True)
+    stepped.run_until(condition, max_cycles=max_cycles, jit=False)
     return folded, stepped
 
 
@@ -130,7 +137,7 @@ class TestExtractConditionReads:
 
 
 # ---------------------------------------------------------------------------
-# 2. Folded / unfolded first-bump parity
+# 2. First-bump parity
 # ---------------------------------------------------------------------------
 
 
@@ -147,12 +154,17 @@ def _bool_flip_program(preset_ms: int = 200) -> tuple[Program, Bool]:
     return prog, Done
 
 
-def _perscan_counter_program(preset: int = 100) -> tuple[Program, Counter]:
+def _clock_counter_program(preset: int = 100) -> tuple[Program, Counter]:
+    """A counter counting the rises of ``sys.clock_100ms`` while Enable is on.
+
+    A counter counts rising edges, so under a held Enable it is the clock that
+    advances it: one count per 100 ms.
+    """
     Enable = Bool("Enable", external=True)
     Ctr = Counter.clone("Ctr")
     Reset = Bool("Reset", external=True)
-    with Program() as prog:
-        with Rung(Enable):
+    with Program(strict=False) as prog:
+        with Rung(Enable, system.sys.clock_100ms):
             count_up(Ctr, preset).reset(Reset)
     return prog, Ctr
 
@@ -169,15 +181,15 @@ class TestFirstBumpParity:
         _assert_landing_parity(folded, stepped)
 
     def test_counter_accumulator_ge_threshold(self) -> None:
-        # (b) per-scan counter accumulator with `Acc >= N`.
-        prog, ctr = _perscan_counter_program(100)
+        # (b) a counter counting clock edges, with `Acc >= N`.
+        prog, ctr = _clock_counter_program(100)
         folded, stepped = _fold_nofold(prog, ctr.Acc >= 30, patch={"Enable": True})
         assert folded.state.tags["Ctr_Acc"] == 30
         _assert_landing_parity(folded, stepped)
 
     def test_counter_accumulator_eq_exact_landing(self) -> None:
-        # (c) `Acc == N` on a per-scan (integer) counter — exact landing.
-        prog, ctr = _perscan_counter_program(100)
+        # (c) `Acc == N` on a counter counting clock edges — exact landing.
+        prog, ctr = _clock_counter_program(100)
         folded, stepped = _fold_nofold(prog, ctr.Acc == 50, patch={"Enable": True})
         assert folded.state.tags["Ctr_Acc"] == 50
         _assert_landing_parity(folded, stepped)
@@ -200,45 +212,24 @@ def _churn_plus_timer_program(preset_ms: int = 100_000) -> Program:
     rung writes nothing else, affine self-referential calc) PLUS an unrelated
     timer so the fold has a plateau to fold.
 
-    X qualifies for `_unread_churn_tags` (fold.py:368-388): readers ⊆ writers,
-    the writer writes only X, and the calc reads X itself."""
+    Unprotected, X moves by a constant the scan loop checks: one unconditional
+    ``math(X + 1, X)`` into an INT."""
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     X = Int("X")
     with Program() as prog:
         with Rung():
-            calc(X + 1, X)  # X := X + 1, unconditional, self-referential
+            math(X + 1, X)  # X := X + 1, unconditional, self-referential
         with Rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
     return prog
 
 
-class TestProtectedChurnExcludedRead:
-    """A churn-excluded tag read by the run_until condition must break the
-    plateau (not be folded past to the timer preset)."""
-
-    def test_setup_is_real_churn_is_excluded_without_protection(self) -> None:
-        # The unprotected context (target_names=∅) really does classify X as
-        # unobservable churn — the setup being fixed is what the headline needs.
-        plc = PLC(_churn_plus_timer_program(), dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        ctx = plc._ensure_fold_context()
-        assert "X" in ctx.churn_excluded
-
-    def test_protection_removes_x_from_churn_excluded(self) -> None:
-        # Threading X in as a protected read (target_names) removes it from the
-        # churn set, so the plateau guard once again watches every increment.
-        plc = PLC(_churn_plus_timer_program(), dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        ctx = plc._ensure_fold_context(frozenset({"X"}))
-        assert "X" not in ctx.churn_excluded
+class TestChurnedTagInTheCondition:
+    """A tag changing every scan, read by the run_until condition: the run must stop on the
+    first scan it crosses, not at the timer preset."""
 
     def test_run_until_lands_on_exact_first_crossing(self) -> None:
-        # End-to-end: run_until(X >= K) auto-protects X, so the fold lands on the
-        # exact first scan X >= K — bit-equal to scan-by-scan.  Without the seam
-        # the fold would skip X's churn straight to the timer preset and overshoot.
         prog = _churn_plus_timer_program()
         X = Int("X")
         folded, stepped = _fold_nofold(prog, X >= 30, patch={"Enable": True})
@@ -247,47 +238,43 @@ class TestProtectedChurnExcludedRead:
 
 
 # ---------------------------------------------------------------------------
-# 4. Scan-local terminal exclusion
+# 4. An output nothing reads
 # ---------------------------------------------------------------------------
 
 
-class TestScanLocalTerminalExclusion:
-    def test_unread_unconditionally_redefined_output_is_excluded(self) -> None:
+class TestUnreadOutputs:
+    def test_unread_unconditionally_redefined_output_matches_stepping(self) -> None:
         Terminal = Int("Terminal")
         Gate = Bool("Gate", external=True)
         with Program() as program:
             with Rung():
-                calc(1, Terminal)
+                math(1, Terminal)
             with Rung(Gate):
-                calc(2, Terminal)
+                math(2, Terminal)
 
-        plc = PLC(program)
-        context = plc._ensure_fold_context()
+        folded, stepped = _fold_nofold(program, Bool("Never"), max_cycles=50)
+        _assert_landing_parity(folded, stepped)
 
-        assert "Terminal" in context.churn_excluded
-
-    def test_unread_conditional_latch_is_not_excluded(self) -> None:
+    def test_unread_conditional_latch_matches_stepping(self) -> None:
         Terminal = Int("Terminal")
         Gate = Bool("Gate", external=True)
         with Program() as program:
             with Rung(Gate):
-                calc(2, Terminal)
+                math(2, Terminal)
 
-        plc = PLC(program)
-        context = plc._ensure_fold_context()
+        folded, stepped = _fold_nofold(program, Bool("Never"), patch={"Gate": True}, max_cycles=50)
+        assert folded.state.tags["Terminal"] == 2
+        _assert_landing_parity(folded, stepped)
 
-        assert "Terminal" not in context.churn_excluded
-
-    def test_predicate_visible_terminal_is_never_discardable(self) -> None:
+    def test_output_the_condition_reads_lands_with_it(self) -> None:
         Terminal = Int("Terminal")
         with Program() as program:
             with Rung():
-                calc(1, Terminal)
+                math(1, Terminal)
 
-        plc = PLC(program)
-        context = plc._ensure_fold_context(frozenset({Terminal.name}))
-
-        assert "Terminal" not in context.churn_excluded
+        folded, stepped = _fold_nofold(program, Terminal == 1)
+        assert folded.state.tags["Terminal"] == 1
+        _assert_landing_parity(folded, stepped)
 
 
 # ---------------------------------------------------------------------------
@@ -307,8 +294,8 @@ def _timer_no_clock_program(preset_ms: int = 5_000) -> Program:
 
 
 class TestConditionReadSystemClock:
-    """A system clock read only by the run_until condition still bounds the
-    fold to its edges (the program's rungs never read it)."""
+    """A system clock read only by the run_until condition: the run stops on its edge, though
+    the program's rungs never read it."""
 
     def test_condition_clock_lands_same_scan_as_nofold(self) -> None:
         prog = _timer_no_clock_program()
@@ -317,89 +304,18 @@ class TestConditionReadSystemClock:
         assert _resolved(folded, system.sys.clock_1s.name) is True
         _assert_landing_parity(folded, stepped)
 
-    def test_condition_clock_recorded_in_half_periods(self) -> None:
-        # The context the run built carries the condition clock's half-period,
-        # even though no rung reads clock_1s.
-        prog = _timer_no_clock_program()
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        clock = system.sys.clock_1s.name
-        ctx = plc._ensure_fold_context(frozenset(), frozenset({clock}), frozenset())
-        assert _CLOCK_HALF_PERIODS[clock] in ctx.clock_half_periods
-
 
 # ---------------------------------------------------------------------------
-# 5. Scan-derived signal in the condition disables folding
+# 6. A signal in the condition that changes every scan
 # ---------------------------------------------------------------------------
 
 
 class TestScanDerivedInCondition:
-    """A scan-id-derived signal read by the condition (changes every scan) has
-    no periodic edge to land on, so it degrades the fold to scan-by-scan."""
-
-    def test_scan_counter_condition_degrades_but_lands_exactly(self) -> None:
+    def test_scan_counter_condition_lands_exactly(self) -> None:
         prog = _timer_no_clock_program(preset_ms=100_000)
         folded, stepped = _fold_nofold(prog, system.sys.scan_counter == 40, patch={"Enable": True})
         assert _resolved(folded, system.sys.scan_counter.name) == 40
         _assert_landing_parity(folded, stepped)
-
-    def test_scan_counter_recorded_in_scan_derived_names(self) -> None:
-        prog = _timer_no_clock_program(preset_ms=100_000)
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        name = system.sys.scan_counter.name
-        ctx = plc._ensure_fold_context(frozenset(), frozenset(), frozenset({name}))
-        assert name in ctx.scan_derived_names
-
-
-# ---------------------------------------------------------------------------
-# 6. Fold-context cache semantics (keyed per protected-read triple)
-# ---------------------------------------------------------------------------
-
-
-class TestFoldContextCache:
-    """`_ensure_fold_context` keyed-caches per (protected, clock, scan_derived)
-    triple; external invalidation clears every key."""
-
-    def test_same_key_returns_identical_object(self) -> None:
-        plc = PLC(_timer_no_clock_program(), dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        ctx1 = plc._ensure_fold_context(frozenset({"Enable"}))
-        ctx2 = plc._ensure_fold_context(frozenset({"Enable"}))
-        assert ctx1 is ctx2
-
-    def test_two_different_keys_two_entries(self) -> None:
-        plc = PLC(_timer_no_clock_program(), dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        plc._fold_context_cache = None  # start clean
-        ctx_a = plc._ensure_fold_context(frozenset({"Enable"}))
-        ctx_b = plc._ensure_fold_context(frozenset({"Tmr_Acc"}))
-        assert ctx_a is not ctx_b
-        assert len(plc._fold_context_cache) == 2
-
-    def test_two_run_untils_populate_two_entries(self) -> None:
-        # Driving two distinct conditions through run_until leaves two cache keys.
-        prog, done = _bool_flip_program(200)
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        plc._fold_context_cache = None
-        plc.run_until(Bool("Enable"), max_cycles=10, fold=True)
-        plc.run_until(done, max_cycles=10, fold=True)
-        assert len(plc._fold_context_cache) >= 2
-
-    def test_external_invalidation_rebuilds_without_error(self) -> None:
-        plc = PLC(_timer_no_clock_program(), dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        ctx1 = plc._ensure_fold_context(frozenset({"Enable"}))
-        plc._fold_context_cache = None  # external invalidation clears all keys
-        ctx2 = plc._ensure_fold_context(frozenset({"Enable"}))
-        assert ctx2 is not ctx1  # rebuilt fresh
 
 
 # ---------------------------------------------------------------------------
@@ -417,11 +333,8 @@ def _timed_timer_program(preset_ms: int = 100_000) -> tuple[Program, Timer]:
 
 
 class TestTimedAccumulatorEqualityHazard:
-    """A timed (ms-based) accumulator advances by one dt per scan.  `>=` always
-    lands on the first scan Acc crosses the target; `==` lands only when the
-    target is a whole multiple of the per-scan increment (otherwise one dt can
-    step over the equality — the DESIGN's `==`→`>=` rewrite hazard, fold.py
-    around _progress_bound / _scans_to_cross)."""
+    """A timed (ms-based) accumulator advances by one dt per scan.  `>=` lands on the first
+    scan Acc crosses the target; `==` lands only on a whole multiple of the increment."""
 
     def test_ge_on_timed_accumulator_lands_exactly(self) -> None:
         prog, tmr = _timed_timer_program()
@@ -431,11 +344,175 @@ class TestTimedAccumulatorEqualityHazard:
         _assert_landing_parity(folded, stepped)
 
     def test_eq_on_reachable_whole_multiple_lands(self) -> None:
-        # 500 is a whole multiple of the 10 ms per-scan increment, so `== 500`
-        # is landed exactly (no dt steps over it).  This documents the safe half
-        # of the `==` hazard: on a value NOT reachable exactly the fold would
-        # need the session's `==`→`>=`-plus-verify rewrite to stay honest.
+        # 500 is a whole multiple of the 10 ms per-scan increment, so no dt steps over it.
         prog, tmr = _timed_timer_program()
         folded, stepped = _fold_nofold(prog, tmr.Acc == 500, patch={"Enable": True})
         assert folded.state.tags["Tmr_Acc"] == 500
         _assert_landing_parity(folded, stepped)
+
+
+# ---------------------------------------------------------------------------
+# A coast trigger: its stop is where stepping would stop
+# ---------------------------------------------------------------------------
+
+_CoastT = Timer.clone("CoastT")
+_Mirror = Int("CoastMirror")
+_Bank = Block("CoastBank", TagType.INT, 1, 4)
+_Idx = Int("CoastIdx", default=2)
+_Clock = system.sys.clock_1s
+
+
+def _coast_plc() -> PLC:
+    """Nothing here stops the loop before scan 69 but a trigger's own reads."""
+    with Program(strict=False) as program:
+        with Rung():
+            on_delay(_CoastT, preset=7350)
+        with Rung():
+            copy(_CoastT.Acc, _Mirror)
+        with Rung(_CoastT.Acc >= 700):
+            latch(Bool("CoastLate"))
+        with Rung():
+            copy(_CoastT.Acc, _Bank[2])
+    plc = PLC(program, dt=0.010)
+    plc.set_rtc(datetime(2026, 1, 1))
+    plc.step()
+    return plc
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        _Clock,
+        ~_Clock,
+        _Mirror,
+        _Mirror >= 300,
+        _Bank[_Idx] >= 300,
+        _Mirror >= _Bank[_Idx],
+        _Mirror + 1 >= 300,
+        Or(_Bank[_Idx] >= 300, _Mirror >= 400),
+        And(_Clock, _Mirror >= 1),
+    ],
+    ids=[
+        "bare-clock",
+        "negated-clock",
+        "bare-int",
+        "compare",
+        "indirect-compare",
+        "indirect-operand",
+        "expression-compare",
+        "or-with-indirect",
+        "and-with-clock",
+    ],
+)
+def test_a_condition_trigger_stops_where_stepping_does(condition: object) -> None:
+    probe = _coast_plc()
+    predicate = probe._compile_condition_predicate(condition, method="run_until")
+
+    stepped = _coast_plc()
+    for _ in range(1_500):
+        stepped.step()
+        if predicate(stepped.state):
+            break
+    assert predicate(stepped.state), "the condition never comes true"
+
+    coasted = _coast_plc()
+    result = CoastSession(coasted, kind="t").seek(
+        [CoastTrigger("t", TARGET, predicate, condition=condition)], budget=1_500
+    )
+
+    assert result.stop_reason == "reached"
+    _assert_landing_parity(coasted, stepped)
+
+
+_CoastHeld = Int("CoastHeld")
+_CoastLimit = Int("CoastLimit", default=1)
+_CoastOther = Bool("CoastOther")
+_CoastLate = Bool("CoastLate")
+
+
+def _quiet_until_late_plc() -> PLC:
+    """A long timer runs; what the conditions below read holds still until scan 70."""
+    with Program(strict=False) as program:
+        with Rung():
+            on_delay(_CoastT, preset=7350)
+        with Rung(_CoastT.Acc >= 700):
+            latch(_CoastLate)
+            copy(1, _CoastHeld)
+        with Rung(_CoastOther, _CoastHeld == _CoastLimit, _CoastLimit == 9):
+            out(Bool("CoastSeen"))
+    plc = PLC(program, dt=0.010)
+    plc.step()
+    return plc
+
+
+@pytest.mark.parametrize(
+    ("condition", "reads"),
+    [
+        (_CoastLate, {"CoastLate"}),
+        (_CoastHeld, {"CoastHeld"}),
+        (_CoastHeld >= 1, {"CoastHeld"}),
+        (_CoastHeld >= _CoastLimit, {"CoastHeld", "CoastLimit"}),
+        (And(_CoastLate, ~_CoastOther), {"CoastLate", "CoastOther"}),
+        (Or(_CoastLate, _CoastOther), {"CoastLate", "CoastOther"}),
+    ],
+    ids=["bare-bool", "bare-int", "compare", "tag-operand", "and", "or"],
+)
+def test_an_exact_condition_stretches_on_what_it_names(
+    condition: object, reads: set[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming its reads spares a trace: this is the reason to name them at all."""
+
+    def _no_trace(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("an exact condition does not need tracing")
+
+    monkeypatch.setattr("pyrung.core.coast_run._traced_call", _no_trace)
+    predicate = _quiet_until_late_plc()._compile_condition_predicate(condition, method="run_until")
+    trigger = CoastTrigger("t", TARGET, predicate, condition=condition)
+    assert _trigger_reads([trigger]) == reads
+
+    stepped = _quiet_until_late_plc()
+    for _ in range(1_500):
+        stepped.step()
+        if predicate(stepped.state):
+            break
+
+    coasted = _quiet_until_late_plc()
+    session = CoastSession(coasted, kind="t")
+    result = session.seek([trigger], budget=1_500)
+
+    assert result.stop_reason == "reached"
+    assert session._last_coast_stats["stretches"] >= 1
+    _assert_landing_parity(coasted, stepped)
+
+
+class TestExactConditionReads:
+    def test_bare_tags_read_themselves(self) -> None:
+        contact, word = Bool("A"), Int("W")
+        assert _extract_condition_reads(contact) == {"A"}
+        assert _extract_condition_reads(word) == {"W"}
+        assert _exact_condition_reads(contact) == {"A"}
+        assert _exact_condition_reads(word) == {"W"}
+
+    def test_a_named_condition_is_exact(self) -> None:
+        a, b, w = Bool("A"), Bool("B"), Int("W")
+        assert _exact_condition_reads(And(a, Or(~b, rise(a)), w >= 3, w == Int("V"))) == {
+            "A",
+            "B",
+            "W",
+            "V",
+        }
+
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            _Bank[_Idx] >= 1,
+            _Mirror >= _Bank[_Idx],
+            _Mirror + 1 >= 1,
+            _Mirror >= Int("Fixed", readonly=True, default=5),
+            Or(Bool("A"), _Bank[_Idx] == 1),
+            And(Bool("A"), _Mirror + 1 >= 1),
+        ],
+        ids=["indirect", "indirect-operand", "expression", "readonly-operand", "or", "and"],
+    )
+    def test_a_condition_hiding_a_read_will_not_say(self, condition: object) -> None:
+        assert _exact_condition_reads(condition) is None

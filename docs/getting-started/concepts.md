@@ -4,7 +4,7 @@ This page covers the vocabulary you need to write and understand a pyrung progra
 
 ## Scans
 
-A PLC doesn't run code line by line — it runs in **scans**. Each scan works through every rung in order, first to last. On each rung, conditions are checked, then instructions execute. Once every rung has been evaluated, that's one scan.
+A PLC doesn't run code line by line. It runs in **scans**. Each scan works through every rung in order, first to last. On each rung, conditions are checked, then instructions execute. Once every rung has been evaluated, that's one scan.
 
 ```python
 runner.step()           # Execute one scan
@@ -20,18 +20,18 @@ from pyrung import Bool, Int, Real, Char
 
 Button  = Bool()             # 1 bit, resets on STOP→RUN
 Step    = Int()              # 16-bit signed, retentive
-Temp    = Real()             # 32-bit float, retentive
+Temp    = Real()             # float, retentive
 State   = Char()             # 8-bit ASCII, retentive
 ```
 
-Tags don't hold values themselves — they're references. Values live in the system state and update each scan.
+Tags don't hold values themselves. They're references. Values live in the system state and update each scan.
 
 | Constructor | Size | Retentive by default |
 |-------------|------|---------------------|
 | `Bool` | 1 bit | No |
 | `Int` | 16-bit signed | Yes |
 | `Dint` | 32-bit signed | Yes |
-| `Real` | 32-bit float | Yes |
+| `Real` | float, ±3.4028235E+38 (64-bit precision in pyrung) | Yes |
 | `Word` | 16-bit unsigned | Yes |
 | `Char` | 8-bit ASCII | Yes |
 
@@ -39,14 +39,14 @@ Tags don't hold values themselves — they're references. Values live in the sys
 
 ## Rungs
 
-A rung is a `with` block. The condition goes on the `rung`, the instructions go in the body. If the condition is true, the instructions execute. If false, instructions that depend on the live power rail are turned off.
+A rung is a `with` block. The condition goes on the `rung`, and the instructions go in the body. If the condition is true, the instructions execute. If false, instructions that depend on the live power rail are turned off.
 
 ```python
 with rung(Button):
     latch(MotorRunning)
 ```
 
-This reads like a ladder diagram: `Button` is the contact on the left rail, `latch(MotorRunning)` is the coil on the right. If `Button` is true, `MotorRunning` gets latched.
+This reads like a ladder diagram. `Button` is the contact on the left rail, and `latch(MotorRunning)` is the coil on the right. If `Button` is true, `MotorRunning` gets latched.
 
 Conditions can be combined and compared:
 
@@ -63,21 +63,26 @@ with rung(State == "g"):          # Equality
 
 ### Branches
 
-A `branch` creates a parallel condition within a rung — like a parallel path on a ladder diagram:
+A `branch` creates a parallel condition within a rung, like a parallel path on a ladder diagram. It ANDs its own condition with the rung's:
 
 ```python
-with rung(First):          # ① Evaluate: First
-    out(Third)             # ③ Execute
-    with branch(Second):   # ② Evaluate: First AND Second
-        out(Fourth)        # ④ Execute
-    out(Fifth)             # ⑤ Execute
+with rung(Running):
+    out(Motor)
+    with branch(HighSpeed):
+        out(FastLamp)  # On when Running AND HighSpeed
 ```
 
-Three rules:
+### Evaluation order
 
-- **Conditions evaluate before instructions.** ① and ② are resolved before ③ ④ ⑤ run. A branch ANDs its own condition with the parent rung's.
-- **Instructions execute in source order.** ③ → ④ → ⑤, as written — not "all rung, then all branch."
-- **Each rung starts fresh.** The next rung sees the state as it was left after the previous rung's instructions.
+A rung is commonly said to be evaluated left to right, top to bottom. It's a little more nuanced than that. Instructions run in the order written. The rung's own condition is read once and holds for everything below it:
+
+```python
+with rung(A):
+    reset(A)
+    out(Y)      # Still on this scan: A was already read
+```
+
+A branch reads its own contacts when execution reaches it, so it sees what the instructions above it in the same rung just wrote. See [Branching](../instructions/rungs.md#branching).
 
 ## Instructions
 
@@ -89,13 +94,13 @@ latch(Motor)                  # Set and hold — stays true even if rung goes fa
 reset(Motor)                  # Clear a latched tag
 
 copy("g", State)              # Copy a value into a tag
-calc(Step + 1, Step)          # Evaluate an expression, store the result
+math(Step + 1, Step)          # Evaluate an expression, store the result
 
 on_delay(MyTimer, preset=3000)               # Timer: accumulate while rung is true
-count_up(MyCounter, preset=100)              # Counter: increment each scan
+count_up(MyCounter, preset=100)              # Counter: one count per rising edge
 ```
 
-`out` vs `latch`: `out` follows the rung — true when the rung is true, false when it's false. `latch` is sticky — once set, it stays set until explicitly `reset`.
+`out` vs `latch`: `out` follows the rung. The output is true when the rung is true and false when the rung is false. `latch` is sticky. Once set, it stays set until explicitly `reset`.
 
 The full instruction set (branching, subroutines, shift registers, edge detection, and more) is in the [Instruction Reference](../instructions/index.md).
 
@@ -112,20 +117,20 @@ with rung(State == "g"):
     on_delay(GreenTimer, preset=3000)  # 3000 ms (default unit)
 ```
 
-The accumulator tracks progress in the unit you specify (milliseconds by default). If the rung goes false before the preset, the accumulator resets (that's `on_delay` — use `off_delay` for the inverse behavior).
+The accumulator tracks progress in the unit you specify (milliseconds by default). If the rung goes false before the preset, the accumulator resets (that's `on_delay`). Use `off_delay` for the inverse behavior.
 
-Counters increment once per scan while enabled. Use `rise()` on the rung condition if you want one increment per leading edge:
+Counters count rising edges. Each time the rung goes True, the count goes up by one, however long the rung stays True:
 
 ```python
 PartCounter = Counter.clone("PartCounter")
 
-with rung(rise(Sensor)):
+with rung(Sensor):
     count_up(PartCounter, preset=9999).reset(CountReset)
 ```
 
 ## Instruction pins
 
-Some instructions have extra condition inputs beyond the rung — like the `.reset()` on the counter example above. These are pins on the instruction block.
+Some instructions have extra condition inputs beyond the rung, like the `.reset()` on the counter example above. These are pins on the instruction block.
 
 ```
                     ┌─────────────────┐
@@ -136,7 +141,7 @@ Some instructions have extra condition inputs beyond the rung — like the `.res
                     └─────────────────┘
 ```
 
-The rung condition powers the instruction (top wire). Other pins are wired with dot-methods: `.down()`, `.reset()`, `.clock()`. Multiple conditions on one pin AND together — `Home, Auto` on `.reset()` means both must be True.
+The rung condition powers the instruction (top wire). Other pins are wired with dot-methods: `.down()`, `.reset()`, `.clock()`. Multiple conditions on one pin AND together. `Home, Auto` on `.reset()` means both must be True.
 
 ```
                        ┌─────────────────┐
@@ -150,13 +155,13 @@ The rung condition powers the instruction (top wire). Other pins are wired with 
 Each pin gets its own line with `\` continuation:
 
 ```python
-with rung(rise(Sensor)):
+with rung(Sensor):
     count_up(PartCounter, preset=100) \
         .down(Reverse) \
         .reset(Home, Auto)
 ```
 
-Reads directly off the diagram — the pin name in the ASCII maps to the dot-method in the Python.
+The code reads directly off the diagram. The pin name in the ASCII maps to the dot-method in the Python.
 
 ## Programs
 
@@ -181,7 +186,7 @@ def logic():
         reset(Running)
 ```
 
-Both forms produce the same thing — a `Program` you pass to `PLC`.
+Both forms produce the same thing, a `Program` you pass to `PLC`.
 
 ## Structured tags (UDTs)
 
@@ -219,7 +224,7 @@ with rung(Pump[1].Running):
 
 ## Blocks
 
-A block is a contiguous array of tags — used for grouped memory and physical I/O. Addresses typically start at 1 to match PLC conventions, but any start index is supported.
+A block is a contiguous array of tags, used for grouped memory and physical I/O. Addresses typically start at 1 to match PLC conventions, but any start index is supported.
 
 ```python
 from pyrung import Block, InputBlock, OutputBlock, TagType
@@ -267,27 +272,27 @@ plc.unforce("Button")
 
 The PLC exposes built-in status and control through the `system` namespace. Import it with `from pyrung import system`.
 
-**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`. Use `first_scan` for one-time initialization:
+**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`, and `scan_clock_toggle`. Use `first_scan` for one-time initialization:
 
 ```python
 with rung(system.sys.first_scan):
     copy("g", State)
 ```
 
-**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). Fault flags are auto-cleared at the start of each scan.
+**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). Each `math()` clears `division_error` and `math_operation_error` as it starts and sets each only if it faults. Each `math()` or copy instruction does the same for `out_of_range` and `address_error`, so read the flag on the next rung. A `math()` on a false rung clears its flags too. A copy instruction on a false rung leaves them. A flag stays on into the next scan until an instruction clears it.
 
 ```python
 with rung(system.fault.division_error):
     latch(MathFaultSeen)
 ```
 
-**`system.rtc`** — real-time clock: `year4`, `month`, `day`, `hour`, `minute`, `second` (read-only). Writable counterparts (`new_hour`, etc.) with `apply_date`/`apply_time` triggers. Use for time-of-day logic like shift changes.
+**`system.rtc`** — real-time clock: `year4`, `month`, `day`, `hour`, `minute`, `second` (read-only). `system.rtc` also has writable counterparts (`new_hour`, etc.) and `apply_date`/`apply_time` triggers. Use for time-of-day logic like shift changes.
 
 The [CLICK cheatsheet](../guides/click-cheatsheet.md#system-points) has the full point-to-address mapping.
 
 ## What's next as your programs grow
 
-Once you have UDTs with command/feedback pairs — solenoids, sensors, actuators — you can annotate the physical behavior of feedback signals with `physical=` and `link=`. The autoharness reads those annotations and drives feedback in tests automatically, so you stop writing boilerplate that toggles inputs by hand. See [Physical Annotations and Autoharness](../guides/physical-harness.md).
+Once you have UDTs with command/feedback pairs (solenoids, sensors, actuators), you can annotate the physical behavior of feedback signals with `physical=` and `link=`. The autoharness reads those annotations and drives feedback in tests automatically, so you stop writing boilerplate that toggles inputs by hand. See [Physical Annotations and Autoharness](../guides/physical-harness.md).
 
 ## Next steps
 

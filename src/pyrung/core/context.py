@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from math import copysign
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pyrsistent import PMap, pmap
 
 if TYPE_CHECKING:
+    from pyrung.core.runner import PLC
     from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
     from pyrung.core.state import SystemState
 
@@ -31,16 +33,43 @@ WriteOccurrenceSink = Callable[
 ]
 
 # Read-path sentinel: hot lookups cache the ``state.tags``/``state.memory``
-# pmaps once (each ``state.<field>`` access is itself a PRecord bucket walk)
-# and probe them a single time via try/except instead of ``in`` + ``[]``.
+# pmaps once and probe them a single time via try/except instead of ``in`` + ``[]``.
 _MISSING = object()
 
 
-def _commit_changed(base: PMap, pending: Mapping[str, Any]) -> PMap:
-    """Publish only final values that differ from the immutable scan base."""
+def refused_inside_its_own_scan() -> RuntimeError:
+    """What a PLC raises when a function its scan is calling asks for what only fits between scans."""
+    return RuntimeError(
+        "A run_function called step(), run(), run_for(), run_until(), start(), stop() or "
+        "reboot(), or set battery_present, on the PLC running it, which a PLC can't do in the "
+        "middle of its own scan. "
+        "Set a tag through outs= and act on it from outside the scan. To scan from inside the "
+        "function, use another PLC or CompiledPLC; a PLC can make one with fork()."
+    )
+
+
+def same_stored_value(old: Any, new: Any) -> bool:
+    """Whether storing *new* over *old* leaves the same value, type and sign of zero too.
+
+    ``==`` is not enough: a state that kept the old object on ``False`` over ``0`` or
+    ``-0.0`` over ``0.0`` would depend on when it was last published, and a compiled
+    range publishes sparsely.  What a tag holds is what was last written to it.
+    """
+    if old is new:
+        return True
+    if type(old) is not type(new) or old != new:
+        return False
+    return type(new) is not float or new != 0.0 or copysign(1.0, old) == copysign(1.0, new)
+
+
+def _commit_changed(base: PMap, pending: Mapping[str, Any], read: Mapping[str, Any]) -> PMap:
+    """Publish only final values that differ from the immutable scan base.
+
+    *read* is what the scan read *base* through: the base itself, or a plain dict of it.
+    """
     evolver = None
     for key, value in pending.items():
-        if base.get(key, _MISSING) == value:
+        if same_stored_value(read.get(key, _MISSING), value):
             continue
         if evolver is None:
             evolver = base.evolver()
@@ -62,11 +91,22 @@ class RungId(NamedTuple):
 
 
 class ConditionView:
-    """Frozen read-only view of tag/memory state for condition evaluation.
+    """Read-only view of tag/memory state for one row's condition evaluation.
 
-    Created at rung entry so that all branch conditions — at every nesting
-    depth — evaluate against the same snapshot, regardless of mutations made
-    by instructions that execute between branch evaluations.
+    A row (a rung's trunk, a branch, a continued rung, a For-body rung) reads
+    its contacts when the solve reaches it, so they see the writes of the rows
+    above it; a row reads its contacts before its outputs write.
+
+    A *live* view (``live=True``) reads the context's pending writes directly:
+    the interpreter's natural path takes one per row and drops it once the row
+    is evaluated.  Its edge contacts still compare against the memory as it
+    was before the row (``_hold_memory``: the row's scan stores each edge
+    site's new bit, and the view keeps the old one).
+
+    A *frozen* view copies the pending writes when it is taken.  A box reads
+    its enable and pins through one taken at box entry, so no pin sees the
+    box's own writes; observers hold frozen views to re-evaluate a row after
+    the scan.
     """
 
     __slots__ = (
@@ -80,23 +120,62 @@ class ConditionView:
         "_read_sink",
         "_tag_source_snapshot",
         "_memory_source_snapshot",
+        "_edge_prior",
+        "_live",
     )
 
-    def __init__(self, ctx: ScanContext) -> None:
+    def __init__(self, ctx: ScanContext, *, live: bool = False) -> None:
         self._state: SystemState = ctx._state
         self._tags: Mapping[str, Any] = ctx._state_tags_read
         self._memory: PMap = ctx._state_memory
-        self._tags_snapshot: dict[str, Any] = ctx._tags_pending.copy()
-        self._memory_snapshot: dict[str, Any] = ctx._memory_pending.copy()
         self._resolver = ctx._resolver
         self._scope_token = ctx._condition_scope_token
         self._read_sink = ctx._read_sink
+        # Edge memory as it was before this view's row was scanned, by key, with
+        # the origin and definition its read had (live views only).
+        self._edge_prior: dict[str, tuple[Any, ReadOccurrenceOrigin, Any]] | None = None
+        self._live = live
+        if live:
+            self._tags_snapshot: dict[str, Any] = ctx._tags_pending
+            self._memory_snapshot: dict[str, Any] = ctx._memory_pending
+            self._tag_source_snapshot = ctx._tag_write_sources
+            self._memory_source_snapshot = ctx._memory_write_sources
+            return
+        self._tags_snapshot = ctx._tags_pending.copy()
+        self._memory_snapshot = ctx._memory_pending.copy()
         self._tag_source_snapshot = (
             ctx._tag_write_sources.copy() if ctx._tag_write_sources is not None else None
         )
         self._memory_source_snapshot = (
             ctx._memory_write_sources.copy() if ctx._memory_write_sources is not None else None
         )
+
+    @property
+    def live(self) -> bool:
+        """Whether this view reads the context's pending writes as they happen."""
+        return self._live
+
+    def _hold_memory(self, key: str) -> None:
+        """Keep *key*'s memory as this view sees it now, before its row stores
+        a new value there (a live view's edge sites; a frozen view holds it
+        already)."""
+        if not self._live:
+            return
+        held = self._edge_prior
+        if held is None:
+            held = self._edge_prior = {}
+        elif key in held:
+            return
+        snap = self._memory_snapshot
+        value = snap.get(key, _MISSING)
+        if value is not _MISSING:
+            sources = self._memory_source_snapshot
+            held[key] = (value, "pending", sources.get(key) if sources is not None else None)
+            return
+        try:
+            held[key] = (self._memory[key], "entry", None)
+        except KeyError:
+            held[key] = (_MISSING, "default", None)
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         snap = self._tags_snapshot
@@ -127,6 +206,15 @@ class ConditionView:
         return value
 
     def get_memory(self, key: str, default: Any = None) -> Any:
+        held = self._edge_prior
+        if held is not None and key in held:
+            value, origin, source = held[key]
+            if value is _MISSING:
+                value = default
+            sink = self._read_sink
+            if sink is not None:
+                sink("memory", key, value, origin, source)
+            return value
         snap = self._memory_snapshot
         value = snap.get(key, _MISSING)
         source = None
@@ -160,6 +248,10 @@ class ConditionView:
         return name in self._tags_snapshot or name in self._tags
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
+        held = self._edge_prior
+        if held is not None and key in held:
+            value = held[key][0]
+            return default if value is _MISSING else value
         snap = self._memory_snapshot
         value = snap.get(key, _MISSING)
         if value is not _MISSING:
@@ -170,6 +262,9 @@ class ConditionView:
             return default
 
     def _has_memory_internal(self, key: str) -> bool:
+        held = self._edge_prior
+        if held is not None and key in held:
+            return held[key][0] is not _MISSING
         return key in self._memory_snapshot or key in self._memory
 
     @property
@@ -223,7 +318,7 @@ class ScanContext:
         "_rung_firing_varied",
         "_node_firings",
         "_node_firing_varied",
-        "_consumed_tags_getter",
+        "_runner",
         "_io_submit_staging",
         "_io_drain_staging",
         "_replay_io_submits",
@@ -237,7 +332,7 @@ class ScanContext:
         *,
         resolver: TagResolver | None = None,
         read_only_tags: frozenset[str] = frozenset(),
-        consumed_tags_getter: Callable[[], frozenset[str] | None] | None = None,
+        runner: PLC | None = None,
         replay_io: tuple[Mapping[str, IoSubmitRecord], Mapping[str, IoResultRecord]] | None = None,
         state_tags_read: Mapping[str, Any] | None = None,
     ) -> None:
@@ -247,13 +342,14 @@ class ScanContext:
             state: The current system state to build upon.
             resolver: Optional fallback for unresolved tag reads.
             read_only_tags: System points that must not be written.
-            consumed_tags_getter: Optional callable returning the set of
-                tag names that at least one rung reads.  When provided
-                and non-None, :meth:`capturing_rung` drops writes to
-                tags outside the set — the firing log is consumed by
-                the simulator's own analysis APIs, which by definition
-                don't ask about unread tags.  Returning ``None`` from
-                the callable bypasses the filter (escape hatch).
+            runner: The PLC this scan belongs to, if any.  It says which
+                tag names at least one rung reads: when that is non-None,
+                :meth:`capturing_rung` drops writes to tags outside the
+                set — the firing log is consumed by the simulator's own
+                analysis APIs, which by definition don't ask about unread
+                tags.  ``None`` bypasses the filter (escape hatch).  It
+                also refuses to scan, stop, reboot or set its battery
+                during :meth:`call_user_function`.
             replay_io: When replaying, a pair of (submits, drains)
                 for this scan.  ``None`` during live execution.
         """
@@ -299,7 +395,7 @@ class ScanContext:
         self._rung_firing_varied: dict[int, frozenset[str]] = {}
         self._node_firings: dict[RungId, dict[str, Any]] = {}
         self._node_firing_varied: dict[RungId, frozenset[str]] = {}
-        self._consumed_tags_getter = consumed_tags_getter
+        self._runner = runner
         self._io_submit_staging: dict[str, IoSubmitRecord] = {}
         self._io_drain_staging: dict[str, IoResultRecord] = {}
         self._is_replay_io: bool = replay_io is not None
@@ -401,6 +497,22 @@ class ScanContext:
                 if summary[0] != value:
                     summary[1] = True
                 summary[0] = value
+
+    def call_user_function(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+        """Call a ``run_function`` body; meanwhile this scan's PLC refuses what only fits between scans.
+
+        Only for the call: a paused ``scan_steps`` generator sits between prepare and
+        commit with no user code running, and stepping beside it is legal.  A count, since
+        a body can resume a paused scan of its PLC, which can call a body in turn.
+        """
+        runner = self._runner
+        if runner is None:
+            return fn(*args, **kwargs)
+        runner._user_calls_running += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            runner._user_calls_running -= 1
 
     def set_tag(self, name: str, value: Any) -> None:
         """Set a tag value (batched, committed at end of scan).
@@ -539,13 +651,14 @@ class ScanContext:
         """Access to the original (unmodified) state.
 
         Useful for operations that need to read original values,
-        such as computing _prev:* for edge detection.
+        such as the value a tag held when the scan began.
         """
         return self._state
 
-    def _new_condition_view(self) -> ConditionView:
-        """Create the rung-entry view, with an override point for analysis contexts."""
-        return ConditionView(self)
+    def _new_condition_view(self, *, live: bool = False) -> ConditionView:
+        """Create a row's condition view (see :class:`ConditionView`), frozen
+        unless *live*, with an override point for analysis contexts."""
+        return ConditionView(self, live=live)
 
     # =========================================================================
     # Rung-scoped firing capture
@@ -696,7 +809,7 @@ class ScanContext:
         varied = {name for name, summary in journal.items() if summary[1]}
         if retain_all_writes:
             return attempted_writes, varied
-        consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
+        consumed = self._runner._consumed_tags_for_capture() if self._runner is not None else None
         if consumed is None:
             return attempted_writes, varied
         retained = {name: val for name, val in attempted_writes.items() if name in consumed}
@@ -729,6 +842,26 @@ class ScanContext:
     @property
     def is_replay_io(self) -> bool:
         return self._is_replay_io
+
+    @property
+    def modbus_io(self) -> Literal["replay", "live"] | None:
+        """What a send() or receive() does on this scan, decided here for every runner.
+
+        Only a real forward scan talks to the device.  A replay, a cause() rebuild, how()
+        or a context with no runner would send requests the session never made.
+        """
+        if self._is_replay_io:
+            return "replay"
+        runner = self._runner
+        if runner is None or runner._replay_mode or runner._reconstructs_history:
+            return None
+        return None if runner._modbus_stubbed else "live"
+
+    @property
+    def modbus_requests(self) -> dict[int, Any]:
+        """The runner's requests in flight, by instruction ``id()``.  A fork owns its own."""
+        assert self._runner is not None
+        return self._runner._modbus_requests
 
     def record_io_submit(self, key: str, record: IoSubmitRecord) -> None:
         self._io_submit_staging[key] = record
@@ -763,9 +896,8 @@ class ScanContext:
         # the final value of each key is known.  Avoid touching the PMap for
         # writes that finish equal to the immutable scan base; otherwise apply
         # all genuinely changed values through one deferred evolver.
-        new_tags = _commit_changed(self._state_tags, self._tags_pending)
-        new_memory = _commit_changed(self._state_memory, self._memory_pending)
+        new_tags = _commit_changed(self._state_tags, self._tags_pending, self._state_tags_read)
+        new_memory = _commit_changed(self._state_memory, self._memory_pending, self._state_memory)
 
         # Create new state with updated tags/memory and advance scan
-        new_state = self._state.set(tags=new_tags, memory=new_memory)
-        return new_state.next_scan(dt=dt)
+        return self._state.committed(new_tags, new_memory, dt)

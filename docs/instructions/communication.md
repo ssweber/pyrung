@@ -49,14 +49,14 @@ with rung(Enable):
 
 ### Status tags
 
-Both instructions require four status tags:
+Both instructions take four status tags, each optional as in CLICK (one left off runs on a hidden tag and exports as off):
 
 - **sending** / **receiving** (`BOOL`) — True while the transaction is in progress
-- **success** (`BOOL`) — Latches True on successful completion; cleared when the next request starts
-- **error** (`BOOL`) — Latches True on failure; cleared when the next request starts
-- **exception_response** (`INT`) — Modbus exception code on error; cleared when the next request starts
+- **success** (`BOOL`) — Latches True on success. The next request clears it.
+- **error** (`BOOL`) — Latches True on failure. The next request clears it.
+- **exception_response** (`INT`) — Modbus exception code on error. The next request clears it.
 
-Once a request is submitted, it runs to completion even if `Enable` drops — `sending` / `receiving` stays True until the response (or timeout) is processed. `success` and `error` then latch and persist across disabled scans. They are only cleared when the next request is submitted (the rising-edge of Enable, or any scan where Enable is still high after a previous request finished).
+Once a request is submitted, it runs to completion even if `Enable` drops. `sending` / `receiving` stays True until the response (or timeout) is processed. `success` and `error` then latch and persist across disabled scans. They are only cleared when the next request is submitted (the rising-edge of Enable, or any scan where Enable is still high after a previous request finished).
 
 Because the flags latch, checking `success` or `error` directly in downstream logic will fire every scan while the value is stuck True. Use `rise(success)` / `rise(error)` to get a one-scan pulse on the completion edge:
 
@@ -65,11 +65,20 @@ with rung(rise(SendOK)):
     out(SendComplete)  # fires for exactly one scan on each success
 ```
 
-This also handles a subtle hardware timing case: on real CLICK CPUs, if the TCP connection is busy with another Send/Receive, `sending` / `receiving` may not rise immediately — and during that brief delay, the previous cycle's `success` is still latched. `rise()` avoids triggering on the stale value.
+This also covers a hardware timing case. On a real CLICK, if the TCP connection is busy with another Send/Receive, `sending` / `receiving` may not rise immediately. During that delay, the previous cycle's `success` is still latched. `rise()` avoids triggering on the stale value.
 
 ### Verification
 
 `receive()` destination tags are automatically treated as nondeterministic by `always()` and `reachable_states()`. The verifier knows the values come from outside the program, so it enumerates them without requiring `external=True`. Adding `external=True` is still good practice for documentation but doesn't change verifier behavior.
+
+### how()
+
+`how()` sends no Modbus request. It may set these tags the way it sets an input:
+
+- a `receive()` destination
+- the success or error bit of a `send()` or `receive()`
+
+A plan step that sets one stands for the device's answer. The busy bit and the exception code keep their values. The forks `how()` returns don't talk to the device either.
 
 ### Remote addressing
 

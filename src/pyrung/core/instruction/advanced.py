@@ -18,6 +18,8 @@ from .advance import (
 )
 from .base import Instruction, OneShotMixin
 from .resolvers import (
+    _set_fault_address_error,
+    reads_indexed_element,
     resolve_block_range_ctx,
     resolve_block_range_tags_ctx,
     resolve_tag_or_value_ctx,
@@ -59,6 +61,8 @@ class SearchInstruction(OneShotMixin, Instruction):
     **Continuous mode** — when `continuous=True`, the search resumes from the
     address after the previous result rather than restarting each scan.
     Set ``result = 0`` to restart, or set ``result = -1`` to signal exhaustion.
+    As on a CLICK, a result that is not an address inside the range (below,
+    above, or any other value) is a miss, ``-1``.
 
     Args:
         comparison: A `RangeComparison` from a block-range comparison
@@ -114,6 +118,10 @@ class SearchInstruction(OneShotMixin, Instruction):
         self.condition = comparison.operator
         self.value = comparison.value
         self.search_range = comparison.search_range
+        if isinstance(self.search_range, IndirectBlockRange) or reads_indexed_element(self.value):
+            # A window out of its block, or a value read below it, sets SC44: the
+            # analyses (PDG, prover) see the flag written where it can be.
+            self._fault_writes = ("fault.address_error",)
         self.result = result
         self.found = found
         self.continuous = continuous
@@ -121,7 +129,11 @@ class SearchInstruction(OneShotMixin, Instruction):
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        resolved_range = resolve_block_range_ctx(self.search_range, ctx)
+        try:
+            resolved_range = resolve_block_range_ctx(self.search_range, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
         addresses = list(resolved_range.addresses)
         tags = resolved_range.tags()
 
@@ -138,11 +150,19 @@ class SearchInstruction(OneShotMixin, Instruction):
             self._write_miss(ctx)
             return
 
-        if self._is_text_path(tags):
+        text_path = self._is_text_path(tags)
+        try:
+            rhs = resolve_tag_or_value_ctx(self.value, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
+
+        if text_path:
             matched_address = self._search_text(
                 tags=tags,
                 addresses=addresses,
                 cursor_index=cursor_index,
+                rhs=rhs,
                 ctx=ctx,
             )
         else:
@@ -150,6 +170,7 @@ class SearchInstruction(OneShotMixin, Instruction):
                 tags=tags,
                 addresses=addresses,
                 cursor_index=cursor_index,
+                rhs=rhs,
                 ctx=ctx,
             )
 
@@ -174,15 +195,12 @@ class SearchInstruction(OneShotMixin, Instruction):
         if current_result == -1:
             return None
 
-        if reverse_order:
-            for idx, addr in enumerate(addresses):
-                if addr < current_result:
-                    return idx
-            return None
-
+        # CLICK: an old result inside the search range resumes after it; any other
+        # value (below, above, negative) is a miss.  A result on the last address
+        # has nothing after it, which is a miss too.
         for idx, addr in enumerate(addresses):
-            if addr > current_result:
-                return idx
+            if addr == current_result:
+                return idx + 1 if idx + 1 < len(addresses) else None
         return None
 
     def _is_text_path(self, tags: list[Tag]) -> bool:
@@ -207,23 +225,21 @@ class SearchInstruction(OneShotMixin, Instruction):
         )
 
     def _search_numeric(
-        self, tags: list[Tag], addresses: list[int], cursor_index: int, ctx: ScanContext
+        self, tags: list[Tag], addresses: list[int], cursor_index: int, rhs: Any, ctx: ScanContext
     ) -> int | None:
-        rhs_value = resolve_tag_or_value_ctx(self.value, ctx)
-
         for idx in range(cursor_index, len(tags)):
             candidate = ctx.get_tag(tags[idx].name, tags[idx].default)
-            if self._compare(candidate, rhs_value):
+            if self._compare(candidate, rhs):
                 return addresses[idx]
         return None
 
     def _search_text(
-        self, tags: list[Tag], addresses: list[int], cursor_index: int, ctx: ScanContext
+        self, tags: list[Tag], addresses: list[int], cursor_index: int, rhs: Any, ctx: ScanContext
     ) -> int | None:
         if self.condition not in {"==", "!="}:
             raise ValueError("Text search only supports '==' and '!=' conditions")
 
-        rhs_text = str(resolve_tag_or_value_ctx(self.value, ctx))
+        rhs_text = str(rhs)
         if rhs_text == "":
             raise ValueError("Text search value cannot be empty")
 
@@ -320,7 +336,7 @@ class ShiftInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         tags = self._resolve_tags(ctx)
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
 
         clock_curr = bool(self.clock_condition.evaluate(condition_view))
         clock_prev = bool(ctx.get_memory(self.memory_key("_shift_prev_clock"), False))
@@ -339,7 +355,7 @@ class ShiftInstruction(Instruction):
 
         ctx.set_memory(self.memory_key("_shift_prev_clock"), clock_curr)
 
-    def is_terminal(self) -> bool:
+    def has_pins(self) -> bool:
         return True
 
     def advance_profile(self) -> AdvanceProfile | None:

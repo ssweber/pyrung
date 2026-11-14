@@ -59,7 +59,7 @@ class PilotRung:
 
 
 class PilotRungExecutionState(Enum):
-    """One installed rule's status in a frozen rung-entry snapshot."""
+    """One installed rule's status in the state the PILOT holds start from."""
 
     DORMANT = "dormant"
     ELIGIBLE = "eligible"
@@ -114,9 +114,9 @@ def _constraint_condition(
 ) -> Any | None:
     """Lower a crossing ``Constraint`` to an equivalent runtime condition.
 
-    The constraint algebra is the planner's data-only language; coasts and
-    folding need the executable Condition language so they can expose exact
-    reads and crossing thresholds.  Unsupported constraint shapes return
+    The constraint algebra is the planner's data-only language; coasts need the
+    executable Condition language so they can expose exact reads and crossing
+    thresholds.  Unsupported constraint shapes return
     ``None`` and leave the caller's predicate authoritative.
     """
     from pyrung.core.condition import (
@@ -134,11 +134,10 @@ def _constraint_condition(
     if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
         return None
 
-    tag = plc._known_tags_by_name.get(constraint.tag)
+    tag = plc._tag_known_or_reached(constraint.tag)
     if tag is None:
-        # Static block ranges are intentionally lazy in the runner's tag
-        # inventory.  An advance profile still owns concrete Tag objects for
-        # its channels, so use that authoritative channel metadata.
+        # An advance profile owns concrete Tag objects for its channels, so a
+        # channel the runner neither knows nor reaches takes its metadata from the profile.
         from pyrung.core.analysis.pilot.advance import build_advance_index
 
         owner = (
@@ -165,7 +164,7 @@ def _constraint_condition(
         return AllCondition(*terms) if unresolved else AnyCondition(*terms)
 
     if isinstance(constraint, AffineCmp):
-        operand = plc._known_tags_by_name.get(constraint.bound_tag)
+        operand = plc._tag_known_or_reached(constraint.bound_tag)
         if operand is None:
             return None
         if constraint.scale != 1:
@@ -173,7 +172,7 @@ def _constraint_condition(
         if constraint.offset != 0:
             operand = operand + constraint.offset
     elif constraint.bound_is_tag:
-        operand = plc._known_tags_by_name.get(str(constraint.bound))
+        operand = plc._tag_known_or_reached(str(constraint.bound))
         if operand is None:
             return None
     else:
@@ -237,16 +236,16 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
             raise ValueError(f"constraint {atom!r} cannot lower to a runtime condition")
         return condition
 
-    tag = plc._known_tags_by_name.get(atom.tag)
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
+    tag = plc._tag_known_or_reached(atom.tag)
+    if tag is None:
+        tag = SYSTEM_TAGS_BY_NAME.get(atom.tag)
     if tag is None:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
 
     form = atom.form
-    operand = (
-        plc._known_tags_by_name.get(atom.operand, atom.operand)
-        if atom.operand_is_tag
-        else atom.operand
-    )
+    operand = plc.tags.get(atom.operand, atom.operand) if atom.operand_is_tag else atom.operand
     if atom.operand_is_tag:
         if atom.operand_scale != 1:
             operand = operand * atom.operand_scale
@@ -299,7 +298,7 @@ def _target_unresolved_condition(
         return _until_unresolved_condition(plc, target_predicate)
     from pyrung.core.condition import CompareNe
 
-    tag = plc._known_tags_by_name.get(target_tag)
+    tag = plc._tag_known_or_reached(target_tag)
     if tag is None:
         raise KeyError(f"pilot target guard tag {target_tag!r} is not a program tag")
     return CompareNe(tag, target_value)
@@ -332,7 +331,7 @@ class _ExpandedPilotRule:
 
 def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule, ...]:
     """Lower installed rules to the exact ordered branches the runner scans."""
-    from pyrung.core.condition import AllCondition, Condition, _as_condition
+    from pyrung.core.condition import AllCondition, AnyCondition, Condition, _as_condition
 
     class _DemandActive(Condition):
         def __init__(self, demand: Any):
@@ -340,6 +339,9 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
 
         def evaluate(self, ctx: Any) -> bool:
             return bool(self.demand.condition.evaluate(ctx)) is bool(self.demand.value)
+
+        def _complement(self) -> Condition:
+            return _NoDemandActive((self.demand,))
 
     class _NoDemandActive(Condition):
         def __init__(self, demands: tuple[Any, ...]):
@@ -350,6 +352,27 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
                 bool(demand.condition.evaluate(ctx)) is bool(demand.value)
                 for demand in self.demands
             )
+
+        def _complement(self) -> Condition:
+            active = [_DemandActive(demand) for demand in self.demands]
+            return active[0] if len(active) == 1 else AnyCondition(*active)
+
+    from pyrung.core.synthesis import _condition_and, _condition_complement
+
+    def _demand_active(demand: Any) -> Any:
+        # The plain contact the demand stands for, so the printed rung reads as ladder.
+        condition = _as_condition(demand.condition)
+        if bool(demand.value):
+            return condition
+        flipped = _condition_complement(condition)
+        return _DemandActive(demand) if flipped is None else flipped
+
+    def _no_demand_active(demands: tuple[Any, ...]) -> Any:
+        parts = [_condition_complement(_demand_active(demand)) for demand in demands]
+        plain = [part for part in parts if part is not None]
+        if len(plain) != len(parts):
+            return _NoDemandActive(demands)
+        return plain[0] if len(plain) == 1 else AllCondition(*plain)
 
     materialized = list(pilot_rungs)
     progress_by_dest: dict[str, tuple[Any, ...]] = {}
@@ -368,7 +391,7 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
         progress = rung.operation.progress if rung.operation is not None else None
         peers = progress_by_dest.get(rung.dest, ())
         start_guard = (
-            AllCondition(rung_guard, _NoDemandActive(peers))
+            _condition_and(rung_guard, _no_demand_active(peers))
             if progress is not None and peers
             else rung_guard
         )
@@ -384,7 +407,7 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
                 _ExpandedPilotRule(
                     rung_index,
                     rung,
-                    _DemandActive(progress),
+                    _demand_active(progress),
                     True,
                 )
             )
@@ -397,11 +420,11 @@ def _pilot_rung_execution_receipt(
 ) -> PilotOverlayExecution:
     """Classify every installed rule using the compiler's exact expansion.
 
-    All conditions read one frozen rung-entry snapshot, just as
-    :func:`guarded_copy_rung` executes them.  The last active expanded branch
-    for each destination is the effective owner.  Earlier active starts remain
-    eligible, earlier active continuation branches remain continuing, and an
-    operation prevented from starting by a peer's progress is shadowed.
+    All conditions read one snapshot, the state the holds start from.  Every guard of
+    :func:`guarded_copy_rung` means that state too, and the rung it builds agrees when it
+    runs.  The last active expanded rule for each destination is the effective owner.
+    Earlier active starts remain eligible, earlier active continuation branches remain
+    continuing, and an operation prevented from starting by a peer's progress is shadowed.
     """
     from pyrung.core.analysis.sp_values import _SnapshotView
     from pyrung.core.condition import _as_condition
@@ -445,7 +468,7 @@ def project_pilot_overlay(
     pilot_rungs: Iterable[PilotRung],
     resting: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Project the compiled overlay at one hypothetical rung-entry snapshot.
+    """Project the compiled overlay from one hypothetical starting state.
 
     This is a read of the overlay compiler's existing ownership receipt.  It
     lets route verification ask which temporary holds would still exist at a
@@ -462,6 +485,9 @@ def project_pilot_overlay(
         elif dest in resting:
             projected[dest] = resting[dest]
     return projected
+
+
+PILOT_RUNGS_BUILT_FROM = "_pilot_rungs_built_from"
 
 
 def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
@@ -483,11 +509,64 @@ def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
     expanded = _expand_pilot_rules(materialized)
     rules: list[tuple[Any, Any, Any]] = []
     for rule in expanded:
-        dest = plc._known_tags_by_name.get(rule.rung.dest)
+        dest = plc._tag_known_or_reached(rule.rung.dest)
         if dest is None:
             raise KeyError(f"pilot rung destination {rule.rung.dest!r} is not a program tag")
         rules.append((dest, rule.rung.value, rule.guard))
-    _set_synth_holds(plc, [guarded_copy_rung(rules)] if rules else [])
+    holds = [guarded_copy_rung(rules)] if rules else []
+    for rung in holds:
+        # What the rung was built from, kept with it: an epoch keeps its holds, so a plan's
+        # recording says which PILOT rungs ran on each of its scans.
+        setattr(rung, PILOT_RUNGS_BUILT_FROM, materialized)
+    _set_synth_holds(plc, holds)
+
+
+def _pilot_hold(synthesis: Any) -> Any | None:
+    for hold in () if synthesis is None else synthesis.holds:
+        if getattr(hold, PILOT_RUNGS_BUILT_FROM, None) is not None:
+            return hold
+    return None
+
+
+def pilot_logic_at(recording: PLC, scan: int) -> Any | None:
+    """The temporary logic as it was built and ran on the scan after *scan*, or None.
+
+    A plan prints this rung, not the rules it came from, so its text is the logic that ran.
+    The recording's own tip has run no scan under its logic yet, so its synthesis answers there.
+    """
+    for epoch, _first, _last in recording._causal_lineage.epochs_covering(scan + 1, scan + 1):
+        return _pilot_hold(epoch.synthesis)
+    if scan == recording.state.scan_id:
+        return _pilot_hold(recording._synthesis)
+    return None
+
+
+def pilot_rules_rung(pilot_rungs: Iterable[PilotRung], tags: Mapping[str, Any]) -> Any | None:
+    """*pilot_rungs* built into a rung on their own, as :func:`_set_pilot_rungs` builds them.
+
+    This is for logic that has not run, such as a proposal or a step built by hand.  A tag
+    missing from *tags* stands in by its value's type, which is all the build reads from it.
+    """
+    from pyrung.core.synthesis import guarded_copy_rung
+    from pyrung.core.tag import Bool, Char, Int, Real
+
+    rules: list[tuple[Any, Any, Any]] = []
+    for rule in _expand_pilot_rules(pilot_rungs):
+        dest = tags.get(rule.rung.dest)
+        if dest is None:
+            value = rule.rung.value
+            kind = (
+                Bool
+                if isinstance(value, bool)
+                else Real
+                if isinstance(value, float)
+                else Char
+                if isinstance(value, str)
+                else Int
+            )
+            dest = kind(rule.rung.dest)
+        rules.append((dest, rule.rung.value, rule.guard))
+    return guarded_copy_rung(rules) if rules else None
 
 
 def _merged_pilot_rungs(
@@ -517,6 +596,7 @@ def fork_with_pilot_rungs(
     scan_id: int | None = None,
     history_budget: int | float | None = None,
     inherit_log: bool = True,
+    keep_overrides: bool = True,
 ) -> PLC:
     """Fork *source* and rebuild its scoped steering overlay verbatim.
 
@@ -527,12 +607,21 @@ def fork_with_pilot_rungs(
     boundary to ``source``, including synthetic rung resolution. Internal
     replay of the child's later scans may therefore use its current synthesis
     without redefining inherited historical scans.
+
+    A public fork also starts with no forces or pending patches, but a plan is about
+    what stepping the session does, so these keep them unless told otherwise.
     """
     fork = source.fork(
         scan_id=scan_id,
         history_budget=history_budget,
         inherit_log=inherit_log,
     )
+    # how() does no Modbus I/O.  The forks it returns, plan.fork among them, keep the flag.
+    fork._modbus_stubbed = True
+    if keep_overrides:
+        fork._forces.update(source._forces)
+        if scan_id is None:
+            fork._pending_patches.update(source._pending_patches)
     _set_pilot_rungs(fork, pilot_rungs)
     return fork
 
@@ -569,12 +658,14 @@ def _union_conditions(terms: Iterable[Any]) -> Any:
 
 def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:
     """Replace the plc's synthesis holds overlay and invalidate the derived caches."""
+    from pyrung.core.site_memory import PILOT_NAMESPACE, bind_sites
     from pyrung.core.synthesis import Synthesis
 
     if plc._synthesis is None:
         plc._synthesis = Synthesis()
+    # Hold rungs keep their memory under their own ``pilot:`` site keys.
+    bind_sites(rungs, namespace=PILOT_NAMESPACE)
     plc._synthesis.holds = rungs
-    plc._fold_context_cache = None
     plc._compiled_replay_kernel = None
     plc._soft_exec_program_cache = None
     plc._causal_lineage.invalidate_current_epoch()

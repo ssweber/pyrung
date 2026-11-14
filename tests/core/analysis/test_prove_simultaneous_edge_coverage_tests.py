@@ -13,11 +13,11 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
-    calc,
     copy,
     fall,
     forloop,
     latch,
+    math,
     out,
     rise,
 )
@@ -243,7 +243,7 @@ class TestAutoJointDetectionLimits:
 
 
 class TestAdversarialElisionSoundness:
-    """calc(C + Step, C) where Step is a tag — the elision pass
+    """math(C + Step, C) where Step is a tag — the elision pass
     incorrectly classifies C as scan-local (write-before-read) without
     tracking that the calc source expression reads C from the previous scan.
 
@@ -253,7 +253,7 @@ class TestAdversarialElisionSoundness:
     """
 
     def test_self_referencing_calc_not_elided(self):
-        """calc(C + Step, C) reads C cross-scan — C must stay in state key."""
+        """math(C + Step, C) reads C cross-scan — C must stay in state key."""
         step = Int("Step")
         c = Int("C")
         target = Bool("Target")
@@ -262,7 +262,7 @@ class TestAdversarialElisionSoundness:
             with Rung():
                 copy(1, step)
             with Rung():
-                calc(c + step, c)
+                math(c + step, c)
             with Rung(c >= 5):
                 latch(target)
 
@@ -350,8 +350,10 @@ class TestAdversarialAbstractElisionRetainedSummary:
             "the Target counterexample instead of merging the distinct Mode=True states"
         )
 
-    def test_forloop_minimum_one_count_executes_body(self):
-        """A forloop count that resolves false/zero still executes one body iteration."""
+    def test_forloop_zero_count_keeps_its_count_tag_in_the_key(self):
+        """A forloop count that resolves to 0 runs no iteration (CLICK reads it as
+        unsigned 16-bit), so C, the count, lags Mode by a scan and must stay a
+        dimension: Target turns on two scans after Start."""
         start = Bool("Start", external=True)
         mode = Bool("Mode")
         c = Bool("C")
@@ -369,20 +371,25 @@ class TestAdversarialAbstractElisionRetainedSummary:
         plc = PLC(logic, dt=0.010)
         plc.patch({"Start": False})
         plc.step()
+        assert plc.current_state.tags["Target"] is False
+        plc.patch({"Start": True})
+        plc.step()
+        plc.step()
+        assert plc.current_state.tags["Target"] is False
+        plc.step()
         assert plc.current_state.tags["Target"] is True
 
         states = reachable_states(logic, project=["Target"], depth_budget=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("Target", True)}) in states
+        assert frozenset({("Target", False)}) in states
+
+        result = always(logic, ~target, depth_budget=5)
+        assert isinstance(result, Counterexample)
 
 
 class TestAdversarialDepthTruncation:
-    """depth_budget truncation silently returns Proven with no caveat.
-
-    FIX DIRECTION: emit a caveat when any BFS frontier state is discarded
-    due to depth — at minimum ``"BFS reached depth_budget={n}; deeper states
-    were not explored"``.
-    """
+    """A search the depth budget cut short proves nothing: it answers Intractable."""
 
     def test_constant_stride_threshold_counterexample_not_lost_to_depth(self):
         enable = Bool("Enable", external=True)
@@ -394,18 +401,30 @@ class TestAdversarialDepthTruncation:
             with Rung():
                 copy(1, step)
             with Rung(enable):
-                calc(c + step, c)
+                math(c + step, c)
             with Rung(c >= 55):
                 latch(target)
 
-        result = always(logic, ~target, depth_budget=50)
+        # C counts one per scan: 55 scans to the threshold.  The budget is
+        # a plain BFS depth, so a shorter one cannot tell.
+        short = always(logic, ~target, depth_budget=50)
+        assert isinstance(short, Intractable), short
+        assert "depth_budget=50" in short.reason
+
+        result = always(logic, ~target, depth_budget=60)
         assert isinstance(result, Counterexample), (
             f"C should reach the threshold with Enable=True, but prove returned "
             f"{type(result).__name__} with caveats={getattr(result, 'caveats', '?')}"
         )
+        plc = PLC(logic, dt=0.010)
+        for step in result.trace:
+            plc.patch(step.inputs)
+            for _ in range(step.scans):
+                plc.step()
+        assert plc.current_state.tags["Target"] is True
 
-    def test_depth_truncation_emits_caveat(self):
-        """When the BFS hits depth_budget, Proven.caveats should warn the user."""
+    def test_depth_truncation_is_intractable(self):
+        """When the BFS hits depth_budget with no scan found, it answers Intractable."""
         enable = Bool("Enable", external=True)
         stage_a = Bool("StageA")
         stage_b = Bool("StageB")
@@ -452,14 +471,11 @@ class TestAdversarialDepthTruncation:
             bfs_config=_BFSConfig(
                 live_input_pruning=False,
                 edge_compression=False,
-                hidden_event_jumping=False,
-                pending_settlement=False,
             ),
         )[0]
-        assert isinstance(result, Proven)
-        assert any("depth_budget=3" in caveat for caveat in result.caveats), (
-            "always() should emit a caveat when depth_budget truncates exploration"
-        )
+        assert isinstance(result, Intractable), result
+        assert "depth_budget=3" in result.reason
+        assert "depth_budget=" in result.hints[0]
 
     def test_no_depth_caveat_when_exhaustive(self):
         """Fully explored finite state spaces should not report depth truncation."""
@@ -517,7 +533,7 @@ class TestAdversarialNDDomainCompleteness:
         )
 
     def test_calc_offset_to_stateful_tag_with_comparison(self):
-        """calc(Level + 10, Stored) + Stored == 85 requires Level=75 in the ND domain."""
+        """math(Level + 10, Stored) + Stored == 85 requires Level=75 in the ND domain."""
         level = Int("Level", external=True)
         stored = Int("Stored")
         alarm_a = Bool("AlarmA")
@@ -527,7 +543,7 @@ class TestAdversarialNDDomainCompleteness:
             with Rung(level > 100):
                 latch(alarm_a)
             with Rung():
-                calc(level + 10, stored)
+                math(level + 10, stored)
             with Rung(stored == 85):
                 latch(alarm_b)
 
@@ -538,7 +554,7 @@ class TestAdversarialNDDomainCompleteness:
 
         result = always(logic, ~alarm_b)
         assert isinstance(result, Counterexample), (
-            f"Level=75 flows through calc(level+10) to Stored=85 which latches AlarmB, "
+            f"Level=75 flows through math(level+10) to Stored=85 which latches AlarmB, "
             f"but prove returned {type(result).__name__} "
             f"(ND domain for Level likely missing 75)"
         )
@@ -548,7 +564,7 @@ class TestReversePropagationFallbacks:
     """Unsupported reverse shapes must widen to declared domains or become Intractable."""
 
     def test_bounded_unsupported_reverse_widens_to_declared_domain(self):
-        """calc(source % 10, stored) with stored == 5 and source min=0/max=20:
+        """math(source % 10, stored) with stored == 5 and source min=0/max=20:
         backward propagation cannot invert %, but source's declared domain
         covers the critical value (source=5), so prove finds the counterexample."""
         source = Int("Source", external=True, min=0, max=20)
@@ -559,7 +575,7 @@ class TestReversePropagationFallbacks:
             with Rung(source > 100):
                 latch(alarm)
             with Rung():
-                calc(source % 10, stored)
+                math(source % 10, stored)
             with Rung(stored == 5):
                 latch(alarm)
 
@@ -575,7 +591,7 @@ class TestReversePropagationFallbacks:
         )
 
     def test_unbounded_unsupported_reverse_is_intractable(self):
-        """calc(source % 10, stored) with stored == 5 and no source metadata:
+        """math(source % 10, stored) with stored == 5 and no source metadata:
         backward propagation cannot invert % and source has no safe finite
         fallback, so the result must be Intractable (not a false Proven)."""
         source = Int("Source", external=True)
@@ -586,7 +602,7 @@ class TestReversePropagationFallbacks:
             with Rung(source > 100):
                 latch(alarm)
             with Rung():
-                calc(source % 10, stored)
+                math(source % 10, stored)
             with Rung(stored == 5):
                 latch(alarm)
 

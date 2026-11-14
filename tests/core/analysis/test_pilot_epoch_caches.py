@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import PLC
+from pyrung import PLC, Int, Program, Rung, copy, math
 from pyrung.core.executor import ConditionViewCapture
 
 _ALL_CACHES = {
@@ -76,7 +76,7 @@ def test_tip_advance_invalidates_only_replay_evidence() -> None:
 
 
 def test_history_trim_clears_reconstruction_caches_and_selectively_prunes_recent() -> None:
-    plc = PLC(logic=[])
+    plc = PLC(logic=[], history=1000)
     plc.run(3)
     _warm_all(plc)
 
@@ -90,7 +90,9 @@ def test_history_trim_clears_reconstruction_caches_and_selectively_prunes_recent
     assert tuple(plc._recent_state_cache) == (2, 3)
 
 
-def test_stop_to_run_reset_preserves_replay_slabs() -> None:
+def test_stop_to_run_drops_the_replay_slabs_of_the_old_recording() -> None:
+    # A restart starts a recording, as a reboot does: scan ids go back to 0, so a slab
+    # built on the old log holds another run's states under the ids to come.
     plc = PLC(logic=[])
     plc.step()
     _warm_all(plc)
@@ -98,7 +100,34 @@ def test_stop_to_run_reset_preserves_replay_slabs() -> None:
     plc.stop()
     plc.step()
 
-    assert _warm_cache_names(plc) == {"recent_states", "replay_slabs"}
+    assert _warm_cache_names(plc) == {"recent_states"}
+
+
+def test_a_seek_after_a_restart_answers_from_the_new_run() -> None:
+    step, mode, seen = Int("Step"), Int("Mode"), Int("Seen")
+    with Program() as program:
+        with Rung():
+            math(step + 1, step)
+        with Rung():
+            copy(mode, seen)
+    # A small recent-state cache and a far checkpoint, so a seek reaches for a slab.
+    plc = PLC(program, cache=20, history_budget=1_048_576, checkpoint_interval=5000)
+
+    plc.patch({"Mode": 7})
+    plc.run(400)
+    assert plc.history.at(100).tags["Seen"] == 7
+    assert plc._replay_slabs
+
+    plc.stop()
+    plc.step()
+    plc.patch({"Mode": 0})
+    as_they_ran = {}
+    for _ in range(400):
+        plc.step()
+        as_they_ran[plc.state.scan_id] = plc.state.tags
+
+    assert plc.history.at(100).tags == as_they_ran[100]
+    assert plc.history.at(100).tags["Seen"] == 0
 
 
 def test_reboot_composes_runtime_and_recording_reset() -> None:

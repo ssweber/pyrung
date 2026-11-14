@@ -23,10 +23,12 @@ from pyrung.core import (
     run_function,
 )
 from pyrung.core.analysis.prove import (
+    Counterexample,
     Intractable,
     TraceStep,
     _classify_dimensions,
     always,
+    never,
     reachable_states,
 )
 
@@ -91,6 +93,38 @@ class TestIntractableTags:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "Result" in result.tags
+
+    @pytest.mark.parametrize("bounded", [False, True])
+    def test_a_function_out_through_a_pointer_is_a_write(self, bounded):
+        """Each slot a pointer out can reach is written: the input feeding it stays live.
+
+        The out was dropped, so ``never(Regs1 == 7)`` came back Proven while
+        stepping ``Sel = 6`` writes 7.
+        """
+        sel = Int("Sel", external=True, min=0, max=9)
+        ptr = Int("Ptr", default=1, min=1, max=2)
+        regs = Block("Regs", TagType.INT, 1, 2)
+        if bounded:
+            regs.slot(1, min=0, max=20)
+            regs.slot(2, min=0, max=20)
+
+        def plus_one(a):
+            return {"o": a + 1}
+
+        with Program(strict=False) as logic:
+            with Rung():
+                run_function(plus_one, ins={"a": sel}, outs={"o": regs[ptr]})
+
+        plc = PLC(logic)
+        plc.patch({"Sel": 6})
+        plc.step()
+        assert plc.current_state.tags["Regs1"] == 7
+        result = never(logic, regs[1] == 7, max_states=20_000)
+        if bounded:
+            assert isinstance(result, Counterexample)
+        else:
+            assert isinstance(result, Intractable)
+            assert {"Regs1", "Regs2"} <= set(result.tags)
 
 
 class TestIntractableHints:
@@ -194,7 +228,7 @@ class TestIntractableHints:
 
 
 class TestThresholdBlockerHints:
-    """Intractable hints explain why threshold abstraction was blocked."""
+    """Threshold tags are bounded by what writes them; hints name the rest."""
 
     def test_literal_thresholds_are_structurally_bounded(self):
         """Literal-written thresholds no longer need readonly/final hints."""
@@ -219,9 +253,10 @@ class TestThresholdBlockerHints:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "CurStep_tmr_Acc" not in stateful
-        assert "PanWatchdog_Ts" not in stateful
-        assert "ShaftWatchdog_Ts" not in stateful
+        # Tracked, not absorbed, but bounded by their literal writes.
+        assert "CurStep_tmr_Acc" in stateful
+        assert set(stateful["PanWatchdog_Ts"]) == {0, 500}
+        assert set(stateful["ShaftWatchdog_Ts"]) == {0, 600}
 
     def test_literal_threshold_no_longer_suggests_readonly(self):
         """Literal-written thresholds are bounded without readonly hints."""
@@ -241,8 +276,8 @@ class TestThresholdBlockerHints:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "WdTmr_Acc" not in stateful
-        assert "WatchdogTs" not in stateful
+        assert "WdTmr_Acc" in stateful
+        assert set(stateful["WatchdogTs"]) == {0, 500}
 
     def test_shared_threshold_blocks_absorption(self):
         """One threshold shared across progress sources stays explicit."""
@@ -349,7 +384,7 @@ class TestPostElisionInfeasibility:
         """Self-accumulating Word with no min/max/choices, conditionally
         written, copied into an observer — Intractable because the tag
         carries cross-scan state with no inferrable domain."""
-        from pyrung.core import Word, calc
+        from pyrung.core import Word, math
 
         trigger = Bool("Trigger", external=True)
         mid = Word("Mid")
@@ -357,7 +392,7 @@ class TestPostElisionInfeasibility:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(mid + 1, mid)
+                math(mid + 1, mid)
             with Rung():
                 copy(mid, obs)
 
@@ -370,7 +405,7 @@ class TestPostElisionInfeasibility:
     def test_unbounded_word_not_in_cone_is_fine(self):
         """Self-accumulating Word with no domain that is NOT in the
         observer cone should not cause Intractable."""
-        from pyrung.core import Word, calc
+        from pyrung.core import Word, math
 
         trigger = Bool("Trigger", external=True)
         mid = Word("Mid")
@@ -379,7 +414,7 @@ class TestPostElisionInfeasibility:
 
         with Program(strict=False) as logic:
             with Rung(trigger):
-                calc(mid + 1, mid)
+                math(mid + 1, mid)
             with Rung(flag):
                 out(obs)
 
@@ -426,3 +461,61 @@ class TestMultipleBlockers:
         assert "Val" in result.tags
         assert "Other" in result.tags
         assert any("surviving dimensions" in h for h in result.hints)
+
+
+class TestFreeInputComboCap:
+    """Free inputs past the joint-value cap stop the search instead of sampling."""
+
+    def _joint_compare(self) -> tuple[Program, Bool]:
+        values = {v: f"v{v}" for v in range(25)}
+        a = Int("CapA", external=True, choices=values)
+        b = Int("CapB", external=True, choices=values)
+        c = Int("CapC", external=True, choices=values)
+        hit = Bool("CapHit")
+        with Program(strict=False) as logic:
+            with Rung(a == 9, b == 9, c == 9):
+                out(hit)
+        return logic, hit
+
+    def test_always_is_intractable_not_proven(self):
+        logic, hit = self._joint_compare()
+        result = always(logic, ~hit)
+        assert isinstance(result, Intractable)
+        assert result.tags == ["CapA", "CapB", "CapC"]
+        assert "15,625" in result.reason
+        assert any("CapA: 25 values" in hint for hint in result.hints)
+
+    def test_reachable_states_is_intractable_not_a_sample(self):
+        logic, _hit = self._joint_compare()
+        result = reachable_states(logic, project=["CapHit"])
+        assert isinstance(result, Intractable)
+
+    def test_bool_inputs_past_the_cap_are_enumerated_exactly(self):
+        """Two-valued inputs cannot be thinned, so their product is explored in full."""
+        inputs = [Bool(f"CapBool{i}", external=True) for i in range(14)]
+        hit = Bool("CapBoolHit")
+        with Program(strict=False) as logic:
+            with Rung(*inputs):
+                out(hit)
+        assert isinstance(always(logic, ~hit), Counterexample)
+        assert reachable_states(logic, project=["CapBoolHit"]) == frozenset(
+            {frozenset({("CapBoolHit", False)}), frozenset({("CapBoolHit", True)})}
+        )
+
+    def test_a_sampled_search_still_reports_its_counterexamples(self):
+        values = {v: f"v{v}" for v in range(25)}
+        a = Int("SmpA", external=True, choices=values)
+        b = Int("SmpB", external=True, choices=values)
+        c = Int("SmpC", external=True, choices=values)
+        arm = Bool("SmpArm", external=True)
+        armed = Bool("SmpArmed")
+        hit = Bool("SmpHit")
+        with Program(strict=False) as logic:
+            with Rung(arm):
+                latch(armed)
+            with Rung(armed, a == 9, b == 9, c == 9):
+                out(hit)
+        results = always(logic, [~hit, ~armed])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Intractable)
+        assert isinstance(results[1], Counterexample)

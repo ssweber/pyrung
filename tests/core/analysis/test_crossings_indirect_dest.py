@@ -16,7 +16,7 @@ punt — it can't silently skip the crossing.
 
 from __future__ import annotations
 
-from pyrung import Int, Program, Rung, blockcopy, calc, copy, fill
+from pyrung import Int, Program, Rung, blockcopy, copy, fill, math
 from pyrung.core.analysis.crossings.indirect_dest import writable_slots
 from pyrung.core.analysis.pdg import _build_writer_instrs, build_program_graph
 from pyrung.core.analysis.steerable import compute_steerable
@@ -47,7 +47,7 @@ def test_writable_slots_resolves_affine_pointer_region() -> None:
         with Rung(root == 1):
             copy(0, root)
         with Rung():
-            calc(root + 200, ptr)
+            math(root + 200, ptr)
         with Rung():
             copy(src, ds[ptr])
 
@@ -69,9 +69,9 @@ def test_writable_slots_punts_on_computed_root_without_literal_domain() -> None:
     src = Int("Src")
     with Program(strict=False) as logic:
         with Rung():
-            calc(other * 10 + 3, root)  # root computed, no literal writes
+            math(other * 10 + 3, root)  # root computed, no literal writes
         with Rung():
-            calc(root + 200, ptr)
+            math(root + 200, ptr)
         with Rung():
             copy(src, ds[ptr])
 
@@ -93,7 +93,7 @@ def test_writable_slots_punts_on_nonaffine_pointer() -> None:
         with Rung(root == 1):
             copy(5, root)
         with Rung():
-            calc(root * 10, ptr)  # scale 10 — not bijective
+            math(root * 10, ptr)  # scale 10 — not bijective
         with Rung():
             copy(src, ds[ptr])
 
@@ -136,7 +136,7 @@ def _band_program() -> tuple[Program, Block]:
         with Rung(root == 5):
             copy(0, root)
         with Rung():
-            calc(root + 200, ptr)
+            math(root + 200, ptr)
         with Rung():
             copy(src, ds[ptr])
         with Rung():
@@ -181,7 +181,7 @@ def _never_written_band_program() -> tuple[Program, Block]:
         with Rung(root == 5):
             copy(0, root)
         with Rung():
-            calc(root + 200, ptr)
+            math(root + 200, ptr)
         with Rung():
             copy(src, ds[ptr])  # over-cap indirect write, dropped without the crossing
         with Rung():

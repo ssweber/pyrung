@@ -355,7 +355,6 @@ def test_trim_before_drops_lifecycle_events():
     plc = _idle_plc()
     plc.step()  # scan 1
     plc.stop()  # lifecycle at_scan_id=2
-    plc.step()  # scan 2
 
     snap_before = plc._scan_log.snapshot()
     assert len(snap_before.lifecycle_events) == 1
@@ -371,7 +370,6 @@ def test_trim_before_keeps_lifecycle_at_horizon():
     plc = _idle_plc()
     plc.step()  # scan 1
     plc.stop()  # lifecycle at_scan_id=2
-    plc.step()  # scan 2
 
     plc._scan_log.trim_before(2)  # horizon = 2, event at_scan_id=2 — keep
 

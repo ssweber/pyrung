@@ -19,7 +19,6 @@ from pyrung.core import (
     Rung,
     blockcopy,
     branch,
-    calc,
     call,
     copy,
     count_down,
@@ -31,6 +30,7 @@ from pyrung.core import (
     latch,
     lro,
     lsh,
+    math,
     off_delay,
     on_delay,
     out,
@@ -90,6 +90,14 @@ def timer_presets() -> st.SearchStrategy[int]:
 def counter_presets() -> st.SearchStrategy[int]:
     boundary = st.sampled_from([0, 1, 5, 10])
     return st.one_of(boundary, boundary, st.integers(0, 10))
+
+
+def count_down_presets() -> st.SearchStrategy[int]:
+    """A down counter starts at 0 and is Done at ``Acc <= preset``: a negative
+    preset is the one it counts toward; 0 and a positive one are Done from
+    the first scan."""
+    boundary = st.sampled_from([-10, -5, -1, -1, 0, 1])
+    return st.one_of(boundary, boundary, st.integers(-10, 5))
 
 
 def real_values() -> st.SearchStrategy[float]:
@@ -318,7 +326,7 @@ def instruction_specs(
             [("fill", 3), ("fill_oneshot", 1), ("blockcopy", 2), ("blockcopy_oneshot", 1)]
         )
     if has_int_block and has_numeric:
-        choices.extend([("indirect_copy", 4), ("range_sum_calc", 2)])
+        choices.extend([("indirect_copy", 4), ("range_sum_calc", 2), ("range_agg_calc", 2)])
     if has_int_block and (pool.int_tags or pool.dint_tags) and has_bool:
         choices.append(("search", 2))
     if has_bool_block and has_bool:
@@ -490,7 +498,7 @@ def instruction_specs(
         )
     elif kind == "count_down":
         counter = draw(st.sampled_from(pool.counters))
-        preset = draw(counter_presets())
+        preset = draw(count_down_presets())
         assume(has_bool)
         reset_tag = draw(st.sampled_from(writable_bool))
         return InstrSpec(
@@ -640,6 +648,15 @@ def instruction_specs(
         return InstrSpec(
             kind="range_sum_calc",
             args={"block": blk, "start": r["start"], "end": r["end"], "dest": dest},
+        )
+    elif kind == "range_agg_calc":
+        blk = pool.int_block
+        r = _block_range_args(draw, blk)
+        dest = draw(st.sampled_from(writable_numeric))
+        agg = draw(st.sampled_from(["max", "min", "median", "mean"]))
+        return InstrSpec(
+            kind="range_agg_calc",
+            args={"block": blk, "start": r["start"], "end": r["end"], "dest": dest, "agg": agg},
         )
     elif kind == "event_drum":
         did = _next_drum_id()
@@ -798,14 +815,14 @@ def emit_instruction(spec: InstrSpec) -> None:
             expr = source**lit
         else:
             expr = source + lit
-        calc(expr, args["dest"])
+        math(expr, args["dest"])
     elif kind == "calc_tag_tag":
         s1, s2 = args["source1"], args["source2"]
         expr = _CALC_TAG_TAG_OPS[args["op"]](s1, s2)
-        calc(expr, args["dest"])
+        math(expr, args["dest"])
     elif kind == "calc_shift":
         fn = _SHIFT_FNS[args["shift_op"]]
-        calc(fn(args["source"], args["count"]), args["dest"])
+        math(fn(args["source"], args["count"]), args["dest"])
     elif kind == "on_delay":
         builder = on_delay(args["timer"], args["preset"], unit=args.get("unit", "ms"))
         if args.get("reset") is not None:
@@ -921,7 +938,11 @@ def emit_instruction(spec: InstrSpec) -> None:
             builder.jog(args["jog"])
     elif kind == "range_sum_calc":
         blk = args["block"]
-        calc(blk.select(args["start"], args["end"]).sum(), args["dest"])
+        math(blk.select(args["start"], args["end"]).sum(), args["dest"])
+    elif kind == "range_agg_calc":
+        blk = args["block"]
+        rng = blk.select(args["start"], args["end"])
+        math(getattr(rng, args["agg"])(), args["dest"])
 
 
 # ---------------------------------------------------------------------------
@@ -1010,6 +1031,7 @@ _WRITE_DEST_KINDS = _CHAIN_DEST_KINDS | {
     "copy_convert",
     "indirect_copy",
     "range_sum_calc",
+    "range_agg_calc",
     "reset",
 }
 
@@ -1104,7 +1126,8 @@ def rung_specs(
     non_terminal = [i for i in instructions if not _is_terminal(i)]
     terminal = [i for i in instructions if _is_terminal(i)]
     if terminal:
-        instructions = non_terminal + [terminal[0]]
+        # A box with pins ends its rung: it stands alone.
+        instructions = [terminal[0]]
     else:
         instructions = non_terminal if non_terminal else instructions
 

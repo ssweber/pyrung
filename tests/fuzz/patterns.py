@@ -123,7 +123,7 @@ def timer_acc_zero_copy(pool: TagPool) -> list[RungSpec] | None:
 
 
 def counter_acc_calc_boost(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #6: calc(C.Acc + K, C.Acc) alongside one counter owner."""
+    """Pattern #6: math(C.Acc + K, C.Acc) alongside one counter owner."""
     if not pool.counters or not pool.writable_bool():
         return None
     counter = pool.counters[0]
@@ -175,7 +175,9 @@ def exclusive_inputs_across_scans(pool: TagPool) -> list[RungSpec] | None:
 
 
 def count_down_constant_preset(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #8: count_down(C, 5).reset(R) + Rung(C.Acc <= -3)."""
+    """Pattern #8: count_down(C, -5).reset(R) + Rung(C.Acc <= -3).
+
+    The compare crosses on the third count, before Done (``Acc <= -5``)."""
     if not pool.counters or not pool.writable_bool():
         return None
     counter = pool.counters[0]
@@ -186,7 +188,7 @@ def count_down_constant_preset(pool: TagPool) -> list[RungSpec] | None:
             instructions=[
                 InstrSpec(
                     kind="count_down",
-                    args={"counter": counter, "preset": 5, "reset": reset_tag},
+                    args={"counter": counter, "preset": -5, "reset": reset_tag},
                 )
             ],
         ),
@@ -219,7 +221,7 @@ def bidirectional_counter(pool: TagPool) -> list[RungSpec] | None:
 
 
 def self_referencing_accumulator(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #10: calc(N + 1, N) using a numeric tag."""
+    """Pattern #10: math(N + 1, N) using a numeric tag."""
     if not pool.writable_numeric():
         return None
     tag = pool.writable_numeric()[0]
@@ -333,7 +335,7 @@ def multi_hop_copy_chain(pool: TagPool) -> list[RungSpec] | None:
 
 
 def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #29: calc(block.select(start, end).sum(), Total) + Rung(Total != 0)."""
+    """Pattern #29: math(block.select(start, end).sum(), Total) + Rung(Total != 0)."""
     if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
         return None
     blk = pool.int_block
@@ -352,6 +354,35 @@ def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
         ),
         RungSpec(
             conditions=[CondSpec(kind="compare", tag=total, op="!=", operand=0)],
+            instructions=[_default_output(pool)],
+        ),
+    ]
+
+
+def range_aggregate_into_compare(pool: TagPool) -> list[RungSpec] | None:
+    """Pattern #29b: math(block.select(start, end).max(), Out) + Rung(Out > 0).
+
+    The non-additive siblings of range_sum_into_compare: the prover must keep
+    every member as a read of the calc (no element-wise sum decomposition).
+    """
+    if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
+        return None
+    blk = pool.int_block
+    out = pool.writable_numeric()[0]
+    start = blk.start
+    end = min(blk.start + 2, blk.end)
+    return [
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
+            instructions=[
+                InstrSpec(
+                    kind="range_agg_calc",
+                    args={"block": blk, "start": start, "end": end, "dest": out, "agg": "max"},
+                )
+            ],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="compare", tag=out, op=">", operand=0)],
             instructions=[_default_output(pool)],
         ),
     ]
@@ -412,7 +443,7 @@ def indirect_oob_source(pool: TagPool) -> list[RungSpec] | None:
 
 
 def identity_calc(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #32: calc(X + 0, Y) + Rung(Y == K) — identity calc keeps X observed."""
+    """Pattern #32: math(X + 0, Y) + Rung(Y == K) — identity calc keeps X observed."""
     writable_nums = pool.writable_numeric()
     all_nums = pool.all_numeric()
     if not writable_nums or not all_nums:
@@ -680,7 +711,7 @@ def self_resetting_timer(pool: TagPool) -> list[RungSpec] | None:
 
 
 def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
-    """Adjacency: copy(lit, A) -> copy(A, B) -> calc(B + k, C) + Rung(C >= k).
+    """Adjacency: copy(lit, A) -> copy(A, B) -> math(B + k, C) + Rung(C >= k).
 
     A mixed copy+calc chain (>=2 hops) whose tail is read by a comparison.
     """
@@ -712,7 +743,7 @@ def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
 
 
 def chain_tail_preset(pool: TagPool) -> list[RungSpec] | None:
-    """Adjacency: copy(lit, A) -> calc(A + k, B), then on_delay(T, preset=B).
+    """Adjacency: copy(lit, A) -> math(A + k, B), then on_delay(T, preset=B).
 
     The tail of a copy/calc chain is consumed as a timer preset.
     """
@@ -786,7 +817,10 @@ def colocated_crossing_accumulators(pool: TagPool) -> list[RungSpec] | None:
 
 
 def latch_reset_near_accumulator(pool: TagPool) -> list[RungSpec] | None:
-    """Adjacency: latch(B) and count_up(C).reset(B) share a rung — latch target is the reset."""
+    """Adjacency: latch(B) on the rung above count_up(C).reset(B) — latch target is the reset.
+
+    A box with pins ends its rung, so the latch sits on a rung of its own above it.
+    """
     if not pool.counters or len(pool.writable_bool()) < 2:
         return None
     counter = pool.counters[-1]
@@ -795,8 +829,11 @@ def latch_reset_near_accumulator(pool: TagPool) -> list[RungSpec] | None:
     return [
         RungSpec(
             conditions=[CondSpec(kind="bit", tag=cond)],
+            instructions=[InstrSpec(kind="latch", args={"target": target})],
+        ),
+        RungSpec(
+            conditions=[CondSpec(kind="bit", tag=cond)],
             instructions=[
-                InstrSpec(kind="latch", args={"target": target}),
                 InstrSpec(
                     kind="count_up",
                     args={"counter": counter, "preset": 5, "reset": target, "down": None},
@@ -918,6 +955,7 @@ TIER1_PATTERNS = [
     timer_chain_advancement,
     multi_hop_copy_chain,
     range_sum_into_compare,
+    range_aggregate_into_compare,
     band_collapse_pattern,
     indirect_oob_source,
     identity_calc,

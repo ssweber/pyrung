@@ -21,7 +21,7 @@ The tumbler's exact-bug assertion lives in ``tests/tumbler`` behind the
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Or, Program, Rung, Timer, calc, copy, on_delay, rise
+from pyrung.core import Bool, Int, Or, Program, Rung, Timer, copy, math, on_delay, rise
 from pyrung.core.analysis.query import WaitEscapeFinding, wait_edges_without_escape
 
 
@@ -42,7 +42,7 @@ class TestWaitWithoutEscape:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, FB):  # advance waits on FB
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step == 3, ~FB):  # error escape — wrong step
                 copy(1, Err)
 
@@ -67,7 +67,7 @@ class TestWaitWithoutEscape:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, FB):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step >= 1, ~FB):
                 copy(1, Err)
 
@@ -92,7 +92,7 @@ class TestWaitWithoutEscape:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, FB):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Tmr.Acc >= Limit):  # live timeout: the program drives Acc
                 copy(1, Err)
 
@@ -113,7 +113,7 @@ class TestWaitWithoutEscape:
 
         with Program() as prog:
             with Rung(Step == 1, Acc > 2, FB):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Acc >= Limit):
                 copy(1, Err)
 
@@ -133,7 +133,7 @@ class TestWaitWithoutEscape:
             with Rung(Step == 1):  # R1 timer
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, FB):  # R2 advance
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Tmr.Acc >= Limit, EnableLimit == 1):  # R3 config-gated timeout
                 copy(1, Err)
             with Rung(Step == 3, ~FB):  # R4 wrong-step error
@@ -170,7 +170,7 @@ class TestWaitWithoutEscape:
 
         with Program() as prog:
             with Rung(Step == 1, Acc > 2, FB):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step == 1, Abort):  # the only escape is a human
                 copy(1, Err)
 
@@ -196,7 +196,7 @@ class TestWaitWithoutEscape:
 
         with Program() as prog:
             with Rung(Step == 1, Acc > 2, FB):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step == 3, ~FB):  # the only escape rung, and it misses step 1
                 copy(1, Err)
 
@@ -217,7 +217,7 @@ class TestWaitWithoutEscape:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, FB):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Or(Step == 1, Step == 3), ~FB):  # unreadable, step-scoped
                 copy(1, Err)
 
@@ -237,7 +237,7 @@ class TestWaitWithoutEscape:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2):  # nothing here comes from outside
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
 
         assert _find(prog) == []
 
@@ -284,7 +284,7 @@ class TestIdioms:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, rise(FB)):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step == 3, ~FB):
                 copy(1, Err)
 
@@ -304,7 +304,7 @@ class TestIdioms:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, Temp >= 200):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step == 3, ~FB):
                 copy(1, Err)
 
@@ -328,7 +328,7 @@ class TestIdioms:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, FB):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step == 3, ~FB):
                 copy(1, Err)
 
@@ -349,7 +349,7 @@ class TestIdioms:
             with Rung(Step == 1):
                 on_delay(Tmr, preset=5000)
             with Rung(Step == 1, Tmr.Acc > 2, fall(FB)):
-                calc(Step + 1, Step)
+                math(Step + 1, Step)
             with Rung(Step == 3, ~FB):
                 copy(1, Err)
 

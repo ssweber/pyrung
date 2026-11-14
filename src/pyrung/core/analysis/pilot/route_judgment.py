@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.availability as _availability
+from pyrung.core.analysis.pilot.avoid import _avoid_weighed_names
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -46,11 +47,7 @@ def trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, in
 def route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -> bool:
     """Whether the concrete demands across a completed route satisfy ``pred``."""
 
-    overlay = _route_overlay(nodes, snapshot)
-    try:
-        return bool(pred(overlay))
-    except Exception:
-        return False
+    return bool(_avoid_weighed_names(pred, _route_overlay(nodes, snapshot)))
 
 
 def route_forced_names(
@@ -58,17 +55,7 @@ def route_forced_names(
 ) -> tuple[str, ...]:
     """Return the avoid-condition names satisfied by a route's demands."""
 
-    overlay = _route_overlay(nodes, snapshot)
-    violated = getattr(avoid, "violated", None)
-    if violated is not None:
-        try:
-            return tuple(violated(overlay))
-        except Exception:
-            return ()
-    try:
-        return ("avoided condition",) if bool(avoid(overlay)) else ()
-    except Exception:
-        return ()
+    return _avoid_weighed_names(avoid, _route_overlay(nodes, snapshot))
 
 
 def _route_overlay(nodes: list[TraceNode], snapshot: dict[str, Any]) -> dict[str, Any]:

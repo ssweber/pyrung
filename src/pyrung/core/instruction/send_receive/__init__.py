@@ -14,8 +14,10 @@ during simulation and exists only for code generation.
 from __future__ import annotations
 
 from ._core import (
+    MODBUS_STATUS_TAG_PREFIX,
     ModbusReceiveInstruction,
     ModbusSendInstruction,
+    is_modbus_status_tag,
     receive,
     send,
 )
@@ -29,6 +31,7 @@ from .types import (
 )
 
 __all__ = [
+    "MODBUS_STATUS_TAG_PREFIX",
     "ModbusAddress",
     "ModbusReceiveInstruction",
     "ModbusRtuTarget",
@@ -37,6 +40,7 @@ __all__ = [
     "RegisterType",
     "VALID_COM_PORTS",
     "WordOrder",
+    "is_modbus_status_tag",
     "receive",
     "send",
 ]

@@ -30,22 +30,37 @@ Comments are limited to 1400 characters. Exceeding this raises `ValueError`.
 `branch()` creates a parallel path within a rung. The branch condition is ANDed with the parent rung's condition.
 
 ```python
-with rung(First):          # ① Evaluate: First
-    out(Third)             # ③ Execute
-    with branch(Second):   # ② Evaluate: First AND Second
-        out(Fourth)        # ④ Execute
-    out(Fifth)             # ⑤ Execute
+with rung(Running):
+    out(Motor)
+    with branch(HighSpeed):
+        out(FastLamp)  # On when Running AND HighSpeed
+    out(RunLamp)
 ```
 
-Three rules:
+Each instruction evaluates only the path from the rail to itself. Instructions run in the order written, so rung and branch instructions interleave (not "all rung, then all branch"). A rung's own contacts are read once and hold for everything below:
 
-1. **Conditions evaluate before instructions.** ① and ② are resolved before ③ ④ ⑤ run. A branch ANDs its own condition with the parent rung's.
-2. **Instructions execute in source order.** ③ → ④ → ⑤, as written — not "all rung, then all branch."
-3. **Each rung starts fresh.** The next rung sees the state as it was left after the previous rung's instructions.
+```python
+with rung(A):
+    reset(A)
+    out(Y)      # Still on this scan: A was already read
+```
+
+A branch reads its own contacts when execution reaches it, so it sees what the instructions above it wrote:
+
+```python
+with rung(A):
+    latch(B)
+    with branch(B):
+        out(Y)  # On this scan: the branch reads B after the latch
+```
+
+Each rung starts fresh. The next rung sees the state as the previous rung's instructions left it.
+
+A box with pins reads its enable and every pin together, before it writes anything. Examples are a counter's `.reset()` or `.down()`, a shift register's `.clock()` and a drum's events. A box with pins ends its rung. No other output or branch shares the rung with it, so put what follows it in a rung of its own.
 
 ### Nested branches
 
-Branches can nest inside other branches. All conditions at every depth evaluate against the same rung-entry snapshot.
+Branches can nest inside other branches. Each one reads its own contacts where it stands, under the power of the branches around it.
 
 ```python
 with rung(A):
@@ -56,37 +71,4 @@ with rung(A):
             out(Z)  # Executes when A AND B AND C
 ```
 
-This exists so codegen can faithfully represent imported ladder topologies. For hand-written logic, flat branches are clearer.
-
-## Continued rungs
-
-`rung.continued()` tells a rung to reuse the previous rung's condition snapshot instead of freezing a fresh one. All conditions in the continued rung evaluate against the pre-instruction state from the original rung.
-
-```python
-with rung(A):
-    out(X)
-with rung(B).continued():
-    out(Y)  # B evaluated against pre-X state (same snapshot as A)
-```
-
-This models the CLICK ladder editor pattern where a single visual rung has multiple independent wires to the right power rail. Without `.continued()`, splitting into separate `rung` blocks would give each its own snapshot — changing behavior if the first rung's instructions mutate a tag that the second rung's conditions reference.
-
-Multiple continued rungs chain — they all share the original snapshot:
-
-```python
-with rung(A):
-    copy(10, Counter)
-with rung(Counter == 0).continued():
-    out(X)  # True: Counter was 0 at snapshot time
-with rung(Counter == 10).continued():
-    out(Y)  # False: Counter was 0 at snapshot time, not 10 yet
-```
-
-A normal (non-continued) rung breaks the chain and takes a fresh snapshot.
-
-Constraints:
-
-- `continued()` cannot be the first rung in a program or subroutine.
-- Continued rungs cannot have their own `.comment`.
-
-Like nested branches, this exists primarily for codegen round-tripping. For hand-written logic, separate rungs with fresh snapshots are easier to reason about.
+For hand-written logic, flat branches are clearer.

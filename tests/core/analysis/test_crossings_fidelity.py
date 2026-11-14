@@ -45,7 +45,17 @@ from pyrung.core.instruction.data_transfer import (
     CopyInstruction,
     FillInstruction,
 )
-from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+from pyrung.core.instruction.drums import (
+    EventDrumInstruction,
+    TimeDrumInstruction,
+    TimeEventDrumInstruction,
+)
+from pyrung.core.instruction.out_variants import (
+    DebounceInstruction,
+    FlasherInstruction,
+    TimedInstruction,
+    ToggleInstruction,
+)
 from pyrung.core.instruction.packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -99,6 +109,21 @@ def _time_drum():
     return TimeDrumInstruction(
         [Bool("Y1"), Bool("Y2")],
         [10, 20],
+        "ms",
+        [[1, 0], [0, 1]],
+        Int("Step"),
+        Int("Acc"),
+        Bool("Cmpl"),
+        Bool("Auto"),
+        Bool("Rst"),
+    )
+
+
+def _time_event_drum():
+    return TimeEventDrumInstruction(
+        [Bool("Y1"), Bool("Y2")],
+        [10, None],
+        [None, Bool("E2")],
         "ms",
         [[1, 0], [0, 1]],
         Int("Step"),
@@ -193,6 +218,53 @@ _CASES = [
     ),
     (_event_drum(), "Y2", True, "fallthrough", ()),
     (_time_drum(), "Y2", True, "fallthrough", ()),
+    (_time_event_drum(), "Y2", True, "fallthrough", ()),
+    (ToggleInstruction(Bool("L"), Bool("En")), "L", True, "fallthrough", ()),
+    (
+        DebounceInstruction(
+            Bool("V"),
+            on_done=Bool("OnDone"),
+            on_acc=Int("OnAcc"),
+            on_preset=10,
+            off_done=Bool("OffDone"),
+            off_acc=Int("OffAcc"),
+            off_preset=10,
+            enable_condition=Bool("En"),
+        ),
+        "V",
+        True,
+        "fallthrough",
+        (),
+    ),
+    (
+        FlasherInstruction(
+            Bool("B"),
+            on_done=Bool("OnDone"),
+            on_acc=Int("OnAcc"),
+            on_preset=10,
+            off_done=Bool("OffDone"),
+            off_acc=Int("OffAcc"),
+            off_preset=10,
+            enable_condition=Bool("En"),
+        ),
+        "B",
+        True,
+        "fallthrough",
+        (),
+    ),
+    (
+        TimedInstruction(
+            Bool("H"),
+            timer_done=Bool("Done"),
+            timer_acc=Int("Acc"),
+            on_preset=10,
+            enable_condition=Bool("En"),
+        ),
+        "H",
+        False,
+        "fallthrough",
+        (),
+    ),
     (_search(), "F", True, "partial", ()),
 ]
 

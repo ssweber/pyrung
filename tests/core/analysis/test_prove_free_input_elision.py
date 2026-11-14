@@ -238,3 +238,89 @@ class TestFreeInputElision:
 
         result2 = always(logic, Or(x, ~x))
         assert isinstance(result2, Proven)
+
+
+@pytest.mark.parametrize(
+    ("label", "target"),
+    [("copy", 7), ("plus_one", 8), ("modulo", 7)],
+)
+def test_elided_intermediate_keeps_choice_input_live(label, target):
+    """An elided scan-local tag must not resolve a gate from its stale snapshot value.
+
+    ``Result`` is rewritten every scan from ``ExtA``, so it is elided.  Live-input
+    pruning used to partially evaluate ``Result == target`` against the value left
+    in the restored snapshot (0), found it constant False, and never enumerated
+    ``ExtA``: ``always(~Hit)`` came back Proven although ``Hit`` is one scan away.
+    """
+    from pyrung.core import copy, math
+
+    ext_a = Int("ExtA", external=True, choices={0: "zero", 3: "low", 7: "mid"})
+    result = Int("Result")
+    hit = Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung():
+            if label == "copy":
+                copy(ext_a, result)
+            elif label == "plus_one":
+                math(ext_a + 1, result)
+            else:
+                math(ext_a % 10, result)
+        with Rung(result == target):
+            out(hit)
+
+    verdict = always(logic, ~hit, max_states=10_000, depth_budget=20)
+    assert isinstance(verdict, Counterexample), verdict
+    plc = PLC(logic, dt=0.010)
+    for step in verdict.trace:
+        plc.patch(step.inputs)
+        for _ in range(step.scans):
+            plc.step()
+    assert plc.current_state.tags["Hit"] is True
+
+
+@pytest.mark.parametrize("label", ["latch", "copy", "subroutine"])
+def test_read_after_scan_write_keeps_input_live(label):
+    """A tracked tag read after an in-scan write must not resolve a gate from its snapshot.
+
+    ``Pulse`` is set by ``Arm`` and cleared again before the scan ends, so every
+    snapshot holds it at its cleared value even though the gate rung in between
+    sees it set.  Live-input pruning used to resolve ``And(Pulse, Fire)`` to
+    constant False from that snapshot and never enumerate ``Fire``:
+    ``always(~Hit)`` came back Proven although ``Arm`` and ``Fire`` together
+    reach ``Hit`` in one scan.
+    """
+    from pyrung.core import And, call, copy, subroutine
+
+    arm = Bool("Arm", external=True)
+    fire = Bool("Fire", external=True)
+    hit = Bool("Hit")
+    pulse = Int("Pulse") if label == "copy" else Bool("Pulse")
+    gate = pulse == 1 if label == "copy" else pulse
+    with Program(strict=False) as logic:
+        with Rung(arm):
+            if label == "latch":
+                latch(pulse)
+            elif label == "copy":
+                copy(1, pulse)
+            else:
+                call("ArmPulse")
+        with Rung(And(gate, fire)):
+            out(hit)
+        with Rung():
+            if label == "copy":
+                copy(0, pulse)
+            else:
+                reset(pulse)
+        if label == "subroutine":
+            with subroutine("ArmPulse"):
+                with Rung():
+                    latch(pulse)
+
+    verdict = always(logic, ~hit, max_states=10_000, depth_budget=20)
+    assert isinstance(verdict, Counterexample), verdict
+    plc = PLC(logic, dt=0.010)
+    for step in verdict.trace:
+        plc.patch(step.inputs)
+        for _ in range(step.scans):
+            plc.step()
+    assert plc.current_state.tags["Hit"] is True

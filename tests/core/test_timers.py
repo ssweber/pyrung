@@ -301,14 +301,15 @@ class TestOnDelayRTON:
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
-    def test_rton_reset_condition_uses_rung_entry_snapshot(self, runner_factory):
-        """Same-rung writes do not trip the helper reset until the next snapshot."""
+    def test_rton_reset_reads_at_box_entry(self, runner_factory):
+        """reset() reads at box entry, so it sees a write on the wire above on the same scan."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
             with Rung(Enable):
                 latch(ResetBtn)
+            with Rung(Enable).continued():
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -316,9 +317,6 @@ class TestOnDelayRTON:
 
         runner.step()
         assert runner.current_state.tags["ResetBtn"] is True
-        assert runner.current_state.tags["Timer_Acc"] == 10
-
-        runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
@@ -326,10 +324,11 @@ class TestOnDelayRTON:
         """RTON accumulator preserves value across STOP->RUN when retentive."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
+        kept = Timer.clone("Timer", retentive={"Acc": True})
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer[1], preset=100).reset(ResetBtn)
+                on_delay(kept, preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -513,6 +512,115 @@ class TestOffDelayTOF:
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is True
+
+
+class TestOffDelayPresetReachedUnderOneUnit:
+    """A TOF once enabled keeps timing at Done False, Acc 0.
+
+    With preset 0 the first off scan drops Done; when that scan is shorter
+    than one unit, Acc is still 0, the never-enabled resting pair.  The timer
+    keeps timing from there (memory key ``_tof_armed:<Acc>``), and so does a
+    timed-out TOF whose Acc is written to 0, as on a CLICK
+    (``tof_rewrite/done_after_td_zeroed``).  A TOF never enabled still rests.
+    """
+
+    @staticmethod
+    def _tof(preset=0, unit="Tms"):
+        Enable = Bool("Enable")
+        with Program() as logic:
+            with Rung(Enable):
+                off_delay(Timer[1], preset=preset, unit=unit)
+        return logic
+
+    @staticmethod
+    def _enable_then_drop(runner, off_scans):
+        runner.patch({"Enable": True})
+        runner.step()
+        runner.patch({"Enable": False})
+        for _ in range(off_scans):
+            runner.step()
+
+    def test_preset_zero_times_on_half_ms_scans(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 1)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+        assert runner.current_state.memory["_tof_armed:Timer_Acc"] is True
+        for _ in range(9):
+            runner.step()
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 5)
+
+    def test_preset_zero_in_seconds_times_on_ten_ms_scans(self, runner_factory):
+        runner = runner_factory(self._tof(unit="Ts"), dt=0.010)
+        self._enable_then_drop(runner, 250)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 2)
+
+    def test_never_enabled_preset_zero_rests(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        runner.patch({"Enable": False})
+        runner.run(cycles=20)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+        assert "_tof_armed:Timer_Acc" not in runner.current_state.memory
+
+    def test_zeroing_a_preset_zero_tof_keeps_timing(self, runner_factory):
+        """At preset 0, Done stays off after the zero write, and Acc counts from 0."""
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 8)
+        assert runner.current_state.tags["Timer_Acc"] == 4
+        runner.patch({"Timer_Acc": 0})
+        runner.step()
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+        runner.run(cycles=9)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 5)
+
+    def test_zeroing_a_timed_out_tof_turns_done_back_on(self, runner_factory):
+        """Done is judged from Acc on every off scan once the TOF was enabled."""
+        runner = runner_factory(self._tof(preset=3), dt=0.0005)
+        self._enable_then_drop(runner, 8)
+        assert runner.current_state.tags["Timer_Done"] is False
+        runner.patch({"Timer_Acc": 0})
+        runner.step()
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (True, 0)
+        runner.run(cycles=9)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 5)
+
+    def test_re_enable_keeps_the_marker(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 1)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.memory["_tof_armed:Timer_Acc"] is True
+        assert runner.current_state.tags["Timer_Done"] is True
+
+    def test_stop_to_run_rests(self, runner_factory):
+        runner = runner_factory(self._tof(), dt=0.0005)
+        self._enable_then_drop(runner, 1)
+        runner.stop()
+        runner.start()
+        runner.run(cycles=10)
+        tags = runner.current_state.tags
+        assert (tags["Timer_Done"], tags["Timer_Acc"]) == (False, 0)
+
+    def test_fork_and_replay_keep_timing(self):
+        from pyrung.core import PLC
+
+        plc = PLC(self._tof(), dt=0.0005)
+        self._enable_then_drop(plc, 1)
+        stalled = plc.current_state.scan_id
+        plc.run(cycles=9)
+        child = plc.fork(stalled)
+        child.run(cycles=9)
+        assert child.current_state.tags["Timer_Acc"] == plc.current_state.tags["Timer_Acc"] == 5
+        replay = plc.replay_to(plc.current_state.scan_id)
+        assert replay.current_state.tags["Timer_Acc"] == 5
+        assert dict(replay.current_state.memory) == dict(plc.current_state.memory)
 
 
 class TestTimerIntegration:
@@ -1320,3 +1428,55 @@ class TestTimerStatusBits:
         assert runner.current_state.tags["MyTimer_Acc"] == 10
         assert "MyTimer_EN" not in runner.current_state.tags
         assert "MyTimer_TT" not in runner.current_state.tags
+
+
+class TestRetentiveDefaults:
+    """Built-in Timer/Counter fields follow CLICK's bank defaults: T and TD are
+    non-retentive, CT and CTD retentive.  ``clone(retentive=...)`` overrides."""
+
+    def test_defaults_match_click_banks(self):
+        from pyrung.core import Counter
+
+        assert Timer.Done.retentive is False
+        assert Timer.Acc.retentive is False
+        assert Counter.Done.retentive is True
+        assert Counter.Acc.retentive is True
+
+    def test_clone_overrides_field_retentive(self):
+        kept = Timer.clone("KeptTimer", retentive={"Acc": True})
+        assert kept.Acc.retentive is True
+        assert kept.Done.retentive is False
+        pool = Timer.clone("KeptPool", count=3, retentive={"Acc": True})
+        assert pool[2].Acc.retentive is True
+
+    def test_clone_rejects_unknown_retentive_field(self):
+        with pytest.raises(ValueError, match="Unknown Timer/Counter retentive fields: EN"):
+            Timer.clone("BadTimer", retentive={"EN": True})
+
+    def test_clone_sets_field_comments(self):
+        noted = Timer.clone("NotedTimer", comments={"Acc": "Elapsed cure time"})
+        assert noted.Acc.comment == "Elapsed cure time"
+        assert not noted.Done.comment
+        with pytest.raises(ValueError, match="Unknown Timer/Counter comment fields: EN"):
+            Timer.clone("BadTimer", comments={"EN": "x"})
+        with pytest.raises(ValueError, match="comment overrides require count=1"):
+            Timer.clone("NotedPool", count=3, comments={"Acc": "x"})
+
+    def test_rton_time_resets_on_stop_run_unless_retentive(self, runner_factory):
+        enable = Bool("RtonEnable")
+        plain, kept = Timer.clone("PlainRton"), Timer.clone("KeptRton", retentive={"Acc": True})
+        with Program() as logic:
+            with Rung(enable):
+                on_delay(plain, 1000).reset(Bool("RtonReset"))
+            with Rung(enable):
+                on_delay(kept, 1000).reset(Bool("RtonReset2"))
+
+        runner = runner_factory(logic, dt=0.010)
+        runner.patch({enable: True})
+        for _ in range(5):
+            runner.step()
+        runner.stop()
+        runner.start()
+        tags = runner.current_state.tags
+        assert tags["PlainRton_Acc"] == 0
+        assert tags["KeptRton_Acc"] == 50

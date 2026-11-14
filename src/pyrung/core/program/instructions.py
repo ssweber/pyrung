@@ -11,8 +11,10 @@ from pyrung.core._source import (
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction import (
     BlockCopyInstruction,
+    BreakInstruction,
     CalcInstruction,
     CallInstruction,
+    ContinueInstruction,
     CopyInstruction,
     EnabledFunctionCallInstruction,
     FillInstruction,
@@ -350,8 +352,30 @@ def unpack_to_words(source: Any, word_block: Any, *, oneshot: bool = False) -> N
     )
 
 
-def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
-    """Calc instruction.
+# Standard ``math`` names that pyrung exports its own version of, for an expression.
+_PYRUNG_MATH_NAMES = {
+    "pi": "PI",
+    **{
+        name: name
+        for name in (
+            "sqrt",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "radians",
+            "degrees",
+            "log",
+            "log10",
+        )
+    },
+}
+
+
+class _MathInstruction:
+    """Math instruction (CLICK's Math).
 
     Evaluates an expression and stores the result in dest, with
     truncation to the destination tag's bit width (modular wrapping).
@@ -363,8 +387,8 @@ def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
 
     Example:
         with Rung(Enable):
-            calc(DS1 * DS2 + DS3, Result)
-            calc(MaskA & MaskB, MaskResult)
+            math(DS1 * DS2 + DS3, Result)
+            math(MaskA & MaskB, MaskResult)
 
     Args:
         expression: Expression, Tag, or literal to evaluate.
@@ -373,7 +397,61 @@ def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
 
     Returns:
         The dest tag.
+
+    The name hides the standard ``math`` module in a file that imports
+    both; ``math.<name>`` then says what to use instead.
     """
+
+    __name__ = "math"
+
+    def __call__(self, expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
+        _add_instruction("math", CalcInstruction, expression, dest, oneshot=oneshot)
+        return dest
+
+    def __repr__(self) -> str:
+        return "<pyrung instruction math>"
+
+    def __reduce__(self) -> str:
+        # Pickled by name, as the module-level instance it is.
+        return "math"
+
+    if not TYPE_CHECKING:
+        # At runtime only: a type checker still reports ``math.isclose`` as
+        # an unknown attribute, which is the earlier hint.
+
+        def __getattr__(self, name: str) -> Any:
+            if name.startswith("_"):
+                raise AttributeError(name)
+            own = _PYRUNG_MATH_NAMES.get(name)
+            if own is not None:
+                hint = f"for {name} in an expression, use pyrung's {own}: from pyrung.core import {own}"
+            else:
+                hint = (
+                    "for the standard module, import it under another name: import math as pymath"
+                )
+            raise AttributeError(
+                f"math.{name}: math here is pyrung's math() instruction, which hides the "
+                f"standard math module; {hint}"
+            )
+
+
+math = _MathInstruction()
+"""Math instruction (CLICK's Math): ``math(expression, dest, *, oneshot=False)``.
+
+Evaluates *expression* and stores it in *dest*, truncated to the destination's
+width (modular wrapping).  Division by zero gives 0; decimal or hex mode is
+inferred from the tags read.
+"""
+
+
+def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
+    """Deprecated: use ``math()``, CLICK's name for the Math instruction."""
+    warnings.warn(
+        "calc() is now math(), CLICK's name for the Math instruction; "
+        "calc() will be removed in a later release",
+        FutureWarning,
+        stacklevel=2,
+    )
     _add_instruction("calc", CalcInstruction, expression, dest, oneshot=oneshot)
     return dest
 
@@ -471,3 +549,47 @@ def return_early() -> None:
     if prog is None or prog._current_subroutine is None:
         raise RuntimeError("return_early() must be used inside a subroutine")
     _attach_instruction(ctx, ReturnInstruction(), source_file, source_line)
+
+
+def _loop_exit_context(func_name: str) -> tuple[Any, str | None, int | None]:
+    ctx, source_file, source_line = _capture_instruction_context(func_name, source_depth=4)
+    if getattr(ctx, "_loop", None) is None:
+        raise RuntimeError(
+            f"{func_name}() must be inside a conditioned body rung of a forloop: "
+            "with forloop(...): with Rung(...): ..."
+        )
+    body_rung = ctx._rung
+    if len(body_rung._conditions) <= body_rung._branch_condition_start:
+        raise RuntimeError(f"{func_name}() needs a body rung with at least one contact")
+    return ctx, source_file, source_line
+
+
+def break_loop() -> None:
+    """Leave the innermost forloop now; the scan continues after the loop.
+
+    Must sit in a body rung with a contact (CLICK Break).
+
+    Example:
+        with Rung(Enable):
+            with forloop(10) as loop:
+                with Rung(Fault):
+                    break_loop()
+    """
+    ctx, source_file, source_line = _loop_exit_context("break_loop")
+    _attach_instruction(ctx, BreakInstruction(), source_file, source_line)
+
+
+def continue_loop() -> None:
+    """Skip the rest of this forloop iteration and start the next one.
+
+    Must sit in a body rung with a contact (CLICK Continue).
+
+    Example:
+        with Rung(Enable):
+            with forloop(10) as loop:
+                with Rung(Src[loop.idx] == 0):
+                    continue_loop()
+                copy(Src[loop.idx], Dst[loop.idx])
+    """
+    ctx, source_file, source_line = _loop_exit_context("continue_loop")
+    _attach_instruction(ctx, ContinueInstruction(), source_file, source_line)

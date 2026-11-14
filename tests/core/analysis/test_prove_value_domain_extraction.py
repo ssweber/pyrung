@@ -9,19 +9,22 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Dint,
     Int,
     Program,
     Real,
     Rung,
-    calc,
+    Word,
     copy,
     latch,
+    math,
     out,
     run_function,
 )
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
+    Proven,
     TraceStep,
     _classify_dimensions,
     always,
@@ -88,6 +91,120 @@ class TestValueDomainExtraction:
         _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert nd["Flag"] == (False, True)
 
+    def test_a_mod_of_a_whole_number_formula_lists_its_remainders(self):
+        """(Step + 1) % 6 is a whole number: its remainders are -5..5 (an Int may be
+        negative, and MOD takes the dividend's sign)."""
+        step = Int("Step")
+        with Program(strict=False) as logic:
+            with Rung(step == 3):
+                out(Bool("AtThree"))
+            with Rung():
+                math((step + 1) % 6, step)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert result[0]["Step"] == tuple(range(-5, 6))
+
+    @pytest.mark.parametrize("low, domain", [(-5, (-2, -1, 0, 1, 2)), (0, (0, 1, 2))])
+    def test_a_mod_takes_the_dividends_sign(self, low, domain):
+        """MOD truncates (a CLICK's Math): -5 MOD 3 is -2, so a dividend that may be
+        negative gives a domain below 0 too."""
+        n = Int("N", external=True, min=low, max=5)
+        d = Int("D")
+        neg = Bool("Neg")
+        with Program(strict=False) as logic:
+            with Rung(d < 0):
+                latch(neg)
+            with Rung():
+                math(n % 3, d)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful = result[0]
+        assert stateful["D"] == domain
+        expected = Counterexample if low < 0 else prove_module.Proven
+        assert isinstance(always(logic, ~neg, max_states=5000), expected)
+
+    def test_a_mod_into_a_word_stores_a_negative_remainder_wrapped(self):
+        """-2 MOD 3 into a Word (a decimal Math, an Int operand) is stored as 65534."""
+        n = Int("N", external=True, min=-5, max=5)
+        w = Word("W")
+        high = Bool("High")
+        with Program(strict=False) as logic:
+            with Rung(w > 2):
+                latch(high)
+            with Rung():
+                math(n % 3, w)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert result[0]["W"] == (0, 1, 2, 65534, 65535)
+        assert isinstance(always(logic, ~high, max_states=5000), Counterexample)
+
+    def test_a_power_that_may_be_zero_to_a_negative_is_not_bounded_by_its_corners(self):
+        """0 ** -1 is +Inf, which a Dint stores as 0.  So the corners of N ** E run from 0 to
+        +Inf, and the domain of D must still hold 2 (2 ** 1)."""
+        two_base, plus_one = Bool("TwoBase", external=True), Bool("PlusOne", external=True)
+        n, e, d = Int("N"), Int("E"), Dint("D")
+        big = Bool("Big")
+        with Program(strict=False) as logic:
+            with Rung(two_base):
+                copy(2, n)
+            with Rung(~two_base):
+                copy(0, n)
+            with Rung(plus_one):
+                copy(1, e)
+            with Rung(~plus_one):
+                copy(-1, e)
+            with Rung():
+                math(n**e, d)
+            with Rung(d > 1):
+                latch(big)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert 2 in result[0]["D"]
+        assert isinstance(always(logic, ~big, max_states=5000), Counterexample)
+
+    @staticmethod
+    def _real_mod_program():
+        r = Real("R", external=True, min=-5.0, max=5.0)
+        x = Real("X")
+        hi = Bool("Hi")
+        with Program(strict=False) as logic:
+            with Rung():
+                math(r % 3, x)
+            with Rung(x > 2.2):
+                latch(hi)
+        return logic, hi
+
+    def test_a_mod_of_a_real_is_not_listed_as_whole_remainders(self):
+        """2.5 MOD 3 is 2.5: a Real dividend's remainder is not one of -2..2, so
+        X keeps a value on each side of its compare with 2.2."""
+        logic, _hi = self._real_mod_program()
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        assert any(value > 2.2 for value in result[0]["X"])
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="a Real input with whole-number min/max is searched at its whole numbers "
+        "(_declared_domain), so R = 2.5 is never tried: the search answers Intractable, and "
+        "a Counterexample needs a Real's fractions modelled through %",
+    )
+    def test_a_mod_of_a_real_reaches_its_fraction(self):
+        logic, hi = self._real_mod_program()
+        assert isinstance(always(logic, ~hi, max_states=5000), Counterexample)
+
+    def test_a_mod_of_a_real_is_not_proven(self):
+        """R = 2.5 latches Hi, so whatever the search tries, it must not answer Proven."""
+        logic, hi = self._real_mod_program()
+        plc = PLC(logic, dt=0.010)
+        plc.patch({"R": 2.5})
+        plc.step()
+        assert plc.current_state.tags["Hi"] is True
+        assert not isinstance(always(logic, ~hi, max_states=5000), Proven)
+
     def test_integer_comparison_literals(self):
         """Pure equality-only inputs collapse to {literals..., OTHER}."""
         state = Int("State", external=True)
@@ -123,7 +240,7 @@ class TestValueDomainExtraction:
         assert set(nd["Mode"]) == {0, 1, 2}
 
     def test_eq_ne_only_input_gets_literal_plus_other_domain(self):
-        """Pure-switch eq/ne inputs collapse to {literals..., OTHER}."""
+        """Pure-switch eq/ne inputs collapse to {literals..., one other value}."""
         mode = Int("Mode", external=True)
         light = Bool("Light")
         alarm = Bool("Alarm")
@@ -140,6 +257,24 @@ class TestValueDomainExtraction:
         assert 1 in nd["Mode"]
         assert 2 in nd["Mode"]
         assert len(nd["Mode"]) == 3
+        # The other value is the power-on default, a value the PLC can hold.
+        assert 0 in nd["Mode"]
+
+    def test_eq_ne_other_value_skips_literals_and_bounds(self):
+        """When the default is a literal, the other value is the nearest unused one."""
+        mode = Int("Mode", external=True, min=0)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(mode == 0):
+                out(light)
+            with Rung(mode != 1):
+                out(light)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert nd["Mode"] == (0, 1, 2)
 
     def test_eq_ne_only_closure_rejects_data_flow_usage(self):
         """Arithmetic/data-flow usage keeps eq/ne-only closure from applying."""
@@ -149,7 +284,7 @@ class TestValueDomainExtraction:
 
         with Program(strict=False) as logic:
             with Rung():
-                calc(step % 2, odd)
+                math(step % 2, odd)
             with Rung(step == 5):
                 out(flag)
 
@@ -458,3 +593,77 @@ class TestValueDomainExtraction:
         assert domain is not None
         assert "a" in domain
         assert "b" in domain
+
+
+def test_literal_domain_counts_a_write_past_the_block_cap():
+    """``copy(Val, DS[WPtr])`` can land on DS7, so DS7's writes are not all literals."""
+    from pyrung.core import Block, TagType
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.prove.classify import _collect_literal_write_domains
+
+    go, put = Bool("Go", external=True), Bool("Put", external=True)
+    sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
+    val = Int("Val", external=True, choices={0: "zero", 9: "nine"})
+    wptr = Int("WPtr")
+    ds = Block("DS", TagType.INT, 1, 4500)
+
+    with Program(strict=False) as logic:
+        with Rung(go):
+            copy(1, ds[7])
+        with Rung():
+            math(sel + 6, wptr)
+        with Rung(put):
+            copy(val, ds[wptr])
+
+    graph = build_program_graph(logic, unbounded_index_reads=True)
+    domains = _collect_literal_write_domains(logic, graph.tags, graph.indirect_reach)
+
+    assert "DS7" not in domains
+
+
+# A REAL past 2**53 has no value one away: ``1e20 + 1 == 1e20``.
+LARGE_REALS = [
+    pytest.param(lambda r: r > 1e20, id="above 1e20"),
+    pytest.param(lambda r: r > 1e16, id="above 1e16"),
+    pytest.param(lambda r: r < -1e30, id="below -1e30"),
+    pytest.param(lambda r: r > 3.4e38, id="above 3.4e38"),
+]
+
+
+def _fires(logic: Program, trace: list[TraceStep], name: str) -> bool:
+    return bool(_replay_trace(logic, trace).current_state.tags[name])
+
+
+@pytest.mark.parametrize("compare", LARGE_REALS)
+def test_a_large_real_compared_with_a_literal_has_values_past_it(compare) -> None:
+    level, hit = Real("BigR", external=True), Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung(compare(level)):
+            out(hit)
+    result = always(logic, ~hit)
+    assert isinstance(result, Counterexample), result
+    assert _fires(logic, result.trace, "Hit")
+
+
+@pytest.mark.parametrize("compare", LARGE_REALS)
+def test_a_large_real_carried_back_through_a_copy_has_values_past_it(compare) -> None:
+    level, copied, hit = Real("BigR", external=True), Real("BigCopy"), Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(level, copied)
+        with Rung(compare(copied)):
+            out(hit)
+    result = always(logic, ~hit)
+    assert isinstance(result, Counterexample), result
+    assert _fires(logic, result.trace, "Hit")
+
+
+def test_two_large_reals_compared_with_each_other_past_a_literal() -> None:
+    """Both above 1e20 and one above the other: two floats past the point."""
+    pv, sp, hit = Real("BigPV", external=True), Real("BigSP", external=True), Bool("Hit")
+    with Program(strict=False) as logic:
+        with Rung(sp > 1e20, pv > 1e20, pv > sp):
+            out(hit)
+    result = always(logic, ~hit)
+    assert isinstance(result, Counterexample), result
+    assert _fires(logic, result.trace, "Hit")

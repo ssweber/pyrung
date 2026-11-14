@@ -22,15 +22,19 @@ from pyrung.core import (
     Timer,
     Word,
     blockcopy,
-    calc,
+    break_loop,
     call,
+    continue_loop,
     copy,
     count_down,
     count_up,
+    debounce,
     event_drum,
     fill,
+    flasher,
     forloop,
     latch,
+    math,
     off_delay,
     on_delay,
     out,
@@ -45,11 +49,14 @@ from pyrung.core import (
     shift,
     subroutine,
     time_drum,
+    time_event_drum,
+    timed,
+    toggle,
     unpack_to_bits,
     unpack_to_words,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import PENDING, Intractable, _classify_dimensions
+from pyrung.core.analysis.prove import Intractable, _classify_dimensions
 from pyrung.core.analysis.prove.elision.slice import _collect_hidden_memory_info
 from pyrung.core.analysis.reverse_edges import back_propagate_value, build_reverse_edge_map
 from pyrung.core.analysis.sp_values import _written_value_for_tag
@@ -308,7 +315,7 @@ def _calc_case() -> Program:
     a = Int("CalcA")
     b = Int("CalcB")
     result = Int("CalcResult")
-    return _program_with_one_rung(lambda: calc(a + b, result), Bool("CalcEnable"))
+    return _program_with_one_rung(lambda: math(a + b, result), Bool("CalcEnable"))
 
 
 def _search_case() -> Program:
@@ -375,6 +382,54 @@ def _time_drum_case() -> Program:
             .jog(Bool("TimeDrumJog"))
         ),
         Bool("TimeDrumAuto"),
+    )
+
+
+def _time_event_drum_case() -> Program:
+    step = Int("TEDrumStep")
+    return _program_with_one_rung(
+        lambda: (
+            time_event_drum(
+                outputs=[Bool("TEDrumOutput")],
+                presets=[Int("TEDrumPreset1"), None],
+                events=[None, Bool("TEDrumEvent2")],
+                pattern=[[0], [1]],
+                current_step=step,
+                accumulator=Int("TEDrumAcc"),
+                completion_flag=Bool("TEDrumDone"),
+            )
+            .reset(Bool("TEDrumReset"))
+            .jump(Bool("TEDrumJump"), step=Int("TEDrumJumpStep"))
+        ),
+        Bool("TEDrumAuto"),
+    )
+
+
+def _toggle_case() -> Program:
+    return _program_with_one_rung(lambda: toggle(Bool("ToggleLamp")), Bool("ToggleButton"))
+
+
+def _debounce_case() -> Program:
+    on, off = Timer.clone("AnalysisDebOn"), Timer.clone("AnalysisDebOff")
+    return _program_with_one_rung(
+        lambda: debounce(Bool("DebValve"), on=(on, Int("DebOnPreset")), off=(off, 200), unit="ms"),
+        Bool("DebInput"),
+    )
+
+
+def _flasher_case() -> Program:
+    on, off = Timer.clone("AnalysisFlashOn"), Timer.clone("AnalysisFlashOff")
+    return _program_with_one_rung(
+        lambda: flasher(Bool("FlashBeacon"), on=(on, 500), off=(off, Int("FlashOffPreset"))),
+        Bool("FlashEnable"),
+    )
+
+
+def _timed_case() -> Program:
+    timer = Timer.clone("AnalysisTimed")
+    return _program_with_one_rung(
+        lambda: timed(Bool("TimedHorn"), timer, Int("TimedPreset"), maintained=True),
+        Bool("TimedEnable"),
     )
 
 
@@ -449,6 +504,19 @@ def _forloop_case() -> Program:
     return logic
 
 
+def _loop_exit_case(verb: Callable[[], None], prefix: str) -> Callable[[], Program]:
+    def build() -> Program:
+        with Program(strict=False) as logic:
+            with Rung(Bool(f"{prefix}Enable")):
+                with forloop(3):
+                    with Rung(Bool(f"{prefix}Exit")):
+                        verb()
+                    copy(Int(f"{prefix}Source"), Int(f"{prefix}Dest"))
+        return logic
+
+    return build
+
+
 def _send_case() -> Program:
     src = Int("SendSource")
     sending, success, error, ex = _status("Send")
@@ -484,7 +552,14 @@ def _receive_case() -> Program:
 
 
 _COPY_FAULTS = frozenset({"fault.address_error", "fault.out_of_range"})
-_CALC_FAULTS = frozenset({"fault.division_error", "fault.out_of_range"})
+_CALC_FAULTS = frozenset(
+    {
+        "fault.division_error",
+        "fault.out_of_range",
+        "fault.address_error",
+        "fault.math_operation_error",
+    }
+)
 
 
 GRAPH_CASES: tuple[GraphCase, ...] = (
@@ -615,7 +690,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"BlockCopyEnable"}),
         data_reads=frozenset({"BlockSrc1", "BlockSrc2"}),
         writes=frozenset({"BlockDest1", "BlockDest2"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "blockcopy:to_value",
@@ -624,7 +699,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"BlockValueEnable"}),
         data_reads=frozenset({"BlockValueChars1", "BlockValueChars2"}),
         writes=frozenset({"BlockValueDest1", "BlockValueDest2"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "blockcopy:to_ascii",
@@ -633,7 +708,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"BlockAsciiEnable"}),
         data_reads=frozenset({"BlockAsciiChars1", "BlockAsciiChars2"}),
         writes=frozenset({"BlockAsciiDest1", "BlockAsciiDest2"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "fill",
@@ -642,6 +717,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"FillEnable"}),
         data_reads=frozenset({"FillSource"}),
         writes=frozenset({"FillDest1", "FillDest2"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "pack_bits",
@@ -650,6 +726,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"PackBitsEnable"}),
         data_reads=frozenset({"PackBits1", "PackBits2"}),
         writes=frozenset({"PackedBits"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "pack_words",
@@ -658,6 +735,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"PackWordsEnable"}),
         data_reads=frozenset({"PackWords1", "PackWords2"}),
         writes=frozenset({"PackedWords"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "pack_text",
@@ -666,7 +744,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"PackTextEnable"}),
         data_reads=frozenset({"PackTextChars1", "PackTextChars2"}),
         writes=frozenset({"ParsedText"}),
-        implicit_writes=frozenset({"fault.out_of_range"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "unpack_to_bits",
@@ -675,6 +753,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"UnpackBitsEnable"}),
         data_reads=frozenset({"UnpackBitsSource"}),
         writes=frozenset({"UnpackBits1", "UnpackBits2"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "unpack_to_words",
@@ -683,6 +762,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         frozenset({"UnpackWordsEnable"}),
         data_reads=frozenset({"UnpackWordsSource"}),
         writes=frozenset({"UnpackWords1", "UnpackWords2"}),
+        implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
         "calc",
@@ -723,7 +803,7 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
                 "EventDrumJog",
             }
         ),
-        data_reads=frozenset({"EventDrumStep", "EventDrumJumpStep"}),
+        data_reads=frozenset({"EventDrumStep", "EventDrumJumpStep", "EventDrumDone"}),
         writes=frozenset({"EventDrumOutput", "EventDrumStep", "EventDrumDone"}),
     ),
     GraphCase(
@@ -737,9 +817,61 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
                 "TimeDrumPreset2",
                 "TimeDrumJumpStep",
                 "TimeDrumStep",
+                "TimeDrumDone",
             }
         ),
         writes=frozenset({"TimeDrumOutput", "TimeDrumStep", "TimeDrumAcc", "TimeDrumDone"}),
+    ),
+    GraphCase(
+        "toggle",
+        "toggle",
+        _toggle_case,
+        frozenset({"ToggleButton"}),
+        writes=frozenset({"ToggleLamp"}),
+    ),
+    GraphCase(
+        "debounce",
+        "debounce",
+        _debounce_case,
+        frozenset({"DebInput"}),
+        data_reads=frozenset({"DebOnPreset"}),
+        writes=frozenset(
+            {
+                "DebValve",
+                "AnalysisDebOn_Acc",
+                "AnalysisDebOff_Acc",
+            }
+        ),
+    ),
+    GraphCase(
+        "flasher",
+        "flasher",
+        _flasher_case,
+        frozenset({"FlashEnable"}),
+        data_reads=frozenset({"FlashOffPreset"}),
+        writes=frozenset(
+            {
+                "FlashBeacon",
+                "AnalysisFlashOn_Acc",
+                "AnalysisFlashOff_Acc",
+            }
+        ),
+    ),
+    GraphCase(
+        "timed",
+        "timed",
+        _timed_case,
+        frozenset({"TimedEnable"}),
+        data_reads=frozenset({"TimedPreset"}),
+        writes=frozenset({"TimedHorn", "AnalysisTimed_Acc"}),
+    ),
+    GraphCase(
+        "time_event_drum",
+        "time_event_drum",
+        _time_event_drum_case,
+        frozenset({"TEDrumAuto", "TEDrumEvent2", "TEDrumReset", "TEDrumJump"}),
+        data_reads=frozenset({"TEDrumPreset1", "TEDrumJumpStep", "TEDrumStep", "TEDrumDone"}),
+        writes=frozenset({"TEDrumOutput", "TEDrumStep", "TEDrumAcc", "TEDrumDone"}),
     ),
     GraphCase(
         "on_delay",
@@ -821,9 +953,29 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         "forloop",
         "forloop",
         _forloop_case,
-        frozenset({"LoopEnable"}),
+        # A count of 0 runs no iteration, so the count gates the body too.
+        frozenset({"LoopEnable", "LoopCount"}),
         data_reads=frozenset({"LoopCount", "LoopSource"}),
         writes=frozenset({"_forloop_idx", "LoopDest"}),
+        implicit_writes=_COPY_FAULTS,
+    ),
+    GraphCase(
+        "break_loop",
+        "break_loop",
+        _loop_exit_case(break_loop, "Break"),
+        # The body rung's contact gates every later body write.
+        frozenset({"BreakEnable", "BreakExit"}),
+        data_reads=frozenset({"BreakSource"}),
+        writes=frozenset({"_forloop_idx", "BreakDest"}),
+        implicit_writes=_COPY_FAULTS,
+    ),
+    GraphCase(
+        "continue_loop",
+        "continue_loop",
+        _loop_exit_case(continue_loop, "Continue"),
+        frozenset({"ContinueEnable", "ContinueExit"}),
+        data_reads=frozenset({"ContinueSource"}),
+        writes=frozenset({"_forloop_idx", "ContinueDest"}),
         implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
@@ -849,6 +1001,10 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
 PUBLIC_RUNG_INSTRUCTIONS = frozenset(
     {
         "out",
+        "toggle",
+        "debounce",
+        "flasher",
+        "timed",
         "latch",
         "reset",
         "copy",
@@ -872,7 +1028,10 @@ PUBLIC_RUNG_INSTRUCTIONS = frozenset(
         "on_delay",
         "off_delay",
         "time_drum",
+        "time_event_drum",
         "forloop",
+        "break_loop",
+        "continue_loop",
         "send",
         "receive",
     }
@@ -904,9 +1063,12 @@ def test_instruction_graph_matrix(case: GraphCase) -> None:
         assert tag_name in graph.def_use_chains
         assert any(version.defined_at == idx for version in graph.def_use_chains[tag_name])
 
+    # No rung reads the fault flags, so their implicit writes are dead and
+    # stay out of writers_of (see test_graph's fault-reader cases).
     for tag_name in case.implicit_writes:
         assert tag_name not in graph.writers_of
         assert tag_name in graph.tags
+        assert tag_name in graph.unread_fault_writes
 
 
 def test_reverse_edges_cover_supported_and_conservative_copy_family_shapes() -> None:
@@ -923,7 +1085,7 @@ def test_reverse_edges_cover_supported_and_conservative_copy_family_shapes() -> 
     with Program(strict=False) as logic:
         with Rung():
             copy(a, b)
-            calc(a + 5, c)
+            math(a + 5, c)
             fill(fill_src, block_a.select(1, 2))
             blockcopy(block_a.select(1, 2), block_b.select(1, 2))
             copy(chars[1], converted, convert=to_value)
@@ -955,7 +1117,7 @@ def test_sp_values_cover_literal_tag_fill_reset_latch_and_calc_priors() -> None:
             reset(other_flag)
             copy(source, dest)
             fill(7, block.select(1, 2))
-            calc(dest + 1, dest)
+            math(dest + 1, dest)
 
     from pyrung.core.crossing import Affine, Literal, StoreTransform
 
@@ -1156,10 +1318,12 @@ def test_prover_domains_cover_callbacks_receive_search_and_timer_counter_abstrac
     assert set(nondeterministic["DomainReceiveDest"]) == {0, 1, 2, 3}
     assert set(stateful["DomainSearchFound"]) == {False, True}
     assert set(stateful["DomainSearchResult"]) >= {-1, 1, 2}
-    assert stateful["DomainTimer_Done"] == (False, PENDING, True)
-    assert stateful["DomainCounter_Done"] == (False, PENDING, True)
-    assert "DomainTimer_Acc" not in stateful
-    assert "DomainCounter_Acc" not in stateful
+    # Black-box timers: Done is a plain Bool, and the accumulators are state
+    # (a timer's by its preset, a counter's up to its preset).
+    assert stateful["DomainTimer_Done"] == (False, True)
+    assert stateful["DomainCounter_Done"] == (False, True)
+    assert set(stateful["DomainTimer_Acc"]) >= {0, 10}
+    assert set(stateful["DomainCounter_Acc"]) == {0, 1, 2}
 
 
 def test_hidden_memory_info_tracks_shift_and_drums() -> None:
@@ -1170,3 +1334,48 @@ def test_hidden_memory_info_tracks_shift_and_drums() -> None:
 
     assert {"ShiftBits1", "ShiftBits2"} <= set(hidden_writes)
     assert oneshot_writes == ()
+
+    logic = _time_event_drum_case()
+    hidden_writes, _ = _collect_hidden_memory_info(logic, build_program_graph(logic).tags)
+    assert {"TEDrumOutput", "TEDrumStep", "TEDrumAcc", "TEDrumDone"} <= set(hidden_writes)
+
+
+def _division_fault_reader_case(*, read_fault: bool) -> Program:
+    from pyrung.core import system
+
+    divisor = Int("FaultDivisor")
+    quotient = Int("FaultQuotient")
+    hit = Bool("FaultHit")
+    with Program(strict=False) as logic:
+        with Rung():
+            math(100 / divisor, quotient)
+        if read_fault:
+            with Rung(system.fault.division_error):
+                out(hit)
+    return logic
+
+
+def test_read_fault_flag_counts_its_implicit_writers() -> None:
+    graph = build_program_graph(_division_fault_reader_case(read_fault=True))
+
+    assert graph.writers_of["fault.division_error"] == frozenset({0})
+    assert "fault.division_error" in graph.fault_writes
+    assert "FaultDivisor" in graph.upstream_slice("FaultHit")
+    assert "FaultHit" in graph.downstream_slice("FaultDivisor")
+    chain = graph.def_use_chains["fault.division_error"]
+    assert any(version.defined_at == 0 and 1 in version.read_by for version in chain)
+    # The flag nobody reads stays out.
+    assert "fault.out_of_range" not in graph.writers_of
+
+
+def test_observed_fault_flag_counts_its_implicit_writers() -> None:
+    logic = _division_fault_reader_case(read_fault=False)
+    base = build_program_graph(logic)
+    assert "fault.division_error" not in base.writers_of
+
+    observed = build_program_graph(logic, observed_system=("fault.division_error",))
+    assert observed is not base
+    assert observed.writers_of["fault.division_error"] == frozenset({0})
+    assert "FaultDivisor" in observed.upstream_slice("fault.division_error")
+    assert build_program_graph(logic, observed_system=("fault.division_error",)) is observed
+    assert build_program_graph(logic) is base

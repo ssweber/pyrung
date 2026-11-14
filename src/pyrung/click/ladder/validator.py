@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -10,14 +11,25 @@ from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.constants import _PIN_RE
 from pyrung.click.codegen.models import _AnalyzedRung, _PinInfo
 from pyrung.click.codegen.parser import _parse_rows
-from pyrung.core.condition import AllCondition, AnyCondition, Condition
+from pyrung.click.codegen.shaping import emitted_logic_mismatch
+from pyrung.click.validation.findings import (
+    CLK_NESTED_CALL,
+    CLK_PTR_PAST_BANK,
+    CLK_STEP_LIMIT,
+    CLK_TEXT_PAST_BANK,
+    CLK_TEXT_PAST_BLOCK,
+)
+from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
 
+from ._loop_items import is_own_rung, loop_item_rung
 from .layout import _HEADER
 from .types import Issue, LadderExportError
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from pyrung.click.tag_map import TagMap
     from pyrung.core.program import Program
 
@@ -40,10 +52,26 @@ class _ValidationMixin:
 
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
 
-    def _run_precheck(self) -> None:
+    def _run_precheck(self, allow: Collection[str] = ()) -> None:
         report = self._tag_map.validate(self._program, mode="strict")
         # We intentionally fail on warnings and hints to keep export deterministic.
         findings = [*report.errors, *report.warnings, *report.hints]
+        # The step count is the whole project's, and an estimate: rows over the
+        # limit still render faithfully, so it warns instead of refusing.  So does
+        # a text past its bank or block, a store the CLICK editor takes.  A pointer that
+        # can run past its bank warns too, as the CLICK takes the write.
+        warn_only = (CLK_STEP_LIMIT, CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK, CLK_PTR_PAST_BANK)
+        # The step limit warns whatever *allow* holds.
+        for finding in findings:
+            if finding.code in warn_only and (
+                finding.code == CLK_STEP_LIMIT or finding.code not in allow
+            ):
+                warnings.warn(
+                    f"{finding.code}: {finding.message} {finding.suggestion or ''}".rstrip(),
+                    stacklevel=5,
+                )
+        # A nested call is refused below, with its source location.
+        findings = [f for f in findings if f.code not in (*warn_only, CLK_NESTED_CALL, *allow)]
         if findings:
             issues: list[Issue] = []
             for finding in findings:
@@ -105,6 +133,26 @@ class _ValidationMixin:
             )
 
 
+def _rung_comments(rung: Rung) -> list[str | None]:
+    """A rung's comment, then its forloop body rungs' (nested loops included)."""
+    comments: list[str | None] = [rung.comment]
+
+    def _loop(loop: ForLoopInstruction) -> None:
+        for item in loop.body:
+            if isinstance(item, Rung):
+                comments.append(item.comment)
+                for instruction in item._instructions:
+                    if isinstance(instruction, ForLoopInstruction):
+                        _loop(instruction)
+            elif isinstance(item, ForLoopInstruction):
+                _loop(item)
+
+    for instruction in rung._instructions:
+        if isinstance(instruction, ForLoopInstruction):
+            _loop(instruction)
+    return comments
+
+
 class _RoundTripValidationMixin:
     """Round-trip emitted ladder rows back through the analyzer and compare semantics."""
 
@@ -128,7 +176,7 @@ class _RoundTripValidationMixin:
         ) -> list[tuple[str, Condition, str]]: ...
         def _instruction_token(self, instruction: Any, *, path: str) -> str: ...
         def _condition_leaf_token(self, condition: Condition, *, path: str) -> str: ...
-        def _normalize_branching_rung(self, rung: Rung) -> Rung: ...
+        def _normalize_branching_rung(self, rung: Rung, *, path: str | None = None) -> Rung: ...
         def _series_tree(self, *nodes: SPNode | None) -> SPNode | None: ...
 
     def _validate_scope_roundtrip(
@@ -141,11 +189,26 @@ class _RoundTripValidationMixin:
     ) -> None:
         """Fail loudly when emitted CSV rows lose rung semantics."""
         actual_rungs = _analyze_rungs(_parse_rows([tuple(_HEADER), *rendered_rows]))
-        expected_comments = [rung.comment for rung in source_rungs if rung.comment is not None]
+        scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
+
+        # The rows must also come back as the same logic through codegen:
+        # ladder_to_pyrung renders the blocks this check walks.
+        mismatch = emitted_logic_mismatch(actual_rungs)
+        if mismatch is not None:
+            self._raise_issue(
+                path=scope_path,
+                message=(
+                    "CSV round-trip validation failed: importing these rows would change "
+                    f"the rung logic: {mismatch}"
+                ),
+                source=source_rungs[0] if source_rungs else None,
+            )
+        expected_comments = [
+            comment for rung in source_rungs for comment in _rung_comments(rung) if comment
+        ]
         actual_comments = [rung.comment for rung in actual_rungs if rung.comment is not None]
 
         if actual_comments != expected_comments:
-            scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
             self._raise_issue(
                 path=scope_path,
                 message=(
@@ -163,7 +226,6 @@ class _RoundTripValidationMixin:
         actual = self._flatten_analyzed_outputs(actual_rungs)
 
         if len(actual) != len(expected):
-            scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
             source = (
                 source_rungs[min(len(source_rungs) - 1, len(expected) - 1)]
                 if source_rungs
@@ -243,10 +305,15 @@ class _RoundTripValidationMixin:
                     pins=(),
                 )
             ]
-            for child_index, child_instruction in enumerate(
-                getattr(instruction, "instructions", ())
-            ):
-                child_path = f"{path}.instruction[0](ForLoopInstruction).instruction[{child_index}]({type(child_instruction).__name__})"
+            for child_index, child_instruction in enumerate(instruction.body):
+                child_path = f"{path}.instruction[0](ForLoopInstruction).body[{child_index}]({type(child_instruction).__name__})"
+                if is_own_rung(child_instruction):
+                    outputs.extend(
+                        self._expected_outputs_for_rung(
+                            loop_item_rung(child_instruction), path=child_path
+                        )
+                    )
+                    continue
                 outputs.append(
                     _ScopeOutput(
                         af_token=self._instruction_token(child_instruction, path=child_path),
@@ -401,6 +468,7 @@ class _RoundTripValidationMixin:
         return make_compound(nodes, Series)
 
     def _condition_to_tree(self, condition: Condition, *, path: str) -> SPNode:
+        condition = text_window_of(condition)
         if isinstance(condition, AllCondition):
             children = [
                 self._condition_to_tree(child, path=f"{path}.all[{index}]")

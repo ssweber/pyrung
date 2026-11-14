@@ -19,11 +19,12 @@ explain why the latch hasn't cleared.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
+from pyrung.core.state import value_changed
 
 from .models import CausalChain, ChainStep, Transition
 from .support import _collect_sp_leaves, _condition_tag_name, _HistoricalView
@@ -54,6 +55,7 @@ def why_cause(
     *,
     program: Program | None = None,
     frontier: Callable[[str], bool] | None = None,
+    forces: Mapping[str, Any] | None = None,
 ) -> CausalChain:
     """Build a diagnostic causal chain from a snapshot.
 
@@ -72,10 +74,14 @@ def why_cause(
             the no-writers (external input) case — even though the tag
             has writers.  ``None`` preserves the default behavior
             (terminate only at external inputs / init constants).
+        forces: The session's active forces, tag name to value.  The walk
+            still shows a forced tag's rungs, since they are what the logic
+            does; the chain names the forces it touches.
 
     Returns:
         A ``CausalChain`` with ``mode='why'``.
     """
+    forces = forces or {}
     visited: set[str] = set()
     steps: list[ChainStep] = []
     conjunctive_roots: list[Transition] = []
@@ -101,7 +107,8 @@ def why_cause(
         edge_map = build_reverse_edge_map(program)
         for t in tags:
             val = state.tags.get(t)
-            if val is not None:
+            # A forced value says nothing about what the logic copied in.
+            if val is not None and t not in forces:
                 for src, src_val in back_propagate_value(edge_map, t, val).items():
                     if src in cone:
                         inferred.setdefault(src, src_val)
@@ -176,7 +183,7 @@ def why_cause(
         if choices:
             choice_labels[name] = dict(choices.items())
 
-    return CausalChain(
+    chain = CausalChain(
         effect=primary,
         mode="why",
         steps=steps,
@@ -185,6 +192,15 @@ def why_cause(
         effects=effects,
         choice_labels=choice_labels,
     )
+    for name in chain.tags():
+        if name not in forces:
+            continue
+        current = state.tags.get(name)
+        if current is None and name in pdg.tags:
+            current = pdg.tags[name].default
+        held = chain.force_pending if value_changed(current, forces[name]) else chain.forced
+        held[name] = forces[name]
+    return chain
 
 
 class _RungResolver:
@@ -223,13 +239,18 @@ _INSTRUCTION_LABELS: dict[str, str] = {
     "LatchInstruction": "latch",
     "ResetInstruction": "reset",
     "CopyInstruction": "copy",
-    "CalcInstruction": "calc",
+    "CalcInstruction": "math",
     "OnDelayInstruction": "on_delay",
     "OffDelayInstruction": "off_delay",
     "CountUpInstruction": "count_up",
     "CountDownInstruction": "count_down",
     "EventDrumInstruction": "event_drum",
     "TimeDrumInstruction": "time_drum",
+    "TimeEventDrumInstruction": "time_event_drum",
+    "ToggleInstruction": "toggle",
+    "DebounceInstruction": "debounce",
+    "FlasherInstruction": "flasher",
+    "TimedInstruction": "timed",
     "FillInstruction": "fill",
     "BlockCopyInstruction": "blockcopy",
     "PackBitsInstruction": "pack_bits",

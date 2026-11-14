@@ -7,18 +7,21 @@ dicts instead of module-level globals backed by hardware I/O.
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Mapping
+from types import CodeType
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
-    _DINT_MAX,
-    _DINT_MIN,
     _FAULT_ADDRESS_ERROR_TAG,
-    _HELPER_ORDER,
-    _INT_MAX,
-    _INT_MIN,
     _STORE_TYPE_HELPERS,
     _TYPE_DEFAULTS,
+)
+from pyrung.circuitpy.codegen._helpers import (
+    _render_helper_defs,
+    _render_index_helpers,
+    _with_helper_deps,
 )
 from pyrung.circuitpy.codegen._util import (
     _first_defined_name,
@@ -27,11 +30,77 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext, describe_static_range
-from pyrung.core.kernel import BlockSpec, CompiledKernel
+from pyrung.core.kernel import BlockSpec, CompiledKernel, ForIterationsBeyondCap
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
+from pyrung.core.time_mode import dt_to_ns
+
+# Code objects by kernel source, least recently used first.  A code object is immutable.
+# Each kernel runs the shared code in a namespace of its own, so kernels share no state
+# through it.  Runners on one program compile the same source, and so do how() forks with
+# the same synthesis.
+MAX_CACHED_CODE = 4
+_CODE_BY_SOURCE: dict[str, CodeType] = {}
+_CODE_LOCK = threading.Lock()
+
+
+def _code_of(source: str) -> tuple[CodeType, bool]:
+    """The kernel source's code object, and whether an earlier compile made it."""
+    with _CODE_LOCK:
+        code = _CODE_BY_SOURCE.pop(source, None)
+        if code is not None:
+            _CODE_BY_SOURCE[source] = code
+            return code, True
+    code = compile(source, "<kernel>", "exec", dont_inherit=True)
+    with _CODE_LOCK:
+        _CODE_BY_SOURCE[source] = code
+        while len(_CODE_BY_SOURCE) > MAX_CACHED_CODE:
+            _CODE_BY_SOURCE.pop(next(iter(_CODE_BY_SOURCE)))
+    return code, False
+
+
+# What the materialized-tag walk does with an object, by its type (see ``_kind_of``).
+_SKIP, _TAG, _RANGE, _DICT, _MAPPING, _ITEMS, _OBJECT = range(7)
+# Exact types the walk never looks inside.
+_PLAIN_TYPES = frozenset({type(None), str, bytes, bytearray, int, float, bool})
+# Exact container types push() may read twice.  A dict's views are among them.
+_SEQUENCE_TYPES = frozenset({list, tuple, set, frozenset, type({}.keys()), type({}.values())})
+_OBJECT_CLASS = object.__dict__["__class__"]
+
+
+def _kind_is_per_type(cls: type) -> bool:
+    """Whether every instance of *cls* answers ``__class__`` and isinstance() alike.
+
+    A proxy, or a class that overrides attribute lookup, may answer per instance.
+    """
+    if cls.__getattribute__ is not object.__getattribute__:
+        return False
+    for base in cls.__mro__:
+        if "__class__" in base.__dict__:
+            return base.__dict__["__class__"] is _OBJECT_CLASS
+    return False
+
+
+def _kind_of(current: Any) -> int:
+    if current is None:
+        return _SKIP
+    if isinstance(current, Tag):
+        return _TAG
+    if isinstance(current, (str, bytes, bytearray, int, float, bool, Block, Program)):
+        return _SKIP
+    if type(current) is BlockRange:
+        return _SKIP
+    if isinstance(current, BlockRange):
+        return _RANGE
+    if type(current) is dict:
+        return _DICT
+    if isinstance(current, Mapping):
+        return _MAPPING
+    if isinstance(current, tuple | list | set | frozenset):
+        return _ITEMS
+    return _OBJECT
 
 
 def _collect_materialized_tag_names(
@@ -44,6 +113,13 @@ def _collect_materialized_tag_names(
     into that block would make the result depend on ``Block._tag_cache`` and on
     whether compilation has already expanded static ranges.  For state seeding,
     only concrete ``Tag`` objects that appear in the program graph should count.
+
+    A rung points back to the program that bound it (``_site_owner``).  The walk stops
+    there, so the names do not depend on which analyses of the program have run.  The
+    rungs and subroutines it starts from are the program's own.
+
+    The walk asks what each type is once, and skips a container of plain values without
+    queueing them.  The walk finds the same names as a walk that queues every item.
     """
 
     found: set[str] = set()
@@ -52,22 +128,31 @@ def _collect_materialized_tag_names(
     queue.extend(program.rungs)
     for subroutine_rungs in program.subroutines.values():
         queue.extend(subroutine_rungs)
+    kinds: dict[type, int] = dict.fromkeys(_PLAIN_TYPES, _SKIP)
+
+    def push(items: Any) -> None:
+        # push() reads the items twice, so it takes only a container that gives the same items
+        # each time.
+        if type(items) not in _SEQUENCE_TYPES:
+            queue.extend(items)
+        elif not _PLAIN_TYPES.issuperset(map(type, items)):
+            queue.extend(items)
 
     while queue:
         current = queue.pop()
-        if current is None:
+        cls = type(current)
+        kind = kinds.get(cls)
+        if kind is None:
+            kind = _kind_of(current)
+            if _kind_is_per_type(cls):
+                kinds[cls] = kind
+        if kind == _SKIP:
             continue
-        if isinstance(current, Tag):
+        if kind == _TAG:
             if current.name not in SYSTEM_TAGS_BY_NAME:
                 found.add(current.name)
             continue
-        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
-            continue
-        if isinstance(current, Block):
-            continue
-        if type(current) is BlockRange:
-            continue
-        if isinstance(current, BlockRange):
+        if kind == _RANGE:
             layout = (
                 ctx.static_range_layout(current)
                 if ctx is not None
@@ -82,18 +167,17 @@ def _collect_materialized_tag_names(
             continue
         visited.add(current_id)
 
-        if isinstance(current, Mapping):
+        if kind == _DICT:
+            push(current.keys())
+            push(current.values())
+        elif kind == _MAPPING:
             queue.extend(current.keys())
             queue.extend(current.values())
-            continue
-        if isinstance(current, tuple | list | set | frozenset):
-            queue.extend(current)
-            continue
-
-        if hasattr(current, "__dict__"):
-            queue.extend(vars(current).values())
-            continue
-        if hasattr(current, "__slots__"):
+        elif kind == _ITEMS:
+            push(current)
+        elif hasattr(current, "__dict__"):
+            push(vars(current).values())
+        elif hasattr(current, "__slots__"):
             for slot in current.__slots__:
                 if slot in {"__weakref__", "__dict__"}:
                     continue
@@ -103,31 +187,59 @@ def _collect_materialized_tag_names(
     return frozenset(found)
 
 
+def _no_clock() -> float:
+    return 0.0
+
+
 def compile_kernel(
     program: Program,
     *,
     force_rung_enable: bool = False,
     blockless: bool = False,
     proof_metadata: bool = False,
+    abstract_timers: bool = False,
     split_after: int | None = None,
+    timings: dict[str, float] | None = None,
 ) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel.
+
+    ``abstract_timers`` (the prover's kernel only) replaces every timed tick
+    with a call to ``_bb_tick``: the accumulator moves to a value the caller's
+    oracle (``memory["_bb"]``) chooses instead of by the scan's dt, so one
+    compiled scan stands for a scan of any length.  Enable, reset and preset
+    logic stay the runtime's.  Without an oracle a tick never advances.
 
     ``split_after`` (a rung count) emits a second ``pre_step_fn`` covering the
     leading rungs — the synthesis ``plant`` pass — so the caller can drain inputs
     *between* the two passes (the plant reads the previous commit, the input-read
     phase).  ``None`` ⇒ a single ``step_fn`` for the whole program.
+
+    The jit counters pass ``timings`` to get the seconds each step took.
     """
+    clock = time.perf_counter if timings is not None else _no_clock
+    started = clock()
     ctx = CodegenContext.for_kernel(
         program,
         force_rung_enable=force_rung_enable,
         blockless=blockless,
         proof_metadata=proof_metadata,
+        abstract_timers=abstract_timers,
     )
-    source = _render_kernel_source(ctx, split_after=split_after)
+    source, lock_source = _render_kernel_source(ctx, split_after=split_after)
+    rendered = clock()
 
-    namespace: dict[str, Any] = {}
-    exec(compile(source, "<kernel>", "exec"), namespace)  # noqa: S102
+    namespace: dict[str, Any] = {
+        **ctx.function_objects,
+        **ctx.function_constants,
+        "_dt_to_ns": dt_to_ns,
+        # A proof_metadata kernel's For past the verifier's cap raises it.
+        "_ForIterationsBeyondCap": ForIterationsBeyondCap,
+        "_for_cap_sites": tuple(ctx.for_cap_sites),
+    }
+    code, reused = _code_of(source)
+    compiled = clock()
+    exec(code, namespace)  # noqa: S102
+    executed = clock()
     step_fn = namespace["_kernel_step"]
     pre_step_fn = namespace.get("_kernel_step_pre")
 
@@ -146,19 +258,35 @@ def compile_kernel(
         )
 
     block_specs = _build_block_specs(ctx)
+    built = clock()
+    materialized = _collect_materialized_tag_names(program, ctx)
+    walked = clock()
 
-    return CompiledKernel(
+    kernel = CompiledKernel(
         step_fn=step_fn,
         pre_step_fn=pre_step_fn,
+        calls_functions=bool(ctx.function_objects),
         referenced_tags=dict(ctx.referenced_tags),
         block_specs=block_specs,
-        edge_tags=set(ctx.edge_prev_tags),
+        # Edge contacts keep their memory per site in ``memory``
+        # (``_edge:e{N}``); nothing reads a previous-scan tag copy.
+        edge_tags=set(),
         source=source,
+        lock_source=lock_source,
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
-        materialized_tag_names=_collect_materialized_tag_names(program, ctx),
+        materialized_tag_names=materialized,
+        timer_unit_ns=dict(ctx.timer_unit_ns),
     )
+    if timings is not None:
+        timings["source"] = rendered - started
+        if not reused:
+            timings["python compile"] = compiled - rendered
+        timings["exec"] = executed - compiled
+        timings["build"] = built - executed + clock() - walked
+        timings["materialized tags"] = walked - built
+    return kernel
 
 
 def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
@@ -188,7 +316,26 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
     return specs
 
 
-def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None) -> str:
+# The abstract-timer tick (see ``compile_kernel``).  Kernel only: CircuitPython
+# output never calls it.
+_BB_TICK_HELPER = [
+    "def _bb_tick(_mem, key, acc, limit):",
+    "    oracle = _mem.get('_bb')",
+    "    if oracle is None:",
+    "        return acc",
+    "    return oracle(key, acc, limit)",
+    "",
+]
+
+
+def _render_kernel_source(
+    ctx: CodegenContext, *, split_after: int | None = None
+) -> tuple[str, str]:
+    """The source a kernel runs, and that source with each called function's text in it.
+
+    A kernel calls the function itself, so its text isn't run.  A lock still has to see an
+    edit to it, and hashes the second string.
+    """
     sub_fn_lines = _compile_subroutines(ctx)
     rungs = ctx.program.rungs
     if split_after is None:
@@ -204,17 +351,21 @@ def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None
         pre_body = _compile_rung_body(ctx, rungs[:split_after], "_kernel_step_pre")
         main_body = _compile_rung_body(ctx, rungs[split_after:], "_kernel_step")
 
-    lines: list[str] = []
-    lines.extend(_render_imports(ctx))
-    lines.extend(_render_helpers(ctx))
-    lines.extend(_render_indirect_helpers(ctx))
-    lines.extend(_render_embedded_functions(ctx))
-    lines.extend(_render_declarations(ctx))
-    lines.extend(sub_fn_lines)
+    head: list[str] = []
+    head.extend(_render_imports(ctx))
+    head.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
+    if ctx.abstract_timers:
+        head.extend(_BB_TICK_HELPER)
+    head.extend(_render_indirect_helpers(ctx))
+    tail: list[str] = []
+    tail.extend(_render_declarations(ctx))
+    tail.extend(sub_fn_lines)
     if pre_body is not None:
-        lines.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
-    lines.extend(_render_step_function(ctx, main_body))
-    return "\n".join(lines).rstrip() + "\n"
+        tail.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
+    tail.extend(_render_step_function(ctx, main_body))
+    source = "\n".join([*head, *tail]).rstrip() + "\n"
+    lock_source = "\n".join([*head, *_render_function_texts(ctx), *tail]).rstrip() + "\n"
+    return source, lock_source
 
 
 # -- Compilation (populates ctx side-effects) --------------------------------
@@ -266,7 +417,9 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_parse_pack_text_value" in ctx.used_helpers
         or "_store_copy_value_to_type" in ctx.used_helpers
         or "_calc_math_isfinite" in ctx.used_helpers
+        or "_math_func" in ctx.used_helpers
         or bool(ctx.used_helpers & set(_STORE_TYPE_HELPERS.values()))
+        or "_store_word_clamped" in ctx.used_helpers
     )
     needs_struct = (
         "_int_to_float_bits" in ctx.used_helpers
@@ -285,256 +438,6 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
     return lines
 
 
-def _render_helpers(ctx: CodegenContext) -> list[str]:
-    helper_defs: dict[str, list[str]] = {
-        "_clamp_int": [
-            "def _clamp_int(value):",
-            "    if value < -32768:",
-            "        return -32768",
-            "    if value > 32767:",
-            "        return 32767",
-            "    return int(value)",
-            "",
-        ],
-        "_wrap_int": [
-            "def _wrap_int(value, bits, signed):",
-            "    mask = (1 << bits) - 1",
-            "    v = int(value) & mask",
-            "    if signed and v >= (1 << (bits - 1)):",
-            "        v -= (1 << bits)",
-            "    return v",
-            "",
-        ],
-        "_rise": [
-            "def _rise(curr, prev):",
-            "    return bool(curr) and not bool(prev)",
-            "",
-        ],
-        "_fall": [
-            "def _fall(curr, prev):",
-            "    return not bool(curr) and bool(prev)",
-            "",
-        ],
-        "_int_to_float_bits": [
-            "def _int_to_float_bits(n):",
-            '    return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]',
-            "",
-        ],
-        "_float_to_int_bits": [
-            "def _float_to_int_bits(f):",
-            '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
-            "",
-        ],
-        "_ascii_char_from_code": [
-            "def _ascii_char_from_code(code):",
-            "    if code < 0 or code > 127:",
-            '        raise ValueError("ASCII code out of range")',
-            "    return chr(code)",
-            "",
-        ],
-        "_as_single_ascii_char": [
-            "def _as_single_ascii_char(value):",
-            "    if not isinstance(value, str):",
-            '        raise ValueError("CHAR value must be a string")',
-            '    if value == "":',
-            "        return value",
-            "    if len(value) != 1 or ord(value) > 127:",
-            '        raise ValueError("CHAR value must be blank or one ASCII character")',
-            "    return value",
-            "",
-        ],
-        "_text_from_source_value": [
-            "def _text_from_source_value(value):",
-            "    if isinstance(value, str):",
-            "        return value",
-            '    raise ValueError("text conversion source must resolve to str")',
-            "",
-        ],
-        "_store_numeric_text_digit": [
-            "def _store_numeric_text_digit(char, mode):",
-            "    _char = _as_single_ascii_char(char)",
-            '    if _char == "":',
-            '        raise ValueError("empty CHAR cannot be converted to numeric")',
-            '    if mode == "value":',
-            '        if _char < "0" or _char > "9":',
-            '            raise ValueError("Copy Character Value accepts only digits 0-9")',
-            '        return ord(_char) - ord("0")',
-            '    if mode == "ascii":',
-            "        return ord(_char)",
-            '    raise ValueError(f"Unsupported text->numeric mode: {mode}")',
-            "",
-        ],
-        "_format_int_text": [
-            "def _format_int_text(value, width, suppress_zero, signed=True):",
-            "    if suppress_zero:",
-            "        return str(value)",
-            "    if not signed:",
-            '        return f"{value:0{width}X}"',
-            "    if value < 0:",
-            '        return f"-{abs(value):0{width}d}"',
-            '    return f"{value:0{width}d}"',
-            "",
-        ],
-        "_render_text_from_numeric": [
-            "def _render_text_from_numeric(",
-            "    value,",
-            "    *,",
-            "    source_type=None,",
-            "    suppress_zero=True,",
-            "    pad=None,",
-            "    exponential=False,",
-            "):",
-            '    if source_type == "REAL" or isinstance(value, float):',
-            "        numeric = float(value)",
-            "        if not math.isfinite(numeric):",
-            '            raise ValueError("REAL source is not finite")',
-            '        return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"',
-            "",
-            "    number = int(value)",
-            "    effective_suppress_zero = suppress_zero if pad is None else False",
-            "    signed_width = max(pad - 1, 0) if pad is not None and number < 0 else pad",
-            "",
-            '    if source_type == "WORD":',
-            "        width = 4 if pad is None else pad",
-            "        return _format_int_text(number & 0xFFFF, width, effective_suppress_zero, False)",
-            '    if source_type == "DINT":',
-            "        width = 10 if signed_width is None else signed_width",
-            "        return _format_int_text(number, width, effective_suppress_zero)",
-            '    if source_type == "INT":',
-            "        width = 5 if signed_width is None else signed_width",
-            "        return _format_int_text(number, width, effective_suppress_zero)",
-            "",
-            "    if pad is None:",
-            '        return str(number) if suppress_zero else f"{number:05d}"',
-            "    width = 5 if signed_width is None else signed_width",
-            "    return _format_int_text(number, width, False)",
-            "",
-        ],
-        "_termination_char": [
-            "def _termination_char(termination_code):",
-            "    if termination_code is None:",
-            '        return ""',
-            "    if isinstance(termination_code, str):",
-            "        if len(termination_code) != 1:",
-            '            raise ValueError("termination_code must be one character or int ASCII code")',
-            "        return _as_single_ascii_char(termination_code)",
-            "    if not isinstance(termination_code, int):",
-            '        raise TypeError("termination_code must be int, str, or None")',
-            "    return _ascii_char_from_code(termination_code)",
-            "",
-        ],
-        "_parse_pack_text_value": [
-            "def _parse_pack_text_value(text, dest_type):",
-            '    if text == "":',
-            '        raise ValueError("empty text cannot be parsed")',
-            '    if dest_type in {"INT", "DINT"}:',
-            '        if not re.fullmatch(r"[+-]?\\d+", text):',
-            '            raise ValueError("integer parse failed")',
-            "        parsed = int(text, 10)",
-            '        if dest_type == "INT" and (parsed < -32768 or parsed > 32767):',
-            '            raise ValueError("integer out of INT range")',
-            '        if dest_type == "DINT" and (parsed < -2147483648 or parsed > 2147483647):',
-            '            raise ValueError("integer out of DINT range")',
-            "        return parsed",
-            '    if dest_type == "WORD":',
-            '        if not re.fullmatch(r"[0-9A-Fa-f]+", text):',
-            '            raise ValueError("hex parse failed")',
-            "        parsed = int(text, 16)",
-            "        if parsed < 0 or parsed > 0xFFFF:",
-            '            raise ValueError("hex out of WORD range")',
-            "        return parsed",
-            '    if dest_type == "REAL":',
-            "        parsed = float(text)",
-            "        if not math.isfinite(parsed):",
-            '            raise ValueError("REAL parse produced non-finite value")',
-            '        struct.pack("<f", parsed)',
-            "        return parsed",
-            '    raise TypeError(f"Unsupported pack_text destination type: {dest_type}")',
-            "",
-        ],
-        "_store_copy_value_to_type": [
-            "def _store_copy_value_to_type(value, dest_type):",
-            "    if isinstance(value, float) and not math.isfinite(value):",
-            "        value = 0",
-            '    if dest_type == "INT":',
-            f"        return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
-            '    if dest_type == "DINT":',
-            f"        return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
-            '    if dest_type == "WORD":',
-            "        return int(value) & 0xFFFF",
-            '    if dest_type == "REAL":',
-            "        return float(value)",
-            '    if dest_type == "BOOL":',
-            "        return bool(value)",
-            '    if dest_type == "CHAR":',
-            "        if not isinstance(value, str):",
-            '            raise ValueError("CHAR value must be a string")',
-            '        if value == "":',
-            "            return value",
-            "        if len(value) != 1 or ord(value) > 127:",
-            '            raise ValueError("CHAR value must be blank or one ASCII character")',
-            "        return value",
-            "    return value",
-            "",
-        ],
-        "_store_int": [
-            "def _store_int(value):",
-            "    if type(value) is int:",
-            f"        return {_INT_MAX} if value > {_INT_MAX} else ({_INT_MIN} if value < {_INT_MIN} else value)",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            f"    return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
-            "",
-        ],
-        "_store_dint": [
-            "def _store_dint(value):",
-            "    if type(value) is int:",
-            f"        return {_DINT_MAX} if value > {_DINT_MAX} else ({_DINT_MIN} if value < {_DINT_MIN} else value)",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
-            "",
-        ],
-        "_store_word": [
-            "def _store_word(value):",
-            "    if type(value) is int:",
-            "        return value & 0xFFFF",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            "    return int(value) & 0xFFFF",
-            "",
-        ],
-        "_store_real": [
-            "def _store_real(value):",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0.0",
-            "    return float(value)",
-            "",
-        ],
-        "_store_bool": [
-            "def _store_bool(value):",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return False",
-            "    return bool(value)",
-            "",
-        ],
-    }
-
-    needed = set(ctx.used_helpers)
-    if "_store_numeric_text_digit" in needed:
-        needed.add("_as_single_ascii_char")
-    if "_termination_char" in needed:
-        needed.update({"_as_single_ascii_char", "_ascii_char_from_code"})
-    if "_render_text_from_numeric" in needed:
-        needed.add("_format_int_text")
-
-    lines: list[str] = []
-    for helper in _HELPER_ORDER:
-        if helper in needed:
-            lines.extend(helper_defs[helper])
-    return lines
-
-
 def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
     lines: list[str] = []
     fault_sym = ctx.symbol_if_referenced(_FAULT_ADDRESS_ERROR_TAG)
@@ -542,34 +445,12 @@ def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
         (ctx.block_bindings[bid] for bid in ctx.used_indirect_blocks),
         key=lambda b: ctx.index_helper_name(b.block_id),
     ):
-        helper_name = ctx.index_helper_name(binding.block_id)
-        lines.append(f"def {helper_name}(addr):")
-        if fault_sym is not None:
-            lines.append(f"    global {fault_sym}")
-        lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
-        if fault_sym is not None:
-            lines.append(f"        {fault_sym} = True")
-        lines.append(
-            f'        raise IndexError(f"Address {{addr}} out of range'
-            f" for {binding.logical_name} ({binding.start}-{binding.end})"
-            '")'
-        )
-        if binding.valid_addresses is not None:
-            lines.append(f"    if addr not in {binding.valid_addresses!r}:")
-            if fault_sym is not None:
-                lines.append(f"        {fault_sym} = True")
-            lines.append(
-                f'        raise IndexError(f"Address {{addr}} out of range'
-                f" for {binding.logical_name} ({binding.start}-{binding.end})"
-                '")'
-            )
-        lines.append(f"    return int(addr) - {binding.start}")
-        lines.append("")
+        lines.extend(_render_index_helpers(ctx, binding, fault_sym, fault_sym))
     return lines
 
 
-def _render_embedded_functions(ctx: CodegenContext) -> list[str]:
-    lines: list[str] = []
+def _render_function_texts(ctx: CodegenContext) -> list[str]:
+    lines: list[str] = ctx.function_constant_lines()
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
         lines.append(src)

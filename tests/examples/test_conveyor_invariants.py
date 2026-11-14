@@ -131,7 +131,7 @@ mapping = TagMap(
         EntrySensor.map_to(x[6]),
         DiverterBtn.map_to(x[7]),
         BinASensor.map_to(x[8]),
-        BinBSensor.map_to(x[9]),
+        BinBSensor.map_to(x[101]),
         # Outputs
         conv.Motor.map_to(y[1]),
         conv.Diverter.map_to(y[2]),
@@ -141,8 +141,8 @@ mapping = TagMap(
         IsLarge.map_to(c[2]),
         CountReset.map_to(c[3]),
         # Feedback (mapped to available input points)
-        conv.MotorFb.map_to(x[10]),
-        conv.DiverterFb.map_to(x[11]),
+        conv.MotorFb.map_to(x[102]),
+        conv.DiverterFb.map_to(x[103]),
         # State constants
         *SortState.map_to(ds.select(1, 4)),
         # Data
@@ -170,7 +170,7 @@ mapping = TagMap(
 
 @program
 def logic():
-    comment("Start/stop — NC stop button resets when pressed or wire broken")
+    comment("Start/stop - NC stop button resets when pressed or wire broken")
     with Rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with Rung(~StopCircuitOK):
@@ -178,14 +178,14 @@ def logic():
     with Rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with Rung(EstopOK):
         with branch(Running):
             out(conv.Motor)
         with branch(Running):
             out(conv.StatusLight)
 
-    comment("Sort state machine — IDLE to DETECTING: box arrives")
+    comment("Sort state machine - IDLE to DETECTING: box arrives")
     with Rung(State == SortState.IDLE, rise(EntrySensor)):
         copy(SortState.DETECTING, State)
 
@@ -208,7 +208,7 @@ def logic():
         reset(IsLarge)
         copy(SortState.IDLE, State)
 
-    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    comment("Diverter output - auto sort OR manual button, gated by EstopOK")
     with Rung(
         EstopOK,
         Or(
@@ -219,9 +219,9 @@ def logic():
         out(conv.Diverter)
 
     comment("Bin counters")
-    with Rung(rise(BinASensor)):
+    with Rung(BinASensor):
         count_up(BinACounter, preset=9999).reset(CountReset)
-    with Rung(rise(BinBSensor)):
+    with Rung(BinBSensor):
         count_up(BinBCounter, preset=9999).reset(CountReset)
 
 

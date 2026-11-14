@@ -13,11 +13,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from pyrung.core.analysis.pilot.constrained_reachability import (
-    FrontierStatus,
-    NoRoute,
-    Reachable,
-)
 from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     refine_relational_hypothesis,
@@ -58,16 +53,6 @@ class _RelationalRefinementReceipt:
     @property
     def exhausted(self) -> bool:
         return self.refinements >= self.budget
-
-
-def _continuation_ground(status: FrontierStatus) -> str:
-    """Render the exact static ground carried by a continuation verdict."""
-
-    if isinstance(status, Reachable):
-        return ", ".join(status.provenance)
-    if isinstance(status, NoRoute):
-        return status.proof
-    return status.reason
 
 
 def _refine_unknown_continuation(

@@ -58,6 +58,19 @@ class _InstructionInfo:
     af_token: str
     branch_tree: SPNode | None  # branch-local conditions (SP tree)
     pins: list[_PinInfo]
+    # The wire of the raw CSV rung it sits on (0 for the first), a wire being
+    # rows joined by verticals; None where unknown.
+    wire: int | None = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
+class _SourceOutput:
+    """One output as the source rows wired it, before grouping or splitting."""
+
+    af_token: str
+    tree: SPNode | None  # full condition from the power rail to this output
+    pins: tuple[_PinInfo, ...]
+    wire: int = 0  # the wire of the raw CSV rung it sits on (0 for the first)
 
 
 @dataclass
@@ -69,6 +82,9 @@ class _AnalyzedRung:
     instructions: list[_InstructionInfo]
     role: RungRole = RungRole.NORMAL
     is_continued: bool = False
+    # Per-output source wiring of the raw CSV rung this rung starts; None on
+    # pieces split off a raw rung (they share the first piece's entry).
+    source_outputs: tuple[_SourceOutput, ...] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -81,9 +97,8 @@ class _PhysicalSpec:
     """A serializable Physical(...) declaration used by codegen."""
 
     name: str
-    on_delay: str | None = None
-    off_delay: str | None = None
-    profile: str | None = None
+    # ``Physical.keywords()`` as pairs, so the spec stays hashable.
+    keywords: tuple[tuple[str, object], ...] = ()
     system: str | None = None
 
 
@@ -137,6 +152,10 @@ class _TimerCounterCloneDecl:
     done_operand: str  # original done-bit operand (e.g. "T1")
     acc_operand: str  # original accumulator operand (e.g. "TD1")
     nicknames: dict[str, str] = field(default_factory=dict)
+    # Fields whose address is set to a retentive policy other than the built-in's.
+    retentive: dict[str, bool] = field(default_factory=dict)
+    # Comments carried by the Done/Acc addresses.
+    comments: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -149,7 +168,6 @@ class _RangeDecl:
     prefix: str  # operand prefix (e.g. "DS")
     start: int
     end: int
-    operand_str: str  # e.g. "DS100..DS102"
 
 
 @dataclass
@@ -271,6 +289,7 @@ class _OperandCollection:
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
+    has_register_type: bool = False
     has_system_operands: bool = False
     unmapped_defaults: dict[tuple[str, int], object] = field(default_factory=dict)
     unmapped_retentive: dict[tuple[str, int], bool] = field(default_factory=dict)
@@ -312,6 +331,7 @@ class _FileRefs:
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
+    has_register_type: bool = False
     has_system_import: bool = False
     tc_clone_var_names: set[str] = field(default_factory=set)
     subroutine_func_names: set[str] = field(default_factory=set)

@@ -198,6 +198,13 @@ After each scan, the extension reads trace data and applies decorations to the s
 - **Inline annotations**: evaluated condition and instruction values as faded text
 - **Red inline text**: the condition that caused an unpowered rung
 
+Each instruction solves the path from the rail to it, and the trace follows that:
+
+- A branch's contacts are evaluated when the step reaches the branch, against the writes of the instructions above it. Until then its region reads `disabled_local` with its conditions skipped (under an unpowered parent, `disabled_parent`, final from the rung's first step).
+- Every branch under a powered parent gets a `branch` step, powered or not, so its final region is in some event. Branch steps are not stop points for `next`/`stepIn`.
+- A box's pins are traced as the box read them, at box entry.
+- The whole-program trace built from the last committed scan (Continue and scan frames) takes each region of a rung's first event from the last event carrying it, so each branch shows its solved state. Regions are matched by their place in the rung's tree (each step carries its own as `branch_path`), not by source span, which branches built by one helper share. Nested branches are included, those under an unpowered branch too; steps of a called subroutine or a loop body are skipped. `pyrungTrace` sends the debugger's current event (`runner.debug.last_event()`) as it stands.
+
 ### Architecture
 
 The extension consists of:
@@ -218,6 +225,127 @@ Incremental note (Phase 3, 2026-02-21):
   - `"live"` when the returned event is from in-flight debug scan context
   - `"inspect"` when the returned event is from committed retained debug scan context
 - Coverage remains intentionally debug-path-only (`scan_steps_debug()` and DAP stepping paths).
+
+### Trace event
+
+The adapter emits `pyrungTrace` after each stop with the current step and region evaluation details used by decorations.
+
+### Simulator custom requests
+
+These requests drive the [simulator controls](../guides/dap-vscode.md#simulator-controls) from a client such as ClickNick.
+
+| Request | Arguments | Response body |
+|---|---|---|
+| `pyrungSetMode` | `{mode: "run" or "stop", patches?: {target: value}, forces?: {target: value}}` | `{mode, forces, pendingPatches}` |
+| `pyrungSetSpeed` | `{speed}` | `{speed}` |
+| `pyrungModbusInfo` | none | `{running, host, port, clients, error}` |
+| `pyrungLink` | `{feedback, enable, trigger?, onDelay?, offDelay?, flasherOn?, flasherOff?, timed?, maintained?, toggle?, rampOn?, rampOff?, approachTo?, approachRate?, physical?, system?}` | `{text, command}` |
+| `pyrungUnlink` | `{feedback}` | `{text}` |
+| `pyrungRestoreLink` | `{feedback}` | `{text}` |
+| `pyrungSetLinks` | `{bench?: bool, enabled?: {feedback: bool}}` | same as `pyrungListLinks` |
+| `pyrungListLinks` | none | `{bench, revision, links: [{feedback, enable, trigger, kind, onDelay, offDelay, flasherOn, flasherOff, timed, maintained, toggle, rampOn, rampOff, approachTo, approachRate, keys, physical, system, source, active, pending, cut?, enabled?}]}` |
+| `pyrungReload` | `{forces?: {old: new or null}, links?: {old feedback: {en, fb} or {cut: true, fb} or null}, declared?: {old feedback: new feedback}}` | `{result, carried}` (see [Planned reload](#planned-reload)) |
+
+`pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again.
+
+The link requests mirror the [bench link](../guides/console.md#bench-links) console verbs. Each response key is one camelCase field, such as `flasherOn` for `flasher_on`. `pyrungListLinks` gives each value as the text a comment would hold (`"0.8"`, `"500ms"`), and `maintained` and `toggle` as booleans. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
+
+### State frames
+
+`pyrungScanFrame` is sent while Continue runs. It is also sent after any state change, whether the change came from a DAP request, a `pyrung live` command, a Modbus write, or auto-reload. A state change is a step, run, force, patch, mode change, speed change or reload.
+
+Each frame carries `trace` (whose `forces` always holds the full force map), `changes`, `monitors`, `snapshots` and `outputs`. It also carries these fields:
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"run"` or `"stop"` |
+| `running` | Continue is executing |
+| `speed` | Requested pacing, `0` = unpaced |
+| `actualSpeed` | Measured simulation time / wall time while running, else `null` |
+| `pendingPatches` | Patches not yet in the committed state (queued, or taken by a scan still being stepped) |
+| `source` | Who caused the frame: `{origin, command}`, origin one of `dap`, `live`, `worker`, `modbus`, `autoreload` |
+
+Frames sent outside Continue carry an empty `changes` list and, when paused, the same trace as the latest `pyrungTrace`.
+
+### Reload report
+
+The `evaluate` response for the console `reload` carries a `carried` list next to `result`. Autoreload puts the same list in the `data` of its console output event. The list is empty when nothing moved or dropped. Each entry is one force, bench link or bench cut that moved to another CLICK address or was dropped:
+
+| Field | Meaning |
+|---|---|
+| `tag` | The tag that moved or was dropped. For a link whose enable moved or left the program, this is the enable. |
+| `kind` | `force`, `link` or `cut` |
+| `feedback` | The link's or cut's feedback tag. Absent for a force. |
+| `old`, `new` | CLICK addresses as the TagMap writes them (`X001`, `DS1`). `null` when the tag had none, and `new` is `null` when dropped. |
+| `dropped` | `true` when the force or bench change no longer applies |
+| `reason` | Only when dropped. One of the reasons below. |
+| `value` | A force's value. Absent otherwise. |
+| `enabled` | A link's or cut's enabled flag. Absent for a force. |
+
+A force or link follows the tag name, never the address. A reload without a TagMap reports only drops.
+
+Each `reason` means:
+
+| Reason | Meaning |
+|---|---|
+| `gone` | The new program has no tag of that name. The console reload names it in `tag`, and `pyrungReload` names it in `detail`. |
+| `type changed` | The tag the force goes to has another type in the new program than the forced tag had. |
+| `not forceable` | The new program refuses the force. |
+| `unlinked` | The feedback is in the new program, but the program does not link it. This drops a cut, or a `declared` entry. |
+| `in program` | The new program declares the bench link the same way, so the program's link runs. A coil the plan moved there keeps its state. |
+| `invalid` | The bench link does not fit the new program, such as a feedback that is now an `Int`. |
+| `bad plan` | Only from `pyrungReload`. The plan entry is malformed (`detail` says how). |
+| `conflict` | Only from `pyrungReload`. Two or more forces would end on the same new tag, or two or more bench changes would end on the same new feedback. Two `declared` entries onto one feedback are a conflict too. None of them is applied. |
+| `in use` | Only from `pyrungReload`. A coil already runs on the new feedback, and it still runs there after the reload. Moving this coil there would overwrite the other coil's state, so the entry is dropped. |
+| `changed kind` | Only from `pyrungReload`. A `declared` entry's new link has another kind (`timed` and `delay`, say) or another trigger than the old one. The new coil starts fresh. |
+| `not declared` | Only from `pyrungReload`. A `declared` entry names a feedback the old program does not link, or one whose link a bench change replaced. A bench change that runs on the new feedback drops the entry too, and the bench change stays. A disabled bench change, or any with bench wiring off, does not. |
+| `not forced` | Only from `pyrungReload`. The plan names a force that does not exist. |
+| `no bench change` | Only from `pyrungReload`. The plan names a bench change that does not exist. |
+
+### Planned reload
+
+`pyrungReload` reloads the program as the console `reload` does, and moves each force and bench change where the caller's plan says. A client that has the new program's TagMap (ClickNick) knows where each tag went, so it sends the plan. Each argument is optional, and each is keyed by the old tag name:
+
+```json
+{
+  "forces": {"Start": "StartPB", "Jog": null},
+  "links": {
+    "MotorFb": {"en": "MotorCmd", "fb": "Motor_Fb"},
+    "DoorFb": {"cut": true, "fb": "Door_Fb"},
+    "PumpFb": null
+  },
+  "declared": {"FanFb": "Fan_Fb"}
+}
+```
+
+- A force moves to the tag its plan names with the same value. `null` releases it.
+- A bench link moves to the feedback `fb` and reads the enable `en`, with the same delays and trigger. `null` removes it.
+- A bench cut is planned as `{"cut": true, "fb": ...}`. The cut is dropped when the new program does not link `fb`.
+- A plan entry without `en` and without `"cut": true` is a `bad plan`. It is never taken as a cut.
+- A force or bench change the plan leaves out follows its tag name, as the console `reload` does.
+- A `declared` entry is for a link the program declares itself. The old program links the old feedback, and the new program links the new one. The coil's state moves to the new feedback, and the entry is reported as kind `declared`. An entry is dropped when either side has no declared link. It is also dropped when the new link has another kind or trigger.
+- When two forces or two bench changes would end on the same new tag, planned or following their names, neither is applied. Each is reported as a `conflict`.
+- A bench change that runs on a feedback drops a `declared` entry onto it as `not declared`. The bench change stays. A disabled bench change, or any with bench wiring off, lets the entry move.
+- A coil never moves onto a feedback whose own coil stays there. Such an entry is dropped as `in use`.
+
+A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. A feedback value moves only into a tag of the same type. Otherwise the new feedback starts from its default. The plan is applied when the new program replaces the old one. A reload that fails changes nothing, so the old program, mode, forces, harness, bench changes and breakpoints stay. A plan whose `forces`, `links` or `declared` is not an object fails the request. So does a plan with a key that is not a tag name. Any other problem with an entry is reported in `carried` and leaves the rest of the plan applied. `pyrungReload` pauses a running Continue first.
+
+The response body is `{result, carried}`, as for the console `reload`. Here `carried` lists every force and bench change of the session, moved or not. It also lists each `declared` entry, and each plan entry that matched nothing. Each entry has these fields:
+
+| Field | Meaning |
+|---|---|
+| `tag` | The old name of the forced tag, or of the link's feedback |
+| `kind` | `force`, `link`, `cut` or `declared` |
+| `to` | The tag it now sits on. `null` when released or dropped. |
+| `old`, `new` | CLICK addresses of `tag` in the old program and of `to` in the new one, or `null` |
+| `planned` | `true` when the plan named it |
+| `released` | `true` when the plan takes the force off, with a `null` or a `conflict`. For a bench change, `true` when the plan removes it with a `null`. |
+| `dropped` | `true` when it could not be carried, and `reason` says why. A dropped force is not in the new program, and neither is a released one. |
+| `reason`, `detail` | Only when dropped. `detail` is a sentence such as `"Motor_Fb is not in the new program"`. |
+| `value` | A force's value |
+| `feedback` | A link's, cut's or declared link's old feedback (the same as `tag`) |
+| `enable` | The enable a kept link or declared link now reads. `null` for a cut, and for a link that was dropped or removed. |
+| `enabled` | A bench link's or cut's enabled flag. Absent for a declared link. |
 
 ---
 
@@ -277,9 +405,10 @@ Mapped to core engine phases:
 
 ### Force and edge detection
 
-- `rise()` / `fall()` evaluate whatever value is present when that condition is evaluated.
-- Since forced variables may diverge mid-cycle, edges can reflect IEC assignments during the scan.
-- Across scans, the committed post-force value is what carries into the next cycle.
+- Each `rise()` / `fall()` contact keeps its own memory (`_edge:e{N}` in `SystemState.memory`): the bit as that contact last saw it, updated every scan its row is solved, powered or not, and off at RUN and at STOP->RUN.
+- A contact compares the value present when it is solved with that memory. Since forced variables may diverge mid-cycle, a contact below a rung that assigns a forced tag sees the assigned value; one above it sees the pre-logic force value.
+- So the memory a contact carries into the next scan is the value it read, not the committed post-force value: two contacts on one forced tag can remember different values.
+- Breakpoint and `run_until()` edges are no contact of the program: each keeps private memory, judged on the committed scan snapshot (see below).
 
 ---
 
@@ -290,6 +419,7 @@ Mapped to core engine phases:
 - `pause()` halts `run()`, `run_for()`, or `run_until()` after committing the triggering scan.
 - `snapshot(label)` tags the triggering scan and does not halt.
 - Each registration returns a handle with `remove()`, `enable()`, `disable()`, and `id`.
+- A `rise()` / `fall()` in a `when()` condition compares against the bit as that registration last judged it, armed from the current state when registered and again on `enable()`.
 - Multiple breakpoints can be active simultaneously.
 
 Label lookup:

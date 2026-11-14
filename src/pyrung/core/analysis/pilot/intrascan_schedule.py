@@ -23,8 +23,8 @@ from pyrung.core.analysis.pilot.requirements import (
 )
 from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.crossing import Cmp
-from pyrung.core.fold import _extract_condition_reads
 from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.read_trace import _extract_condition_reads
 from pyrung.core.tag import Tag, TagType
 
 
@@ -296,7 +296,7 @@ def compile_scalar_schedule(
     for name, conditions in sorted(by_tag.items()):
         if name in guard_names:
             return ScheduleCompilation(detail=f"repair guard self-demands {name!r}")
-        tag = plc._known_tags_by_name.get(name)
+        tag = plc._tag_known_or_reached(name)
         if tag is None:
             return ScheduleCompilation(detail=f"unknown assignment destination {name!r}")
         value = _satisfying_value(tag, tuple(conditions), snapshot)

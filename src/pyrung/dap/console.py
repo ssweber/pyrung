@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyrung.core import AvoidCheckError
+from pyrung.core.state import value_changed
 from pyrung.dap import execution_flow
 
 # grammar.py reads this registry, but only from inside command_grammar() — so
@@ -28,6 +30,8 @@ class ConsoleResult:
 
     text: str
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
+    #: Extra fields for the evaluate response body, for clients that read data.
+    body: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -133,7 +137,16 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
             f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
         )
     result = entry.handler(adapter, expression)
+    record_command(adapter, verb, expression, provenance=provenance)
+    return result
 
+
+def record_command(adapter: Any, verb: str, expression: str, *, provenance: str) -> None:
+    """Log a command that succeeded, and capture it while recording.
+
+    A request that runs a console command's code (``pyrungReload`` runs ``reload``)
+    calls this too, so the log shows it the same way.
+    """
     from pyrung.dap.capture import capture_hook
 
     capture_hook(adapter, verb, expression, provenance=provenance)
@@ -143,8 +156,6 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
         runner = getattr(adapter, "_runner", None)
         scan_id = runner.current_state.scan_id if runner else None
         action_log.append((scan_id, expression.strip(), provenance))
-
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +187,13 @@ def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.force(tag, value)
+    name = adapter._resolve_target_locked(tag)
+    try:
+        runner.force(name, value)
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"cannot force: {exc}") from exc
     execution_flow.invalidate_mid_scan(adapter)
-    return ConsoleResult(f"Forced {tag}={value!r}")
+    return ConsoleResult(f"Forced {tag}={runner.forces[name]!r}")
 
 
 @register("unforce", usage="unforce <tag>", group="data")
@@ -188,7 +203,7 @@ def _cmd_unforce(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Usage: unforce <tag>")
     tag = parts[1]
     runner = adapter._require_runner_locked()
-    runner.unforce(tag)
+    runner.unforce(adapter._resolve_target_locked(tag))
     execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Removed force {tag}")
 
@@ -215,9 +230,13 @@ def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     raw_value = parts[2]
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
-    runner.patch({tag: value})
+    name = adapter._resolve_target_locked(tag)
+    try:
+        runner.patch({name: value})
+    except ValueError as exc:
+        raise adapter.DAPAdapterError(f"cannot patch: {exc}") from exc
     execution_flow.invalidate_mid_scan(adapter)
-    return ConsoleResult(f"Patched {tag}={value!r}")
+    return ConsoleResult(f"Patched {tag}={runner.pending_patches[name]!r}")
 
 
 @register("continue", usage="continue", group="execution")
@@ -244,6 +263,51 @@ def _cmd_pause(adapter: Any, _expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Not running")
     adapter._pause_event.set()
     return ConsoleResult("Pausing after current scan")
+
+
+@register("mode", usage="mode [run|stop]", group="execution", hint="(PLC RUN/STOP mode)")
+def _cmd_mode(adapter: Any, expression: str) -> ConsoleResult:
+    from pyrung.dap.handlers.simulation import set_mode_locked
+
+    parts = expression.strip().split()
+    runner = adapter._require_runner_locked()
+    if len(parts) == 1:
+        return ConsoleResult(f"Mode: {runner.mode.upper()}")
+    mode = parts[1].lower()
+    if len(parts) > 2 or mode not in ("run", "stop"):
+        raise adapter.DAPAdapterError("Usage: mode [run|stop]")
+    set_mode_locked(adapter, mode)
+    if mode == "stop" and adapter._pending_stop:
+        return ConsoleResult("Pausing, then entering STOP")
+    return ConsoleResult(f"Mode: {runner.mode.upper()}")
+
+
+@register(
+    "speed",
+    usage="speed [N|max]",
+    group="execution",
+    hint="(1 = real time; 0 or max = unpaced)",
+    slots=(Slot(kind="text", label="N|max", required=False),),
+)
+def _cmd_speed(adapter: Any, expression: str) -> ConsoleResult:
+    from pyrung.dap.handlers.simulation import parse_speed
+
+    parts = expression.strip().split()
+    if len(parts) > 2:
+        raise adapter.DAPAdapterError("Usage: speed [N|max]")
+    if len(parts) == 2:
+        if parts[1].lower() == "max":
+            raw: Any = 0.0
+        else:
+            try:
+                raw = float(parts[1])
+            except ValueError:
+                raw = parts[1]
+        adapter._speed = parse_speed(adapter, raw, prefix="speed")
+    speed = adapter._speed
+    if speed <= 0:
+        return ConsoleResult("Speed: unpaced")
+    return ConsoleResult(f"Speed: {speed:g}x real time")
 
 
 @register("stop", usage="stop", group="execution", hint="(cancels a running analysis)")
@@ -395,10 +459,13 @@ def _cmd_cause(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Usage: cause <tag>[@scan|:value]")
     tag, scan, has_value, value = _parse_tag_spec(parts[1])
     runner = adapter._require_runner_locked()
-    if has_value:
-        chain = runner.cause(tag, to=value)
-    else:
-        chain = runner.cause(tag, scan=scan)
+    try:
+        if has_value:
+            chain = runner.cause(tag, to=value)
+        else:
+            chain = runner.cause(tag, scan=scan)
+    except ValueError as exc:  # e.g. too many unrecorded scans to settle
+        raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No causal chain found for {tag}")
     return ConsoleResult(str(chain))
@@ -411,10 +478,13 @@ def _cmd_effect(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError("Usage: effect <tag>[@scan|:value]")
     tag, scan, has_value, value = _parse_tag_spec(parts[1])
     runner = adapter._require_runner_locked()
-    if has_value:
-        chain = runner.effect(tag, from_=value)
-    else:
-        chain = runner.effect(tag, scan=scan)
+    try:
+        if has_value:
+            chain = runner.effect(tag, from_=value)
+        else:
+            chain = runner.effect(tag, scan=scan)
+    except ValueError as exc:  # e.g. too many unrecorded scans to settle
+        raise adapter.DAPAdapterError(str(exc)) from exc
     if chain is None:
         return ConsoleResult(f"No effect chain found for {tag}")
     return ConsoleResult(str(chain))
@@ -536,9 +606,6 @@ class _PilotProgressFormatter:
         return rendered[-1] if rendered else ""
 
     def _confirmed_corrections(self, data: dict[str, Any]) -> list[str]:
-        from pyrung.core.analysis.graph import _format_synthesis_instruction
-        from pyrung.core.validation.render import render_condition
-
         investigation = data.get("investigation", {})
         confirmed = investigation.get("confirmed_detail", ())
         if not confirmed:
@@ -551,23 +618,16 @@ class _PilotProgressFormatter:
             if exact_rungs:
                 confirmed = ({"holds": exact_rungs},)
         steady: list[str] = []
-        by_guard: dict[str, list[str]] = {}
+        logic: list[Any] = []
         for hypothesis in confirmed:
             for proposal in hypothesis.get("holds", ()):
                 if hasattr(proposal, "dest"):
-                    guard = render_condition(proposal.guard)
-                    instruction = _format_synthesis_instruction(proposal)
-                    instructions = by_guard.setdefault(guard, [])
-                    if instruction not in instructions:
-                        instructions.append(instruction)
+                    logic.append(proposal)
                 else:
                     assignment = f"{proposal[0]}={_pilot_value(proposal[1])}"
                     if assignment not in steady:
                         steady.append(assignment)
-        corrections = [
-            f"with rung({guard}): {'; '.join(instructions)}"
-            for guard, instructions in by_guard.items()
-        ]
+        corrections = self._render_rungs(logic)
         if steady:
             corrections.insert(0, f"keep {', '.join(steady)}")
         for tag, value in data.get("released_holds", ()):
@@ -575,21 +635,25 @@ class _PilotProgressFormatter:
         return corrections
 
     def _render_rungs(self, rungs: Any) -> list[str]:
-        """Render exact temporary logic as compact, source-shaped operations."""
-        from pyrung.core.analysis.graph import _format_synthesis_instruction
-        from pyrung.core.validation.render import render_condition
+        """The temporary logic built as the plan text builds it, one line per rung."""
+        from pyrung.core.analysis.graph import rules_logic
+        from pyrung.core.analysis.pilot.world_key import _rung_identity
 
-        by_guard: dict[str, list[str]] = {}
-        for rung in rungs:
-            guard = render_condition(rung.guard)
-            instruction = _format_synthesis_instruction(rung)
-            instructions = by_guard.setdefault(guard, [])
-            if instruction not in instructions:
-                instructions.append(instruction)
-        return [
-            f"with rung({guard}): {'; '.join(instructions)}"
-            for guard, instructions in by_guard.items()
-        ]
+        unique = list({_rung_identity(rung): rung for rung in rungs}.values())
+        compact: list[str] = []
+        for line in rules_logic(tuple(unique)):
+            if line.startswith("comment("):
+                # One line per rung leaves no room for its comment.  The plan text prints it.
+                continue
+            if line.startswith("  ") and compact and compact[-1].startswith("with rung("):
+                compact[-1] = (
+                    f"{compact[-1]} {line.strip()}"
+                    if compact[-1].endswith(":")
+                    else f"{compact[-1]}; {line.strip()}"
+                )
+            else:
+                compact.append(line.strip())
+        return compact
 
     def format(self, event: Any) -> str | None:
         kind = event.kind
@@ -708,14 +772,14 @@ class _PilotProgressFormatter:
             scan_before = data.get("scan_before")
             scan_after = data.get("scan_after", event.scan)
             span = scan_after - scan_before if scan_before is not None else None
-            skipped = data.get("coast_skipped_scans")
+            stretched = data.get("coast_stretched_scans")
             kernel = data.get("coast_kernel_scans")
             channel = data.get("bearing_coast_channel_tag")
             before = data.get("bearing_coast_before_value")
             after = data.get("bearing_coast_actual_value")
             elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
-            if isinstance(skipped, int) and skipped > 0 and isinstance(kernel, int):
-                elapsed += f" ({skipped:,} folded; {kernel:,} kernel)"
+            if isinstance(stretched, int) and stretched > 0 and isinstance(kernel, int):
+                elapsed += f" ({stretched:,} in the loop; {kernel:,} interpreted)"
             prefix = " " if self._wait_open or self._retry_open else "  "
             wait_channel = self._wait_channel
             resuming = self._resuming_open
@@ -727,7 +791,7 @@ class _PilotProgressFormatter:
             if self._target is not None and snapshot.get(self._target[0]) == self._target[1]:
                 tag, value = self._target
                 outcome = f"{tag}={_pilot_value(value)}{elapsed}"
-            elif channel is not None and before != after:
+            elif channel is not None and value_changed(before, after):
                 tag = "" if channel == wait_channel and not resuming else f"{channel} "
                 if isinstance(before, bool) and isinstance(after, bool):
                     outcome = f"{tag}-> {_pilot_value(after)}{elapsed}"
@@ -918,7 +982,7 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         except ExpressionParseError as exc:
             raise adapter.DAPAdapterError(f"how {label}: {exc}") from exc
         try:
-            conds = to_conditions(parsed, runner._known_tags_by_name)
+            conds = to_conditions(parsed, runner.tags)
         except KeyError as exc:
             raise adapter.DAPAdapterError(f"how {label}: unknown tag {exc}") from exc
         return conds
@@ -943,7 +1007,10 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         if fragment is not None:
             adapter._send_event("output", {"category": "console", "output": fragment})
 
-    path = runner.how(*conditions, avoid=_single("avoid"), on_event=_on_pilot_event)
+    try:
+        path = runner.how(*conditions, avoid=_single("avoid"), on_event=_on_pilot_event)
+    except AvoidCheckError as exc:
+        raise adapter.DAPAdapterError(f"how avoid: {exc}") from exc
     return ConsoleResult(str(path))
 
 
@@ -1005,7 +1072,7 @@ def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError(f"prove: {exc}") from exc
 
     scope = sorted(referenced_tags(expr))
-    predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
+    predicate = compile_for_dict(expr, tags=runner.tags)
 
     adapter._send_event("output", {"category": "console", "output": "Verifying...\n"})
 
@@ -1060,7 +1127,7 @@ def _format_prove_result(result: Any) -> str:
 def _resolve_tags(runner: Any, names: list[str], *, verb: str) -> list[Any]:
     tags = []
     for name in names:
-        tag = runner._known_tags_by_name.get(name)
+        tag = runner._tag_known_or_reached(name)
         if tag is None:
             raise ValueError(f"{verb}: unknown tag '{name}'")
         tags.append(tag)
@@ -1442,6 +1509,14 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
         if a_scan is not None and prov != "console":
             scan_sources.setdefault(a_scan, set()).add(prov)
 
+    # A force record repeats the set in force at each checkpoint: what changed is against the last.
+    force_records = log._force_changes_by_scan
+    earlier = [scan_id for scan_id in force_records if scan_id < start]
+    last_forces = force_records[max(earlier)] if earlier else {}
+
+    # Newest first, the way a replayed stretch is kept: oldest first steps one for each scan.
+    states = {scan_id: runner.history.at(scan_id) for scan_id in range(tip, start - 1, -1)}
+
     prev_state = None
     for scan_id in range(start, tip + 1):
         entries: list[str] = []
@@ -1451,29 +1526,26 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
         if patches:
             for tag, val in sorted(patches.items()):
                 entries.append(f"  patch {tag} {val!r}")
-        force_snap = log._force_changes_by_scan.get(scan_id)
+        force_snap = force_records.get(scan_id)
         if force_snap is not None:
-            prev_scan = scan_id - 1
-            prev_forces = (
-                log._force_changes_by_scan.get(prev_scan, {}) if prev_scan >= log.base_scan else {}
-            )
-            for tag in sorted(set(force_snap) | set(prev_forces)):
-                old = prev_forces.get(tag)
+            for tag in sorted(set(force_snap) | set(last_forces)):
+                old = last_forces.get(tag)
                 new = force_snap.get(tag)
-                if old != new:
+                if value_changed(old, new):
                     if new is not None and old is None:
                         entries.append(f"  force {tag} {new!r}")
                     elif new is None and old is not None:
                         entries.append(f"  unforce {tag}")
                     else:
                         entries.append(f"  force {tag} {old!r} -> {new!r}")
+            last_forces = force_snap
 
-        cur_state = runner.history.at(scan_id)
+        cur_state = states[scan_id]
         if prev_state is not None:
             for key in sorted(set(cur_state.tags.keys()) | set(prev_state.tags.keys())):
                 old_v = prev_state.tags.get(key)
                 new_v = cur_state.tags.get(key)
-                if old_v != new_v:
+                if value_changed(old_v, new_v):
                     entries.append(f"  {key}: {old_v!r} -> {new_v!r}")
         prev_state = cur_state
 

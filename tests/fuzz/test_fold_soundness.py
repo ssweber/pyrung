@@ -1,22 +1,19 @@
-"""Fold soundness fuzzer — saturated-heartbeat and frozen-rung shapes.
+"""Loop soundness fuzzer: saturated-heartbeat and stable-input shapes.
 
 **Saturated heartbeat:**  A system clock gating a rung that reads an accumulator
-through a comparison is exactly the family `_runtime_soft_clocks` promotes soft
-once the comparison saturates (`fold._comparisons_saturated`).  Before saturation
-the clock must stay bound (every edge honored); after, its edges may be skipped —
-but only while the gated output stays frozen, which the observe-before-skip
-plateau guard re-confirms each window.
+through a comparison that saturates partway up the ramp.  The clock ends every
+window, before and after the comparison settles.
 
-**Frozen-rung writes:**  A clock-gated rung whose inputs are *structurally*
-unreachable from any varying tag (accumulators, churn, etc.) has its writes
-excluded from the plateau guard entirely — the fixed-point analysis in
-``_frozen_rung_writes`` proves the rung can only emit identical output, so clock
-edges no longer break the plateau window.  Non-frozen tags written by other rungs
-gated by the same clock must still be bit-equal to scan-by-scan.
+**Stable-input rungs:**  Clock-gated rungs over external inputs beside one over
+the accumulator.  None is an indicator (an edge contact remembers), so every clock
+edge ends a window; every tag must still be bit-equal to scan-by-scan.
 
-Reproducer on failure: the drawn ``spec`` is the reproducer — it is printed via
+Both families compare the whole tag image exactly, timer accumulators
+included: the loop runs each timer's per-scan carry.
+
+Reproducer on failure: the drawn ``spec`` is the reproducer: it is printed via
 ``note`` and embedded in the assertion message, and ``_build(spec)`` /
-``_build_frozen(spec)`` reconstructs the exact program.
+``_build_stable(spec)`` reconstructs the exact program.
 """
 
 from __future__ import annotations
@@ -24,7 +21,7 @@ from __future__ import annotations
 import hypothesis.strategies as st
 from hypothesis import example, given, note, settings
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, calc, count_up, on_delay, out
+from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, math, on_delay, out
 from pyrung.core import rise, system
 from pyrung.core.runner import PLC
 
@@ -39,14 +36,15 @@ _BODY = ["calc", "coil"]
 @st.composite
 def _heartbeat_spec(draw: st.DrawFn) -> dict:
     """A saturated-heartbeat program: a ramping timer/counter, a clock-gated
-    rung reading its accumulator through one comparison, and a frozen-input
+    rung reading its accumulator through one comparison, and a stable-input
     body.  The threshold sits strictly below the preset so the comparison
     saturates partway up the ramp (the interesting window)."""
     src = draw(st.sampled_from(_SRC))
     if src == "timer":
         preset = draw(st.integers(min_value=2_000, max_value=20_000))  # ms
     else:
-        preset = draw(st.integers(min_value=200, max_value=2_000))  # counts
+        # Counts of the 100 ms clock (a counter counts rising edges).
+        preset = draw(st.integers(min_value=20, max_value=200))
     return {
         "src": src,
         "preset": preset,
@@ -89,37 +87,29 @@ def _build(spec: dict):
                 on_delay(src, spec["preset"], "ms")
         else:
             src = Counter.clone("Ctr")
-            with Rung(Enable):
+            # A counter counts rising edges: the 100 ms clock ramps it.
+            with Rung(Enable, system.sys.clock_100ms):
                 count_up(src, spec["preset"]).reset(Reset)
         with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
             if spec["body"] == "calc":
-                calc(A + B, Extent)
+                math(A + B, Extent)
             else:
                 out(Beat)
     return prog, src.Done
 
 
-# Folding a *timed* source (on_delay) rides the dt knob, so its accumulator can
-# land one tick off scan-by-scan at large presets — the documented timed-fold
-# drift (see core/test_fold.py::test_unread_timer_folds_instead_of_stepping,
-# which tolerates <= 10).  Counters are per-scan integers and stay exact.
-_TIMED_ACC_TOLERANCE = 20
-
-
-def _run(spec: dict, *, fold: bool) -> dict:
+def _run(spec: dict, *, jit: bool) -> dict:
     prog, done = _build(spec)
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
-    plc.run_until(done, max_cycles=40_000, fold=fold)
-    # Drop scan-timing diagnostics: a folded scan reports one big synthetic
-    # `dt_override` pass, so `sys.scan_time_*` legitimately differs from
-    # scan-by-scan.  They are runtime metrics, not program logic — outside the
-    # fold soundness contract (bit-equal *visible logic state*).
-    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
+    plc.run_until(done, max_cycles=40_000, jit=jit)
+    # Every tag, the scan-time diagnostics included: a landing records the
+    # normal dt of the scan it stands for.
+    return dict(plc.state.tags)
 
 
 def test_saturated_heartbeat_fold_is_bit_equal() -> None:
-    """Folded run_until(Done) must equal scan-by-scan across the heartbeat family."""
+    """run_until(Done) in the loop must equal scan-by-scan across the heartbeat family."""
 
     @given(spec=_heartbeat_spec())
     @settings(max_examples=MAX_EXAMPLES, deadline=None)
@@ -137,15 +127,16 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
             "b": 4,
         }
     )
-    # Boundary-straddle regression: Done (1676 counts) lands at t=16.75 s, exactly
-    # a clock_500ms rise edge.  Accumulated scan time drifts to 16.74999999999982
-    # (clock low) while the fold's big-step timestamp lands on 16.75 (clock high) —
-    # the OTE coil disagreed (Beat True vs False) until clock phase was grid-snapped
-    # (system_points.clock_phase).
+    # Boundary-straddle regression: Done (16 750 ms; first found as a per-scan
+    # counter's 1676 counts) lands at t=16.75 s, exactly a clock_500ms rise
+    # edge.  Accumulated scan time drifts to 16.74999999999982 (clock low)
+    # while a big-step timestamp lands on 16.75 (clock high) — the
+    # OTE coil disagreed (Beat True vs False) until clock phase was
+    # grid-snapped (system_points.clock_phase).
     @example(
         spec={
-            "src": "counter",
-            "preset": 1676,
+            "src": "timer",
+            "preset": 16_750,
             "threshold": 1,
             "form": "gt",
             "clock": "clock_500ms",
@@ -156,20 +147,8 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
         }
     )
     def inner(spec: dict) -> None:
-        folded = _run(spec, fold=True)
-        stepped = _run(spec, fold=False)
-        # The timed-source accumulator is allowed its documented one-tick drift;
-        # everything else — the clock-gated logic (Beat / Extent), Done, and the
-        # exact counter accumulator — must be bit-equal.
-        acc = "Tmr_Acc" if spec["src"] == "timer" else "Ctr_Acc"
-        f_acc, s_acc = folded.pop(acc, None), stepped.pop(acc, None)
-        if spec["src"] == "timer" and f_acc is not None and s_acc is not None:
-            assert abs(f_acc - s_acc) <= _TIMED_ACC_TOLERANCE, (
-                f"timer acc drift too large\n  spec={spec}\n  {acc}: {f_acc} vs {s_acc}"
-            )
-        else:
-            folded[acc], stepped[acc] = f_acc, s_acc  # counter: compare exactly
-
+        folded = _run(spec, jit=True)
+        stepped = _run(spec, jit=False)
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -179,38 +158,38 @@ def test_saturated_heartbeat_fold_is_bit_equal() -> None:
             note(f"spec={spec}")
             note(f"fold != nofold: {diffs}")
             raise AssertionError(
-                f"fold disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
+                f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
             )
 
     inner()
 
 
 # ---------------------------------------------------------------------------
-# Frozen-rung write exclusion
+# Rungs over stable inputs
 # ---------------------------------------------------------------------------
 
-_FROZEN_BODY = ["calc", "coil"]
-_N_FROZEN = [1, 2, 3]
+_STABLE_BODY = ["calc", "coil"]
+_N_STABLE = [1, 2, 3]
 
 
 @st.composite
-def _frozen_write_spec(draw: st.DrawFn) -> dict:
-    """A program mixing frozen and non-frozen clock-gated rungs.
+def _stable_input_spec(draw: st.DrawFn) -> dict:
+    """A program mixing stable-input and accumulator-reading clock-gated rungs.
 
     - A ramping timer/counter advancing to Done.
     - One clock-gated rung reading the accumulator through a comparison
-      (non-frozen — makes the clock hard).
-    - One or more clock-gated rungs reading only external inputs (frozen).
+      (its clock ends every window).
+    - One or more clock-gated rungs reading only external inputs.
 
-    The frozen rungs' writes are excluded from the plateau guard; non-frozen
-    tags must stay bit-equal to scan-by-scan.
+    Every tag must stay bit-equal to scan-by-scan.
     """
     src = draw(st.sampled_from(_SRC))
     if src == "timer":
         preset = draw(st.integers(min_value=2_000, max_value=20_000))
     else:
-        preset = draw(st.integers(min_value=200, max_value=2_000))
-    n_frozen = draw(st.sampled_from(_N_FROZEN))
+        # Counts of the 100 ms clock (a counter counts rising edges).
+        preset = draw(st.integers(min_value=20, max_value=200))
+    n_stable = draw(st.sampled_from(_N_STABLE))
     return {
         "src": src,
         "preset": preset,
@@ -220,20 +199,20 @@ def _frozen_write_spec(draw: st.DrawFn) -> dict:
         "dt": draw(st.sampled_from([0.005, 0.010, 0.020])),
         "a": draw(st.integers(min_value=0, max_value=50)),
         "b": draw(st.integers(min_value=0, max_value=50)),
-        "n_frozen": n_frozen,
-        "frozen_bodies": [draw(st.sampled_from(_FROZEN_BODY)) for _ in range(n_frozen)],
+        "n_stable": n_stable,
+        "stable_bodies": [draw(st.sampled_from(_STABLE_BODY)) for _ in range(n_stable)],
     }
 
 
-def _build_frozen(spec: dict):
-    """Build a program with mixed frozen/non-frozen clock-gated rungs."""
+def _build_stable(spec: dict):
+    """Build a program with mixed stable-input and accumulator-reading clock-gated rungs."""
     Enable = Bool("Enable", external=True)
     A = Int("A", external=True)
     B = Int("B", external=True)
     AccView = Int("AccView")
     clock_tag = getattr(system.sys, spec["clock"])
 
-    frozen_tags: list[str] = []
+    stable_tags: list[str] = []
 
     with Program(strict=False) as prog:
         if spec["src"] == "timer":
@@ -243,41 +222,42 @@ def _build_frozen(spec: dict):
         else:
             src = Counter.clone("Ctr")
             Reset = Bool("Reset", external=True)
-            with Rung(Enable):
+            # A counter counts rising edges: the 100 ms clock ramps it.
+            with Rung(Enable, system.sys.clock_100ms):
                 count_up(src, spec["preset"]).reset(Reset)
 
-        # Non-frozen rung: reads accumulator → makes clock hard
+        # Reads the accumulator: its clock ends every window
         with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
-            calc(src.Acc, AccView)
+            math(src.Acc, AccView)
 
-        # Frozen rungs: read only external inputs
-        for i, body in enumerate(spec["frozen_bodies"]):
+        # Read only external inputs
+        for i, body in enumerate(spec["stable_bodies"]):
             if body == "calc":
-                tag = Int(f"Frozen{i}")
-                frozen_tags.append(f"Frozen{i}")
+                tag = Int(f"Stable{i}")
+                stable_tags.append(f"Stable{i}")
                 with Rung(rise(clock_tag)):
-                    calc(A + B + i, tag)
+                    math(A + B + i, tag)
             else:
                 tag = Bool(f"FBeat{i}")
-                frozen_tags.append(f"FBeat{i}")
+                stable_tags.append(f"FBeat{i}")
                 with Rung(rise(clock_tag)):
                     out(tag)
 
-    return prog, src.Done, frozenset(frozen_tags)
+    return prog, src.Done, frozenset(stable_tags)
 
 
-def _run_frozen(spec: dict, *, fold: bool) -> dict:
-    prog, done, _frozen = _build_frozen(spec)
+def _run_stable(spec: dict, *, jit: bool) -> dict:
+    prog, done, _stable = _build_stable(spec)
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
-    plc.run_until(done, max_cycles=40_000, fold=fold)
-    return {k: v for k, v in plc.state.tags.items() if not k.startswith("sys.scan_time")}
+    plc.run_until(done, max_cycles=40_000, jit=jit)
+    return dict(plc.state.tags)
 
 
-def test_frozen_write_exclusion_preserves_non_frozen_tags() -> None:
-    """Non-frozen tags must be bit-equal; frozen-write tags may diverge."""
+def test_stable_input_rungs_are_bit_equal() -> None:
+    """Every tag must be bit-equal to scan-by-scan."""
 
-    @given(spec=_frozen_write_spec())
+    @given(spec=_stable_input_spec())
     @settings(max_examples=MAX_EXAMPLES, deadline=None)
     @example(
         spec={
@@ -289,39 +269,13 @@ def test_frozen_write_exclusion_preserves_non_frozen_tags() -> None:
             "dt": 0.010,
             "a": 3,
             "b": 4,
-            "n_frozen": 2,
-            "frozen_bodies": ["calc", "coil"],
+            "n_stable": 2,
+            "stable_bodies": ["calc", "coil"],
         }
     )
     def inner(spec: dict) -> None:
-        folded = _run_frozen(spec, fold=True)
-        stepped = _run_frozen(spec, fold=False)
-
-        _, _, frozen_tags = _build_frozen(spec)
-
-        acc = "Tmr_Acc" if spec["src"] == "timer" else "Ctr_Acc"
-        f_acc, s_acc = folded.pop(acc, None), stepped.pop(acc, None)
-        if spec["src"] == "timer" and f_acc is not None and s_acc is not None:
-            assert abs(f_acc - s_acc) <= _TIMED_ACC_TOLERANCE, (
-                f"timer acc drift too large\n  spec={spec}\n  {acc}: {f_acc} vs {s_acc}"
-            )
-        else:
-            folded[acc], stepped[acc] = f_acc, s_acc
-
-        # AccView snapshots the accumulator on clock edges.  The fold's
-        # dt_override shifts which exact scan a clock edge lands on, so the
-        # snapshot value can differ from scan-by-scan — this is a pre-existing
-        # fold property (not introduced by frozen-write exclusion), present
-        # for both timed and per-scan sources.
-        folded.pop("AccView", None)
-        stepped.pop("AccView", None)
-
-        # Frozen-write tags may legitimately differ (their clock edges are
-        # skipped during fold), so exclude them from the comparison.
-        for tag in frozen_tags:
-            folded.pop(tag, None)
-            stepped.pop(tag, None)
-
+        folded = _run_stable(spec, jit=True)
+        stepped = _run_stable(spec, jit=False)
         if folded != stepped:
             diffs = {
                 k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
@@ -329,9 +283,167 @@ def test_frozen_write_exclusion_preserves_non_frozen_tags() -> None:
                 if folded.get(k) != stepped.get(k)
             }
             note(f"spec={spec}")
-            note(f"fold != nofold (excluding frozen writes): {diffs}")
+            note(f"fold != nofold: {diffs}")
             raise AssertionError(
-                f"fold disagreed with scan-by-scan on non-frozen tags\n"
+                f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
+            )
+
+    inner()
+
+
+# ---------------------------------------------------------------------------
+# Composite readers: shapes earlier reviews kept finding
+# ---------------------------------------------------------------------------
+
+_SOURCES = ["timer_ms", "timer_s", "counter", "counter_pulse_reset", "selfcalc"]
+_READERS = [
+    "cmp_below",  # a comparison rung after the source
+    "cmp_above",  # read before the source moves this scan (flips one scan late)
+    "eq",  # flips twice: reaching k and passing it
+    "expr",  # (acc // d) == k
+    "display",  # math(acc // d, Disp), nothing reads Disp
+    "stored",  # math(acc // d, Q) then Rung(Q == k)
+    "snapshot",  # Rung(rise(X)): copy(acc, Snap) then Rung(Snap > k)
+    "operand",  # acc compared against the other source's acc
+]
+
+
+@st.composite
+def _composite_spec(draw: st.DrawFn) -> dict:
+    n_src = draw(st.integers(min_value=1, max_value=2))
+    sources = [draw(st.sampled_from(_SOURCES)) for _ in range(n_src)]
+    readers = [
+        {
+            "src": draw(st.integers(min_value=0, max_value=n_src - 1)),
+            "shape": draw(st.sampled_from(_READERS)),
+            "k": draw(st.integers(min_value=1, max_value=60)),
+            "d": draw(st.sampled_from([1, 7, 100])),
+            "form": draw(st.sampled_from(_FORMS)),
+            "count": draw(st.booleans()),
+        }
+        for _ in range(draw(st.integers(min_value=1, max_value=3)))
+    ]
+    return {
+        "sources": sources,
+        "readers": readers,
+        "gate": draw(st.sampled_from(["none", "clock_500ms", "clock_1s"])),
+        "dt": draw(st.sampled_from([0.01, 0.03, 0.1])),
+        "seconds": draw(st.sampled_from([3.0, 12.0, 40.0])),
+    }
+
+
+def _build_composite(spec: dict):
+    from pyrung import copy
+
+    # Each source's accumulator, made before any rung so a reader can sit above it.
+    blocks: list = []
+    accs: list = []
+    for i, kind in enumerate(spec["sources"]):
+        if kind.startswith("timer"):
+            blocks.append(Timer.clone(f"T{i}"))
+            accs.append(blocks[-1].Acc)
+        elif kind.startswith("counter"):
+            blocks.append(Counter.clone(f"C{i}"))
+            accs.append(blocks[-1].Acc)
+        else:
+            blocks.append(None)
+            accs.append(Int(f"S{i}"))
+
+    with Program(strict=False) as prog:
+        for j, r in enumerate(spec["readers"]):
+            if r["shape"] == "cmp_above":
+                _reader_body(j, r, _cmp(accs[r["src"]], r["form"], r["k"] * r["d"]))
+        for i, kind in enumerate(spec["sources"]):
+            gate = () if spec["gate"] == "none" or i > 0 else (getattr(system.sys, spec["gate"]),)
+            if kind.startswith("counter"):
+                # A counter counts rising edges: the 100 ms clock ramps it.
+                gate = (*gate, system.sys.clock_100ms)
+            with Rung(*gate):
+                if kind.startswith("timer"):
+                    unit = "s" if kind == "timer_s" else "ms"
+                    on_delay(blocks[i], 30 if unit == "s" else 30_000, unit)
+                elif kind.startswith("counter"):
+                    pulse = kind == "counter_pulse_reset"
+                    count_up(blocks[i], 30_000).reset(
+                        rise(system.sys.clock_1s) if pulse else Bool(f"CR{i}")
+                    )
+                else:
+                    math((accs[i] + 3) % 997, accs[i])
+        for j, r in enumerate(spec["readers"]):
+            acc = accs[r["src"]]
+            other = accs[(r["src"] + 1) % len(accs)]
+            shape, k, d = r["shape"], r["k"], r["d"]
+            if shape == "cmp_below":
+                _reader_body(j, r, _cmp(acc, r["form"], k * d))
+            elif shape == "eq":
+                _reader_body(j, r, acc == k * d)
+            elif shape == "expr":
+                _reader_body(j, r, (acc // d) == k)
+            elif shape == "display":
+                with Rung():
+                    math(acc // d, Int(f"Disp{j}"))
+            elif shape == "stored":
+                with Rung():
+                    math(acc // d, Int(f"Q{j}"))
+                _reader_body(j, r, Int(f"Q{j}") == k)
+            elif shape == "snapshot":
+                with Rung(rise(Bool(f"X{j}"))):
+                    copy(acc, Int(f"Snap{j}"))
+                _reader_body(j, r, Int(f"Snap{j}") > k)
+            elif shape == "operand":
+                _reader_body(j, r, acc > other)
+    return prog
+
+
+def _reader_body(j: int, r: dict, cond) -> None:
+    from pyrung import latch
+
+    with Rung(cond):
+        if r["count"]:
+            math(Int(f"N{j}") + 1, Int(f"N{j}"))
+        else:
+            latch(Bool(f"Hit{j}"))
+
+
+def _run_composite(spec: dict, *, jit: bool) -> tuple[int, dict]:
+    plc = PLC(_build_composite(spec), dt=spec["dt"])
+    plc.step()
+    plc.run_for(spec["seconds"], jit=jit)
+    image = dict(plc.state.tags)
+    image.update({f"mem:{k}": v for k, v in plc.state.memory.items()})
+    return plc.state.scan_id, image
+
+
+def test_composite_readers_fold_is_bit_equal() -> None:
+    """Every reader shape the reviews found must leave stepping's exact state."""
+
+    def spec_of(sources, readers, gate="none", dt=0.01, seconds=12.0):
+        return {"sources": sources, "readers": readers, "gate": gate, "dt": dt, "seconds": seconds}
+
+    def reader(shape, *, src=0, k=5, d=100, form="ge", count=True):
+        return {"src": src, "shape": shape, "k": k, "d": d, "form": form, "count": count}
+
+    @given(spec=_composite_spec())
+    @settings(max_examples=MAX_EXAMPLES, deadline=None)
+    # Review probes, always exercised: read-above (a6), slow-timer == (a7),
+    # pulse reset (a3), expression / stored copy (gap_dataread), affine self-calc (a1).
+    @example(spec=spec_of(["timer_ms"], [reader("cmp_above")]))
+    @example(spec=spec_of(["timer_s"], [reader("eq", k=7, d=1)], dt=0.1))
+    @example(spec=spec_of(["counter_pulse_reset"], [reader("cmp_below", k=1, d=7)]))
+    @example(spec=spec_of(["timer_ms"], [reader("expr", k=1, d=100), reader("stored", k=1, d=100)]))
+    @example(spec=spec_of(["selfcalc", "timer_ms"], [reader("operand"), reader("display")]))
+    def inner(spec: dict) -> None:
+        f_scan, folded = _run_composite(spec, jit=True)
+        s_scan, stepped = _run_composite(spec, jit=False)
+        if (f_scan, folded) != (s_scan, stepped):
+            diffs = {
+                k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
+                for k in sorted(set(folded) | set(stepped))
+                if folded.get(k) != stepped.get(k)
+            }
+            note(f"spec={spec}")
+            raise AssertionError(
+                f"the loop disagreed with scan-by-scan (scans {f_scan} vs {s_scan})\n"
                 f"  spec={spec}\n  diffs={diffs}"
             )
 

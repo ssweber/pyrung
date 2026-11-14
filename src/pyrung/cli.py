@@ -7,6 +7,7 @@ import importlib
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, NoReturn
 
 
 def _find_program(module_path: str) -> tuple:
@@ -56,6 +57,28 @@ def _find_program(module_path: str) -> tuple:
     return found[0][1], mod
 
 
+def _exit_intractable(intractable: Any) -> NoReturn:
+    print(f"Intractable: {intractable.reason}", file=sys.stderr)
+    for hint in intractable.hints:
+        print(hint, file=sys.stderr)
+    raise SystemExit(1)
+
+
+_DEPTH_BUDGET_DOCS = "https://pyrung.com/pyrung/guides/verification/#cli-reference"
+
+
+def _warn_truncated(states: Any, consequence: str) -> None:
+    if not states.truncated:
+        return
+    budget = states.depth_budget
+    print(
+        f"Warning: the search stopped at --depth-budget {budget}."
+        f" A state more than {budget} scans from power-on {consequence}.",
+        file=sys.stderr,
+    )
+    print(f"Raise --depth-budget to search further. See {_DEPTH_BUDGET_DOCS}", file=sys.stderr)
+
+
 def _cmd_lock(args: argparse.Namespace) -> None:
     from pyrung.core.analysis.prove import (
         Intractable,
@@ -94,17 +117,16 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         split_at=split_at,
     )
     if isinstance(states, Intractable):
-        print(f"Intractable: {states.reason}", file=sys.stderr)
-        for hint in states.hints:
-            print(hint, file=sys.stderr)
-        raise SystemExit(1)
+        _exit_intractable(states)
 
     write_lock(lock_path, states, projection, program_hash(program))
     print(f"Wrote {lock_path} ({len(states)} reachable states)")
+    _warn_truncated(states, "may be missing from the lock file")
 
 
 def _cmd_lock_check(args: argparse.Namespace) -> None:
-    from pyrung.core.analysis.prove import check_lock
+    from pyrung.core.analysis.prove import LockIntractable
+    from pyrung.core.analysis.prove.lockfile import _check_lock_states
 
     program, mod = _find_program(args.module)
     lock_path = Path(args.output)
@@ -120,16 +142,20 @@ def _cmd_lock_check(args: argparse.Namespace) -> None:
     lock_config = getattr(mod, "__lock__", None)
     _, joint_inputs, exclusive_inputs, split_at = _apply_lock_config([], lock_config)
 
-    diff = check_lock(
-        program,
-        lock_path,
-        depth_budget=args.depth_budget,
-        max_states=args.max_states,
-        progress=True,
-        joint_inputs=joint_inputs,
-        exclusive_inputs=exclusive_inputs,
-        split_at=split_at,
-    )
+    try:
+        diff, states = _check_lock_states(
+            program,
+            lock_path,
+            depth_budget=args.depth_budget,
+            max_states=args.max_states,
+            progress=True,
+            joint_inputs=joint_inputs,
+            exclusive_inputs=exclusive_inputs,
+            split_at=split_at,
+        )
+    except LockIntractable as exc:
+        _exit_intractable(exc.intractable)
+    _warn_truncated(states, "may be missing, so the check can report it lost or miss a new one")
     if diff is None:
         print("OK: program matches lock file")
     else:
@@ -280,7 +306,7 @@ def main() -> None:
         "--depth-budget",
         type=int,
         default=50,
-        help="Abstract BFS depth budget; hidden-event acceleration may cover more concrete scans",
+        help="BFS depth budget: the longest scan sequence explored",
     )
     lock_p.add_argument("--max-states", type=int, default=100_000)
     lock_p.add_argument(

@@ -18,6 +18,7 @@ from pyrung.click.codegen.constants import (
     _OPERAND_RE,
     _RANGE_RE,
     _STRING_KWARGS,
+    _sub_operands,
 )
 from pyrung.click.codegen.models import _OperandCollection
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
@@ -47,10 +48,18 @@ _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
     "RSH": "rsh",
     "LRO": "lro",
     "RRO": "rro",
+    "RAND": "randint",
+    # ABS maps to the Python builtin; it is never imported (see _EXPR_FUNC_IMPORT_NAMES).
+    "ABS": "abs",
 }
 
-# Regex matching Click function calls like SQRT(, LSH(, etc.
-_CLICK_FUNC_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_TO_PYTHON) + r")\(")
+# Python builtins in the table above: callable without an import.
+_BUILTIN_EXPR_FUNCS = frozenset({"abs"})
+
+# Regex matching Click function calls like SQRT(, LSH ( , etc.
+_CLICK_FUNC_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_TO_PYTHON) + r")\s*\("
+)
 
 # Regex matching standalone PI (not followed by digits, which would be a prefix match)
 _CLICK_PI_RE = re.compile(r"\bPI\b")
@@ -59,9 +68,78 @@ _CLICK_PI_RE = re.compile(r"\bPI\b")
 # Safe on raw Click text because operand prefixes use uppercase H (DH, TH).
 # Used as fullmatch in _sub_operand (standalone) and .sub() in expressions.
 _CLICK_HEX_RE = re.compile(r"\b([0-9A-Fa-f]+)h\b")
+_MODBUS_ADDRESS_RE = re.compile(r"ModbusAddress\(([^()]*)\)")
+# A bare digit run that is not part of an address, a hex literal or a decimal.
+_BARE_DIGITS_RE = re.compile(r"(?<![0-9A-Za-z_.])(\d+)(?![0-9A-Za-z_.])")
 
-# Regex matching SUM with colon-range: SUM ( DS1 : DS10 ) or SUM(DS1:DS10)
-_SUM_RE = re.compile(r"SUM\s*\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)")
+
+def _hex_math_bare_numbers(formula: str) -> str:
+    """Read bare digits in a hex-mode Math formula as hex, as CLICK does.
+
+    CLICK's Math dialog in hex mode treats typed digits as hex and appends
+    ``h`` (``DH1 + 255`` is stored as ``255h`` = 0x255).  Its own exports
+    always carry the ``h``; this covers hand-written or legacy CSV.
+    """
+    if '"' in formula:
+        return formula
+    return _BARE_DIGITS_RE.sub(lambda m: f"{m.group(1)}h", formula)
+
+
+_MODBUS_984_RE = re.compile(r"\d+")
+_MODBUS_HEX_RE = re.compile(r"[0-9A-Fa-f]+[hH]")
+_MODBUS_984_COIL_MAX = 65536
+_TO_TEXT_RE = re.compile(r"to_text\(([^()]*)\)")
+_TO_TEXT_FLAGS = {"0": "False", "1": "True"}
+_TERMINATION_CODE_RE = re.compile(r"\$[0-9A-Fa-f]{1,2}")
+# CLICK's ASCII-code text constant: ``$0D`` is one CR, ``$00`` the TXT blank.
+_TEXT_CODE_RE = re.compile(r"\$([0-9A-Fa-f]{1,2})")
+
+
+def _text_code_value(text: str) -> str | None:
+    """The character a CLICK ``$hh`` text constant stands for, or None."""
+    match = _TEXT_CODE_RE.fullmatch(text.strip())
+    if match is None:
+        return None
+    return chr(int(match.group(1), 16))
+
+
+_REGISTER_TYPE_MEMBERS = {
+    "coil": "COIL",
+    "discrete_input": "DISCRETE_INPUT",
+    "holding": "HOLDING",
+    "input": "INPUT",
+}
+
+# Click range aggregates (colon-range argument) -> BlockRange method name.
+_RANGE_AGG_TO_METHOD: dict[str, str] = {
+    "SUM": "sum",
+    "MAX": "max",
+    "MIN": "min",
+    "MDN": "median",
+    "AVG": "mean",
+}
+
+# Regex matching a range aggregate with colon-range: SUM ( DS1 : DS10 ), MAX(DS1:DS10), ...
+# Groups: 1 = function, 2/3 = first operand prefix/number, 4/5 = last operand prefix/number.
+_RANGE_AGG_RE = re.compile(
+    r"\b(" + "|".join(_RANGE_AGG_TO_METHOD) + r")\s*\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)"
+)
+
+# Placeholder call names used while validating range aggregates as Python syntax.
+_RANGE_AGG_PLACEHOLDERS: dict[str, str] = {
+    name: f"_range_{name.lower()}" for name in _RANGE_AGG_TO_METHOD
+}
+
+# CLICK's formula spelling NAME ( a , b ) and ( a + b ): spaces inside each paren and
+# before each separator. Compacted on import so CLICK's spelling and the bare
+# ABS(x) one generate the same code. A space before a call's paren goes only after
+# a function name, and before a group's paren only after a unary sign, since
+# DS1 MOD ( DS2 + 1 ) and DS1 - ( DS2 ) keep theirs.
+_SPACED_CALL_RE = re.compile(
+    r"\b(" + "|".join([*_CLICK_FUNC_TO_PYTHON, *_RANGE_AGG_TO_METHOD]) + r")\s+\("
+)
+_SPACED_UNARY_RE = re.compile(r"(^|\(|[-+*/^] |\b(?:MOD|AND|OR|XOR) )([-+~])\s+\(")
+_PAREN_INNER_SPACE_RE = re.compile(r"(?<=\()\s+|\s+(?=\))|\s+(?=,)")
 
 # Pointer/indirect addressing: DH[DS134] means "DH at index stored in DS134"
 _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
@@ -70,7 +148,7 @@ _POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
 _PREFIX_TO_BLOCK: dict[str, str] = {p: bv for p, _, bv in _OPERAND_PREFIXES}
 
 # Expression function names that require import from pyrung.core.expression
-_EXPR_FUNC_IMPORT_NAMES = frozenset(_CLICK_FUNC_TO_PYTHON.values()) | {"PI"}
+_EXPR_FUNC_IMPORT_NAMES = (frozenset(_CLICK_FUNC_TO_PYTHON.values()) - _BUILTIN_EXPR_FUNCS) | {"PI"}
 
 # Regex matching Python expression-function calls (lowercase) in generated code
 _PYTHON_EXPR_FUNC_RE = re.compile(
@@ -120,6 +198,21 @@ def _parse_operand_prefix(operand: str) -> tuple[str, str, str, int] | None:
 def _strip_quoted_strings(text: str) -> str:
     """Remove quoted strings from text to avoid false operand matches."""
     return re.sub(r'"[^"]*"', "", text)
+
+
+def _out_variant_timer_pairs(kwargs: list[tuple[str, str]]) -> list[tuple[str, str, str]]:
+    """``(side, done, acc)`` for each phase Timer of a debounce/flasher/timed token.
+
+    The token names only the phase's TD, as CLICK's coil does; its Done is the T
+    of the same number.
+    """
+    values = dict(kwargs)
+    pairs: list[tuple[str, str, str]] = []
+    for side in ("on", "off"):
+        acc = values.get(f"{side}_acc")
+        if acc is not None and acc.startswith("TD") and acc[2:].isdigit():
+            pairs.append((side, f"T{acc[2:]}", acc))
+    return pairs
 
 
 def _parse_af_args(args_str: str) -> tuple[list[str], list[tuple[str, str]]]:
@@ -187,6 +280,29 @@ def _classify_arg(
     args.append(token)
 
 
+def _render_to_text(args_str: str) -> str:
+    """CSV ``to_text(suppress_zero=1,exponential=0,termination_code=$0D)`` -> Python.
+
+    CLICK writes ``termination_code=none`` when the option is off.
+    """
+    args, kwargs = _parse_af_args(args_str)
+    fields = dict(kwargs)
+    rendered: list[str] = []
+    valid = not args and set(fields) <= {"suppress_zero", "exponential", "termination_code"}
+    for key in ("suppress_zero", "exponential"):
+        if key in fields:
+            flag = _TO_TEXT_FLAGS.get(fields[key])
+            valid = valid and flag is not None
+            rendered.append(f"{key}={flag}")
+    code = fields.get("termination_code", "none")
+    if code != "none":
+        valid = valid and _TERMINATION_CODE_RE.fullmatch(code) is not None
+        rendered.append(f'termination_code="{code}"')
+    if not valid:
+        raise ValueError(f"Unsupported CSV operand expression: 'to_text({args_str})'")
+    return f"to_text({', '.join(rendered)})"
+
+
 def _sub_operand_kwarg(
     key: str,
     value: str,
@@ -205,17 +321,63 @@ def _sub_operand_kwarg(
         return "True" if value == "1" else "False"
     # Conversion syntax is source too; validate it before passing it through.
     if key == "convert":
+        to_text = _TO_TEXT_RE.fullmatch(value)
+        if to_text:
+            return _render_to_text(to_text.group(1))
         _validate_operand(value)
         return _pythonize_csv_strings(value)
     return _sub_operand(value, collection, nicknames, structured_map)
+
+
+def _parse_modbus_address(args_str: str) -> tuple[str, str | None]:
+    """CSV ``ModbusAddress(...)`` args -> (Python address, ``RegisterType`` member or None).
+
+    CLICK shows a remote address either as MODBUS 984 (``400001``; coils are
+    ``1``..``65536``) or as hex with its register type
+    (``address=50Eh,register_type=holding``).
+    """
+    args, kwargs = _parse_af_args(args_str)
+    fields = dict(kwargs)
+    address = fields.get("address", "")
+    register_type = fields.get("register_type")
+    if not args and set(fields) <= {"address", "register_type"}:
+        if _MODBUS_HEX_RE.fullmatch(address):
+            member = _REGISTER_TYPE_MEMBERS.get(register_type or "holding")
+            if member is not None:
+                return f'"{address}"', member
+        elif _MODBUS_984_RE.fullmatch(address) and register_type is None:
+            number = int(address)
+            if 1 <= number <= _MODBUS_984_COIL_MAX:
+                return str(number - 1), "COIL"
+            return str(number), None
+    raise ValueError(f"Unsupported CSV operand expression: 'ModbusAddress({args_str})'")
+
+
+def _render_modbus_address(args_str: str) -> str:
+    address, member = _parse_modbus_address(args_str)
+    if member is None:
+        return f"ModbusAddress(address={address})"
+    return f"ModbusAddress(address={address}, register_type=RegisterType.{member})"
+
+
+def _compact_click_formula(text: str) -> str:
+    """``ABS ( DS1 - 5 ) * 2`` -> ``ABS(DS1 - 5) * 2``; quoted text is left alone."""
+    if '"' in text or "'" in text:
+        return text
+    text = _SPACED_CALL_RE.sub(r"\1(", text)
+    text = _PAREN_INNER_SPACE_RE.sub("", text)
+    return _SPACED_UNARY_RE.sub(r"\1\2(", text)
 
 
 def _validate_operand(text: str) -> ast.expr:
     """Validate Click syntax before substituting trusted generated references."""
     normalized = _pythonize_csv_strings(text)
     normalized = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1)}", normalized)
-    normalized = _SUM_RE.sub(
-        lambda m: f"_range_sum({m.group(1)}{m.group(2)}, {m.group(3)}{m.group(4)})",
+    normalized = _RANGE_AGG_RE.sub(
+        lambda m: (
+            f"{_RANGE_AGG_PLACEHOLDERS[m.group(1)]}"
+            f"({m.group(2)}{m.group(3)}, {m.group(4)}{m.group(5)})"
+        ),
         normalized,
     )
     normalized = _RANGE_RE.sub(
@@ -232,9 +394,8 @@ def _validate_operand(text: str) -> ast.expr:
             "any",
             "ModbusTcpTarget",
             "ModbusRtuTarget",
-            "ModbusAddress",
             "_range",
-            "_range_sum",
+            *_RANGE_AGG_PLACEHOLDERS.values(),
             "immediate",
             "rise",
             "fall",
@@ -258,6 +419,14 @@ def _sub_operand(
     if not text:
         return text
 
+    text = _compact_click_formula(text)
+    code_char = _text_code_value(text)
+    if code_char is not None:
+        # pyrung reads "" as the blank (NUL); keep the source free of \u0000.
+        return _string_literal("" if code_char == "\x00" else code_char)
+    modbus_address = _MODBUS_ADDRESS_RE.fullmatch(text)
+    if modbus_address:
+        return _render_modbus_address(modbus_address.group(1))
     expression = _validate_operand(text)
 
     # System operands (SC/SD → system.* path)
@@ -316,24 +485,15 @@ def _sub_operand(
             for k, v in kwargs:
                 rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
             return f"ModbusRtuTarget({', '.join(rendered)})"
-        if func_name == "ModbusAddress":
-            args, kwargs = _parse_af_args(inner_args_str)
-            rendered: list[str] = []
-            for k, v in kwargs:
-                rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
-            return f"ModbusAddress({', '.join(rendered)})"
         if func_name in {"all", "any"}:
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
             return f"{func_name}({', '.join(rendered)})"
-        # SUM with colon-range: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum()
-        if func_name == "SUM":
-            sum_match = _SUM_RE.match(text)
-            if sum_match:
-                prefix = sum_match.group(1)
-                start_num = int(sum_match.group(2))
-                end_num = int(sum_match.group(4))
-                return f"{_render_range_expr(prefix, start_num, end_num, collection)}.sum()"
+        # Range aggregate with colon-range: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum()
+        if func_name in _RANGE_AGG_TO_METHOD:
+            agg_match = _RANGE_AGG_RE.fullmatch(text)
+            if agg_match:
+                return _render_range_aggregate(agg_match, collection)
         # Click expression functions (SQRT, LSH, SIN, etc.)
         py_name = _CLICK_FUNC_TO_PYTHON.get(func_name)
         if py_name is not None:
@@ -376,14 +536,8 @@ def _sub_operand(
     # names like DH001 won't false-match because H is not a hex digit).
     result = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1).upper()}", _pythonize_csv_strings(text))
 
-    # Convert SUM colon-ranges (before general expression conversion)
-    def _sub_sum(m: re.Match[str]) -> str:
-        prefix = m.group(1)
-        start_num = int(m.group(2))
-        end_num = int(m.group(4))
-        return f"{_render_range_expr(prefix, start_num, end_num, collection)}.sum()"
-
-    result = _SUM_RE.sub(_sub_sum, result)
+    # Convert range-aggregate colon-ranges (before general expression conversion)
+    result = _RANGE_AGG_RE.sub(lambda m: _render_range_aggregate(m, collection), result)
     result = _click_expr_to_python(result)
     result = _RANGE_RE.sub(lambda m: _sub_range(m, collection, nicknames), result)
 
@@ -397,8 +551,7 @@ def _sub_operand(
 
     result = _POINTER_RE.sub(_sub_pointer, result)
 
-    def _sub_operand_token(m: re.Match[str]) -> str:
-        op = m.group(0)
+    def _sub_operand_token(op: str) -> str:
         if op in SYSTEM_OPERAND_PATHS:
             return SYSTEM_OPERAND_PATHS[op]
         render = collection.semantic_operands.get(op)
@@ -408,7 +561,7 @@ def _sub_operand(
             return collection.tags[op].var_name
         return op
 
-    result = _OPERAND_RE.sub(_sub_operand_token, result)
+    result = _sub_operands(result, _sub_operand_token)
 
     # Track expression function names for imports
     for m in _PYTHON_EXPR_FUNC_RE.finditer(result):
@@ -419,20 +572,22 @@ def _sub_operand(
     return result
 
 
+def _render_range_aggregate(match: re.Match[str], collection: _OperandCollection) -> str:
+    """Render one ``_RANGE_AGG_RE`` match as ``block.select(a, b).<method>()``."""
+    method = _RANGE_AGG_TO_METHOD[match.group(1)]
+    prefix = match.group(2)
+    start_num = int(match.group(3))
+    end_num = int(match.group(5))
+    return f"{_render_range_expr(prefix, start_num, end_num, collection)}.{method}()"
+
+
 def _sub_range(
     match: re.Match[str],
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
 ) -> str:
     """Substitute a range match."""
-    range_str = match.group(0)
-    prefix = match.group(1)
-    start_num = int(match.group(2))
-    end_num = int(match.group(4))
-    render = collection.semantic_ranges.get(range_str)
-    if render is not None:
-        return render.expr
-    return _render_inline_range(prefix, start_num, end_num)
+    return _render_range_expr(match.group(1), int(match.group(2)), int(match.group(4)), collection)
 
 
 def _render_range_expr(
@@ -441,7 +596,13 @@ def _render_range_expr(
     end_num: int,
     collection: _OperandCollection,
 ) -> str:
-    """Render a range using semantic ownership when available."""
+    """Render a range using semantic ownership when available.
+
+    An end below the start (``C1018..C1011``, CLICK's downward shift
+    register) renders as the ascending window ``.reverse()``.
+    """
+    if start_num > end_num:
+        return f"{_render_range_expr(prefix, end_num, start_num, collection)}.reverse()"
     range_str = f"{prefix}{start_num}..{prefix}{end_num}"
     render = collection.semantic_ranges.get(range_str)
     if render is not None:
@@ -492,7 +653,7 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "copy",
         "blockcopy",
         "fill",
-        "calc",
+        "math",
         "on_delay",
         "off_delay",
         "count_up",
@@ -506,6 +667,11 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "unpack_to_words",
         "event_drum",
         "time_drum",
+        "time_event_drum",
+        "toggle",
+        "debounce",
+        "flasher",
+        "timed",
         "return_early",
         "send",
         "receive",
@@ -527,6 +693,7 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
 _CODEGEN_RESERVED_IDENTIFIERS: frozenset[str] = frozenset(
     set(_RESERVED_IMPORT_NAMES)
     | set(_EXPR_FUNC_IMPORT_NAMES)
+    | set(_BUILTIN_EXPR_FUNCS)
     | {block_var for _, _, block_var in _OPERAND_PREFIXES}
     | {
         "TagMap",

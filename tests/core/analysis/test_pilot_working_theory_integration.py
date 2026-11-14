@@ -510,7 +510,7 @@ def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
     events: list[Any] = []
     research_seen = False
     stream = pilot_events(
-        PLC(sequence_route.logic, dt=0.010),
+        PLC(sequence_route.adjacent_logic, dt=0.010),
         sequence_route.SequenceStep == 81,
         max_scans=40,
     )
@@ -599,7 +599,7 @@ def test_neutral_route_uses_exact_regression_requirement_for_third_correction(
 
     events: list[Any] = []
     stream = pilot_events(
-        PLC(sequence_route.logic, dt=0.010),
+        PLC(sequence_route.adjacent_logic, dt=0.010),
         sequence_route.SequenceStep == 81,
         max_scans=40,
     )
@@ -702,7 +702,7 @@ def test_neutral_route_uses_exact_regression_requirement_for_third_correction(
     )
 
 
-def test_prestepped_watchdog_retains_composed_world_for_followup_research(
+def test_watchdog_retains_composed_world_for_followup_research(
     monkeypatch: Any,
 ) -> None:
     """A same-scan overlay change remains part of the active theory's World."""
@@ -727,8 +727,7 @@ def test_prestepped_watchdog_retains_composed_world_for_followup_research(
             raise ResearchMissing("bounded run never retained the comparable attempt")
 
     monkeypatch.setattr(theory_recording_module, "_record_working_theory_transition", record)
-    plc = PLC(sequence_route.logic, dt=0.010)
-    plc.step()
+    plc = PLC(sequence_route.adjacent_logic, dt=0.010)
 
     with pytest.raises(ResearchObserved):
         plc.how(
@@ -742,7 +741,7 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
 ) -> None:
     captured = _capture_theory_transitions(monkeypatch)
 
-    PLC(sequence_route.logic, dt=0.010).how(
+    PLC(sequence_route.adjacent_logic, dt=0.010).how(
         sequence_route.SequenceStep == 81,
         max_scans=40,
     )

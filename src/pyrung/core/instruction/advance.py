@@ -220,12 +220,17 @@ def monotone_profile(
     restore: ConditionDemand | None = None,
     restore_is_pulse: bool = False,
     completion_controls: tuple[ConditionDemand, ...] | None = None,
+    mirror_preset: bool = True,
 ) -> AdvanceProfile:
     """Build the common timer/counter/analog next-operation contract.
 
     Instruction classes pass their real conditions into this helper.  The
     returned profile exposes none of those implementation details as fields;
     callers ask ``plan`` for the operation appropriate to the current target.
+
+    With *mirror_preset* (the default) a descending owner completes at
+    ``acc <= -abs(preset)``; without it at ``acc <= preset`` (a CLICK down
+    counter, which starts at 0 and is done once ``Acc <= preset``).
     """
 
     sign = 1 if direction >= 0 else -1
@@ -233,14 +238,14 @@ def monotone_profile(
     def _preset_value(snapshot: Snapshot) -> int | None:
         raw = resolve_snapshot_value(preset, snapshot)
         try:
-            return sign * abs(int(raw))
+            return sign * abs(int(raw)) if mirror_preset else int(raw)
         except (TypeError, ValueError):
             return None
 
     def _done_boundary(snapshot: Snapshot) -> Cmp | None:
         preset_name = getattr(preset, "name", None)
-        if sign > 0 and preset_name is not None:
-            return Cmp(accumulator.name, ">=", preset_name, bound_is_tag=True)
+        if preset_name is not None and (sign > 0 or not mirror_preset):
+            return Cmp(accumulator.name, ">=" if sign > 0 else "<=", preset_name, bound_is_tag=True)
         target = _preset_value(snapshot)
         if target is None:
             return None

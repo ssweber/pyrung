@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
@@ -17,7 +18,8 @@ pytest_plugins = ["pytester"]
 
 # ---------------------------------------------------------------------------
 # Hard memory cap — kills the process before it OOMs the machine.
-# Override with PYTEST_MEMORY_CAP_MB env var (default 4096).
+# Override with PYTEST_MEMORY_CAP_MB env var (default 4096).  Per process: each xdist
+# worker has its own, and a worker it kills fails the run, naming the test.
 # ---------------------------------------------------------------------------
 
 _MEMORY_CAP_MB = int(os.environ.get("PYTEST_MEMORY_CAP_MB", "4096"))
@@ -25,6 +27,10 @@ _current_test: str | None = None
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    if config.getoption("fold_check", default=False):
+        from tests import fold_check
+
+        fold_check.install()
     try:
         import psutil
     except ImportError:
@@ -32,6 +38,9 @@ def pytest_configure(config: pytest.Config) -> None:
 
     cap_bytes = _MEMORY_CAP_MB * 1024 * 1024
     proc = psutil.Process()
+    # Bound here: a test's fake clock replaces time.sleep, and a call from this
+    # thread would advance that clock mid-scan.
+    sleep = time.sleep
 
     def _monitor() -> None:
         while True:
@@ -48,9 +57,17 @@ def pytest_configure(config: pytest.Config) -> None:
                 )
                 sys.stderr.flush()
                 os._exit(99)
-            time.sleep(2)
+            sleep(2)
 
     threading.Thread(target=_monitor, daemon=True).start()
+
+
+@pytest.fixture(autouse=True)
+def _no_wall_clock_in_how(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An answer a test asserts must not depend on how busy the machine is."""
+    from pyrung.core.analysis.pilot import budget
+
+    monkeypatch.setattr(budget, "WALL_CLOCK_ENABLED", False)
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +78,9 @@ def _memory_cap_tracker(request: pytest.FixtureRequest) -> Iterator[None]:
     _current_test = None
 
 
-_BLOCK_CONFIG_BASELINE: dict[Any, tuple[dict[int, Any], dict[int, Any]]] = {}
+_BLOCK_CONFIG_BASELINE: weakref.WeakKeyDictionary[Any, tuple[dict[int, Any], dict[int, Any]]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +98,7 @@ def _clean_block_state() -> Iterator[None]:
     """
     from pyrung.click.tag_map._parsers import _HARDWARE_BLOCK_CACHE
     from pyrung.core.memory_block import Block
+    from pyrung.core.tag import note_metadata_edit
 
     def _restore_all() -> None:
         for block in Block._all_instances:
@@ -92,9 +112,17 @@ def _clean_block_state() -> Iterator[None]:
                 )
             else:
                 slot_config, mapped_tags = baseline
+                if block._slot_config != slot_config or (
+                    {addr: id(tag) for addr, tag in block._mapped_tags.items()}
+                    != {addr: id(tag) for addr, tag in mapped_tags.items()}
+                ):
+                    # This restore undoes a test's slot settings behind the block's back.
+                    # A shared program's cached prover facts may have been built with them.
+                    note_metadata_edit()
                 block._slot_config = {addr: copy.copy(e) for addr, e in slot_config.items()}
                 block._mapped_tags = dict(mapped_tags)
             block._tag_cache.clear()
+            block._indexed.clear()
         for block in _HARDWARE_BLOCK_CACHE.values():
             block.reset()
         _HARDWARE_BLOCK_CACHE.clear()
@@ -112,6 +140,8 @@ from pyrung.core.context import ScanContext
 from pyrung.core.instruction import Instruction
 from pyrung.core.program import Program as ProgramLogic
 from pyrung.core.rung import Rung
+from pyrung.core.site_memory import bind_logic_list, bind_sites
+from pyrung.core.synthesis import _rung_holding
 
 _EXPENSIVE_MARKERS = frozenset(
     {
@@ -121,6 +151,7 @@ _EXPENSIVE_MARKERS = frozenset(
         "fuzz",
         "known_answer",
         "tumbler",
+        "conformance",
     }
 )
 
@@ -136,6 +167,57 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Backend used by tests that opt into runner_factory: "
             "'interpreted' uses PLC, 'compiled' uses CompiledPLC, "
             "'both' runs both and asserts state parity."
+        ),
+    )
+    group.addoption(
+        "--fold-check",
+        action="store_true",
+        default=False,
+        help=(
+            "Check every run_until()/run_for() on the guarded loop and every coast "
+            "against a stepped twin, scan by scan (tests/fold_check.py)."
+        ),
+    )
+    group.addoption(
+        "--fold-check-allow-vacuous",
+        action="store_true",
+        default=False,
+        help=(
+            "With --fold-check, judge only mismatches: a session whose long runs all decline "
+            "is reported, not failed. For a few files, where the session-wide share of runs "
+            "in the loop says little (the mergeq fold-new stage)."
+        ),
+    )
+    group = parser.getgroup("pyrung-conformance", "pyrung conformance suite")
+    group.addoption(
+        "--conformance-plc",
+        action="store",
+        default=None,
+        metavar="HOST[:PORT]",
+        help=(
+            "Run the conformance marker against a CLICK at HOST[:PORT] instead of "
+            "pyrung's local soft PLC (env: PYRUNG_CONFORMANCE_PLC)."
+        ),
+    )
+    group.addoption(
+        "--conformance-group",
+        action="store",
+        default=None,
+        metavar="NAME[,NAME...]",
+        help=(
+            "Run only these conformance groups over Modbus "
+            "(env: PYRUNG_CONFORMANCE_GROUP); default is every group."
+        ),
+    )
+    group.addoption(
+        "--conformance-target",
+        action="store",
+        default=None,
+        choices=("pyrung", "circuitpy"),
+        help=(
+            "Local target when no --conformance-plc is given: pyrung's soft PLC "
+            "(default) or the program's generated P1AM-200 code run on this "
+            "machine (env: PYRUNG_CONFORMANCE_TARGET)."
         ),
     )
     group = parser.getgroup("pyrung-prove", "pyrung prove debug tools")
@@ -174,8 +256,16 @@ def _assert_states_match(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> N
     right_state = right.current_state
     assert left_state.scan_id == right_state.scan_id
     assert left_state.timestamp == pytest.approx(right_state.timestamp)
-    assert dict(left_state.tags) == dict(right_state.tags)
-    assert dict(left_state.memory) == dict(right_state.memory)
+    assert _nan_free(left_state.tags) == _nan_free(right_state.tags)
+    assert _nan_free(left_state.memory) == _nan_free(right_state.memory)
+
+
+def _nan_free(values: Any) -> dict[str, Any]:
+    """*values* as a dict, NaN spelled so two NaNs compare equal (a REAL may hold NaN)."""
+    return {
+        key: "<NaN>" if isinstance(value, float) and value != value else value
+        for key, value in values.items()
+    }
 
 
 class _RunnerPair:
@@ -275,6 +365,31 @@ class _RunnerPair:
         self._compiled.stop()
         _assert_states_match(self._interpreted, self._compiled)
 
+    def start(self) -> None:
+        self._interpreted.start()
+        self._compiled.start()
+        _assert_states_match(self._interpreted, self._compiled)
+
+    @property
+    def mode(self) -> str:
+        assert self._interpreted.mode == self._compiled.mode
+        return self._interpreted.mode
+
+    @property
+    def pending_patches(self):  # noqa: ANN201
+        assert dict(self._interpreted.pending_patches) == dict(self._compiled.pending_patches)
+        return self._interpreted.pending_patches
+
+    @property
+    def keep_forces_on_run(self) -> bool:
+        assert self._interpreted.keep_forces_on_run == self._compiled.keep_forces_on_run
+        return self._interpreted.keep_forces_on_run
+
+    @keep_forces_on_run.setter
+    def keep_forces_on_run(self, value: bool) -> None:
+        self._interpreted.keep_forces_on_run = value
+        self._compiled.keep_forces_on_run = value
+
     def reboot(self) -> SystemState:
         self._interpreted.reboot()
         self._compiled.reboot()
@@ -332,6 +447,9 @@ def execute(instr: Instruction, state: SystemState, *, dt: float = 0.0) -> Syste
     Returns:
         New SystemState with the instruction's effects applied.
     """
+    if instr._state_key is None:
+        # A lone instruction is the only site of its one-instruction program.
+        bind_sites([_rung_holding(None, instr)])
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)  # For timer instructions
     instr.execute(ctx, True)
@@ -352,6 +470,7 @@ def evaluate_rung(rung: Rung, state: SystemState, *, dt: float = 0.0) -> SystemS
     Returns:
         New SystemState with the rung's effects applied.
     """
+    bind_logic_list([rung])
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)  # For timer instructions
     rung.evaluate(ctx)
@@ -410,17 +529,11 @@ def _format_context(ctx: Any) -> str:
     lines.append(f"  memory_key_names:       {ctx.memory_key_names}")
     lines.append(f"  demoted_edge_names:     {ctx.demoted_edge_names}")
 
-    lines.append(f"  threshold_vector_specs ({len(ctx.threshold_vector_specs)}):")
-    for vs in ctx.threshold_vector_specs:
-        lines.append(f"    acc={vs.acc_name}  kind={vs.kind}  atoms={vs.atoms}")
-
-    lines.append(f"  done_event_specs ({len(ctx.done_event_specs)}):")
-    for de in ctx.done_event_specs:
-        lines.append(f"    acc={de.acc_name}  kind={de.kind}  preset={de.preset}")
-
-    lines.append(f"  threshold_event_specs ({len(ctx.threshold_event_specs)}):")
-    for te in ctx.threshold_event_specs:
-        lines.append(f"    acc={te.acc_name}  kind={te.kind}  threshold={te.threshold}")
+    model = ctx.timer_model
+    if model is not None:
+        lines.append(f"  timer_model: branch={sorted(model.branch)}  exact={sorted(model.exact)}")
+        lines.append(f"    reps={dict(model.reps)}")
+    lines.append(f"  count_clamps:           {ctx.count_clamps}")
 
     if ctx.journal:
         lines.append(f"  journal ({len(ctx.journal)} tags):")
@@ -519,3 +632,63 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # noqa
     rep = outcome.get_result()
     if rep.when == "call":
         item.rep_call = rep  # type: ignore[attr-defined]
+
+
+@pytest.fixture(autouse=True)
+def _a_fold_mismatch_fails_its_test(request: pytest.FixtureRequest) -> Any:
+    """Name the test that met a mismatch, even if something on the way out caught it."""
+    module = sys.modules.get("tests.fold_check")
+    before = 0 if module is None else len(module.undeclared())
+    yield
+    module = sys.modules.get("tests.fold_check")
+    if module is None:
+        return
+    found = module.undeclared()[before:]
+    call = getattr(request.node, "rep_call", None)
+    if found and (call is None or not call.failed):
+        pytest.fail(f"a fold mismatch was caught and hidden: {found[0][1]}", pytrace=False)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node: Any, error: Any) -> None:
+    """An xdist worker's record of the check, for the controller to judge with the rest."""
+    record = getattr(node, "workeroutput", {}).get("fold_check")
+    if record is not None:
+        from tests import fold_check
+
+        fold_check.absorb(record)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    fold_check = sys.modules.get("tests.fold_check")
+    if fold_check is None:
+        return
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        # The controller sets the exit code, and a worker has only part of the session.
+        workeroutput["fold_check"] = fold_check.export()
+        return
+    if exitstatus != 0:
+        return
+    vacuous = (
+        session.config.getoption("fold_check", default=False)
+        and not session.config.getoption("fold_check_allow_vacuous", default=False)
+        and fold_check.vacuous()
+    )
+    if fold_check.undeclared() or vacuous:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:
+    if config.getoption("fold_check", default=False):
+        from tests import fold_check
+
+        terminalreporter.write_line("fold-check:")
+        for line in fold_check.summary():
+            terminalreporter.write_line(line)
+        problem = fold_check.vacuous()
+        if problem is not None:
+            if config.getoption("fold_check_allow_vacuous", default=False):
+                terminalreporter.write_line(f"fold-check (vacuity not judged): {problem}")
+            else:
+                terminalreporter.write_line(f"fold-check VACUOUS: {problem}", red=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pytest
 
@@ -15,10 +16,10 @@ from pyrung.core import (
     Rung,
     TagType,
     TimeMode,
-    calc,
     copy,
     fall,
     latch,
+    math,
     out,
     rise,
     system,
@@ -97,14 +98,15 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode(runner_fa
 
     runner = runner_factory(program)
 
+    # SC3 is on when SD9 is even, the first scan's 0 included (measured on a CLICK).
     runner.step()
     assert runner.current_state.tags["FirstScanLatched"] is True
-    assert runner.current_state.tags["ScanClockValue"] is False
+    assert runner.current_state.tags["ScanClockValue"] is True
     assert runner.current_state.tags["FixedModeValue"] is True
 
     runner.step()
     assert runner.current_state.tags["FirstScanLatched"] is False
-    assert runner.current_state.tags["ScanClockValue"] is True
+    assert runner.current_state.tags["ScanClockValue"] is False
 
 
 def test_clock_rise_fall_edge_detect_not_level():
@@ -120,9 +122,9 @@ def test_clock_rise_fall_edge_detect_not_level():
     falls = Int("Falls")
     with Program() as program:
         with Rung(rise(system.sys.clock_1s)):
-            calc(rises + 1, rises)
+            math(rises + 1, rises)
         with Rung(fall(system.sys.clock_1s)):
-            calc(falls + 1, falls)
+            math(falls + 1, falls)
 
     runner = PLC(program, dt=0.010)
     runner.step()
@@ -231,8 +233,12 @@ def test_scan_clock_toggle_derived_edge_rise(runner_factory):
 
     runner = runner_factory(program)
 
+    runner.step()  # scan 0: toggle=True, rises from the off edge memory starts with
+    assert runner.current_state.tags["Flag"] is True
+    runner.patch({"Flag": False})
+
     runner.step()  # scan 1: toggle=False, no rise
-    assert runner.current_state.tags.get("Flag") is not True
+    assert runner.current_state.tags["Flag"] is False
 
     runner.step()  # scan 2: toggle=True, rise
     assert runner.current_state.tags["Flag"] is True
@@ -247,11 +253,15 @@ def test_scan_clock_toggle_derived_edge_fall(runner_factory):
 
     runner = runner_factory(program)
 
-    runner.step()  # scan 1: toggle=False, no fall
+    runner.step()  # scan 0: toggle=True, no fall
     assert runner.current_state.tags.get("Flag") is not True
 
+    runner.step()  # scan 1: toggle=False, fall
+    assert runner.current_state.tags["Flag"] is True
+    runner.patch({"Flag": False})
+
     runner.step()  # scan 2: toggle=True, no fall
-    assert runner.current_state.tags.get("Flag") is not True
+    assert runner.current_state.tags["Flag"] is False
 
     runner.step()  # scan 3: toggle=False, fall
     assert runner.current_state.tags["Flag"] is True
@@ -263,17 +273,18 @@ def test_scan_clock_toggle_derived_edge_alternates(runner_factory):
 
     with Program() as program:
         with Rung(rise(system.sys.scan_clock_toggle)):
-            calc(rise_count + 1, rise_count)
+            math(rise_count + 1, rise_count)
         with Rung(fall(system.sys.scan_clock_toggle)):
-            calc(fall_count + 1, fall_count)
+            math(fall_count + 1, fall_count)
 
     runner = runner_factory(program)
 
     for _ in range(10):
         runner.step()
 
+    # Scans 0..9: on at 0, 2, 4, 6, 8 (each a rise, scan 0's too), off at 1, 3, 5, 7, 9.
     assert runner.current_state.tags["RiseCount"] == 5
-    assert runner.current_state.tags["FallCount"] == 4
+    assert runner.current_state.tags["FallCount"] == 5
 
 
 def test_rtc_fields_derive_from_set_rtc_anchor():
@@ -455,7 +466,8 @@ def test_storage_sd_commands_auto_clear_and_pulse_write_status():
     assert _resolved(runner, system.storage.sd.write_status.name) is False
 
 
-def test_fault_division_error_auto_clears_next_scan_when_not_retriggered(runner_factory):
+def test_fault_division_error_clears_next_scan_by_the_held_oneshot_math(runner_factory):
+    """A one-shot Math that does not fire still clears its flags (CLICK, ``flag_reads/oneshot_held``)."""
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
@@ -463,7 +475,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered(runner_
 
     with Program() as program:
         with Rung(Enable):
-            calc(A / B, Result, oneshot=True)
+            math(A / B, Result, oneshot=True)
 
     runner = runner_factory(program)
     runner.patch({"Enable": True, "A": 100, "B": 0})
@@ -475,7 +487,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered(runner_
     assert runner.current_state.tags[system.fault.division_error.name] is False
 
 
-def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered(runner_factory):
+def test_fault_out_of_range_clears_next_scan_by_the_held_oneshot_math(runner_factory):
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
@@ -483,7 +495,7 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
 
     with Program() as program:
         with Rung(Enable):
-            calc(A + B, Result, oneshot=True)
+            math(A + B, Result, oneshot=True)
 
     runner = runner_factory(program)
     runner.patch({"Enable": True, "A": 30000, "B": 30000})
@@ -495,7 +507,11 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
     assert runner.current_state.tags[system.fault.out_of_range.name] is False
 
 
-def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered(runner_factory):
+def test_fault_out_of_range_carries_until_a_copy_runs(runner_factory):
+    """A one-shot Copy that does not fire, or one on a false rung, leaves its flags.
+
+    CLICK: ``flag_reads/oneshot_held``, ``flag_steps``.
+    """
     CH = Block("CH", TagType.CHAR, 1, 10)
     Dest = Int("Dest")
     Enable = Bool("Enable")
@@ -510,12 +526,18 @@ def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered(runner_fa
     assert runner.current_state.tags[system.fault.out_of_range.name] is True
 
     runner.step()
+    assert runner.current_state.tags[system.fault.out_of_range.name] is True
+
+    runner.patch({"Enable": False})
+    runner.step()
+    assert runner.current_state.tags[system.fault.out_of_range.name] is True
+
+    runner.patch({"Enable": True, "CH1": "5"})
+    runner.step()
     assert runner.current_state.tags[system.fault.out_of_range.name] is False
 
 
-def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
-    runner_factory,
-):
+def test_fault_address_error_carries_until_a_copy_runs(runner_factory):
     DS = Block("DS", TagType.INT, 1, 10)
     CH = Block("CH", TagType.CHAR, 1, 10)
     Pointer = Int("Pointer")
@@ -526,10 +548,52 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
             copy(DS[Pointer], CH[1], oneshot=True, convert=to_binary)
 
     runner = runner_factory(program)
-    runner.patch({"Enable": True, "Pointer": 999})
+    runner.patch({"Enable": True, "Pointer": 0})
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is True
     assert runner.current_state.tags.get(system.fault.out_of_range.name, False) is False
 
     runner.step()
+    assert runner.current_state.tags[system.fault.address_error.name] is True
+
+    runner.patch({"Enable": False})
+    runner.step()
+    runner.patch({"Enable": True, "Pointer": 1})
+    runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is False
+
+
+class TestSystemPointsStayOutOfBlocks:
+    """A CLICK never holds one in a block, and no fold can see one read through a pointer."""
+
+    @pytest.mark.parametrize(
+        ("point", "bank_type"),
+        [
+            pytest.param(system.rtc.second, TagType.INT, id="rtc-second"),
+            pytest.param(system.sys.clock_1s, TagType.BOOL, id="clock-1s"),
+            pytest.param(system.sys.scan_counter, TagType.INT, id="scan-counter"),
+        ],
+    )
+    def test_map_to_a_block_slot_is_refused(self, point: Any, bank_type: TagType) -> None:
+        bank = Block("Cb", bank_type, 1, 8)
+        with pytest.raises(ValueError, match="can't live in a block"):
+            point.map_to(bank[3])
+        assert bank[3].name == "Cb3"
+
+    def test_a_tag_with_a_system_name_is_the_same_point(self) -> None:
+        with pytest.raises(ValueError, match="can't live in a block"):
+            Int("rtc.second").map_to(Block("Cb", TagType.INT, 1, 8)[3])
+
+    def test_a_block_range_cannot_carry_one(self) -> None:
+        """``Block.map_to`` takes a slot's name, so the name is where it stops."""
+        logical = Block("Sn", TagType.INT, 1, 4)
+        with pytest.raises(ValueError, match="can't live in a block"):
+            logical.slot(3, name="rtc.second")
+        assert logical[3].name == "Sn3"
+
+    def test_other_names_still_map_onto_a_bank(self) -> None:
+        bank = Block("Cb", TagType.INT, 1, 8)
+        name = Int("Cp")
+        name.map_to(bank[3])
+        bank.slot(4, name="Cq")
+        assert (bank[3].name, bank[4].name) == ("Cp", "Cq")

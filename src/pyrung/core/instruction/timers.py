@@ -11,13 +11,28 @@ from pyrung.core.time_mode import _parse_time_unit
 from .advance import AdvanceProfile, ConditionDemand, monotone_profile
 from .base import Instruction
 from .utils import (
+    elapsed_units,
     instruction_condition_view,
     resolve_preset_ctx,
     to_condition,
+    validate_preset,
 )
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+
+
+def tof_armed_key(acc_name: str) -> str:
+    """Memory key set on the first scan an off-delay timer runs enabled, or runs
+    with Done on or Acc above 0.
+
+    A TOF that was never enabled rests at ``Done False, Acc 0`` and does not
+    time (``timers/tof_never_enabled``).  Once enabled, it judges ``Acc <
+    preset`` on every scan its rung is false, so a TD the ladder writes to 0
+    turns Done back on and counts from 0 (``tof_rewrite/done_after_td_zeroed``).
+    STOP -> RUN clears the key with the rest of the memory.
+    """
+    return f"_tof_armed:{acc_name}"
 
 
 class OnDelayInstruction(Instruction):
@@ -65,6 +80,7 @@ class OnDelayInstruction(Instruction):
         en_bit: Tag | None = None,
         tt_bit: Tag | None = None,
     ):
+        validate_preset(preset, label="on_delay() preset")
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
@@ -87,18 +103,18 @@ class OnDelayInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
-        condition_view = instruction_condition_view(ctx)
+        condition_view = instruction_condition_view(ctx, self)
 
         reset_active = self.reset_condition is not None and self.reset_condition.evaluate(
             condition_view
         )
         acc_value = ctx.get_tag(self.accumulator.name, 0)
-        frac = ctx.get_memory(frac_key, 0.0)
+        frac = ctx.get_memory(frac_key, 0)
         dt = ctx.get_memory("_dt", 0.0)
         sp = resolve_preset_ctx(self.preset, ctx)
 
         if reset_active:
-            ctx.set_memory(frac_key, 0.0)
+            ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
                     self.done_bit.name: False,
@@ -107,9 +123,7 @@ class OnDelayInstruction(Instruction):
                 }
             )
         elif enabled:
-            dt_units = self.unit.dt_to_units(dt) + frac
-            int_units = int(dt_units)
-            new_frac = dt_units - int_units
+            int_units, new_frac = elapsed_units(frac, dt, self.unit)
             acc_value = min(acc_value + int_units, 32767)
             ctx.set_memory(frac_key, new_frac)
             done_value = acc_value >= sp
@@ -121,7 +135,7 @@ class OnDelayInstruction(Instruction):
                 }
             )
         elif not self.has_reset:
-            ctx.set_memory(frac_key, 0.0)
+            ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
                     self.done_bit.name: False,
@@ -134,7 +148,7 @@ class OnDelayInstruction(Instruction):
             if status:
                 ctx.set_tags(status)
 
-    def is_terminal(self) -> bool:
+    def has_pins(self) -> bool:
         return self.has_reset
 
     def advance_profile(self) -> AdvanceProfile:
@@ -180,9 +194,11 @@ class OffDelayInstruction(Instruction):
     - **Rung True:** done = True, accumulator = 0 (resets immediately)
     - **Rung False:** accumulator counts up; done = False once acc ≥ preset
     - **Re-enabling:** re-enables immediately (acc and done reset)
+    - **Never enabled:** rests at done = False, acc = 0
 
     If `preset` is a dynamic tag that increases past the current accumulator
     after the timer has already fired, done re-enables until acc catches up.
+    So does an accumulator written below the preset.
 
     Args:
         done_bit: BOOL tag that stays True until delay expires.
@@ -211,6 +227,7 @@ class OffDelayInstruction(Instruction):
         en_bit: Tag | None = None,
         tt_bit: Tag | None = None,
     ):
+        validate_preset(preset, label="off_delay() preset")
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
@@ -231,10 +248,14 @@ class OffDelayInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
+        armed_key = tof_armed_key(self.accumulator.name)
+        armed = ctx.get_memory(armed_key, False)
 
         if enabled:
             # While enabled: done = True, acc = 0
-            ctx.set_memory(frac_key, 0.0)
+            if not armed:
+                ctx.set_memory(armed_key, True)
+            ctx.set_memory(frac_key, 0)
             ctx.set_tags(
                 {
                     self.done_bit.name: True,
@@ -245,24 +266,21 @@ class OffDelayInstruction(Instruction):
         else:
             acc_value = ctx.get_tag(self.accumulator.name, 0)
 
-            # Never-enabled: Done=False, Acc=0 is the resting state.
-            # The enabled branch always sets Done=True before Acc=0,
-            # so (False, 0) uniquely identifies a timer that was never enabled.
-            if not ctx.get_tag(self.done_bit.name, False) and acc_value == 0:
+            # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
+            if not armed and acc_value == 0 and not ctx.get_tag(self.done_bit.name, False):
                 status = self._status_tags(False, False)
                 if status:
                     ctx.set_tags(status)
                 return
+            if not armed:
+                ctx.set_memory(armed_key, True)
 
             sp = resolve_preset_ctx(self.preset, ctx)
 
             # Always count while disabled (accumulator continues to max int)
             dt = ctx.get_memory("_dt", 0.0)
-            frac = ctx.get_memory(frac_key, 0.0)
-
-            dt_units = self.unit.dt_to_units(dt) + frac
-            int_units = int(dt_units)
-            new_frac = dt_units - int_units
+            frac = ctx.get_memory(frac_key, 0)
+            int_units, new_frac = elapsed_units(frac, dt, self.unit)
 
             # Update accumulator, clamp at INT16_MAX (32767)
             acc_value = min(acc_value + int_units, 32767)

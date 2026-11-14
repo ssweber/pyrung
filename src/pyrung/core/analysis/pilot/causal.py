@@ -131,9 +131,7 @@ def _reference_constants(plc: PLC) -> frozenset[str]:
         try:
             from pyrung.core.analysis.pilot.program_facts import compute_reference_constants
 
-            result = compute_reference_constants(
-                plc._ensure_pdg(), program, plc._known_tags_by_name
-            )
+            result = compute_reference_constants(plc._ensure_pdg(), program, plc.tags)
         except Exception:  # noqa: BLE001
             logger.debug("pilot causal: reference-constant computation failed", exc_info=True)
             result = frozenset()
@@ -194,7 +192,7 @@ def _program_written_changes(
                 continue
 
             # User logic follows patches and both synthesis brackets.
-            main_firings = plc.rung_firings(scan_id)
+            main_firings = plc._recorded_rung_firings(scan_id)
             if any(
                 tag in writes and _values_match(writes[tag], value)
                 for writes in main_firings.values()

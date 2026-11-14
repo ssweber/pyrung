@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from pyclickplc.banks import BANKS
+
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
     from pyrung.core.validation.walker import OperandFact
@@ -19,33 +21,64 @@ FindingSeverity = Literal["error", "warning", "hint"]
 CLK_PTR_CONTEXT_ONLY_COPY = "CLK_PTR_CONTEXT_ONLY_COPY"
 CLK_PTR_POINTER_MUST_BE_DS = "CLK_PTR_POINTER_MUST_BE_DS"
 CLK_PTR_EXPR_NOT_ALLOWED = "CLK_PTR_EXPR_NOT_ALLOWED"
-CLK_EXPR_ONLY_IN_CALC = "CLK_EXPR_ONLY_IN_CALC"
+CLK_PTR_BLOCK_OFFSET = "CLK_PTR_BLOCK_OFFSET"
+CLK_EXPR_ONLY_IN_MATH = "CLK_EXPR_ONLY_IN_MATH"
 CLK_TILDE_BOOL_CONTACT_ONLY = "CLK_TILDE_BOOL_CONTACT_ONLY"
 CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED"
 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
 CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
 CLK_FUNCTION_CALL_NOT_PORTABLE = "CLK_FUNCTION_CALL_NOT_PORTABLE"
-CLK_CALC_MODE_MIXED = "CLK_CALC_MODE_MIXED"
-CLK_CALC_FLOOR_DIV = "CLK_CALC_FLOOR_DIV"
-CLK_CALC_FUNC_MODE_MISMATCH = "CLK_CALC_FUNC_MODE_MISMATCH"
-CLK_CALC_NESTING_DEPTH = "CLK_CALC_NESTING_DEPTH"
+CLK_MATH_MODE_MIXED = "CLK_MATH_MODE_MIXED"
+CLK_MATH_FLOOR_DIV = "CLK_MATH_FLOOR_DIV"
+CLK_MATH_FUNC_MODE_MISMATCH = "CLK_MATH_FUNC_MODE_MISMATCH"
+CLK_MATH_NESTING_DEPTH = "CLK_MATH_NESTING_DEPTH"
+CLK_MATH_RANGE_MIXED_BANKS = "CLK_MATH_RANGE_MIXED_BANKS"
+CLK_MATH_RANGE_NOT_CONTIGUOUS = "CLK_MATH_RANGE_NOT_CONTIGUOUS"
+CLK_MATH_MEDIAN_RANGE_TOO_LARGE = "CLK_MATH_MEDIAN_RANGE_TOO_LARGE"
+CLK_MATH_BIT_RANGE_AGGREGATE = "CLK_MATH_BIT_RANGE_AGGREGATE"
+CLK_MATH_SUM_BANK_NOT_AVAILABLE = "CLK_MATH_SUM_BANK_NOT_AVAILABLE"
 
 CLK_PROFILE_UNAVAILABLE = "CLK_PROFILE_UNAVAILABLE"
 CLK_ADDRESS_IDENTITY_CONFLICT = "CLK_ADDRESS_IDENTITY_CONFLICT"
+CLK_NICKNAME_TOO_LONG = "CLK_NICKNAME_TOO_LONG"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
 CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
 CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
 CLK_COPY_BANK_INCOMPATIBLE = "CLK_COPY_BANK_INCOMPATIBLE"
 CLK_COPY_CONVERTER_INCOMPATIBLE = "CLK_COPY_CONVERTER_INCOMPATIBLE"
 CLK_PACK_TEXT_BANK_INCOMPATIBLE = "CLK_PACK_TEXT_BANK_INCOMPATIBLE"
-CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED = "CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED"
 CLK_DRUM_JUMP_STEP_TAG_REQUIRED = "CLK_DRUM_JUMP_STEP_TAG_REQUIRED"
 CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED = "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED"
 CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
 CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
+CLK_IMMEDIATE_CONTACT_MUST_BE_X = "CLK_IMMEDIATE_CONTACT_MUST_BE_X"
 CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS = "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS"
 CLK_TIMER_PRESET_OVERFLOW = "CLK_TIMER_PRESET_OVERFLOW"
+CLK_OUT_UNIT_UNSUPPORTED = "CLK_OUT_UNIT_UNSUPPORTED"
+CLK_TIMER_PAIR_MISMATCH = "CLK_TIMER_PAIR_MISMATCH"
 CLK_STATUS_BIT_NOT_PORTABLE = "CLK_STATUS_BIT_NOT_PORTABLE"
+CLK_FORLOOP_NESTING_DEPTH = "CLK_FORLOOP_NESTING_DEPTH"
+CLK_FORLOOP_INNER_ONESHOT = "CLK_FORLOOP_INNER_ONESHOT"
+CLK_FORLOOP_RETURN_INSIDE = "CLK_FORLOOP_RETURN_INSIDE"
+CLK_NESTED_CALL = "CLK_NESTED_CALL"
+CLK_STEP_LIMIT = "CLK_STEP_LIMIT"
+CLK_FORLOOP_COUNT_BANK = "CLK_FORLOOP_COUNT_BANK"
+CLK_RAND_BOUND_TYPE = "CLK_RAND_BOUND_TYPE"
+CLK_RAND_EQUAL_BOUNDS = "CLK_RAND_EQUAL_BOUNDS"
+CLK_MATH_ARG_NOT_PLAIN = "CLK_MATH_ARG_NOT_PLAIN"
+CLK_MATH_WIDE_CONSTANT = "CLK_MATH_WIDE_CONSTANT"
+CLK_TEXT_ORDER_COMPARE = "CLK_TEXT_ORDER_COMPARE"
+CLK_TEXT_PAST_BANK = "CLK_TEXT_PAST_BANK"
+CLK_TEXT_PAST_BLOCK = "CLK_TEXT_PAST_BLOCK"
+CLK_TEXT_WINDOW_NOT_CONTIGUOUS = "CLK_TEXT_WINDOW_NOT_CONTIGUOUS"
+CLK_COPY_CONSTANT_INTO_BIT = "CLK_COPY_CONSTANT_INTO_BIT"
+CLK_MATH_BIT_OPERAND = "CLK_MATH_BIT_OPERAND"
+CLK_MATH_DEST_BANK = "CLK_MATH_DEST_BANK"
+CLK_SEARCH_RANGE_BANK = "CLK_SEARCH_RANGE_BANK"
+CLK_SEARCH_RESULT_NOT_DS = "CLK_SEARCH_RESULT_NOT_DS"
+CLK_TIMER_PRESET_TOO_LOW = "CLK_TIMER_PRESET_TOO_LOW"
+CLK_PTR_PAST_BANK = "CLK_PTR_PAST_BANK"
+CLK_COMPARE_HEX_MIX = "CLK_COMPARE_HEX_MIX"
 
 
 @dataclass(frozen=True)
@@ -84,9 +117,43 @@ def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:
     return "hint"
 
 
+_DEST_PATHS = {"instruction.dest", "instruction.target"}
+
+
+def _bank_pointer_advice(
+    block_name: str, index_dsl: str, tag_map: TagMap, *, dest: bool = False
+) -> str | None:
+    """How to reach ``block_name[index_dsl]`` through a bare CLICK bank pointer.
+
+    CLICK takes only ``BANK[pointer]``, so the block's offset goes into the pointer.
+    Returns None when the block is not mapped onto one bank.
+    """
+    entry = tag_map._block_entry_by_name(block_name)
+    if entry is None:
+        # A pre-built CLICK block such as ds or dd is its own bank, with no offset.
+        if block_name not in BANKS:
+            return None
+        offset, bank = 0, block_name
+    else:
+        try:
+            offset = tag_map._offset_for(entry.logical)
+            bank = tag_map.resolve(entry.logical, entry.logical_addresses[0]).rstrip("0123456789")
+        except (KeyError, ValueError, IndexError):
+            return None
+    if not bank:
+        return None
+    total = index_dsl if offset == 0 else f"{index_dsl} {'+' if offset > 0 else '-'} {abs(offset)}"
+    copy_text = f"copy(src, {bank.lower()}[Ptr])" if dest else f"copy({bank.lower()}[Ptr], dest)"
+    return (
+        f"Compute the {bank} address into a DS tag and index the bank directly: "
+        f"math({total}, Ptr); {copy_text}"
+    )
+
+
 def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> str:
     """Build a context-aware suggestion string for a finding code."""
     meta = {} if fact is None else fact.metadata
+    is_dest = fact is not None and fact.location.arg_path in _DEST_PATHS
 
     if code == CLK_PTR_CONTEXT_ONLY_COPY:
         block_name = str(meta.get("block_name", ""))
@@ -125,32 +192,34 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         block_name = str(meta.get("block_name", ""))
         expr_dsl = str(meta.get("expr_dsl", ""))
         if block_name and expr_dsl:
-            block_entry = tag_map._block_entry_by_name(block_name)
-            if block_entry is not None:
-                try:
-                    offset = tag_map._offset_for(block_entry.logical)
-                    return (
-                        f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
-                        f"Store the index in a DS tag and use copy(): "
-                        f"calc({expr_dsl} + {offset}, Ptr); copy({block_name}[Ptr], dest)"
-                    )
-                except (KeyError, ValueError):
-                    pass
+            advice = _bank_pointer_advice(block_name, expr_dsl, tag_map, dest=is_dest)
+            if advice is not None:
+                return f"Click cannot compute {block_name}[{expr_dsl}] at runtime. {advice}"
             return (
                 f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
-                "Pre-compute the index with calc() into a DS pointer tag, "
+                "Pre-compute the index with math() into a DS pointer tag, "
                 "then use block[Ptr]."
             )
         return "Replace computed pointer arithmetic with DS pointer tag updated separately."
 
-    if code == CLK_EXPR_ONLY_IN_CALC:
+    if code == CLK_PTR_BLOCK_OFFSET:
+        block_name = str(meta.get("block_name", ""))
+        pointer_name = str(meta.get("pointer_name", ""))
+        advice = (
+            _bank_pointer_advice(block_name, pointer_name, tag_map, dest=is_dest)
+            if pointer_name
+            else None
+        )
+        return advice or "Index the CLICK bank directly with a DS pointer tag."
+
+    if code == CLK_EXPR_ONLY_IN_MATH:
         expr_dsl = str(meta.get("expr_dsl", ""))
         if expr_dsl:
             return (
                 f"Expression '{expr_dsl}' cannot be used directly here. "
-                f"Move it into calc({expr_dsl}, temp) and use temp in this context."
+                f"Move it into math({expr_dsl}, temp) and use temp in this context."
             )
-        return "Move expression into calc(expr, temp) and use temp in this context."
+        return "Move expression into math(expr, temp) and use temp in this context."
 
     if code == CLK_TILDE_BOOL_CONTACT_ONLY:
         expr_dsl = str(meta.get("expr_dsl", ""))
@@ -182,28 +251,28 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     if code == CLK_FUNCTION_CALL_NOT_PORTABLE:
         return (
             "Replace run_function/run_enabled_function with Click-portable instructions "
-            "(copy/calc/timer/counter/send/receive)."
+            "(copy/math/timer/counter/send/receive)."
         )
 
-    if code == CLK_CALC_MODE_MIXED:
+    if code == CLK_MATH_MODE_MIXED:
         return (
-            "Split mixed calc math into separate decimal and WORD-only calc() steps, "
-            "or convert through an intermediate tag so each calc() stays one family."
+            "Split mixed math into separate decimal and WORD-only math() steps, "
+            "or convert through an intermediate tag so each math() stays one family."
         )
 
-    if code == CLK_CALC_FLOOR_DIV:
+    if code == CLK_MATH_FLOOR_DIV:
         return (
-            "Click has no floor-division operator. Use calc(a / b, int_dest) instead; "
+            "Click has no floor-division operator. Use math(a / b, int_dest) instead; "
             "copying the result to an Int or Dint tag truncates toward zero automatically."
         )
 
-    if code == CLK_CALC_FUNC_MODE_MISMATCH:
+    if code == CLK_MATH_FUNC_MODE_MISMATCH:
         return ""  # suggestion is built inline with context
 
-    if code == CLK_CALC_NESTING_DEPTH:
+    if code == CLK_MATH_NESTING_DEPTH:
         return (
             "Click limits parenthetical nesting to 8 levels. "
-            "Break the expression into intermediate calc() steps with temporary tags."
+            "Break the expression into intermediate math() steps with temporary tags."
         )
 
     if code == CLK_COPY_CONVERTER_INCOMPATIBLE:
@@ -214,13 +283,19 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         )
 
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
-        return "Use immediate(...) only in rung contacts and out()/latch()/reset() coil targets."
+        return (
+            "Use immediate(...) only in rung contacts and out()/latch()/reset()/toggle() "
+            "coil targets."
+        )
 
     if code == CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED:
         return "Use rise(tag)/fall(tag) without immediate(...), or use a plain immediate contact."
 
     if code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y:
         return "Map immediate coil targets to Y bank addresses only."
+
+    if code == CLK_IMMEDIATE_CONTACT_MUST_BE_X:
+        return "Map it to an X input, or use a plain contact."
 
     if code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS:
         return "Map immediate-wrapped coil ranges to contiguous Y addresses (Ynnn..Ymmm)."
@@ -244,31 +319,62 @@ __all__ = [
     "CLK_PTR_CONTEXT_ONLY_COPY",
     "CLK_PTR_POINTER_MUST_BE_DS",
     "CLK_PTR_EXPR_NOT_ALLOWED",
-    "CLK_EXPR_ONLY_IN_CALC",
+    "CLK_PTR_BLOCK_OFFSET",
+    "CLK_EXPR_ONLY_IN_MATH",
     "CLK_TILDE_BOOL_CONTACT_ONLY",
     "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED",
     "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED",
     "CLK_PTR_DS_UNVERIFIED",
     "CLK_FUNCTION_CALL_NOT_PORTABLE",
-    "CLK_CALC_MODE_MIXED",
-    "CLK_CALC_FLOOR_DIV",
-    "CLK_CALC_FUNC_MODE_MISMATCH",
-    "CLK_CALC_NESTING_DEPTH",
+    "CLK_MATH_MODE_MIXED",
+    "CLK_MATH_FLOOR_DIV",
+    "CLK_MATH_FUNC_MODE_MISMATCH",
+    "CLK_MATH_NESTING_DEPTH",
+    "CLK_MATH_RANGE_MIXED_BANKS",
+    "CLK_MATH_RANGE_NOT_CONTIGUOUS",
+    "CLK_MATH_MEDIAN_RANGE_TOO_LARGE",
+    "CLK_MATH_BIT_RANGE_AGGREGATE",
+    "CLK_MATH_SUM_BANK_NOT_AVAILABLE",
     "CLK_PROFILE_UNAVAILABLE",
+    "CLK_NICKNAME_TOO_LONG",
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
     "CLK_BANK_WRONG_ROLE",
     "CLK_COPY_BANK_INCOMPATIBLE",
     "CLK_COPY_CONVERTER_INCOMPATIBLE",
     "CLK_PACK_TEXT_BANK_INCOMPATIBLE",
-    "CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED",
     "CLK_DRUM_JUMP_STEP_TAG_REQUIRED",
     "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
+    "CLK_IMMEDIATE_CONTACT_MUST_BE_X",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
+    "CLK_OUT_UNIT_UNSUPPORTED",
+    "CLK_TIMER_PAIR_MISMATCH",
     "CLK_STATUS_BIT_NOT_PORTABLE",
+    "CLK_FORLOOP_NESTING_DEPTH",
+    "CLK_STEP_LIMIT",
+    "CLK_FORLOOP_INNER_ONESHOT",
+    "CLK_FORLOOP_RETURN_INSIDE",
+    "CLK_NESTED_CALL",
+    "CLK_FORLOOP_COUNT_BANK",
+    "CLK_RAND_BOUND_TYPE",
+    "CLK_RAND_EQUAL_BOUNDS",
+    "CLK_MATH_ARG_NOT_PLAIN",
+    "CLK_MATH_WIDE_CONSTANT",
+    "CLK_TEXT_ORDER_COMPARE",
+    "CLK_TEXT_PAST_BANK",
+    "CLK_TEXT_PAST_BLOCK",
+    "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
+    "CLK_COPY_CONSTANT_INTO_BIT",
+    "CLK_MATH_BIT_OPERAND",
+    "CLK_MATH_DEST_BANK",
+    "CLK_SEARCH_RANGE_BANK",
+    "CLK_SEARCH_RESULT_NOT_DS",
+    "CLK_TIMER_PRESET_TOO_LOW",
+    "CLK_PTR_PAST_BANK",
+    "CLK_COMPARE_HEX_MIX",
     "ClickFinding",
     "ClickValidationReport",
 ]

@@ -30,13 +30,16 @@ def _infer_assignment_name(frame: FrameType) -> str | None:
         if node is None:
             return None
 
-        parent_map: dict[int, ast.AST] | None = getattr(src.tree, "_pyrung_parent_map", None)
+        tree = src.tree
+        if tree is None:
+            return None
+        parent_map: dict[int, ast.AST] | None = getattr(tree, "_pyrung_parent_map", None)
         if parent_map is None:
             parent_map = {}
-            for n in ast.walk(src.tree):
+            for n in ast.walk(tree):
                 for child in ast.iter_child_nodes(n):
                     parent_map[id(child)] = n
-            src.tree._pyrung_parent_map = parent_map  # type: ignore[attr-defined]
+            tree._pyrung_parent_map = parent_map  # ty: ignore[unresolved-attribute]
 
         parent = parent_map.get(id(node))
         if isinstance(parent, ast.Assign) and len(parent.targets) == 1:

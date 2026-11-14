@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import struct
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from pyclickplc.addresses import format_address_display, parse_address
 from pyclickplc.banks import BANKS
@@ -11,6 +13,8 @@ from pyclickplc.server import DataProvider, MemoryDataProvider, PlcValue
 from pyclickplc.validation import assert_runtime_value
 
 from pyrung.click.tag_map import TagMap
+from pyrung.click.tag_map._nickname_io import _PLAIN_DATA_BANKS
+from pyrung.core.memory_block import Block
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
 
@@ -34,6 +38,7 @@ for _lo, _hi in _XY_SLOT_RANGES:
         raise RuntimeError("Each X/Y sparse slot must be 16 bits wide.")
 
 _WORD_SIZE = 16
+_CLICK_NAN: float = struct.unpack("<f", b"\xff\xff\xff\xff")[0]
 _MIRRORED_WORD_BANKS: dict[str, str] = {"XD": "X", "YD": "Y"}
 
 
@@ -47,7 +52,9 @@ class ClickDataProvider:
       mapped logical tag.
     - **Writes** queue a ``runner.patch()`` so the new value takes effect at
       the start of the next scan.
-    - Unmapped addresses fall through to an optional `fallback` provider.
+    - Addresses without a TagMap entry are served from *blocks* when given
+      (the Click bank blocks a generated project keeps beside ``mapping``),
+      then fall through to an optional `fallback` provider.
 
     **XD / YD word-image mirroring:**
 
@@ -57,10 +64,21 @@ class ClickDataProvider:
     - ``XD*`` writes are rejected (read-only).
 
     Args:
-        runner: The active ``PLC`` whose state is served.
+        runner: The active ``PLC`` whose state is served, or a zero-argument
+            callable returning it.  Pass a callable when the runner can be
+            replaced while the provider is in use (a debug session reload).
         tag_map: Mapping from logical tag names to Click hardware addresses.
         fallback: Optional provider for unmapped addresses.
             Defaults to an in-memory provider.
+        blocks: Click bank blocks whose slots the program uses directly,
+            without a TagMap entry (``x.slot(1, name="Start")`` or a bare
+            ``ds[5]``).  Accepts a ``ClickBlockSet`` or any iterable of
+            blocks; only the plain data banks (X, Y, C, DS, DD, DH, DF, TXT)
+            are used.
+        on_stop: Called instead of ``runner.stop()`` when a write to the STOP
+            command bit (SC50) reaches the provider.  pyclickplc's Modbus
+            server refuses that write (exception code 2), so a Modbus client
+            never gets here.
 
     Example:
         .. code-block:: python
@@ -74,13 +92,46 @@ class ClickDataProvider:
 
     def __init__(
         self,
-        runner: PLC,
+        runner: PLC | Callable[[], PLC],
         tag_map: TagMap,
         fallback: DataProvider | None = None,
+        *,
+        blocks: Iterable[Any] | None = None,
+        on_stop: Callable[[], None] | None = None,
     ) -> None:
-        self._runner = runner
+        if isinstance(runner, PLC):
+            fixed_runner = runner
+            self._get_runner: Callable[[], PLC] = lambda: fixed_runner
+        else:
+            self._get_runner = runner
         self._fallback = fallback if fallback is not None else MemoryDataProvider()
         self._mapped_slots = self._build_reverse_index(tag_map)
+        self._banks: dict[str, Block] = {
+            blk.name: blk
+            for blk in (blocks if blocks is not None else ())
+            if isinstance(blk, Block) and blk.name in _PLAIN_DATA_BANKS
+        }
+        self._bank_slots: dict[str, _MappedRuntimeSlot | None] = {}
+        self._on_stop = on_stop
+
+    @property
+    def _runner(self) -> PLC:
+        return self._get_runner()
+
+    def tag_name(self, address: str) -> str | None:
+        """Return the logical tag name served at a Click *address*, or ``None``.
+
+        ``None`` means the address is not mapped (neither by the TagMap nor by
+        *blocks*) or is a mirrored word image (XD/YD).
+
+        Raises:
+            ValueError: If *address* is not a valid Click address.
+        """
+        normalized, bank, _index = self._normalize(address)
+        if bank in _MIRRORED_WORD_BANKS:
+            return None
+        mapped = self._lookup_slot(normalized)
+        return mapped.logical_name if mapped is not None else None
 
     @staticmethod
     def _normalize(address: str) -> tuple[str, str, int]:
@@ -107,7 +158,11 @@ class ClickDataProvider:
         normalized, bank, index = self._normalize(address)
         if bank in _MIRRORED_WORD_BANKS:
             return self._read_mirrored_word(bank, index)
-        return self._read_mapped_or_fallback(normalized)
+        value = self._read_mapped_or_fallback(normalized)
+        if isinstance(value, float) and value != value:
+            # pyrung serves every NaN it holds as a CLICK serves its NaN, 0xFFFF:0xFFFF.
+            return _CLICK_NAN
+        return value
 
     def write(self, address: str, value: PlcValue) -> None:
         normalized, bank, index = self._normalize(address)
@@ -120,8 +175,32 @@ class ClickDataProvider:
             return
         self._write_mapped_or_fallback(normalized, value)
 
-    def _read_mapped_or_fallback(self, normalized: str) -> PlcValue:
+    def _lookup_slot(self, normalized: str) -> _MappedRuntimeSlot | None:
         mapped = self._mapped_slots.get(normalized)
+        if mapped is not None or not self._banks:
+            return mapped
+        if normalized in self._bank_slots:
+            return self._bank_slots[normalized]
+        bank_name, index = parse_address(normalized)
+        bank = self._banks.get(bank_name)
+        slot: _MappedRuntimeSlot | None = None
+        if bank is not None:
+            try:
+                tag = bank._tag_at(index)
+            except IndexError:
+                tag = None
+            if tag is not None:
+                slot = _MappedRuntimeSlot(
+                    logical_name=tag.name,
+                    default=tag.default,
+                    read_only=False,
+                    source="user",
+                )
+        self._bank_slots[normalized] = slot
+        return slot
+
+    def _read_mapped_or_fallback(self, normalized: str) -> PlcValue:
+        mapped = self._lookup_slot(normalized)
         if mapped is None:
             return self._fallback.read(normalized)
         if mapped.source == "system":
@@ -134,7 +213,7 @@ class ClickDataProvider:
 
     def _write_mapped_or_fallback(self, normalized: str, value: PlcValue) -> None:
         bank, index = parse_address(normalized)
-        mapped = self._mapped_slots.get(normalized)
+        mapped = self._lookup_slot(normalized)
         if mapped is None:
             self._fallback.write(normalized, value)
             return
@@ -146,7 +225,10 @@ class ClickDataProvider:
             )
         if mapped.logical_name == system.sys.cmd_mode_stop.name:
             if bool(value):
-                self._runner.stop()
+                if self._on_stop is not None:
+                    self._on_stop()
+                else:
+                    self._runner.stop()
             return
         self._runner.patch({mapped.logical_name: value})
 

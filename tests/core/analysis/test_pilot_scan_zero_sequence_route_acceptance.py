@@ -1,8 +1,16 @@
-"""Acceptance contract for the field-faithful sequential correction route."""
+"""Acceptance contract for the field-faithful sequential correction route.
+
+The lifecycle contracts run ``adjacent_logic``, which keeps the adjacent-scan
+98 -> 10 -> 94 mechanism; the field-order tests at the end run ``logic``,
+where the status branch sees the repair on the same scan.
+"""
 
 from typing import Any
 
+import pytest
+
 from pyrung import PLC
+from pyrung.core.analysis.graph import PlanStatus
 from tests.fixtures import pilot_scan_zero_sequence_route as fixture
 
 
@@ -144,7 +152,7 @@ def _assert_clicknick_success(
 
 def test_neutral_route_resolves_clicknick_sequential_corrections() -> None:
     events: list[Any] = []
-    plan = PLC(fixture.logic, dt=0.010).how(
+    plan = PLC(fixture.adjacent_logic, dt=0.010).how(
         fixture.SequenceStep == 81,
         max_scans=120,
         on_event=events.append,
@@ -171,29 +179,42 @@ def test_neutral_route_resolves_clicknick_sequential_corrections() -> None:
     _assert_clicknick_success(recorded, plan, anchor_scan=0)
 
 
-def test_neutral_route_resolves_corrections_after_runner_has_already_stepped() -> None:
-    runner = PLC(fixture.logic, dt=0.010)
+@pytest.mark.parametrize(
+    ("logic", "clear_scans"),
+    [(fixture.adjacent_logic, 10), (fixture.logic, 6)],
+    ids=["adjacent", "field"],
+)
+def test_a_route_a_scan_has_already_spoiled_says_what_a_restart_needs(logic, clear_scans) -> None:
+    """The first scan latched what the route needs clear, and a restart keeps it."""
+    runner = PLC(logic, dt=0.010)
     runner.step()
 
     assert runner.state.scan_id == 1
     assert runner.state.tags[fixture.SequenceStep.name] == 99
 
-    events: list[Any] = []
-    plan = runner.how(
-        fixture.SequenceStep == 81,
-        max_scans=120,
-        on_event=events.append,
-    )
-    _assert_clicknick_success(tuple(events), plan, anchor_scan=1)
+    plan = runner.how(fixture.SequenceStep == 81, max_scans=2000)
+
+    assert plan.status is PlanStatus.STOPPED
+    assert plan.restart.clear == {"RouteSequenceInterrupted": 0, fixture.SequenceStep.name: 0}
+    assert plan.restart.clear_scans == clear_scans
+
+    # What the report says a person can do works.
+    runner.stop()
+    runner._state = runner.state.with_tags(dict(plan.restart.clear))
+    runner.start()
+    followed = runner.how(fixture.SequenceStep == 81, max_scans=2000)
+    assert followed.reachable, followed.reason
+    assert followed.total_scans == clear_scans
+    assert followed.replay().state.tags[fixture.SequenceStep.name] == 81
 
 
 def test_neutral_reconnect_boundary_uses_one_exact_intrascan_pulse() -> None:
     """A retained 98 is consumed alone before Compass considers another steer."""
 
-    boundary = PLC(fixture.logic, dt=0.010)
+    boundary = PLC(fixture.adjacent_logic, dt=0.010)
     boundary.step()
     runner = PLC(
-        fixture.logic,
+        fixture.adjacent_logic,
         dt=0.010,
         initial_state=boundary.state.with_tags(
             {
@@ -231,3 +252,166 @@ def test_neutral_reconnect_boundary_uses_one_exact_intrascan_pulse() -> None:
         pulse.data["expected_write"].before,
         pulse.data["expected_write"].after,
     ) == (98, 10)
+
+
+def _field_order_reconnect_logic() -> Any:
+    """The reconnect rung in the field program's order (the repair branch above
+    the status branch), cut to the rungs around the reconnect.
+
+    The status branch reads its conditions when the scan reaches it, so it
+    sees the repair's 10 on the same scan.  The pilot used to raise
+    "conflicting lifecycle fact" here: a later act that reached the same
+    rejected source re-opened its spent theory with a smaller budget.
+    """
+    from pyrung import Or, Program, branch, copy, count_up, rung
+
+    S = fixture.SequenceStep
+    with Program() as logic:
+        with rung(S == 80, fixture.SettleDelay.Done):
+            copy(81, S, oneshot=True)
+        with rung(
+            Or(
+                fixture.PositionReading < fixture.PositionThreshold,
+                fixture.BypassPositionCheck,
+                fixture.SequenceInterrupted == 1,
+            ),
+            S == 81,
+        ):
+            copy(10, S, oneshot=True)
+        with rung(~fixture.InterruptionInput):
+            with branch(fixture.BaseSensor):
+                copy(10, S, oneshot=True)
+            with branch(S < 50, ~fixture.BaseSensor):
+                copy(80, S, oneshot=True)
+        with rung(~fixture.NetworkAvailable, S <= 20):
+            copy(98, S, oneshot=True)
+        with rung(fixture.NetworkAvailable):
+            with branch(S == 98):
+                copy(10, S, oneshot=True)
+            with branch(S <= 20):
+                with branch(fixture.RecoveryCounter.Done):
+                    copy(97, S, oneshot=True)
+                with branch(~fixture.RecoveryCounter.Done, fixture.ServiceStatus == 0):
+                    copy(94, S, oneshot=True)
+        with rung(fixture.CommunicationError):
+            count_up(fixture.RecoveryCounter, 60).reset(~fixture.CommunicationError)
+        with rung():
+            copy(fixture.ServiceStatusInput, fixture.ServiceStatus)
+    return logic
+
+
+def _retained_98(logic: Any) -> PLC:
+    boundary = PLC(logic, dt=0.010)
+    boundary.step()
+    return PLC(
+        logic,
+        dt=0.010,
+        initial_state=boundary.state.with_tags(
+            {fixture.SequenceStep.name: 98, fixture.SafetyPermit.name: True}
+        ),
+    )
+
+
+def _reconnect_overwrites(events: list[Any]) -> set[tuple[Any, Any, bool]]:
+    """What each rejected reconnect saw happen to the step: the value it
+    wrote, the value that displaced it, and whether that was the same scan."""
+    reconnect = ((fixture.NetworkAvailable.name, True),)
+    return {
+        (
+            observation.appeared.values,
+            observation.displacement.values,
+            observation.displacement.scan_id == observation.appeared.scan_id,
+        )
+        for event in events
+        if event.kind == "candidate_rejected" and event.data.get("applied") == reconnect
+        for observation in event.data.get("effect_observations", ())
+        if observation.appeared is not None and observation.displacement is not None
+    }
+
+
+def _assert_reconnect_overwritten_on_its_scan(plan: Any, events: list[Any]) -> None:
+    # The pilot tries the reconnect and rejects it each time: the status
+    # branch below the repair turns its 10 into 94 on the same scan.  It does
+    # not yet try a nonzero ServiceStatusInput, which keeps that branch off,
+    # so the search runs out of budget.
+    assert _reconnect_overwrites(events) == {((98, 10), (10, 94), True)}
+    assert not plan.reachable
+    assert plan.reason.startswith("budget exhausted")
+    assert "RouteSequenceStep=10 (have 98)" in plan.reason
+
+
+def test_field_order_reconnect_boundary_does_not_crash() -> None:
+    events: list[Any] = []
+    plan = _retained_98(_field_order_reconnect_logic()).how(
+        fixture.SequenceStep == 10, max_scans=30, on_event=events.append
+    )
+
+    _assert_reconnect_overwritten_on_its_scan(plan, events)
+
+
+def test_field_order_reconnect_overwrite_is_intrascan() -> None:
+    """In the field order the status branch, below the repair, sees its 10."""
+    runner = _retained_98(fixture.logic)
+    runner.patch({fixture.NetworkAvailable.name: True})
+    runner.step()
+
+    assert runner.state.tags[fixture.SequenceStep.name] == 94
+    events: list[Any] = []
+    plan = _retained_98(fixture.logic).how(
+        fixture.SequenceStep == 10, max_scans=30, on_event=events.append
+    )
+    _assert_reconnect_overwritten_on_its_scan(plan, events)
+
+
+_FIELD_ORDER_LOGICS = pytest.mark.parametrize(
+    "make_logic",
+    [_field_order_reconnect_logic, lambda: fixture.logic],
+    ids=["cut", "full"],
+)
+
+
+@_FIELD_ORDER_LOGICS
+def test_field_order_reconnect_is_reachable_by_hand(make_logic: Any) -> None:
+    """A nonzero status keeps the status branch off, so the reconnect's 10 stays."""
+    runner = _retained_98(make_logic())
+    runner.patch({fixture.ServiceStatusInput.name: 1})
+    runner.step()
+    runner.patch({fixture.NetworkAvailable.name: True})
+    runner.step()
+
+    assert runner.state.tags[fixture.SequenceStep.name] == 10
+
+
+@_FIELD_ORDER_LOGICS
+def test_field_order_reconnect_reaches_step_10(make_logic: Any) -> None:
+    """The pilot alone stops: it holds the reconnect only as an exploratory hypothesis, or has
+    nothing left.  The last resort presses it, and how() asked again finds the rest."""
+    plan = _retained_98(make_logic()).how(fixture.SequenceStep == 10, max_scans=120)
+
+    assert plan.reachable, plan.reason
+    assert plan.last_resort.tag == fixture.NetworkAvailable.name
+    assert plan.replay().state.tags[fixture.SequenceStep.name] == 10
+
+
+def test_field_order_route_reaches_the_terminal_step() -> None:
+    events: list[Any] = []
+    plan = PLC(fixture.logic, dt=0.010).how(
+        fixture.SequenceStep == 81, max_scans=120, on_event=events.append
+    )
+
+    assert plan.reachable, plan.reason
+    reconnect_overwrite = next(
+        observation
+        for event in events
+        if event.kind == "candidate_accepted"
+        for observation in event.data.get("effect_observations", ())
+        if observation.appeared is not None
+        and observation.displacement is not None
+        and observation.appeared.tag == fixture.SequenceStep.name
+        and observation.appeared.values == (98, 10)
+    )
+    assert reconnect_overwrite.displacement.values == (10, 94)
+    assert reconnect_overwrite.displacement.scan_id == reconnect_overwrite.appeared.scan_id
+    replay = plan.replay()
+    assert replay.state.scan_id == plan.state.scan_id
+    assert replay.state.tags[fixture.SequenceStep.name] == 81

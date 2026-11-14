@@ -155,7 +155,7 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
             valid_ranges=valid_ranges,
             address_formatter=_click_address_formatter,
         )
-    return Block(
+    block = Block(
         name=name,
         type=tag_type,
         start=start,
@@ -164,6 +164,14 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
         valid_ranges=valid_ranges,
         address_formatter=_click_address_formatter,
     )
+    # Read on a CLICK: a Copy from a pointer past these banks leaves its destination.
+    # Past DD a CLICK reads whatever memory follows (``faults/pointer_past_bank``).
+    # pyrung has no memory there, so the read gives 0.
+    block._past_end_keeps = name in _PAST_END_KEEPS
+    return block
+
+
+_PAST_END_KEEPS = frozenset({"DS", "DH", "DF", "TXT"})
 
 
 class ClickBlockSet(NamedTuple):
@@ -224,10 +232,16 @@ from pyrung.click.codegen import (
     WorkspaceKind,
     ladder_to_pyrung,
     ladder_to_pyrung_project,
-    refresh_workspace_lifecycle_guidance,
 )
 from pyrung.click.data_provider import ClickDataProvider
-from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
+from pyrung.click.ladder import (
+    CLICK_STEP_LIMIT,
+    LadderBundle,
+    LadderExportError,
+    StepEstimate,
+    estimate_steps,
+    pyrung_to_ladder,
+)
 from pyrung.click.nop import NopInstruction, nop
 from pyrung.click.raw import RawInstruction, raw
 from pyrung.click.tag_map import SystemNicknameRepair, SystemNicknameRepairRequired, TagMap
@@ -275,6 +289,9 @@ __all__ = [
     "SystemNicknameRepairRequired",
     "LadderBundle",
     "LadderExportError",
+    "CLICK_STEP_LIMIT",
+    "StepEstimate",
+    "estimate_steps",
     "ClickDataProvider",
     "ModbusAddress",
     "ModbusReceiveInstruction",
@@ -293,7 +310,6 @@ __all__ = [
     "WorkspaceKind",
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
-    "refresh_workspace_lifecycle_guidance",
     "pyrung_to_ladder",
     "validate_click_program",
     "ValidationMode",

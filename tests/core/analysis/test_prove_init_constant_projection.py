@@ -68,6 +68,27 @@ def test_simple_init_pattern_projected() -> None:
     assert "InitDone" in ctx.stateful_dims
 
 
+def test_readonly_constant_source_is_projected() -> None:
+    """copy(S_IDLE, Cfg) with S_IDLE readonly writes a constant, like copy(5, Cfg)."""
+    init_done = Bool("InitDone")
+    s_idle = Int("S_IDLE", default=5, readonly=True)
+    cfg = Int("Cfg", min=0, max=10)
+    seen = Bool("Seen")
+
+    with Program(strict=False) as logic:
+        with Rung(cfg > 3):
+            out(seen)
+        with Rung(~init_done):
+            copy(s_idle, cfg)
+            latch(init_done)
+
+    ctx = _run_through_initconst(logic)
+    assert ctx.stateful_dims is not None
+    assert "Cfg" not in ctx.stateful_dims
+    assert ctx._elided_tags is not None
+    assert ctx._elided_tags.get("Cfg") == "init_constant"
+
+
 def test_copy_true_latch_still_valid() -> None:
     init_done = Bool("InitDone")
     cfg = Int("Cfg", min=0, max=10)

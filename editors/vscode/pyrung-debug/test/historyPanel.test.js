@@ -204,3 +204,226 @@ test("live running updates append only watched-tag changes and post immediately"
     },
   ]);
 });
+
+function windowEntry() {
+  return {
+    window: true,
+    scanId: 2400,
+    prevScanId: 0,
+    timestamp: 24,
+    changes: { Lamp: ["False", "True"] },
+  };
+}
+
+async function stoppedPanelWith(onCustomRequest) {
+  const session = createFakeSession({ onCustomRequest });
+  const provider = new PyrungHistoryPanelProvider({
+    getExecutionState: () => "stopped",
+  });
+  const view = createFakeWebviewView();
+  provider.resolveWebviewView(view);
+  provider.setSession(session);
+  await view.emit({ type: "ready" });
+  provider.addTag("Lamp");
+  await delay(0);
+  return { session, provider, view };
+}
+
+test("a window offers more, and loading it reads its own scans in its place", async () => {
+  const pages = [
+    {
+      entries: [
+        { scanId: 3005, prevScanId: 3004, timestamp: 30.05, changes: { Lamp: ["False", "True"] } },
+        windowEntry(),
+      ],
+    },
+    {
+      entries: [
+        { scanId: 100, prevScanId: 99, timestamp: 1, changes: { Lamp: ["True", "False"] } },
+      ],
+    },
+  ];
+  const { session, view } = await stoppedPanelWith(() => pages.shift());
+
+  assert.equal(latestState(view).hasMore, true);
+  assert.deepEqual(
+    latestState(view).entries.map((entry) => Boolean(entry.window)),
+    [false, true]
+  );
+
+  await view.emit({ type: "loadOlder" });
+
+  // beforeScan is exclusive, and the window's last scan is one of those not read.
+  assert.equal(session.calls.at(-1).args.beforeScan, 2401);
+  assert.deepEqual(
+    latestState(view).entries.map((entry) => entry.scanId),
+    [3005, 100]
+  );
+  assert.equal(latestState(view).hasMore, false);
+});
+
+test("loading after an entry still asks for what is older than it", async () => {
+  const entry = { scanId: 50, prevScanId: 49, timestamp: 0.5, changes: { Lamp: ["0", "1"] } };
+  const { session, provider, view } = await stoppedPanelWith(() => ({ entries: [entry] }));
+  provider._hasMore = true;
+
+  await view.emit({ type: "loadOlder" });
+
+  assert.equal(session.calls.at(-1).args.beforeScan, 50);
+});
+
+// A panel whose requests wait until the test answers them, in the order they were asked.
+async function panelAnsweredByHand(firstPage) {
+  const waiting = [];
+  const opened = await stoppedPanelWith(
+    () => new Promise((resolve) => waiting.push(resolve))
+  );
+  waiting.shift()({ entries: firstPage });
+  await delay(0);
+  return { ...opened, waiting };
+}
+
+function page(...scanIds) {
+  return scanIds.map((scanId) => ({
+    scanId,
+    prevScanId: scanId - 1,
+    timestamp: scanId / 100,
+    changes: { Lamp: ["False", "True"] },
+  }));
+}
+
+test("a second click during a Load older asks nothing and adds nothing twice", async () => {
+  const { session, provider, view, waiting } = await panelAnsweredByHand([windowEntry()]);
+  const asked = session.calls.length;
+
+  const first = view.emit({ type: "loadOlder" });
+  await delay(0);
+  assert.equal(latestState(view).fetching, true);
+  const second = view.emit({ type: "loadOlder" });
+  await delay(0);
+  assert.equal(session.calls.length, asked + 1);
+  assert.equal(waiting.length, 1);
+
+  waiting.shift()({ entries: page(100) });
+  await Promise.all([first, second]);
+
+  assert.equal(latestState(view).fetching, false);
+  assert.deepEqual(
+    provider._entries.map((entry) => entry.scanId),
+    [100]
+  );
+});
+
+test("a click during a refresh leaves the fresh window standing", async () => {
+  const { session, provider, view, waiting } = await panelAnsweredByHand(page(3005));
+  const asked = session.calls.length;
+
+  const refresh = provider.refresh();
+  await delay(0);
+  assert.equal(latestState(view).fetching, true);
+  const click = view.emit({ type: "loadOlder" });
+  await delay(0);
+  assert.equal(session.calls.length, asked + 1);
+
+  waiting.shift()({ entries: [...page(3005), windowEntry()] });
+  await Promise.all([refresh, click]);
+
+  assert.deepEqual(
+    provider._entries.map((entry) => Boolean(entry.window)),
+    [false, true]
+  );
+  assert.equal(latestState(view).fetching, false);
+  assert.equal(latestState(view).hasMore, true);
+});
+
+test("a refresh during a Load older answers, and the older page is dropped", async () => {
+  const { provider, view, waiting } = await panelAnsweredByHand(page(3005));
+
+  const older = view.emit({ type: "loadOlder" });
+  await delay(0);
+  const refresh = provider.refresh();
+  await delay(0);
+  assert.equal(waiting.length, 2);
+  const [answerOlder, answerRefresh] = waiting.splice(0);
+
+  answerOlder({ entries: page(100) });
+  await older;
+  assert.equal(latestState(view).fetching, true, "the refresh is still out");
+  assert.deepEqual(
+    provider._entries.map((entry) => entry.scanId),
+    [3005]
+  );
+
+  answerRefresh({ entries: page(3010, 3005) });
+  await refresh;
+  assert.equal(latestState(view).fetching, false);
+  assert.deepEqual(
+    provider._entries.map((entry) => entry.scanId),
+    [3010, 3005]
+  );
+});
+
+test("a fetch that fails lets the button go again", async () => {
+  const entry = page(50)[0];
+  let fail = false;
+  const { provider, view, session } = await stoppedPanelWith(() => {
+    if (fail) {
+      throw new Error("session ended");
+    }
+    return { entries: [entry] };
+  });
+  fail = true;
+  await view.emit({ type: "loadOlder" });
+  assert.equal(latestState(view).fetching, false);
+  fail = false;
+  const asked = session.calls.length;
+  await view.emit({ type: "loadOlder" });
+  assert.equal(session.calls.length, asked + 1);
+  assert.equal(provider._fetching, false);
+});
+
+test("the Load older button is drawn disabled while a fetch is out", async () => {
+  const { provider } = await stoppedPanelWith(() => ({ entries: [] }));
+  const source = provider._html();
+  const begin = source.indexOf('id="load-older-btn"');
+  assert.notEqual(begin, -1);
+  assert.match(source.slice(begin, begin + 80), /state\.fetching \? " disabled" : ""/);
+});
+
+test("a window with no net change for the watched tags stays, as scans not read", async () => {
+  const { provider, view } = await stoppedPanelWith(() => ({ entries: [windowEntry()] }));
+  provider._watchedTags.delete("Lamp");
+  provider._watchedTags.add("Other");
+
+  provider._syncEntriesToWatchedTags();
+  provider._postState();
+
+  const [entry] = latestState(view).entries;
+  assert.equal(entry.window, true);
+  assert.deepEqual(entry.changes, {});
+});
+
+test("a window renders as a range, explains nothing and forks at its two ends", async () => {
+  const { provider } = await stoppedPanelWith(() => ({ entries: [] }));
+  const source = provider._html();
+  const begin = source.indexOf("function renderWindow(entry)");
+  const end = source.indexOf("function renderEntries()");
+  assert.ok(begin > 0 && end > begin);
+  const render = new Function(
+    "esc",
+    "formatChange",
+    "state",
+    source.slice(begin, end) + "\nreturn renderWindow;"
+  )(String, (_tag, values) => values.join(" -> "), { activeScanId: null });
+
+  const html = render(windowEntry());
+
+  assert.match(html, /#1\.\.#2400/);
+  assert.match(html, /Lamp/);
+  assert.match(html, /window-note/);
+  assert.doesNotMatch(html, /data-explain/);
+  assert.deepEqual(
+    [...html.matchAll(/data-fork-scan="(\d+)"/g)].map((match) => match[1]),
+    ["0", "2400"]
+  );
+});

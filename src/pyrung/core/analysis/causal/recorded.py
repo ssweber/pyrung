@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -8,6 +8,7 @@ from pyrung.core.analysis.observed import latest_writer_run, writer_runs_for_nod
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
+from pyrung.core.state import value_changed
 
 from ._rung_writes import RungWrite, ScanRungWriteProjection, build_scan_rung_write_projection
 from .crossings_recorded import recorded_read_changes, resolve_recorded_branches
@@ -37,6 +38,7 @@ class _CrossedReads:
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.condition import Condition
+    from pyrung.core.executor import RungRun
     from pyrung.core.history import History
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
@@ -616,12 +618,40 @@ def _indexed_value_transition_scans(
         cursor = scan - 1
 
 
+# ``(tag, rung_index, subroutine)`` writers already explained on the current path.
+_Lineage = frozenset[tuple[str, int, str | None]]
+_WalkFrame = Iterator[tuple[Transition, tuple[str, ...], _Lineage]]
+
+
 def _walk_backward(
     context: _RecordedCauseContext,
     transition: Transition,
     trail: tuple[str, ...] = (),
 ) -> None:
-    """Recursive backward walk from a single transition.
+    """Depth-first backward walk from a single transition, on an explicit stack.
+
+    A walk frame yields each predecessor transition it would recurse into; the
+    driver runs that frame to completion before resuming the parent, so steps
+    and roots land in exactly the order plain recursion would produce.  Chain
+    depth grows with history (an accumulator ``math(T + 3, T)`` hops once per
+    scan), so the walk must not consume one interpreter frame per hop.
+    """
+    stack: list[_WalkFrame] = [_walk_frame(context, transition, trail, frozenset())]
+    while stack:
+        child = next(stack[-1], None)
+        if child is None:
+            stack.pop()
+        else:
+            stack.append(_walk_frame(context, *child))
+
+
+def _walk_frame(
+    context: _RecordedCauseContext,
+    transition: Transition,
+    trail: tuple[str, ...],
+    lineage: _Lineage,
+) -> _WalkFrame:
+    """Backward walk from a single transition; yields transitions to walk next.
 
     Beyond trigger recursion, the walk may recursively explain a fired rung's
     steady enablers. An enabler that transitioned earlier is followed to that
@@ -631,6 +661,12 @@ def _walk_backward(
 
     Terminals are classified into ``deep.roots`` (external / never-written /
     system / unattributed).
+
+    A writer already on the current path (*lineage*) for the same tag is a
+    recurrence, not a new cause: ``math(T + 3, T)`` reads its own previous
+    result, and two calcs feeding each other hand the value back and forth.
+    The step above already names the value read; walking on would repeat the
+    same explanation once per scan, so the walk stops there.
     """
     logic = context.logic
     history = context.history
@@ -713,8 +749,10 @@ def _walk_backward(
         )
 
     def _chase_supports(
-        supports: tuple[EnablingCondition, ...], base_trail: tuple[str, ...]
-    ) -> None:
+        supports: tuple[EnablingCondition, ...],
+        base_trail: tuple[str, ...],
+        base_lineage: _Lineage,
+    ) -> _WalkFrame:
         """Recursively explain enablers on the actual fired path."""
         if deep is None or pdg is None:
             return
@@ -734,11 +772,13 @@ def _walk_backward(
                     initial_tags=initial_tags,
                 )
                 if t is not None:
-                    _walk_backward(context, t, trail=base_trail)
+                    yield t, base_trail, base_lineage
                     continue
-            _absence_hop(name, ec.value, base_trail)
+            yield from _absence_hop(name, ec.value, base_trail, base_lineage)
 
-    def _absence_hop(name: str, value: Any, base_trail: tuple[str, ...]) -> None:
+    def _absence_hop(
+        name: str, value: Any, base_trail: tuple[str, ...], base_lineage: _Lineage
+    ) -> _WalkFrame:
         """Expand a held enabler through its observed value writer.
 
         A steady contact only enters here because an actual fired rung made it
@@ -796,7 +836,7 @@ def _walk_backward(
                 scan_log=scan_log,
                 initial_tags=initial_tags,
             )
-            if transition is None or transition.to_value != value:
+            if transition is None or value_changed(transition.to_value, value):
                 continue
             prior_writers = _replayed_writers_from_pdg(
                 pdg=pdg,
@@ -818,11 +858,7 @@ def _walk_backward(
             _add_root(name, value, "unattributed", None, hop_trail)
             return
 
-        _walk_backward(
-            context,
-            Transition(name, writer_scan, value, value),
-            trail=hop_trail,
-        )
+        yield Transition(name, writer_scan, value, value), hop_trail, base_lineage
 
     # Resolved writers: (rung_index, rung, subroutine).  The node-level
     # firing timeline names the precise subroutine writer rung; the
@@ -899,8 +935,13 @@ def _walk_backward(
         _mirror_root(transition)
         return
 
+    walked = False
     for rung_idx, rung, sub_name in resolved_writers:
-        sp_tree = rung.sp_tree()
+        writer_key = (tag_name, rung_idx, sub_name)
+        if writer_key in lineage:
+            continue  # recurrence: this writer is already explained on the path
+        walked = True
+        writer_lineage = lineage | {writer_key}
 
         # At-fire-time view: for a subroutine writer, the rung's contacts
         # may have flipped later the same scan (a command gate consumed
@@ -931,6 +972,7 @@ def _walk_backward(
         caller_rung_index = (
             fire_run.caller_rung if fire_run is not None and fire_run.kind == "subroutine" else None
         )
+        sp_tree = _run_sp_tree(fire_run, rung)
 
         if indirect_crossings and (rung_idx, sub_name) in indirect_crossings:
             triggers, enablers = indirect_crossings[(rung_idx, sub_name)]
@@ -954,8 +996,8 @@ def _walk_backward(
             )
             steps.append(wrapped)
             for p in triggers:
-                _walk_backward(context, p, trail=trail)
-            _chase_supports(wrapped.enablers, trail)
+                yield p, trail, writer_lineage
+            yield from _chase_supports(wrapped.enablers, trail, writer_lineage)
             continue
 
         if sp_tree is None:
@@ -1000,8 +1042,8 @@ def _walk_backward(
                 )
                 steps.append(wrapped)
                 for p in triggers:
-                    _walk_backward(context, p, trail=trail)
-                _chase_supports(wrapped.enablers, trail)
+                    yield p, trail, writer_lineage
+                yield from _chase_supports(wrapped.enablers, trail, writer_lineage)
                 continue
             step = ChainStep(
                 transition=transition,
@@ -1023,28 +1065,31 @@ def _walk_backward(
             steps.append(wrapped)
             conjunctive_roots.append(transition)
             _mirror_root(transition)
-            _chase_supports(wrapped.enablers, trail)
+            yield from _chase_supports(wrapped.enablers, trail, writer_lineage)
             continue
 
         # Attribute from the exact entry-time view when replay captured one.
         # Otherwise reconstruct the committed historical state. Cache
         # residency affects cost only; it never selects a causal model.
+        # A branch writer's inherited contacts are read on the rows above it
+        # (``RungRun.condition_view``), its own on the branch row.
         view: Any = fire_view if fire_view is not None else _HistoricalView(history.at(scan_id))
-
-        def _eval(cond: Condition, _v: Any = view) -> bool:
-            return cond.evaluate(_v)  # type: ignore[arg-type]
+        _eval = _row_evaluator(fire_run, view)
 
         attributions = attribute(sp_tree, _eval)
 
         proximate: list[Transition] = []
         enabling: list[EnablingCondition] = []
         attributed_tags: dict[str, Any] = {}
+        attributed_rows: dict[str, Any] = {}
 
         for attr in attributions:
             cond_tag = _condition_tag_name(attr.condition)
-            if cond_tag is None:
+            if cond_tag is None or cond_tag in attributed_tags:
                 continue
-            attributed_tags.setdefault(cond_tag, view.get_tag(cond_tag))
+            row_view = _row_view(fire_run, view, attr.condition)
+            attributed_tags[cond_tag] = row_view.get_tag(cond_tag)
+            attributed_rows[cond_tag] = row_view
 
         # Classify contacts against the value the writer actually read,
         # not the end-of-scan value. Commands are commonly written,
@@ -1065,9 +1110,12 @@ def _walk_backward(
         }
         if rung_writes is not None and fire_run is not None:
             for name, value in attributed_tags.items():
+                row_run = _row_run(rung_writes, fire_run, attributed_rows[name])
+                if row_run is None:
+                    continue
                 observed = rung_writes.transition_observed_by(
                     name,
-                    fire_run,
+                    row_run,
                     observed_value=value,
                 )
                 if observed is not None:
@@ -1147,7 +1195,9 @@ def _walk_backward(
                 dr_triggers = tuple(
                     trigger
                     for trigger in crossed.triggers
-                    if trigger not in steps[step_idx].triggers
+                    if not any(
+                        _same_transition(trigger, known) for known in steps[step_idx].triggers
+                    )
                 )
                 dr_enablers = crossed.enablers
                 steps[step_idx] = replace(
@@ -1157,7 +1207,7 @@ def _walk_backward(
                     crossing_exact=crossed.crossing_exact,
                 )
                 for p in dr_triggers:
-                    _walk_backward(context, p, trail=trail)
+                    yield p, trail, writer_lineage
             # If a rung was explained only by held enablers, do not
             # invent the written tag as its own root; callers can fall
             # through to the enabler set as the remaining choices.
@@ -1167,10 +1217,57 @@ def _walk_backward(
         if proximate:
             # Recurse on each proximate cause
             for p in proximate:
-                _walk_backward(context, p, trail=trail)
+                yield p, trail, writer_lineage
         # Deep walk: explain this fired rung's enablers through their
         # establishing transitions or observed value writers.
-        _chase_supports(steps[step_idx].enablers, trail)
+        yield from _chase_supports(steps[step_idx].enablers, trail, writer_lineage)
+
+    if resolved_writers and not walked:
+        # Cut on this path only; another path may still need to explain it.
+        visited.discard(visit_key)
+        seed = _recurrence_seed(context, tag_name, scan_id, lineage)
+        if seed is not None:
+            yield seed, trail, lineage
+
+
+def _recurrence_seed(
+    context: _RecordedCauseContext,
+    tag_name: str,
+    scan_id: int,
+    lineage: _Lineage,
+) -> Transition | None:
+    """The transition that seeded a recurrence: the last write by any other writer.
+
+    ``copy(Setpoint, T)`` then ``math(T + 3, T)`` every scan: the recurrence
+    explains nothing new, but where it started from does.  Main-scope writers
+    only (the firing timelines index them by rung); no other writer, or no write
+    by one in the retained history, means the recurrence ran from the initial
+    value and the cut is the end of the walk.
+    """
+    pdg = context.pdg
+    timelines = context.timelines
+    if pdg is None or timelines is None:
+        return None
+    looped = {rung_idx for tag, rung_idx, sub in lineage if tag == tag_name and sub is None}
+    others = frozenset(
+        node.rung_index
+        for node in (pdg.rung_nodes[idx] for idx in pdg.writers_of.get(tag_name, ()))
+        if node.subroutine is None and node.rung_index not in looped
+    )
+    if not others:
+        return None
+    last_write = timelines.last_tag_write_before(others, tag_name, scan_id)
+    if last_write is None or last_write[0] < context.history.oldest_scan_id:
+        return None
+    return _find_transition_at_scan(
+        context.history,
+        tag_name,
+        last_write[0],
+        timelines=timelines,
+        pdg=pdg,
+        scan_log=context.scan_log,
+        initial_tags=context.initial_tags,
+    )
 
 
 def _replayed_writers_from_pdg(
@@ -1216,18 +1313,20 @@ def _replayed_writers_from_pdg(
 
 
 def _tag_in_block(block: Any, tag_name: str) -> bool:
-    """Check whether *tag_name* is a tag inside *block*."""
+    """Check whether *tag_name* is a tag inside *block*.
+
+    The answer comes from the slot names, not the block's cache.  The cache holds whichever
+    slots something has asked for, so a fresh runner's answer would differ from a later one's.
+    """
     mapped = getattr(block, "_mapped_tags", None)
     if mapped is not None:
         for tag in mapped.values():
             if getattr(tag, "name", None) == tag_name:
                 return True
-    cache = getattr(block, "_tag_cache", None)
-    if cache is not None:
-        for tag in cache.values():
-            if getattr(tag, "name", None) == tag_name:
-                return True
-    return False
+    return any(
+        block._effective_slot_name(addr) == tag_name
+        for addr in block._window_addresses(block.start, block.end)
+    )
 
 
 def _resolve_indirect_writers(
@@ -1355,7 +1454,7 @@ def _recorded_writers_from_firings(
     main_matching = {
         rung_idx
         for rung_idx, writes in firings.items()
-        if tag_name in writes and writes[tag_name] == to_value
+        if tag_name in writes and not value_changed(writes[tag_name], to_value)
     }
 
     # 1. Node writers — precise subroutine nodes plus synthesis namespaces.
@@ -1371,7 +1470,7 @@ def _recorded_writers_from_firings(
             if rung_id.subroutine is None:
                 continue
             writes = node_firings[rung_id]
-            if tag_name not in writes or writes[tag_name] != to_value:
+            if tag_name not in writes or value_changed(writes[tag_name], to_value):
                 continue
             if rung_id.subroutine in (
                 PLANT_RUNG_NAMESPACE,
@@ -1492,13 +1591,8 @@ def _writer_fire_view(
     rung_idx: int,
     scan_id: int,
     *,
-    rung: Rung | None = None,
-    tag_name: str | None = None,
-    to_value: Any = None,
     node_views_fn: Any,
     node_views_cache: dict[int, dict[RungId, Any]] | None,
-    node_runs_fn: Any = None,
-    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
 ) -> Any:
     """Return the writer rung's at-fire-time ``ConditionView``, or ``None``.
 
@@ -1510,16 +1604,11 @@ def _writer_fire_view(
     consistent (and now near-free) choice.  Falls back to ``None`` (caller uses
     end-of-scan state) when there is no replay — a logic-list PLC with no
     Program, or a scan out of replay range.  Memoized per distinct scan.
+
+    Callers try the exact writer run first (``latest_writer_run``): its
+    ``condition_view`` routes a branch's inherited contacts to the rows that
+    read them.  This per-rung view is the fallback.
     """
-    if rung is not None and tag_name is not None:
-        run = latest_writer_run(
-            rung,
-            tag_name,
-            to_value,
-            _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
-        )
-        if run is not None:
-            return run.view
     if node_views_fn is None:
         return None
     if node_views_cache is not None and scan_id in node_views_cache:
@@ -1651,34 +1740,46 @@ def _executed_writers_from_pdg(
         ):
             writers.append((node.rung_index, rung, node.subroutine))
             continue
-        fire_view = _writer_fire_view(
-            node.subroutine,
-            node.rung_index,
-            scan_id,
-            rung=rung,
-            tag_name=tag_name,
-            to_value=to_value,
-            node_views_fn=node_views_fn,
-            node_views_cache=node_views_cache,
-            node_runs_fn=node_runs_fn,
-            node_runs_cache=node_runs_cache,
+        fire_run = latest_writer_run(rung, tag_name, to_value, observed_runs)
+        fire_view = (
+            fire_run.view
+            if fire_run is not None
+            else _writer_fire_view(
+                node.subroutine,
+                node.rung_index,
+                scan_id,
+                node_views_fn=node_views_fn,
+                node_views_cache=node_views_cache,
+            )
         )
         if fire_view is None:
             continue
-        sp_tree = rung.sp_tree()
+        sp_tree = _run_sp_tree(fire_run, rung)
         if sp_tree is None:
             if _replayed_writer_proves_value(rung, tag_name, to_value, fire_view):
                 writers.append((node.rung_index, rung, node.subroutine))
             continue
 
-        def _eval_fire(cond: Condition, _v: Any = fire_view) -> bool:
-            return cond.evaluate(_v)  # type: ignore[arg-type]
+        _eval_fire = _row_evaluator(fire_run, fire_view)
 
         if evaluate_sp(sp_tree, _eval_fire) and _replayed_writer_proves_value(
             rung, tag_name, to_value, fire_view
         ):
             writers.append((node.rung_index, rung, node.subroutine))
     return writers
+
+
+def _same_value(written: Any, to_value: Any) -> bool:
+    """Whether the value a rung's write states, read from the program, equals *to_value*.
+    A NaN matches a NaN.
+
+    A deferred value (an ``IndirectRef`` from static extraction) raises on ``==``.
+    It cannot match a stored value, so it is a non-match.
+    """
+    try:
+        return not value_changed(written, to_value)
+    except TypeError:
+        return False
 
 
 def _replayed_writer_proves_value(
@@ -1688,11 +1789,7 @@ def _replayed_writer_proves_value(
     fire_view: Any,
 ) -> bool:
     """Whether a conductive replayed rung must write ``tag_name=to_value``."""
-    from pyrung.core.analysis.sp_values import (
-        _values_match,
-        _writer_for_tag,
-        _written_value_for_tag,
-    )
+    from pyrung.core.analysis.sp_values import _writer_for_tag, _written_value_for_tag
     from pyrung.core.crossing import UNKNOWN, Affine, Literal, evaluate_forward
     from pyrung.core.instruction.coils import LatchInstruction, OutInstruction
     from pyrung.core.instruction.data_transfer import (
@@ -1703,12 +1800,12 @@ def _replayed_writer_proves_value(
 
     written = _written_value_for_tag(rung, tag_name)
     if isinstance(written, Literal):
-        return _values_match(written.value, to_value)
+        return _same_value(written.value, to_value)
     if isinstance(written, Affine):
         try:
             source = fire_view.get_tag(written.source)
             produced = evaluate_forward(written, {written.source: source})
-            return produced is not UNKNOWN and _values_match(produced, to_value)
+            return produced is not UNKNOWN and _same_value(produced, to_value)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
     # A named slot inside a block can evade the generic forward crossing even
@@ -1723,11 +1820,11 @@ def _replayed_writer_proves_value(
     ):
         try:
             source = fire_view.get_tag(instr.source.name)
-            stored = _store_copy_value_to_tag_type(source, instr.dest)
-            return _values_match(stored, to_value)
+            stored = _store_copy_value_to_tag_type(source, instr.dest, instr.source.type)
+            return _same_value(stored, to_value)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
-    return isinstance(instr, (OutInstruction, LatchInstruction)) and _values_match(
+    return isinstance(instr, (OutInstruction, LatchInstruction)) and _same_value(
         to_value,
         True,
     )
@@ -1964,7 +2061,7 @@ def recorded_effect(
 
 
 class _RungWriteCounterfactualView:
-    """One-tag overlay over a replayed rung-entry ConditionView."""
+    """One-tag overlay over the replayed ConditionView of one row."""
 
     __slots__ = ("_base", "_name", "_value")
 
@@ -1982,21 +2079,69 @@ class _RungWriteCounterfactualView:
         return self._base.get_memory(name, default)
 
 
+def _run_sp_tree(run: RungRun | None, rung: Rung) -> Any:
+    """*rung*'s SP tree; an observed *run*'s, whose leaves name their rows."""
+    return run.sp_tree() if run is not None else rung.sp_tree()
+
+
+def _row_view(run: RungRun | None, view: Any, condition: Condition) -> Any:
+    """The view that read *condition*: its row's, for an observed run."""
+    return run.condition_view(condition) if run is not None else view
+
+
+def _row_evaluator(run: RungRun | None, view: Any) -> Callable[[Condition], bool]:
+    """Evaluate a rung's conditions as the solve read them.
+
+    With an observed *run*, each condition is read on the view of its own row
+    (``RungRun.condition_view``): a branch's inherited contacts on the rows
+    above it, its local contacts on the branch row.  Otherwise on *view*.
+    """
+    if run is None:
+
+        def _eval(cond: Condition, _v: Any = view) -> bool:
+            return cond.evaluate(_v)  # type: ignore[arg-type]
+
+        return _eval
+
+    def _routed(cond: Condition, _run: RungRun = run) -> bool:
+        return cond.evaluate(_run.condition_view(cond))  # type: ignore[arg-type]
+
+    return _routed
+
+
+def _row_run(
+    projection: ScanRungWriteProjection,
+    run: RungRun,
+    view: Any,
+) -> RungRun | None:
+    """The run whose row read with *view*: *run*, or a row it hangs from."""
+    current: RungRun | None = run
+    while current is not None:
+        if current.view is view:
+            return current
+        if current.kind != "branch" and current.kind != "loop_body":
+            return None
+        current = projection.parent_run(current)
+    return None
+
+
 def _rung_write_changes_outcome(
     sp_tree: Any,
-    view: Any,
+    run: RungRun,
     tag_name: str,
     from_value: Any,
 ) -> bool:
-    """Whether reverting one observed rung read changes conductivity."""
+    """Whether reverting one read on *run*'s own row changes conductivity.
 
-    def _actual(cond: Condition, _view: Any = view) -> bool:
-        return cond.evaluate(_view)  # type: ignore[arg-type]
+    Only the run's own row is reverted: the rows a branch hangs from were read
+    on views of their own, which the reverted read never reached.
+    """
+    _actual = _row_evaluator(run, run.view)
+    counterfactual: Any = _RungWriteCounterfactualView(run.view, tag_name, from_value)
 
-    counterfactual = _RungWriteCounterfactualView(view, tag_name, from_value)
-
-    def _counterfactual(cond: Condition, _view: Any = counterfactual) -> bool:
-        return cond.evaluate(_view)  # type: ignore[arg-type]
+    def _counterfactual(cond: Condition, _run: RungRun = run) -> bool:
+        view = _run.condition_view(cond)
+        return cond.evaluate(counterfactual if view is _run.view else view)
 
     return evaluate_sp(sp_tree, _actual) != evaluate_sp(sp_tree, _counterfactual)
 
@@ -2006,8 +2151,8 @@ def _same_transition(left: Transition, right: Transition) -> bool:
     return (
         left.tag_name == right.tag_name
         and left.scan_id == right.scan_id
-        and left.from_value == right.from_value
-        and left.to_value == right.to_value
+        and not value_changed(left.from_value, right.from_value)
+        and not value_changed(left.to_value, right.to_value)
         and left.occurrence_ordinal == right.occurrence_ordinal
     )
 
@@ -2034,8 +2179,8 @@ def _causal_source_for_exact_read(
                 and candidate.occurrence_ordinal is None
                 and candidate.tag_name == observed.tag_name
                 and candidate.scan_id == observed.scan_id
-                and candidate.from_value == observed.from_value
-                and candidate.to_value == observed.to_value
+                and not value_changed(candidate.from_value, observed.from_value)
+                and not value_changed(candidate.to_value, observed.to_value)
             ):
                 return observed
             return None
@@ -2050,7 +2195,7 @@ def _causal_source_for_exact_read(
         read.occurrence.source == "entry"
         and candidate is not None
         and candidate.scan_id < rung_writes.scan_id
-        and candidate.to_value == read.occurrence.value
+        and not value_changed(candidate.to_value, read.occurrence.value)
     ):
         return candidate
     return None
@@ -2100,28 +2245,26 @@ def _recorded_effect_from_rung_writes(
         # value remains the one produced by the frontier rung write.
         if current_scan != transition.scan_id:
             for name, source in tuple(frontier.items()):
-                if projection.entry_tags.get(name) != source.to_value:
+                if value_changed(projection.entry_tags.get(name), source.to_value):
                     del frontier[name]
 
         new_effects = False
         control_sources: dict[int, Transition] = {}
         enablers_by_run: dict[int, tuple[EnablingCondition, ...]] = {}
         for run in projection.runs:
-            sp_tree = run.rung.sp_tree()
-            attributed_names: list[str] = []
-
-            def _eval(cond: Condition, _view: Any = run.view) -> bool:
-                return cond.evaluate(_view)  # type: ignore[arg-type]
+            sp_tree = run.sp_tree()
+            attributed_names: dict[str, Any] = {}
+            _eval = _row_evaluator(run, run.view)
 
             if sp_tree is not None:
                 for attr in attribute(sp_tree, _eval):
                     name = _condition_tag_name(attr.condition)
                     if name is not None and name not in attributed_names:
-                        attributed_names.append(name)
+                        attributed_names[name] = run.condition_view(attr.condition)
             enablers_by_run[id(run)] = tuple(
                 EnablingCondition(
                     tag_name=name,
-                    value=run.view.get_tag(name),
+                    value=row_view.get_tag(name),
                     held_since_scan=_find_last_transition_scan(
                         history,
                         name,
@@ -2130,7 +2273,7 @@ def _recorded_effect_from_rung_writes(
                         pdg=pdg,
                     ),
                 )
-                for name in attributed_names
+                for name, row_view in attributed_names.items()
             )
 
         def _control_source(
@@ -2142,7 +2285,7 @@ def _recorded_effect_from_rung_writes(
             cached = control_sources.get(id(run))
             if cached is not None:
                 return cached
-            sp_tree = run.rung.sp_tree()
+            sp_tree = run.sp_tree()
             if sp_tree is not None:
                 condition_tags: list[str] = []
                 for leaf in _collect_sp_leaves(sp_tree):
@@ -2161,7 +2304,7 @@ def _recorded_effect_from_rung_writes(
                     )
                     if source is not None and _rung_write_changes_outcome(
                         sp_tree,
-                        run.view,
+                        run,
                         name,
                         source.from_value,
                     ):
@@ -2186,7 +2329,7 @@ def _recorded_effect_from_rung_writes(
                 and write.ordinal <= transition.occurrence_ordinal
             ):
                 continue
-            if written.from_value == written.to_value:
+            if not value_changed(written.from_value, written.to_value):
                 continue
 
             run = write.run

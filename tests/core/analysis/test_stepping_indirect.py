@@ -29,8 +29,8 @@ from pyrung import (
     Int,
     Program,
     TagType,
-    calc,
     copy,
+    math,
     rung,
 )
 
@@ -101,7 +101,7 @@ def _indirect_state_program(*, table_write: str | None) -> tuple[Program, dict[s
 
         # constant-table enable (indirect copy #2 — arms detect_opaque_loop)
         with rung():
-            calc(StateRequested + MASK_BASE, MaskIdx)
+            math(StateRequested + MASK_BASE, MaskIdx)
         with rung():
             copy(MT[MaskIdx], EnblYes)
 
@@ -166,7 +166,7 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     assert state_name in opaque_loop, sorted(opaque_loop)
 
     # The pilot-facing consumer agrees (is_stepping is what engages the compass).
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.evidence is not None
     assert prover.evidence.is_stepping(state_name)
 

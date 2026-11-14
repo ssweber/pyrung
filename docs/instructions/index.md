@@ -8,23 +8,23 @@ with rung(Start, ~Fault):
     on_delay(RunDelay, preset=500)
 ```
 
-Read it like a ladder diagram: conditions go on `rung(...)`, instructions go in the body. Use the pages below by instruction family.
+Read it like a ladder diagram. Conditions go on `rung(...)`. Instructions go in the body. Use the pages below by instruction family.
 
 ## Start here
 
 - [Rungs](rungs.md) — comments, branching, source order, and how power flows through a rung
 - [Conditions](conditions.md) — contacts, comparisons, AND/OR logic, and edge detection
-- [Coils](coils.md) — `out`, `latch`, `reset`, and immediate I/O
+- [Coils](coils.md) — `out`, `toggle`, `debounce`, `flasher`, `timed`, `latch`, `reset`, and immediate I/O
 
 ## Data movement
 
 - [Data Movement](copy.md) — `copy`, `blockcopy`, `fill`, converters, `pack_*`, and `unpack_*`
-- [Math](math.md) — `calc()`, overflow behavior, division rules, and range sums
+- [Math](math.md) — `math()`, overflow behavior, division rules, range aggregates, and `abs()`
 
 ## Time and control
 
 - [Timers & Counters](timers-counters.md) — `on_delay`, `off_delay`, `count_up`, and `count_down`
-- [Drum, Shift & Search](drum-shift-search.md) — step sequencers, shift registers, and range search
+- [Drum, Shift & Search](drum-shift-search.md) — event, time, and time & event step sequencers, shift registers, and range search
 - [Program Control](program-control.md) — `Program`, subroutines, `call`, and `forloop`
 
 ## Communication

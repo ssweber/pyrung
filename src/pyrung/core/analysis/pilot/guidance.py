@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pyrung.core.analysis.pilot.compass import CompassObservation
+from pyrung.core.analysis.pilot.physical import upstream_through_plant
 from pyrung.core.analysis.pilot.skiff import _declared_domain, _skiff_expectation, run_pinned_scan
 from pyrung.core.analysis.pilot.steer import StaleBearingError
 from pyrung.core.analysis.pilot.world_key import ReadIdentity
@@ -41,12 +42,12 @@ def survey_current_inputs(world: Any, *, max_evaluations: int = 64) -> SurveyRes
         for node in frame.tree.iter_nodes()
         if node.tag in ctx.pdg.writers_of and node.tag not in ctx.steerable
     )
-    cone: set[str] = set(relevant)
-    for tag in relevant:
-        cone.update(ctx.pdg.upstream_slice(tag, follow_calls=True))
+    cone = set(relevant) | upstream_through_plant(
+        ctx.pdg, getattr(work, "_harness", None), relevant
+    )
     changes = []
     for name in sorted(ctx.steerable & cone):
-        ref = work._known_tags_by_name.get(name)
+        ref = work._tag_known_or_reached(name)
         domain = (
             (False, True) if ref is not None and ref.type is TagType.BOOL else _declared_domain(ref)
         )
@@ -91,7 +92,7 @@ def survey_current_inputs(world: Any, *, max_evaluations: int = 64) -> SurveyRes
     baseline = preview(())
     if baseline is None:
         return SurveyResult(evaluations=evaluations, reason="survey budget exhausted")
-    allowed = frozenset(work.state.tags) | frozenset(work._known_tags_by_name)
+    allowed = frozenset(work.state.tags) | frozenset(work.tags)
     control = None
     # Width is bounded before evaluation, and cardinality is breadth-first.
     # Even a pair is one simultaneous assignment, never two future steps.

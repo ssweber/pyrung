@@ -19,6 +19,7 @@ _EXECUTOR_CALL = 1
 _EXECUTOR_FOR_LOOP = 2
 _EXECUTOR_RETURN = 3
 _EXECUTOR_BRANCH = 4
+_EXECUTOR_LOOP_EXIT = 5
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,13 @@ class Instruction(ABC):
     end_line: int | None = None
     debug_substeps: tuple[DebugInstructionSubStep, ...] | None = None
     _state_key: str | None = None
+    _site_program_owned: bool = False
+    # The binding that stamped ``_state_key`` (see ``Condition._site_owner``).
+    _site_owner: object | None = None
+    # Edge sites this instruction's helper legs hold (``(memory key, tag)``
+    # pairs), stamped by ``site_memory.build_edge_frames``; the box scans them
+    # as it reads its pins (``utils.instruction_condition_view``).
+    _edge_frame: tuple[tuple[str, str], ...] | None = None
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
     _reads: tuple[str, ...] = ()
@@ -52,6 +60,18 @@ class Instruction(ABC):
     _conditions: tuple[str, ...] = ()
     _structural_fields: tuple[str, ...] = ()
     _exclusive_fields: tuple[str, ...] = ()
+    # System fault flags (``fault.*`` tag names) the instruction can set or
+    # clear while executing, beyond its declared destinations.
+    _fault_writes: tuple[str, ...] = ()
+    # The flags that follow this instruction: each scan it runs it clears them
+    # as it starts, before it reads, and sets each it raises
+    # (``guard_oneshot_execution``).  A flag carries from scan to scan until an
+    # instruction that follows it clears it.
+    # Every name here is in ``_fault_writes`` too.
+    _fault_follows: tuple[str, ...] = ()
+    # Whether it clears those flags on a scan it is reached but does not run
+    # (its rung false, or a one-shot that does not fire), as a CLICK Math does.
+    _fault_settles_idle: bool = False
     _executor_kind: int = _EXECUTOR_INSTRUCTION
 
     @abstractmethod
@@ -103,16 +123,29 @@ class Instruction(ABC):
 
     @property
     def state_key(self) -> str:
-        if self._state_key is not None:
-            return self._state_key
-        return str(id(self))
+        """The site key ``bind_sites`` assigned (``i{N}``); see :mod:`pyrung.core.site_memory`."""
+        key = self._state_key
+        if key is None:
+            raise RuntimeError(
+                f"{type(self).__name__} has no site key: it was never bound into a program. "
+                "Build it inside `with Program():`, or bind overlay rungs with "
+                "pyrung.core.site_memory.bind_sites()."
+            )
+        return key
 
     def memory_key(self, prefix: str) -> str:
         return f"{prefix}:{self.state_key}"
 
+    def has_pins(self) -> bool:
+        """Whether this is a box with pins (``.reset()``, ``.down()``, ``.clock()``, ...).
+
+        A box with pins ends its rung: nothing else shares its wire tree.
+        """
+        return False
+
     def is_terminal(self) -> bool:
         """Whether this instruction must be the last execution item in its flow."""
-        return False
+        return self.has_pins()
 
     def advance_profile(self) -> AdvanceProfile | None:
         """Describe the next cross-scan operation for owned result channels."""
@@ -123,33 +156,24 @@ class SubroutineReturnSignal(Exception):
     """Internal control-flow signal used by return_early() inside subroutines."""
 
 
+class LoopBreakSignal(Exception):
+    """Internal control-flow signal used by break_loop() inside a forloop body."""
+
+
+class LoopContinueSignal(Exception):
+    """Internal control-flow signal used by continue_loop() inside a forloop body."""
+
+
 class OneShotMixin:
     """Mixin for instructions that support one-shot mode.
 
-    One-shot instructions execute only once per rung activation.
-    They must be reset when the rung goes false.
+    One-shot instructions execute only once per rung activation.  Each keeps that
+    memory in the scan state (``memory_key("_oneshot")``), so each PLC has its own.
     """
 
     def __init__(self, oneshot: bool = False):
         self._oneshot = oneshot
-        self._has_executed = False
 
     @property
     def oneshot(self) -> bool:
         return self._oneshot
-
-    def should_execute(self, enabled: bool) -> bool:
-        """Check if instruction should execute (respects oneshot)."""
-        if not enabled:
-            self._has_executed = False
-            return False
-        if not self._oneshot:
-            return True
-        if self._has_executed:
-            return False
-        self._has_executed = True
-        return True
-
-    def reset_oneshot(self) -> None:
-        """Reset oneshot state (call when rung goes false)."""
-        self._has_executed = False

@@ -19,11 +19,11 @@ from pyrung.core import (
     TagType,
     Timer,
     blockcopy,
-    calc,
     call,
     copy,
     fill,
     latch,
+    math,
     named_array,
     on_delay,
     out,
@@ -96,7 +96,7 @@ def test_compiled_plc_seeds_explicit_block_pointer_tag() -> None:
 
     with Program(strict=False) as program:
         with Rung(enable):
-            calc(index + 1, index)
+            math(index + 1, index)
         with Rung(enable):
             copy(0, ds[ds[1]])
 
@@ -127,12 +127,14 @@ def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() ->
     )
 
 
+@pytest.mark.parametrize("retentive", [True, False], ids=["retentive", "not_retentive"])
 @pytest.mark.parametrize("transition", ["reboot", "stop_to_run"])
-def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
+def test_a_dormant_range_keeps_through_a_reset_only_if_retentive(
     transition: str,
+    retentive: bool,
 ) -> None:
     enabled = Bool("ResetRangeEnabled", external=True)
-    values = Block("ResetRange", TagType.INT, 1, 2)
+    values = Block("ResetRange", TagType.INT, 1, 2, retentive=retentive)
 
     with Program(strict=False) as program:
         with Rung(enabled):
@@ -162,7 +164,16 @@ def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
     compiled.step()
 
     _assert_states_equivalent(plc, compiled)
-    assert not {"ResetRange1", "ResetRange2"} & set(compiled.current_state.tags)
+    for runner in (plc, compiled):
+        tags = runner.current_state.tags
+        assert runner.current_state.scan_id == 1
+        if retentive:
+            # A battery reboot keeps what STOP -> RUN keeps: what a retentive slot the
+            # rungs reach holds, named or not.
+            assert (tags["ResetRange1"], tags["ResetRange2"]) == (7, 7)
+            assert tags["ResetRangeEnabled"] is False
+        else:
+            assert not {"ResetRange1", "ResetRange2"} & set(tags)
 
 
 def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
@@ -195,7 +206,8 @@ def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
 
 def test_compiled_plc_forced_block_tag_survives_battery_reboot() -> None:
     enabled = Bool("ForcedRangeEnabled", external=True)
-    values = Block("ForcedRange", TagType.INT, 1, 2)
+    # Retentive, so a battery keeps it (a non-retentive slot resets, as on STOP -> RUN).
+    values = Block("ForcedRange", TagType.INT, 1, 2, retentive=True)
 
     with Program(strict=False) as program:
         with Rung(enabled):
@@ -259,7 +271,7 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     key_kind: str,
 ) -> None:
     enabled = Bool("PatchedRangeEnabled", external=True)
-    values = Block("PatchedRange", TagType.INT, 1, 2)
+    values = Block("PatchedRange", TagType.INT, 1, 2, retentive=True)
 
     with Program(strict=False) as program:
         with Rung(enabled):
@@ -281,10 +293,9 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     compiled.reboot()
 
     _assert_states_equivalent(plc, compiled)
-    if key_kind == "tag":
-        assert compiled.current_state.tags["PatchedRange1"] == 31
-    else:
-        assert "PatchedRange1" not in compiled.current_state.tags
+    # The rungs reach it and it is retentive, so a battery keeps it, whichever way the
+    # patch spelled it.
+    assert compiled.current_state.tags["PatchedRange1"] == 31
 
 
 @pytest.mark.parametrize("compiled_step", ["step", "step_replay"])
@@ -692,7 +703,7 @@ def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defa
     _assert_states_equivalent(plc, compiled)
 
 
-def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
+def test_compiled_plc_matches_plc_for_patch_force_and_edge_memory() -> None:
     enable = Bool("Enable")
     reset_tag = Bool("Reset")
     output = Bool("Output")
@@ -700,6 +711,7 @@ def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
     with Program(strict=False) as program:
         with Rung(enable):
             latch(reset_tag)
+        with Rung(enable).continued():
             on_delay(Timer[1], preset=50).reset(reset_tag)
         with Rung(rise(enable)):
             out(output)
@@ -713,7 +725,16 @@ def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
     compiled.step()
 
     _assert_states_equivalent(plc, compiled)
-    assert compiled.current_state.memory["_prev:Enable"] is True
+    # The rise() contact stored the bit it saw in its own site memory.
+    assert compiled.current_state.memory["_edge:e1"] is True
+    assert plc.current_state.memory["_edge:e1"] is True
+    assert compiled.current_state.tags["Output"] is True
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["Output"] is False
 
 
 def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() -> None:
@@ -729,8 +750,8 @@ def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() ->
     plc = PLC(program, dt=0.010)
     compiled = CompiledPLC(program, dt=0.010)
 
-    plc.patch({"Enable": True, "Pointer": 999})
-    compiled.patch({"Enable": True, "Pointer": 999})
+    plc.patch({"Enable": True, "Pointer": 0})
+    compiled.patch({"Enable": True, "Pointer": 0})
     plc.step()
     compiled.step()
 
@@ -763,14 +784,15 @@ def test_compiled_plc_matches_plc_for_rtc_apply_and_system_points() -> None:
     _assert_states_equivalent(plc, compiled)
 
 
-def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> None:
-    """Regression: compiled kernel must snapshot helper conditions at rung entry."""
+def test_intra_rung_write_visible_to_timer_reset_in_compiled_kernel() -> None:
+    """The compiled kernel reads a box's pins at box entry, after the wire above."""
     Enable = Bool("Enable")
     ResetBtn = Bool("ResetBtn")
 
     with Program(strict=False) as program:
         with Rung(Enable):
             latch(ResetBtn)
+        with Rung(Enable).continued():
             on_delay(Timer[1], preset=100).reset(ResetBtn)
 
     plc = PLC(program, dt=0.010)
@@ -783,7 +805,7 @@ def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> Non
     compiled.step()
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.tags["ResetBtn"] is True
-    assert compiled.current_state.tags["Timer_Acc"] == 10
+    assert compiled.current_state.tags["Timer_Acc"] == 0
 
     plc.step()
     compiled.step()
@@ -791,8 +813,8 @@ def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> Non
     assert compiled.current_state.tags["Timer_Acc"] == 0
 
 
-def test_compiled_plc_matches_plc_for_continued_snapshot_chain() -> None:
-    """Regression: compiled kernel must reuse the anchor snapshot for continued()."""
+def test_compiled_plc_matches_plc_for_continued_chain() -> None:
+    """The compiled kernel reads a continued() rung live, after the rung above."""
     Enable = Bool("Enable")
     Latched = Bool("Latched")
     Output = Bool("Output")
@@ -813,7 +835,7 @@ def test_compiled_plc_matches_plc_for_continued_snapshot_chain() -> None:
     compiled.step()
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.tags["Latched"] is True
-    assert compiled.current_state.tags["Output"] is False
+    assert compiled.current_state.tags["Output"] is True
 
     plc.patch({"Enable": False})
     compiled.patch({"Enable": False})
@@ -822,7 +844,7 @@ def test_compiled_plc_matches_plc_for_continued_snapshot_chain() -> None:
     compiled.step()
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.tags["Latched"] is False
-    assert compiled.current_state.tags["Output"] is True
+    assert compiled.current_state.tags["Output"] is False
 
 
 def test_replay_to_prefers_compiled_path_when_supported() -> None:
@@ -846,6 +868,202 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
     assert dict(compiled_replay._input_overrides.forces_mutable) == dict(
         interpreted_replay._input_overrides.forces_mutable
     )
+
+
+@pytest.mark.parametrize(
+    ("history", "history_budget", "pad", "target", "floor"),
+    [
+        (None, 1 << 30, 0, 2900, 2900),
+        (None, 1 << 30, 0, 2800, 2800),
+        # 1300 scans on, the window of 1000 scans starts at the checkpoint after tip - 1000.
+        (1000, 1 << 30, 0, 2900, 3200),
+        (1000, 1 << 30, 0, 2800, 3000),
+        # Six checkpoints of the padded state pass 1 MiB, so the floor moves one interval more.
+        (1000, 1_048_576, 1000, 2900, 3400),
+    ],
+)
+def test_both_replay_paths_keep_history_from_the_target(
+    history: int | None, history_budget: int, pad: int, target: int, floor: int
+) -> None:
+    toggle = Bool("FloorToggle")
+    count = Int("FloorCount")
+    seen = Int("FloorSeen")
+
+    with Program(strict=False) as program:
+        with Rung(~toggle):
+            out(toggle)
+        with Rung(toggle):
+            math(count + 1, count)
+        with Rung(count == 1450):
+            copy(7, seen)
+
+    source = PLC(
+        program,
+        dt=0.01,
+        history=history,
+        checkpoint_interval=200,
+        history_budget=history_budget,
+        initial_state=SystemState().with_tags({f"FloorPad{k}": 0 for k in range(pad)}),
+    )
+    for _ in range(3000):
+        source.step()
+
+    kernel = source._replay_kernel_from(target - 1)
+    assert kernel is not None
+    forks = [source._replay_to_interpreted(target), source._replay_to(target, kernel)]
+    assert [fork.history.oldest_scan_id for fork in forks] == [target, target]
+    truth = source.rung_firings(target)
+    assert truth
+    assert [fork.rung_firings(target) for fork in forks] == [truth, truth]
+    assert [fork._rung_firing_timelines.at(target - 1) for fork in forks] == [{}, {}]
+    for scans in (150, 850, 300):
+        for fork in forks:
+            for _ in range(scans):
+                fork.step()
+        floors = [fork.history.oldest_scan_id for fork in forks]
+        assert floors[0] == floors[1]
+        if scans == 150:
+            assert forks[0].query.cold_rungs() == forks[1].query.cold_rungs()
+    assert floors == [floor, floor]
+    _assert_states_equivalent(*forks)
+    tip = forks[0].state.scan_id
+    assert forks[0].rung_firings(tip - 1) == forks[1].rung_firings(tip - 1)
+
+
+def _replay_both_ways(source: PLC, target: int) -> list[PLC]:
+    kernel = source._replay_kernel_from(target - 1)
+    assert kernel is not None
+    return [source._replay_to_interpreted(target), source._replay_to(target, kernel)]
+
+
+def test_a_replay_of_a_checkpoint_keeps_a_stop_made_after_it() -> None:
+    toggle = Bool("StopToggle")
+    with Program(strict=False) as program:
+        with Rung(~toggle):
+            out(toggle)
+    source = PLC(program, dt=0.01, checkpoint_interval=100)
+    for _ in range(200):
+        source.step()
+    source.stop()
+
+    for fork in _replay_both_ways(source, 200):
+        assert not fork._running
+        assert dict(fork.state.memory) == dict(source.state.memory)
+
+
+def _battery_program() -> Program:
+    toggle, seen = Bool("BatteryToggle"), Bool("BatterySeen")
+    with Program(strict=False) as program:
+        with Rung(~toggle):
+            out(toggle)
+        with Rung(system.sys.battery_present):
+            out(seen)
+    return program
+
+
+def test_a_replay_of_a_checkpoint_steps_on_with_a_battery_change_made_after_it() -> None:
+    source = PLC(_battery_program(), dt=0.01, checkpoint_interval=100)
+    for _ in range(200):
+        source.step()
+    source.battery_present = False
+    at_the_tip = _replay_both_ways(source, 200)
+    live = {}
+    for _ in range(50):
+        source.step()
+        live[source.state.scan_id] = source.state
+
+    for fork in at_the_tip:
+        assert not fork._battery_present
+        for scan in range(201, 251):
+            fork.step()
+            assert dict(fork.state.tags) == dict(live[scan].tags), scan
+            assert dict(fork.state.memory) == dict(live[scan].memory), scan
+    # Past the tip, the change belongs to scan 201, as in history and fork().
+    for fork in _replay_both_ways(source, 200):
+        assert fork._battery_present
+        assert dict(fork.state.memory) == dict(source.history.at(200).memory)
+
+
+@pytest.mark.parametrize("changed_after", [200, 250], ids=["checkpoint", "mid_interval"])
+def test_replay_to_history_and_fork_agree_on_a_battery_change_after_an_earlier_scan(
+    changed_after: int,
+) -> None:
+    source = PLC(_battery_program(), dt=0.01, checkpoint_interval=100)
+    for _ in range(changed_after):
+        source.step()
+    source.battery_present = False
+    for _ in range(100):
+        source.step()
+
+    for target in (changed_after, changed_after + 1):
+        truth = source.history.at(target)
+        forked = source.fork(target)
+        assert forked._battery_present == (target == changed_after)
+        forked.step()
+        for fork in _replay_both_ways(source, target):
+            assert dict(fork.state.tags) == dict(truth.tags), target
+            assert dict(fork.state.memory) == dict(truth.memory), target
+            assert fork._battery_present == (target == changed_after)
+            fork.step()
+            assert dict(fork.state.tags) == dict(forked.state.tags), target
+            assert dict(fork.state.memory) == dict(forked.state.memory), target
+
+
+def test_a_fork_steps_on_as_the_stopped_or_battery_less_state_it_forks() -> None:
+    source = PLC(_battery_program(), dt=0.01, checkpoint_interval=100)
+    for _ in range(200):
+        source.step()
+    source.battery_present = False
+    for _ in range(100):
+        source.step()
+
+    for forked in (source.fork(300), source.fork(250)):
+        assert not forked.battery_present
+        forked.step()
+        assert forked.state.tags["BatterySeen"] is False
+        assert forked.state.memory["_sys.battery_present"] is False
+    source.stop()
+    stopped = source.fork()
+    assert stopped.mode == "stop"
+    source.step()
+    stopped.step()
+    assert dict(stopped.state.tags) == dict(source.state.tags)
+
+
+@pytest.mark.parametrize("stopped_by", ["stop", "program"])
+def test_a_replay_of_a_stopped_tip_restarts_on_its_next_scan_as_live_does(
+    stopped_by: str,
+) -> None:
+    tick, count, kill = Bool("RestartTick"), Int("RestartCount"), Bool("RestartKill")
+    with Program(strict=False) as program:
+        with Rung(~tick):
+            out(tick)
+        with Rung(tick):
+            math(count + 1, count)
+        with Rung(kill):
+            out(system.sys.cmd_mode_stop)
+    source = PLC(program, dt=0.01, checkpoint_interval=100)
+    for _ in range(230):
+        source.step()
+    if stopped_by == "stop":
+        source.stop()
+    else:
+        # The PLC reads the stop bit one scan after the program writes it.
+        source.patch({"RestartKill": True})
+        source.step()
+        source.step()
+    assert source.mode == "stop"
+    tip = source.state.scan_id
+
+    runners = [source.fork(), source.replay_to(tip), source._replay_to_interpreted(tip)]
+    for _ in range(3):
+        source.step()
+        for runner in runners:
+            runner.step()
+            assert runner.mode == "run"
+            assert runner.state.scan_id == source.state.scan_id
+            assert dict(runner.state.tags) == dict(source.state.tags)
+            assert dict(runner.state.memory) == dict(source.state.memory)
 
 
 def test_interpreted_replay_preserves_active_pilot_holds() -> None:
@@ -935,7 +1153,7 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
     _assert_states_equivalent(replay, interpreted)
 
 
-def test_sparse_replay_seek_reports_unsupported_world_as_residual() -> None:
+def test_a_replay_of_a_world_the_kernel_cannot_run_lands_interpreted() -> None:
     enable = Bool("UnsupportedSeekEnable")
 
     with Program(strict=False) as program:
@@ -946,18 +1164,10 @@ def test_sparse_replay_seek_reports_unsupported_world_as_residual() -> None:
     source.patch({"UnsupportedSeekEnable": True})
     source.run(5)
 
-    replay = source._replay_seek(4)
+    replay = source.replay_to(4)
 
     assert replay.state.scan_id == 4
     assert source._compiled_replay_supported_kernel() is None
-    assert source._last_replay_seek_stats == {
-        "logical_scans": 4,
-        "kernel_scans": 4,
-        "folded_scans": 0,
-        "ordinary_folded_scans": 0,
-        "cycle_folded_scans": 0,
-        "residual_scans": 4,
-    }
 
 
 def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) -> None:

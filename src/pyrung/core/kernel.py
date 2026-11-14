@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyrung.core.storage import BLANK_CHAR
+from pyrung.core.system_points import _DERIVED_TAG_NAMES, HOOK_BOUND_TAG_NAMES
 from pyrung.core.tag import Tag, TagType
 
 _TYPE_DEFAULTS: dict[TagType, bool | int | float | str] = {
@@ -20,7 +22,7 @@ _TYPE_DEFAULTS: dict[TagType, bool | int | float | str] = {
     TagType.DINT: 0,
     TagType.REAL: 0.0,
     TagType.WORD: 0,
-    TagType.CHAR: "",
+    TagType.CHAR: BLANK_CHAR,
 }
 
 PROVE_EFFECTIVE_PRESET_PREFIX = "_prove:effective_preset:"
@@ -29,6 +31,29 @@ PROVE_EFFECTIVE_PRESET_PREFIX = "_prove:effective_preset:"
 def prove_effective_preset_key(done_name: str) -> str:
     """Memory key for the preset value observed by a timer/counter instruction."""
     return f"{PROVE_EFFECTIVE_PRESET_PREFIX}{done_name}"
+
+
+#: The most iterations the verifier's kernel runs one For for in one scan.  A
+#: 16-bit count runs at most 65535, under it; a Dint count is read whole and
+#: signed (``control.for_loop_iterations``), so a positive one can run up to
+#: 2147483647 and the search would not return.
+PROVE_FOR_ITERATION_CAP = 1_000_000
+
+
+class ForIterationsBeyondCap(Exception):
+    """A For in the verifier's kernel was about to run past ``PROVE_FOR_ITERATION_CAP``.
+
+    Raised by the kernel ``compile_kernel(proof_metadata=True)`` builds, only
+    for a For whose count is read 32-bit; the verifier answers ``Intractable``.
+    """
+
+    def __init__(self, where: str, count: str, tags: tuple[str, ...], iterations: int) -> None:
+        super().__init__(f"forloop({count}) at {where} would run {iterations} times in one scan")
+        self.where = where
+        self.count = count
+        self.iterations = iterations
+        #: The tags the count reads: the count tag, or an indexed count's pointer.
+        self.tags = tags
 
 
 @dataclass(frozen=True)
@@ -138,6 +163,9 @@ class CompiledKernel:
     block_specs: dict[str, BlockSpec] = field(default_factory=dict)
     edge_tags: set[str] = field(default_factory=set)
     source: str = ""
+    # ``source`` with the text of each function it calls, which it holds by reference:
+    # what a lock hashes, not what runs.
+    lock_source: str = ""
     blockless: bool = False
     has_io_gaps: bool = False
     # Optional leading pass, run *before* the input drain so it reads the previous
@@ -146,10 +174,14 @@ class CompiledKernel:
     # Shares the runtime kernel's tags/blocks/memory with ``step_fn`` — same
     # signature — because both are compiled from one program (union templates).
     pre_step_fn: Callable[..., None] | None = None
+    # Whether its passes can call a ``run_function`` body, which could ask for a scan.
+    calls_functions: bool = True
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict
     )
     materialized_tag_names: frozenset[str] = field(default_factory=frozenset)
+    # Nanoseconds to a unit, per accumulator whose ``_frac:`` carry the kernel ticks.
+    timer_unit_ns: dict[str, int] = field(default_factory=dict)
     _tag_template: dict[str, bool | int | float | str] = field(
         init=False, repr=False, default_factory=dict
     )
@@ -158,6 +190,10 @@ class CompiledKernel:
     )
     _prev_template: dict[str, bool | int | float | str] = field(
         init=False, repr=False, default_factory=dict
+    )
+    # The scalars ``compiled_plc.absent_scalars`` may add, at the default the kernel holds.
+    _scalar_defaults: tuple[tuple[str, Any], ...] = field(
+        init=False, repr=False, compare=False, default=()
     )
 
     def __post_init__(self) -> None:
@@ -168,6 +204,15 @@ class CompiledKernel:
             for name in spec.tag_names:
                 tag_template.setdefault(name, spec.default)
         object.__setattr__(self, "_tag_template", tag_template)
+        cells = {name for spec in self.block_specs.values() for name in spec.tag_names}
+        scalar_defaults = tuple(
+            (name, default)
+            for name, default in tag_template.items()
+            if name not in cells
+            and name not in _DERIVED_TAG_NAMES
+            and name not in HOOK_BOUND_TAG_NAMES
+        )
+        object.__setattr__(self, "_scalar_defaults", scalar_defaults)
 
         if self.blockless:
             object.__setattr__(self, "_blocks_template", {})

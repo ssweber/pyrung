@@ -9,11 +9,7 @@ from pyrung.circuitpy.codegen._constants import (
     _BOARD_NEOPIXEL_R_TAG,
     _BOARD_SAVE_MEMORY_CMD_TAG,
     _BOARD_SWITCH_TAG,
-    _DINT_MAX,
-    _DINT_MIN,
-    _HELPER_ORDER,
-    _INT_MAX,
-    _INT_MIN,
+    _FAULT_ADDRESS_ERROR_TAG,
     _SD_DELETE_ALL_CMD_TAG,
     _SD_EJECT_CMD_TAG,
     _SD_ERROR_CODE_TAG,
@@ -28,16 +24,22 @@ from pyrung.circuitpy.codegen._constants import (
     _SYS_MODE_RUN_TAG,
     _TYPE_DEFAULTS,
 )
+from pyrung.circuitpy.codegen._helpers import (
+    _render_helper_defs,
+    _render_index_helpers,
+    _with_helper_deps,
+)
 from pyrung.circuitpy.codegen._util import (
     _first_defined_name,
     _global_line,
+    _refuse_a_def_over_a_generated_name,
     _ret_defaults_literal,
     _ret_types_literal,
     _subroutine_symbol,
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
-from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.context import BlockBinding, CodegenContext
 from pyrung.circuitpy.codegen.render_modbus import (
     _render_ethernet_setup,
     _render_modbus_accessors,
@@ -47,6 +49,216 @@ from pyrung.circuitpy.codegen.render_modbus import (
     _render_modbus_server,
     _render_modbus_server_init,
 )
+from pyrung.core.system_points import system
+
+#: The free-running clocks and their half periods in ms.  A clock reads on in
+#: the odd half periods since RUN started, as core's ``clock_high`` has it.
+_CLOCK_HALF_PERIOD_MS = (
+    (system.sys.clock_10ms.name, 5),
+    (system.sys.clock_100ms.name, 50),
+    (system.sys.clock_500ms.name, 250),
+    (system.sys.clock_1s.name, 500),
+    (system.sys.clock_1m.name, 30000),
+    (system.sys.clock_1h.name, 1800000),
+)
+#: The RTC points and their expression over ``_rtc_now = time.localtime()``.
+#: Weekday is CLICK's: Sunday = 1 ... Saturday = 7 (``tm_wday`` is Monday = 0).
+_RTC_FIELDS = (
+    (system.rtc.year4.name, "_rtc_now[0]"),
+    (system.rtc.year2.name, "_rtc_now[0] % 100"),
+    (system.rtc.month.name, "_rtc_now[1]"),
+    (system.rtc.day.name, "_rtc_now[2]"),
+    (system.rtc.weekday.name, "((_rtc_now[6] + 1) % 7) + 1"),
+    (system.rtc.hour.name, "_rtc_now[3]"),
+    (system.rtc.minute.name, "_rtc_now[4]"),
+    (system.rtc.second.name, "_rtc_now[5]"),
+)
+
+
+def _system_clock_symbols(ctx: CodegenContext) -> list[tuple[str, int]]:
+    return [
+        (symbol, half_ms)
+        for name, half_ms in _CLOCK_HALF_PERIOD_MS
+        if (symbol := ctx.symbol_if_referenced(name)) is not None
+    ]
+
+
+def _system_scan_count_needed(ctx: CodegenContext) -> bool:
+    return any(
+        name in ctx.referenced_tags
+        for name in (system.sys.scan_counter.name, system.sys.scan_clock_toggle.name)
+    )
+
+
+def _system_first_needed(ctx: CodegenContext) -> bool:
+    return system.sys.first_scan.name in ctx.referenced_tags or bool(_system_clock_symbols(ctx))
+
+
+def _stop_command_used(ctx: CodegenContext) -> bool:
+    """Whether the code carries SC50, so a rung can put it in STOP.
+
+    A Modbus write to SC50 is refused, so only a rung stops the code.  A math
+    error (SC46) does not stop the code, as it does not stop a CLICK.
+    """
+    return ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is not None
+
+
+def _stop_hold_needed(ctx: CodegenContext) -> bool:
+    """Whether the code needs ``_stop_hold`` to stay in STOP after the STOP command.
+
+    The hold keeps STOP while the RUN/STOP switch reads RUN, until the switch
+    reads STOP.  Without a switch, nothing but a restart leaves STOP.
+    """
+    return ctx.runstop is not None and _stop_command_used(ctx)
+
+
+def _mode_state_needed(ctx: CodegenContext) -> bool:
+    """Whether the code has a STOP mode (``_mode_run``, ``_force_outputs_off``)."""
+    return ctx.runstop is not None or _stop_command_used(ctx)
+
+
+def _render_stop_lines(ctx: CodegenContext, sp: str) -> list[str]:
+    """Put the code in STOP.
+
+    With a RUN/STOP switch, also set the hold (see :func:`_stop_hold_needed`).
+    """
+    lines = [f"{sp}_mode_run = False"]
+    if _stop_hold_needed(ctx):
+        lines.append(f"{sp}_stop_hold = True")
+    mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
+    if mode_run_symbol is not None:
+        lines.append(f"{sp}{mode_run_symbol} = False")
+    lines.extend([f"{sp}save_memory()", f'{sp}print("Mode: STOP")'])
+    return lines
+
+
+def _render_stop_command_take_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """Start of a RUN scan: take the STOP command (SC50) a rung wrote.
+
+    As core's ``_process_mode_commands``: SC50 clears, this scan runs with
+    SC11 off, and the code is in STOP at its end
+    (:func:`_render_stop_command_end_lines`).
+    """
+    cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
+    if cmd_mode_stop_symbol is None:
+        return []
+    sp = " " * indent
+    lines = [f"{sp}_stop_cmd = {cmd_mode_stop_symbol}", f"{sp}if _stop_cmd:"]
+    lines.append(f"{sp}    {cmd_mode_stop_symbol} = False")
+    mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
+    if mode_run_symbol is not None:
+        lines.append(f"{sp}    {mode_run_symbol} = False")
+    return lines
+
+
+def _render_stop_command_end_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """End of a RUN scan that took the STOP command: the code is in STOP."""
+    if ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is None:
+        return []
+    sp = " " * indent
+    return [f"{sp}if _stop_cmd and _mode_run:", *_render_stop_lines(ctx, sp + "    ")]
+
+
+def _render_system_point_state_lines(ctx: CodegenContext) -> list[str]:
+    """Module-level state behind the derived system points the program uses.
+
+    As in core, the scan counter and the clocks count from the first scan in
+    RUN, and a STOP->RUN transition starts them again.
+    """
+    lines: list[str] = []
+    if _system_scan_count_needed(ctx):
+        lines.append("_sys_scan_n = 0")
+    if _system_first_needed(ctx):
+        lines.append("_sys_first = True")
+    if _system_clock_symbols(ctx):
+        lines.extend(["_sys_t0_ns = 0", "_sys_prev_ns = 0"])
+    if lines:
+        lines.append("")
+    return lines
+
+
+def _system_point_reset_globals(ctx: CodegenContext) -> list[str]:
+    names: list[str] = []
+    if _system_scan_count_needed(ctx):
+        names.append("_sys_scan_n")
+    if _system_first_needed(ctx):
+        names.append("_sys_first")
+    return names
+
+
+def _render_system_point_reset_lines(ctx: CodegenContext) -> list[str]:
+    """Restart the scan counter and the clocks on STOP->RUN, as core restarts scan_id."""
+    lines: list[str] = []
+    if _system_scan_count_needed(ctx):
+        lines.append("    _sys_scan_n = 0")
+    if _system_first_needed(ctx):
+        lines.append("    _sys_first = True")
+    return lines
+
+
+def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """Derived system points for the scan about to run, as core resolves them.
+
+    These are the scan counter (SD9, ``scan_id % 32768``) and the scan clock
+    (SC3, on when SD9 is even). Then come the first-scan bit and the
+    free-running clocks over the time of the RUN scans before this one (0 on
+    the first scan, so every clock starts off). Last are the scan time (SD10)
+    and the RTC. The fault flags carry from the scan before.
+    """
+    sp = " " * indent
+    lines: list[str] = []
+    always_on = ctx.symbol_if_referenced(system.sys.always_on.name)
+    if always_on is not None:
+        lines.append(f"{sp}{always_on} = True")
+    counter = ctx.symbol_if_referenced(system.sys.scan_counter.name)
+    if counter is not None:
+        lines.append(f"{sp}{counter} = _sys_scan_n")
+    scan_clock = ctx.symbol_if_referenced(system.sys.scan_clock_toggle.name)
+    if scan_clock is not None:
+        lines.append(f"{sp}{scan_clock} = (_sys_scan_n & 1) == 0")
+    first_scan = ctx.symbol_if_referenced(system.sys.first_scan.name)
+    if first_scan is not None:
+        lines.append(f"{sp}{first_scan} = _sys_first")
+    clocks = _system_clock_symbols(ctx)
+    if clocks:
+        # Integer ms from the scan's monotonic_ns() reading: a float
+        # monotonic() loses ms resolution within hours on CircuitPython's
+        # 30-bit floats.
+        lines.extend(
+            [
+                f"{sp}if _sys_first:",
+                f"{sp}    _sys_t0_ns = scan_start_ns",
+                f"{sp}    _sys_prev_ns = scan_start_ns",
+                f"{sp}_sys_ms = (_sys_prev_ns - _sys_t0_ns) // 1000000",
+                f"{sp}_sys_prev_ns = scan_start_ns",
+            ]
+        )
+        for symbol, half_ms in clocks:
+            lines.append(f"{sp}{symbol} = ((_sys_ms // {half_ms}) & 1) == 1")
+    scan_ms = ctx.symbol_if_referenced(system.sys.scan_time_current_ms.name)
+    if scan_ms is not None:
+        lines.append(f"{sp}{scan_ms} = int(round(dt * 1000.0))")
+    rtc = [
+        (symbol, expr)
+        for name, expr in _RTC_FIELDS
+        if (symbol := ctx.symbol_if_referenced(name)) is not None
+    ]
+    if rtc:
+        lines.append(f"{sp}_rtc_now = time.localtime()")
+        for symbol, expr in rtc:
+            lines.append(f"{sp}{symbol} = {expr}")
+    return lines
+
+
+def _render_system_point_advance_lines(ctx: CodegenContext, indent: int) -> list[str]:
+    """After a scan in RUN: step the scan counter, drop the first-scan bit."""
+    sp = " " * indent
+    lines: list[str] = []
+    if _system_scan_count_needed(ctx):
+        lines.append(f"{sp}_sys_scan_n = (_sys_scan_n + 1) % 32768")
+    if _system_first_needed(ctx):
+        lines.append(f"{sp}_sys_first = False")
+    return lines
 
 
 def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
@@ -62,20 +274,96 @@ def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
     return binding.direction == "input"
 
 
+def _render_slot_runs(symbol: str, runs: list[tuple[int, int, str]], indent: str = "") -> list[str]:
+    """Assign each ``(first index, stop index, literal)``; a run of 3 or more is one loop."""
+    lines: list[str] = []
+    for first, stop, literal in runs:
+        if stop - first < 3:
+            lines.extend(f"{indent}{symbol}[{index}] = {literal}" for index in range(first, stop))
+        else:
+            lines.append(f"{indent}for _i in range({first}, {stop}):")
+            lines.append(f"{indent}    {symbol}[_i] = {literal}")
+    return lines
+
+
+def _render_block_power_on_lines(
+    symbol: str, binding: BlockBinding, literals: dict[int, str], indent: str = ""
+) -> list[str]:
+    """Seed the given slots; contiguous equal values are one run."""
+    runs: list[tuple[int, int, str]] = []
+    for addr, literal in literals.items():
+        index = addr - binding.start
+        if runs and runs[-1][1] == index and runs[-1][2] == literal:
+            runs[-1] = (runs[-1][0], index + 1, literal)
+        else:
+            runs.append((index, index + 1, literal))
+    return _render_slot_runs(symbol, runs, indent)
+
+
+def _render_block_run_reset_lines(binding: BlockBinding, ctx: CodegenContext) -> list[str]:
+    """Put a block's non-retentive slots back at their power-on values, for a STOP->RUN.
+
+    Every slot, not just the named ones: a pointer can have written any of them.  An
+    input block is left alone, as this scan's read has already filled it.
+    """
+    if binding.direction == "input":
+        return []
+    base = binding.block.retentive
+    overrides = ctx.block_retentive_overrides(binding)
+    # Runs of cleared indexes.  The block's own flag covers every slot not overridden,
+    # so a big block costs a line per override, not a line per slot.
+    runs: list[tuple[int, int, str]] = []
+    zero = repr(_TYPE_DEFAULTS[binding.tag_type])
+    first = 0
+    for addr, retentive in sorted(overrides.items()):
+        index = addr - binding.start
+        if base and not retentive:
+            if runs and runs[-1][1] == index:
+                runs[-1] = (runs[-1][0], index + 1, zero)
+            else:
+                runs.append((index, index + 1, zero))
+        elif not base and retentive:
+            if first < index:
+                runs.append((first, index, zero))
+            first = index + 1
+    size = binding.end - binding.start + 1
+    if not base and first < size:
+        runs.append((first, size, zero))
+    symbol = ctx.block_symbols[binding.block_id]
+    lines = _render_slot_runs(symbol, runs, "    ")
+    seeds = {
+        addr: literal
+        for addr, literal in ctx.block_power_on_literals(binding).items()
+        if not overrides.get(addr, base)
+    }
+    lines.extend(_render_block_power_on_lines(symbol, binding, seeds, "    "))
+    return lines
+
+
 def _render_run_transition_reset_lines(ctx: CodegenContext) -> list[str]:
     lines: list[str] = []
     for tag_name in sorted(ctx.referenced_tags):
         tag = ctx.referenced_tags[tag_name]
         if tag.retentive:
             continue
-        if _tag_is_input_endpoint(ctx, tag_name):
+        if tag_name in ctx.tag_block_addresses or _tag_is_input_endpoint(ctx, tag_name):
             continue
         lines.append(f"    {ctx.symbol_for_tag(tag)} = {repr(tag.default)}")
+    for binding in sorted(
+        ctx.emitted_bindings(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
+    ):
+        lines.extend(_render_block_run_reset_lines(binding, ctx))
     return lines
 
 
-def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
+def _render_stop_output_clear_lines(ctx: CodegenContext) -> tuple[list[str], list[str]]:
+    """Clear the output arrays for the write that turns the modules off.
+
+    Returns the lines before that write and the lines after it: a retentive slot's
+    value outlives STOP, in its array, though its output is off.
+    """
     lines: list[str] = []
+    restore_lines: list[str] = []
     for binding in sorted(
         ctx.emitted_bindings(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
     ):
@@ -84,6 +372,12 @@ def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
         symbol = ctx.block_symbols[binding.block_id]
         default = _TYPE_DEFAULTS[binding.tag_type]
         size = binding.end - binding.start + 1
+        overrides = ctx.block_retentive_overrides(binding)
+        for index in range(size):
+            if overrides.get(binding.start + index, binding.block.retentive):
+                kept = f"_kept{len(restore_lines)}"
+                lines.append(f"    {kept} = {symbol}[{index}]")
+                restore_lines.append(f"    {symbol}[{index}] = {kept}")
         lines.append(f"    for _i in range({size}):")
         lines.append(f"        {symbol}[_i] = {repr(default)}")
     led_symbol = ctx.symbol_if_referenced(_BOARD_LED_TAG)
@@ -93,7 +387,7 @@ def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
         channel_symbol = ctx.symbol_if_referenced(channel_tag)
         if channel_symbol is not None:
             lines.append(f"    {channel_symbol} = 0")
-    return lines
+    return lines, restore_lines
 
 
 def _section(label: str) -> str:
@@ -105,12 +399,16 @@ def _section(label: str) -> str:
 def _runtime_import_names(ctx: CodegenContext) -> set[str]:
     """Return the set of names to ``from pyrung_rt import ...``."""
     needed = set(ctx.used_helpers)
+    # A flag that code.py needs ``import math``, not a runtime name.
+    needed.discard("_calc_math_isfinite")
     if "_store_numeric_text_digit" in needed:
         needed.add("_as_single_ascii_char")
     if "_termination_char" in needed:
         needed.update({"_as_single_ascii_char", "_ascii_char_from_code"})
     if "_render_text_from_numeric" in needed:
         needed.add("_format_int_text")
+    if "_math_func" in needed:
+        needed.add("_MathDomainError")
     # Client pack/unpack helpers and constants used by per-job code in code.py
     if ctx.modbus_client is not None:
         specs = list(ctx.modbus_client_specs)
@@ -139,9 +437,9 @@ def _render_runtime_wiring(ctx: CodegenContext) -> list[str]:
         lines.extend(
             [
                 "_rt._mb_read_coil = _mb_read_coil",
-                "_rt._mb_write_coil = _mb_write_coil",
+                "_rt._mb_write_coils = _mb_write_coils",
                 "_rt._mb_read_reg = _mb_read_reg",
-                "_rt._mb_write_reg = _mb_write_reg",
+                "_rt._mb_write_regs = _mb_write_regs",
                 "_rt._mb_server = _mb_server",
                 "_rt._mb_clients = _mb_clients",
                 "_rt._mb_buf = _mb_buf",
@@ -191,6 +489,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "import json",
             "import math",
             "import os",
+            *(["import random"] if ctx.uses_random else []),
             "import re",
             "import struct",
             "import time",
@@ -323,14 +622,18 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
         size = binding.end - binding.start + 1
         default = _TYPE_DEFAULTS[binding.tag_type]
         lines.append(f"{symbol} = [{repr(default)}] * {size}")
+        lines.extend(
+            _render_block_power_on_lines(symbol, binding, ctx.block_power_on_literals(binding))
+        )
     lines.append("")
 
     # 6) runtime memory declarations (stubbed persistence state)
     lines.extend(
         [
             "_mem = {}",
-            "_prev = {}",
-            "_last_scan_ts = time.monotonic()",
+            # Scan time in integer ns: a float monotonic() loses ms resolution
+            # within hours on CircuitPython's 30-bit floats.
+            "_last_scan_ns = time.monotonic_ns()",
             "_scan_overrun_count = 0",
             "",
             "_sd_available = False",
@@ -347,22 +650,27 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "_sd_eject_cmd = False",
             "_sd_delete_all_cmd = False",
             "_ret_snapshot = {}",
-            "_ret_last_save_ts = 0.0",
-            "_RET_AUTO_SAVE_S = 30.0",
+            "_ret_last_save_ns = 0",
+            "_RET_AUTO_SAVE_NS = 30000000000",
             "",
         ]
     )
+    if _mode_state_needed(ctx):
+        lines.append("_mode_run = True")
+        if _stop_hold_needed(ctx):
+            lines.append("_stop_hold = False")
     if ctx.runstop is not None:
         lines.extend(
             [
-                "_mode_run = True",
                 "_runstop_initialized = False",
                 "_runstop_raw = False",
                 "_runstop_debounced = False",
-                "_runstop_last_change_ts = 0.0",
-                "",
+                "_runstop_last_change_ns = 0",
             ]
         )
+    if _mode_state_needed(ctx):
+        lines.append("")
+    lines.extend(_render_system_point_state_lines(ctx))
     if has_runtime:
         if modbus_server_init_lines or modbus_client_codepy_lines:
             lines.append(_section("Modbus TCP"))
@@ -383,7 +691,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     ret_globals = sorted(
         {ctx.global_symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())}
     )
-    snapshot_globals = ["_ret_snapshot", "_ret_last_save_ts"]
+    snapshot_globals = ["_ret_snapshot", "_ret_last_save_ns"]
     load_globals = ", ".join(
         ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"] + snapshot_globals
     )
@@ -478,7 +786,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
             f"    _ret_snapshot = {snapshot_literal}",
-            "    _ret_last_save_ts = time.monotonic()",
+            "    _ret_last_save_ns = time.monotonic_ns()",
             "",
             "def save_memory():",
         ]
@@ -495,10 +803,15 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     )
     for name, tag in sorted(ctx.retentive_tags.items()):
         symbol = ctx.symbol_for_tag(tag)
+        value_expr = symbol
+        if tag.type.name == "REAL":
+            # JSON has no Inf or NaN: save one as its str ("inf", "nan"), which
+            # the load's float() parses back.  ``x - x == 0`` only when finite.
+            value_expr = f"({symbol} if {symbol} - {symbol} == 0 else str({symbol}))"
         lines.extend(
             [
                 f'    if {symbol} != _RET_DEFAULTS["{name}"]:',
-                f'        values["{name}"] = {{"type": "{tag.type.name}", "value": {symbol}}}',
+                f'        values["{name}"] = {{"type": "{tag.type.name}", "value": {value_expr}}}',
             ]
         )
     lines.extend(
@@ -532,7 +845,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
             f"    _ret_snapshot = {snapshot_literal}",
-            "    _ret_last_save_ts = time.monotonic()",
+            "    _ret_last_save_ns = time.monotonic_ns()",
             "",
             "_mount_sd()",
             "load_memory()",
@@ -546,10 +859,10 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     if modbus_accessor_lines:
         lines.append(_section("Modbus address mapping"))
         lines.extend(modbus_accessor_lines)
-        if has_runtime:
-            lines.extend(_render_runtime_wiring(ctx))
-        else:
-            lines.extend(modbus_protocol_lines)
+    if has_runtime and (modbus_accessor_lines or ctx.modbus_client is not None):
+        lines.extend(_render_runtime_wiring(ctx))
+    elif modbus_accessor_lines:
+        lines.extend(modbus_protocol_lines)
 
     # 9) embedded user function sources
     lines.extend(function_source_lines)
@@ -569,7 +882,9 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     lines.append(_section("Main scan loop"))
     lines.extend(_render_scan_loop(ctx, has_runtime=has_runtime))
 
-    return "\n".join(lines).rstrip() + "\n"
+    source = "\n".join(lines).rstrip() + "\n"
+    _refuse_a_def_over_a_generated_name(source, ctx.function_sources)
+    return source
 
 
 def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = False) -> list[str]:
@@ -636,12 +951,12 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         reset_globals = sorted(
             {
                 "_mem",
-                "_prev",
                 "_ret_snapshot",
                 "_sd_save_cmd",
                 "_sd_eject_cmd",
                 "_sd_delete_all_cmd",
                 *scalar_symbols,
+                *_system_point_reset_globals(ctx),
             }
         )
         lines.append("def _reset_for_run_transition():")
@@ -649,11 +964,11 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         lines.extend(
             [
                 "    _mem = {}",
-                "    _prev = {}",
                 "    _ret_snapshot = {}",
                 "    _sd_save_cmd = False",
                 "    _sd_eject_cmd = False",
                 "    _sd_delete_all_cmd = False",
+                *_render_system_point_reset_lines(ctx),
             ]
         )
         if reset_lines:
@@ -662,278 +977,33 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
             lines.append("    pass")
         lines.append("")
 
+    if _mode_state_needed(ctx):
+        scalar_symbols = [ctx.symbol_table[name] for name in sorted(ctx.scalar_tags)]
         lines.append("def _force_outputs_off():")
         if scalar_symbols:
             lines.append(f"    global {', '.join(sorted(set(scalar_symbols)))}")
-        output_clear_lines = _render_stop_output_clear_lines(ctx)
-        if output_clear_lines:
-            lines.extend(output_clear_lines)
+        output_clear_lines, output_restore_lines = _render_stop_output_clear_lines(ctx)
+        lines.extend(output_clear_lines)
         lines.append("    _write_outputs()")
+        lines.extend(output_restore_lines)
         lines.append("")
 
+    address_fault_symbol = ctx.symbol_if_referenced(_FAULT_ADDRESS_ERROR_TAG)
+    address_fault_global = (
+        ctx.global_symbol_for_tag(ctx.referenced_tags[_FAULT_ADDRESS_ERROR_TAG])
+        if address_fault_symbol is not None
+        else None
+    )
     for binding in sorted(
         (ctx.block_bindings[bid] for bid in ctx.used_indirect_blocks),
         key=lambda b: ctx.index_helper_name(b.block_id),
     ):
-        helper_name = ctx.index_helper_name(binding.block_id)
-        lines.append(f"def {helper_name}(addr):")
-        lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
-        lines.append(
-            f'        raise IndexError(f"Address {{addr}} out of range for {binding.logical_name} ({binding.start}-{binding.end})")'
+        lines.extend(
+            _render_index_helpers(ctx, binding, address_fault_symbol, address_fault_global)
         )
-        if binding.valid_addresses is not None:
-            lines.append(f"    if addr not in {binding.valid_addresses!r}:")
-            lines.append(
-                f'        raise IndexError(f"Address {{addr}} out of range for {binding.logical_name} ({binding.start}-{binding.end})")'
-            )
-        lines.append(f"    return int(addr) - {binding.start}")
-        lines.append("")
-
-    helper_defs = {
-        "_clamp_int": [
-            "def _clamp_int(value):",
-            "    if value < -32768:",
-            "        return -32768",
-            "    if value > 32767:",
-            "        return 32767",
-            "    return int(value)",
-            "",
-        ],
-        "_wrap_int": [
-            "def _wrap_int(value, bits, signed):",
-            "    mask = (1 << bits) - 1",
-            "    v = int(value) & mask",
-            "    if signed and v >= (1 << (bits - 1)):",
-            "        v -= (1 << bits)",
-            "    return v",
-            "",
-        ],
-        "_rise": [
-            "def _rise(curr, prev):",
-            "    return bool(curr) and not bool(prev)",
-            "",
-        ],
-        "_fall": [
-            "def _fall(curr, prev):",
-            "    return not bool(curr) and bool(prev)",
-            "",
-        ],
-        "_int_to_float_bits": [
-            "def _int_to_float_bits(n):",
-            '    return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]',
-            "",
-        ],
-        "_float_to_int_bits": [
-            "def _float_to_int_bits(f):",
-            '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
-            "",
-        ],
-        "_ascii_char_from_code": [
-            "def _ascii_char_from_code(code):",
-            "    if code < 0 or code > 127:",
-            '        raise ValueError("ASCII code out of range")',
-            "    return chr(code)",
-            "",
-        ],
-        "_as_single_ascii_char": [
-            "def _as_single_ascii_char(value):",
-            "    if not isinstance(value, str):",
-            '        raise ValueError("CHAR value must be a string")',
-            '    if value == "":',
-            "        return value",
-            "    if len(value) != 1 or ord(value) > 127:",
-            '        raise ValueError("CHAR value must be blank or one ASCII character")',
-            "    return value",
-            "",
-        ],
-        "_text_from_source_value": [
-            "def _text_from_source_value(value):",
-            "    if isinstance(value, str):",
-            "        return value",
-            '    raise ValueError("text conversion source must resolve to str")',
-            "",
-        ],
-        "_store_numeric_text_digit": [
-            "def _store_numeric_text_digit(char, mode):",
-            "    _char = _as_single_ascii_char(char)",
-            '    if _char == "":',
-            '        raise ValueError("empty CHAR cannot be converted to numeric")',
-            '    if mode == "value":',
-            '        if _char < "0" or _char > "9":',
-            '            raise ValueError("Copy Character Value accepts only digits 0-9")',
-            '        return ord(_char) - ord("0")',
-            '    if mode == "ascii":',
-            "        return ord(_char)",
-            '    raise ValueError(f"Unsupported text->numeric mode: {mode}")',
-            "",
-        ],
-        "_format_int_text": [
-            "def _format_int_text(value, width, suppress_zero, signed=True):",
-            "    if suppress_zero:",
-            "        return str(value)",
-            "    if not signed:",
-            '        return f"{value:0{width}X}"',
-            "    if value < 0:",
-            '        return f"-{abs(value):0{width}d}"',
-            '    return f"{value:0{width}d}"',
-            "",
-        ],
-        "_render_text_from_numeric": [
-            "def _render_text_from_numeric(",
-            "    value,",
-            "    *,",
-            "    source_type=None,",
-            "    suppress_zero=True,",
-            "    pad=None,",
-            "    exponential=False,",
-            "):",
-            '    if source_type == "REAL" or isinstance(value, float):',
-            "        numeric = float(value)",
-            "        if not math.isfinite(numeric):",
-            '            raise ValueError("REAL source is not finite")',
-            '        return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"',
-            "",
-            "    number = int(value)",
-            "    effective_suppress_zero = suppress_zero if pad is None else False",
-            "    signed_width = max(pad - 1, 0) if pad is not None and number < 0 else pad",
-            "",
-            '    if source_type == "WORD":',
-            "        width = 4 if pad is None else pad",
-            "        return _format_int_text(number & 0xFFFF, width, effective_suppress_zero, False)",
-            '    if source_type == "DINT":',
-            "        width = 10 if signed_width is None else signed_width",
-            "        return _format_int_text(number, width, effective_suppress_zero)",
-            '    if source_type == "INT":',
-            "        width = 5 if signed_width is None else signed_width",
-            "        return _format_int_text(number, width, effective_suppress_zero)",
-            "",
-            "    if pad is None:",
-            '        return str(number) if suppress_zero else f"{number:05d}"',
-            "    width = 5 if signed_width is None else signed_width",
-            "    return _format_int_text(number, width, False)",
-            "",
-        ],
-        "_termination_char": [
-            "def _termination_char(termination_code):",
-            "    if termination_code is None:",
-            '        return ""',
-            "    if isinstance(termination_code, str):",
-            "        if len(termination_code) != 1:",
-            '            raise ValueError("termination_code must be one character or int ASCII code")',
-            "        return _as_single_ascii_char(termination_code)",
-            "    if not isinstance(termination_code, int):",
-            '        raise TypeError("termination_code must be int, str, or None")',
-            "    return _ascii_char_from_code(termination_code)",
-            "",
-        ],
-        "_parse_pack_text_value": [
-            "def _parse_pack_text_value(text, dest_type):",
-            '    if text == "":',
-            '        raise ValueError("empty text cannot be parsed")',
-            '    if dest_type in {"INT", "DINT"}:',
-            '        if not re.fullmatch(r"[+-]?\\d+", text):',
-            '            raise ValueError("integer parse failed")',
-            "        parsed = int(text, 10)",
-            '        if dest_type == "INT" and (parsed < -32768 or parsed > 32767):',
-            '            raise ValueError("integer out of INT range")',
-            '        if dest_type == "DINT" and (parsed < -2147483648 or parsed > 2147483647):',
-            '            raise ValueError("integer out of DINT range")',
-            "        return parsed",
-            '    if dest_type == "WORD":',
-            '        if not re.fullmatch(r"[0-9A-Fa-f]+", text):',
-            '            raise ValueError("hex parse failed")',
-            "        parsed = int(text, 16)",
-            "        if parsed < 0 or parsed > 0xFFFF:",
-            '            raise ValueError("hex out of WORD range")',
-            "        return parsed",
-            '    if dest_type == "REAL":',
-            "        parsed = float(text)",
-            "        if not math.isfinite(parsed):",
-            '            raise ValueError("REAL parse produced non-finite value")',
-            '        struct.pack("<f", parsed)',
-            "        return parsed",
-            '    raise TypeError(f"Unsupported pack_text destination type: {dest_type}")',
-            "",
-        ],
-        "_store_copy_value_to_type": [
-            "def _store_copy_value_to_type(value, dest_type):",
-            "    if isinstance(value, float) and not math.isfinite(value):",
-            "        value = 0",
-            '    if dest_type == "INT":',
-            f"        return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
-            '    if dest_type == "DINT":',
-            f"        return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
-            '    if dest_type == "WORD":',
-            "        return int(value) & 0xFFFF",
-            '    if dest_type == "REAL":',
-            "        return float(value)",
-            '    if dest_type == "BOOL":',
-            "        return bool(value)",
-            '    if dest_type == "CHAR":',
-            "        if not isinstance(value, str):",
-            '            raise ValueError("CHAR value must be a string")',
-            '        if value == "":',
-            "            return value",
-            "        if len(value) != 1 or ord(value) > 127:",
-            '            raise ValueError("CHAR value must be blank or one ASCII character")',
-            "        return value",
-            "    return value",
-            "",
-        ],
-        "_store_int": [
-            "def _store_int(value):",
-            "    if type(value) is int:",
-            f"        return {_INT_MAX} if value > {_INT_MAX} else ({_INT_MIN} if value < {_INT_MIN} else value)",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            f"    return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
-            "",
-        ],
-        "_store_dint": [
-            "def _store_dint(value):",
-            "    if type(value) is int:",
-            f"        return {_DINT_MAX} if value > {_DINT_MAX} else ({_DINT_MIN} if value < {_DINT_MIN} else value)",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            f"    return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
-            "",
-        ],
-        "_store_word": [
-            "def _store_word(value):",
-            "    if type(value) is int:",
-            "        return value & 0xFFFF",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0",
-            "    return int(value) & 0xFFFF",
-            "",
-        ],
-        "_store_real": [
-            "def _store_real(value):",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return 0.0",
-            "    return float(value)",
-            "",
-        ],
-        "_store_bool": [
-            "def _store_bool(value):",
-            "    if type(value) is float and not math.isfinite(value):",
-            "        return False",
-            "    return bool(value)",
-            "",
-        ],
-    }
-    needed_helpers = set(ctx.used_helpers)
-    if "_store_numeric_text_digit" in needed_helpers:
-        needed_helpers.add("_as_single_ascii_char")
-    if "_termination_char" in needed_helpers:
-        needed_helpers.update({"_as_single_ascii_char", "_ascii_char_from_code"})
-    if "_render_text_from_numeric" in needed_helpers:
-        needed_helpers.add("_format_int_text")
 
     if not helpers_in_runtime:
-        for helper in _HELPER_ORDER:
-            if helper in needed_helpers:
-                lines.extend(helper_defs[helper])
+        lines.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
     return lines
 
 
@@ -944,6 +1014,9 @@ def _render_embedded_functions(ctx: CodegenContext) -> list[str]:
         lines.append("# None emitted in foundation step.")
         lines.append("")
         return lines
+    lines.extend(ctx.function_constant_lines())
+    # A function that imports the math module under another name reads it by that name.
+    lines.extend(f"{alias} = math" for alias in sorted(ctx.math_aliases))
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
         lines.append(src)
@@ -1104,17 +1177,18 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         ctx.symbol_if_referenced(ctx.runstop.source) if ctx.runstop is not None else None
     )
     mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
-    cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
+    mode_switch_symbol = ctx.symbol_if_referenced(system.sys.mode_switch_run.name)
 
     lines = [
         "while True:",
-        "    scan_start = time.monotonic()",
+        "    scan_start_ns = time.monotonic_ns()",
         "    _sd_write_status = False",
-        "    dt = scan_start - _last_scan_ts",
-        "    if dt < 0:",
-        "        dt = 0.0",
-        "    _last_scan_ts = scan_start",
+        # dt in seconds, as core's timers take it, from the exact ns difference.
+        "    _dt_ns = scan_start_ns - _last_scan_ns",
+        "    dt = _dt_ns / 1000000000",
+        "    _last_scan_ns = scan_start_ns",
         '    _mem["_dt"] = dt',
+        '    _mem["_dt_ns"] = _dt_ns',
         "",
     ]
 
@@ -1149,21 +1223,33 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             "    _read_inputs()",
         ]
     )
+    # The RUN scan: the STOP command a rung wrote last scan is taken first
+    # (core's on_scan_start), and that command puts the code in STOP at its
+    # end.
+    run_scan_lines = [
+        *_render_stop_command_take_lines(ctx, 8),
+        *_render_system_point_scan_lines(ctx, 8),
+        "        _run_main_rungs()",
+        "        _write_outputs()",
+        *_render_system_point_advance_lines(ctx, 8),
+        *_render_stop_command_end_lines(ctx, 8),
+    ]
     if ctx.runstop is not None:
         if runstop_source_symbol is None:
             raise RuntimeError("RunStopConfig source tag was not referenced")
+        debounce_ns = ctx.runstop.debounce_ms * 1000000
         lines.extend(
             [
                 f"    _runstop_sample = bool({runstop_source_symbol})",
                 "    if not _runstop_initialized:",
                 "        _runstop_raw = _runstop_sample",
                 "        _runstop_debounced = _runstop_sample",
-                "        _runstop_last_change_ts = scan_start",
+                "        _runstop_last_change_ns = scan_start_ns",
                 "        _runstop_initialized = True",
                 "    elif _runstop_sample != _runstop_raw:",
                 "        _runstop_raw = _runstop_sample",
-                "        _runstop_last_change_ts = scan_start",
-                f"    elif ((scan_start - _runstop_last_change_ts) * 1000.0) >= {ctx.runstop.debounce_ms}:",
+                "        _runstop_last_change_ns = scan_start_ns",
+                f"    elif (scan_start_ns - _runstop_last_change_ns) >= {debounce_ns}:",
                 "        _runstop_debounced = _runstop_raw",
                 "",
             ]
@@ -1172,12 +1258,17 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             lines.append("    _desired_run = bool(_runstop_debounced)")
         else:
             lines.append("    _desired_run = (not bool(_runstop_debounced))")
-        if ctx.runstop.expose_mode_tags and cmd_mode_stop_symbol is not None:
+        if _stop_hold_needed(ctx):
+            # The STOP command put the code in STOP; the hold keeps STOP
+            # while the switch says RUN.  The switch reading STOP releases
+            # it, and its next RUN resets the tags, as core's STOP->RUN.
             lines.extend(
                 [
-                    f"    if bool({cmd_mode_stop_symbol}):",
-                    "        _desired_run = False",
-                    f"        {cmd_mode_stop_symbol} = False",
+                    "    if _stop_hold:",
+                    "        if _desired_run:",
+                    "            _desired_run = False",
+                    "        else:",
+                    "            _stop_hold = False",
                 ]
             )
         lines.extend(
@@ -1185,6 +1276,10 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "    if _desired_run != _mode_run:",
                 "        if _desired_run:",
                 "            _reset_for_run_transition()",
+                # The first RUN scan times the loop pass it runs in, as core's
+                # first scan after start() advances by a full dt.
+                '            _mem["_dt"] = dt',
+                '            _mem["_dt_ns"] = _dt_ns',
                 '            print("Mode: RUN")',
                 "        else:",
                 "            save_memory()",
@@ -1192,23 +1287,54 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "        _mode_run = _desired_run",
             ]
         )
-        if ctx.runstop.expose_mode_tags and mode_run_symbol is not None:
+        if mode_switch_symbol is not None:
+            # SC10 is the switch itself, set after the STOP->RUN reset: on in
+            # RUN even while cmd_mode_stop holds the PLC in STOP.
+            switch_run = (
+                "bool(_runstop_debounced)"
+                if ctx.runstop.run_when_high
+                else "(not bool(_runstop_debounced))"
+            )
+            lines.append(f"    {mode_switch_symbol} = {switch_run}")
+        if mode_run_symbol is not None:
             lines.append(f"    {mode_run_symbol} = bool(_mode_run)")
         lines.extend(
             [
                 "    if _mode_run:",
-                "        _run_main_rungs()",
-                "        _write_outputs()",
+                *run_scan_lines,
                 "    else:",
                 "        _force_outputs_off()",
                 "",
             ]
         )
-    else:
+    elif not _stop_command_used(ctx):
+        # No RUN/STOP switch: the code is always in RUN, as core's mode bits
+        # read with no mode change (SC10 and SC11 on).
+        for symbol in (mode_switch_symbol, mode_run_symbol):
+            if symbol is not None:
+                lines.append(f"    {symbol} = True")
         lines.extend(
             [
+                *_render_system_point_scan_lines(ctx, 4),
                 "    _run_main_rungs()",
                 "    _write_outputs()",
+                *_render_system_point_advance_lines(ctx, 4),
+                "",
+            ]
+        )
+    else:
+        # No RUN/STOP switch, but the STOP command still stops the code, as on
+        # a CLICK; with no switch to turn back to RUN, only a restart does.
+        if mode_switch_symbol is not None:
+            lines.append(f"    {mode_switch_symbol} = True")
+        lines.append("    if _mode_run:")
+        if mode_run_symbol is not None:
+            lines.append(f"        {mode_run_symbol} = True")
+        lines.extend(
+            [
+                *run_scan_lines,
+                "    else:",
+                "        _force_outputs_off()",
                 "",
             ]
         )
@@ -1229,29 +1355,34 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         dirty_parts = []
         for name, tag in sorted(ctx.retentive_tags.items()):
             symbol = ctx.symbol_for_tag(tag)
-            dirty_parts.append(f'{symbol} != _ret_snapshot.get("{name}")')
+            saved = f'_ret_snapshot.get("{name}")'
+            if tag.type.name == "REAL":
+                # NaN != NaN: a REAL that was NaN when saved and is NaN still
+                # is not dirty, or it would be resaved every interval.
+                dirty_parts.append(
+                    f"({symbol} != {saved} and ({symbol} == {symbol} or {saved} == {saved}))"
+                )
+            else:
+                dirty_parts.append(f"{symbol} != {saved}")
         dirty_check = " or ".join(dirty_parts)
         lines.extend(
             [
-                "    if (scan_start - _ret_last_save_ts) >= _RET_AUTO_SAVE_S:",
+                "    if (scan_start_ns - _ret_last_save_ns) >= _RET_AUTO_SAVE_NS:",
                 f"        if {dirty_check}:",
                 "            save_memory()",
                 "        else:",
-                "            _ret_last_save_ts = scan_start",
+                "            _ret_last_save_ns = scan_start_ns",
                 "",
             ]
         )
 
-    for tag_name in sorted(ctx.edge_prev_tags):
-        tag = ctx.referenced_tags[tag_name]
-        lines.append(f'    _prev["{tag_name}"] = {ctx.symbol_for_tag(tag)}')
     lines.append("")
     if ctx.watchdog_ms is not None:
         lines.append("    _wd_pet()")
         lines.append("")
     lines.extend(
         [
-            "    elapsed_ms = (time.monotonic() - scan_start) * 1000.0",
+            "    elapsed_ms = (time.monotonic_ns() - scan_start_ns) / 1000000",
             "    sleep_ms = TARGET_SCAN_MS - elapsed_ms",
             "    if sleep_ms > 0:",
             "        time.sleep(sleep_ms / 1000.0)",

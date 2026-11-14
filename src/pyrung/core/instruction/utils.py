@@ -6,30 +6,67 @@ from collections.abc import Callable, Iterable
 from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from pyrung.core.time_mode import dt_to_ns
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 if TYPE_CHECKING:
+    from fractions import Fraction
+
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.tag import Tag, TagType
+    from pyrung.core.time_mode import TimeUnit
+
+
+def elapsed_units(carry: Any, dt: float, unit: TimeUnit) -> tuple[int, int | Fraction]:
+    """This scan's *dt*, added to what ``_frac:<acc>`` carries: whole units and what is left.
+
+    The carry is the nanoseconds since the accumulator's last whole unit, so no time is lost
+    however many scans it takes to make a unit.  It is a fraction of a unit (a float) in
+    memory saved before carries were nanoseconds.
+    """
+    if carry.__class__ is float:
+        carry = round(carry * unit.ns)
+    return divmod(carry + dt_to_ns(dt), unit.ns)
 
 
 def guard_oneshot_execution(func: F) -> F:
-    """Skip execute calls when one-shot state says not to run."""
+    """Skip execute calls when one-shot state says not to run.
+
+    An instruction that runs clears the flags in its ``_fault_follows`` as it
+    starts, before it reads anything.  A raise in its body sets them again.  A
+    source that names one of those flags reads it as off.  One with
+    ``_fault_settles_idle`` (a Math) clears them on a scan it is reached but
+    does not run too, with its rung false or as a one-shot that does not fire
+    (CLICK, ``flag_steps``, ``flag_reads/oneshot_held``).  Any other leaves
+    them then.
+    """
 
     @wraps(func)
     def wrapper(self: Any, ctx: ScanContext, enabled: bool, *args: Any, **kwargs: Any) -> Any:
         if not enabled:
             if getattr(self, "_oneshot", False):
                 ctx.set_memory(self.memory_key("_oneshot"), False)
+            if self._fault_settles_idle:
+                _settle_fault_flags(self, ctx)
             return None
         if getattr(self, "_oneshot", False):
             key = self.memory_key("_oneshot")
             if ctx.get_memory(key, False):
+                if self._fault_settles_idle:
+                    _settle_fault_flags(self, ctx)
                 return None
             ctx.set_memory(key, True)
+        _settle_fault_flags(self, ctx)
         return func(self, ctx, enabled, *args, **kwargs)
 
     return cast(F, wrapper)
+
+
+def _settle_fault_flags(instr: Any, ctx: ScanContext) -> None:
+    for name in instr._fault_follows:
+        if ctx._get_tag_internal(name, False):
+            ctx._set_tag_internal(name, False)
 
 
 def to_condition(obj: Any) -> Any:
@@ -61,20 +98,25 @@ def to_condition(obj: Any) -> Any:
     )
 
 
-def instruction_condition_view(ctx: ScanContext) -> ConditionView:
-    """Return the frozen condition snapshot visible to instruction helper inputs.
+def instruction_condition_view(ctx: ScanContext, instr: Any) -> ConditionView:
+    """The condition view box *instr* reads its helper pins from, taken at box entry.
 
-    Helper conditions such as ``.reset(...)`` and ``.jump(...)`` should read from
-    the active rung snapshot when one exists. Direct instruction unit tests may
-    execute outside a rung, so we fall back to a one-off frozen snapshot taken at
-    instruction entry.
+    A box reads its enable and all its pins at one moment, as it starts and
+    before any write of its own, whether or not it is enabled: the view is
+    frozen there, so no pin sees the box's own Done/Acc/step writes, and it
+    sees every write of the rows above the box.  The box's edge pins are
+    scanned (their memory stored) as the view is taken.  Call it before the
+    box writes anything.
     """
-    from pyrung.core.context import ConditionView
+    from pyrung.core.site_memory import build_box_frame, scan_edge_frame
 
-    snapshot = ctx._condition_snapshot
-    if snapshot is not None:
-        return snapshot
-    return ConditionView(ctx)
+    view = ctx._new_condition_view()
+    frame = instr._edge_frame
+    if frame is None:
+        frame = build_box_frame(instr)
+    if frame:
+        scan_edge_frame(ctx, view, frame)
+    return view
 
 
 def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:
@@ -84,6 +126,26 @@ def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:
     if isinstance(preset, TagClass):
         return ctx.get_tag(preset.name, preset.default)
     return preset
+
+
+def validate_preset(preset: object, *, label: str) -> None:
+    """Reject presets that are not an int literal or an INT, DINT or WORD tag.
+
+    A REAL preset has no single comparison every backend agrees on, and CLICK
+    refuses one anyway (DS timer presets, DS/DD counter presets).
+    """
+    from pyrung.core.tag import Tag as TagClass
+    from pyrung.core.tag import TagType
+
+    allowed = (TagType.INT, TagType.DINT, TagType.WORD)
+    if isinstance(preset, TagClass):
+        assert_tag_type(preset, allowed, label=label, include_tag_name=True)
+        return
+    if isinstance(preset, bool) or not isinstance(preset, int):
+        raise TypeError(
+            f"{label} must be an int or an {_allowed_type_text(allowed)} tag; "
+            f"got {type(preset).__name__}"
+        )
 
 
 def _allowed_type_text(allowed_types: Iterable[TagType]) -> str:

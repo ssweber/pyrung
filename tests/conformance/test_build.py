@@ -1,0 +1,916 @@
+"""The canonical conformance program, the manifest, and case definitions (no network)."""
+
+from __future__ import annotations
+
+import tomllib
+from collections import Counter
+from dataclasses import replace
+
+import pytest
+
+from pyrung.click import ClickBlocks
+from pyrung.click.ladder import estimate_steps, pyrung_to_ladder
+from pyrung.conformance import (
+    Case,
+    CaseResult,
+    Confirmation,
+    Group,
+    Manifest,
+    ManifestError,
+    ScanTimeError,
+    assert_all_passed,
+    build_program,
+    case,
+    format_report,
+    is_confirmed,
+    load_confirmations,
+    load_manifest,
+    parse_endpoint,
+    record_confirmations,
+    run,
+)
+from pyrung.conformance._ladder import case_comment, emit_case
+from pyrung.conformance._modbus import check_scan_time
+from pyrung.conformance._slot import DS_LAST, make_slot, slot_register
+from pyrung.core import PLC, Program, Rung, copy, math, on_delay
+from pyrung.core.system_points import system
+from pyrung.core.validation._common import _collect_write_sites
+from tests.conformance import memory, suite
+from tests.conformance.probe_kit import (
+    asks_for_a_reading,
+    between,
+    reading_lines,
+    record_raw_readings,
+    record_readings,
+    record_run,
+)
+from tests.conformance.scans import deadline
+
+ds = ClickBlocks().ds
+
+
+def _prove_constant(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(7, slot.Result1)
+        copy(1, slot.Fired)
+
+
+def _prove_other_constant(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(8, slot.Result1)
+        copy(1, slot.Fired)
+
+
+def _seven(id: str = "seven", sentence: str = "c") -> Case:
+    return case(sentence, ladder=_prove_constant, expect={"Result1": 7}, id=id)
+
+
+def _layout(**groups: dict) -> Manifest:
+    return Manifest.from_dict({"groups": groups}, source="test.toml")
+
+
+# --- layout ------------------------------------------------------------------
+
+
+def test_checked_in_manifest_covers_the_suite() -> None:
+    manifest = load_manifest(suite.MANIFEST_PATH)
+    for group in suite.groups():
+        manifest.layout_for(group)
+
+
+def test_cases_stay_in_their_groups_raw_memory() -> None:
+    problems = memory.outside_owned(suite.groups())
+    assert not problems, "\n".join(problems)
+
+
+def test_owned_memory_is_disjoint_and_inside_clicks_banks() -> None:
+    claims: dict[tuple[str, int], str] = {}
+    for group, banks in memory.OWNED.items():
+        assert len(group) <= 12, group
+        for bank, entry in banks.items():
+            assert bank in memory.BANKS, (group, bank)
+            for owned in memory.ranges(entry):
+                assert 1 <= owned.start and owned.stop - 1 <= memory.BANKS[bank], (group, bank)
+                for n in owned:
+                    other = claims.setdefault((bank, n), group)
+                    assert other == group, f"{group} and {other} both own {bank}{n}"
+
+
+def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
+    staging = memory.STAGING_DS
+    owned_ds: set[int] = set()
+    for group, banks in memory.OWNED.items():
+        for owned in memory.ranges(banks.get("DS", ())):
+            assert staging.start <= owned.start and owned.stop <= staging.stop, group
+            owned_ds.update(owned)
+    # A block may sit in the staging area on registers no group owns (the S6
+    # probes' blocks do), never on registers a group stages in.
+    for layout in load_manifest(suite.MANIFEST_PATH).groups.values():
+        block = range(layout.base, layout.last_register + 1)
+        assert not owned_ds.intersection(block), layout
+
+
+def test_parts_split_the_suite_into_projects_with_their_own_layout() -> None:
+    every = [g.name for g in suite.groups()]
+    in_parts = [name for names in suite.PARTS.values() for name in names]
+    assert sorted(in_parts) == sorted(every)
+
+    whole = suite.build()
+    hashes = {whole.program_hash}
+    for part in suite.PARTS:
+        build = suite.build(part)
+        assert set(build.names) == set(suite.PARTS[part])
+        # One subroutine, one block, one hash, whichever project holds it.
+        for g in build.groups:
+            assert (g.base, g.group_hash) == (
+                whole.group(g.name).base,
+                whole.group(g.name).group_hash,
+            )
+        hashes.add(build.program_hash)
+    assert len(hashes) == 1 + len(suite.PARTS)
+    # The system group still runs first in its part (see test_system.py).
+    assert suite.groups("system")[0].name == "system"
+
+
+def test_the_groups_apart_stay_in_their_own_memory_and_manifest() -> None:
+    manifest = load_manifest(suite.APART_MANIFEST_PATH)
+    for group in suite.APART_GROUPS:
+        manifest.layout_for(group)
+    problems = memory.outside_owned(suite.APART_GROUPS, memory.OWNED_APART)
+    assert not problems, "\n".join(problems)
+    claims: dict[tuple[str, int], str] = {}
+    for group, banks in memory.OWNED_APART.items():
+        assert len(group) <= 12, group
+        for bank, entry in banks.items():
+            for owned in memory.ranges(entry):
+                for n in owned:
+                    other = claims.setdefault((bank, n), group)
+                    assert other == group, f"{group} and {other} both own {bank}{n}"
+    in_parts = [name for apart in suite.APART_PARTS.values() for name in apart.groups]
+    assert sorted(in_parts) == sorted(g.name for g in suite.APART_GROUPS)
+    assert not set(in_parts).intersection(g.name for g in suite.ALL_GROUPS)
+    assert not set(suite.APART_PARTS).intersection(suite.PARTS)
+
+
+def test_a_fixed_scan_part_says_what_to_set() -> None:
+    assert suite.APART_PARTS["fixed_scan"].fixed_scan_ms == 100
+    note = suite.fixed_scan_note("fixed_scan")
+    assert note is not None
+    for words in ("fixed scan", "SC202", "100 ms"):
+        assert words in note
+    assert note.isascii()
+    assert suite.fixed_scan_note("units") is None
+    assert suite.fixed_scan_note("coils") is None
+    assert suite.fixed_scan_note(None) is None
+
+
+def test_the_export_of_a_fixed_scan_part_names_the_setting(
+    tmp_path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert suite.main(["--part", "fixed_scan", str(tmp_path / "fixed_scan")]) == 0
+    assert "fixed scan" in capsys.readouterr().out
+    assert suite.main(["--part", "units", str(tmp_path / "units")]) == 0
+    assert "fixed scan" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("part", sorted(suite.APART_PARTS))
+def test_each_part_apart_fits_a_click_project(part: str) -> None:
+    build = suite.build(part)
+    assert set(build.names) == set(suite.APART_PARTS[part].groups)
+    estimate = estimate_steps(pyrung_to_ladder(build.program, build.tag_map, validate=False))
+    assert estimate.total <= suite.PART_STEP_BUDGET
+
+
+@pytest.mark.parametrize(
+    "part",
+    sorted(
+        p for p in suite.APART_PARTS if p.startswith(("follow_", "follow2_")) or p == "modbus_raw"
+    ),
+)
+def test_each_follow_part_pastes_under_the_rung_limit(part: str, tmp_path) -> None:
+    out = suite.build(part).export(tmp_path / part)
+    csvs = [out / "main.csv", *sorted((out / "subroutines").glob("*.csv"))]
+    rungs = sum(
+        1
+        for path in csvs
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("R,")
+    )
+    assert rungs < suite.FOLLOW_RUNG_LIMIT, (
+        f"part {part} exports {rungs} rungs, over {suite.FOLLOW_RUNG_LIMIT}: "
+        "CLICK's editor freezes on a larger paste; move a group to another part"
+    )
+
+
+@pytest.mark.parametrize("part", sorted(suite.PARTS))
+def test_each_part_fits_a_click_project(part: str) -> None:
+    build = suite.build(part)
+    estimate = estimate_steps(pyrung_to_ladder(build.program, build.tag_map, validate=False))
+    assert estimate.total <= suite.PART_STEP_BUDGET, (
+        f"part {part} estimates {estimate.total} steps, over {suite.PART_STEP_BUDGET}: "
+        "move a group to another part"
+    )
+
+
+def test_groups_live_at_fixed_ds_registers() -> None:
+    build = suite.build()
+    m = build.tag_map
+    rungs = build.group("rungs")
+    assert rungs.subroutine == "Conf_Rungs"
+    assert m.resolve("Conf_ProgramHash") == "DS1"
+    assert m.resolve(rungs.hash_tag.name) == "DS101"
+    assert m.resolve(rungs.slot[1].Cmd.name) == "DS111"
+    assert m.resolve(rungs.slot[1].Fired.name) == "DS117"
+    assert m.resolve(rungs.slot[3].ErrorCode.name) == "DS138"
+    assert rungs.register(3, "ErrorCode") == 138
+    assert rungs.span == (111, 10 * max(i for i, _ in rungs.cases))
+    assert rungs.layout.last_register == 220
+
+
+#: Cases whose question is two always-writing instructions on one bit.
+DOUBLE_WRITERS_ON_PURPOSE = {"rungs/last_rung_wins_shared_coil"}
+
+
+def test_one_always_writing_instruction_to_a_bit() -> None:
+    """A second Out rung turns the bit off on the first's scans, and every target agrees,
+    so nothing else fails: ``coils/edge_behind_open_contact`` could not tell its answers
+    apart this way.  CLICK warns (C1001) at paste, which is too late."""
+    doubled: list[str] = []
+    for group in suite.ALL_GROUPS:
+        for c in group.cases:
+            label = f"{group.name}/{c.id}"
+            if label in DOUBLE_WRITERS_ON_PURPOSE:
+                continue
+            with Program(strict=False) as program:
+                emit_case("", c, make_slot(1, name="Doubled"), 1)
+            sites = Counter(site.target_name for site in _collect_write_sites(program))
+            doubled += [f"{label}: {tag}" for tag, count in sites.items() if count > 1]
+    assert not doubled, doubled
+
+
+def test_slots_come_from_the_manifest_not_case_order() -> None:
+    manifest = _layout(g={"base": 101, "slots": 9, "cases": {"a": 5, "b": 2}})
+    build = build_program(Group("g", [_seven("a"), _seven("b")]), manifest)
+    g = build.group("g")
+    assert [i for i, _ in g.cases] == [5, 2]
+    assert g.register(5) == 151
+    assert g.span == (121, 40)
+
+
+def test_adding_a_case_moves_nothing_else() -> None:
+    manifest = _layout(
+        a={"base": 101, "slots": 9, "cases": {"one": 1, "two": 2}},
+        b={"base": 201, "slots": 9, "cases": {"one": 1}},
+    )
+    before = build_program([Group("a", [_seven("one")]), Group("b", [_seven("one")])], manifest)
+    after = build_program(
+        [Group("a", [_seven("one"), _seven("two")]), Group("b", [_seven("one")])], manifest
+    )
+    assert after.program_hash == before.program_hash
+    assert after.group("b").group_hash == before.group("b").group_hash
+    assert after.group("a").group_hash != before.group("a").group_hash
+    assert after.group("a").register(1) == before.group("a").register(1)
+
+
+def test_group_hash_is_stable_and_tracks_the_ladder() -> None:
+    def build(ladder):
+        group = Group("g", [case("c", ladder=ladder, expect={"Result1": 7}, id="c")])
+        return build_program(group).group("g").group_hash
+
+    one = build(_prove_constant)
+    assert 1 <= one <= 32767
+    assert one == build(_prove_constant)
+    assert one != build(_prove_other_constant)
+
+
+def test_program_hash_tracks_the_group_table() -> None:
+    a = build_program(Group("a", [_seven()]))
+    b = build_program(Group("b", [_seven()]))
+    ab = build_program([Group("a", [_seven()]), Group("b", [_seven()])])
+    assert len({a.program_hash, b.program_hash, ab.program_hash}) == 3
+
+
+def test_every_scan_writes_the_headers() -> None:
+    build = suite.build()
+    rungs = build.group("rungs")
+    plc = PLC(build.program)
+    plc.step()
+    tags = plc.current_state.tags
+    assert tags["Conf_ProgramHash"] == build.program_hash
+    assert tags[rungs.hash_tag.name] == rungs.group_hash
+
+
+def test_main_keeps_the_longest_scan() -> None:
+    build = build_program(Group("g", [_seven()]))
+    plc = PLC(build.program, dt=0.010)
+    plc.step()
+    assert plc.current_state.tags["Conf_LongestScan"] == 10
+    # A longer scan already kept stays.  The harness writes 0 to start a new record.
+    plc.patch({"Conf_LongestScan": 30})
+    plc.step()
+    assert plc.current_state.tags["Conf_LongestScan"] == 30
+    plc.patch({"Conf_LongestScan": 0})
+    plc.step()
+    assert plc.current_state.tags["Conf_LongestScan"] == 10
+
+
+def test_a_scan_past_the_parts_limit_voids_a_run_on_a_real_plc() -> None:
+    build = suite.build("coils")
+    assert build.scan_limit_ms == 50
+    check_scan_time(build, 50)
+    with pytest.raises(ScanTimeError) as raised:
+        check_scan_time(build, 61)
+    message = str(raised.value)
+    for words in ("Run void", "part coils", "at most 50 ms", "took 61 ms", "No Result", "For"):
+        assert words in message
+    assert message.isascii()
+    # A program with no limit judges any scan.
+    check_scan_time(build_program(Group("g", [_seven()])), 5000)
+
+
+def test_a_scan_past_the_limit_in_process_is_noted_on_each_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    line = "longest scan 10 ms passed the 5 ms limit of this program"
+    wrong = case("Wrong", ladder=_prove_constant, expect={"Result1": 8}, id="wrong")
+    results = run(Group("g", [_seven(), wrong]), scan_limit_ms=5)
+    assert [r.passed for r in results] == [True, False]
+    assert results[0].note == ""
+    assert results[1].note.endswith(line)
+    assert line in capsys.readouterr().out
+    assert_all_passed(run(Group("g", [_seven()]), scan_limit_ms=10))
+    assert line not in capsys.readouterr().out
+
+
+def test_each_part_carries_a_scan_limit(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
+    parts = (*suite.PARTS, *suite.APART_PARTS)
+    assert set(suite.PART_SCAN_LIMITS_MS) <= set(parts)
+    assert suite.scan_limit_ms("units") == suite.SCAN_LIMIT_MS == 50
+    assert suite.scan_limit_ms("fixed_scan") > suite.APART_PARTS["fixed_scan"].fixed_scan_ms
+    # for_signed's longest scan on a CLICK read 1287 ms (SD12).
+    assert suite.scan_limit_ms("follow2_for") > 1287
+    for part in parts:
+        assert suite.build(part).scan_limit_ms == suite.scan_limit_ms(part)
+    assert suite.main(["--part", "units", str(tmp_path / "units")]) == 0
+    assert "scans of at most 50 ms" in capsys.readouterr().out
+
+
+def test_in_process_only_cases_are_left_out_of_the_program() -> None:
+    wire = _seven("wire")
+    local = case("local", ladder=_prove_constant, expect={"Result1": 7}, in_process_only="why")
+    # The local case needs no manifest entry.
+    build = build_program(
+        [Group("g", [local, wire]), Group("only_local", [local])],
+        _layout(g={"base": 101, "slots": 2, "cases": {"wire": 1}}),
+    )
+    assert [c for _, c in build.group("g").cases] == [wire]
+    assert [g.name for g in build.groups] == ["g"]
+    assert build.names == ("g", "only_local")
+    assert build.skipped == (("g", local), ("only_local", local))
+    with pytest.raises(ValueError, match="No cases can run over Modbus"):
+        build_program(Group("g", [local]))
+
+
+def test_export_writes_main_one_subroutine_per_group_and_nicknames(tmp_path) -> None:
+    build = suite.build()
+    rungs = build.group("rungs")
+    # The whole suite is more than one CLICK project holds: it exports, with a warning.
+    with pytest.warns(UserWarning, match="CLK_STEP_LIMIT"):
+        out = build.export(tmp_path / "conformance")
+    main = (out / "main.csv").read_text(encoding="utf-8")
+    assert f"copy({build.program_hash},DS1)" in main
+    assert 'call(""Conf_Rungs"")' in main
+    sub = (out / "subroutines" / "Conf_Rungs.csv").read_text(encoding="utf-8")
+    assert f"copy({rungs.group_hash},DS101)" in sub
+    assert "DS111!=0" in sub
+    assert (out / "nicknames.csv").exists()
+
+
+def test_export_leaves_no_subroutine_from_an_earlier_export(tmp_path) -> None:
+    out = tmp_path / "part"
+    build_program([Group("alpha", [_seven()])]).export(out)
+    build_program([Group("beta", [_seven()])]).export(out)
+    assert sorted(p.name for p in (out / "subroutines").iterdir()) == ["Conf_Beta.csv"]
+
+
+# --- manifest errors -----------------------------------------------------------
+
+
+def test_missing_group_says_what_to_add() -> None:
+    manifest = _layout(a={"base": 101, "slots": 19, "cases": {"seven": 1}})
+    group = Group("math", [_seven("int_wraps"), _seven("div_by_zero")])
+    with pytest.raises(ManifestError) as excinfo:
+        build_program([group], manifest)
+    text = str(excinfo.value)
+    assert "Group 'math' has no block in test.toml" in text
+    assert "[groups.math]\nbase = 301\nslots = 19" in text
+    assert "[groups.math.cases]\nint_wraps = 1\ndiv_by_zero = 2" in text
+
+
+def test_missing_case_says_what_to_add() -> None:
+    manifest = _layout(g={"base": 101, "slots": 3, "cases": {"a": 1, "gone": 3}})
+    group = Group("g", [_seven("a"), _seven("b"), _seven("c")])
+    with pytest.raises(ManifestError) as excinfo:
+        build_program(group, manifest)
+    text = str(excinfo.value)
+    assert "Add under [groups.g.cases]:\n\nb = 4\nc = 5" in text
+    assert "holds 3 slots: raise slots" in text
+
+
+@pytest.mark.parametrize(
+    ("groups", "match"),
+    [
+        ({"g": {"base": 5, "slots": 1}}, "base must be an integer > 10"),
+        ({"g": {"base": 101, "slots": 0}}, "slots must be an integer >= 1"),
+        ({"g": {"base": 101, "slots": 2, "cases": {"a": 3}}}, r"slot must be 1\.\.2"),
+        ({"g": {"base": 101, "slots": 2, "cases": {"a": 1, "b": 1}}}, "share slot 1"),
+        ({"g": {"base": 4401, "slots": 19}}, f"past DS{DS_LAST}"),
+        (
+            {"a": {"base": 101, "slots": 19}, "b": {"base": 251, "slots": 1}},
+            r"\[groups\.a\] \(DS101\.\.DS300\) overlaps \[groups\.b\]",
+        ),
+    ],
+)
+def test_bad_manifest_is_rejected(groups: dict, match: str) -> None:
+    with pytest.raises(ManifestError, match=match):
+        _layout(**groups)
+
+
+def test_long_group_name_is_rejected_before_click_sees_it() -> None:
+    with pytest.raises(ValueError, match="CLICK allows 24"):
+        build_program(Group("rung_semantics_order", [_seven()]))
+
+
+# --- cases and groups ------------------------------------------------------------
+
+
+def test_case_id_defaults_to_the_ladder_name() -> None:
+    def prove_widgets(slot):
+        _prove_constant(slot)
+
+    assert case("x", ladder=prove_widgets, expect={}).id == "widgets"
+    assert case("x", ladder=_prove_constant, expect={}).id == "constant"
+    with pytest.raises(ValueError, match="pass id="):
+        case("x", ladder=lambda slot: None, expect={})
+
+
+def test_group_rejects_bad_names_and_repeated_ids() -> None:
+    with pytest.raises(ValueError, match="snake_case"):
+        Group("Math", [])
+    with pytest.raises(ValueError, match="two cases with id 'seven'"):
+        Group("g", [_seven(), _seven()])
+    assert Group("rung_order", []).subroutine == "Conf_RungOrder"
+
+
+def test_run_a_group_in_process_inside_its_subroutine() -> None:
+    group = Group("g", [_seven()])
+    results = run(group)
+    assert_all_passed(results)
+    assert results[0].group == "g"
+
+
+def test_report_marks_unconfirmed_cases() -> None:
+    confirmed = case("on hardware", ladder=_prove_constant, expect={"Result1": 7})
+    results = run(Group("g", [confirmed, _seven(sentence="not yet")]))
+    report = format_report(results, {"g/constant": Confirmation("abc", "2026-10-30")})
+    assert "PASS  g/constant [confirmed] on hardware" in report
+    assert "PASS  g/seven [unconfirmed] not yet" in report
+    assert report.endswith("1 unconfirmed on hardware")
+    assert report.isascii()
+
+
+def test_case_hash_follows_only_its_own_rows() -> None:
+    def hashes(*cases: Case) -> dict[str, str]:
+        return build_program(Group("g", list(cases))).groups[0].case_hashes
+
+    before = hashes(_seven(), case("x", ladder=_prove_constant, expect={"Result1": 7}))
+    assert set(before) == {"seven", "constant"}
+    # Editing one case's expectation changes its hash and no other's.
+    after = hashes(_seven(), case("x", ladder=_prove_constant, expect={"Result1": 8}))
+    assert after["seven"] == before["seven"]
+    assert after["constant"] != before["constant"]
+
+
+def test_case_hash_ignores_the_groups_closing_return() -> None:
+    def hashes(*cases: Case) -> dict[str, str]:
+        return build_program(Group("g", list(cases))).groups[0].case_hashes
+
+    a = _seven()
+    b = case("x", ladder=_prove_constant, expect={"Result1": 7})
+    c = case("y", ladder=_prove_other_constant, expect={"Result1": 8}, id="eight")
+    alone = hashes(a, b)
+    # Appending a case leaves the previous last case's hash alone.
+    appended = hashes(a, b, c)
+    assert appended["constant"] == alone["constant"]
+    assert appended["seven"] == alone["seven"]
+    # Editing a row of the last case changes its hash.
+    edited = hashes(a, b, case("y", ladder=_prove_constant, expect={"Result1": 8}, id="eight"))
+    assert edited["eight"] != appended["eight"]
+    assert edited["constant"] == appended["constant"]
+
+
+def test_a_click_run_records_passes_and_drops_failures(tmp_path) -> None:
+    path = tmp_path / "confirmed.toml"
+    one, two = _seven(), case("x", ladder=_prove_constant, expect={"Result1": 7})
+    passed = CaseResult(case=one, passed=True, actual={}, slot_index=1, group="g", case_hash="h1")
+    failed = CaseResult(case=two, passed=False, actual={}, slot_index=2, group="g", case_hash="h2")
+    added, dropped = record_confirmations(
+        path, [passed, replace(failed, passed=True)], on="2026-10-30"
+    )
+    assert (sorted(added), dropped) == (["g/constant", "g/seven"], [])
+    added, dropped = record_confirmations(path, [passed, failed], on="2026-10-31")
+    assert (added, dropped) == ([], ["g/constant"])
+    record = load_confirmations(path)
+    assert record == {"g/seven": Confirmation("h1", "2026-10-31")}
+    assert is_confirmed(passed, record)
+    # Rewritten since (another hash): unconfirmed until it passes again.
+    assert not is_confirmed(replace(passed, case_hash="h9"), record)
+
+
+def test_a_case_of_candidates_records_a_reading_and_no_confirmation(tmp_path, monkeypatch) -> None:
+    asks = case("x", ladder=_prove_constant, expect={"Result1": between(0, 9)})
+    asserts = case("x", ladder=_prove_constant, expect={"Result1": range(0, 10)})
+    assert asks_for_a_reading(asks)
+    assert not asks_for_a_reading(asserts)
+    read = CaseResult(
+        case=asks, passed=True, actual={"Result1": 7}, slot_index=1, group="g", case_hash="h1"
+    )
+    other = CaseResult(
+        case=asserts, passed=True, actual={"Result1": 7}, slot_index=2, group="g", case_hash="h2"
+    )
+    path = tmp_path / "readings.toml"
+    assert record_readings(path, [read, other], on="2026-11-04") == ["g/constant"]
+    assert record_readings(path, [replace(read, actual={"Result1": 8})], on="2026-11-05")
+    assert record_readings(path, [replace(read, stale=True)], on="2026-11-06") == []
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"] == [
+        {"case": "g/constant", "hash": "h1", "on": "2026-11-04", "read": {"Result1": 7}},
+        {"case": "g/constant", "hash": "h1", "on": "2026-11-05", "read": {"Result1": 8}},
+    ]
+    assert reading_lines([read, other]) == ["read g/constant {'Result1': 7}"]
+    monkeypatch.setenv("PYRUNG_CONFORMANCE_STEP", "STOP->RUN")
+    record_readings(path, [read], on="2026-11-07")
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["reading"][-1]["step"] == "STOP->RUN"
+
+
+def test_a_raw_reading_is_an_entry_toml_reads_back(tmp_path) -> None:
+    path = tmp_path / "readings.toml"
+    readings = {
+        "staged_nan": {"raw": ["0x0000", "0xFFC0"], "decoded": "nan", "settled": 1},
+        "fc03_x200": {"raw": "timeout", "echo": [{"DH1": 0}, {}], "sent": True},
+    }
+    keys = record_raw_readings(path, readings, group="modbus_raw", case_hash="h", on="2026-11-09")
+    assert keys == ["modbus_raw/staged_nan", "modbus_raw/fc03_x200"]
+    record_raw_readings(path, {"a": {"raw": [1]}}, group="g", case_hash="h2", on="2026-11-10")
+    entries = tomllib.loads(path.read_text(encoding="utf-8"))["reading"]
+    assert entries == [
+        {
+            "case": "modbus_raw/staged_nan",
+            "hash": "h",
+            "on": "2026-11-09",
+            "read": readings["staged_nan"],
+        },
+        {
+            "case": "modbus_raw/fc03_x200",
+            "hash": "h",
+            "on": "2026-11-09",
+            "read": readings["fc03_x200"],
+        },
+        {"case": "g/a", "hash": "h2", "on": "2026-11-10", "read": {"raw": [1]}},
+    ]
+
+
+def test_a_passed_reading_of_part_o_stays_out_of_the_confirmed_record(tmp_path) -> None:
+    results = [replace(r, case_hash="h") for g in suite.groups("fixed_scan") for r in run(g)]
+    assert results
+    assert all(r.passed and asks_for_a_reading(r.case) for r in results)
+    confirmed, readings = tmp_path / "confirmed.toml", tmp_path / "readings.toml"
+    added, dropped, read = record_run(confirmed, readings, results, on="2026-11-04")
+    assert (added, dropped) == ([], [])
+    assert load_confirmations(confirmed) == {}
+    assert read == [f"fixed_scan/{r.case.id}" for r in results]
+    recorded = tomllib.loads(readings.read_text(encoding="utf-8"))["reading"]
+    counted = {entry["case"]: entry["read"] for entry in recorded}
+    # Each count with the setting it was counted under.
+    for name in ("seconds_and_ms", "off_delay_and_drum"):
+        assert {"Result1", "Result2", "Result3", "Result4", "ErrorCode"} == set(
+            counted[f"fixed_scan/{name}"]
+        )
+
+
+def test_a_pass_of_part_n_is_confirmed(tmp_path) -> None:
+    results = [replace(r, case_hash="h") for g in suite.groups("units") for r in run(g)]
+    added, _dropped, read = record_run(
+        tmp_path / "confirmed.toml", tmp_path / "readings.toml", results, on="2026-11-04"
+    )
+    assert read == []
+    assert sorted(added) == sorted(f"{r.group}/{r.case.id}" for r in results)
+
+
+def test_a_case_asking_for_a_reading_is_on_no_confirmed_record() -> None:
+    asked = {
+        f"{g.name}/{c.id}"
+        for g in (*suite.ALL_GROUPS, *suite.APART_GROUPS)
+        for c in g.cases
+        if asks_for_a_reading(c)
+    }
+    confirmed = load_confirmations(suite.CONFIRMED_PATH)
+    assert not asked & set(confirmed)
+    assert {
+        "boot_read/what_survives",
+        "rtc_set/date_and_time_apply",
+        "fixed_scan/seconds_and_ms",
+    } <= asked
+
+
+def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:
+    # pyrung reads 7.  A pending case expecting 8 (CLICK's answer) passes as XFAIL
+    # in-process; once pyrung reads what it expects, it fails until the marker goes.
+    missing = case("CLICK reads 8", ladder=_prove_constant, expect={"Result1": 8}, pending="S2")
+    (result,) = run(Group("g", [missing]))
+    assert result.passed and result.xfail
+    assert "pending S2" in result.note
+    assert_all_passed([result])
+    report = format_report([result])
+    assert "XFAIL g/constant [unconfirmed; pending S2] CLICK reads 8" in report
+    assert "1 pending (pyrung differs from CLICK)" in report
+    assert report.isascii()
+
+    met = case("pyrung caught up", ladder=_prove_constant, expect={"Result1": 7}, pending="S2")
+    (result,) = run(Group("g", [met]))
+    assert not result.passed and not result.xfail
+    with pytest.raises(AssertionError, match="remove pending="):
+        assert_all_passed([result])
+
+
+def test_pending_case_still_fails_a_leak() -> None:
+    leaky = case("Counts its runs", ladder=_prove_counts_runs, expect={"Result1": 5}, pending="S2")
+    (result,) = run(Group("g", [leaky]))
+    assert not result.passed
+    assert "state left after the reset" in result.note
+
+
+def test_pending_and_probe_are_checked_and_reported() -> None:
+    with pytest.raises(ValueError, match="pending='S9' must name a fix step"):
+        case("x", ladder=_prove_constant, expect={"Result1": 7}, pending="S9")
+    probe = case("x", ladder=_prove_constant, expect={"Result1": 7}, probe="what CLICK does")
+    report = format_report(run(Group("g", [probe])))
+    assert "PASS  g/constant [unconfirmed; probe: what CLICK does] x" in report
+
+
+def _prove_calls(slot):
+    # Result1 counts the calls while Cmd is up; in-process the case runs 10 scans.
+    with Rung(slot.Cmd != 0):
+        math(slot.Result1 + 1, slot.Result1)
+        copy(1, slot.Fired)
+
+
+def test_a_group_can_be_called_twice_a_scan() -> None:
+    def calls(n: int) -> Group:
+        counted = case("calls", ladder=_prove_calls, expect={"Result1": 10 * n}, scans=10)
+        return Group("g", [counted], calls=n)
+
+    assert_all_passed(run(calls(1)))
+    assert_all_passed(run(calls(2)))
+    assert build_program(calls(2)).program_hash != build_program(calls(1)).program_hash
+    with pytest.raises(ValueError, match="calls must be >= 1"):
+        Group("g", [], calls=0)
+
+
+def test_range_expectation_in_process() -> None:
+    results = run([case("bracket", ladder=_prove_constant, expect={"Result1": range(5, 10)})])
+    assert_all_passed(results)
+    results = run([case("bracket", ladder=_prove_constant, expect={"Result1": range(8, 10)})])
+    with pytest.raises(AssertionError, match=r"'Result1': 8\.\.9"):
+        assert_all_passed(results)
+
+
+def test_case_rejects_bad_expectations() -> None:
+    with pytest.raises(ValueError, match="Unknown slot fields"):
+        case("x", ladder=_prove_constant, expect={"Cmd": 1})
+    with pytest.raises(TypeError, match="int or a range"):
+        case("x", ladder=_prove_constant, expect={"Result1": 1.5})
+
+
+def test_parse_endpoint() -> None:
+    assert str(parse_endpoint("192.168.0.10")) == "192.168.0.10:502"
+    assert str(parse_endpoint(" localhost:5020 ")) == "localhost:5020"
+    with pytest.raises(ValueError):
+        parse_endpoint("host:notaport")
+    with pytest.raises(ValueError):
+        parse_endpoint("")
+
+
+def test_slot_register_layout() -> None:
+    assert slot_register(101, 1, "Cmd") == 111
+    assert slot_register(101, 19, "ErrorCode") == 298
+    assert slot_register(101, 19, "Ready") == 299
+
+
+# --- comments and the reset ------------------------------------------------------
+
+
+def test_each_case_starts_with_its_comment() -> None:
+    c = case(
+        "Seven, or a draw",
+        ladder=_prove_constant,
+        expect={"Result1": 7, "Result2": range(1, 7)},
+        id="seven",
+    )
+    text = case_comment("g", c)
+    assert text.splitlines() == [
+        "Case g/seven",
+        "Seven, or a draw",
+        "Expect: Result1 = 7, Result2 in 1..6",
+    ]
+    build = build_program(Group("g", [c]))
+    rungs = build.program.subroutines["Conf_G"]
+    # Rung 1 writes the group hash; the case's reset rung follows, carrying the comment.
+    assert [r.comment for r in rungs[:2]] == [None, text]
+
+
+def test_the_reset_rung_zeroes_the_slot_with_one_fill(tmp_path) -> None:
+    out = build_program(Group("g", [_seven()])).export(tmp_path)
+    sub = (out / "subroutines" / "Conf_G.csv").read_text(encoding="utf-8")
+    assert "#,Case g/seven" in sub
+    assert "fill(0,DS21..DS29)" in sub.replace(" ", "")
+
+
+def _prove_counts_runs(slot):
+    # Leaks unless DS4000 is reset: each run adds one to it.
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        math(ds[4000] + 1, ds[4000])
+        copy(ds[4000], slot.Result1)
+        copy(1, slot.Fired)
+
+
+def _init_counts_runs(slot):
+    copy(0, ds[4000])
+
+
+def test_state_left_after_the_reset_fails_the_case() -> None:
+    leaky = case("Counts its runs", ladder=_prove_counts_runs, expect={"Result1": 1})
+    (result,) = run([leaky])
+    assert not result.passed
+    assert result.actual == {"Result1": 2}
+    assert "run 1 of 2: actual {'Result1': 1}" in result.note
+    assert "state left after the reset: DS4000 = 1 (fresh 0)" in result.note
+
+    reset = case(
+        "Counts its runs",
+        ladder=_prove_counts_runs,
+        init=_init_counts_runs,
+        expect={"Result1": 1},
+    )
+    assert_all_passed(run([reset]))
+    # keep= exempts the tag from the leak check, not from the repeat.
+    kept = case(
+        "Counts its runs", ladder=_prove_counts_runs, expect={"Result1": 1}, keep=[ds[4000]]
+    )
+    (result,) = run([kept])
+    assert not result.passed
+    assert "state left" not in result.note
+
+
+def test_edge_history_of_a_system_clock_is_not_a_leak() -> None:
+    # rise() on a clock leaves edge memory that moves with time, not with any
+    # case; a user tag's edge history still counts.
+    from pyrung.conformance._runner import _diff
+    from pyrung.core.state import SystemState
+
+    edge_tags = {"_edge:e1": system.sys.clock_100ms.name, "_edge:e2": "C1"}
+    fresh = SystemState().set(memory=SystemState().memory.set("_edge:e1", False))
+    now = fresh.set(memory=fresh.memory.set("_edge:e1", True).set("_edge:e2", True))
+    assert _diff(fresh, now, kept=(), edge_tags=edge_tags) == {"_edge:e2": (True, None)}
+
+
+def test_a_reset_that_never_completes_fails_only_its_case() -> None:
+    stuck = case(
+        "Never ready",
+        ladder=_prove_constant,
+        expect={"Result1": 7},
+        ready=lambda slot: slot.Cmd != 0,
+        id="stuck",
+    )
+    results = run(Group("g", [stuck, _seven()]))
+    assert [r.passed for r in results] == [False, True]
+    assert not results[0].fired
+    assert "reset did not complete" in results[0].note
+
+
+def _prove_waits_past_its_deadline(slot):
+    # Step 1 waits for a Result2 that never comes.
+    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+        copy(1, slot.Fired)
+    with Rung(slot.Cmd != 0, slot.Scratch == 1, slot.Result2 == 1):
+        copy(2, slot.Scratch)
+    with Rung(slot.Cmd != 0, slot.Scratch == 0):
+        copy(7, slot.Result1)
+        copy(1, slot.Scratch)
+    deadline(slot, memory.ClickTimer(1), 100)
+
+
+def _prove_ends_before_its_deadline(slot):
+    clock = memory.ClickTimer(2)
+    with Rung(slot.Cmd != 0):
+        on_delay(clock, 1000)
+    with Rung(slot.Cmd != 0, slot.Fired == 0, clock.Acc >= 50):
+        copy(7, slot.Result1)
+        copy(1, slot.Fired)
+    deadline(slot, memory.ClickTimer(3), 100)
+
+
+def test_a_wait_past_its_deadline_times_out_at_its_step() -> None:
+    late = case("Waits", ladder=_prove_waits_past_its_deadline, expect={"Result1": 7}, scans=30)
+    on_time = case("Ends", ladder=_prove_ends_before_its_deadline, expect={"Result1": 7}, scans=30)
+    results = run(Group("g", [late, on_time]))
+    assert [r.passed for r in results] == [False, True]
+    assert results[0].note.startswith("timed out at step 1")
+    assert "timed out at step 1" in format_report(results)
+
+
+def test_cases_that_share_memory_are_rejected() -> None:
+    a = case("A", ladder=_prove_counts_runs, expect={"Result1": 1}, id="a")
+    b = case("B", ladder=_prove_counts_runs, expect={"Result1": 1}, id="b")
+    with pytest.raises(ValueError, match="g/a and g/b share DS4000"):
+        run(Group("g", [a, b]))
+    with pytest.raises(ValueError, match="g/a and h/b share DS4000"):
+        build_program([Group("g", [a]), Group("h", [b])])
+
+
+def _prove_calls_a_helper(slot):
+    from pyrung.core import call, forloop, subroutine
+
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        with forloop(3):
+            call("Conf_H_Inc")
+    with Rung(slot.Cmd != 0):
+        copy(1, slot.Fired)
+    with subroutine("Conf_H_Inc"):
+        with Rung():
+            math(slot.Result1 + 1, slot.Result1)
+
+
+def test_an_in_main_group_runs_its_rungs_in_main_with_helper_subroutines(tmp_path) -> None:
+    c = case("c", ladder=_prove_calls_a_helper, expect={"Result1": 3}, id="seven")
+    plain = build_program(Group("g", [_seven()]))
+    group = Group("h", [c], in_main=True)
+    build = build_program(group)
+
+    assert "Conf_H" not in build.program.subroutines
+    assert "Conf_H_Inc" in build.program.subroutines
+    out = build.export(tmp_path)
+    main = (out / "main.csv").read_text(encoding="utf-8")
+    assert "#,Case h/seven" in main
+    assert "call(" in main and "Conf_H_Inc" in main
+    assert sorted(p.name for p in (out / "subroutines").iterdir()) == ["Conf_H_Inc.csv"]
+    assert_all_passed(run(group))
+    assert plain.program_hash != build.program_hash
+    assert build.groups[0].case_hashes["seven"]
+
+    with pytest.raises(ValueError, match="in_main"):
+        Group("h", [c], in_main=True, calls=2)
+
+
+def _in_main_case(id: str, helper_step: int):
+    from pyrung.core import call, forloop, subroutine
+
+    def ladder(slot):
+        with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with forloop(2):
+                call(f"Conf_H_{id}")
+        with Rung(slot.Cmd != 0):
+            copy(1, slot.Fired)
+        with subroutine(f"Conf_H_{id}"):
+            with Rung():
+                math(slot.Result1 + helper_step, slot.Result1)
+
+    return case("c", ladder=ladder, expect={"Result1": 2 * helper_step}, id=id)
+
+
+def test_an_in_main_helper_changes_only_the_hash_of_the_case_that_defines_it() -> None:
+    def hashes(step_one: int, step_two: int):
+        group = Group(
+            "h", [_in_main_case("one", step_one), _in_main_case("two", step_two)], in_main=True
+        )
+        return build_program(group).groups[0].case_hashes
+
+    base = hashes(1, 1)
+    edited_one = hashes(2, 1)
+    assert edited_one["one"] != base["one"]
+    assert edited_one["two"] == base["two"]
+    edited_two = hashes(1, 2)
+    assert edited_two["two"] != base["two"]
+    assert edited_two["one"] == base["one"]
+
+
+def test_flag_raising_probes_run_after_every_group_that_reads_a_fault_flag() -> None:
+    """The store probes and flag probes raise SC40/SC43/SC44/SC46 on purpose; a flag
+    stays up to scan end, so a group after them would read them (found by the gate on
+    text/to_binary).  ``past_write`` is last so a part can leave it out."""
+    assert [g.name for g in suite.ALL_GROUPS[-3:]] == [
+        "store_probe",
+        "flag_probe",
+        "past_write",
+    ]
+    # Nothing depends on past_write: a part without it is a part.
+    assert suite.PARTS["copy"][-1] == "past_write"

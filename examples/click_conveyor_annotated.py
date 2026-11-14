@@ -8,6 +8,9 @@ Same conveyor logic as click_conveyor.py, but tags carry physical metadata:
 
 Run under DAP to see autoharness feedback, tag flag badges, and
 runtime bounds checking in action.
+
+Uses X001-X008 (8 inputs, built in or in Slot 0) and X101-X103 (an input
+module at expansion module 1).
 """
 
 import os
@@ -133,7 +136,7 @@ mapping = TagMap(
         EntrySensor.map_to(x[6]),
         DiverterBtn.map_to(x[7]),
         BinASensor.map_to(x[8]),
-        BinBSensor.map_to(x[9]),
+        BinBSensor.map_to(x[101]),
         # Outputs
         conv.Motor.map_to(y[1]),
         conv.Diverter.map_to(y[2]),
@@ -143,8 +146,8 @@ mapping = TagMap(
         IsLarge.map_to(c[2]),
         CountReset.map_to(c[3]),
         # Feedback (mapped to available input points)
-        conv.MotorFb.map_to(x[10]),
-        conv.DiverterFb.map_to(x[11]),
+        conv.MotorFb.map_to(x[102]),
+        conv.DiverterFb.map_to(x[103]),
         # State constants
         *SortState.map_to(ds.select(1, 4)),
         # Data
@@ -172,7 +175,7 @@ mapping = TagMap(
 
 @program
 def logic():
-    comment("Start/stop — NC stop button resets when pressed or wire broken")
+    comment("Start/stop - NC stop button resets when pressed or wire broken")
     with rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with rung(~StopCircuitOK):
@@ -180,14 +183,14 @@ def logic():
     with rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output — EstopOK gates all outputs")
+    comment("Motor output - EstopOK gates all outputs")
     with rung(EstopOK):
         with branch(Running):
             out(conv.Motor)
         with branch(Running):
             out(conv.StatusLight)
 
-    comment("Sort state machine — IDLE to DETECTING: box arrives")
+    comment("Sort state machine - IDLE to DETECTING: box arrives")
     with rung(State == SortState.IDLE, rise(EntrySensor)):
         copy(SortState.DETECTING, State)
 
@@ -210,7 +213,7 @@ def logic():
         reset(IsLarge)
         copy(SortState.IDLE, State)
 
-    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    comment("Diverter output - auto sort OR manual button, gated by EstopOK")
     with rung(
         EstopOK,
         Or(
@@ -221,9 +224,9 @@ def logic():
         out(conv.Diverter)
 
     comment("Bin counters")
-    with rung(rise(BinASensor)):
+    with rung(BinASensor):
         count_up(BinACounter, preset=9999).reset(CountReset)
-    with rung(rise(BinBSensor)):
+    with rung(BinBSensor):
         count_up(BinBCounter, preset=9999).reset(CountReset)
 
 

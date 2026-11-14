@@ -11,10 +11,9 @@ Two oracles:
   * ``reachable_states()`` — the projected reachable set must not lose states;
     catches dropped states that never flip a safety verdict.
 
-The reach-extending optimizations (``hidden_event_jumping``,
-``pending_settlement``) are pinned on in every config — disabling them under a
-finite ``depth_budget`` under-approximates reachability, so they cannot appear
-in the subset axis. See ``_REDUCTION_OPTIMIZATIONS`` in ``prove/passes.py``.
+The baseline is ``_OptConfig.sound_baseline()``: every reduction off (timers
+are black boxes, so nothing extends reach per unit of ``depth_budget``). See
+``_REDUCTION_OPTIMIZATIONS`` in ``prove/passes.py``.
 """
 
 from __future__ import annotations

@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
-from ._errors import SystemNicknameRepair, SystemNicknameRepairRequired
+from ._errors import OldCommentFormError, SystemNicknameRepair, SystemNicknameRepairRequired
 from ._map import TagMap
+from ._migrations import (
+    MIGRATIONS,
+    CommentMigration,
+    comment_needs_upgrade,
+    old_form_tokens,
+    pending_migrations,
+    upgrade_comment,
+)
 from ._parsers import TagMeta, format_tag_meta, parse_tag_meta
 from ._types import MappedSlot, OwnerInfo, StructuredImport
 
 __all__ = [
     "TagMap",
+    "OldCommentFormError",
     "SystemNicknameRepair",
     "SystemNicknameRepairRequired",
     "MappedSlot",
@@ -17,4 +26,10 @@ __all__ = [
     "TagMeta",
     "parse_tag_meta",
     "format_tag_meta",
+    "MIGRATIONS",
+    "CommentMigration",
+    "comment_needs_upgrade",
+    "old_form_tokens",
+    "pending_migrations",
+    "upgrade_comment",
 ]

@@ -29,7 +29,7 @@ Three channel shapes, all valid user code, exercise three generalizations:
   must keep the elided channel or the establish move reads as SPIN.
 
 * **ext_index** — no channel register at all: the gauge is indexed directly by
-  the command, ``calc(200 + ToolSelCmd, CfgIdx)``.  The pointer's source is
+  the command, ``math(200 + ToolSelCmd, CfgIdx)``.  The pointer's source is
   writer-less, so the finite-domain fix must propagate the command's domain
   through the affine map (``CfgIdx = 200 + {0,1,2}``) — trace then inverts the
   affine back to the steerable command.
@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Int, Program, Word, calc, copy, rung
+from pyrung import Int, Program, Word, copy, math, rung
 from pyrung.click import ClickBlocks
 
 
@@ -103,15 +103,15 @@ def _tool_changer(*, channel: str):
         with rung():
             # ext_index: the gauge pointer is computed straight from the command;
             # otherwise from the channel register.
-            calc(200 + (ToolSelCmd if channel == "ext_index" else ToolSel), CfgIdx)
+            math(200 + (ToolSelCmd if channel == "ext_index" else ToolSel), CfgIdx)
         with rung():
             copy(dh[CfgIdx], AllowWord)
         with rung():
-            calc(210 + ToolReq, BitIdx)
+            math(210 + ToolReq, BitIdx)
         with rung():
             copy(dh[BitIdx], ToolBit)
         with rung():
-            calc(AllowWord & ToolBit, EnableResult)
+            math(AllowWord & ToolBit, EnableResult)
         with rung(EnableResult != 0):
             copy(1, ToolEnable)
         with rung(EnableResult == 0):

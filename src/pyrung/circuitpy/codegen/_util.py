@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import ast
+import math
 import re
+from collections import Counter
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS, _TYPE_DEFAULTS
-from pyrung.core.memory_block import (
-    BlockRange,
-    IndirectBlockRange,
-    IndirectExprRef,
-    IndirectRef,
-)
+from pyrung.circuitpy.codegen._constants import _IDENT_RE, _STORE_TYPE_HELPERS
+from pyrung.core.instruction.coils import reset_value_for_type
+from pyrung.core.instruction.conversions import copy_source_kind, copy_store_transform
+from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 if TYPE_CHECKING:
@@ -33,25 +34,17 @@ def _bool_literal(expr: str) -> bool | None:
 
 
 def _optional_value_type_name(value: Any) -> str | None:
-    if isinstance(value, Tag):
-        return value.type.name
-    if isinstance(value, (IndirectRef, IndirectExprRef)):
-        return value.block.type.name
-    return None
-
-
-def _optional_range_type_name(range_value: Any) -> str | None:
-    if isinstance(range_value, (BlockRange, IndirectBlockRange)):
-        return range_value.block.type.name
-    return None
+    """The type of the tag or pointer *value* reads, as :func:`copy_source_kind` takes it
+    (an ``immediate()`` operand is its tag's); ``None`` for anything else."""
+    kind = copy_source_kind(value)
+    return kind.name if isinstance(kind, TagType) else None
 
 
 def _value_type_name(value: Any) -> str:
-    if isinstance(value, Tag):
-        return value.type.name
-    if isinstance(value, (IndirectRef, IndirectExprRef)):
-        return value.block.type.name
-    raise TypeError(f"Unsupported typed value target: {type(value).__name__}")
+    name = _optional_value_type_name(value)
+    if name is None:
+        raise TypeError(f"Unsupported typed value target: {type(value).__name__}")
+    return name
 
 
 def _store_coerce_expr(source_expr: str, dest_type: str, ctx: CodegenContext) -> str:
@@ -63,19 +56,35 @@ def _store_coerce_expr(source_expr: str, dest_type: str, ctx: CodegenContext) ->
     return f'_store_copy_value_to_type({source_expr}, "{dest_type}")'
 
 
+def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: CodegenContext) -> str:
+    """*source_expr* as a Copy, Block copy or Fill stores it into *dest_type*.
+
+    *source* is the store's ``copy_source_kind`` (``copy_store_transform``): a Word
+    from a register clamps past 65535, a Word into an Int keeps its bits.  Any other
+    store is :func:`_store_coerce_expr`'s.
+    """
+    store = copy_store_transform(TagType[dest_type], source)
+    kind = None if store is None else store.kind
+    if dest_type == "WORD" and kind == "word":
+        ctx.mark_helper("_store_word_clamped")
+        return f"_store_word_clamped({source_expr})"
+    if dest_type == "INT" and kind == "wrap":
+        ctx.mark_helper("_wrap_int")
+        return f"_wrap_int({source_expr}, 16, True)"
+    return _store_coerce_expr(source_expr, dest_type, ctx)
+
+
 def _range_type_name(range_value: Any) -> str:
+    if isinstance(range_value, ImmediateRef):
+        return _range_type_name(range_value.value)
     if isinstance(range_value, (BlockRange, IndirectBlockRange)):
         return range_value.block.type.name
     raise TypeError(f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}")
 
 
-def _range_reverse(range_value: Any) -> bool:
-    if isinstance(range_value, (BlockRange, IndirectBlockRange)):
-        return bool(range_value.reverse_order)
-    return False
-
-
 def _static_range_length(range_value: Any) -> int | None:
+    if isinstance(range_value, ImmediateRef):
+        return _static_range_length(range_value.value)
     if isinstance(range_value, BlockRange):
         return len(range_value)
     return None
@@ -93,22 +102,86 @@ def _first_defined_name(source: str) -> str | None:
     return None
 
 
+def _module_level_binds(tree: ast.Module) -> Counter[str]:
+    """How many times each name is bound at the top of a module, and through ``global``."""
+    binds: Counter[str] = Counter()
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                binds[child.name] += 1
+                continue
+            if isinstance(child, ast.Import | ast.ImportFrom):
+                binds.update(a.asname or a.name.split(".")[0] for a in child.names)
+            elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                binds[child.id] += 1
+            elif isinstance(child, ast.ExceptHandler) and child.name:
+                binds[child.name] += 1
+            walk(child)
+
+    walk(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            binds.update(node.names)
+    return binds
+
+
+def _refuse_a_def_over_a_generated_name(source: str, function_sources: Mapping[str, str]) -> None:
+    """Refuse a generated module whose embedded ``def`` shares a name with its other code.
+
+    A def lands at the top of the module, so it and a helper, an import, a tag or another
+    function's alias of that name overwrite one another: the module calls something other
+    than the function, or the function's symbol is something else.  Asked of the module as
+    rendered rather than of a list of names, so it answers for what this program uses and
+    for this target.  Two embedded defs may share a name: each alias binds after its def.
+    """
+    if not function_sources:
+        return
+    defs = Counter(_first_defined_name(fn_source) for fn_source in function_sources.values())
+    binds = _module_level_binds(ast.parse(source))
+    for name, count in defs.items():
+        if name is not None and binds[name] > count:
+            raise ValueError(
+                f"Callable name would shadow a name the generated code uses: {name!r}. "
+                "Rename the function."
+            )
+
+
 def _coil_reset_value(
     target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
     ctx: CodegenContext,
 ) -> str:
     if isinstance(target, ImmediateRef):
         return _coil_reset_value(target.value, ctx)
+    # RESET writes the core engine's OFF/zero value; for CHAR that is NUL,
+    # the same blank an unwritten TXT holds.
     if isinstance(target, Tag):
-        return repr(_TYPE_DEFAULTS[target.type])
+        return repr(reset_value_for_type(target.type))
     binding = ctx.block_bindings[id(target.block)]
-    return repr(_TYPE_DEFAULTS[binding.tag_type])
+    return repr(reset_value_for_type(binding.tag_type))
 
 
 def _global_line(symbols: list[str], indent: int) -> str | None:
     if not symbols:
         return None
     return f"{' ' * indent}global {', '.join(symbols)}"
+
+
+def _default_literal(value: Any) -> str | None:
+    """Python source for a default, or None for one no literal can spell.
+
+    ``repr`` is not source for every default a slot can carry: an ``IntEnum`` member
+    spells ``<Color.BLUE: 2>``, and ``float("inf")`` spells a bare ``inf``.
+    """
+    if isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, int):
+        return int.__repr__(value)
+    if isinstance(value, float):
+        return float.__repr__(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        return str.__repr__(value)
+    return None
 
 
 def _ret_defaults_literal(ctx: CodegenContext) -> dict[str, Any]:

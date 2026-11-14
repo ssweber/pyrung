@@ -37,9 +37,9 @@ from pyrung import (
     Program,
     TagType,
     Timer,
-    calc,
     copy,
     latch,
+    math,
     on_delay,
     out,
     reset,
@@ -249,7 +249,7 @@ def _door_cycle_program(
 
         # The stepper: one +2 affine writer, transition-pulse armed.
         with rung(Trans):
-            calc(Step + 2, Step)
+            math(Step + 2, Step)
             reset(Trans)
 
         # Real recipe steppers have an establishment/reset writer.  Besides
@@ -293,15 +293,15 @@ def _door_cycle_program(
 
         # Enable: constant-table mask predicate (everything enabled).
         with rung():
-            calc(300 + StateRequested, MaskIdx)
+            math(300 + StateRequested, MaskIdx)
         with rung():
             copy(MT[MaskIdx], StateMask)
         with rung():
-            calc(200 + Mode, CfgIdx)
+            math(200 + Mode, CfgIdx)
         with rung():
             copy(MT[CfgIdx], DisabledStates)
         with rung():
-            calc(StateMask & DisabledStates, MaskResult)
+            math(StateMask & DisabledStates, MaskResult)
         with rung():
             copy(0, EnblYes)
         with rung(MaskResult == 0):
@@ -309,7 +309,7 @@ def _door_cycle_program(
 
         # Indirect jump-table hop (arms detect_opaque_loop).
         with rung():
-            calc(StateRequested + 150, JumpIdx)
+            math(StateRequested + 150, JumpIdx)
         with rung():
             copy(JT[JumpIdx], JumpTarget)
 
@@ -407,7 +407,7 @@ def test_stepper_is_an_earned_work_component() -> None:
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
-    prover = build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic)
     assert prover.key_config is not None
     earned_work = build_earned_work(
         pdg,

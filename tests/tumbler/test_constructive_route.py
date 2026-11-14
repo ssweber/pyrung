@@ -1,8 +1,7 @@
 """Constructive ground truth: hand-drive the tumbler from cold to COMPLETED(17).
 
-Port of ``scratchpad/burner/reconstitute_completed_steps.py``.  The companion
-``test_burnerloop_prefix`` proves the known-good prefix (mode change -> Reset
--> Start -> Rotate/Blower init -> HeatDelay -> the burner loop).  This one
+The companion ``test_burnerloop_prefix`` proves the known-good prefix (mode change
+-> Reset -> Start -> Rotate/Blower init -> HeatDelay -> the burner loop).  This one
 picks up the territory AFTER the burner loop, all the way through
 ProductionExecuteSteps to S_Fluffing_tmr and on into COMPLETED(17).
 

@@ -9,6 +9,7 @@ import pytest
 
 from pyrung.core import Block, Bool, Int, ScanContext, SystemState, TagType
 from pyrung.core.condition import Condition
+from pyrung.core.expression import CALC_FAULTS
 from tests.conftest import evaluate_condition
 
 # =============================================================================
@@ -713,23 +714,51 @@ class TestShiftRotateFunctions:
 class TestExpressionEdgeCases:
     """Test edge cases and error handling."""
 
-    def test_division_by_zero_returns_inf(self):
-        """Division by zero returns infinity (like hardware)."""
+    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
+    def test_division_by_zero_outside_calc_is_zero(self, symbol):
+        """Outside calc an expression is permissive: a division by zero gives 0."""
         DS = Block("DS", TagType.INT, 1, 9)
-        expr = DS[1] / DS[2]
+        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
-        result = expr.evaluate(ctx)
-        assert math.isinf(result)
+        assert expr.evaluate(ctx) == 0
+        assert (expr + 5).evaluate(ctx) == 5  # only the failing operation is 0
 
-    def test_floor_division_by_zero_raises(self):
-        """Floor division by zero raises ZeroDivisionError."""
+    @pytest.mark.parametrize("symbol", ["/", "//", "%"])
+    def test_division_by_zero_inside_calc_is_its_term_with_sc40(self, symbol):
+        """Inside calc (CALC_FAULTS) a division by zero is 0 too, and notes SC40;
+        the rest of the formula runs.  A raw ``%`` (one calc_form leaves, as in a
+        pointer or a randint() bound) by 0 is such a division."""
         DS = Block("DS", TagType.INT, 1, 9)
-        expr = DS[1] // DS[2]
+        expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol] + 5
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
-        with pytest.raises(ZeroDivisionError):
-            expr.evaluate(ctx)
+        faults: list[str] = []
+        token = CALC_FAULTS.set(faults)
+        try:
+            assert expr.evaluate(ctx) == 5
+        finally:
+            CALC_FAULTS.reset(token)
+        assert faults == ["fault.division_error"]
+
+    def test_calc_form_swaps_in_clicks_mod_and_power(self):
+        """calc runs CLICK's MOD (truncated; by 0 a 0 with no flag) and 0 ** 0 as
+        such an error; the expression itself keeps Python's ``%`` and ``**``."""
+        from pyrung.core.instruction.calc import calc_form
+
+        DS = Block("DS", TagType.INT, 1, 9)
+        ctx = ScanContext(SystemState().with_tags({"DS1": -7, "DS2": 2, "DS3": 0}))
+        mod, by_zero, power = DS[1] % DS[2], DS[1] % DS[3], DS[3] ** DS[3]
+        assert (mod.evaluate(ctx), power.evaluate(ctx)) == (1, 1)
+        assert calc_form(mod, "decimal").evaluate(ctx) == -1
+        faults: list[str] = []
+        token = CALC_FAULTS.set(faults)
+        try:
+            for expr in (by_zero, power):
+                assert calc_form(expr + 5, "decimal").evaluate(ctx) == 5
+        finally:
+            CALC_FAULTS.reset(token)
+        assert faults == []
 
     def test_expression_with_default_value(self):
         """Expression uses tag's default when not in state."""
@@ -814,3 +843,82 @@ class TestSumExpr:
         result = format_expr(expr)
         assert "sum(" in result
         assert "DS" in result
+
+
+# =============================================================================
+# Range aggregate Tests (max / min / median / mean)
+# =============================================================================
+
+
+def _eval_in(expr, tags):
+    return expr.evaluate(ScanContext(SystemState().with_tags(tags)))
+
+
+class TestRangeAggregateExpr:
+    """BlockRange.max()/.min()/.median()/.mean() -> RangeAggregateExpr."""
+
+    DS = Block("DS", TagType.INT, 1, 10)
+    VALUES = {"DS1": 3, "DS2": -7, "DS3": 10, "DS4": 4}
+
+    def test_max_min(self):
+        assert _eval_in(self.DS.select(1, 4).max(), self.VALUES) == 10
+        assert _eval_in(self.DS.select(1, 4).min(), self.VALUES) == -7
+
+    def test_median_odd_count_is_middle_value(self):
+        assert _eval_in(self.DS.select(1, 3).median(), self.VALUES) == 3
+
+    def test_median_even_count_of_integers_truncates_toward_zero(self):
+        # sorted: -7, 3, 4, 10 -> (3 + 4) / 2 = 3.5, an integer on a CLICK: 3
+        assert _eval_in(self.DS.select(1, 4).median(), self.VALUES) == 3
+        assert _eval_in(self.DS.select(1, 2).median(), {"DS1": -9, "DS2": -2}) == -5
+
+    def test_median_even_count_of_reals_keeps_the_fraction(self):
+        DF = Block("DF", TagType.REAL, 1, 4)
+        assert _eval_in(DF.select(1, 2).median(), {"DF1": 1.0, "DF2": 2.0}) == 1.5
+
+    def test_mean_is_exact_quotient(self):
+        assert _eval_in(self.DS.select(1, 4).mean(), self.VALUES) == 2.5
+
+    def test_single_element(self):
+        for method in ("max", "min", "median", "mean"):
+            assert _eval_in(getattr(self.DS.select(3, 3), method)(), self.VALUES) == 10
+
+    def test_missing_tags_use_default(self):
+        assert _eval_in(self.DS.select(1, 3).max(), {"DS2": -5}) == 0
+
+    def test_bool_range(self):
+        C = Block("C", TagType.BOOL, 1, 4)
+        tags = {"C1": True, "C2": False, "C3": True, "C4": False}
+        assert _eval_in(C.select(1, 4).sum(), tags) == 2
+        assert _eval_in(C.select(1, 4).mean(), tags) == 0.5
+        assert _eval_in(C.select(1, 4).max(), tags) is True
+
+    def test_composes_with_arithmetic_and_abs(self):
+        expr = self.DS.select(1, 4).max() + abs(self.DS[2])
+        assert _eval_in(expr, self.VALUES) == 17
+
+    def test_is_sibling_not_sum(self):
+        """Every isinstance(x, SumExpr) arm computes a sum; aggregates must not match it."""
+        from pyrung.core.expression import Expression, RangeAggregateExpr, SumExpr
+
+        expr = self.DS.select(1, 4).max()
+        assert isinstance(expr, RangeAggregateExpr)
+        assert isinstance(expr, Expression)
+        assert not isinstance(expr, SumExpr)
+        assert not isinstance(self.DS.select(1, 4).sum(), RangeAggregateExpr)
+
+    def test_unknown_kind_rejected(self):
+        from pyrung.core.expression import RangeAggregateExpr
+
+        with pytest.raises(ValueError, match="Unknown range aggregate kind"):
+            RangeAggregateExpr("avg", self.DS.select(1, 4))
+
+    def test_format_and_repr_are_dsl(self):
+        from pyrung.core.expression import format_expr
+
+        assert format_expr(self.DS.select(1, 4).median()) == "DS.select(1, 4).median()"
+        assert repr(self.DS.select(2, 5).mean()) == "DS.select(2, 5).mean()"
+        assert repr(self.DS.select(1, 5).sum()) == "DS.select(1, 5).sum()"
+        assert format_expr(self.DS.select(1, 3).reverse().max()) == (
+            "DS.select(1, 3).reverse().max()"
+        )

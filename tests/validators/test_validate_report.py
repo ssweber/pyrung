@@ -279,6 +279,7 @@ class TestValidationReport:
     def test_all_rules_constant_complete(self):
         expected = {
             "PHYS_ANTITOGGLE",
+            "PHYS_LINK_UNKNOWN",
             "CALL_NEVER_CALLED",
             "CALL_RECURSION",
             "CMP_ALWAYS_FALSE",
@@ -295,8 +296,10 @@ class TestValidationReport:
             "COIL_STUCK_HIGH",
             "COIL_STUCK_LOW",
             "RUNG_CONTRADICTION",
+            "RUNG_ORDER_DEPENDENT",
             "RUNG_REDUNDANT_TERM",
             "RUNG_TAUTOLOGY",
+            "CMP_EQ_ON_COMPUTED_REAL",
             "CMP_EQ_ON_MONOTONE",
             "CMP_OPERAND_NO_WRITER",
             "CMP_PRESET_STAYS_ZERO",

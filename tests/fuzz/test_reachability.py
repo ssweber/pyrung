@@ -90,9 +90,26 @@ def test_reachability_crosscheck():
                     continue
 
                 state = _project_plc_state(plc, projection)
+                # The simulation is scan + 1 scans in, which may be past the
+                # budget.  Search that deep before calling the state a miss.
+                depth = max(DEPTH_BUDGET, scan + 1)
+                if (
+                    state not in bfs_result
+                    and bfs_result.truncated
+                    and depth > bfs_result.depth_budget
+                ):
+                    deeper = reachable_states(
+                        program,
+                        project=projection,
+                        max_states=MAX_STATES,
+                        depth_budget=depth,
+                    )
+                    if isinstance(deeper, Intractable):
+                        return
+                    bfs_result = deeper
                 if state not in bfs_result:
 
-                    def _check_reach(candidate, _scan=scan, _hist=input_history):
+                    def _check_reach(candidate, _scan=scan, _hist=input_history, _depth=depth):
                         try:
                             p = build_program(candidate)
                             proj = _projection_names(
@@ -104,7 +121,7 @@ def test_reachability_crosscheck():
                                 p,
                                 project=proj,
                                 max_states=MAX_STATES,
-                                depth_budget=DEPTH_BUDGET,
+                                depth_budget=_depth,
                             )
                             if isinstance(bfs, Intractable):
                                 return False
@@ -125,7 +142,7 @@ def test_reachability_crosscheck():
                         min_prog,
                         project=min_proj,
                         max_states=MAX_STATES,
-                        depth_budget=DEPTH_BUDGET,
+                        depth_budget=depth,
                     )
                     min_plc = PLC(min_prog, dt=DT)
                     for step_inputs in input_history[: scan + 1]:
@@ -139,6 +156,7 @@ def test_reachability_crosscheck():
                         min_proj,
                         dict(min_state),
                         len(min_bfs) if not isinstance(min_bfs, Intractable) else -1,
+                        depth_budget=depth,
                     )
                     note(f"\n--- Reproducer ---\n{code}")
                     path = write_reproducer(code, "reachability")
@@ -196,16 +214,17 @@ def test_simultaneous_rise_cross_product():
     assert state in bfs_result
 
 
-def test_time_drum_zero_preset_reachability():
-    """time_drum with presets=[0,0,0,0] advances through all steps immediately.
+def test_time_drum_one_ms_preset_reachability():
+    """time_drum with presets=[1,1,1,1] advances a step a scan.
 
-    The drum reaches step 4 (pattern=[..., [False, True]]) within a few
-    scans, setting B1=True.  BFS finds only {B0: False, B1: False}.
+    The drum reaches step 4 on scan 4 and turns B1 on. The reachable states must
+    hold that state. No rung writes N0, so the search explores it as an input.
+    A forloop count needs every value it can hold, so N0 gets a range.
     """
     In0 = Bool("In0", external=True)
     B0 = Bool("B0")
     B1 = Bool("B1")
-    N0 = Int("N0")
+    N0 = Int("N0", min=0, max=3)
     DrumStep = Int("DrumStep")
     DrumAcc = Int("DrumAcc")
     DrumDone = Bool("DrumDone")
@@ -217,7 +236,7 @@ def test_time_drum_zero_preset_reachability():
         with Rung(N0 == 0):
             time_drum(
                 outputs=[B0, B1],
-                presets=[0, 0, 0, 0],
+                presets=[1, 1, 1, 1],
                 unit="ms",
                 pattern=[
                     [False, False],
@@ -235,10 +254,11 @@ def test_time_drum_zero_preset_reachability():
     assert not isinstance(bfs_result, Intractable)
 
     plc = PLC(logic, dt=0.010)
-    for _ in range(3):
+    for _ in range(4):
         plc.patch({"In0": False})
         plc.step()
 
     tags = plc.current_state.tags
+    assert tags["B1"] is True
     state = frozenset((name, tags[name]) for name in projection)
     assert state in bfs_result

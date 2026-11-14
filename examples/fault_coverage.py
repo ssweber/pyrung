@@ -21,7 +21,7 @@ from pyrung import (
     Physical,
     rung,
     Timer,
-    calc,
+    math,
     copy,
     fall,
     latch,
@@ -87,7 +87,7 @@ def logic():
 
     # AlarmExtent: nonzero when any alarm is active
     with rung():
-        calc(AlarmInts.select(1, 2).sum(), AlarmExtent)
+        math(AlarmInts.select(1, 2).sum(), AlarmExtent)
 
 
 # ---------------------------------------------------------------------------

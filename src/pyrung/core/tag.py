@@ -6,6 +6,7 @@ They carry type metadata but hold no runtime state.
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pyrung.core._source import _capture_source
 from pyrung.core.live_binding import get_active_runner
+from pyrung.core.storage import BLANK_CHAR, check_real_value, store_char
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -26,7 +28,7 @@ class TagType(Enum):
     BOOL = "bool"  # Boolean: True/False
     INT = "int"  # 16-bit signed: -32768 to 32767
     DINT = "dint"  # 32-bit signed (Double INT)
-    REAL = "real"  # 32-bit float
+    REAL = "real"  # float, within CLICK's REAL range (see Real)
     WORD = "word"  # 16-bit unsigned
     CHAR = "char"  # Single ASCII character
 
@@ -104,6 +106,36 @@ def _normalize_choices(
     return normalized or None
 
 
+def refuse_system_point_in_block(name: str, block_name: str, addr: int) -> None:
+    """Raise if *name* is a system point: the runtime owns it, and no block holds one."""
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
+    if name in SYSTEM_TAGS_BY_NAME:
+        raise ValueError(
+            f"Cannot put {name!r} in {block_name}[{addr}]: the name is reserved for "
+            "system points, and a system point can't live in a block."
+        )
+
+
+_metadata_edits = 0
+
+
+def note_metadata_edit() -> None:
+    """Count one change to a tag's settings made after the tag exists.
+
+    Analysis cached on a Program reads its tags' settings when it runs.  A slot
+    configured later, a tag mapped onto a bank, or a TagMap marking tags external
+    can change what such a cache holds, so it compares this count first.
+    """
+    global _metadata_edits
+    _metadata_edits += 1
+
+
+def metadata_edits() -> int:
+    """How many times `note_metadata_edit` has been called in this process."""
+    return _metadata_edits
+
+
 @dataclass(frozen=True)
 class MappingEntry:
     """Logical-to-hardware mapping declaration used by TagMap."""
@@ -160,13 +192,18 @@ class Tag:
                 TagType.DINT: 0,
                 TagType.REAL: 0.0,
                 TagType.WORD: 0,
-                TagType.CHAR: "\x00",
+                TagType.CHAR: BLANK_CHAR,
             }
             # Use object.__setattr__ because frozen=True
             object.__setattr__(self, "default", defaults.get(self.type, 0))
 
-        if self.type == TagType.CHAR and self.default == "":
-            object.__setattr__(self, "default", "\x00")
+        if self.type == TagType.CHAR:
+            object.__setattr__(self, "default", store_char(self.default))
+        if self.type == TagType.REAL:
+            check_real_value(self.default, f"Tag {self.name!r}: default")
+            if isinstance(self.default, int):
+                # A REAL holds a float, as a patch, force or store makes one.
+                object.__setattr__(self, "default", float(self.default))
 
         # Mutual exclusivity checks
         if self.readonly and self.final:
@@ -185,10 +222,10 @@ class Tag:
             raise ValueError(f"Tag {self.name!r}: choices cannot be combined with min/max.")
         if self.readonly and self.physical is not None:
             raise ValueError(f"Tag {self.name!r}: readonly cannot be combined with physical.")
-        if self.physical is not None and self.physical.profile is not None and self.link is None:
+        if self.physical is not None and self.physical.kind != "delay" and self.link is None:
             raise ValueError(
-                f"Tag {self.name!r}: physical profile requires link "
-                "(profile defines response to a linked command)."
+                f"Tag {self.name!r}: physical {self.physical.kind} requires link "
+                "(it answers a linked command)."
             )
 
     def __hash__(self) -> int:
@@ -206,8 +243,8 @@ class Tag:
                     return k
             if value not in self.choices:
                 self.choice(value)
-        if self.type == TagType.CHAR and value == "":
-            return "\x00"
+        if self.type == TagType.CHAR:
+            return store_char(value)
         return value
 
     def choice(self, label: str) -> ChoiceKey:
@@ -239,17 +276,23 @@ class Tag:
 
     def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""
-        from pyrung.core.condition import CompareEq
+        from pyrung.core.condition import CompareEq, text_window_condition
 
-        cond = CompareEq(cast(Any, self), self._resolve_choice(other))
+        value = self._resolve_choice(other)
+        cond = text_window_condition(cast(Any, self), value, equal=True)
+        if cond is None:
+            cond = CompareEq(cast(Any, self), value)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
     def __ne__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create inequality comparison condition."""
-        from pyrung.core.condition import CompareNe
+        from pyrung.core.condition import CompareNe, text_window_condition
 
-        cond = CompareNe(cast(Any, self), self._resolve_choice(other))
+        value = self._resolve_choice(other)
+        cond = text_window_condition(cast(Any, self), value, equal=False)
+        if cond is None:
+            cond = CompareNe(cast(Any, self), value)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -369,14 +412,14 @@ class Tag:
 
         If *target* is a block slot (e.g. ``ds[165]``), the tag is
         registered as the canonical occupant of that address so that
-        ``block[addr]`` returns this tag directly.  The registration
-        survives ``Block.reset()`` (which only clears slot overrides
-        and the tag cache), so cached module imports remain correct
-        across test boundaries.
+        ``block[addr]`` returns this tag directly.  ``Block.reset()``
+        clears the registration with the slot overrides.  A system point
+        can't be one (`refuse_system_point_in_block`).
         """
         block = getattr(target, "_pyrung_block", None)
         if block is not None:
             addr: int = getattr(target, "_pyrung_block_addr")  # noqa: B009
+            refuse_system_point_in_block(self.name, block.name, addr)
             existing = block._mapped_tags.get(addr)
             if existing is not None and existing is not self and existing.name != self.name:
                 raise ValueError(
@@ -385,7 +428,13 @@ class Tag:
                     f"cannot remap to {self.name!r}."
                 )
             block._mapped_tags[addr] = self
+            block._slot_names_changed += 1
+            note_metadata_edit()
             block._tag_cache.pop(addr, None)
+            # The slot, for a text compare's window (`text_window_condition`) and a
+            # store of several elements (`_store_block`); weak, so the mapping alone
+            # does not keep the bank alive.
+            object.__setattr__(self, "_pyrung_hw_slot", (weakref.ref(block), addr))
         return MappingEntry(source=self, target=target)
 
     # =========================================================================
@@ -603,10 +652,10 @@ class LiveTag(Tag):
 
 @dataclass(frozen=True)
 class ImmediateRef:
-    """Reference to the immediate (physical) value of an I/O tag.
+    """An I/O tag or range used as CLICK immediate I/O.
 
-    Wraps an InputTag or OutputTag to access the physical I/O value
-    directly, bypassing the scan-cycle image table.
+    The Click export writes it as an immediate contact or coil.  pyrung's
+    simulation and the generated CircuitPython code use the plain tag.
     """
 
     value: Tag | BlockRange
@@ -653,14 +702,15 @@ class InputTag(Tag):
     """Tag representing a physical input channel.
 
     `InputTag` instances are produced exclusively by indexing an `InputBlock`.
-    They add the `.immediate` property for bypassing the scan-cycle image table.
+    They add the `.immediate` property for CLICK's immediate I/O.
 
     `.immediate` semantics by context:
 
-    - **Simulation (pure):** validation-time annotation only; no runtime effect.
-    - **Click dialect:** transcription hint for Click software export.
-    - **CircuitPython dialect:** generates direct hardware-read code.
-    - **Hardware-in-the-loop:** triggers a real hardware read mid-scan.
+    - **Simulation:** no runtime effect.
+    - **Click dialect:** the ladder export writes an immediate contact. Click
+      validation checks its placement.
+    - **CircuitPython dialect:** no effect. The generated code reads the input
+      at the start of the scan, as for a plain tag.
 
     You cannot create an `InputTag` directly; use `InputBlock[n]` instead.
 
@@ -668,13 +718,13 @@ class InputTag(Tag):
         ```python
         X = InputBlock("X", TagType.BOOL, 1, 16)
         sensor = X[3]          # LiveInputTag
-        sensor.immediate       # ImmediateRef — bypass image table
+        sensor.immediate       # ImmediateRef: immediate I/O on a CLICK
         ```
     """
 
     @property
     def immediate(self) -> ImmediateRef:
-        """Return an ImmediateRef that bypasses the input image table."""
+        """Return an ImmediateRef, which the Click export writes as immediate I/O."""
         return ImmediateRef(self)
 
 
@@ -683,14 +733,15 @@ class OutputTag(Tag):
     """Tag representing a physical output channel.
 
     `OutputTag` instances are produced exclusively by indexing an `OutputBlock`.
-    They add the `.immediate` property for bypassing the scan-cycle image table.
+    They add the `.immediate` property for CLICK's immediate I/O.
 
     `.immediate` semantics by context:
 
-    - **Simulation (pure):** validation-time annotation only; no runtime effect.
-    - **Click dialect:** transcription hint for Click software export.
-    - **CircuitPython dialect:** generates direct hardware-write code.
-    - **Hardware-in-the-loop:** triggers a real hardware write mid-scan.
+    - **Simulation:** no runtime effect.
+    - **Click dialect:** the ladder export writes an immediate coil. Click
+      validation checks its placement.
+    - **CircuitPython dialect:** no effect. The generated code writes the output
+      at the end of the scan, as for a plain tag.
 
     You cannot create an `OutputTag` directly; use `OutputBlock[n]` instead.
 
@@ -698,13 +749,13 @@ class OutputTag(Tag):
         ```python
         Y = OutputBlock("Y", TagType.BOOL, 1, 16)
         valve = Y[1]           # LiveOutputTag
-        valve.immediate        # ImmediateRef — bypass image table
+        valve.immediate        # ImmediateRef: immediate I/O on a CLICK
         ```
     """
 
     @property
     def immediate(self) -> ImmediateRef:
-        """Return an ImmediateRef that bypasses the output image table."""
+        """Return an ImmediateRef, which the Click export writes as immediate I/O."""
         return ImmediateRef(self)
 
 
@@ -850,9 +901,18 @@ class Dint(_TagTypeBase):
 
 
 class Real(_TagTypeBase):
-    """Create a REAL (32-bit IEEE 754 float) tag.
+    """Create a REAL (floating-point) tag.
 
     Retentive by default. Use for analog presets and process values.
+
+    pyrung keeps a REAL at Python's 64-bit precision, where a CLICK REAL is a
+    32-bit IEEE 754 float: ``16777216.0 + 1`` reads 16777217 in pyrung and
+    16777216 on a CLICK.  The range is CLICK's float32 one: a finite value
+    never leaves +/-3.4028235E+38.  A ``calc`` or ``copy`` result past it is
+    +/-Inf, as a CLICK stores it (``calc`` also sets
+    ``system.fault.out_of_range``).  A default or literal must be finite and in
+    range; a patch or force may be +/-Inf or NaN, never a finite value past
+    the range.
 
     Example:
         ```python

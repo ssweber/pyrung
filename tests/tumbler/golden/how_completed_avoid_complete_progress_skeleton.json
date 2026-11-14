@@ -3490,151 +3490,6 @@
  {
   "accepted": true,
   "agency": "program",
-  "bearing": "exposed",
-  "bearing_coast_actual_value": 12,
-  "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6,
-  "bearing_stop_reason": "timeout",
-  "ejected": false,
-  "kind": "bearing_coast_accepted",
-  "new_frontier": true,
-  "observe_label": "bearing_coast",
-  "progress": "forward",
-  "trend": 8
- },
- {
-  "applied": [],
-  "candidate": {},
-  "kind": "trial_committed"
- },
- {
-  "baseline_trend": 14,
-  "kind": "trend_checkpoint",
-  "trend": 8
- },
- {
-  "distance": 8,
-  "kind": "iteration",
-  "nogoods": [],
-  "raw_trace_actions": [],
-  "still_need": [
-   "Sts_State_Completed=True (have False)",
-   "Sts_StateCurrent=17 (have 12)",
-   "Sts_StateRequested=17 (have 0)",
-   "Sts_StateCompleteFlag=True (have False)",
-   "Sts_StateCompleteBool=1 (have 0)",
-   "Blower__init=1 (have 0)",
-   "Blower_CurStep=2 (have 1)",
-   "Blower_Trans=1 (have 0)"
-  ],
-  "target": [
-   "Sts_State_Completed",
-   true
-  ],
-  "watch_tags": [
-   "Cmd_UnitMode",
-   "Cmd_UnitModeChgReqBool",
-   "Sts_StateCurrent",
-   "Sts_StateRequested",
-   "Sts_State_Completed",
-   "Sts_UnitModeCurrent",
-   "Blower_CurStep",
-   "Blower_Trans",
-   "Blower__init",
-   "Blower__x",
-   "Blower_xCall",
-   "Rotate_CurStep",
-   "Rotate_Trans",
-   "Rotate__init",
-   "Sts_StateCompleteBool",
-   "Sts_StateCompleteFlag",
-   "i_BlowerFB",
-   "i_RotateFB",
-   "Rotate__x",
-   "Rotate_xCall"
-  ]
- },
- {
-  "active_trace_actions": [],
-  "candidates": [],
-  "completion_frontier": [
-   [
-    "Sts_StateCompleteFlag",
-    true
-   ],
-   [
-    "Sts_StateCompleteBool",
-    1
-   ],
-   [
-    "Blower__init",
-    1
-   ],
-   [
-    "Blower_CurStep",
-    2
-   ],
-   [
-    "Blower_Trans",
-    1
-   ]
-  ],
-  "kind": "candidates_built",
-  "route_candidates": [],
-  "route_plan": {
-   "channel_tag": "Sts_StateCurrent",
-   "needed": [
-    "Sts_StateCurrent",
-    17
-   ],
-   "path": [
-    {
-     "action": null,
-     "enablers": [],
-     "from": 12,
-     "request": [
-      "Sts_StateRequested",
-      6
-     ],
-     "to": 6
-    },
-    {
-     "action": null,
-     "enablers": [],
-     "from": 6,
-     "request": [
-      "Sts_StateRequested",
-      16
-     ],
-     "to": 16
-    },
-    {
-     "action": null,
-     "enablers": [],
-     "from": 16,
-     "request": [
-      "Sts_StateRequested",
-      17
-     ],
-     "to": 17
-    }
-   ],
-   "target_value": 17
-  },
-  "stuck_reason": null,
-  "trace_actions": [],
-  "wait_prescribed": true,
-  "wait_reason": "let-run Sts_StateCurrent: 12->6"
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "kind": "bearing_coast",
-  "prescribed": true,
-  "reason": "let-run Sts_StateCurrent: 12->6"
- },
- {
-  "accepted": true,
-  "agency": "program",
   "bearing": "satisfied",
   "bearing_coast_actual_value": 6,
   "bearing_coast_channel_tag": "Sts_StateCurrent",
@@ -3981,7 +3836,6 @@
   "plan_journal": [
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_UnitModeChgRequest",
@@ -4002,7 +3856,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_State_Clear",
@@ -4019,7 +3872,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_State_Reset",
@@ -4036,7 +3888,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_State_Start",
@@ -4053,7 +3904,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "x_DoorClosed",
@@ -4074,7 +3924,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "",
@@ -4099,7 +3948,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "x_BlowerFB",
@@ -4120,60 +3968,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      3
-     ],
-     [
-      "Blower_tmr.Acc",
-      3
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      3
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      4
-     ],
-     [
-      "Rotate_SensorOffWD_tmr.Acc",
-      4
-     ],
-     [
-      "Rotate_tmr.Acc",
-      3
-     ],
-     [
-      "Rotate_tmr.Acc",
-      8
-     ],
-     [
-      "_1stScanDebounce_tmr.Acc",
-      4
-     ],
-     [
-      "_1stScanDebounce_tmr.Acc",
-      9
-     ]
-    ],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",
@@ -4196,7 +3990,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "S_DryerTemp_F",
@@ -4213,100 +4006,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      4
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      8
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      4
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      9
-     ],
-     [
-      "Blower_tmr.Acc",
-      12
-     ],
-     [
-      "Blower_tmr.Acc",
-      8
-     ],
-     [
-      "HeatDelay_Tmr.Acc",
-      4
-     ],
-     [
-      "HeatDelay_Tmr.Acc",
-      9
-     ],
-     [
-      "RotateErrorDelay_Tmr.Acc",
-      4
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      14
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      9
-     ],
-     [
-      "Rotate_SensorOffWD_tmr.Acc",
-      14
-     ],
-     [
-      "Rotate_SensorOffWD_tmr.Acc",
-      9
-     ],
-     [
-      "Rotate_tmr.Acc",
-      13
-     ],
-     [
-      "Rotate_tmr.Acc",
-      17
-     ],
-     [
-      "S_HeatAtTemp_tmr.Acc",
-      0
-     ],
-     [
-      "S_HeatAtTemp_tmr.Acc",
-      0
-     ]
-    ],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",
@@ -4324,7 +4023,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "x_RotateSensor",
@@ -4341,7 +4039,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "",
@@ -4360,48 +4057,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      8
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      9
-     ],
-     [
-      "Blower_tmr.Acc",
-      12
-     ],
-     [
-      "HeatDelay_Tmr.Acc",
-      9
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      14
-     ],
-     [
-      "Rotate_tmr.Acc",
-      17
-     ],
-     [
-      "S_HeatAtTemp_tmr.Acc",
-      0
-     ]
-    ],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",
@@ -4420,7 +4075,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "x_SailRelay",
@@ -4437,7 +4091,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "",
@@ -4457,200 +4110,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      1
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      1
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      5
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      60
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      299
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      29
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      3598
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      51
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      300
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      30
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      3599
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      52
-     ],
-     [
-      "Blower_tmr.Acc",
-      303
-     ],
-     [
-      "Blower_tmr.Acc",
-      33
-     ],
-     [
-      "Blower_tmr.Acc",
-      3602
-     ],
-     [
-      "Blower_tmr.Acc",
-      55
-     ],
-     [
-      "HeatDelay_Tmr.Acc",
-      300
-     ],
-     [
-      "HeatDelay_Tmr.Acc",
-      30
-     ],
-     [
-      "HeatDelay_Tmr.Acc",
-      3599
-     ],
-     [
-      "HeatDelay_Tmr.Acc",
-      52
-     ],
-     [
-      "Heat_CurStep_tmr.Acc",
-      15
-     ],
-     [
-      "Heat_CurStep_tmr.Acc",
-      285
-     ],
-     [
-      "Heat_CurStep_tmr.Acc",
-      3584
-     ],
-     [
-      "Heat_CurStep_tmr.Acc",
-      37
-     ],
-     [
-      "Heat_tmr.Acc",
-      17
-     ],
-     [
-      "Heat_tmr.Acc",
-      287
-     ],
-     [
-      "Heat_tmr.Acc",
-      3586
-     ],
-     [
-      "Heat_tmr.Acc",
-      39
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      305
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      35
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      3604
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      57
-     ],
-     [
-      "Rotate_tmr.Acc",
-      308
-     ],
-     [
-      "Rotate_tmr.Acc",
-      3607
-     ],
-     [
-      "Rotate_tmr.Acc",
-      38
-     ],
-     [
-      "Rotate_tmr.Acc",
-      60
-     ],
-     [
-      "S_HeatAtTemp_tmr.Acc",
-      0
-     ],
-     [
-      "S_HeatAtTemp_tmr.Acc",
-      0
-     ],
-     [
-      "S_HeatAtTemp_tmr.Acc",
-      59
-     ],
-     [
-      "S_HeatAtTemp_tmr.Acc",
-      5
-     ]
-    ],
     "inputs": [],
     "kind": "coast",
     "label": "S_HeatAtTemp_tmr_Acc",
@@ -4670,7 +4129,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "Internal__Step",
@@ -4690,44 +4148,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      1
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      1
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      75
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      4498
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      4499
-     ],
-     [
-      "Blower_tmr.Acc",
-      4502
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      4504
-     ],
-     [
-      "Rotate_tmr.Acc",
-      4507
-     ],
-     [
-      "S_CoolCycle_tmr.Acc",
-      14
-     ]
-    ],
     "inputs": [],
     "kind": "coast",
     "label": "S_CoolCycle_tmr_Acc",
@@ -4747,7 +4167,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",
@@ -4767,7 +4186,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",
@@ -4787,7 +4205,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [
      [
       "Cmd_State_Unhold",
@@ -4804,28 +4221,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      1
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      4504
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      3
-     ],
-     [
-      "Rotate_tmr.Acc",
-      3
-     ]
-    ],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",
@@ -4851,67 +4246,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
-    "inputs": [],
-    "kind": "coast",
-    "label": "Sts_StateCurrent",
-    "notes": [],
-    "pulsing_holds": [],
-    "steady_holds": [
-     "S_DryerTemp_F",
-     "x_BlowerFB",
-     "x_DoorClosed",
-     "x_LintDoorClosed",
-     "x_RotateFB",
-     "x_RotateSensor",
-     "x_SailRelay"
-    ],
-    "transition": "Sts_StateCurrent 12 -> 6",
-    "waiting_for": [
-     "Blower_tmr_Acc",
-     "Ref_State_EXECUTE"
-    ]
-   },
-   {
-    "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_CTmr_Prd_Execute.Acc",
-      0
-     ],
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      1
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      30
-     ],
-     [
-      "A_TimeBetween1stScan_tmr.Acc",
-      6307
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      1799
-     ],
-     [
-      "Blower_tmr.Acc",
-      1802
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      1802
-     ],
-     [
-      "Rotate_tmr.Acc",
-      1806
-     ],
-     [
-      "S_Fluffing_tmr.Acc",
-      29
-     ]
-    ],
     "inputs": [],
     "kind": "coast",
     "label": "S_Fluffing_tmr_Acc",
@@ -4931,7 +4265,6 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",

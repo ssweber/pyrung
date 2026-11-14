@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterator
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -31,14 +32,56 @@ _OPERAND_PREFIXES: list[tuple[str, str, str]] = [
     ("T", "Bool", "t"),
 ]
 
-_OPERAND_RE = re.compile(
-    r"(?:CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\d+",
+# An address stands alone: the tail of ``FFC0h`` or ``0xFFC0`` is not ``C0``.
+_OPERAND_PATTERN = (
+    r"(?<![A-Za-z0-9_])(?:CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\d+(?![A-Za-z0-9_])"
 )
+
+_OPERAND_RE = re.compile(_OPERAND_PATTERN)
+
+# Quoted text is skipped whole, so a text constant such as ``"C1"`` never reads
+# as an address.  Raw CSV doubles its quotes and treats backslash as plain; the
+# Python-rendered form uses backslash escapes.
+_CSV_OPERAND_OR_TEXT_RE = re.compile(rf'"(?:[^"]|"")*"|(?P<operand>{_OPERAND_PATTERN})')
+_PY_OPERAND_OR_TEXT_RE = re.compile(rf'"(?:[^"\\]|\\.)*"|(?P<operand>{_OPERAND_PATTERN})')
+
+
+def _operand_matches(text: str) -> Iterator[re.Match[str]]:
+    """Operand matches in raw CSV ``text``, leaving out anything inside quoted text."""
+    for match in _CSV_OPERAND_OR_TEXT_RE.finditer(text):
+        if match.group("operand") is not None:
+            yield match
+
+
+def _sub_operands(text: str, replace: Callable[[str], str]) -> str:
+    """Replace each operand in Python-rendered ``text``; quoted text is untouched."""
+    return _PY_OPERAND_OR_TEXT_RE.sub(
+        lambda m: replace(m.group("operand")) if m.group("operand") is not None else m.group(0),
+        text,
+    )
+
 
 # Matches a range like DS100..DS102
 _RANGE_RE = re.compile(
     r"([A-Z]+)(\d+)\.\.([A-Z]+)(\d+)",
 )
+
+
+def _ascending_range_str(range_str: str) -> str:
+    """``C1018..C1011`` -> ``C1011..C1018``; ascending ranges pass through.
+
+    CLICK's shift register allows an end below the start (it then shifts
+    downward); pyrung spells that window ``.reverse()``, so range metadata is
+    kept under the ascending key.
+    """
+    match = _RANGE_RE.fullmatch(range_str)
+    if match is None or match.group(1) != match.group(3):
+        return range_str
+    start, end = int(match.group(2)), int(match.group(4))
+    if start <= end:
+        return range_str
+    return f"{match.group(1)}{end}..{match.group(3)}{start}"
+
 
 # Matches a function-call token like out(Y001) or on_delay(T1,TD1,preset=100,unit=Tms)
 _FUNC_RE = re.compile(r"^(\~?)(\w+)\((.*)?\)$")
@@ -77,8 +120,15 @@ _INSTRUCTION_NAMES = {
     "unpack_to_words",
     "event_drum",
     "time_drum",
+    "time_event_drum",
+    "toggle",
+    "debounce",
+    "flasher",
+    "timed",
     "call",
     "return",
+    "break",
+    "continue",
     "for",
     "next",
     "raw",
@@ -86,16 +136,8 @@ _INSTRUCTION_NAMES = {
     "receive",
 }
 
-# Instructions that support pin rows
-_PIN_INSTRUCTIONS = {
-    "on_delay",
-    "off_delay",
-    "count_up",
-    "count_down",
-    "shift",
-    "event_drum",
-    "time_drum",
-}
+# Out coil variants whose phases own a Timer, named as ``<side>_done``/``<side>_acc``
+_OUT_VARIANT_TIMER_INSTRUCTIONS = {"debounce", "flasher", "timed"}
 
 # Copy converter functions
 _COPY_CONVERTERS = {"to_value", "to_ascii", "to_text", "to_binary"}

@@ -1,12 +1,12 @@
 """Characterization / parity oracle for harness coupling executors.
 
 Pins the per-scan feedback the harness synthesizes, so the consolidation onto
-synthesis bracket rungs (analog -> a ``plant`` profile rung; bool -> real
-TON/TOF *dwell* plant rungs) is held to account: an intended diff is a visible,
+synthesis bracket rungs (analog -> a ``plant`` profile rung; bool -> a debounce
+coil) is held to account: an intended diff is a visible,
 reviewed change; an accidental one fails here.
 
 Bool couplings are **dwell** — feedback responds to a *sustained* command, never
-a glitch.  The bool feedback is real on/off-delay timers in the runner's
+a glitch.  The bool feedback is a debounce coil in the runner's
 ``plant`` pass, scanned *pre*-logic (the input-read phase): it reads the
 *previous* commit's settled command and lays the feedback down as this scan's
 input image, so the program reads it the same scan, and a command that settles
@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Real, Rung, copy
 from pyrung.core.harness import Harness
-from pyrung.core.physical import Physical, Ramp
+from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
 
 # +1.0/s enabled, -0.5/s decaying → +0.1/scan, -0.05/scan at dt=0.1.
-PARITY_THERMAL = Ramp(up=1.0, down=-0.5)
+PARITY_THERMAL = Physical("T", ramp_on=1.0, ramp_off=-0.5)
 
 
 def _run(prog: Program, en_seq: list[bool], fb: str, dt: float = 0.1) -> list:
@@ -42,7 +42,7 @@ def _run(prog: Program, en_seq: list[bool], fb: str, dt: float = 0.1) -> list:
 
 def _analog_prog() -> Program:
     Enable = Bool("Enable", external=True)
-    Temp = Real("Temp", physical=Physical("T", profile=PARITY_THERMAL), link="Enable")
+    Temp = Real("Temp", physical=PARITY_THERMAL, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
         with Rung(Enable, Temp >= 5.0):
@@ -86,13 +86,15 @@ def test_bool_sustained_rise_and_fall_parity() -> None:
     # The ``plant`` pass reads the *previous* commit's En (the input-read phase),
     # so the *committed* feedback lags the command by one scan — same dwell
     # duration and glitch suppression, phase shifted right (feedback is an input).
+    # The debounce's off side compares a scan after the fall, so Fb holds a scan
+    # longer than its off_delay.
     assert _run(_bool_prog(), [True] * 4 + [False] * 3, "Fb") == [
         False,
         False,
         True,
         True,
         True,
-        False,
+        True,
         False,
     ]
 
@@ -101,8 +103,11 @@ def test_bool_on_delay_zero_is_next_scan() -> None:
     # on_delay == 0 -> the pre-logic plant reads the *previous* commit's command,
     # so Fb commits the scan *after* the command is active — feedback as fast as
     # the next scan (the scan boundary is the plant latency).
-    assert _run(_bool_prog(on_delay="0ms", off_delay="0ms"), [True] * 3 + [False] * 2, "Fb") == [
+    # An off_delay of 0 still holds Fb a scan after the plant sees the fall, as a
+    # CLICK debounce of 0 does (conformance ``deb_zero/off_side_lag``).
+    assert _run(_bool_prog(on_delay="0ms", off_delay="0ms"), [True] * 3 + [False] * 3, "Fb") == [
         False,
+        True,
         True,
         True,
         True,
@@ -151,15 +156,14 @@ def test_bool_glitch_is_suppressed_under_dwell() -> None:
     )
 
 
-# ── bool dwell folds like a program timer ─────────────────────────────────────
-#    The on/off-delay timers are registered as ordinary fold sources, so a long
-#    dwell collapses to a handful of kernel scans (dt-knob) and lands *bit-equal*
-#    to stepping scan-by-scan — not stepped one scan at a time.
+# ── bool dwell runs like a program timer ─────────────────────────────────────
+#    The on/off-delay timers run as a program timer does, so a long dwell lands
+#    *bit-equal* to stepping scan-by-scan.
 
 
-def _bool_fold_plc(dt: float = 0.010):
+def _bool_dwell_plc(dt: float = 0.010):
     Enable = Bool("Enable", external=True)
-    # 2s on-delay at dt=10ms = 200 scans of dwell to fold through.
+    # 2s on-delay at dt=10ms = 200 scans of dwell.
     Fb = Bool("Fb", physical=Physical("M", on_delay="2s", off_delay="500ms"), link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
@@ -170,35 +174,26 @@ def _bool_fold_plc(dt: float = 0.010):
     return plc
 
 
-def test_bool_dwell_folds_to_few_kernel_scans() -> None:
-    plc = _bool_fold_plc()
-    kernel_scans = [0]
-    orig = plc._run_single_scan
-
-    def _counted(*a, **k):
-        kernel_scans[0] += 1
-        return orig(*a, **k)
-
-    plc._run_single_scan = _counted  # type: ignore[method-assign]
+def test_bool_dwell_lands_on_the_feedback() -> None:
+    plc = _bool_dwell_plc()
     plc.force("Enable", True)
-    plc.run_until(lambda s: s.tags.get("Fb") is True, max_cycles=5000, fold=True)
+    plc.run_until(lambda s: s.tags.get("Fb") is True, max_cycles=5000, jit=True)
 
     assert plc.state.tags["Fb"] is True
     assert plc.state.scan_id >= 200  # the dwell really was ~200 scans long
-    assert kernel_scans[0] < 20  # …yet folded into a handful of kernel scans
 
 
-def test_bool_dwell_fold_matches_stepping() -> None:
+def test_bool_dwell_matches_stepping() -> None:
     # Run until the *program* reacts to the synthesized feedback (Stage := 1),
     # i.e. one scan after Fb commits — the program-visible event.
-    folded = _bool_fold_plc()
+    folded = _bool_dwell_plc()
     folded.force("Enable", True)
-    folded.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=True)
+    folded.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, jit=True)
 
-    stepped = _bool_fold_plc()
+    stepped = _bool_dwell_plc()
     stepped.force("Enable", True)
-    stepped.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, fold=False)
+    stepped.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, jit=False)
 
-    # Same scan the program latched the feedback — fold is sound, not approximate.
+    # Same scan the program latched the feedback.
     assert folded.state.scan_id == stepped.state.scan_id
     assert folded.state.tags["Stage"] == stepped.state.tags["Stage"] == 1

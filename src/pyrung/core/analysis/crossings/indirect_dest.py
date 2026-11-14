@@ -13,7 +13,7 @@ This crossing closes that gap.  It is the DESTINATION twin of the indirect-SOURC
 reasoning in ``prove/classify`` (``_indirect_constant_table_index`` /
 ``_domain_from_indirect_source``) and reuses its soundness rule **verbatim**: the
 addressable region is bounded by the POINTER's *derivable* value domain, hopping
-an affine ``calc(root ± k)`` pointer back to a root register whose domain is
+an affine ``math(root ± k)`` pointer back to a root register whose domain is
 declared (``choices`` / ``min``/``max``), a literal-write set, or an
 init-constant default.  Over-approximating that domain is sound for attribution —
 a superset of write targets only ever *removes* a tag from the operator-lever set
@@ -53,7 +53,7 @@ def _hop_affine_index(
     idx_tag: str,
     writer_instrs: dict[str, list[Any]],
 ) -> tuple[str, int, int | float]:
-    """Follow a single-writer bijective ``copy`` / ``calc(src ± k)`` pointer back
+    """Follow a single-writer bijective ``copy`` / ``math(src ± k)`` pointer back
     to its root register, tracking address-as-a-function-of-root.
 
     Mirrors ``prove/classify._hop_affine_index``: only bijective affine hops

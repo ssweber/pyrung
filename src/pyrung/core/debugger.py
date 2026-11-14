@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     from pyrung.core.rung import Rung
 
 
-RungKind = Literal["rung", "branch", "subroutine"]
-StepKind = Literal["rung", "branch", "subroutine", "instruction"]
+RungKind = Literal["rung", "branch", "subroutine", "loop_body"]
+StepKind = Literal["rung", "branch", "subroutine", "loop_body", "instruction"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,10 @@ class DebugExecutionState:
     parent_enabled: bool
     enabled_state: EnabledState
     condition_view: Any = None
+    #: Place in the top-level rung's tree: ``()`` for the rung, ``(k,)`` for
+    #: its k-th branch, and so on; ``None`` in a called subroutine or a loop
+    #: body, which are not part of that tree.
+    branch_path: tuple[int, ...] | None = ()
 
     def with_overrides(self, **changes: Any) -> DebugExecutionState:
         """Return a copied state with selected fields replaced."""
@@ -100,7 +104,9 @@ class PLCDebugger:
 
         for i, rung in enumerate(runner.iter_top_level_rungs()):
             with ctx.capturing_rung(i):
-                condition_view = rung._resolve_condition_view(ctx)
+                # The trunk's own view, frozen so substep traces can re-read
+                # it; each branch takes its own when the solve reaches it.
+                condition_view = rung._new_row_view(ctx)
                 enabled, rung_condition_traces = self._evaluate_conditions_with_trace(
                     runner, rung._conditions, condition_view
                 )
@@ -137,50 +143,56 @@ class PLCDebugger:
 
         execution = rung_state.execution
         rung = rung_state.rung
-        branch_enable_map, branch_trace_map = self._build_branch_maps(rung_state)
+        # A branch's contacts are solved when execution reaches it, so its region
+        # is only final from there; until then it shows as off with its
+        # contacts skipped.  Every step's trace is built from this board as
+        # it stands at that step.
+        branch_trace_map = self._initial_branch_trace_map(rung_state)
 
-        step_trace = self._build_step_trace(
-            kind=execution.kind,
-            rung=rung,
-            enabled_state=execution.enabled_state,
-            rung_condition_traces=rung_state.rung_condition_traces,
-            branch_trace_map=branch_trace_map,
-        )
+        def step_trace() -> TraceEvent:
+            return self._build_step_trace(
+                kind=execution.kind,
+                rung=rung,
+                enabled_state=execution.enabled_state,
+                rung_condition_traces=rung_state.rung_condition_traces,
+                branch_trace_map=branch_trace_map,
+            )
 
-        if execution.kind != "branch" or execution.enabled:
+        # A branch under a powered parent emits its step when it is solved,
+        # on or off; a branch under an unpowered parent was final at the
+        # parent's step and emits none.
+        if execution.kind != "branch" or execution.parent_enabled:
             yield self._emit_step(
                 execution=execution,
                 rung=rung,
                 kind=execution.kind,
                 source=self._span_from_rung(rung),
-                trace=step_trace,
+                trace=step_trace(),
                 instruction_kind=None,
             )
 
         try:
+            ordinal = 0
             for item in rung._execution_items:
                 if isinstance(item, RungClass):
-                    branch_enabled = branch_enable_map.get(id(item), False)
-                    branch_trace = branch_trace_map.get(id(item))
-                    child_conditions = (
-                        list(branch_trace.conditions) if branch_trace is not None else []
-                    )
+                    branch_enabled, branch_trace, branch_view = self._solve_branch(execution, item)
+                    branch_trace_map[id(item)] = branch_trace
+                    parent_path = execution.branch_path
                     child_execution = execution.with_overrides(
                         kind="branch",
                         depth=execution.depth + 1,
                         enabled=branch_enabled,
                         parent_enabled=execution.enabled,
-                        enabled_state=self._enabled_state_for(
-                            kind="branch",
-                            enabled=branch_enabled,
-                            parent_enabled=execution.enabled,
-                        ),
+                        enabled_state=branch_trace.enabled_state,
+                        condition_view=branch_view,
+                        branch_path=None if parent_path is None else (*parent_path, ordinal),
                     )
+                    ordinal += 1
                     yield from self._iter_rung_steps(
                         self._make_rung_state(
                             execution=child_execution,
                             rung=item,
-                            rung_condition_traces=child_conditions,
+                            rung_condition_traces=list(branch_trace.conditions),
                         )
                     )
                 else:
@@ -189,7 +201,7 @@ class PLCDebugger:
                             execution=execution,
                             rung=rung,
                             instruction=item,
-                            step_trace=step_trace,
+                            step_trace=step_trace(),
                         )
                     )
         except SubroutineReturnSignal:
@@ -531,40 +543,58 @@ class PLCDebugger:
             step_trace=step_trace,
         )
 
-    def _build_branch_maps(
+    def _initial_branch_trace_map(
         self,
         rung_state: DebugRungState,
-    ) -> tuple[dict[int, bool], dict[int, _BranchTraceState]]:
+    ) -> dict[int, _BranchTraceState]:
+        """Each direct branch's region before the solve reaches it: off, its
+        contacts skipped (final at once under an unpowered parent)."""
         from pyrung.core.rung import Rung as RungClass
 
         execution = rung_state.execution
-        branch_enable_map: dict[int, bool] = {}
+        state: EnabledState = "disabled_local" if execution.enabled else "disabled_parent"
         branch_trace_map: dict[int, _BranchTraceState] = {}
         for item in rung_state.rung._execution_items:
             if not isinstance(item, RungClass):
                 continue
             local_conditions = item._conditions[item._branch_condition_start :]
-            if execution.enabled:
-                local_enabled, local_traces = self._evaluate_conditions_with_trace(
-                    execution.runner,
-                    local_conditions,
-                    execution.condition_view,
-                )
-                branch_state: EnabledState = "enabled" if local_enabled else "disabled_local"
-            else:
-                local_enabled = False
-                local_traces = [
+            branch_trace_map[id(item)] = _BranchTraceState(
+                enabled_state=state,
+                conditions=[
                     self._skipped_condition_trace(execution.runner, cond)
                     for cond in local_conditions
-                ]
-                branch_state = "disabled_parent"
-            branch_enable_map[id(item)] = local_enabled
-            branch_trace_map[id(item)] = _BranchTraceState(
-                enabled_state=branch_state,
-                conditions=local_traces,
+                ],
             )
+        return branch_trace_map
 
-        return branch_enable_map, branch_trace_map
+    def _solve_branch(
+        self,
+        execution: DebugExecutionState,
+        branch: Rung,
+    ) -> tuple[bool, _BranchTraceState, ConditionView]:
+        """Solve *branch* as the solve reaches it, like the engine: a view of
+        its own taken now (its edge sites scanned), its own contacts read under
+        the parent's power."""
+        branch_view = branch._new_row_view(execution.ctx)
+        local_conditions = branch._conditions[branch._branch_condition_start :]
+        if execution.enabled:
+            local_enabled, local_traces = self._evaluate_conditions_with_trace(
+                execution.runner,
+                local_conditions,
+                branch_view,
+            )
+            branch_state: EnabledState = "enabled" if local_enabled else "disabled_local"
+        else:
+            local_enabled = False
+            local_traces = [
+                self._skipped_condition_trace(execution.runner, cond) for cond in local_conditions
+            ]
+            branch_state = "disabled_parent"
+        return (
+            local_enabled,
+            _BranchTraceState(enabled_state=branch_state, conditions=local_traces),
+            branch_view,
+        )
 
     def _resolve_location(
         self,
@@ -629,4 +659,5 @@ class PLCDebugger:
             enabled_state=execution.enabled_state,
             trace=trace,
             instruction_kind=instruction_kind,
+            branch_path=execution.branch_path,
         )

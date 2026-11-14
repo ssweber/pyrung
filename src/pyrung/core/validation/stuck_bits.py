@@ -17,7 +17,10 @@ execute?**  If so the coil holds its last value on that scan, the ``out``
 supplies only the latch side, and something else must ``reset`` it — exactly as
 if it had been written ``latch(...)``.
 
-An ``out`` in the main program answers no by itself.  So does a set of ``out``
+An ``out`` in the main program answers no by itself, unless it sits in a forloop
+body: a false For rung skips its body, so that ``out`` runs only while its loop
+does (a count read from a tag may run no iteration, and a oneshot loop runs only
+on its rung's rising edge).  So does a set of ``out``
 sites whose subroutines *cover* the state space between them — the state-machine
 idiom where every state's subroutine drives the coil, so one of them writes it
 every scan.  Coverage is proved via :func:`_chains_cover_domain`, and needs the
@@ -57,6 +60,7 @@ from pyrung.core.validation._common import (
     _collect_write_sites,
     _domain_map,
     _flatten_and_conditions,
+    _inexact_entry_subroutines,
     _resolve_tag_names,
     _resolve_tag_objects,
     _scope_reach_chains,
@@ -85,6 +89,9 @@ _COPY_RESET = "CopyInstruction(reset)"
 
 _OUT_LATCH = "OutInstruction(latch)"
 _OUT_RESET = "OutInstruction(reset)"
+# Toggle, debounce, flasher and timed coils drive their bit both ways themselves.
+_VARIANT_LATCH = "OutVariant(latch)"
+_VARIANT_RESET = "OutVariant(reset)"
 
 # ---------------------------------------------------------------------------
 # Latch/Reset target extractor
@@ -115,6 +122,12 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
     """
     from pyrung.core.instruction.coils import LatchInstruction, OutInstruction, ResetInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+        ToggleInstruction,
+    )
     from pyrung.core.tag import TagType
 
     if isinstance(instr, (LatchInstruction, ResetInstruction)):
@@ -127,6 +140,15 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
             for tag in _resolve_tag_objects(instr.target)
             if tag.type == TagType.BOOL
             for itype in (_OUT_LATCH, _OUT_RESET)
+        ]
+
+    if isinstance(
+        instr, (ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction)
+    ):
+        return [
+            (name, itype)
+            for name in _resolve_tag_names(instr.target)
+            for itype in (_VARIANT_LATCH, _VARIANT_RESET)
         ]
 
     if isinstance(instr, CopyInstruction):
@@ -169,23 +191,103 @@ def _return_rungs(program: Program) -> dict[str, tuple[int, ...]]:
     return {name: tuple(indices) for name, indices in returns.items()}
 
 
+def _loop_exit_skippable(program: Program) -> frozenset[int]:
+    """Ids of instructions in a forloop whose body can break or continue.
+
+    A ``break_loop()`` or ``continue_loop()`` may skip any of them on a scan
+    (and the outer loop's, for a nested one), so none is proved to execute.
+    """
+    from pyrung.core.instruction.control import (
+        BreakInstruction,
+        ContinueInstruction,
+        ForLoopInstruction,
+    )
+    from pyrung.core.validation._common import walk_instructions
+
+    def _flat(loop: ForLoopInstruction) -> list[Any]:
+        out: list[Any] = []
+        for instr in loop.instructions:
+            out.append(instr)
+            if isinstance(instr, ForLoopInstruction):
+                out.extend(_flat(instr))
+        return out
+
+    skippable: set[int] = set()
+    for instr in walk_instructions(program):
+        if not isinstance(instr, ForLoopInstruction):
+            continue
+        body = _flat(instr)
+        if any(isinstance(item, (BreakInstruction, ContinueInstruction)) for item in body):
+            skippable.update(id(item) for item in body)
+    return frozenset(skippable)
+
+
+def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | None]:
+    """Per forloop body instruction (by id), the conditions its loop runs under.
+
+    A false For rung skips its body, so an ``out()`` there runs only when the
+    innermost loop around it is enabled.  A loop whose count is read from a tag
+    may run no iteration at all (a count of 0), and a oneshot loop runs its body
+    only on its rung's rising edge; their bodies map to ``None``.
+    """
+    from pyrung.core.instruction.control import (
+        ForLoopInstruction,
+        for_count_mask,
+        for_loop_iterations,
+    )
+
+    def _loop_only(instr: Any) -> list[tuple[str, str]]:
+        return [("", "ForLoop")] if isinstance(instr, ForLoopInstruction) else []
+
+    def _flat(loop: ForLoopInstruction) -> list[Any]:
+        out: list[Any] = []
+        for instr in loop.instructions:
+            out.append(instr)
+            if isinstance(instr, ForLoopInstruction):
+                out.extend(_flat(instr))
+        return out
+
+    run: dict[int, tuple[Condition, ...] | None] = {}
+    # Outer loops come first in walk order, so an inner loop's entry wins.
+    for site in _collect_write_sites(program, target_extractor=_loop_only):
+        loop = site.instruction
+        count = loop.count
+        literal = isinstance(count, int) and not isinstance(count, bool)
+        runs = (
+            literal and for_loop_iterations(count, for_count_mask(count)) > 0 and not loop._oneshot
+        )
+        for instr in _flat(loop):
+            outer = run.get(id(loop), ())
+            run[id(instr)] = None if outer is None or not runs else site.conditions
+    return run
+
+
 def _site_run_chains(
     site: WriteSite,
     reach_chains: dict[str, tuple[tuple[Condition, ...], ...]],
     return_rungs: dict[str, tuple[int, ...]],
+    loop_conditions: dict[int, tuple[Condition, ...] | None] | None = None,
 ) -> tuple[tuple[Condition, ...], ...]:
     """The condition chains under which the scan executes this site's instruction.
 
     An OR of AND-chains — empty tuple when nothing can be proved (an uncalled
     subroutine, or a ``return_early()`` above the site that may skip it), and
-    ``((),)`` — the always-true chain — for a site in the main program.
+    ``((),)`` — the always-true chain — for a site in the main program.  A site
+    in a forloop body also needs its loop enabled (*loop_conditions*).
     """
     if site.scope == "main":
-        return ((),)
-    assert site.subroutine is not None
-    if any(index < site.rung_index for index in return_rungs.get(site.subroutine, ())):
+        chains: tuple[tuple[Condition, ...], ...] = ((),)
+    else:
+        assert site.subroutine is not None
+        if any(index < site.rung_index for index in return_rungs.get(site.subroutine, ())):
+            return ()
+        chains = reach_chains.get(site.subroutine, ())
+    if loop_conditions is None or id(site.instruction) not in loop_conditions:
+        return chains
+    loop = loop_conditions[id(site.instruction)]
+    if loop is None:
         return ()
-    return reach_chains.get(site.subroutine, ())
+    return tuple(chain + loop for chain in chains)
 
 
 def _self_clearing_coils(
@@ -193,6 +295,7 @@ def _self_clearing_coils(
     reach_chains: dict[str, tuple[tuple[Condition, ...], ...]],
     return_rungs: dict[str, tuple[int, ...]],
     domains: DomainMap,
+    loop_conditions: dict[int, tuple[Condition, ...] | None] | None = None,
 ) -> set[str]:
     """Coils whose ``out`` instructions are proved to execute on *every* scan.
 
@@ -206,7 +309,7 @@ def _self_clearing_coils(
     for tag_name, sites in out_sites.items():
         chains: list[tuple[Condition, ...]] = []
         for site in sites:
-            chains.extend(_site_run_chains(site, reach_chains, return_rungs))
+            chains.extend(_site_run_chains(site, reach_chains, return_rungs, loop_conditions))
         if _chains_cover_domain(chains, domains):
             self_clearing.add(tag_name)
     return self_clearing
@@ -218,6 +321,7 @@ def _undeclared_domain_tags(
     return_rungs: dict[str, tuple[int, ...]],
     tag_map: dict[str, Tag],
     domains: DomainMap,
+    loop_conditions: dict[int, tuple[Condition, ...] | None] | None = None,
 ) -> list[str]:
     """Tags whose *missing* domain declaration is the only thing blocking coverage.
 
@@ -234,7 +338,7 @@ def _undeclared_domain_tags(
 
     chains: list[tuple[Condition, ...]] = []
     for site in sites:
-        chains.extend(_site_run_chains(site, reach_chains, return_rungs))
+        chains.extend(_site_run_chains(site, reach_chains, return_rungs, loop_conditions))
 
     # The literal values each undeclared tag is compared against across the guards.
     mentioned: dict[str, set[int | float]] = defaultdict(set)
@@ -483,11 +587,17 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     tag_map = _build_tag_map(program)
     domains = _domain_map(tag_map)
     reach_chains = _scope_reach_chains(program)
+    # A subroutine entered through a call its conditions do not decide (a
+    # forloop body-rung contact an iteration can change, a oneshot loop, a
+    # break_loop()) may run on every scan or not: nothing can be claimed, so
+    # its coils are not reported.
+    for sub_name in _inexact_entry_subroutines(program):
+        reach_chains[sub_name] = ((),)
     return_rungs = _return_rungs(program)
 
     # Partition sites by target and instruction type
-    latch_types = {LatchInstruction.__name__, _COPY_LATCH, _OUT_LATCH}
-    reset_types = {ResetInstruction.__name__, _COPY_RESET, _OUT_RESET}
+    latch_types = {LatchInstruction.__name__, _COPY_LATCH, _OUT_LATCH, _VARIANT_LATCH}
+    reset_types = {ResetInstruction.__name__, _COPY_RESET, _OUT_RESET, _VARIANT_RESET}
 
     out_sites: dict[str, list[WriteSite]] = defaultdict(list)
     for site in sites:
@@ -497,7 +607,16 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     # Coils whose out() instructions run on every scan de-energize themselves; the
     # rest hold their last value on the scans nothing writes them, and their out()
     # is a latch with no matching reset.
-    self_clearing = _self_clearing_coils(out_sites, reach_chains, return_rungs, domains)
+    # An out() a break_loop()/continue_loop() can skip proves nothing either.
+    skippable = _loop_exit_skippable(program)
+    provable_out_sites = {
+        tag: [s for s in tag_sites if id(s.instruction) not in skippable]
+        for tag, tag_sites in out_sites.items()
+    }
+    loop_conditions = _loop_run_conditions(program)
+    self_clearing = _self_clearing_coils(
+        provable_out_sites, reach_chains, return_rungs, domains, loop_conditions
+    )
 
     latch_sites: dict[str, list[WriteSite]] = defaultdict(list)
     reset_sites: dict[str, list[WriteSite]] = defaultdict(list)
@@ -545,7 +664,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                     f"run; reset({tag_name}) when it stops running?"
                 )
                 undeclared = _undeclared_domain_tags(
-                    held, reach_chains, return_rungs, tag_map, domains
+                    held, reach_chains, return_rungs, tag_map, domains, loop_conditions
                 )
                 if undeclared:
                     names = ", ".join(undeclared)

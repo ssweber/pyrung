@@ -67,6 +67,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryAttemptDisposition,
     TheoryAttemptReceipt,
     TheoryClaim,
+    TheoryInvariantError,
     TheoryPhaseKind,
     TheoryPhaseReceipt,
     TheoryTemporalIntent,
@@ -550,11 +551,18 @@ def _record_theory_transition(
     if state.theory_state.active_theory_id is None:
         if not observation.interpretation.opens_theory:
             return
+        opening_identity = ("theory-open", observation.claim.identity)
+        if ("open", opening_identity) in state.theory_state.ledger.applied_facts:
+            # This exact claim, from this exact source boundary, already had
+            # its theory, and that theory has ended.  Reaching the claim again
+            # (a later act that lands on the same rejected source) replays a
+            # closed history; it opens nothing, whatever budget is left.
+            return
         record_fact(
             state,
             OpenTheory(
                 claim=observation.claim,
-                opening_identity=("theory-open", observation.claim.identity),
+                opening_identity=opening_identity,
                 remaining_budget=max(0, remaining_budget),
             ),
         )
@@ -706,16 +714,16 @@ def _record_controlled_setup_attempt(
 
     execution = attempt.executed_attempt
     if execution is None:
-        raise ValueError("setup-first execution lost its exact attempt evidence")
+        raise TheoryInvariantError("setup-first execution lost its exact attempt evidence")
     execution_receipt = execution.execution
     if execution_receipt is None:
-        raise ValueError("setup-first execution has no immutable execution receipt")
+        raise TheoryInvariantError("setup-first execution has no immutable execution receipt")
     owner = execution_owner(execution.pulse.fork, execution.assertion_scan)
     if owner is None:
-        raise ValueError("setup-first execution has no exact assertion owner")
+        raise TheoryInvariantError("setup-first execution has no exact assertion owner")
     projection = execution.projection_at(execution.assertion_scan)
     if projection is None:
-        raise ValueError("setup-first execution has no owner-bound projection")
+        raise TheoryInvariantError("setup-first execution has no owner-bound projection")
     occurrences = tuple(
         (
             "write",
