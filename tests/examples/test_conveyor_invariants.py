@@ -131,7 +131,7 @@ mapping = TagMap(
         EntrySensor.map_to(x[6]),
         DiverterBtn.map_to(x[7]),
         BinASensor.map_to(x[8]),
-        BinBSensor.map_to(x[9]),
+        BinBSensor.map_to(x[101]),
         # Outputs
         conv.Motor.map_to(y[1]),
         conv.Diverter.map_to(y[2]),
@@ -141,8 +141,8 @@ mapping = TagMap(
         IsLarge.map_to(c[2]),
         CountReset.map_to(c[3]),
         # Feedback (mapped to available input points)
-        conv.MotorFb.map_to(x[10]),
-        conv.DiverterFb.map_to(x[11]),
+        conv.MotorFb.map_to(x[102]),
+        conv.DiverterFb.map_to(x[103]),
         # State constants
         *SortState.map_to(ds.select(1, 4)),
         # Data
@@ -219,9 +219,9 @@ def logic():
         out(conv.Diverter)
 
     comment("Bin counters")
-    with Rung(rise(BinASensor)):
+    with Rung(BinASensor):
         count_up(BinACounter, preset=9999).reset(CountReset)
-    with Rung(rise(BinBSensor)):
+    with Rung(BinBSensor):
         count_up(BinBCounter, preset=9999).reset(CountReset)
 
 

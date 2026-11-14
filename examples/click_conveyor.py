@@ -192,9 +192,9 @@ def logic():
         out(DiverterCmd)
 
     comment("Bin counters")
-    with rung(rise(BinASensor)):
+    with rung(BinASensor):
         count_up(BinACounter, preset=9999).reset(CountReset)
-    with rung(rise(BinBSensor)):
+    with rung(BinBSensor):
         count_up(BinBCounter, preset=9999).reset(CountReset)
 
 

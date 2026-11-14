@@ -74,7 +74,7 @@ mapping = TagMap({
     EntrySensor:    x[6],
     DiverterBtn:    x[7],
     Bin[1].Sensor:  x[8],
-    Bin[2].Sensor:  x[9],
+    Bin[2].Sensor:  x[101],
     ConveyorMotor:  y[1],       # Physical output terminal 1
     DiverterCmd:    y[2],
     StatusLight:    y[3],

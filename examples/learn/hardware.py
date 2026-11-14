@@ -102,9 +102,9 @@ with Program() as logic:
         out(DiverterCmd)
 
     comment("Bin counters")
-    with rung(rise(Bin[1].Sensor)):
+    with rung(Bin[1].Sensor):
         count_up(BinACounter, preset=10).reset(CountReset)
-    with rung(rise(Bin[2].Sensor)):
+    with rung(Bin[2].Sensor):
         count_up(BinBCounter, preset=10).reset(CountReset)
 
 # --- Option B: Map to a Click PLC ---
@@ -123,7 +123,7 @@ mapping = TagMap(
         EntrySensor: x[6],
         DiverterBtn: x[7],
         Bin[1].Sensor: x[8],
-        Bin[2].Sensor: x[9],
+        Bin[2].Sensor: x[101],
         ConveyorMotor: y[1],  # Physical output terminal 1
         DiverterCmd: y[2],
         StatusLight: y[3],
