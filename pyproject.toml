@@ -95,7 +95,7 @@ exclude = ["scratchpad"]
 packages = ["src/pyrung"]
 
 [tool.uv]
-required-version = ">=0.11.29"
+required-version = ">=0.13.8"
 exclude-newer = "7 days"
 exclude-newer-package = { pyclickplc = "0 days", ty = "0 days" }
 
