@@ -13,7 +13,7 @@
 
 ## Unreleased
 
-pyrung now runs a program the way a CLICK PLC does, and it is the engine under ClickNick's CLICK Simulator. A suite of test cases runs on pyrung and on a real CLICK, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page lists the cases and how many pass on a CLICK. Instruction details are there, not here.
+pyrung now runs a program the way a CLICK PLC does, and it is the engine under ClickNick's CLICK Simulator. A suite of test cases runs on pyrung and on a real CLICK, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page gives the case counts by area, the two known differences, what the suite doesn't reach, and how to run it.
 
 ### What's new
 
@@ -49,7 +49,6 @@ Each of these runs in `PLC`, `CompiledPLC` and generated CircuitPython. Each exp
 
 #### CLICK export and checks
 
-- CLICK validation refuses what CLICK's editor refuses, so export stops where CLICK would. Each refusal has a `CLK_` code, and `pyrung_to_ladder(allow=...)` lets a code through.
 - `pyrung.click.estimate_steps()` estimates a program's CLICK steps to within about 1%. Validation warns with `CLK_STEP_LIMIT` as a program nears CLICK's 8000.
 - `CLK_PTR_PAST_BANK` warns when a pointer can reach past the end of its bank.
 - `pyrung_to_ladder(validate=True)` and `ladder_to_pyrung(validate=True)` compare the generated code with the CLICK rows, row by row.
@@ -80,6 +79,7 @@ Each of these runs in `PLC`, `CompiledPLC` and generated CircuitPython. Each exp
 - `how()` adds temporary logic only where the plan needs it, and prints that logic as rows of pyrung source.
 - When `how()` would stop, it tries releasing a force, a STOP->RUN, or one more wait or input change. A plan that needs one says so in a step of its own.
 - `how()` plans with the session's forces and pending patches in place (it planned without them).
+- `how(max_scans=)` counts most scans of a long wait as a hundredth each, so a long timer fits a small budget.
 - `how()` stops after 300 s by default (`wall_clock_s=`) or when its search holds about 1 GB.
 - `why()` marks a forced tag and says when the force takes effect.
 - `check_lock()` raises `LockIntractable`, a `RuntimeError`, when the verifier can't finish.
@@ -96,64 +96,55 @@ Each of these runs in `PLC`, `CompiledPLC` and generated CircuitPython. Each exp
 
 Most of these bring pyrung in line with what a CLICK does. Each says what changed, then what to do.
 
-- `calc()` is now `math()`, CLICK's name for the instruction. The finding codes `CLK_CALC_*` are now `CLK_MATH_*`.
+- `calc()` is now `math()`, CLICK's name for the instruction. Finding codes that said `CALC` now say `MATH`, such as `CLK_MATH_*` and `CLK_EXPR_ONLY_IN_MATH`.
   Rename your calls. `calc()` still works with a `FutureWarning`. `from pyrung import *` now hides Python's `math`, so import that as `import math as pymath`.
 - `run_for()` and `run_until()` take `jit=` in place of `fold=`.
   Rename the argument. `fold=` raises `TypeError`.
-- `how()` waits run every scan, so plans have no "Jump ahead" line. `CoastReceipt` reports `stretches` and `stretched_scans` in place of `macro_folds` and `skipped_scans`, and `PlanStep.accelerators` is gone.
+- `how()` no longer skips scans while it waits, so a plan has no "Jump ahead" line. On a `CoastReceipt`, `stretches` and `stretched_scans` replace `macro_folds` and `skipped_scans`. `PlanStep.accelerators` is gone.
   Update code that reads those fields.
 - Counters count rising edges, as a CLICK does (they counted every scan the input was on). A down counter is done at `Acc <= preset` (it was `Acc <= -preset`).
-  A `rise()` on a counter's rung still works but is no longer needed. To count scans, use `math(N + 1, N)`.
-- Each instruction reads only the contacts on its own path from the rail, as a CLICK does. A branch or a box pin now sees a tag written earlier in the same rung (it saw the value from rung entry).
-  Run `pyrung check`. It flags these rungs as `RUNG_ORDER_DEPENDENT`.
-- A box with pins (a counter, a retentive timer's `.reset()`, a shift register or a drum) must end its rung, because CLICK won't compile it otherwise. Building a rung with more after the box raises `RuntimeError`.
-  Move what comes before the box into a rung above it, and what follows into a rung of its own.
+  A `rise()` on a counter's rung is no longer needed. To count scans, use `math(N + 1, N)`. To count down 5, give the down counter a preset of -5.
+- Each instruction reads only the contacts on its own path from the rail, as a CLICK does. A branch or a box pin now sees a tag written earlier in the same rung (it saw the value from rung entry). A box with pins (a counter, a retentive timer's `.reset()`, a shift register or a drum) must be alone on its rung, because CLICK won't compile it otherwise. `simplified()` follows the new order, so the last `out()` of a tag in a rung decides it.
+  Run `pyrung check`, which flags the changed rungs as `RUNG_ORDER_DEPENDENT`. Building a rung with anything else beside a box raises `RuntimeError`, so move the rest to rungs of their own.
 - `math()` follows CLICK's Math. A math error zeroes only the operation that failed, so `X / 0 + 5` stores 5 with `fault.division_error` (it stored 0). `%` takes the sign of the dividend.
   Check formulas that relied on the old results.
-- A pointer or index outside its block no longer stops the scan with `IndexError`. An expression outside `math()` never stops the scan, and a math error in it gives 0 with no flag.
-  Test for the value or the fault flag instead of the exception.
-- Fault flags report the most recent instruction, as a CLICK does (they stayed on to the end of the scan). Each `math()` and copy instruction clears the flags it can set, then sets whichever one it trips.
-  Read a flag right after the instruction that sets it.
-- `rise()` and `fall()` work like CLICK's edge contacts. Each contact keeps the bit from the last scan that evaluated it.
-  Check tests that pulse a bit within one scan, or call one subroutine twice. A saved state still loads.
-- The built-in `Timer` and `Counter` follow CLICK's bank defaults. A timer's `Acc` resets on STOP->RUN, and a counter's `Done` survives it.
-  To keep a timer's time across a restart, use `Timer.clone(..., retentive={"Acc": True})`.
-- These now do what a CLICK does, in `PLC`, `CompiledPLC` and generated CircuitPython:
+- A timer, counter or Out-coil preset must be an int or an `Int`, `Dint` or `Word` tag. A block pointer must be an `Int` or `Dint` tag. Anything else raises `TypeError` when the program is built.
+  Copy a `Real` preset into an `Int`, and a `Real` or `Word` pointer into an `Int` or `Dint`. Use `//` for division in an index.
+- A coil that writes a timer's or counter's Done bit raises `OwnedBitCoilError` when the program closes.
+  Clear the bit with the instruction's `.reset()` pin.
+- `Physical` takes one flat keyword per value, and every argument after the name is keyword-only. `Pulse`, `Ramp` and `Approach` are gone.
+  Write `flasher_on=` and `flasher_off=` for a `Pulse`, `ramp_on=` and `ramp_off=` for a `Ramp`, and `approach_to=` and `approach_rate=` for an `Approach`. Run "Upgrade Project" in ClickNick, or `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
+- CLICK ladder export refuses what CLICK's editor refuses, so some programs that exported before now raise `LadderExportError`. Each refusal names a `CLK_` code.
+  Fix the rung, or pass the code to `pyrung_to_ladder(allow=...)`.
+- The verifier treats timers as black boxes, so a `Proven` holds for any scan time and preset. It answers `Intractable` when a property depends on which timer finishes first (`kind="timing"`), or when it can't try every value of an input.
+  Regenerate lock files with `pyrung lock`. Give such an input `choices=` or a `min=`/`max=` of at most 1000 values, and test timing with `run_for()`.
+- These now do what a CLICK does, so a test that counted on the old result may fail:
+  - fault flags, which report the most recent instruction (they stayed on to the end of the scan)
+  - a pointer or index outside its block, which no longer stops the scan with `IndexError`
+  - a math error in an expression outside `math()`, which gives 0 with no flag
+  - `rise()` and `fall()`, which compare with the bit from the last scan that evaluated each contact
+  - the built-in `Timer`, whose `Acc` resets on STOP->RUN (keep it with `Timer.clone(..., retentive={"Acc": True})`)
+  - the built-in `Counter`, whose `Done` survives STOP->RUN
   - drums
-  - `forloop()`, whose body is skipped when the loop's rung is false
+  - `forloop()`, whose body is skipped when its rung is false. A `with Rung(...)` inside it is a rung of the body
   - Copy, Block copy and Fill into another type
   - text copies, text compares and `search()`
   - `reboot()` with the battery in, which keeps only the retentive tags
-  - a `Real`, which holds CLICK's float32 range
+  - a `Real`, which holds CLICK's float32 range. A literal outside it raises `ValueError`
   - `scan_clock_toggle` (SC3), which is on from the first scan
+  - harness feedback, which runs as the CLICK coil it behaves like, so an edge can move by a scan or more
+  - CLICK import, which brings each wire of a CLICK rung back as a rung of its own
 
-  Rerun your tests. The conformance page lists each case.
-- A preset must be an int or an `Int`, `Dint` or `Word` tag. A block pointer must be an `Int` or `Dint` tag. Anything else raises `TypeError` when the program is built.
-  Copy a `Real` or `Word` into an `Int` or `Dint` first. Use `//` for division in an index.
-- A coil that writes a timer's or counter's Done bit raises `OwnedBitCoilError` when the program closes.
-  Clear the bit with the instruction's `.reset()` pin.
-- A `with Rung(...)` inside `forloop()` is a rung of the loop body (it became a separate rung before the loop).
-  Move it out of the loop if it should run once a scan.
-- CLICK import brings each wire of a CLICK rung back as a rung of its own. It no longer makes up timer and counter nicknames, so a `T1` with no nickname keeps its address as its name (it became `T1_Done`).
-  Rename uses of the made-up names.
-- Harness feedback runs as the CLICK coil it behaves like, so a feedback edge can come a scan or more earlier or later.
-  Update tests that count scans to a feedback edge.
-- `Physical` takes one flat keyword per value, and `Pulse`, `Ramp` and `Approach` are gone. `Physical(name, flasher_on="8ms", flasher_off="8ms")` replaces a `Pulse`.
-  Run "Upgrade Project" in ClickNick, or pass each comment to `pyrung.click.tag_map.upgrade_comment()`.
-- The verifier treats timers as black boxes, so a `Proven` holds for any scan time and preset. A property that depends on one timer finishing before another now gives `Intractable` with `kind="timing"`.
-  Regenerate lock files with `pyrung lock`. Check that timing with a `run_for()` test.
-- `always()` and `never()` give `Intractable` and name the input when the search can't try every value of it.
-  Give the input `choices=` or a `min=`/`max=` of at most 1000 values.
-- `simplified()` follows the new rung evaluation. When one rung has several `out()` writes of a tag, the last one decides it.
-  Write an OR as `Or(A, B)`.
-- `SystemState` is no longer a pyrsistent `PRecord` or `PMap`. Its fields, `set()`, `update()`, `Mapping` reads, equality and pickles work as before.
-  Replace calls to the other pyrsistent map methods.
-- `generate_circuitpy()` and `write_circuitpy()` lose `mapped_tag_scope`. The generated Modbus server serves every mapped register and every raw register a rung uses.
-  Drop the argument.
-- Generated CLICK projects keep pyrung's guidance in `AGENTS.pyrung.md` and `README.pyrung.md`. `AGENTS.md` and `README.md` are yours.
-  Drop calls to `refresh_workspace_lifecycle_guidance()`, which is removed.
-- `pyrung.twin` is now `pyrung.conformance`.
-  Change the import.
+  Rerun your tests.
+- Removed or renamed:
+  - `pyrung.twin` is now `pyrung.conformance`
+  - `SystemState` is no longer a pyrsistent `PRecord` or `PMap`. Its fields, `set()`, `update()`, `Mapping` reads, equality and pickles work as before
+  - `SystemState.memory` holds `_edge:` keys in place of `_prev:` keys. A saved state still loads
+  - `generate_circuitpy()` and `write_circuitpy()` lose `mapped_tag_scope`
+  - `refresh_workspace_lifecycle_guidance()` is gone. Generated CLICK projects keep pyrung's guidance in `AGENTS.pyrung.md` and `README.pyrung.md`
+  - CLICK import names a timer or counter address with no nickname by its address (it made up `T1_Done`)
+
+  Change the imports and names, and drop the removed argument and function.
 
 ### Fixes
 
@@ -209,6 +200,7 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
 
 - `always()`, `never()`, `reachable_states()` and `pyrung lock` no longer report `Proven` for states their search skipped. When the search can't cover an input, the answer is `Intractable` and names the input.
 - `never()` and `how()` try only values a tag can hold, so a literal the tag can't hold no longer raises.
+- `never()` no longer proves that a `Char` order comparison can't be met, and `how()` no longer gives up on one. `C > "A"` is met at `"B"`.
 - `pyrung lock --check` on a program the verifier can't finish names the `Intractable` and exits 1 (it ended in a traceback).
 
 #### how()
@@ -217,7 +209,7 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
 - Some goals that made `how()` raise a Python error now give a `Stopped` plan with a reason.
 - `how(And(A, B))` is the same as `how(A, B)`, and `how(~Running)` is the same as `how(Running == False)`.
 - `how(avoid=...)` raises `AvoidCheckError` when the avoid check raises (it treated the check as clear and could plan through the avoided state).
-- `how()` ends where the program stops itself (it planned straight through the stop). On a PLC in STOP it says `Stopped`.
+- `how()` ends where the program stops itself (it planned straight through the stop). On a PLC in STOP it says `Stopped` unless the goal already holds.
 - `how()` reads the settings of a block slot that rungs reach only through a pointer, so it never sets a `readonly=True` slot.
 - `how()` drives a timer or counter inside a `forloop()`.
 
@@ -243,6 +235,7 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
 - Analysis sees inside `forloop()` bodies, including a `return_early()` in a loop.
 - `math()` into a pointer destination raises a `TypeError` that says what to do (it raised `AttributeError`).
 - A kernel that fails to compile warns and runs interpreted (it raised out of `run_for()`).
+- Generated CLICK workspace guidance follows ClickNick's Simulator and its backups.
 - Generated CLICK projects import what a `SUM` range or a math function needs in the file that uses it (they failed with `NameError`).
 
 #### Debugger
@@ -253,7 +246,6 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
 - A `reload` removes a force on a tag the new program no longer has (the force stayed active).
 - The debugger sends a `Real` holding Inf or NaN as `inf`, `-inf` or `nan` (DAP clients refused `Infinity`).
 - The debugger no longer lists the tags pyrung adds itself.
-- Generated CLICK workspace guidance follows ClickNick's Simulator and its backups.
 
 ### Performance
 
