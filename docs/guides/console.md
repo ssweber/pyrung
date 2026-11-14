@@ -241,10 +241,10 @@ link X002 Y001 on_delay=2s off_delay=500ms     # Y001 drives X002 after 2 s, dro
 link DF5 Y003 ramp_on=0.8 ramp_off=-0.05       # analog feedback
 link Sorted State:2 on_delay=1s                # value trigger
 unlink X002        # cut the program's link (X002 is a free input), or remove a bench link
-restore X002       # drop the bench change: back to what the program declares
+restore X002       # drop the bench change (back to what the program declares)
 links              # list program and bench links
-links bench off    # set every bench change aside without forgetting it; `links bench on` again
-links disable X002 # set one aside; `links enable X002` again
+links bench off    # set every bench change aside (`links bench on` brings them back)
+links disable X002 # set one aside (`links enable X002` brings it back)
 ```
 
 A link added while its enable is already on starts its on-delay from zero, so the feedback follows only after the on-delay.
@@ -255,7 +255,7 @@ Bench links live in the debug session, not the runner, so `reload` keeps them. A
 
 Attach to a running debug session from another terminal or process.
 
-When the DAP adapter launches, it starts a TCP server on localhost and writes the port to a session file. The session name defaults to the program filename stem (`logic.py` → `logic`) or can be set explicitly in the launch configuration:
+When the DAP adapter launches, it starts a TCP server on localhost and writes the port to a session file. The session name defaults to the program filename stem (`logic.py` → `logic`). In VS Code, you can set it in the launch configuration instead:
 
 ```json
 {

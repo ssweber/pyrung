@@ -18,10 +18,10 @@ pyrung includes a Debug Adapter Protocol (DAP) server that exposes PLC scan exec
 
 - VS Code with the Python extension
 - `pyrung` installed: `pip install pyrung`
-- The pyrung VS Code extension. Download `pyrung-debug-X.Y.Z.vsix` from the [GitHub releases](https://github.com/ssweber/pyrung/releases) page, then install it:
+- The pyrung VS Code extension. Download the `.vsix` file from the [GitHub releases](https://github.com/ssweber/pyrung/releases) page, then install it:
 
 ```bash
-code --install-extension pyrung-debug-X.Y.Z.vsix
+code --install-extension <path to the downloaded .vsix>
 ```
 
 ## Launch configuration
