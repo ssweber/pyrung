@@ -53,7 +53,7 @@ Each channel has its own shape:
   - Leave out fixes to anything added since the last tag.
   - Leave out internal names, history, rationale and evidence.
   - Say "now does what a CLICK does" when that is what the change amounts to.
-  - Edge-case semantics go on the conformance page (`docs/guides/conformance.md`), not in the changelog.
+  - Leave out edge-case semantics. The conformance suite records them, and the instruction docs carry the ones an author needs.
 - **Docs:** code first, then what it does, then the gotcha. If the code is clear, don't restate it in prose.
 - **Comments and docstrings:** say why, in one or two sentences, with the purpose first and then the trap. Cut a comment that narrates what the code plainly does.
 
@@ -150,7 +150,7 @@ src/pyrung/
 
 ## Gotchas
 
-- `copy()` clamps out-of-range, except a `Word` into an `Int` keeps its bits and a negative into a `Word` wraps; `math()` wraps (modular arithmetic)
+- `copy()` clamps out-of-range, except a `Word` into an `Int` keeps its bits and -32768..-1 into a `Word` keeps its low 16 bits (anything lower stores 32768); `math()` wraps (modular arithmetic)
 - Counters count rising edges (CLICK semantics, per-counter input memory `_cu:i{N}`/`_cd:i{N}`); a held input counts once. Down counter Done is `Acc <= preset` from Acc 0 (a negative preset counts down to it; a positive one is done at once unless Acc is staged above it)
 - Division by zero in `math()` → that division = 0 (the rest of the formula runs), fault flag set. Outside `math()` it is 0 with no flag
 - Comma inside `Rung(...)` is implicit AND; use `Or()` for OR logic
