@@ -106,7 +106,13 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
   A `rise()` on a counter's rung is no longer needed. To count scans, use `math(N + 1, N)`. To count down 5, give the down counter a preset of -5.
 - Each instruction reads only the contacts on its own path from the rail, as a CLICK does. A branch or a box pin now sees a tag written earlier in the same rung (it saw the value from rung entry). A box with pins (a counter, a retentive timer's `.reset()`, a shift register or a drum) must be alone on its rung, because CLICK won't compile it otherwise. `simplified()` follows the new order, so the last `out()` of a tag in a rung decides it. Write an OR as `Or(A, B)`.
   Run `pyrung check`, which flags the changed rungs as `RUNG_ORDER_DEPENDENT`. Building a rung with anything else beside a box raises `RuntimeError`, so move the rest to rungs of their own.
-- `math()` follows CLICK's Math. A math error zeroes only the operation that failed, so `X / 0 + 5` stores 5 with `fault.division_error` (it stored 0). `%` takes the sign of the dividend.
+- `math()` follows CLICK's Math, as the [Math page](https://pyrung.com/pyrung/instructions/math/) describes. A math error zeroes only the operation that failed, so `X / 0 + 5` stores 5 with `fault.division_error` (it stored 0).
+  - `%` takes the sign of the dividend, so `-7 % 2` is -1 (it was 1).
+  - `%` by 0 and `0 ** 0` give 0 with no flag (they set `fault.division_error`, and `0 ** 0` was 1).
+  - In hex mode, each whole-number constant keeps its low 16 bits, so 70000 is 4464.
+  - A whole-number constant outside the `Dint` range keeps its low 32 bits.
+  - Each intermediate result is a 64-bit float, so a whole number past 2**53 loses its last digits.
+
   Check formulas that relied on the old results.
 - A timer, counter or Out-coil preset must be an int or an `Int`, `Dint` or `Word` tag. A block pointer must be an `Int` or `Dint` tag. Anything else raises `TypeError` when the program is built.
   Copy a `Real` preset into an `Int`, and a `Real` or `Word` pointer into an `Int` or `Dint`. Use `//` for division in an index.
