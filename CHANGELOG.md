@@ -11,7 +11,7 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
-## Unreleased
+## v0.16.0 (2026-11-14)
 
 pyrung is the engine under ClickNick's CLICK Simulator. A suite of test cases checks it against a real CLICK, case by case, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page gives the case counts by area and the two known differences. It also says what the suite doesn't reach and how to run it.
 

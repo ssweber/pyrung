@@ -275,7 +275,7 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 dependencies = [
-    "pyrung>=0.15.2",
+    "pyrung>=0.16.0",
 ]
 
 [dependency-groups]
