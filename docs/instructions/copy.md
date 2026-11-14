@@ -11,15 +11,15 @@ copy(DS[1], DS[DS[0]])              # Indirect addressing: DS[pointer]
 copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 ```
 
-`copy()`, `blockcopy()`, `fill()` and `pack_text()` **clamp** an out-of-range value to the destination type's min/max and set `system.fault.out_of_range`. A `Copy` of a `Real` into a `Dint` clamps with no flag. `blockcopy()`, `fill()` and a `copy()` of Inf into a `Dint` do the same. This is different from `math()`, which wraps.
+`copy()`, `blockcopy()`, `fill()` and `pack_text()` **clamp** an out-of-range value to the destination type's min/max and set `system.fault.out_of_range`. This is different from `math()`, which wraps.
 
-`Word` and bit destinations are different, and raise no flag. Into a `Word`, a constant or an `Int` keeps its low 16 bits (-1 is 65535). A `Dint` or `Real` above 65535 stores 65535. One below 0 keeps its low 16 bits, so -1 is 65535 and -32768 is 32768. Anything below -32768 also stores 32768. A `Word` into an `Int` keeps its bits (65535 is -1). A number into a `Bool` is on when it is nonzero and finite. CLICK's editor takes no constant into a bit, so the CLICK export refuses `copy(2, C[1])` and `fill(1, C.select(1, 4))`. Set bits with `out()`, `latch()` or `reset()`.
+Two exceptions. A `Word` into an `Int` keeps its bits (65535 is -1). A negative number into a `Word` wraps (-1 is 65535). CLICK's editor takes no constant into a bit, so the CLICK export refuses `copy(2, C[1])` and `fill(1, C.select(1, 4))`. Set bits with `out()`, `latch()` or `reset()`.
 
-A pointer (`DS[Ptr]`) must be an `Int` or `Dint` tag. An index expression (`DS[Ptr + 1]`) may use only `Int` and `Dint` tags, integer constants and integer operators (`//` rather than `/`, no `**` or math function). The same rule holds for the bounds of a `select()` whose bounds are tags or expressions (`DS.select(Start, Start + 9)`). A `Real`, `Word`, `Bool` or `Char` pointer or bound, or an index expression that breaks the rule, raises `TypeError` when the program is built. Copy a `Word` or `Real` into an `Int` first.
+A pointer (`DS[Ptr]`) or an index expression (`DS[Ptr + 1]`) may use only `Int` and `Dint` tags, integer constants and integer operators (`//` rather than `/`). The same holds for the bounds of a `select()`. Anything else raises `TypeError` when the program is built. Copy a `Word` or `Real` into an `Int` first.
 
-A pointer or index expression whose address falls below the block (or in a gap of a sparse block) sets `system.fault.address_error` and leaves the destination alone. This holds whether the bad address is the source or the destination. `math()` with such a source does the same. Past the block's last address there is no flag. A read gives the type's zero value and a write is dropped. A text or its digits that run past the last address are cut there. A `copy()` from past the end of a CLICK `DS`, `DH`, `DF` or `TXT` leaves its destination as it was. A `select()` whose bounds are tags or expressions (`DS.select(Start, End)`) is different. A bound outside the block, past its end too, sets `address_error` and the instruction writes nothing. A gap of a sparse block inside the window is skipped. In a rung condition an element outside the block reads as 0 with no flag ([Comparisons](conditions.md#comparisons)).
+A pointer that falls below the block sets `system.fault.address_error` and the destination keeps its value. Past the block's last address a read gives zero, a write is dropped and no flag is set.
 
-Each `math()` or copy instruction (`copy()`, `blockcopy()`, `fill()`, `pack_*()`, `unpack_*()`) clears `out_of_range` and `address_error` when it runs, then sets whichever one it trips. A `math()` that does not run (its rung false, or a one-shot that does not fire) clears them too. A copy instruction that does not run leaves them. A flag only reports the most recent of those instructions, so check it on the rung right after. Coils, timers and counters don't change either flag.
+Each `math()` or copy instruction clears `out_of_range` and `address_error` when it runs. Read a flag on the rung right after the instruction.
 
 ## `blockcopy` — copy a range
 
@@ -53,7 +53,7 @@ copy(ModeChar, DS[1], convert=to_value)    # CHAR '5' → numeric 5   (Copy Char
 copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCII Code Value)
 ```
 
-A CLICK TXT is one byte, so a blank TXT is NUL (`$00`). A TXT is blank if nothing has written it, if it was cleared with `fill("", ...)` or `reset()`, or if it was set to `""`. A TXT holds a whole byte, 0-255, not 7-bit ASCII. `to_ascii` reads a character above 127 as its code, and `to_binary` of 200 stores 200. `to_ascii` and `to_value` of a blank TXT write 0. `to_value` of a letter or other non-digit sets the out-of-range fault and leaves the destination alone. In a `blockcopy()`, only that slot is left alone and the rest are written.
+`to_value` of a letter or other non-digit sets the out-of-range fault and leaves the destination alone. A blank TXT reads as 0.
 
 A `copy()` of a TXT into a number with no `convert` is `to_value`, and a `copy()` of a `Real` into a TXT with no `convert` is `to_text()`.
 
@@ -121,9 +121,8 @@ pack_text(Txt.select(1, 3), DS[1], allow_whitespace=True) # " 12" -> 12
 - `pack_words()` packs exactly two `INT`/`WORD` tags into one `DINT` or `REAL`. The first source is the low word.
 - `unpack_to_words()` reverses that mapping. It requires exactly two `INT`/`WORD` destinations.
 - `pack_text()` parses a `TXT`/`CHAR` range into an `INT`, `WORD`, `DINT`, or `REAL`.
-    - `INT`/`DINT` parse signed decimal, stopping at a decimal point (`"12.5"` is 12). Any other character that is not a digit is refused with the out-of-range fault (`"12x"` leaves the destination alone).
-    - A value past the destination clamps and raises the same fault (`"123456"` into an `INT` is 32767).
+    - `INT`/`DINT` parse signed decimal. A character that is not a digit sets the out-of-range fault and leaves the destination alone.
     - `WORD` parses hex, and `REAL` parses float text including exponential notation.
-    - Leading or trailing whitespace sets the out-of-range fault unless you pass `allow_whitespace=True`, which trims before parsing.
+    - Whitespace around the text sets the same fault unless you pass `allow_whitespace=True`.
 - All pack/unpack instructions accept `oneshot=True`.
 - There is no `unpack_text()`. To write a text literal into `TXT`/`CHAR` memory, use plain `copy("HELLO", Txt[1])`. It fans out across sequential tags and is cut at the end of the block. For numeric → text, use `copy(..., convert=to_text())` or `copy(..., convert=to_binary)`.

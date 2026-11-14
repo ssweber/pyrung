@@ -417,6 +417,18 @@ mapping = TagMap({
 report = mapping.validate(logic, mode="warn")
 ```
 
-Built-in `Timer` and `Counter` UDTs are automatically mapped — `Timer[n].Done` → T*n*, `Timer[n].Acc` → TD*n*, etc. No explicit entries needed.
+Map a cloned `Timer` or `Counter` to its banks explicitly. The done bit goes to T or CT, the accumulator to TD or CTD:
+
+```python
+OvenTimer = Timer.clone("OvenTimer")
+PartCounter = Counter.clone("PartCounter")
+
+mapping = TagMap([
+    OvenTimer.Done.map_to(t[1]),
+    OvenTimer.Acc.map_to(td[1]),
+    PartCounter.Done.map_to(ct[1]),
+    PartCounter.Acc.map_to(ctd[1]),
+])
+```
 
 Named arrays use `.map_to()` instead of TagMap — see [Named arrays](#named-arrays) above.

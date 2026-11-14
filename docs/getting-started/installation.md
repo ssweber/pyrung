@@ -51,7 +51,7 @@ make          # lint + test
 
 ## Limits
 
-pyrung simulates CLICK PLC behavior as faithfully as possible, but it is not a certified simulator. It models the program (scans, instructions, tags, and timers). It does not model the wiring, the sensors, or the firmware. If your program behaves differently in pyrung than on a CLICK PLC, that's a bug we want to know about. You should still always validate on real hardware before deploying to production. The CircuitPython target runs on a garbage-collected runtime, so sub-millisecond scan timing is not realistic. Modbus TCP has no built-in authentication, so keep it on isolated networks.
+pyrung is not a certified simulator. It models the program (scans, instructions, tags, and timers). It does not model the wiring, the sensors, or the firmware. The [conformance suite](../guides/conformance.md) checks pyrung against a real CLICK and lists where they differ. If your program behaves differently in pyrung than on a CLICK PLC, that's a bug we want to know about. Validate on real hardware before deploying to production. The CircuitPython target runs on a garbage-collected runtime, so sub-millisecond scan timing is not realistic. Modbus TCP has no built-in authentication, so keep it on isolated networks.
 
 ## For LLM agents
 

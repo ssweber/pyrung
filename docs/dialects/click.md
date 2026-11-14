@@ -513,7 +513,7 @@ with rung():
 
 Both forms produce identical CSV output.
 
-A NOP has to sit alone on a bare wire, so the exporter refuses an empty rung with conditions (`with Rung(C1): pass`).
+A NOP has to sit alone on a bare wire, so the exporter refuses an empty rung with conditions (`with rung(C1): pass`).
 
 ### Boxes with pins
 
@@ -522,9 +522,9 @@ A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a 
 Put the outputs that come before the box in a rung above it. Put the outputs that follow it in a rung of their own:
 
 ```python
-with Rung(Start):
+with rung(Start):
     latch(Running)
-with Rung(Start):
+with rung(Start):
     count_up(Parts, preset=10).reset(Clear)
 ```
 
