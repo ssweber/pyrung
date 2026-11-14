@@ -87,7 +87,7 @@ with rung(Running):
 
 A step ends when its time is up **and** its event is on. `None` leaves out either half. Step 1 is time-only. Step 2 waits for `PartPresent` alone. Step 3 needs 2 s and `DrillHome`. Each step needs at least one of the two.
 
-Events are levels, unlike `event_drum`'s rising edges. An event already on when the time comes up ends the step on that scan. One level held across several event-only steps ends one step per scan. The accumulator times from step entry and keeps counting while a timed step waits for its event. A step with no preset does not time.
+Events are levels, unlike `event_drum`'s rising edges. An event already on when the time comes up ends the step on that scan. A step with no preset does not time.
 
 `event_drum(...)`, `time_drum(...)` and `time_event_drum(...)` end their rung. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
 
@@ -95,14 +95,13 @@ Events are levels, unlike `event_drum`'s rising edges. An event already on when 
 
 All three drums run the same routine:
 
-- **Reset** is a level, and it wins. While it is on, the drum sits on step 1, with its completion flag off and **every output off**. A jump or jog that rises on a reset scan is dropped, not saved for later.
-- **Jump and jog** act on their rising edges, even while the rung is false. A drum does one thing a scan. A jump beats a jog. A jog on the last step completes the drum at once. A step a jump or jog moves to waits for the next scan to time or end.
-- **A step register out of range** goes to step 1 the next scan the rung is true.
-- **A step's own end** needs the rung true and the completion flag off. On those scans a step with a preset times. The step moves when its end is met, which is its time, its event, or both. A false rung pauses all of it. The outputs stay as they were.
-- **On the scan the rung comes back, a reset ends or the program starts**, the drum writes the step's pattern row and does nothing else. The step does not time or end, and an event drum's rising edge on that scan is spent. A jump or jog on that scan still acts.
-- **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then. A write to the step register is not a move. The outputs stay, and the next event, time or jog acts on the step the register holds.
-- **The completion flag is the drum's state.** Completing sets it and turns every output off. While it is on, the drum's own time and events do nothing, the accumulator holds, and a rung coming back writes nothing. A jump moves the step and leaves the outputs alone. A jog forward writes the step's pattern row. A reset clears the flag, and so can any other rung. Set from outside, the flag stops a drum wherever it is. Cleared from outside, it frees the drum to go on from the step it is on.
-- **A tag preset is read on every scan** the step times. A tag preset lowered below the accumulator ends the step on that scan. A preset of 0 or less ends the step on its first timing scan.
+- **Reset** is a level, and it wins. While it is on, the drum sits on step 1, with its completion flag off and **every output off**.
+- **Jump and jog** act on their rising edges, even while the rung is false. A jump beats a jog. A jog on the last step completes the drum.
+- **A step's own end** needs the rung true and the completion flag off. A false rung pauses the drum and the outputs stay as they were.
+- **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then.
+- **The completion flag is the drum's state.** Completing sets it and turns every output off. While it is on, the drum's own time and events do nothing. A reset clears the flag, and so can any other rung.
+- **The step register** out of range sends the drum to step 1 on the next true scan. Writing it is not a move. The outputs stay, and the next event or jog acts on the new step.
+- **A tag preset is read on every scan** the step times. A preset of 0 or less ends the step on its first timing scan.
 
 ### Variadic condition chaining
 

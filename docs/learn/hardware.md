@@ -2,7 +2,7 @@
 
 > *"The tech (maybe you) at 3am will thank you."*
 
-You started with a button that turned on a motor. You ended with a tested, deployable conveyor sorting station with start/stop/e-stop, auto and manual modes, a state-driven sorting sequence, structured bin counting, and a test suite that proves it all works. The tests you wrote in [Lesson 10](testing.md) are still your safety net. pyrung's simulation behavior matches its codegen output. The same assertions that proved your sorting logic in pytest will hold on the target hardware. That's the bargain. You don't have to test on hardware because you already tested in simulation.
+You started with a button that turned on a motor. You ended with a tested, deployable conveyor sorting station with start/stop/e-stop, auto and manual modes, a state-driven sorting sequence, structured bin counting, and a test suite that proves it all works. The tests you wrote in [Lesson 10](testing.md) are still your safety net. The same assertions that proved your sorting logic in pytest should hold on the target hardware. pyrung's [conformance suite](../guides/conformance.md) checks its instructions against a real CLICK, and it lists the few places pyrung differs. The suite cannot check your wiring, your sensors or your machine. Run the program on the hardware before you rely on it.
 
 Everything from here is about taking what you've built and connecting it to the physical world.
 

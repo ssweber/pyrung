@@ -39,16 +39,13 @@ with rung(fall(Button)):    # True for ONE scan on True→False transition
     reset(Motor)
 ```
 
-As on a CLICK, each `rise()` or `fall()` contact keeps its own memory of the bit as that contact last saw it. The memory updates every time the scan reaches the contact, whether the rung has power or not. It starts as off at RUN (and again on STOP→RUN). So:
+As on a CLICK, each `rise()` or `fall()` contact keeps its own memory of the bit. The memory updates every scan the contact is reached, whether the rung has power or not. It starts as off at RUN, so:
 
 - A bit already on at the first scan rises on that scan.
 - Two `rise(Button)` contacts each see the edge, wherever they sit.
-- A `rise()` above the rung that writes its bit sees the write one scan later, and still sees it once.
-- A contact in a rung whose other contacts are open keeps watching. An edge that happens while the rung is off is spent, not saved for later.
-- Inside a `forloop()` body, a contact compares with the bit at the previous iteration. In a subroutine called twice a scan, it compares with the bit at the previous call.
-- A contact the scan skips (a subroutine not called, a loop that does not run, rungs passed over by `return_early()`) keeps its memory until it is scanned again.
-
-The memory lives in `SystemState.memory` as `_edge:e1`, `_edge:e2`, ... one key per contact.
+- An edge that happens while the rung is off is spent, not saved for later.
+- A `rise()` above a rung that writes its bit sees the write one scan later.
+- Inside a `forloop()` body, a `rise()` compares with the previous iteration. In a subroutine called twice a scan, it compares with the previous call.
 
 ## Multiple conditions (AND)
 
@@ -102,7 +99,7 @@ with rung(Setpoint < DS[Step + 1]):
     out(NextIsHigher)
 ```
 
-An address outside the block, or in a gap of a sparse block, reads as its type's zero value (0, 0.0, False or a blank `Char`) on either side of the comparison. The rung evaluates, no fault flag is set and the scan carries on. This holds in simulation, compiled replay and generated CircuitPython. `copy()` and `math()` treat a source below the block differently. They set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). This is pyrung's own rule. A CLICK takes a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
+An address outside the block, or in a gap of a sparse block, reads as its type's zero value, and no fault flag is set. `copy()` and `math()` treat a source below the block differently. They set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). A CLICK takes a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
 
 ## INT truthiness
 
@@ -125,4 +122,4 @@ with rung((PressureA + PressureB) > 100):
 
 Inline expressions work in simulation. The CLICK dialect validator will flag them if targeting CLICK hardware. Rewrite them as `math()` instructions instead.
 
-An inline expression is permissive. An operation that hits a math error (a division by zero, a math function outside its domain, a bitwise operation on Inf or NaN) gives 0 and sets no fault flag. See [Math outside `math()`](math.md#math-outside-math).
+An inline expression is permissive. An operation that hits a math error (a division by zero, a math function outside its domain) gives 0 and sets no fault flag. See [Math outside `math()`](math.md#math-outside-math).

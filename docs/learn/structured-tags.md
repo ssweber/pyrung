@@ -22,7 +22,7 @@ Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSen
 pyrung builds a flat tag name from the structure. `Bin[1].Sensor` is how Python reaches the tag, and the tag's real name is `Bin1_Sensor`. On CLICK that name is a flat nickname. On Rockwell it's a real UDT member. Your Python stays the same either way.
 
 ```python
-from pyrung import udt, Bool, Counter, Program, rung, PLC, out, rise, count_up
+from pyrung import udt, Bool, Counter, Program, rung, PLC, out, count_up
 
 @udt(count=2)
 class Bin:
@@ -34,10 +34,10 @@ BinBCounter = Counter.clone("BinBCounter")
 CountReset  = Bool()
 
 with Program() as logic:
-    with rung(rise(Bin[1].Sensor)):
+    with rung(Bin[1].Sensor):
         count_up(BinACounter, preset=10) \
             .reset(CountReset)
-    with rung(rise(Bin[2].Sensor)):
+    with rung(Bin[2].Sensor):
         count_up(BinBCounter, preset=10) \
             .reset(CountReset)
 
@@ -51,7 +51,7 @@ with Program() as logic:
 
 Yes, the `Bin[1]` and `Bin[2]` rungs look nearly identical. Your Python instinct says "loop." Resist it. Each rung is independently editable, grep-able, and visible in the ladder editor. When Bin 2 needs a different preset or an extra condition, you edit one rung and don't fight a loop. Duplication in ladder logic is a feature, not a smell.
 
-That said, Python `for` loops work fine at build time. For example, `for i in (1, 2): with rung(rise(Bin[i].Sensor)): ...` emits two distinct rungs into the program. pyrung doesn't forbid it. It's just normal Python running during program construction. But explicit rungs are usually more readable, especially once the bins diverge.
+That said, Python `for` loops work fine at build time. For example, `for i in (1, 2): with rung(Bin[i].Sensor): ...` emits two distinct rungs into the program. pyrung doesn't forbid it. It's just normal Python running during program construction. But explicit rungs are usually more readable, especially once the bins diverge.
 
 A singleton UDT (`count` omitted or `count=1`) generates compact names with no instance number: `Motor_Running`, `Motor_Speed`. With `count > 1` you get numbered names: `Pump1_Running`, `Pump2_Running`. If your naming convention wants `Motor1_Running` even for a singleton (so future expansion doesn't rename everything), pass `always_number=True`.
 
