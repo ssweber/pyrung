@@ -6,7 +6,7 @@ pyrung is a Python DSL for writing ladder logic. `with rung()` maps to a ladder 
 
 ## The pitch
 
-Click PLCs have no built-in simulator. pyrung lets you test first — write logic in Python, unit test with pytest, then transpose to Click. Or run as a soft PLC over Modbus to test send/receive instructions (two pyrung programs can talk to each other). Or generate a CircuitPython scan loop for P1AM-200.
+CLICK Programming Software has no simulator. pyrung runs a program the way a CLICK does, and ClickNick's CLICK Simulator runs on it. Write logic in Python, unit test it with pytest, then transpose to CLICK. Or run it as a soft PLC over Modbus, or generate a CircuitPython scan loop for P1AM-200.
 
 ## Tone and style decisions
 

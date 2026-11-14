@@ -25,7 +25,7 @@ with PLC(logic) as plc:
 
 ## Why
 
-CLICK PLCs ship with no simulator, no version control beyond copies of a `.ckp`, and no way to test a program short of downloading it to a real PLC. You draw the ladder in CLICK Programming Software, download it to hardware, and hope. The Structured Text crowd has options. The ladder crowd doesn't. pyrung is that option: write and test the logic in Python first, then move the same rungs into CLICK.
+CLICK Programming Software ships with no simulator, no version control beyond copies of a `.ckp`, and no way to test a program short of downloading it to a real PLC. pyrung fills that gap. It is the engine under ClickNick's CLICK Simulator, and a suite of test cases run on a real CLICK checks that it does what a CLICK does. Write and test the logic in Python, then move the same rungs into CLICK.
 
 Same source, three paths: `pyrung_to_ladder()` encodes your rungs for [ClickNick](https://pyrung.com/clicknick/) to paste into CLICK Programming Software; the CircuitPython dialect generates a scan loop for a P1AM-200; or run it as an emulated CLICK over Modbus and test two programs talking to each other with no hardware.
 
@@ -127,5 +127,5 @@ Step through scans rung by rung, set breakpoints on rungs, force tags, and time-
 
 ## Disclaimers
 
-- **Simulation is best-effort.** pyrung models CLICK PLC behavior as closely as practical, but it is not a certified simulator. You are responsible for verifying your program on real hardware before production use.
+- **Simulation is best-effort.** pyrung models CLICK PLC behavior as closely as practical, but it is not a certified simulator. You are responsible for verifying your program on real hardware before production use. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page lists what was checked against a real CLICK and the known differences.
 - **Modbus is unauthenticated.** The emulated CLICK Modbus interface and CircuitPython Modbus TCP server listen on the network with no encryption or access control — standard for Modbus, but keep them off untrusted networks.

@@ -1,6 +1,6 @@
 # pyrung
 
-Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition on the rail, instructions in the body. Targets Click PLCs and P1AM-200. No built-in Click simulator — test in Python first, then transpose.
+Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition on the rail, instructions in the body. Targets CLICK PLCs and P1AM-200. pyrung runs a program the way a CLICK does. It is the engine under ClickNick's CLICK Simulator, checked against a real CLICK by the conformance suite.
 
 ## Build & Development
 
