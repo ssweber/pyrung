@@ -13,7 +13,7 @@
 
 ## Unreleased
 
-pyrung now runs a program the way a CLICK PLC does, and it is the engine under ClickNick's CLICK Simulator. A suite of test cases runs on pyrung and on a real CLICK, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page gives the case counts by area, the two known differences, what the suite doesn't reach, and how to run it.
+pyrung runs a program the way a CLICK PLC does. It is the engine under ClickNick's CLICK Simulator. A suite of test cases runs on pyrung and on a real CLICK, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page gives the case counts by area and the two known differences. It also says what the suite doesn't reach and how to run it.
 
 ### What's new
 
@@ -104,7 +104,7 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
   Update code that reads those fields.
 - Counters count rising edges, as a CLICK does (they counted every scan the input was on). A down counter is done at `Acc <= preset` (it was `Acc <= -preset`).
   A `rise()` on a counter's rung is no longer needed. To count scans, use `math(N + 1, N)`. To count down 5, give the down counter a preset of -5.
-- Each instruction reads only the contacts on its own path from the rail, as a CLICK does. A branch or a box pin now sees a tag written earlier in the same rung (it saw the value from rung entry). A box with pins (a counter, a retentive timer's `.reset()`, a shift register or a drum) must be alone on its rung, because CLICK won't compile it otherwise. `simplified()` follows the new order, so the last `out()` of a tag in a rung decides it.
+- Each instruction reads only the contacts on its own path from the rail, as a CLICK does. A branch or a box pin now sees a tag written earlier in the same rung (it saw the value from rung entry). A box with pins (a counter, a retentive timer's `.reset()`, a shift register or a drum) must be alone on its rung, because CLICK won't compile it otherwise. `simplified()` follows the new order, so the last `out()` of a tag in a rung decides it. Write an OR as `Or(A, B)`.
   Run `pyrung check`, which flags the changed rungs as `RUNG_ORDER_DEPENDENT`. Building a rung with anything else beside a box raises `RuntimeError`, so move the rest to rungs of their own.
 - `math()` follows CLICK's Math. A math error zeroes only the operation that failed, so `X / 0 + 5` stores 5 with `fault.division_error` (it stored 0). `%` takes the sign of the dividend.
   Check formulas that relied on the old results.
@@ -114,8 +114,8 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
   Clear the bit with the instruction's `.reset()` pin.
 - `Physical` takes one flat keyword per value, and every argument after the name is keyword-only. `Pulse`, `Ramp` and `Approach` are gone.
   Write `flasher_on=` and `flasher_off=` for a `Pulse`, `ramp_on=` and `ramp_off=` for a `Ramp`, and `approach_to=` and `approach_rate=` for an `Approach`. Run "Upgrade Project" in ClickNick, or `pyrung.click.tag_map.upgrade_comment()`, to rewrite old comments.
-- CLICK ladder export refuses what CLICK's editor refuses, so some programs that exported before now raise `LadderExportError`. Each refusal names a `CLK_` code.
-  Fix the rung, or pass the code to `pyrung_to_ladder(allow=...)`.
+- CLICK ladder export refuses what CLICK's editor refuses, so some programs that exported before now raise `LadderExportError`. Most refusals name a `CLK_` code.
+  Fix the rung, or pass that code to `pyrung_to_ladder(allow=...)`.
 - The verifier treats timers as black boxes, so a `Proven` holds for any scan time and preset. It answers `Intractable` when a property depends on which timer finishes first (`kind="timing"`), or when it can't try every value of an input.
   Regenerate lock files with `pyrung lock`. Give such an input `choices=` or a `min=`/`max=` of at most 1000 values, and test timing with `run_for()`.
 - These now do what a CLICK does, so a test that counted on the old result may fail:
@@ -126,11 +126,11 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
   - the built-in `Timer`, whose `Acc` resets on STOP->RUN (keep it with `Timer.clone(..., retentive={"Acc": True})`)
   - the built-in `Counter`, whose `Done` survives STOP->RUN
   - drums
-  - `forloop()`, whose body is skipped when its rung is false. A `with Rung(...)` inside it is a rung of the body
+  - `forloop()`, whose body is skipped when its rung is false. A `with Rung(...)` inside it is a rung of the body, so move it out of the loop if it should run once a scan
   - Copy, Block copy and Fill into another type
   - text copies, text compares and `search()`
   - `reboot()` with the battery in, which keeps only the retentive tags
-  - a `Real`, which holds CLICK's float32 range. A literal outside it raises `ValueError`
+  - a `Real`, which holds CLICK's float32 range. A literal or default outside it, or Inf or NaN, raises `ValueError`. So does a patch or force of a finite value outside it
   - `scan_clock_toggle` (SC3), which is on from the first scan
   - harness feedback, which runs as the CLICK coil it behaves like, so an edge can move by a scan or more
   - CLICK import, which brings each wire of a CLICK rung back as a rung of its own
@@ -138,7 +138,7 @@ Most of these bring pyrung in line with what a CLICK does. Each says what change
   Rerun your tests.
 - Removed or renamed:
   - `pyrung.twin` is now `pyrung.conformance`
-  - `SystemState` is no longer a pyrsistent `PRecord` or `PMap`. Its fields, `set()`, `update()`, `Mapping` reads, equality and pickles work as before
+  - `SystemState` is no longer a pyrsistent `PRecord` or `PMap`. Its fields, `set()`, `update()`, `Mapping` reads, equality and pickles work as before. Replace calls to the other pyrsistent map methods
   - `SystemState.memory` holds `_edge:` keys in place of `_prev:` keys. A saved state still loads
   - `generate_circuitpy()` and `write_circuitpy()` lose `mapped_tag_scope`
   - `refresh_workspace_lifecycle_guidance()` is gone. Generated CLICK projects keep pyrung's guidance in `AGENTS.pyrung.md` and `README.pyrung.md`
