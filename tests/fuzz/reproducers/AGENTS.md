@@ -6,7 +6,7 @@ Minimized cases where optimized `always()` or `reachable_states()` disagrees wit
 
 ```powershell
 # Run a reproducer
-make test -- tests/fuzz/reproducers/soundness_YYYYMMDD_HHMMSS.py
+uv run pytest tests/fuzz/reproducers/soundness_YYYYMMDD_HHMMSS.py
 
 # Triage: reruns optimized vs unoptimized, prints journal, finds minimal restoring set
 uv run python devtools/diagnose_reproducer.py tests/fuzz/reproducers/soundness_YYYYMMDD_HHMMSS.py
@@ -39,7 +39,7 @@ uv run pytest tests/core/analysis/test_prove_fuzz_reproducer_regressions.py::tes
 uv run pytest tests/core/analysis/test_prove_bfs_api.py::test_name --prove-debug -x
 ```
 
-The dump shows both optimized and unoptimized contexts side-by-side: `stateful_names`, `stateful_dims`, `threshold_vector_specs`, journal decisions, and counterexample traces. Implemented in `tests/core/analysis/conftest.py`.
+The dump shows both optimized and unoptimized contexts side-by-side: `stateful_names`, `stateful_dims`, `threshold_vector_specs`, journal decisions, and counterexample traces. Implemented in `tests/conftest.py`.
 
 ## Debugging hints
 

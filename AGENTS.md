@@ -4,17 +4,17 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 
 ## Build & Development
 
-- `make install` — install deps (or `uv sync --all-extras --dev`)
-- `make` — install + lint + test
-- `make lint` — codespell, ruff (check + format), ty
-- `make test` — pytest without the integration, hypothesis, soundness, fuzz, tumbler and conformance markers (ALWAYS use make, not `uv run pytest`). It, `make test-pilot` and `make test-fold` run on `PYTEST_WORKERS` xdist workers (default 6; `PYTEST_WORKERS=0` for one process, a file stays on one worker)
+- `make install` — install deps (`uv sync --locked --all-extras --dev`)
+- `make` — install, then lint, test, test-conformance, test-hypothesis and docs-check
+- `make lint` — ruff (fixes and formats files), `devtools/semantic_lint.py`, ty, and a syntax check of the extension's JS
+- `make test` — pytest without the integration, hypothesis, soundness, fuzz, tumbler and conformance markers (run the whole suite through make, never a bare `uv run pytest`). It, `make test-pilot` and `make test-fold` run on `PYTEST_WORKERS` xdist workers (default 6; `PYTEST_WORKERS=0` for one process, a file stays on one worker)
 - `make test-prove` — prover (verifier) subsystem only
 - `make test-pilot` — pilot (`how()` planner) tests
 - `make test-tumbler` — generated-program PILOT fixtures; run after `make test-pilot`
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
 - `make test-fuzz` — fuzzer suite
-- `make test-fold` — the whole suite again, with every long run checked scan by scan against plain stepping (`--fold-check`, `tests/fold_check.py`). Long runs go through the jit, the guarded loop over the compiled kernel. Only a change to the jit needs this run, for iteration speed. That covers `core/scan_trace.py`, `coast_run.py`, `cycle_jump.py`, `rung_firings.py`, `compiled_run.py`, `kernel.py`, `read_trace.py`, `tests/fold_check.py`, and how timers, counters or clocks compute. A program that only uses timers does not need it.
+- `make test-fold` — the suite again, with every long run checked scan by scan against plain stepping (`--fold-check`, `tests/fold_check.py`). Long runs go through the jit, the guarded loop over the compiled kernel. Run it only after a change to the jit or to how timers, counters or clocks compute. The jit is `core/scan_trace.py`, `coast_run.py`, `cycle_jump.py`, `rung_firings.py`, `compiled_run.py`, `kernel.py`, `read_trace.py` and `tests/fold_check.py`. A test program that only uses timers is no reason to run it.
 - `make test-fold-new` — only the test files this branch adds, under `--fold-check` (mergeq's `fold-new` stage; judges mismatches, not vacuity)
 - `make test-conformance` — conformance cases over Modbus TCP against the local soft PLC (`PLC=host[:port]` for a real CLICK, `TARGET=circuitpy` for the generated P1AM-200 code run locally, `GROUP=name` for some groups); `make conformance-export OUT=dir` writes the CLICK project
 - `make test-integration` — integration tests (needs hardware/network)
@@ -47,7 +47,13 @@ These rules cover the docs, `CHANGELOG.md`, comments, docstrings and commit mess
 
 Each channel has its own shape:
 
-- **Changelog:** the headline is one sentence saying what changed for the user. Each sub-bullet is one change. What the user should do about it comes last ("Copy it into an `Int` first."). No rationale and no evidence.
+- **Changelog:** write for a user deciding whether to upgrade.
+  - Lead with what they can now do. Give each item one line, and group the items.
+  - Put breaking changes in one "Behaviour changes" block. Each gets one line for what changed and one for what to do ("Copy it into an `Int` first.").
+  - Leave out fixes to anything added since the last tag.
+  - Leave out internal names, history, rationale and evidence.
+  - Say "now does what a CLICK does" when that is what the change amounts to.
+  - Leave out edge-case semantics. The conformance suite records them, and the instruction docs carry the ones an author needs.
 - **Docs:** code first, then what it does, then the gotcha. If the code is clear, don't restate it in prose.
 - **Comments and docstrings:** say why, in one or two sentences, with the purpose first and then the trap. Cut a comment that narrates what the code plainly does.
 
@@ -68,7 +74,8 @@ src/pyrung/
 ├── cli.py               # Unified CLI (lock, check, dap, live)
 ├── pytest_plugin.py     # Coverage plugin (pyrung_coverage fixture)
 ├── core/
-│   ├── tag.py           # Tag types (Bool, Int, Dint, Real, Word, Char), UDT, named_array
+│   ├── tag.py           # Tag types (Bool, Int, Dint, Real, Word, Char)
+│   ├── structure.py     # udt, named_array
 │   ├── state.py         # SystemState (immutable, slotted; tags and memory are PMaps), scan state
 │   ├── rung.py          # Rung DSL, condition evaluation
 │   ├── runner.py        # Engine plus first-class causal Epoch lineage (step, seek, fork)
@@ -125,8 +132,8 @@ src/pyrung/
 ## Sub-AGENTS.md Files
 
 - `src/pyrung/core/analysis/prove/AGENTS.md` — Prover internals, optimization glossary, module map, invariants
-- `src/pyrung/core/analysis/pilot/AGENTS.md` — PILOT steering invariants, actual control flow, module map
-- `editors/vscode/pyrung-debug/AGENTS.md` — VS Code extension event architecture, key files
+- `src/pyrung/core/analysis/pilot/AGENTS.md` — PILOT contracts and invariants, where to start, vocabulary
+- `editors/vscode/pyrung-debug/AGENTS.md` — VS Code extension event architecture, key files, packaging. Plain JS with no dependencies, so no `npm install`
 - `docs/AGENTS.md` — Documentation tone and style, API design decisions, technical details
 - `tests/conformance/AGENTS.md` — Conformance suite protocol, groups and manifest, register layout, wire pacing, coverage checklist
 - `tests/fuzz/reproducers/AGENTS.md` — Fuzz reproducer workflow, diagnose script usage
@@ -135,20 +142,15 @@ src/pyrung/
 
 - `CHANGELOG.md` — User-visible changes, grouped by release
 - `docs/getting-started/` — Installation, core concepts, quickstart
+- `docs/learn/` — Ladder logic tutorial for Python developers
 - `docs/instructions/` — Full DSL reference by instruction group
-- `docs/guides/` — Runner, testing, commissioning, analysis, verification, architecture, DAP
+- `docs/guides/` — Runner, testing, commissioning, analysis, verification, conformance, architecture, DAP
 - `docs/dialects/` — Click and CircuitPython dialect details
 - `docs/internal/debug-spec.md` — Debug architecture spec
 
-## VS Code Extension (`editors/vscode/pyrung-debug/`)
-
-- Package: `cd editors/vscode/pyrung-debug && npx @vscode/vsce package`
-- Install: `code --install-extension /absolute/path/to/pyrung-debug-0.12.0.vsix`
-- No `npm install` needed — plain JS, no dependencies
-
 ## Gotchas
 
-- `copy()` clamps out-of-range, except a `Word` into an `Int` keeps its bits and a negative into a `Word` wraps; `math()` wraps (modular arithmetic)
+- `copy()` clamps out-of-range, except a `Word` into an `Int` keeps its bits and -32768..-1 into a `Word` keeps its low 16 bits (anything lower stores 32768); `math()` wraps (modular arithmetic)
 - Counters count rising edges (CLICK semantics, per-counter input memory `_cu:i{N}`/`_cd:i{N}`); a held input counts once. Down counter Done is `Acc <= preset` from Acc 0 (a negative preset counts down to it; a positive one is done at once unless Acc is staged above it)
-- Division by zero → that division = 0 (the rest of the formula runs), fault flag set
+- Division by zero in `math()` → that division = 0 (the rest of the formula runs), fault flag set. Outside `math()` it is 0 with no flag
 - Comma inside `Rung(...)` is implicit AND; use `Or()` for OR logic
