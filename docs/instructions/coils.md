@@ -45,7 +45,7 @@ with rung(Alarm):
     flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 ```
 
-The on phase starts when the rung goes true. When a phase reaches its preset, the other phase starts. The rung going false turns `Beacon` off, and the next true rung starts again with an on phase. CLICK's editor refuses a constant preset of 0 or below.
+The on phase starts when the rung goes true. When a phase reaches its preset, the other phase starts. The rung going false turns `Beacon` off, and the next true rung starts again with an on phase. CLICK's editor refuses a constant preset of 0 or below. A register preset of 0 or below turns `Beacon` off and freezes both `Acc` values.
 
 ### `timed` — on for a set time
 
@@ -55,7 +55,7 @@ with rung(CallButton):
     timed(Lamp, Timer[6], 3, "sec", maintained=True)   # at least 3 s, then follows the rung
 ```
 
-A rung edge starts the on time. The on time runs out whatever the rung does, and an edge during it does not restart it. Without `maintained=True`, the next pulse needs the rung to go false and true again.
+A rung edge starts the on time. The on time runs out whatever the rung does, and an edge during it does not restart it. Without `maintained=True`, the next pulse needs the rung to go false and true again. A preset of 0 or below gives no pulse.
 
 These coils never turn on their timer's `Done` bit, so a contact on `Timer[3].Done` won't tell you a `flasher` or `timed` coil has finished. Read the coil itself, or compare the `Acc`. Only `toggle` takes `immediate(...)`. Don't reuse a coil's timer elsewhere. An `on_delay` on the same timer is a conflicting-output finding, as it is in CLICK.
 

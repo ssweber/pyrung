@@ -44,6 +44,8 @@ As on a CLICK, each `rise()` or `fall()` contact keeps its own memory of the bit
 - A bit already on at the first scan rises on that scan.
 - Two `rise(Button)` contacts each see the edge, wherever they sit.
 - An edge that happens while the rung is off is spent, not saved for later.
+- A `rise()` above a rung that writes its bit sees the write one scan later.
+- Inside a `forloop()` body, a `rise()` compares with the previous iteration. In a subroutine called twice a scan, it compares with the previous call.
 
 ## Multiple conditions (AND)
 

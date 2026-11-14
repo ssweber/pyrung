@@ -100,6 +100,7 @@ All three drums run the same routine:
 - **A step's own end** needs the rung true and the completion flag off. A false rung pauses the drum and the outputs stay as they were.
 - **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then.
 - **The completion flag is the drum's state.** Completing sets it and turns every output off. While it is on, the drum's own time and events do nothing. A reset clears the flag, and so can any other rung.
+- **The step register** out of range sends the drum to step 1 on the next true scan. Writing it is not a move. The outputs stay, and the next event or jog acts on the new step.
 - **A tag preset is read on every scan** the step times. A preset of 0 or less ends the step on its first timing scan.
 
 ### Variadic condition chaining

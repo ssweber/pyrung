@@ -28,13 +28,17 @@ CLICK's editor refuses a whole-number constant outside −2147483648..2147483647
 
 ## REAL range and precision
 
-A CLICK REAL is a 32-bit float, so a `math()` or `copy()` result past ±3.4028235E+38 is +Inf or −Inf. A `math()` also sets `system.fault.out_of_range` (SC43). Inf and NaN follow IEEE 754 in later arithmetic.
+A CLICK REAL is a 32-bit float, so a `math()` or `copy()` result past ±3.4028235E+38 is +Inf or −Inf. A `math()` also sets `system.fault.out_of_range` (SC43). Inf and NaN follow IEEE 754 in later arithmetic. A default or literal must be finite and in range. A `patch()` or `force()` of a finite value past the range raises `ValueError`.
+
+Into an `Int`, `Dint` or `Word`, a `math()` result of ±Inf stores 0 and sets `out_of_range`, and NaN stores 0 with no flag. A `copy()` of ±Inf clamps instead (see [Copy](copy.md)).
+
+The range is checked when `math()` stores its result, not at each step of the formula.
 
 Inside the range pyrung keeps a `Real` at Python's 64-bit precision, while a CLICK REAL is a 32-bit float. For example, `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
 
 ## Division
 
-- A division by zero is 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5. Every later `math()` clears the flag, so read it on the next rung.
+- A division by zero is 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5. Every later `math()` clears the flag, including one on a false rung and a one-shot that does not fire. A `copy()`, coil, timer or counter leaves it. Read it on the next rung.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
 - In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero is 0 with no flag, and the rest of the formula runs. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
@@ -124,6 +128,8 @@ roll = randint(1, 6)
 plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
+
+A hex-mode draw whose bounds are cut to 16 bits is chosen through `roll.ucut_tag` instead. The verifier explores every value a draw can take. A bound tag with no `min`/`max` or `choices` makes the answer `Intractable`, so declare a range.
 
 `randint` is not allowed inside a `forloop()`. Every iteration would read the scan's one draw, while CLICK draws again on each execution. On CircuitPython the board calls `random.randint` directly, so its draws are not replayable.
 
