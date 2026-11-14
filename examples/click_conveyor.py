@@ -52,7 +52,7 @@ Manual = Bool(public=True)  # X005 — manual mode selector
 EntrySensor = Bool()  # X006 — photo-eye at conveyor entry
 DiverterBtn = Bool(public=True)  # X007 — manual diverter button
 BinASensor = Bool()  # X008 — small-box bin exit sensor
-BinBSensor = Bool()  # X009 — large-box bin exit sensor
+BinBSensor = Bool()  # X101 — large-box bin exit sensor
 
 # ---------------------------------------------------------------------------
 # Tags — outputs
@@ -107,7 +107,7 @@ mapping = TagMap(
         EntrySensor.map_to(x[6]),
         DiverterBtn.map_to(x[7]),
         BinASensor.map_to(x[8]),
-        BinBSensor.map_to(x[9]),
+        BinBSensor.map_to(x[101]),
         # Outputs
         ConveyorMotor.map_to(y[1]),
         DiverterCmd.map_to(y[2]),
