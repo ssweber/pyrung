@@ -66,6 +66,7 @@ nav:
         - CircuitPython Quickstart: guides/circuitpy-quickstart.md
       - Tools:
         - VS Code Debugger: guides/dap-vscode.md
+        - Console: guides/console.md
         - Architecture: guides/architecture.md
   - Dialects:
       - CLICK PLC: dialects/click.md

@@ -1250,9 +1250,7 @@ class TestHelpAndErrors:
         from pyrung.dap.grammar import command_grammar
 
         command_grammar()  # Import every module that contributes console verbs.
-        source = (Path(__file__).parents[2] / "docs/guides/dap-vscode.md").read_text(
-            encoding="utf-8"
-        )
+        source = (Path(__file__).parents[2] / "docs/guides/console.md").read_text(encoding="utf-8")
         start = "<!-- dap-console-help:start -->"
         end = "<!-- dap-console-help:end -->"
         payload = source.split(start, 1)[1].split(end, 1)[0].strip()

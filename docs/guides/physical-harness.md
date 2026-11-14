@@ -258,7 +258,7 @@ RELAY = Physical("Relay", toggle=True)                     # push on, push off
 
 Both answer a rise of `En`. `timed` runs as a CLICK `timed` coil. `Fb` turns on for the time given, even if `En` drops sooner. A second rise during that time does not restart it. With `maintained=True`, `Fb` also stays on while `En` stays on. `toggle` runs as a CLICK `toggle` coil, and each rise of `En` flips `Fb`.
 
-The rise's scan counts toward the time, as on a CLICK, so a `timed` of one scan or less never turns `Fb` on. A harness installed while `En` is already on doesn't count that as a rise. That holds for the links the program declares, and for the [bench links](dap-vscode.md#bench-links) the debugger puts back at install. A link you add after the install does count it, so a `timed` or `toggle` link added while `En` is on fires on the next scan.
+The rise's scan counts toward the time, as on a CLICK, so a `timed` of one scan or less never turns `Fb` on. A harness installed while `En` is already on doesn't count that as a rise. That holds for the links the program declares, and for the [bench links](console.md#bench-links) the debugger puts back at install. A link you add after the install does count it, so a `timed` or `toggle` link added while `En` is on fires on the next scan.
 
 In a comment, `maintained` and `toggle` are bare words, as in `[link=Bell, timed=500ms, maintained]` and `[link=Btn, toggle]`.
 
@@ -321,4 +321,4 @@ For fault coverage (proving every device has an alarm path), see [Verification](
 - [Testing Guide](testing.md) — deterministic testing patterns, forces, monitors
 - [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [VS Code Debugger](dap-vscode.md) — Data View, breakpoints, step-through debugging
-- [Harness in the debugger](dap-vscode.md#autoharness-in-the-debug-session) — auto-installs when annotations exist, `harness status/remove/install` console verbs, capture provenance
+- [Harness in the debugger](console.md#autoharness) — auto-installs when annotations exist, `harness status/remove/install` console verbs, capture provenance

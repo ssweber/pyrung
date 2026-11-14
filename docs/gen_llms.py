@@ -81,7 +81,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "guides/circuitpy-quickstart.md",
         ),
     ),
-    ("Guides — Tools", ("guides/dap-vscode.md", "guides/architecture.md")),
+    ("Guides — Tools", ("guides/dap-vscode.md", "guides/console.md", "guides/architecture.md")),
     (
         "Dialects",
         (
