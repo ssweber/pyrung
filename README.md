@@ -25,7 +25,9 @@ with PLC(logic) as plc:
 
 ## Why
 
-CLICK Programming Software ships with no simulator, no version control beyond copies of a `.ckp`, and no way to test a program short of downloading it to a real PLC. pyrung fills that gap. It is the engine under ClickNick's CLICK Simulator, and a suite of test cases run on a real CLICK checks that it does what a CLICK does. Write and test the logic in Python, then move the same rungs into CLICK.
+CLICK Programming Software ships with no simulator, no version control beyond copies of a `.ckp`, and no way to test a program short of downloading it to a real PLC. pyrung fills that gap. It is the engine under ClickNick's CLICK Simulator, and a suite of test cases checks it against a real CLICK, case by case. Write and test the logic in Python, then move the same rungs into CLICK.
+
+> **A simulator, not a substitute for testing.** The conformance results come from one CPU (a C2-03CPU with CLICK V4.00), and yours may differ in ways the suite doesn't reach. The [known differences](https://pyrung.com/pyrung/guides/conformance/#where-pyrung-knowingly-differs) are listed. Test on the real machine, with proper safeguards, before anything interacts with people. pyrung and ClickNick are independent projects, not affiliated with or endorsed by AutomationDirect.
 
 Same source, three paths: `pyrung_to_ladder()` encodes your rungs for [ClickNick](https://pyrung.com/clicknick/) to paste into CLICK Programming Software; the CircuitPython dialect generates a scan loop for a P1AM-200; or run it as an emulated CLICK over Modbus and test two programs talking to each other with no hardware.
 

@@ -2,6 +2,9 @@
 
 pyrung aims to do what a CLICK does. The conformance suite checks that. It is a set of small ladder programs that run the same way on pyrung and on a real CLICK. The expected answer is always what the CLICK does.
 
+!!! warning "A simulator, not a substitute for testing"
+    The conformance results come from one CPU (a C2-03CPU with CLICK V4.00), and yours may differ in ways the suite doesn't reach. The [known differences](#where-pyrung-knowingly-differs) are listed. Test on the real machine, with proper safeguards, before anything interacts with people. pyrung and ClickNick are independent projects, not affiliated with or endorsed by AutomationDirect.
+
 ## What a case is
 
 A case is one sentence and a small ladder that proves it.

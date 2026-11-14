@@ -6,7 +6,9 @@ pyrung is a Python DSL for writing ladder logic. `with rung()` maps to a ladder 
 
 ## The pitch
 
-CLICK Programming Software has no simulator. pyrung runs a program the way a CLICK does, and ClickNick's CLICK Simulator runs on it. Write logic in Python, unit test it with pytest, then transpose to CLICK. Or run it as a soft PLC over Modbus, or generate a CircuitPython scan loop for P1AM-200.
+CLICK Programming Software has no simulator. pyrung is the engine under ClickNick's CLICK Simulator, and the conformance suite checks it against a real CLICK, case by case. Write logic in Python, unit test it with pytest, then transpose to CLICK. Or run it as a soft PLC over Modbus, or generate a CircuitPython scan loop for P1AM-200.
+
+Every claim that pyrung was checked against a CLICK gets a visible disclaimer in the same place, not only at the bottom of the page. It says three things. The results come from one CPU (a C2-03CPU with CLICK V4.00), so yours may differ, and the known differences are listed. pyrung doesn't replace testing on the real machine, with proper safeguards, before anything interacts with people. pyrung and ClickNick are not affiliated with or endorsed by AutomationDirect. Write "checked against a real CLICK, case by case", never "matches CLICK".
 
 ## Tone and style decisions
 

@@ -13,7 +13,9 @@
 
 ## Unreleased
 
-pyrung runs a program the way a CLICK PLC does. It is the engine under ClickNick's CLICK Simulator. A suite of test cases runs on pyrung and on a real CLICK, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page gives the case counts by area and the two known differences. It also says what the suite doesn't reach and how to run it.
+pyrung is the engine under ClickNick's CLICK Simulator. A suite of test cases checks it against a real CLICK, case by case, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page gives the case counts by area and the two known differences. It also says what the suite doesn't reach and how to run it.
+
+The results come from one CPU (a C2-03CPU with CLICK V4.00), and yours may differ. Test on the real machine, with proper safeguards, before anything interacts with people. pyrung is not affiliated with or endorsed by AutomationDirect.
 
 ### What's new
 
