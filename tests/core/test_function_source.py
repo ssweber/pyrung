@@ -60,7 +60,7 @@ def _has_a_kernel(program) -> bool:
     return PLC(program, dt=0.01)._compiled_replay_supported_kernel() is not None
 
 
-def _from_code_py(fn, name: str):
+def _from_code_py(fn, name: str, v: int = 0):
     """Call the ``def`` a generated code.py carries for *fn*."""
     hardware = P1AM()
     hardware.slot(1, "P1-08SIM")
@@ -72,7 +72,7 @@ def _from_code_py(fn, name: str):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             namespace: dict = {}
             exec(compile(ast.Module([node], []), "code.py", "exec"), namespace)  # noqa: S102
-            return namespace[name](0)
+            return namespace[name](v)
     raise AssertionError(f"no def {name} in code.py")
 
 
@@ -149,7 +149,8 @@ def test_a_body_with_a_comprehension_is_the_function(fn):
     program = _program(fn)
     assert _has_a_kernel(program)
     _seeks_as_it_ran(program)
-    assert _from_code_py(fn, fn.__name__) == fn(0)
+    assert fn(4)["out"] > 0
+    assert _from_code_py(fn, fn.__name__, 4) == fn(4)
 
 
 def test_a_whitespace_only_line_in_a_string_at_column_0_is_kept(tmp_path, monkeypatch):

@@ -129,8 +129,8 @@ _SEEN: list[Any] = []
 
 
 # The global is read only inside the comprehension. Python 3.12 inlines a list comprehension
-# into the function's own code (it was a nested code object), and a generator expression stays
-# nested, so the gate must find the read either way.
+# into the function's own code (it was a nested code object). A generator expression stays
+# nested. The gate must find the read in both.
 def _keeps_a_list_in_a_comprehension(v):
     return {"out": [_SEEN.append(v) or len(_SEEN) >= 50 for _ in (0,)][0]}
 
