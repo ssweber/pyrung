@@ -19,6 +19,21 @@ from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.pilot.coast import CoastSession
 from pyrung.core.coast_run import coast_until, work_charged
 
+# The fold check (make test-fold) runs only these. The other waits each take minutes to check
+# against stepping, and make test and make test-pilot still run them.
+_KEPT_UNDER_FOLD = {
+    "test_a_chain_of_timers_under_a_hold_lands_on_the_first_scan[3-2-min-29999]",
+    "test_one_timer_past_a_million_scans_lands_on_the_first_scan[10000s]",
+    "test_the_recording_stepped_from_the_start_lands_there_too[drum]",
+}
+
+
+@pytest.fixture(autouse=True)
+def _few_under_fold(request: pytest.FixtureRequest) -> None:
+    if request.config.getoption("fold_check", default=False):
+        if request.node.name not in _KEPT_UNDER_FOLD:
+            pytest.skip("too slow under the fold check")
+
 
 def _chain(first: int, second: int, unit: str) -> tuple[Program, Bool]:
     go = Bool("LwGo")

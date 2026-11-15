@@ -80,8 +80,9 @@ hypothesis = { cmd = ["make", "test-hypothesis"], timeout = 300 }
 docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plus the reference manifest; a new public export must be listed
 
 [queue.presets]
-# prove and pilot are subsets of test and fold, so only fast names them.
-# fold reruns all of test's tests under --fold-check (31 min against test's 11 on 2026-11-15).
+# prove and pilot are subsets of test, so only fast names them. fold leaves out most of
+# test_pilot_long_wait.py, so a jit branch gates on pilot too.
+# fold reruns test's tests under --fold-check (31 min against test's 11 on 2026-11-15).
 # So only a jit change runs it, through train-jit and the profile's jit file rule.
 default = ["lint", "fold-new", "test", "soundness"]
 fast = ["lint", "docs", "fold-new", "prove", "pilot"]
