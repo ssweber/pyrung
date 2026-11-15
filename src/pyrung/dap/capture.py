@@ -4,7 +4,7 @@ Passive recording layer: every console command evaluated while a
 recording is active gets appended to the buffer with its scan_id
 and timestamp.  ``record ACTION`` / ``record stop`` bracket a
 named capture.  On stop the buffer yields a plain-text transcript
-ready for replay or condensation.
+that ``replay`` runs.
 """
 
 from __future__ import annotations
@@ -24,6 +24,29 @@ class CaptureEntry:
     scan_id: int | None
     timestamp: float
     provenance: str = "console"
+
+
+@dataclass(frozen=True)
+class ProvenanceLine:
+    """A transcript line split into provenance and console command."""
+
+    source: str | None
+    command: str
+
+
+def parse_provenance_line(line: str) -> ProvenanceLine:
+    """Parse ``source: command`` transcript lines.
+
+    Sources may themselves contain colons, as in
+    ``harness:analog:thermal: patch TankTemp 2.0``.  Splitting on the
+    final ``": "`` preserves the full provenance source.
+    """
+
+    stripped = line.strip()
+    source, sep, command = stripped.rpartition(": ")
+    if sep and source and not any(ch.isspace() for ch in source):
+        return ProvenanceLine(source=source, command=command.strip())
+    return ProvenanceLine(source=None, command=stripped)
 
 
 @dataclass
@@ -79,7 +102,7 @@ class CaptureBuffer:
 # Console verb
 # ---------------------------------------------------------------------------
 
-_CAPTURE_EXCLUDED = frozenset({"record", "replay", "help", "pause", "continue", "spec"})
+_CAPTURE_EXCLUDED = frozenset({"record", "replay", "help", "pause", "continue"})
 
 
 def capture_hook(adapter: Any, verb: str, expression: str, *, provenance: str = "console") -> None:
@@ -105,35 +128,8 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
     if sub.lower() == "stop":
         if not capture.recording:
             raise adapter.DAPAdapterError("No active recording")
-        action = capture.action or "capture"
-        start_scan_id = capture.start_scan_id
-        _raw_transcript, entries = capture.stop()
-
-        from pyrung.dap.condenser import condense_capture
-        from pyrung.dap.miner import mine_candidates
-
-        runner = adapter._require_runner_locked()
-        condensed = condense_capture(
-            action,
-            entries,
-            runner,
-            start_scan_id=start_scan_id,
-        )
-
-        suppressed = frozenset(getattr(adapter, "_miner_suppressed", set()))
-        candidates = mine_candidates(
-            action,
-            entries,
-            runner,
-            start_scan_id=start_scan_id,
-            suppressed=suppressed,
-        )
-        adapter._miner_candidates = candidates
-
-        suffix = ""
-        if candidates:
-            suffix = f"\n{len(candidates)} candidate invariant(s); use `candidates` to review"
-        return ConsoleResult(f"Recording stopped.\n{condensed.transcript}{suffix}")
+        transcript, _entries = capture.stop()
+        return ConsoleResult(f"Recording stopped.\n{transcript}")
 
     if capture.recording:
         raise adapter.DAPAdapterError(
@@ -230,8 +226,6 @@ _LINK_VERBS = frozenset({"link", "unlink", "restore", "links"})
 
 
 def _replay_commands(lines: list[str], *, harness_mode: str) -> list[tuple[int, str]]:
-    from pyrung.dap.condenser import parse_provenance_line
-
     commands: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
         stripped = line.strip()

@@ -126,8 +126,6 @@ src/pyrung/
 │   ├── session.py       # Debug session state
 │   ├── handlers/        # DAP request handlers (lifecycle, breakpoints, history, causal, etc.)
 │   ├── capture.py       # Session recording
-│   ├── condenser.py     # Transcript condensing to causal-minimum
-│   ├── miner.py         # Invariant miner
 │   └── live.py          # pyrung live (TCP attach)
 └── conformance/         # Conformance suite: same cases in-process, over Modbus, or on a real PLC
 ```

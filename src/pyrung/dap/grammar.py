@@ -202,9 +202,7 @@ def command_grammar() -> dict[str, CommandGrammar]:
         bounds_console,
         capture,
         harness_console,
-        miner_console,
         reload_console,
-        spec_console,
     )
     from pyrung.dap.console import _REGISTRY
 

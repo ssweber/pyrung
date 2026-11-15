@@ -464,11 +464,9 @@ class TestCapture:
         _say(adapter, out, "record wiring")
         _ok(adapter, out, "pyrungLink", {"feedback": "Spare", "enable": "Motor", "onDelay": "0ms"})
         _ok(adapter, out, "pyrungUnlink", {"feedback": "Aux"})
-        _say(adapter, out, "links")
         transcript = _say(adapter, out, "record stop")
         assert "link Spare Motor on_delay=0ms" in transcript
         assert "unlink Aux" in transcript
-        assert "\nlinks\n" not in transcript
 
     def test_replay_keeps_link_verbs_only_with_the_current_harness(self):
         lines = ["link Spare Motor on_delay=0ms", "unlink Aux", "step 2"]

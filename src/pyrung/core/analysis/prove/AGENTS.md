@@ -124,5 +124,4 @@ See `docs/internal/prove-formal-foundations.md` for the theoretical basis of eac
 
 - **CLI**: `pyrung lock` / `pyrung lock --check` in `src/pyrung/cli.py`
 - **Public API**: re-exported from `src/pyrung/core/analysis/__init__.py`
-- **DAP miner**: `src/pyrung/dap/miner.py` uses `read_lock()` to filter candidates
 - **Compiled kernel**: same codegen path as CircuitPython output (`pyrung.circuitpy.codegen.compile_kernel()`)

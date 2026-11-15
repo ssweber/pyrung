@@ -74,7 +74,6 @@ from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstructi
 from pyrung.core.validation.dead_write import _AMBIGUOUS_INSTRUCTIONS
 from pyrung.core.validation.owned_bit_coil import _COILS, _OWNERS
 from pyrung.core.validation.render import _VERB, render_instruction
-from pyrung.dap.miner import _instruction_owned_tags
 from tests.core.analysis.test_crossings_coverage import _concrete_instruction_classes
 
 # One entry per concrete instruction.  Adding an instruction here is the decision
@@ -189,11 +188,6 @@ TABLES = [
         "dead_write._AMBIGUOUS_INSTRUCTIONS",
         frozenset(cls.__name__ for cls in _AMBIGUOUS_INSTRUCTIONS),
         _of_kinds("runs_other_code"),
-    ),
-    Table(
-        "miner _instruction_owned_tags",
-        _named_in_function(_instruction_owned_tags),
-        _of_kinds("timer", "out_timer", "counter", "drum"),
     ),
 ]
 

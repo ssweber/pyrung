@@ -124,11 +124,10 @@ def slow_verb():
 # ---------------------------------------------------------------------------
 
 
-def test_cli_help_includes_review_commands():
+def test_cli_help_includes_capture_commands():
     help_text = _build_command_epilog()
-    assert "review:" in help_text
-    assert "candidates [list]" in help_text
-    assert "spec [list] | spec test <filepath>" in help_text
+    assert "capture:" in help_text
+    assert "record <action> | record stop" in help_text
 
 
 class TestServerLifecycle:

@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.dap.console import record_command
 from pyrung.dap.handlers.simulation import pause_executor
 from pyrung.dap.reload_console import ReloadPlan, _reload_locked
 
@@ -51,6 +50,4 @@ def on_pyrung_reload(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     pause_executor(adapter)
     with adapter._state_lock:
         summary, events, carried = _reload_locked(adapter, plan)
-        # The history logs this request as a console reload.
-        record_command(adapter, "reload", "reload", provenance="console")
     return {"result": summary, "carried": carried}, events

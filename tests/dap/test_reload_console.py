@@ -1908,13 +1908,6 @@ class TestPlannedReload:
         assert resp["body"]["carried"] == []
         assert not adapter._thread_running_locked()
 
-    def test_a_planned_reload_is_logged_as_a_reload(self, tmp_path: Path):
-        adapter, out, _script = _carry(tmp_path)
-
-        _plan_reload(adapter, out, forces={})
-
-        assert adapter._action_log == [(adapter._runner.current_state.scan_id, "reload", "console")]
-
     def test_a_force_dropped_for_a_conflict_is_released(self, tmp_path: Path):
         adapter, out, _script = _carry(tmp_path)
         _repl(adapter, out, "force A true", seq=10)
