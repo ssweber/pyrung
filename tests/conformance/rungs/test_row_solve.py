@@ -1,23 +1,23 @@
-"""Row solve, round 3: the ``row_solve`` group (subroutine ``Conf_RowSolve``).
+"""Row solve: the ``row_solve`` group (subroutine ``Conf_RowSolve``).
 
-Hardware questions the live row solve (S4) still had open after round 2, in
-drawings pyrung's exporter writes and CLICK has taken before (branches off the
-trunk, a box with a continued wire below it).  Part ``control``, beside ``rungs`` and ``solve_order``.
+How CLICK solves the rows of one rung, in drawings pyrung's exporter writes
+and CLICK takes (branches off the trunk, a box with a continued wire below
+it).  Part ``control``, beside ``rungs`` and ``solve_order``.
 
 The models, as in ``test_solve_order.py``:
 
-- **L** (live, CLICK's model since hardware round 1, adopted by S4): the
-  trunk's power is computed once and held for every row under it; each row's
-  own contacts, edge contacts included, are read when the solve reaches the
-  row, so they see the writes of the rows above; a box reads its enable and
-  pins before it writes; a continued wire is a wire of its own from the rail,
-  read live.  Each case's ``expect`` is L's reading.
-- **S** (snapshot, pyrung before S4): every contact of the rung, its branches
-  and its continued wires reads the memory the rung was entered with, and S3's
-  edge frame samples every edge contact of the rung there too.  ``SOLVE_ORDER``
-  records what pyrung read in-process before S4 (measured, not derived);
-  ``test_solve_order.test_annotation_matches_readings`` checks it against each
-  case's ``expect``, which pyrung now reads.
+- **L** (live, CLICK's model and pyrung's): the trunk's power is computed
+  once and held for every row under it; each row's own contacts, edge contacts
+  included, are read when the solve reaches the row, so they see the writes of
+  the rows above; a box reads its enable and pins before it writes; a
+  continued wire is a wire of its own from the rail, read live.  Each case's
+  ``expect`` is L's reading.
+- **S** (snapshot): every contact of the rung, its branches and its continued
+  wires reads the memory the rung was entered with.  Every edge contact of the
+  rung is also sampled on entry.  ``SOLVE_ORDER`` holds what S reads in each
+  case, measured in-process, not derived.
+  ``test_solve_order.test_annotation_matches_readings`` checks those readings
+  against each case's ``expect``, which pyrung reads.
 
 The cases, what each model reads, and the other models they tell apart:
 
@@ -36,14 +36,13 @@ The cases, what each model reads, and the other models they tell apart:
   3) and falls (scan 7) holds a ``rise`` and a ``fall`` branch; the gate is on
   for scans 5 and 8 only, written by one rung (two ``out`` rungs would leave
   it as the lower one writes it, off on scan 5).  An edge contact under an
-  unpowered parent is still solved and its memory updated ("scanned", adopted:
-  S3 frames every contact of the rung, and S4 reaches every row, unpowered or
-  not): R1 = 0, R2 = 0.  Updated only when power reaches it, or a solve that
-  skips the rows of an unpowered branch: the rise fires on scan 5 and the fall
-  on 8 (5, 8).  The rail rise and fall below (R3 = 3, R4 = 7) are the bit's own
-  edges under both.  ``coils/edge_in_false_rung_branch`` answered this for a
-  rung whose rail contact is open; this one asks it under a powered trunk, one
-  level down.
+  unpowered parent is still solved and its memory updated ("scanned", as
+  pyrung does by reaching every row, powered or not).  That reads R1 = 0,
+  R2 = 0.  Updated only when power reaches it, or a solve that skips the rows
+  of an unpowered branch: the rise fires on scan 5 and the fall on 8 (5, 8).
+  The rail rise and fall below (R3 = 3, R4 = 7) are the bit's own edges under
+  both.  ``coils/edge_in_false_rung_branch`` asks this for a rung whose rail
+  contact is open.  This case asks it under a powered trunk, one level down.
 - ``continued_after_box_rereads_trunk`` (+, probe): a counter (preset 1) whose
   rung needs its own Done off counts on scan 2; the continued wire under the
   box repeats that rung's contacts (~Done first, so the importer does not fold
@@ -53,10 +52,10 @@ The cases, what each model reads, and the other models they tell apart:
   box writes land when the CLICK rung's solve ends: R1 = 1.  The next rung
   reads Done on scan 2 in every model (R2 = 1): the box counted on that scan.
 
-S5 adds three probes (answers indexed in ``scratchpad/conformance_review/
-S5-QUESTIONS.md``):
+Three more probes ask about edge memory behind a false contact and a drum's
+correction scan:
 
-- ``edge_on_box_path_after_false_contact`` (probe, S5 #1): does a contact
+- ``edge_on_box_path_after_false_contact`` (probe): does a contact
   after a false one on an instruction's path still get solved, so an edge
   contact's memory updates while the path is dead?  A counter whose enable is
   ``gate, rise(bit)`` and one whose only live input is a down pin
@@ -67,23 +66,23 @@ S5-QUESTIONS.md``):
   pyrung reads): the rise memory is already on, neither counts (R1 = 0, R2 =
   0).  A path that stops at its first false contact: the rise fires on scan 5,
   the up counter reads 1 and the down pin counts -1 (1, -1).
-- ``edge_after_false_contact_in_branch`` (probe, S5 #1): the same question
+- ``edge_after_false_contact_in_branch`` (probe): the same question
   for a branch's own prefix, under a powered trunk: ``branch(gate, rise(bit))``
   and ``branch(gate, fall(bit))``, with a sibling output above them.  Scanned:
   0 and 0; the rail rise and fall below read 3 and 7 in every model.  Stopped
   at the false gate: 5 and 8.  (The trunk-off form is
-  ``coils/edge_in_false_rung_branch``, answered on hardware.)
-- ``correction_scan_with_free_enable`` (probe, S5 #6): the drum's enable and
+  ``coils/edge_in_false_rung_branch``.)
+- ``correction_scan_with_free_enable`` (probe): the drum's enable and
   jog are not tied to its step register.  A 2-step event drum is on step 2
   (scan 2: the event advances it, output A off and B on); on scan 3 the step
   register is staged out of range (5) and a jog is on that scan.  Result3 is B
   and Result4 A as they stand at the end of scan 3, Result2 the completion
   flag then and ErrorCode the step then; Result1 is the step at the end.
-  Hardware (2026-11-01) answers that the jog scan leaves the bad step and the
-  outputs alone: step 5 at the end of scan 3 (ErrorCode = 5), flag off (Result2
-  = 0), B still on (Result3 = 1, Result4 = 0), and the drum ends on step 1
-  (Result1 = 1).  ``drum_trace/free_jog`` reads the scans after it: the next
-  scan corrects, and B stays on.
+  On a CLICK the jog scan leaves the bad step and the outputs alone.  The step
+  reads 5 at the end of scan 3 (ErrorCode = 5), with the flag off (Result2 =
+  0) and B still on (Result3 = 1, Result4 = 0).  The drum ends on step 1
+  (Result1 = 1).  ``drum_trace/free_jog`` reads the scans after the jog.  The
+  next scan corrects the step, and B stays on.
 
 The cases own C401..C450 and C1..C50 and counters CT191..CT195
 (``memory.OWNED``): cases 1 to 3 take ten C bits each (case N takes
@@ -92,9 +91,9 @@ C<391+10N>..), cases 4 to 6 take C1.., C11.. and C21...
 Open: whether a NOP or a blank row splits the
 solve has no case.  Under L nothing is held from one wire to the next (each
 continued wire starts at the rail, read live), so a split at a NOP or a blank
-row reads the same as no split; only S or a fixpoint over a CLICK rung would
-tell, and round 2 already ruled both out for continued wires
-(``rungs/continued_shares_snapshot``, ``solve_order/continued_reads_later_wire``).
+row reads the same as no split.  Only S or a fixpoint over a CLICK rung would
+tell, and ``rungs/continued_shares_snapshot`` and
+``solve_order/continued_reads_later_wire`` rule both out for continued wires.
 CLICK deletes a NOP row that shares its rung (``tests/click/
 test_codegen_nop_continued.py``), so a NOP between two wires of one rung
 cannot be drawn.
@@ -124,8 +123,8 @@ from tests.conformance.scans import WINDOW, count_scans, done, firings, scans_fo
 GROUP = "row_solve"
 SCANS = scans_for()
 
-#: Case id -> (does the answer depend on solve order?, what pyrung read in-process
-#: under S, before S4).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
+#: Case id -> (does the answer depend on solve order?, what S reads, measured
+#: in-process).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
 SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
     "edge_on_branch_reads_row_above": (
         True,
@@ -136,8 +135,8 @@ SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
         {"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
     ),
     "continued_after_box_rereads_trunk": (True, {"Result1": 1, "Result2": 1}),
-    # The S5 probes: every contact reads what an earlier rung wrote, so the model
-    # does not change the reading.
+    # In the last three probes every contact reads what an earlier rung wrote, so
+    # the model does not change the reading.
     "edge_on_box_path_after_false_contact": (False, {"Result1": 0, "Result2": 0}),
     "edge_after_false_contact_in_branch": (
         False,

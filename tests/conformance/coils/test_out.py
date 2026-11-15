@@ -13,10 +13,9 @@ A fresh PLC's reads 0.  A CLICK keeps a coil's other TDs after the rung falls
 (``out_more``).  So each case's ``init`` writes 0 to every TD that ends one of
 its steps.  No step then depends on the coil clearing that TD on its rise scan.
 
-The cases are the probes O1-O6 of ``scratchpad/click-v4/RESEARCH.md``.  Hardware
-round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6.  An Out coil
+The six cases are O1 to O6, in the order the group lists them.  An Out coil
 never sets its Timer's done bit T<n>, so a contact on that T<n> is always off
-(pyrung matches).  Round 2 (2026-10-30) read O4.
+(O6).
 
 Each case but O1 runs in steps that ``Scratch`` holds.  A step ends on a timer's
 own TD, so no reading depends on how long a scan takes.  A step's rungs come
@@ -33,12 +32,9 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   times from that rise.  Result2 is 1 if the coil is on at 200 ms on T302, and
   Result1 if it is on at 400 ms.  An on side that restarts at the rise comes
   on at 300 ms and reads Result2 = 0, Result1 = 1.  One that runs on from 200
-  comes on near 100 ms and reads Result2 = 1, Result1 = 1.  On 2026-11-11 a
-  CLICK ran an earlier ladder, which ended the off time once the off TD read
-  100.  That case never fired, so the off TD never reached 100.  The coil
-  was off all that time.  A debounce's off TD does not count with its coil
-  off (``deb_off/off_td_with_coil_off``).  So no step ends on the off TD
-  now.
+  comes on near 100 ms and reads Result2 = 1, Result1 = 1.  A debounce's off
+  TD does not count while its coil is off (``deb_off/off_td_with_coil_off``),
+  so no step ends on the off TD.
 - ``flasher_restarts_with_on_phase`` (O4, 300 ms phases): the rung drops once
   the off TD reads 150.  It stays false while T305 times 100 ms, then one scan
   more, which resets T305.  On the scan T305 reaches 100 the case reads the
@@ -47,11 +43,10 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   is under 200 then (frozen or cleared) and 2 if not (still counting).  T305
   then times from the restart.  Result2 is 1 if the coil is on at 50 ms, and
   Result4 if it is on at 200 ms.  A CLICK keeps both TDs, frozen, yet
-  restarts with an on phase, and pyrung now does too.  Hardware round 2
-  (2026-10-30) read 2, 1, 2, 1, 1 on an earlier ladder that read the coil at
-  fixed times.  A flasher that froze and resumed (pyrung before round 2)
-  reads 2, 0, 2, 1, 1.  It runs the off phase's last 150 ms and then a new on phase.  A
-  fresh off phase reads Result2 = 0, Result4 = 0.
+  restarts with an on phase.  That reads 2, 1, 2, 1, 1 in Result1..Result4
+  and ErrorCode.  A flasher that froze and resumed reads 2, 0, 2, 1, 1.  It
+  runs the off phase's last 150 ms and then a new on phase.  A fresh off phase
+  reads Result2 = 0, Result4 = 0.
 - ``timed_needs_fresh_edge`` (O5, a 200 ms pulse): Result1 is 1 if the coil is
   on before its TD reaches 200.  T308 then times 200 ms with the rung still
   held, and Result2 is 1 if the coil is on in that time.
@@ -59,9 +54,6 @@ timer of the case's own times a wait that the coil's TDs cannot time.
   on on any scan.  The case ends on the scan the on TD reaches 300, and
   Result2 is 1 if the coil is on then.  T300 times it out at step 0 after
   1000 ms, as T299 does O2.
-
-A CLICK read each expectation on an earlier ladder that read the same things
-at fixed times.  None is new.
 """
 
 from __future__ import annotations

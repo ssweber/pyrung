@@ -25,10 +25,6 @@ Specs that later work needs are kept beside this file:
 - **Bump to `pyclickplc>=0.5.2`** in pyproject.toml. [nothing]
 - **pilot/AGENTS.md:449** says the last resort is "planned, not built". It was built on 2026-11-05. [nothing]
 - **prove/AGENTS.md** says how() reads `_ExploreContext`. It reads `_PriorFacts`. This fix goes with step 1. [nothing]
-- **Take the history out of the conformance docstrings,** then delete `scratchpad/click-v4/` and
-  `scratchpad/conformance_review/`. tests/conformance/coils/test_out.py, program_control/test_loop.py and
-  rungs/test_row_solve.py point into those folders and tell which hardware round read what. A case says what CLICK
-  does, and readings.toml holds the readings. [nothing]
 
 ## 0. Gate fixes, and the range bound
 
