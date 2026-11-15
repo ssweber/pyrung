@@ -32,9 +32,17 @@ test-fold:
 test-fold-new:
 	uv run python devtools/fold_new_tests.py
 
-# The tests of the code that reads bytecode or source positions, which can change with any Python
-# release. CI runs the full suite on the oldest and newest Python, and only these between them.
-BYTECODE_TESTS = tests/core/test_tag.py tests/core/test_tag_type_classes.py 	tests/core/test_function_source.py tests/core/test_kernel_calls_the_function.py 	tests/core/test_reentrant_scan.py tests/core/test_run_function_arguments.py 	tests/core/analysis/test_prove_function_gate.py
+# These tests cover the code that reads bytecode, which can change with any Python release.
+# CI runs the full suite on the oldest and newest Python, and only these tests on the versions
+# between.
+BYTECODE_TESTS = \
+  tests/core/test_tag.py \
+  tests/core/test_tag_type_classes.py \
+  tests/core/test_function_source.py \
+  tests/core/test_kernel_calls_the_function.py \
+  tests/core/test_reentrant_scan.py \
+  tests/core/test_run_function_arguments.py \
+  tests/core/analysis/test_prove_function_gate.py
 
 test-bytecode:
 	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --runner-backend=both -q $(BYTECODE_TESTS)

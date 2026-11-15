@@ -20,7 +20,8 @@ jobs:
         # Update this as needed:
         # Common platforms: ["ubuntu-latest", "macos-latest", "windows-latest"]
         os: ["ubuntu-latest"]
-        # The oldest and newest supported Python. The bytecode job covers the ones between.
+        # Run the full suite on the oldest and newest supported Python. The bytecode job covers
+        # the versions between.
         python-version: ["3.11", "3.14"]
 
     # Linux only by default. Use ${{ matrix.os }} for other OSes.
@@ -69,8 +70,9 @@ jobs:
         env:
           PYTEST_WORKERS: auto
 
-  # Reading bytecode (opcode names, `executing`'s node lookup) can break on any Python release,
-  # so the tests of that code also run on the versions between the oldest and the newest.
+  # Reading bytecode (opcode names, the `executing` library's node lookup) can break on any
+  # Python release, so the tests of that code also run on the versions between the oldest and
+  # the newest.
   bytecode:
     strategy:
       matrix:

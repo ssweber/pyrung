@@ -125,6 +125,20 @@ def _imports(v):
     return {"out": n >= 50}
 
 
+_SEEN: list[Any] = []
+
+
+# The global is read only inside the comprehension. Python 3.12 inlines a list comprehension
+# into the function's own code (it was a nested code object), and a generator expression stays
+# nested, so the gate must find the read either way.
+def _keeps_a_list_in_a_comprehension(v):
+    return {"out": [_SEEN.append(v) or len(_SEEN) >= 50 for _ in (0,)][0]}
+
+
+def _keeps_a_list_in_a_generator(v):
+    return {"out": next(_SEEN.append(v) or len(_SEEN) >= 50 for _ in (0,))}
+
+
 def _keeps_what_it_is_handed(v, m):
     m.append(v)
     return {"out": len(m) >= 50}
@@ -140,6 +154,8 @@ REFUSED = [
     pytest.param(lambda: _mutable_default, None, id="mutable_default"),
     pytest.param(lambda: _imports, None, id="import_in_body"),
     pytest.param(lambda: _keeps_what_it_is_handed, list, id="list_in_ins"),
+    pytest.param(lambda: _keeps_a_list_in_a_comprehension, None, id="global_in_comprehension"),
+    pytest.param(lambda: _keeps_a_list_in_a_generator, None, id="global_in_generator"),
 ]
 
 
@@ -157,6 +173,7 @@ def _fresh_rows():
         _calls["n"] = 0
         globals()["_STORED"] = 0
         _mutable_default.__defaults__[0].clear()  # type: ignore[index]
+        _SEEN.clear()
         if hasattr(builtins, "_pyrung_gate_row"):
             del builtins._pyrung_gate_row  # type: ignore[attr-defined]
 
@@ -227,6 +244,11 @@ def _uses_math(v):
     return {"out": math.floor(2.5) == 3}
 
 
+def _comprehensions_over_its_input(v):
+    squares = {n: n * n for n in range(int(v) + 2)}
+    return {"out": sum([x for x in squares.values()]) + sum(n for n in range(2)) > 100}
+
+
 def test_the_gate_is_the_one_a_kernel_asks() -> None:
     from pyrung.core.runner import _program_calls_what_a_kernel_may_not
 
@@ -234,8 +256,9 @@ def test_the_gate_is_the_one_a_kernel_asks() -> None:
         program = _build_row(make, handed)
         assert _program_calls_what_a_kernel_may_not(program)
         assert calls_that_depend_on_more_than_their_inputs(program)
-    assert not _program_calls_what_a_kernel_may_not(_program(_answers_true))
-    assert not calls_that_depend_on_more_than_their_inputs(_program(_answers_true))
+    for fn in (_answers_true, _comprehensions_over_its_input):
+        assert not _program_calls_what_a_kernel_may_not(_program(fn))
+        assert not calls_that_depend_on_more_than_their_inputs(_program(fn))
 
 
 def test_a_function_the_gate_passes_stays_explored() -> None:
@@ -243,10 +266,12 @@ def test_a_function_the_gate_passes_stays_explored() -> None:
     assert isinstance(always(_program(_answers_false), ~Alarm), Proven)
     assert isinstance(always(_program(_uses_math), ~Alarm), Proven)
     assert isinstance(always(_program(_answers_by_input), ~Alarm), Proven)
+    assert isinstance(always(_program(_comprehensions_over_its_input), ~Alarm), Proven)
     assert _alarm_scan_stepping(_program(_answers_true)) is not None
     assert _alarm_scan_stepping(_program(_answers_false)) is None
     assert _alarm_scan_stepping(_program(_uses_math)) is None
     assert _alarm_scan_stepping(_program(_answers_by_input)) is None
+    assert _alarm_scan_stepping(_program(_comprehensions_over_its_input)) is None
 
 
 LOCKED_MODULE = """

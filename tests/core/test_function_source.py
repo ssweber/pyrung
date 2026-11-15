@@ -122,6 +122,36 @@ def test_code_py_carries_the_same_string(fn, name):
     assert _from_code_py(fn, name) == {"out": 11}
 
 
+# Python 3.12 inlines list, dict and set comprehensions into the function's own code (each was a
+# nested code object). A generator expression stays nested. The comparison walks both shapes.
+def _list_comprehension(v):
+    return {"out": sum([x % 7 for x in range(v % 5)])}
+
+
+def _dict_comprehension(v):
+    return {"out": len({x: x for x in range(v % 5)})}
+
+
+def _set_comprehension(v):
+    return {"out": len({x % 3 for x in range(v % 5)})}
+
+
+def _generator(v):
+    return {"out": sum(x % 7 for x in range(v % 5))}
+
+
+COMPREHENSIONS = [_list_comprehension, _dict_comprehension, _set_comprehension, _generator]
+
+
+@pytest.mark.parametrize("fn", COMPREHENSIONS, ids=lambda fn: fn.__name__.lstrip("_"))
+def test_a_body_with_a_comprehension_is_the_function(fn):
+    assert is_the_function(embedded_source(fn), fn)
+    program = _program(fn)
+    assert _has_a_kernel(program)
+    _seeks_as_it_ran(program)
+    assert _from_code_py(fn, fn.__name__) == fn(0)
+
+
 def test_a_whitespace_only_line_in_a_string_at_column_0_is_kept(tmp_path, monkeypatch):
     module, _ = _import(
         tmp_path,
@@ -269,6 +299,13 @@ def test_the_comparison_sees_each_part_of_a_function():
     assert not is_the_function("@dec\n" + same, fn)
     assert not is_the_function(same + same, fn)
     assert not is_the_function("def f(:\n", fn)
+
+    listed = "def f(v):\n    return {'out': sum([x for x in range(v)])}\n"
+    assert is_the_function(listed, source_of(listed))
+    assert not is_the_function(listed.replace("[x for", "[x + 1 for"), source_of(listed))
+    generated = listed.replace("[", "(").replace("]", ")")
+    assert is_the_function(generated, source_of(generated))
+    assert not is_the_function(generated.replace("(x for", "(x + 1 for"), source_of(generated))
 
     outer = source_of("def f(v):\n    def g():\n        return 1\n    return {'out': g()}\n")
     assert not is_the_function(
