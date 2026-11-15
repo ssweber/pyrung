@@ -69,22 +69,19 @@ def test_from_nickname_file_refuses_names_that_differ_only_in_case(tmp_path):
         _CSV_HEADER + 'C1,BIT,"Pump",0,No,""\n' + 'C2,BIT,"pump",0,No,""\n', encoding="utf-8"
     )
 
-    with pytest.raises(
-        ValueError, match=r"nicknames\.csv: nickname pump at C2 is the same as Pump"
-    ):
+    with pytest.raises(ValueError, match=r"nicknames\.csv: nickname pump at C2 repeats Pump at C1"):
         TagMap.from_nickname_file(path)
 
 
-def test_from_nickname_file_refuses_a_row_that_repeats_a_system_nickname_in_another_case(
-    tmp_path,
-):
+@pytest.mark.parametrize("name", ["_always_on", "_Always_ON"], ids=["other_case", "exact"])
+def test_from_nickname_file_refuses_a_row_that_repeats_a_system_nickname(tmp_path, name):
     path = tmp_path / "nicknames.csv"
     path.write_text(
-        _CSV_HEADER + 'SC1,BIT,"_Always_ON",0,No,""\n' + 'DS1,INT,"_always_on",0,No,""\n',
+        _CSV_HEADER + 'SC1,BIT,"_Always_ON",0,No,""\n' + f'DS1,INT,"{name}",0,No,""\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="_always_on at DS1 is the same as _Always_ON at SC1"):
+    with pytest.raises(ValueError, match=f"{name} at DS1 repeats _Always_ON at SC1"):
         TagMap.from_nickname_file(path)
 
 

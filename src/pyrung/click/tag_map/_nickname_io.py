@@ -130,13 +130,16 @@ def _refuse_names_that_differ_in_case(rows: Iterable[AddressRecord], path: str |
         if not row.nickname:
             continue
         first = seen.setdefault(row.nickname.lower(), row)
-        if row.memory_type in {"SC", "SD"}:
+        if first is row or row.memory_type in {"SC", "SD"}:
             continue
-        if first.nickname != row.nickname:  # an exact repeat has its own error further on
-            raise ValueError(
-                f"{Path(path).name}: nickname {_row_label(row)} is the same as "
-                f"{_row_label(first)}. CLICK ignores the letter case of a nickname."
-            )
+        # Two ordinary rows with the same name get pyrung's own duplicate error further on.
+        # That check never sees the system rows, so a repeat of one is refused here.
+        if first.nickname == row.nickname and first.memory_type not in {"SC", "SD"}:
+            continue
+        raise ValueError(
+            f"{Path(path).name}: nickname {_row_label(row)} repeats {_row_label(first)}. "
+            "CLICK compares nicknames ignoring letter case."
+        )
 
 
 @contextmanager
