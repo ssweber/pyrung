@@ -19,8 +19,8 @@ from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.pilot.coast import CoastSession
 from pyrung.core.coast_run import coast_until, work_charged
 
-# Marks the cases make test-fold skips. Together they took 1,090 s under its check, all on
-# one worker. make test and make test-pilot still run them.
+# Marks the cases make test-fold skips, the ones that take longest under its check. make test
+# and make test-pilot still run them.
 _SLOW_UNDER_FOLD = pytest.mark.skipif(
     "config.getoption('fold_check', default=False)", reason="too slow under the fold check"
 )

@@ -72,7 +72,7 @@ prove = { cmd = ["make", "test-prove"], timeout = 300 }
 pilot = { cmd = ["make", "test-pilot"], timeout = 420 }
 test = { cmd = ["make", "test"], timeout = 1200 }   # a loaded machine reached 99% at 900 s (2026-11-09)
 soundness = { cmd = ["make", "test-soundness"], timeout = 1200 }
-fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # 1,450-1,900 s alone (1,873 s on 2026-11-15). A loaded machine took it past 1,800 s at 99% (2026-11-09)
+fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # 964 s alone on 2026-11-15, with the slow long-wait cases skipped (1,873 s with them)
 tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
 conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
 conf-cp = { cmd = ["make", "test-conformance", "TARGET=circuitpy"], timeout = 1200 }
@@ -82,7 +82,7 @@ docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plu
 [queue.presets]
 # prove and pilot are subsets of test, so only fast names them. fold leaves out most of
 # test_pilot_long_wait.py, so a jit branch gates on pilot too.
-# fold reruns test's tests under --fold-check (31 min against test's 11 on 2026-11-15).
+# fold reruns test's tests under --fold-check (16 min against test's 11 on 2026-11-15).
 # So only a jit change runs it, through train-jit and the profile's jit file rule.
 default = ["lint", "fold-new", "test", "soundness"]
 fast = ["lint", "docs", "fold-new", "prove", "pilot"]
