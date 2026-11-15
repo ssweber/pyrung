@@ -2075,6 +2075,10 @@ def _domain_from_calc_expression(
         # an INT); the stored values are no longer the interval lo..hi.
         return None
     if isinstance(lo_t, int) and isinstance(hi_t, int):
+        # Listing a wide interval runs out of memory.  A store that wraps part
+        # of the interval leaves lo above hi, and that range would be empty.
+        if hi - lo + 1 > _TAG_COMPARED_DOMAIN_CAP or lo_t > hi_t:
+            return None
         return tuple(range(lo_t, hi_t + 1))
     return None
 

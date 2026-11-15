@@ -11,6 +11,13 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
+## Unreleased
+
+### Fixes
+
+- `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
+- `program.check()` no longer calls a comparison always false when the `math()` that writes the tag wraps past the end of its type.
+
 ## v0.16.0 (2026-11-14)
 
 pyrung is the engine under ClickNick's CLICK Simulator. A suite of test cases checks it against a real CLICK, case by case, and the CLICK's answer is the expected one. The [CLICK Conformance](https://pyrung.com/pyrung/guides/conformance/) page gives the case counts by area and the two known differences. It also says what the suite doesn't reach and how to run it.

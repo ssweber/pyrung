@@ -11,7 +11,7 @@ DOCS_ADDR ?= localhost:8000
 PYTEST_WORKERS ?= 6
 PYTEST_PARALLEL = -n $(PYTEST_WORKERS) --dist=loadfile --max-worker-restart=0
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-conformance conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-conformance test-conformance-repeat conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -44,8 +44,15 @@ test-tumbler:
 # Conformance cases over Modbus TCP against pyrung's local soft PLC.
 # Point at a real CLICK running the exported program with PLC=host[:port];
 # run some groups only with GROUP=name[,name...].
+CONFORMANCE_ARGS = $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(TARGET),--conformance-target=$(TARGET))
+
 test-conformance:
-	uv run pytest -m conformance tests/conformance/ -q -rP $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(TARGET),--conformance-target=$(TARGET))
+	uv run pytest -m "conformance and not suite_repeat" tests/conformance/ -q -rP $(CONFORMANCE_ARGS)
+
+# The suite twice on one PLC, then each group alone: a case must not depend on what ran before it.
+# It takes as long as several suite runs, so it runs before a hardware round, not in the gate.
+test-conformance-repeat:
+	uv run pytest -m suite_repeat tests/conformance/ -q -rP $(CONFORMANCE_ARGS)
 
 # Write the conformance CLICK project (main, one subroutine per group, nicknames).
 # PART=coils, copy, math, drum1, drum2, drum3, control, system or boot writes one part: the whole suite is over CLICK's 8000 steps.
@@ -70,7 +77,7 @@ test-integration:
 	uv run pytest -m integration
 
 test-soundness:
-	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/core/analysis/ --prove-agreement -q
+	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/core/analysis/ --prove-agreement -q $(PYTEST_PARALLEL)
 
 test-fuzz:
 	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/fuzz/

@@ -19,6 +19,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    # The oracle wraps a module's own `always`, so a module without one would only
+    # run its tests a second time.
+    if not config.getoption("prove_agreement"):
+        return
+    keep, drop = [], []
+    for item in items:
+        module = getattr(item, "module", None)
+        (keep if module is not None and hasattr(module, "always") else drop).append(item)
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = keep
+
+
 _NO_AGREEMENT = "_no_agreement"
 
 

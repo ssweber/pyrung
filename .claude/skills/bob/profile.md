@@ -4,13 +4,15 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
 
 ## Paths
 
-- Main checkout `C:/Users/Sam/Documents/GitHub/pyrung`, base branch `dev` (trunk; the user
-  squash-merges dev into main themselves; never touch main). Push dev to origin after each
-  landing (user, 2026-10-30); never push bob/* branches or main.
+- Main checkout `C:/Users/Sam/Documents/GitHub/pyrung`, base branch `main` (since 2026-11-15;
+  there is no dev trunk). Each feature or refactor branch goes into main through a PR that Sam
+  squash-merges. A session stops at "gate green, ready to merge". It pushes branches and opens
+  PRs only once Sam has told it directly that it may. Never push main.
 - Worktrees `../pyrung-wt/<name>` on `bob/<name>`; mergeq home `../pyrung-wt/buildbot`
   (queue, logs, results, `jobs/<id>/{HANDOFF,REVIEW,LEDGER}.md`).
-- Current arc doc: `scratchpad/conform-readings/arc.md` (untracked, so give builders the absolute
-  main-checkout path). One arc doc: fold rulings and leftovers into it, not side notes.
+- Plan: `scratchpad/roadmap.md`. An arc doc lives in `../pyrung-wt/buildbot/jobs/<arc>/` (out of git, so give
+  builders the absolute path). One arc doc per arc: fold rulings and leftovers into it, not side notes. When the
+  arc closes, its open items move into the roadmap.
 
 ## Correctness contract (put in every builder and reviewer brief)
 
@@ -65,7 +67,7 @@ compares of the day had no entry-requirement program (avoid-fix) and never ran a
 mid-count under a held enable (triage), and the 215-answer corpus and tumbler hold neither.
 
 ```
-python -I devtools/mergeq/mergeq.py run --timeout 2000 --     uv run python devtools/how_compare.py --base dev --tree <worktree or merged tree>     [--full] [--only SUBSTRING] [--expected FILE]
+python -I devtools/mergeq/mergeq.py run --timeout 2000 --     uv run python devtools/how_compare.py --base main --tree <worktree or merged tree>     [--full] [--only SUBSTRING] [--expected FILE]
 ```
 
 (`--full`: outer `--timeout 11500`; the per-side default is 900 s fast, 5400 s full. The reviewer
