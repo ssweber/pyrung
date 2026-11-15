@@ -4,41 +4,35 @@ The cases own C1701..C1800, timers T201..T300 and counters CT201..CT250
 (``memory.OWNED``).  CLICK has no
 loop index, so a case counts iterations in a slot register it increments in the
 body.  Each loop rung is gated on ``Fired == 0`` so the loop runs on one scan.
+Each case's ladder function starts with a comment that labels it F1, F2 and
+so on.  The text below uses those labels.
 
-A false For rung skips its body (F2, measured on a CLICK 2026-10-29): body
-coils hold, and body one-shots, timers and counters are not scanned, so they
-do not see a reset either.  So the cases that reset through an instruction
-inside the loop (F6 edge, F7 timer, F8 counter, F14 one-shot) keep their For
-rung true and gate a body rung instead: their resets are scanned on every
-reset scan.  Bits a case latches, or drives from inside a loop, are reset in
-its ``init``.
+A false For rung skips its body (F2).  Body coils hold, and body one-shots,
+timers and counters are not scanned, so they do not see a reset either.  So the
+cases that reset through an instruction inside the loop (F6 edge, F7 timer, F8
+counter, F14 one-shot) keep their For rung true and gate a body rung instead.
+Their resets are then scanned on every reset scan.  Bits a case latches, or
+drives from inside a loop, are reset in its ``init``.
 
-The probe matrix is ``scratchpad/click-v4/RESEARCH.md`` section 4; round 1 on
-a CLICK is ``scratchpad/conformance_review/FINDINGS.md`` item 3.  Which case
-tells which model apart, and what the other model reads:
+Which case tells which model apart, and what the other model reads:
 
-- ``false_for_rung_skips_body`` (F2): skipped, C1701 keeps its latch
-  (Result1 = 1); a body run once with power off turns it off (2, pyrung before
-  CLICK's rule).  Result2 = 0: a body calc does not run either way.  Round 1
-  read Result1 = 1 on the same ladder without Result2.
-- ``zero_count`` (F3): no iteration reads Result2 = 0; 65536 iterations read
-  1; "at least once" (pyrung before) reads Result1 = 1, Result2 = 1.  Round 1
-  read Result1 = 0, which 0 and 65536 both give; but the count -1 loop in the
-  same scan alone accounts for its 1122 ms maximum scan (SD12), so 0 is likely.
+- ``false_for_rung_skips_body`` (F2): a skipped body leaves C1701 latched
+  (Result1 = 1).  A body run once with power off turns C1701 off (2).  A body
+  calc does not run either way (Result2 = 0).
+- ``zero_count`` (F3): no iteration reads Result1 = 0, Result2 = 0.  65536
+  iterations wrap Result1 to 0 and read Result2 = 1.  "At least once" reads
+  Result1 = 1, Result2 = 1.
 - ``negative_count_reads_unsigned`` (F3): unsigned 16-bit runs 65535
-  iterations (Result2 = -1, the Int wraps); "at least once" reads 1.  Round 1
-  read -1.  In-process only: on a CLICK it makes a scan of about 1.1 s that
-  every wall-clock case beside it would see.
-- ``edge_contact_inside_loop`` (F6, answered as adopted): C1721 latches on iteration 1
-  of 3 and stays on.  An edge with memory in the contact rises once
-  (Result1 = 1, what CLICK's per-contact edge memory predicts, FINDINGS item
-  2, which pyrung implements); one judged against the previous scan (pyrung
-  before) rises on all three (3).
-- ``counter_inside_loop`` (F8, probe): the count input is on in iterations 1,
-  2 and 4 of 4.  A counter that counts edges remembered by the instruction
-  reads 2 (CLICK's edge counters, FINDINGS item 1, which pyrung implements);
-  one that counts every enabled execution (pyrung before) reads 3; an edge
-  judged once per scan reads 1.
+  iterations, and the Int wraps to Result2 = -1.  "At least once" reads 1.  A
+  CLICK reads -1.  The case runs in-process only, because on a CLICK it makes
+  a scan of about 1.1 s that every wall-clock case beside it would see.
+- ``edge_contact_inside_loop`` (F6): C1721 latches on iteration 1 of 3 and
+  stays on.  An edge with memory in the contact rises once (Result1 = 1).  One
+  judged against the previous scan rises on all three (3).
+- ``counter_inside_loop`` (F8): the count input is on in iterations 1, 2 and 4
+  of 4.  A counter that counts edges remembered by the instruction reads 2.
+  One that counts every enabled execution reads 3.  An edge judged once per
+  scan reads 1.
 - ``oneshot_inside_loop`` (F14): the one-shot's rung is true in iterations
   1, 2 and 4 of 4.  Memory per instruction, re-armed by iteration 3, fires
   twice (Result1 = 2); once per scan reads 1; a one-shot ignored inside loops
@@ -47,28 +41,27 @@ tells which model apart, and what the other model reads:
   2 of 4.  Skipped, the one-shot stays fired and Result1 = 1; a body run with
   power off re-arms it and it fires again on scan 3 (2).
 
-- ``edge_memory_across_iterations`` (F18, answered as adopted): is an edge
-  contact in a For body one place in the program, its memory carried from
-  iteration to iteration like a contact in a subroutine called N times?
-  C1741 is latched on scan 1 and, on scan 2, off/on/on/off over iterations
-  1..4; Result1 records the iterations ``rise(C1741)`` passed power on, as
-  digits.  Memory per iteration (per-contact edge memory, which pyrung
-  implements) reads Result1 = 2, Result2 = 1; compared with the previous
-  scan's end (pyrung before) the bit was already on, so 0, 0; an edge
-  that passes power whenever the bit is on reads 23, 2.  Result3 = 4 shows
-  the loop ran.
-- ``skipped_body_holds_timer_and_counter`` (F19, answered as adopted): a TON (T211) and a
-  counter (CT211) in a For body; the timer times on scans 1..3, the counter
-  counts once on scan 1, then the For rung is false on scans 4..6 while the
-  counter's reset input is on.  Read on scan 6: Result1 = 1 if the timer's
-  Acc still holds its scan-3 value, 2 if it went to 0 (a body run with power
-  off resets a TON, pyrung before), 3 if it kept timing; Result2 = 1 if the
-  counter still holds 1 (its reset was not scanned), 2 if the reset took it
-  to 0 (pyrung before), 3 otherwise.  Skipping, which pyrung implements,
-  reads 1, 1.  The For rung is true while ``Cmd = 0``, so the case's own
-  reset is scanned whatever the answer.
+- ``edge_memory_across_iterations`` (F18): is an edge contact in a For body
+  one place in the program, its memory carried from iteration to iteration
+  like a contact in a subroutine called N times?  C1741 is latched on scan 1
+  and, on scan 2, off/on/on/off over iterations 1..4.  Result1 records the
+  iterations ``rise(C1741)`` passed power on, as digits.  Memory carried from
+  iteration to iteration reads Result1 = 2, Result2 = 1.  An edge compared
+  with the previous scan's end finds the bit already on, so it reads 0, 0.  An
+  edge that passes power whenever the bit is on reads 23, 2.  Result3 = 4
+  shows the loop ran.
+- ``skipped_body_holds_timer_and_counter`` (F19): a TON (T211) and a counter
+  (CT211) sit in a For body.  The timer times on scans 1..3 and the counter
+  counts once on scan 1.  Then the For rung is false on scans 4..6 while the
+  counter's reset input is on.  The case reads on scan 6.
 
-F6 and F18 expect what a CLICK is predicted to read.
+  - Result1 = 1 if the timer's Acc still holds its scan-3 value, 2 if it went
+    to 0 (a body run with power off resets a TON), 3 if it kept timing.
+  - Result2 = 1 if the counter still holds 1 (its reset was not scanned), 2
+    if the reset took it to 0, 3 otherwise.
+
+  Skipping reads 1, 1.  The For rung is true while ``Cmd = 0``, so the case's
+  own reset is scanned whatever the answer.
 """
 
 from __future__ import annotations

@@ -21,9 +21,8 @@ timed 100 ms), so it runs on a CLICK whose scan is far shorter than 10 ms.
 
 The expectations are what a CLICK does where hardware round 1 (2026-10-29)
 answered, and the adopted answer of an open probe otherwise.  A CLICK event
-drum (drum/model_a.py in the round-1 notes reproduces every reading): jump and
-jog act on their rising edges even while the drum is paused; reset is a level
-that wins, taking the drum to step 1 with its flag off and ALL its outputs off,
+drum: jump and jog act on their rising edges even while the drum is paused;
+reset is a level that wins, taking the drum to step 1 with its flag off and ALL its outputs off,
 and drops a jump or jog on its scan; jump beats jog on one scan; a paused drum
 does not write its outputs; at completion all its outputs go off until a jog
 (hardware round 2: a jump moves the step but leaves them off).  pyrung matches

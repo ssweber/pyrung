@@ -416,8 +416,12 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [x] an edge contact under an unpowered branch still tracks its bit (probe; `row_solve/edge_under_unpowered_branch`)
 - [x] a continued wire below a box re-reads the trunk after the box writes (probe; `row_solve/continued_after_box_rereads_trunk`)
 - [x] a box on a continued wire: its pins and its enable read the wire above (probe, part `control`; `cont_box/box_pin_on_continued_wire`, `cont_box/box_enable_on_continued_wire`)
-- [x] S5 probes (part `control`, expectation = pyrung's reading until a CLICK answers): an edge contact after a false contact on a box's enable and pin path, and on a branch's own prefix (`row_solve/edge_on_box_path_after_false_contact`, `row_solve/edge_after_false_contact_in_branch`); the box on a continued wire against the box on its own rung (`cont_box/box_pin_on_own_rung`); a box rung with no contact in front of its own (`cont_box/box_tee_without_trunk`, drawn from the rail since CLICK redrew its tee `R,-,T` / `,,-` that way on 2026-11-13); a For body split at a box into separate body rungs (`paste_risk/loop_body_split`); the drum's correction scan with an enable and a jog of its own (answered on hardware 2026-11-01; `row_solve/correction_scan_with_free_enable`)
-- [ ] a plain reset of a counter or timer bit (`reset(CT1)`, `reset(T1)`) and the accumulator (S5 #5): the exporter refuses the write (`CLK_BANK_NOT_WRITABLE`), so no case yet
+- [x] an edge contact after a false contact, on a box's enable and pin path (`row_solve/edge_on_box_path_after_false_contact`) and on a branch's own prefix (`row_solve/edge_after_false_contact_in_branch`)
+- [x] the box on a continued wire against the box on its own rung (`cont_box/box_pin_on_own_rung`)
+- [x] a box rung with no contact in front of its own, drawn from the rail as CLICK redraws pins teed off a bare wire (`cont_box/box_tee_without_trunk`)
+- [x] a For body split at a box into separate body rungs (`paste_risk/loop_body_split`)
+- [x] the drum's correction scan with an enable and a jog of its own (`row_solve/correction_scan_with_free_enable`)
+- [ ] a plain reset of a counter or timer bit (`reset(CT1)`, `reset(T1)`) and the accumulator: the exporter refuses the write (`CLK_BANK_NOT_WRITABLE`), so no case yet
 - [ ] whether a NOP or a blank row splits a rung's solve: no drawing tells L from a split (`test_row_solve.py` docstring)
 - [ ] solve order around a `call()` between the rows of one rung (the home exists, `in_main=True`, but no such case yet); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
 - [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses the first and draws an empty rung as a CLICK rung of its own, and a bare NOP round-trips (`tests/click/test_codegen.py`)
