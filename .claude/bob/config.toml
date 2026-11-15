@@ -45,9 +45,10 @@ heavy_exempt = [
 ]
 
 # bob-reviewer and bob-investigator are read-only. The plugin refuses git and gh changes, file
-# changes outside these roots, make, installs, and code outside its bounded runner.
+# changes outside these roots, `make`, installs, PowerShell, and a `uv run` that would sync
+# .venv. The reviewer runs code only through the plugin's run.py, and the investigator runs none.
 reviewer_write_roots = ["$TEMP", "$TMP", "/tmp"]
-reviewer_max_timeout = 1800         # longest bounded run a reviewer may start
+reviewer_max_timeout = 1800         # longest --timeout, in seconds, of a reviewer's bounded run
 
 [ps]
 # Processes shown by `run.py ps --all` and offered to `reap --unmanaged`.
