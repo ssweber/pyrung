@@ -82,8 +82,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
-    # Here, not at workflow level, where a pull request's build queued behind a waiting
-    # deploy would replace it.
+    # The concurrency group is on this job, not the workflow. At workflow level, a pull
+    # request's build would replace a deploy waiting its turn.
     concurrency:
       group: pages
       cancel-in-progress: false

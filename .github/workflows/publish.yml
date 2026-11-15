@@ -62,7 +62,7 @@ jobs:
 
   docs:
     name: Deploy the release's docs
-    # Only after PyPI has the release, and never for a pre-release.
+    # This job runs after the publish job succeeds. A pre-release skips it.
     if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
     needs: build-and-publish
     runs-on: ubuntu-latest
