@@ -69,9 +69,10 @@ jobs:
         env:
           PYTEST_WORKERS: auto
 
-  # main requires this check, so the required name stays the same when the matrix changes.
+  # main requires only this check, so the matrix can change without editing branch protection.
   # Without always(), a failed build would skip this job. A skipped required check counts
-  # as passing.
+  # as passing. A new test job must go into needs and into the test below, or ci passes
+  # without it.
   ci:
     if: always()
     needs: [build]
