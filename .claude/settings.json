@@ -1,19 +1,9 @@
 {
-  "enabledPlugins": {
-    "astral@astral-sh": true
+  "extraKnownMarketplaces": {
+    "bob": { "source": { "source": "github", "repo": "ssweber/bob" } }
   },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|PowerShell|Write|Edit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python -I \"$CLAUDE_PROJECT_DIR/devtools/mergeq/hook.py\"",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
+  "enabledPlugins": {
+    "astral@astral-sh": true,
+    "bob@bob": true
   }
 }

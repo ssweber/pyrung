@@ -1,18 +1,43 @@
 # BOB profile: pyrung
 
-Repo-specific rules for the /bob skill. Another repo replaces this file.
+Repo-specific rules for the bob plugin (`/bob:bob`). The plugin reads this file and the
+`config.toml` beside it.
 
 ## Paths
 
 - Main checkout `C:/Users/Sam/Documents/GitHub/pyrung`, base branch `main` (since 2026-11-15;
-  there is no dev trunk). Each feature or refactor branch goes into main through a PR that Sam
-  squash-merges. A session stops at "gate green, ready to merge". It pushes branches and opens
-  PRs only once Sam has told it directly that it may. Never push main.
+  there is no dev trunk). Each branch goes into main through a PR. The session squash-merges its
+  own PR once CI is green on the head commit and a fresh reviewer has passed that commit. A PR
+  that waits on Sam (his judgment, CLICK software, a real PLC) stays open (user, 2026-11-15).
+  Never push main. Only Sam tags, releases and publishes.
 - Worktrees `../pyrung-wt/<name>` on `bob/<name>`; mergeq home `../pyrung-wt/buildbot`
   (queue, logs, results, `jobs/<id>/{HANDOFF,REVIEW,LEDGER}.md`).
 - Plan: `scratchpad/roadmap.md`. An arc doc lives in `../pyrung-wt/buildbot/jobs/<arc>/` (out of git, so give
   builders the absolute path). One arc doc per arc: fold rulings and leftovers into it, not side notes. When the
   arc closes, its open items move into the roadmap.
+- Builder's local gate: `make lint` before the final commit, plus targeted tests. The queue runs
+  the rest.
+
+## Trains into main
+
+The queue's local `main` must equal `origin/main` when a train is submitted. Nothing else moves
+local `main`, so after each merge on GitHub run, in the main checkout on `main`:
+
+```
+git fetch origin && git merge --ff-only origin/main
+```
+
+A green train goes to GitHub as one PR of the exact tested merge, merged with a merge commit:
+
+```
+git push origin refs/mergeq/train<N>:refs/heads/bob/train<N>
+gh pr create --base main --head bob/train<N> --title "..." --body-file <jobs>/train<N>/PR.md
+gh pr merge <PR> --merge --delete-branch --match-head-commit <merged_sha from done/train<N>.json>
+git update-ref -d refs/mergeq/train<N>
+```
+
+Merge only when CI is green on that head and a fresh reviewer has passed the train. If `main`
+moved after the submit, GitHub asks for an update first, and that is a new tree. Gate it again.
 
 ## Correctness contract (put in every builder and reviewer brief)
 
@@ -67,7 +92,7 @@ compares of the day had no entry-requirement program (avoid-fix) and never ran a
 mid-count under a held enable (triage), and the 215-answer corpus and tumbler hold neither.
 
 ```
-python -I devtools/mergeq/mergeq.py run --timeout 2000 --     uv run python devtools/how_compare.py --base main --tree <worktree or merged tree>     [--full] [--only SUBSTRING] [--expected FILE]
+R --timeout 2000 -- uv run python devtools/how_compare.py --base main --tree <worktree or merged tree>     [--full] [--only SUBSTRING] [--expected FILE]
 ```
 
 (`--full`: outer `--timeout 11500`; the per-side default is 900 s fast, 5400 s full. The reviewer
@@ -128,9 +153,9 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
   strict xfail). A strict xfail whose run fold-check compares wraps that run in
   `fold_check.deliberate()` when fold-check is installed.
 - One heavy job machine-wide (the queue's lock); up to ~5 builders iterating on targeted tests in
-  parallel. `test` and `fold` take 6 of the 8 cores (`PYTEST_WORKERS`, peak 2.4 GB). Pilot-heavy suites
+  parallel. `test` and `fold` take 6 of the 8 cores (`PYTEST_WORKERS`, peak 2.9 GB). Pilot-heavy suites
   (`tumbler`, `prove`, `pilot`, `soundness`) stay in one process: user, 2026-11-03, pilot is intensive.
-- Stage commands, timeouts and presets are in `devtools/mergeq/mergeq.toml`; measured
+- Stage commands, timeouts and presets are in `.claude/bob/config.toml`; measured
   durations are in each job's `done/<id>.json` (a full train should now take ~39 min, was 96).
 - Only a jit change runs the `fold` stage (user, 2026-11-07, for iteration speed). A jit change
   touches `scan_trace.py`, `compiled_run.py`, `coast_run.py`, `kernel.py`, `read_trace.py`,
@@ -146,16 +171,16 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
   tests red on dev once, and it stayed red until the next `test` run (2026-11-02).
 - Never run `make test-fuzz` or `make bench` in an orchestration session.
 - Reviewers run scratch scripts and `node --test` only as
-  `python -I devtools/mergeq/mergeq.py run --timeout N -- <command>`; the hook refuses the bare form
+  `R --timeout N -- <command>` (the plugin's `run.py`); the hook refuses the bare form
   (no memory bound) and allows ruff/ty read-only forms. For an investigation that must not run
-  tests, spawn `bob-investigator` (read-only: no tests, no scripts) instead of a reviewer.
+  tests, spawn `bob:bob-investigator` (read-only: no tests, no scripts) instead of a reviewer.
 - A branch that adds a test file gets it checked under `--fold-check` by the `fold-new` stage in
   `fast`, `default`, `heavy` and `train` (before `test`). The file then meets lockstep without a
   full `fold` stage. Builders run `pytest --fold-check --fold-check-allow-vacuous <new file>` themselves (the flag
   judges mismatches only, as the stage does).
 - Any run that exercises pilot or the prover, scratch scripts included, has a memory and time bound
   (user, 2026-11-02: an unbounded one can OOM the machine). Run it through
-  `mergeq.py run --timeout N`, whose Job Object applies `job_memory_mb`. pytest also has its own
+  `R --timeout N`, whose Job Object applies `job_memory_mb`. pytest also has its own
   `PYTEST_MEMORY_CAP_MB` cap, but a plain `python script.py` or `timeout N` has no memory bound. A
   change that adds anything accumulating per scan or per search (records, traces, kernels) gives it
   a cap in the code.
@@ -188,8 +213,8 @@ came from drums that laddercodec had mis-encoded.
 ## Gotcha
 
 Agent `isolation: worktree` fails in this repo (cwd `documents` vs git `Documents` case
-mismatch): always use `mergeq worktree new` and brief the builder with the path.
+mismatch): always use `R worktree new` and brief the builder with the path.
 
 Before submitting a train, run `uv run python devtools/conf_status.py` in its worktree and compare
-it with dev's. A part that is done on dev and "changed since it was confirmed" on the train means a
+it with main's. A part that is done on main and "changed since it was confirmed" on the train means a
 branch carries an old `tests/conformance/confirmed.toml`.

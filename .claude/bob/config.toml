@@ -1,0 +1,119 @@
+# bob settings for pyrung. The bob plugin's hook, runner and merge queue read this file.
+# Paths are relative to the main checkout.
+
+worktree_root = "../pyrung-wt"              # `run.py worktree new NAME` -> <worktree_root>/NAME
+procs_dir = "../pyrung-wt/buildbot/procs"   # one file per live bounded run (`run.py ps`), and the slot locks
+base = "origin/main"                        # new worktrees start here, with no upstream
+branch_prefix = "bob/"                      # ... on branch <prefix><name>
+# Cap per run, all its processes (Windows Job Object). 0 = no cap. The largest gate stage peaks
+# at 2.9 GB on 6 pytest workers. The cap sits well above pytest's own 4096 MB cap per process,
+# so pytest's cap fires first and names the test.
+job_memory_mb = 12288
+# Bounded runs without --heavy at once (every hook-wrapped pytest, reviewers' scripts). The rest
+# wait. A gate takes 6 of 8 cores, and one chained command can hold a slot for many minutes.
+# 0 = no limit.
+targeted_slots = 3
+targeted_wait = 3600                # seconds a bounded run waits for a slot, then exits 125
+
+# PreToolUse hook. Regexes are searched in the shell command text, quoted strings and heredoc
+# bodies blanked.
+[hook]
+# The hook rewrites a matching Bash command to run under `run.py --timeout N --name
+# <agent>@<worktree>`, with N from a leading `timeout N` or else default_timeout. Only pytest
+# matches. A make stage is heavy and takes the queue's lock instead.
+bash_wrap = ['\bpytest\b']
+# PowerShell commands that are refused with the fix (`timeout` in PowerShell is a sleep).
+powershell_refuse = ['\bpytest\b']
+default_timeout = 600
+
+# Every [queue.stages] command not marked light is heavy. The hook refuses it for subagents.
+# The main session runs it as `mergeq.py run --heavy -- ...`, under the machine-wide lock.
+# heavy_extra adds commands that are heavy but are not stages.
+heavy_extra = [
+    '\bmake\s*($|[;&|])',                                   # bare `make` = install + lint + test
+    '\bmake\s+([^\s;&|]+\s+)*(test-hypothesis|test-fuzz|test-integration)\b',
+    '\bpytest\b[^;&|]*\s-m\s+\W?conformance',                    # conformance over Modbus (soft PLC)
+    '\bpytest\b[^;&|]*--conformance-target',
+    # the same run without a marker: test_modbus.py, or the directory, which collects it
+    '\bpytest\b(?![^;&|]*\s-m\s)[^;&|]*\btests[/\\]conformance(?:[/\\](?:test_modbus\.py\S*)?)?(?=[\s;&|]|$)',
+    '\b(python[0-9.]*|uv\s+run)\s+(-\S+\s+)*\S*fold_new_tests\.py\b',   # the fold-new stage's script runs pytest unbounded
+]
+# Main-session commands that match a heavy pattern but do their work off this machine, so they
+# take no lock. Subagents stay refused. A real CLICK runs the ladder; pytest only polls it.
+heavy_exempt = [
+    '\bmake\s+(?=[^;&|]*\bPLC=[^\s;&|])(?![^;&|]*\bTARGET=)(?:[A-Z_]+=\S+\s+)*+test-conformance(?:\s+[A-Z_]+=[^\s;&|]+)*+(?!\s+[\w-]+(\s|$|[;&|]))',
+]
+
+# bob-reviewer: every shell segment must match reviewer_allow; redirects only to /dev/null or
+# the write roots; no heredocs, no $(...), no PowerShell; Write/Edit only under the write roots.
+reviewer_write_roots = ["$TEMP", "$TMP", "/tmp"]
+# `[uv run] python <script>.py`: allowed only when the script is under a write root, and only
+# bounded: `python -I <plugin>/scripts/run.py --timeout N [--name X] [--cwd D] -- <command>` (its
+# Job Object applies job_memory_mb). The bare form has no memory limit and is refused.
+reviewer_script = '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*(\s+-\S+)*\s+(?P<script>\S+\.py)\b'
+reviewer_max_timeout = 1800
+# Allowed for the reviewer only inside that bounded run (the VS Code extension's JS tests).
+reviewer_bounded = ['^node\s+--test(\s+--test-(isolation|reporter|name-pattern)=\S+)*(\s+[^\s-]\S*)*$']
+# bob-investigator, for investigations that must not run tests: the reviewer's rules, no
+# scripts, no bounded runs, and none of these.
+readonly_refuse = [
+    '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?(python[0-9.]*\s+(-I\s+)?-m\s+)?(pytest|unittest)\b',
+    '^node\s+--test\b',
+    '^make\b',
+]
+reviewer_allow = [
+    '^cd(\s|$)',
+    '^git\s+(-C\s+\S+\s+)?(diff|log|show|status|blame|grep|rev-parse|rev-list|merge-base|ls-files|ls-tree|cat-file|describe|shortlog|range-diff|for-each-ref|name-rev|whatchanged)\b',
+    '^git\s+(-C\s+\S+\s+)?branch(\s+(-a|-r|-v|-vv|--list|--contains|--merged|--no-merged|--show-current)\b.*)?$',
+    '^git\s+(-C\s+\S+\s+)?worktree\s+list\b',
+    '^(rg|grep|egrep|ls|cat|head|tail|wc|sort|uniq|cut|tr|diff|cmp|pwd|echo|printf|which|file|stat|du|tree|basename|dirname|realpath|true|false|test|\[|date|env|nl|column|jq|od)(\s|$)',
+    '^sed\s+-n(\s|$)',
+    '^awk\s+[^>]*$',
+    '^find\s(?!.*\s-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b)',
+    '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?(python[0-9.]*\s+(-I\s+)?-m\s+)?pytest\b',
+    '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*\s+--version\b',
+    # ruff and ty, read-only forms: no fixing, no in-place format, no --config (it can set
+    # `fix = true`), no output file.
+    '^(uv\s+run\s+(--\S+\s+)*)?ruff\s+check\b(?!.*(\s--(fix|unsafe-fixes|fix-only|add-noqa|watch|config|output-file)\b|\s-[wo]\b))',
+    '^(uv\s+run\s+(--\S+\s+)*)?ruff\s+format\b(?=.*\s--(check|diff)\b)(?!.*\s--config\b)',
+    '^(uv\s+run\s+(--\S+\s+)*)?ty\s+check\b',
+]
+
+[ps]
+# Processes shown by `run.py ps --all` and offered to `reap --unmanaged`.
+names = ["python.exe", "python3.exe", "pytest.exe", "make.exe", "uv.exe"]
+# Never listed or reaped (language servers, linters' daemons).
+ignore = ['pyright', 'langserver', 'language[-_]server', '\bty\b.*\bserver\b', 'ruff\s+server', 'debugpy']
+
+# The merge queue (the plugin's mergeq.py).
+[queue]
+base = "main"                       # branch that trains land on
+home = "../pyrung-wt/buildbot"      # queue, logs, results, scratch worktrees, job notes
+lock_file = "../pyrung-wt/.heavy.lock"
+lock_wait = 10800                   # seconds a heavy run waits for the lock
+install = { cmd = ["make", "install"], timeout = 900 }
+
+# Gate stages, cheapest first. A job runs them in this order and stops at the first failure.
+[queue.stages]
+lint = { cmd = ["make", "lint"], timeout = 600, light = true }   # light: agents may run it
+fold-new = { cmd = ["make", "test-fold-new"], timeout = 900 }   # only the test files the branch adds; instant when it adds none
+prove = { cmd = ["make", "test-prove"], timeout = 300 }
+pilot = { cmd = ["make", "test-pilot"], timeout = 420 }
+test = { cmd = ["make", "test"], timeout = 1200 }   # a loaded machine reached 99% at 900 s (2026-11-09)
+soundness = { cmd = ["make", "test-soundness"], timeout = 1200 }
+fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # 1,450-1,900 s alone (1,873 s on 2026-11-15). A loaded machine took it past 1,800 s at 99% (2026-11-09)
+tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
+conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
+conf-cp = { cmd = ["make", "test-conformance", "TARGET=circuitpy"], timeout = 1200 }
+hypothesis = { cmd = ["make", "test-hypothesis"], timeout = 300 }
+docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plus the reference manifest; a new public export must be listed
+
+[queue.presets]
+# prove and pilot are subsets of test and fold, so only fast names them.
+# fold reruns all of test's tests under --fold-check (31 min against test's 11 on 2026-11-15).
+# So only a jit change runs it, through train-jit and the profile's jit file rule.
+default = ["lint", "fold-new", "test", "soundness"]
+fast = ["lint", "docs", "fold-new", "prove", "pilot"]
+heavy = ["lint", "docs", "fold-new", "test", "soundness", "conf", "conf-cp"]
+train = ["lint", "docs", "fold-new", "test", "soundness", "tumbler", "conf", "conf-cp", "hypothesis"]
+train-jit = ["lint", "docs", "test", "soundness", "fold", "tumbler", "conf", "conf-cp", "hypothesis"]

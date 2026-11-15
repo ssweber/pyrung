@@ -55,9 +55,10 @@ def new_test_files(base: str) -> list[str]:
 
 
 def main() -> int:
-    config = os.environ.get("MERGEQ_CONFIG") or ROOT / "devtools" / "mergeq" / "mergeq.toml"
+    # The queue sets BOB_CONFIG to its own config, so a merged tree's older copy can't name the base.
+    config = os.environ.get("BOB_CONFIG") or ROOT / ".claude" / "bob" / "config.toml"
     with open(config, "rb") as fh:
-        base = tomllib.load(fh).get("base", "main")
+        base = tomllib.load(fh).get("queue", {}).get("base", "main")
     files = new_test_files(base)
     if not files:
         print(f"fold-new: no test file added since {base}; nothing to check")
