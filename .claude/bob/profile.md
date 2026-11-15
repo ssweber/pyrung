@@ -161,9 +161,9 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
   touches `scan_trace.py`, `compiled_run.py`, `coast_run.py`, `kernel.py`, `read_trace.py`,
   `tests/fold_check.py`, or how timers, counters or clocks compute. A branch that only uses
   timers or adds rungs is not one.
-  - A jit branch gates on `lint,tumbler,fold`, not `fast`. `fold` includes the prove and pilot
-    tests, and `fast` has no tumbler. A change to the run's fast path broke a pilot golden past
-    READY once.
+  - A jit branch gates on `lint,tumbler,pilot,fold`, not `fast`. `fold` includes the prove and
+    pilot tests, except the slow half of `test_pilot_long_wait.py`. `pilot` runs that file whole.
+    `fast` has no tumbler. A change to the run's fast path broke a pilot golden past READY once.
   - A train holding a jit branch gates on `train-jit`. Every other train gates on `train`, which
     has no `fold` but runs `fold-new` on the files the train adds.
 - A branch landing outside a train still gates on the `test` stage if it changes anything under

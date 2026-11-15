@@ -19,6 +19,12 @@ from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.pilot.coast import CoastSession
 from pyrung.core.coast_run import coast_until, work_charged
 
+# Marks the cases make test-fold skips, the ones that take longest under its check. make test
+# and make test-pilot still run them.
+_SLOW_UNDER_FOLD = pytest.mark.skipif(
+    "config.getoption('fold_check', default=False)", reason="too slow under the fold check"
+)
+
 
 def _chain(first: int, second: int, unit: str) -> tuple[Program, Bool]:
     go = Bool("LwGo")
@@ -120,11 +126,11 @@ def _stepped_from_the_start(fork: PLC) -> PLC:
     ("first", "second", "unit", "scans"),
     [
         (3, 2, "min", 29_999),
-        (6, 4, "min", 59_999),
-        (12, 8, "min", 119_999),
-        (20, 10, "min", 179_999),
-        (1200, 1, "sec", 120_099),
-        (2, 2, "h", 1_439_999),
+        pytest.param(6, 4, "min", 59_999, marks=_SLOW_UNDER_FOLD),
+        pytest.param(12, 8, "min", 119_999, marks=_SLOW_UNDER_FOLD),
+        pytest.param(20, 10, "min", 179_999, marks=_SLOW_UNDER_FOLD),
+        pytest.param(1200, 1, "sec", 120_099, marks=_SLOW_UNDER_FOLD),
+        pytest.param(2, 2, "h", 1_439_999, marks=_SLOW_UNDER_FOLD),
     ],
 )
 def test_a_chain_of_timers_under_a_hold_lands_on_the_first_scan(
@@ -143,14 +149,14 @@ def test_a_chain_of_timers_under_a_hold_lands_on_the_first_scan(
 @pytest.mark.parametrize(
     ("preset", "unit", "coil", "scans"),
     [
-        pytest.param(9990, "sec", latch, 999_000, id="9990s"),
-        pytest.param(9995, "sec", latch, 999_500, id="9995s"),
+        pytest.param(9990, "sec", latch, 999_000, id="9990s", marks=_SLOW_UNDER_FOLD),
+        pytest.param(9995, "sec", latch, 999_500, id="9995s", marks=_SLOW_UNDER_FOLD),
         pytest.param(10_000, "sec", latch, 1_000_000, id="10000s"),
-        pytest.param(3, "h", latch, 1_080_000, id="3h"),
-        pytest.param(4, "h", latch, 1_440_000, id="4h"),
-        pytest.param(4, "h", out, 1_440_000, id="4h_out"),
-        pytest.param(8, "h", latch, 2_880_000, id="8h"),
-        pytest.param(24, "h", latch, 8_640_000, id="24h"),
+        pytest.param(3, "h", latch, 1_080_000, id="3h", marks=_SLOW_UNDER_FOLD),
+        pytest.param(4, "h", latch, 1_440_000, id="4h", marks=_SLOW_UNDER_FOLD),
+        pytest.param(4, "h", out, 1_440_000, id="4h_out", marks=_SLOW_UNDER_FOLD),
+        pytest.param(8, "h", latch, 2_880_000, id="8h", marks=_SLOW_UNDER_FOLD),
+        pytest.param(24, "h", latch, 8_640_000, id="24h", marks=_SLOW_UNDER_FOLD),
     ],
 )
 def test_one_timer_past_a_million_scans_lands_on_the_first_scan(
@@ -168,6 +174,7 @@ def test_one_timer_past_a_million_scans_lands_on_the_first_scan(
     assert path.replay().state.tags == fork.state.tags
 
 
+@_SLOW_UNDER_FOLD
 @pytest.mark.parametrize("coil", [latch, out], ids=["latch", "out"])
 def test_one_timer_stepped_from_the_start_lands_there_too(coil: Any) -> None:
     prog, goal = _one_timer(5, "min", coil)
@@ -185,7 +192,7 @@ def test_one_timer_stepped_from_the_start_lands_there_too(coil: Any) -> None:
 @pytest.mark.parametrize(
     ("build", "landing"),
     [
-        pytest.param(lambda: _chain(3, 2, "min"), 30_000, id="chain"),
+        pytest.param(lambda: _chain(3, 2, "min"), 30_000, id="chain", marks=_SLOW_UNDER_FOLD),
         pytest.param(_soak, 12_001, id="soak"),
         pytest.param(_soak_beside_an_oscillator, 6_001, id="osc_soak"),
         pytest.param(_drum, 6_003, id="drum"),
@@ -226,6 +233,7 @@ def test_a_drum_reset_on_the_way_in_leaves_the_drum_to_run_its_whole_time(
     assert fork.state.tags["LwStep"] == 2
 
 
+@_SLOW_UNDER_FOLD
 def test_a_small_ledger_is_not_spent_on_one_wait() -> None:
     """A search asked to stay small counts its wait in scans, and so charges a hundredth of it."""
     prog, goal = _chain(3, 2, "min")

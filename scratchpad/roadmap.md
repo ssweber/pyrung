@@ -37,8 +37,8 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
 `pyrung-wt/buildbot/logs/gate-trim/`.
 
 - **Narrow `fold`** to the test files whose long runs use the loop (`run_for`/`run_until`). Today it reruns all of
-  `test`'s selection (1,873 s in the trimmed run). `test_pilot_long_wait.py` alone takes 1,146 s under fold and
-  31 s in `test`. Look at it first.
+  `test`'s selection. It took 964 s on 2026-11-15, after the 16 slowest cases of `test_pilot_long_wait.py` left it
+  (1,873 s before).
 - **Fuzz runs in no gate.** The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given`
   on an inner function. Decide its fate with the search deletion, since most of it tests the search.
 
