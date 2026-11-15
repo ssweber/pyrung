@@ -1,7 +1,7 @@
 # mergeq configuration for pyrung. Paths are relative to the main checkout.
 # Copy devtools/mergeq/ into another repo and edit only this file.
 
-base = "dev"                        # branch that trains land on
+base = "main"                       # branch that trains land on
 home = "../pyrung-wt/buildbot"      # queue, logs, results, scratch worktrees, job notes
 worktree_root = "../pyrung-wt"      # `mergeq worktree new <name>` -> <root>/<name>
 branch_prefix = "bob/"              # ... on branch <prefix><name>
