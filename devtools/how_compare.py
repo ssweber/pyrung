@@ -1,7 +1,7 @@
 """how() old-versus-new: the same programs on a base ref and on a tree, a table of what differs.
 
-    python -I devtools/mergeq/mergeq.py run --timeout 2000 -- \
-        uv run python devtools/how_compare.py --base dev --tree ../state-slots
+    python -I <bob plugin>/scripts/run.py --timeout 2000 -- \
+        uv run python devtools/how_compare.py --base main --tree ../state-slots
 
 The outer --timeout must exceed twice the per-side --timeout (default 900 s fast, 5400 s full)
 plus a few minutes; with --full give the outer one 11500.
@@ -22,7 +22,7 @@ plus a few minutes; with --full give the outer one 11500.
          A missing row on either side is never explainable.
 
 Each side runs in its own worker process (devtools/how_compare_worker.py) under
-`mergeq.py run --timeout`, serially, at below-normal priority, with a memory limit and a
+the bob plugin's `run.py --timeout`, serially, at below-normal priority, with a memory limit and a
 per-row time limit; the program set is devtools/how_compare_programs.py.  The worker prints
 pyrung.__file__ and refuses to run if it is not under the tree given, and the report opens with
 both paths.
@@ -66,7 +66,6 @@ from typing import NoReturn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-MERGEQ = os.path.join(HERE, "mergeq", "mergeq.py")
 WORKER = os.path.join(HERE, "how_compare_worker.py")
 
 FIELDS = (
@@ -88,6 +87,26 @@ FIELDS = (
 # the tree; `row` a missing row (never explainable).
 EXPECT_FIELDS = (*FIELDS, "run", "flags")
 BAD_STATUS = ("ABORT", "SETUP_ERROR")
+
+
+def bob_runner() -> str:
+    """The bob plugin's bounded runner, found through Claude Code's list of installed plugins."""
+    listing = os.path.join(os.path.expanduser("~"), ".claude", "plugins", "installed_plugins.json")
+    try:
+        with open(listing, encoding="utf-8") as fh:
+            entries = json.load(fh)["plugins"]["bob@bob"]
+    except (OSError, ValueError, KeyError, TypeError):
+        entries = []
+    # Prefer this repo's install. A worktree is not the install's project, so any install will do.
+    here = os.path.normcase(os.path.realpath(REPO))
+    entries = sorted(
+        entries, key=lambda e: os.path.normcase(os.path.realpath(e.get("projectPath", ""))) != here
+    )
+    for entry in entries:
+        runner = os.path.join(entry.get("installPath", ""), "scripts", "run.py")
+        if os.path.isfile(runner):
+            return runner
+    die("the bob plugin is not installed (claude plugin install bob@bob); or pass --no-runner")
 
 
 def die(message: str, code: int = 2) -> NoReturn:
@@ -162,14 +181,13 @@ def run_side(label: str, tree: str, out: str, opts) -> int:
             cmd.append("--full")
         if opts.only:
             cmd += ["--only", opts.only]
-        if opts.no_mergeq:
+        if opts.no_runner:
             wrapped, timeout = cmd, left
         else:
             wrapped = [
                 sys.executable,
                 "-I",
-                MERGEQ,
-                "run",
+                bob_runner(),
                 "--timeout",
                 str(left),
                 "--name",
@@ -287,7 +305,7 @@ def main() -> int:
     )
     ap.add_argument("--mem-mb", type=int, default=3000)
     ap.add_argument(
-        "--no-mergeq", action="store_true", help="skip the mergeq wrapper (bounds still apply)"
+        "--no-runner", action="store_true", help="skip the bob runner (bounds still apply)"
     )
     opts = ap.parse_args()
     opts.timeout = opts.timeout or (5400 if opts.full else 900)
