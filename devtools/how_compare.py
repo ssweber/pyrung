@@ -97,8 +97,14 @@ def bob_runner() -> str:
             entries = json.load(fh)["plugins"]["bob@bob"]
     except (OSError, ValueError, KeyError, TypeError):
         entries = []
-    # Prefer this repo's install. A worktree is not the install's project, so any install will do.
-    here = os.path.normcase(os.path.realpath(REPO))
+    # Prefer this repo's install. Its project is the main checkout, which a worktree is not, so
+    # compare against the checkout that owns the git directory.
+    common = subprocess.run(
+        ["git", "-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    here = os.path.normcase(os.path.realpath(os.path.dirname(common) if common else REPO))
     entries = sorted(
         entries, key=lambda e: os.path.normcase(os.path.realpath(e.get("projectPath", ""))) != here
     )

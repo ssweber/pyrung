@@ -5,24 +5,29 @@ worktree_root = "../pyrung-wt"              # `run.py worktree new NAME` -> <wor
 procs_dir = "../pyrung-wt/buildbot/procs"   # one file per live bounded run (`run.py ps`), and the slot locks
 base = "origin/main"                        # new worktrees start here, with no upstream
 branch_prefix = "bob/"                      # ... on branch <prefix><name>
-job_memory_mb = 12288               # cap per run, all its processes (Windows Job Object); 0 = no cap. Largest gate stage peak so far is 2.9 GB on 6 pytest workers; well above pytest's 4096 MB per-process cap, so that cap fires first and the run names the test
-targeted_slots = 3                  # bounded runs without --heavy (every hook-wrapped pytest, reviewers' scripts) at once; the rest wait. A gate takes 6 of 8 cores, and one chained command can hold a slot for many minutes. 0 = no limit
+# Cap per run, all its processes (Windows Job Object). 0 = no cap. The largest gate stage peaks
+# at 2.9 GB on 6 pytest workers. The cap sits well above pytest's own 4096 MB cap per process,
+# so pytest's cap fires first and names the test.
+job_memory_mb = 12288
+# Bounded runs without --heavy at once (every hook-wrapped pytest, reviewers' scripts). The rest
+# wait. A gate takes 6 of 8 cores, and one chained command can hold a slot for many minutes.
+# 0 = no limit.
+targeted_slots = 3
 targeted_wait = 3600                # seconds a bounded run waits for a slot, then exits 125
 
 # PreToolUse hook. Regexes are searched in the shell command text, quoted strings and heredoc
 # bodies blanked.
 [hook]
-# Bash commands that get a hard timeout and a named process group: they are rewritten to
-# `run.py --timeout N --name <agent>@<worktree> -- bash -c '...'` (N from a leading
-# `timeout N`, else default_timeout). Only pytest: a make stage is heavy and takes the
-# queue's lock instead.
+# The hook rewrites a matching Bash command to run under `run.py --timeout N --name
+# <agent>@<worktree>`, with N from a leading `timeout N` or else default_timeout. Only pytest
+# matches. A make stage is heavy and takes the queue's lock instead.
 bash_wrap = ['\bpytest\b']
 # PowerShell commands that are refused with the fix (`timeout` in PowerShell is a sleep).
 powershell_refuse = ['\bpytest\b']
 default_timeout = 600
 
-# Every non-light [queue.stages] command is heavy: subagents are refused, and the main session
-# runs it as `mergeq.py run --heavy -- ...` so the machine-wide lock applies.
+# Every [queue.stages] command not marked light is heavy. The hook refuses it for subagents.
+# The main session runs it as `mergeq.py run --heavy -- ...`, under the machine-wide lock.
 # heavy_extra adds commands that are heavy but are not stages.
 heavy_extra = [
     '\bmake\s*($|[;&|])',                                   # bare `make` = install + lint + test
@@ -61,13 +66,11 @@ reviewer_allow = [
     '^git\s+(-C\s+\S+\s+)?(diff|log|show|status|blame|grep|rev-parse|rev-list|merge-base|ls-files|ls-tree|cat-file|describe|shortlog|range-diff|for-each-ref|name-rev|whatchanged)\b',
     '^git\s+(-C\s+\S+\s+)?branch(\s+(-a|-r|-v|-vv|--list|--contains|--merged|--no-merged|--show-current)\b.*)?$',
     '^git\s+(-C\s+\S+\s+)?worktree\s+list\b',
-    '^(rg|grep|egrep|ls|cat|head|tail|wc|sort|uniq|cut|tr|diff|cmp|pwd|echo|printf|which|file|stat|du|tree|basename|dirname|realpath|true|false|test|\[|date|env|nl|column|jq|xxd|od)(\s|$)',
+    '^(rg|grep|egrep|ls|cat|head|tail|wc|sort|uniq|cut|tr|diff|cmp|pwd|echo|printf|which|file|stat|du|tree|basename|dirname|realpath|true|false|test|\[|date|env|nl|column|jq|od)(\s|$)',
     '^sed\s+-n(\s|$)',
     '^awk\s+[^>]*$',
     '^find\s(?!.*\s-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b)',
     '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?(python[0-9.]*\s+(-I\s+)?-m\s+)?pytest\b',
-    '^python[0-9.]*\s+-I\s+\S*mergeq\.py\s+(status|lock)\b',
-    '^python[0-9.]*\s+-I\s+\S*run\.py\s+(ps|worktree\s+list)\b',
     '^(timeout\s+\S+\s+)?(uv\s+run\s+(--\S+\s+)*)?python[0-9.]*\s+--version\b',
     # ruff and ty, read-only forms: no fixing, no in-place format, no --config (it can set
     # `fix = true`), no output file.
@@ -98,7 +101,7 @@ prove = { cmd = ["make", "test-prove"], timeout = 300 }
 pilot = { cmd = ["make", "test-pilot"], timeout = 420 }
 test = { cmd = ["make", "test"], timeout = 1200 }   # a loaded machine reached 99% at 900 s (2026-11-09)
 soundness = { cmd = ["make", "test-soundness"], timeout = 1200 }
-fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # about 1,450-1,900 s alone; a loaded machine took it past 1,800 at 99% (2026-11-09)
+fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # 1,450-1,900 s alone (1,873 s on 2026-11-15). A loaded machine took it past 1,800 s at 99% (2026-11-09)
 tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
 conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
 conf-cp = { cmd = ["make", "test-conformance", "TARGET=circuitpy"], timeout = 1200 }
@@ -107,8 +110,8 @@ docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plu
 
 [queue.presets]
 # prove and pilot are subsets of test and fold, so only fast names them.
-# fold reruns all of test's tests under --fold-check (about 30 min against test's 11), so only a
-# jit change runs it (AGENTS.md, make test-fold): train-jit and the jit file rule in the profile.
+# fold reruns all of test's tests under --fold-check (31 min against test's 11 on 2026-11-15).
+# So only a jit change runs it, through train-jit and the profile's jit file rule.
 default = ["lint", "fold-new", "test", "soundness"]
 fast = ["lint", "docs", "fold-new", "prove", "pilot"]
 heavy = ["lint", "docs", "fold-new", "test", "soundness", "conf", "conf-cp"]
