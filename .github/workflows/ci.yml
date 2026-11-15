@@ -3,8 +3,8 @@
 
 name: CI
 
-# No run on a push to main. A PR must be up to date to merge, so its own run already
-# tested the tree that lands.
+# This workflow does not run on a push to main. A PR must be up to date to merge, so its
+# own run already tested the code that merges.
 on:
   pull_request:
     branches: ["main", "master"]

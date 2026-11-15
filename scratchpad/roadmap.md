@@ -22,11 +22,10 @@ Specs that later work needs are kept beside this file:
 
 ## Before new work
 
-- **The scratchpad commit reaches main.** addcdc4 is on the old local `dev`. It goes to main on a branch, with this
-  roadmap and the sweep. [Sam: the word to push and open a PR]
-- **The merge queue and BOB move to main.** Change `base = "dev"` in `devtools/mergeq/mergeq.toml`, the BOB skill
-  and its profile, and the worktree base. Trains land on main. Then `dev` is deleted locally and on GitHub. [nothing,
-  then Sam for the remote delete]
+- **Delete `dev` on GitHub.** The queue and BOB already gate on main (#52). [Sam]
+- **CI on 3.11 and 3.14 only** (Sam, 2026-11-15). Trim the `build` matrix in `.github/workflows/ci.yml` to the oldest
+  and newest supported Python. Wait until Sam's ruleset requires only `ci` and the docs `build`. Before that, the
+  `build (ubuntu-latest, 3.12)` and `3.13` checks are required, and a PR without them can't merge. [nothing, after Sam]
 - **Bump to `pyclickplc>=0.5.2`** in pyproject.toml. [nothing]
 - **pilot/AGENTS.md:449** says the last resort is "planned, not built". It was built on 2026-11-05. [nothing]
 - **prove/AGENTS.md** says how() reads `_ExploreContext`. It reads `_PriorFacts`. This fix goes with step 1. [nothing]
@@ -37,37 +36,15 @@ Specs that later work needs are kept beside this file:
 
 ## 0. Gate fixes, and the range bound
 
-Every later step pays the gate, so it comes first. All [nothing].
+Every later step pays the gate, so it comes first. All [nothing]. The range bound, the soundness and conformance
+trims and the cleanups landed in #52: `train-jit` took 61 min (it took 78.9). Per-test times from that run are in
+`pyrung-wt/buildbot/logs/gate-trim/`.
 
-- **Bound the range in `classify.py:2078`.** `_domain_from_calc_expression` builds `tuple(range(lo_t, hi_t + 1))`
-  with no size limit. It also wraps lo and hi separately.
-  - `calc(X1 * 100_000_000, DD1)` builds a 100-million-entry tuple. An Int input of -3000..3000 in `math(N ** 3, D)`
-    took 12.6 GB and raised MemoryError.
-  - Validation reaches it, so `pyrung check` and ClickNick's Check Program reach it. The chain is `report.check`,
-    the default validators, `produced_domains`, `collect_produced_value_domains` (classify.py:2548), then
-    `_domain_from_write_instruction` (2674).
-  - how() reaches it through drive_setup.py:428.
-  - The other `range()` sites are capped at 1000 or `_TAG_COMPARED_DOMAIN_CAP`. Use the same cap here.
-- **Measure first.** Run each gate stage once with `--durations=0`, and keep the output under `pyrung-wt/buildbot`.
-  No per-test timing exists on disk today.
-- **Narrow the `soundness` stage** to the 38 files in tests/core/analysis that import `always`. Its oracle
-  (tests/core/analysis/conftest.py) acts only on those, and it does nothing for the 125 pilot files. It runs in one
-  process (802 s median, more than `test`'s 661 s). Run it on workers if the oracle allows. It goes entirely with the
-  search in step 1.
-- **Move `test_suite_repeats_without_restarting` out of the gate** (tests/conformance/test_modbus.py:108). It runs the
-  suite twice and then 2N-1 single-group runs. Its share of `conf`'s 918 s is not measured. Run it before each
-  hardware round instead.
 - **Narrow `fold`** to the test files whose long runs use the loop (`run_for`/`run_until`). Today it reruns all of
-  `test`'s selection (1,488 s median in `train-jit`).
-- **Small cleanups.**
-  - Delete `tests/twin/`, which holds only a cache folder.
-  - Delete `tests/test_placeholder.py`.
-  - The two tumbler `nicknames.csv` files (3,190 lines each) differ from line 1. Diff them, then keep one.
-  - Fuzz runs in no gate. The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given` on
-    an inner function. Decide its fate with the search deletion, since most of it tests the search.
-  - Take `src` out of `testpaths` in pyproject.toml. Pytest walks all 380 src modules today.
-
-Gate medians before the fixes: `train` 54.5 min, `train-jit` 78.9 min.
+  `test`'s selection (1,873 s in the trimmed run). `test_pilot_long_wait.py` alone takes 1,146 s under fold, and less
+  than 112 s in `test`. Look at it first.
+- **Fuzz runs in no gate.** The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given`
+  on an inner function. Decide its fate with the search deletion, since most of it tests the search.
 
 ## 1. The deletions release
 
