@@ -347,7 +347,7 @@ def test_each_part_carries_a_scan_limit(tmp_path, capsys: pytest.CaptureFixture[
     assert set(suite.PART_SCAN_LIMITS_MS) <= set(parts)
     assert suite.scan_limit_ms("units") == suite.SCAN_LIMIT_MS == 50
     assert suite.scan_limit_ms("fixed_scan") > suite.APART_PARTS["fixed_scan"].fixed_scan_ms
-    # for_signed's longest scan on a CLICK read 1287 ms (SD12).
+    # for_signed's longest scan on a CLICK takes 1287 ms (SD12).
     assert suite.scan_limit_ms("follow2_for") > 1287
     for part in parts:
         assert suite.build(part).scan_limit_ms == suite.scan_limit_ms(part)

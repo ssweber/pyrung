@@ -36,7 +36,7 @@ from tests.conformance.memory import df, txt
 from tests.conformance.probe_kit import once
 
 #: The case's value, the window of its span it reads (0 the first 10 TXT, 1 the next 10), the
-#: id, and the 10 characters a CLICK read there.  Each case's DF is DF21 on, and its span TXT101
+#: id, and the 10 characters a CLICK writes there.  Each case's DF is DF21 on, and its span TXT101
 #: on, 20 a case.
 CASES: list[tuple[float, int, str, str]] = [
     (1.5, 0, "one_and_a_half_first", "1.5000000Z"),

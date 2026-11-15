@@ -16,8 +16,13 @@ the TOF in reverse order, so each new step starts on the next scan.
 T292, a TON on from ``Cmd``, times the case out at the step it is on after 1500 ms
 (``scans.deadline``).  A TD that stops at the preset never ends step 1, for one.
 
-On a CLICK Done comes back on and the TD counts from 0.  So a TOF that has been enabled judges ``TD < preset`` on every scan its
-rung is false, and a TD written to 0 starts its delay again (``OffDelayInstruction``).  A TOF never
+On a CLICK Done comes back on and the TD counts from 0.  A TOF that has been enabled judges
+``TD < preset`` on every scan its rung is false.  A TD written to 0 starts its delay again
+(``OffDelayInstruction``).  A TOF never enabled still rests at Done off, TD 0
+(``timers/tof_never_enabled``).  A TOF kept at rest after its TD reads 0 would read Result2 = 0
+and Result4 = 2 here.  Done comes back one scan after the write.  The preset is 200 ms, five
+times the soft PLC's longest scan, so one tick cannot reach it.
+ a TD written to 0 starts its delay again (``OffDelayInstruction``).  A TOF never
 enabled still rests at Done off, TD 0 (``timers/tof_never_enabled``).  A TOF kept at rest after its
 TD reads 0 would read Result2 = 0 and Result4 = 2 here.  Done comes back one scan after the
 write, and at the soft PLC's 20 ms scan that one tick would reach a 20 ms preset.  The preset

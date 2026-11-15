@@ -359,15 +359,16 @@ APART_PARTS: dict[str, ApartPart] = {
     # block of the suite has a slot left, and a blank needs TXT that no project has written.
     # And what a flasher's frozen off TD does when a lowered preset ends its on phase.
     "text_flasher": ApartPart(("text_compare", "flasher_td")),
-    # The follow-up cases, in parts since CLICK's editor freezes on a paste much over 150
-    # rungs: what SC43 and SC44 follow;
+    # The follow-up cases are in parts, since CLICK's editor freezes on a paste much over 150
+    # rungs.  This part asks what SC43 and SC44 follow.
     "follow_flags": ApartPart(("flag_boxes", "flag_halves")),
-    # values;
+    # This part asks about values.
     "follow_values": ApartPart(
         ("math_terms", "search_more", "real_text", "past_clean", "for_dd_minus")
     ),
-    # and timing: a drum's jump to a bad step and when it reads a step's preset, a debounce's
-    # off side and a flasher's on phase of 0; and, for room, a Word store below -32768.
+    # This part asks about timing.  It covers a drum's jump to a bad step, when a drum reads a
+    # step's preset, a debounce's off side and a flasher's on phase of 0.  For room it also holds
+    # a Word store below -32768.
     "follow_timing": ApartPart(
         ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
     ),

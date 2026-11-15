@@ -62,7 +62,7 @@ group = Group(
             expect={"Result1": 3, "Result2": 0, "Result3": 0, "Result4": 0},
             in_process_only=(
                 "CLICK's editor refuses a Real FOR count, and a pasted one stops the PLC on "
-                "its watchdog (hardware 2026-11-01)"
+                "its watchdog"
             ),
         ),
     ],

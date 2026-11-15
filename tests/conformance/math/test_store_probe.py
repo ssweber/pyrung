@@ -6,8 +6,7 @@ stores that no CLICK reading backs.  Each case probes as the
 ``faults`` group does (an op once, on the first scan from 3 on which the flag
 it reads is off just before it, a flag after an op read by running it again;
 every case has a 40-scan window).  A random draw asserts its range, not a
-value.  Expectations are what pyrung reads today, so a CLICK that reads
-otherwise is an answer.  ``non_finite_into_word`` and ``real_into_text_and_fill``
+value.  An expectation is what pyrung reads where no CLICK reading backs it.  ``non_finite_into_word`` and ``real_into_text_and_fill``
 expect what a CLICK does.
 
 - ``rand_int_cuts`` (probe): what a RAND into an Int does with constant bounds

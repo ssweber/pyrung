@@ -112,7 +112,7 @@ What each case tells apart:
   read after the correction (no jog) reads 1, 0, 3, as
   ``invalid_step_corrects_to_1`` shows a correction scan writes step 1's
   outputs.  So the pins are read before the drum runs and the jog does
-  something to the bad step itself.  It does not complete the drum (Result2 = 0): the jog scan leaves step 5 and the outputs alone,
+  something to the bad step itself.  The jog does not complete the drum (Result2 = 0).  The jog scan leaves step 5 and the outputs alone,
   the next scan corrects the step and writes no output, and the rung is then
   false (``drum_trace/tied_jog`` reads it scan by scan).  So 1, 0, 0, 0.
 - ``pins_read_before_step_fix_tee``: the same ladder on its own bits (the same
