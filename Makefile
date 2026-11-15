@@ -24,8 +24,10 @@ lint:
 test:
 	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both $(PYTEST_PARALLEL)
 
+# test_pilot_long_wait.py runs in `test` only. Its how() calls wait up to 8.6 million scans. Checking
+# them against plain stepping took 1,146 s of this stage's 1,873 s, all on one worker.
 test-fold:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q $(PYTEST_PARALLEL)
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --ignore=tests/core/analysis/test_pilot_long_wait.py --fold-check -q $(PYTEST_PARALLEL)
 
 # The test files this branch adds, under --fold-check: the mergeq `fold-new` stage, so a new file
 # cannot first meet the lockstep in the full `test-fold` run.
