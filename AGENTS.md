@@ -26,6 +26,7 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - Bump `pyrung>=` version in `src/pyrung/click/codegen/project_emitter.py` (generated pyproject.toml template)
 - Update `CHANGELOG.md` — move Unreleased to versioned heading with today's date
 - Bump `version` in `editors/vscode/pyrung-debug/package.json` to match (the release script also writes it into the built VSIX)
+- Publishing the GitHub release deploys the docs. `publish.yml` starts `docs.yml` with the tag once PyPI has the release. Merges to `main` never deploy them. To redeploy by hand, run `docs.yml` on `main` (`ref` defaults to the latest release)
 
 ## User-Facing Output
 
