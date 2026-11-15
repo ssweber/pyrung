@@ -4,20 +4,21 @@ Can a box sit on a continued wire of the rung above, and do its enable and its
 pins see that wire's writes?  Each case is
 one CLICK rung of two wires from the rail: the first latches a bit P, the
 second is a counter whose enable or pin reads P, its pins drawn from the rail
-under it.  pyrung's exporter writes that drawing, but no CLICK has taken a box
-below another wire of its rung yet, so the group is in part ``control``, near the end with the
-other paste probes: a CLICK that refuses the rung at paste or transfer costs
-only this group's subroutine and call rung,
-and the refusal is the answer to "can a box sit there" (the cases then do not
-run).
+under it.  pyrung's exporter writes that drawing, and a CLICK takes it.  The
+group is in part ``control``, near the end with the other paste probes.
 
-The models, as in ``test_solve_order.py``: **L** (live, adopted by S4) reads a
-continued wire's contacts, and a box's enable and pins, when the solve reaches
-them, so they see the wire above; **S** (pyrung before S4) reads the whole
-CLICK rung, continued wires and box pins included, against the memory the rung
-was entered with.  ``SOLVE_ORDER`` records what pyrung read in-process before
-S4 (measured), and ``test_solve_order.test_annotation_matches_readings``
-checks it against each case's ``expect``, which pyrung now reads.
+The models, as in ``test_solve_order.py``:
+
+- **L** (live, CLICK's model and pyrung's) reads a continued wire's contacts,
+  and a box's enable and pins, when the solve reaches them, so they see the
+  wire above.
+- **S** (snapshot) reads the whole CLICK rung, continued wires and box pins
+  included, against the memory the rung was entered with.
+
+``SOLVE_ORDER`` holds what S reads in each case.  pyrung solves by L, so a new
+case works out its S reading by hand.
+``test_solve_order.test_annotation_matches_readings`` checks those readings
+against each case's ``expect``, which pyrung reads.
 
 - ``box_pin_on_continued_wire`` (+, probe): the counter counts on scan 2; its
   reset pin is ``Or(Cmd == 0, P)`` and the wire above latches P on scan 4 (the
@@ -33,17 +34,15 @@ checks it against each case's ``expect``, which pyrung now reads.
 - ``box_pin_on_own_rung`` (probe): the control of
   ``box_pin_on_continued_wire``.  The same counter, pin and latching rung, but
   the counter stands on a rung of its own (an ``R`` marker, its contacts from
-  the rail) instead of below a wire.  The pair asks whether a CLICK accepts the
-  box first on a continued wire and reads it the same as the box on its own
-  rung.  Under L both read the same (R1 = 0, R2 = 1), since every row of a
-  rung and every rung reads live.  A CLICK that reads the continued box
-  differently from this control shows the difference here.
+  the rail) instead of below a wire.  A CLICK takes the box first on a
+  continued wire and reads it as it reads the box on its own rung (R1 = 0,
+  R2 = 1), since every row of a rung and every rung reads live.
 - ``box_tee_without_trunk`` (probe): a box rung with no contact in
   front of its own.  The counter (preset 2) counts up on scans 1 and 3, so Acc
   is 2 on scan 4 (R2) with Done on (R3 = 1), and a down pin on scan 5 takes it
-  to 1 (R1).  The case first drew its pins as tees off a bare wire (``R,-,T``
-  over ``,,-``).  CLICK's syntax check redrew them from the rail (save of
-  2026-11-13), so the export now draws them from the rail (``bare=True``).
+  to 1 (R1).  CLICK's syntax check redraws pins teed off a bare wire
+  (``R,-,T`` over ``,,-``) as pins from the rail, so the export draws them
+  from the rail (``bare=True``).
 
 The cases own C451..C500 and counters CT181..CT190 (``memory.OWNED``), ten C
 bits per case (case N takes C<441+10N>..).
@@ -61,12 +60,12 @@ from tests.conformance.scans import count_scans, done, scans_for
 GROUP = "cont_box"
 SCANS = scans_for()
 
-#: Case id -> (does the answer depend on solve order?, what pyrung read in-process
-#: under S, before S4).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
+#: Case id -> (does the answer depend on solve order?, what S reads).
+#: ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
 SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
     "box_pin_on_continued_wire": (True, {"Result1": 1, "Result2": 1}),
     "box_enable_on_continued_wire": (True, {"Result1": 0}),
-    # The S5 probes: the control reads what a rung above wrote in either model.
+    # Both models read the same in the last two cases.
     "box_pin_on_own_rung": (False, {"Result1": 0, "Result2": 1}),
     "box_tee_without_trunk": (False, {"Result1": 1, "Result2": 2, "Result3": 1}),
 }

@@ -13,9 +13,9 @@ Two models of a rung:
   L's reading, and pyrung's.
 - **S** (snapshot): every contact and leg is read at rung entry.
   Instructions still run in source order, with live operands.  Each case's
-  ``snapshot`` is what S reads, measured in-process, not derived.  It is the
-  reading a solve that ignores order would give, and the ground truth of the
-  order-dependence check.
+  ``snapshot`` is what S reads.  pyrung solves by L, so a new case works out
+  its S reading by hand.  It is the reading a solve that ignores order would
+  give, and the ground truth of the order-dependence check.
 
 ``order_dependent`` is ``snapshot != expect``, declared on each case through
 ``solve_case()`` and checked by ``test_annotation_matches_readings``.  The four
@@ -26,8 +26,8 @@ case the suite has on solve order.  If a CLICK reads S for some topology, that
 case's ``expect`` becomes S's reading and its annotation flips to False.
 
 Every case of the ``solve_order`` group itself keeps edge, counter and drum
-semantics out of the answer (no S2, S3 or DRUM; the folded-in ``row_solve``
-and ``cont_box`` cases ask about edges and boxes on purpose): the bit a later
+semantics out of the answer.  The ``row_solve`` and ``cont_box`` cases, which
+join the same check, ask about edges and boxes on purpose.  The bit a later
 part reads (P below) is latched by its writer row and cleared by the next rung
 (or, in a one-shot case whose rung never runs again, by ``init``), so it is
 never on when the rung that reads it is entered.  A part that reads P live
@@ -131,7 +131,7 @@ SCANS = scans_for()
 #: ``"group/id"`` -> does the case's answer depend on solve order?
 ORDER_DEPENDENT: dict[str, bool] = {}
 #: ``"group/id"`` -> what the case reads when every contact and leg is read at
-#: rung entry (S), measured in-process.
+#: rung entry (S).
 SNAPSHOT: dict[str, dict[str, int]] = {}
 
 #: The ``rungs`` group's live-read cases, and what each reads under S.

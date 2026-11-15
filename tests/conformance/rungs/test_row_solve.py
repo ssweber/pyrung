@@ -6,16 +6,19 @@ it).  Part ``control``, beside ``rungs`` and ``solve_order``.
 
 The models, as in ``test_solve_order.py``:
 
-- **L** (live, CLICK's model and pyrung's): the trunk's power is computed
-  once and held for every row under it; each row's own contacts, edge contacts
-  included, are read when the solve reaches the row, so they see the writes of
-  the rows above; a box reads its enable and pins before it writes; a
-  continued wire is a wire of its own from the rail, read live.  Each case's
-  ``expect`` is L's reading.
+- **L** (live, CLICK's model and pyrung's).  Each case's ``expect`` is L's
+  reading.
+
+  - The trunk's power is computed once and held for every row under it.
+  - Each row's own contacts, edge contacts included, are read when the solve
+    reaches the row, so they see the writes of the rows above.
+  - A box reads its enable and pins before it writes.
+  - A continued wire is a wire of its own from the rail, read live.
+
 - **S** (snapshot): every contact of the rung, its branches and its continued
   wires reads the memory the rung was entered with.  Every edge contact of the
   rung is also sampled on entry.  ``SOLVE_ORDER`` holds what S reads in each
-  case, measured in-process, not derived.
+  case.  pyrung solves by L, so a new case works out its S reading by hand.
   ``test_solve_order.test_annotation_matches_readings`` checks those readings
   against each case's ``expect``, which pyrung reads.
 
@@ -35,11 +38,12 @@ The cases, what each model reads, and the other models they tell apart:
   a parent branch whose only contact (the gate) is off while a bit rises (scan
   3) and falls (scan 7) holds a ``rise`` and a ``fall`` branch; the gate is on
   for scans 5 and 8 only, written by one rung (two ``out`` rungs would leave
-  it as the lower one writes it, off on scan 5).  An edge contact under an
-  unpowered parent is still solved and its memory updated ("scanned", as
-  pyrung does by reaching every row, powered or not).  That reads R1 = 0,
-  R2 = 0.  Updated only when power reaches it, or a solve that skips the rows
-  of an unpowered branch: the rise fires on scan 5 and the fall on 8 (5, 8).
+  it as the lower one writes it, off on scan 5).  If an edge contact under an
+  unpowered parent is still solved and its memory updated ("scanned"), the
+  case reads R1 = 0, R2 = 0.  pyrung reaches every row, powered or not, so it
+  reads that.  If the memory updates only when power reaches the contact, or
+  the solve skips the rows of an unpowered branch, the rise fires on scan 5
+  and the fall on 8 (5, 8).
   The rail rise and fall below (R3 = 3, R4 = 7) are the bit's own edges under
   both.  ``coils/edge_in_false_rung_branch`` asks this for a rung whose rail
   contact is open.  This case asks it under a powered trunk, one level down.
@@ -123,8 +127,8 @@ from tests.conformance.scans import WINDOW, count_scans, done, firings, scans_fo
 GROUP = "row_solve"
 SCANS = scans_for()
 
-#: Case id -> (does the answer depend on solve order?, what S reads, measured
-#: in-process).  ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
+#: Case id -> (does the answer depend on solve order?, what S reads).
+#: ``test_solve_order`` folds these into ``ORDER_DEPENDENT``.
 SOLVE_ORDER: Mapping[str, tuple[bool, Mapping[str, int]]] = {
     "edge_on_branch_reads_row_above": (
         True,

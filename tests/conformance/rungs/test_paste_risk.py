@@ -12,28 +12,25 @@ and DF411..DF420.
 - ``jump_to_own_step_register`` (probe): a 3-step event drum whose jump step
   register is its own current-step register (Result1).  Its event (C752) goes
   on on scan 2 (step 2) and again on scan 4 with the jump (C753), so on scan 4
-  the drum advances and jumps on one scan.  Adopted (pyrung since the drum
-  reads its jump step with its pins, before it moves): the jump goes to the
-  step the register held when the scan reached the drum (2) and beats the
-  advance, so the drum ends on step 2 (Result1 = 2) and step 3 is never
-  entered (Result3 = 0, its output C751 never on, Result4 = 0).  A jump to
-  the register as it reads after the advance (3, pyrung before that change),
-  or a jump to 2 followed by the advance, both leave step 3, entered on scan
-  4 (Result3 = 4) with its output on from scan 4 (Result4 = 4): 3, 2, 4, 4.
-  Result2 = 2 is step 2's entry scan.  (Moved here from ``drum`` before any
-  CLICK ran it.)
+  the drum advances and jumps on one scan.  A CLICK reads the jump step with
+  the drum's pins, before the drum moves.  The jump goes to the step the
+  register held when the scan reached the drum (2) and beats the advance, so
+  the drum ends on step 2 (Result1 = 2) and step 3 is never entered
+  (Result3 = 0, its output C751 never on, Result4 = 0).  A jump to the
+  register as it reads after the advance (3), or a jump to 2 followed by the
+  advance, both leave step 3, entered on scan 4 (Result3 = 4) with its output
+  on from scan 4 (Result4 = 4): 3, 2, 4, 4.
+  Result2 = 2 is step 2's entry scan.
 - ``rand_real_bounds`` (probe): RAND whose bounds are DF registers, probed as
   the ``faults`` group probes (``test_faults._probe``: the op once, on the
   first scan from 3 its flag is off just before it).  3.0 and 3.0 (DF411)
   into an Int preset 99 (Result1: 3), and SC46 after it (ErrorCode); +Inf and
   +Inf (DF412, 3.0E+38 * 10 staged on scan 2) into an Int preset 99
   (Result2), with SC43 and SC46 after it as bits 1 and 2 of Result3.
-  Hardware (2026-11-01) reads 0, 0, 0, 0: both write 0 with no flag at all,
-  though RAND ( 7 , 7 ) from constants raises SC46
-  (``faults/rand_wide_bounds_flags``).  CLICK's editor refuses DF bounds typed
-  in, so this is what a pasted one does.
-  ``faults/rand_unequal_bounds`` asks DF bounds that differ.  (Moved here from
-  ``faults`` before any CLICK ran it.)
+  A CLICK reads 0, 0, 0, 0.  Both write 0 with no flag at all, though
+  RAND ( 7 , 7 ) from constants raises SC46 (``faults/rand_wide_bounds_flags``).
+  CLICK's editor refuses DF bounds typed in, so this is what a pasted one does.
+  ``faults/rand_unequal_bounds`` asks DF bounds that differ.
 - ``loop_body_split`` (probe): an instruction above a box in a For
   body.  A box with pins ends its rung (C000A: all its pins start from the box's
   own wire), so the calc and the counter are two body rungs with the same

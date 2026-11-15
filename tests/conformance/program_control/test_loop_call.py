@@ -23,8 +23,9 @@ one.  Candidate answers per case:
 - ``loop_in_called_subroutine`` (probe): two nested loops of 2 in main, the
   Call in the inner one, and a helper with a loop of 2 that adds 1 to
   Result1: depth 3 counting the helper's loop, 2 * 2 * 2 = 8.  CLICK takes
-  it and reads 8 (pyrung, adopted).  If it refuses (C010D at 3), the rule
-  counts more than the research found; a fourth level is not probed here, as
+  it and reads 8 (pyrung, adopted).  If it refuses (C010D at 3), C010D's
+  limit of 3 nested loops counts more than the loops of main and of the
+  called subroutines; a fourth level is not probed here, as
   pyrung's exporter refuses it (``CLK_FORLOOP_NESTING_DEPTH``).
 """
 

@@ -162,7 +162,7 @@ def control_build():
 
 
 def test_the_bare_twin_keeps_its_pins_on_the_rail(control_build):
-    """CLICK saves a tee off a bare wire as the rail drawing, so the export draws that."""
+    """CLICK saves pins teed off a bare wire as pins drawn from the rail, so the export does too."""
     build, rail, drawn = control_build
     sub = build.group("cont_box").subroutine
     before = _case_rows(rail, sub, "cont_box", "box_tee_without_trunk")

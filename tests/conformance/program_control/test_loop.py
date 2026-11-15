@@ -4,8 +4,8 @@ The cases own C1701..C1800, timers T201..T300 and counters CT201..CT250
 (``memory.OWNED``).  CLICK has no
 loop index, so a case counts iterations in a slot register it increments in the
 body.  Each loop rung is gated on ``Fired == 0`` so the loop runs on one scan.
-A comment in each case's ladder labels it F1, F2 and so on, and the text below
-uses those labels.
+Each case's ladder function starts with a comment that labels it F1, F2 and
+so on.  The text below uses those labels.
 
 A false For rung skips its body (F2).  Body coils hold, and body one-shots,
 timers and counters are not scanned, so they do not see a reset either.  So the

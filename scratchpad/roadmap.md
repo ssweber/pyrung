@@ -25,6 +25,10 @@ Specs that later work needs are kept beside this file:
 - **Bump to `pyclickplc>=0.5.2`** in pyproject.toml. [nothing]
 - **pilot/AGENTS.md:449** says the last resort is "planned, not built". It was built on 2026-11-05. [nothing]
 - **prove/AGENTS.md** says how() reads `_ExploreContext`. It reads `_PriorFacts`. This fix goes with step 1. [nothing]
+- **The rest of the conformance docstrings still carry round and step history.** Examples are round numbers, dates
+  and "pyrung before" in test_coils.py, test_text.py and test_drum.py, and S5/S6 labels in drum_rig.py,
+  test_drum_*.py, test_store_probe.py, memory.py and test_rung_semantics.py. A case says what CLICK does. Leave
+  `pending="S2"` and `pending="S3"` alone, since they are live markers. [nothing]
 
 ## 0. Gate fixes, and the range bound
 

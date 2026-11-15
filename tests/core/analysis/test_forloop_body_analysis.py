@@ -258,8 +258,9 @@ def test_how_keeps_its_prover_context_with_body_rungs():
 
 @pytest.mark.parametrize("conditioned", [False, True])
 def test_how_counts_a_counter_inside_a_loop(conditioned: bool):
-    # Body instructions had no enable condition, so the counter's advance
-    # profile asked for no hold and how() stopped.
+    # A body counter counts on the conditions of the rungs it sits in, the For
+    # rung's included.  Without them its advance profile would ask for no hold,
+    # and how() would stop.
     # A bare body counter counts once ever (see above); a body rung's counter
     # counts each rise of its rung's condition while the loop runs.
     with Program(strict=False) as logic:
