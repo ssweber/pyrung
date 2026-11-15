@@ -1,8 +1,10 @@
 name: Docs
 
+# The public site describes the released library. A PR builds and checks the docs.
+# A published release, or a manual run, also deploys them.
 on:
-  push:
-    branches: ["main"]
+  release:
+    types: [published]
   pull_request:
     branches: ["main"]
   workflow_dispatch:
