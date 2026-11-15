@@ -446,7 +446,7 @@ that was not running although `AdvanceStep.progress` names the live one; `Pulse`
 feedback had no `AdvanceProfile`; intrascan interprets only failed effect
 expectations, so a prerequisite hold that promises nothing never asks it.
 
-A last resort is planned, not built, and these are its limits:
+The last resort (`last_resort.py`, with restarts in `restart.py`) keeps to these limits:
 
 - It stays small: wait, set an input, and later restart. It runs only when the
   pilot is about to stop, so a plan that reaches without it cannot change.
