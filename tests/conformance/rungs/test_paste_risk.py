@@ -34,7 +34,7 @@ and DF411..DF420.
   in, so this is what a pasted one does.
   ``faults/rand_unequal_bounds`` asks DF bounds that differ.  (Moved here from
   ``faults`` before any CLICK ran it.)
-- ``loop_body_split`` (probe, S5 #4): an instruction above a box in a For
+- ``loop_body_split`` (probe): an instruction above a box in a For
   body.  A box with pins ends its rung (C000A: all its pins start from the box's
   own wire), so the calc and the counter are two body rungs with the same
   contacts (the Scratch contact is written by an earlier body rung, so the
@@ -140,7 +140,7 @@ def _fire(slot):
 
 
 def prove_loop_body_split(slot):
-    # S5 #4.  The count input (the counter's body rung's Scratch != 3) is on in
+    # The count input (the counter's body rung's Scratch != 3) is on in
     # iterations 1, 2 and 4 of 4; the calc above the counter is a body rung of
     # its own with the same contacts (a box with pins ends its rung).
     counter = ClickCounter(196)
@@ -187,7 +187,7 @@ group = Group(
             "4, the counter counts 2 edges (Result1) and the calc runs 3 times (Result2)",
             ladder=prove_loop_body_split,
             expect={"Result1": 2, "Result2": 3},
-            probe="S5 #4: a For body split into separate body rungs",
+            probe="a For body split into separate body rungs",
         ),
     ],
 )

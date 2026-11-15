@@ -258,8 +258,8 @@ def test_how_keeps_its_prover_context_with_body_rungs():
 
 @pytest.mark.parametrize("conditioned", [False, True])
 def test_how_counts_a_counter_inside_a_loop(conditioned: bool):
-    # PILOT-GOTCHAS X7: body instructions had no enable condition, so the
-    # counter's advance profile asked for no hold and how() stopped.
+    # Body instructions had no enable condition, so the counter's advance
+    # profile asked for no hold and how() stopped.
     # A bare body counter counts once ever (see above); a body rung's counter
     # counts each rise of its rung's condition while the loop runs.
     with Program(strict=False) as logic:

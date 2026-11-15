@@ -316,7 +316,7 @@ group = Group(
             ladder=prove_edge_on_box_path_after_false_contact,
             expect={"Result1": 0, "Result2": 0},
             scans=SCANS,
-            probe="S5 #1: edge memory on a box path after a false contact",
+            probe="edge memory on a box path after a false contact",
         ),
         case(
             "An edge contact after a false contact in a branch still tracks its bit: "
@@ -327,7 +327,7 @@ group = Group(
             ladder=prove_edge_after_false_contact_in_branch,
             expect={"Result1": 0, "Result2": 0, "Result3": 3, "Result4": 7},
             scans=SCANS,
-            probe="S5 #1: edge memory after a false contact on a branch's prefix",
+            probe="edge memory after a false contact on a branch's prefix",
         ),
         case(
             "A drum whose enable and jog do not read its step register, with the "
@@ -338,7 +338,7 @@ group = Group(
             ladder=prove_correction_scan_with_free_enable,
             expect={"Result1": 1, "Result2": 0, "Result3": 1, "Result4": 0, "ErrorCode": 5},
             scans=SCANS,
-            probe="S5 #6: the correction scan with an enable and a jog of its own",
+            probe="the correction scan with an enable and a jog of its own",
         ),
     ],
 )

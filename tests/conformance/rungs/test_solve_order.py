@@ -1,31 +1,29 @@
 """Solve order: the ``solve_order`` group (subroutine ``Conf_SolveOrder``).
 
 Every topology where an earlier part of a rung writes a tag a later part
-reads, asked on a CLICK in hardware round 2.  Each case records whether its
-answer depends on the order the rung is solved in.  The table was the spec of
-the live row solve (S4) and is the test data of the check that warns on
-intra-rung order dependence (``RUNG_ORDER_DEPENDENT``).
+reads.  Each case records whether its answer depends on the order the rung is
+solved in.  The table is the test data of the check that warns on intra-rung
+order dependence (``RUNG_ORDER_DEPENDENT``).
 
 Two models of a rung:
 
-- **L** (live, CLICK's model since hardware round 1, pyrung's since S4): each
-  contact and each box leg is read when the solve reaches its row.  The power
-  at a shared node is computed once and held for every row below it.  Each
-  case's ``expect`` is L's reading, and pyrung's.
-- **S** (snapshot, pyrung before S4): every contact and leg is read at rung
-  entry; instructions still run in source order, with live operands.  Each
-  case's ``snapshot`` is what pyrung read in-process before S4 landed
-  (measured, not derived); it is kept as the reading a solve that ignores
-  order would give, the ground truth of the order-dependence check.
+- **L** (live, CLICK's model and pyrung's): each contact and each box leg is
+  read when the solve reaches its row.  The power at a shared node is
+  computed once and held for every row below it.  Each case's ``expect`` is
+  L's reading, and pyrung's.
+- **S** (snapshot): every contact and leg is read at rung entry.
+  Instructions still run in source order, with live operands.  Each case's
+  ``snapshot`` is what S reads, measured in-process, not derived.  It is the
+  reading a solve that ignores order would give, and the ground truth of the
+  order-dependence check.
 
 ``order_dependent`` is ``snapshot != expect``, declared on each case through
 ``solve_case()`` and checked by ``test_annotation_matches_readings``.  The four
 live-read cases of the ``rungs`` group join the same map (``RUNGS_SNAPSHOT``),
-and so do round 3's ``row_solve`` and ``cont_box`` groups, which annotate their
-own cases (``SOLVE_ORDER`` in each module), so ``ORDER_DEPENDENT`` covers every
-case the suite has on solve order.  If
-round 2 reads S for some topology, its ``expect`` becomes S's reading and its
-annotation flips to False.
+and so do the ``row_solve`` and ``cont_box`` groups, which annotate their own
+cases (``SOLVE_ORDER`` in each module), so ``ORDER_DEPENDENT`` covers every
+case the suite has on solve order.  If a CLICK reads S for some topology, that
+case's ``expect`` becomes S's reading and its annotation flips to False.
 
 Every case of the ``solve_order`` group itself keeps edge, counter and drum
 semantics out of the answer (no S2, S3 or DRUM; the folded-in ``row_solve``
@@ -78,13 +76,13 @@ The cases own C501..C700, timer T151..T160 and counters CT161..CT170
   {0, 0}.
 - ``continued_reads_later_wire`` (-): a wire needs on a bit its continued
   wire latches; the next rung reads it.  L = S {0, 1}; F {1, 1}.
-- ``box_leg_reads_row_below`` (-, answered as adopted): a counter counts on scan 2, with
-  reset leg ``Or(Cmd == 0, P)``; a continued wire below it latches P on scan
-  4.  L = S {1}; R and F {0}.  A box's legs take the rows under it, so what
+- ``box_leg_reads_row_below`` (-): a counter counts on scan 2, with reset leg
+  ``Or(Cmd == 0, P)``; a continued wire below it latches P on scan 4.  L = S
+  {1}; R and F {0}.  A box's legs take the rows under it, so what
   sits below a box in one CLICK rung is a continued wire.
-- ``for_body_rung_reads_body_rung_above`` (-, measured): body rung 1 latches
-  A, body rungs 2 and 3 need it on and off.  pyrung took a fresh snapshot
-  per body rung even before S4, so it read L {1, 0}; V {0, 1}.
+- ``for_body_rung_reads_body_rung_above`` (-): body rung 1 latches A, body
+  rungs 2 and 3 need it on and off.  S takes a fresh snapshot for each body
+  rung, so it reads as L does.  L = S {1, 0}; V {0, 1}.
 
 CLICK does not allow a box below another output on one wire: all inputs
 (pins) of a box must start from the same branch (error C000A), so a box's input wire is its own, from the rail.  No leg can read a
@@ -93,8 +91,10 @@ are retired.  What sits below a box in one CLICK rung is a continued wire
 (``box_leg_reads_row_below``).
 
 Each For rung is unconditional, and its body rungs are gated instead, so no
-case depends on what a false For rung does (F2, step S1).  Each loop runs
-once, so no case asks how a body rung's contacts read across iterations (F5).
+case depends on what a false For rung does
+(``loop/false_for_rung_skips_body``).  Each loop runs once, so no case asks how
+a body rung's contacts read across iterations
+(``loop/body_rung_contact_per_iteration``).
 
 Open: a ``call()`` inside a rung, between rows.  CLICK has no nested calls and
 every case already runs inside ``Conf_SolveOrder``; it waits for a subroutine
@@ -131,7 +131,7 @@ SCANS = scans_for()
 #: ``"group/id"`` -> does the case's answer depend on solve order?
 ORDER_DEPENDENT: dict[str, bool] = {}
 #: ``"group/id"`` -> what the case reads when every contact and leg is read at
-#: rung entry (S): pyrung's reading in-process before S4, measured.
+#: rung entry (S), measured in-process.
 SNAPSHOT: dict[str, dict[str, int]] = {}
 
 #: The ``rungs`` group's live-read cases, and what each reads under S.
@@ -146,7 +146,7 @@ for _id, _snapshot in RUNGS_SNAPSHOT.items():
     ORDER_DEPENDENT[f"rungs/{_id}"] = True
     SNAPSHOT[f"rungs/{_id}"] = dict(_snapshot)
 
-#: Round 3's solve-order groups, which annotate their own cases (``SOLVE_ORDER``:
+#: The other solve-order groups, which annotate their own cases (``SOLVE_ORDER``:
 #: id -> (order dependent?, the S reading)).
 ANNOTATED_MODULES = (test_row_solve, test_cont_box)
 

@@ -30,15 +30,15 @@ checks it against each case's ``expect``, which pyrung now reads.
   S, or the enable read when the CLICK rung was entered: it never counts (R1 =
   0).
 
-- ``box_pin_on_own_rung`` (probe, S5 #2): the control of ``box_pin_on_continued_wire``.
-  The same counter, pin and latching rung, but the counter stands on a rung
-  of its own (an ``R`` marker, its contacts from the rail) instead of below a
-  wire.  S5 asks whether a CLICK accepts the box first on a continued wire and
-  reads it the same as the box on its own rung: adopted, the same (R1 = 0, R2 =
-  1), as in L every row of a rung and every rung reads live.  A CLICK that
-  reads the continued box differently from this control answers question 2 with
-  the difference.
-- ``box_tee_without_trunk`` (probe, S5 #3): a box rung with no contact in
+- ``box_pin_on_own_rung`` (probe): the control of
+  ``box_pin_on_continued_wire``.  The same counter, pin and latching rung, but
+  the counter stands on a rung of its own (an ``R`` marker, its contacts from
+  the rail) instead of below a wire.  The pair asks whether a CLICK accepts the
+  box first on a continued wire and reads it the same as the box on its own
+  rung.  Under L both read the same (R1 = 0, R2 = 1), since every row of a
+  rung and every rung reads live.  A CLICK that reads the continued box
+  differently from this control shows the difference here.
+- ``box_tee_without_trunk`` (probe): a box rung with no contact in
   front of its own.  The counter (preset 2) counts up on scans 1 and 3, so Acc
   is 2 on scan 4 (R2) with Done on (R3 = 1), and a down pin on scan 5 takes it
   to 1 (R1).  The case first drew its pins as tees off a bare wire (``R,-,T``
@@ -104,7 +104,7 @@ def prove_box_enable_on_continued_wire(slot):
 
 
 def prove_box_pin_on_own_rung(slot):
-    # S5 #2 control.  P = C471 and counter CT183: the ladder of
+    # The control.  P = C471 and counter CT183: the ladder of
     # box_pin_on_continued_wire, with the counter on a rung of its own.
     p, counter = c[471], ClickCounter(183)
     count_scans(slot)
@@ -121,7 +121,7 @@ def prove_box_pin_on_own_rung(slot):
 
 
 def prove_box_tee_without_trunk(slot):
-    # S5 #3.  Counter CT184, preset 2: up pulses (C481) on scans 1 and 3, a down
+    # Counter CT184, preset 2: up pulses (C481) on scans 1 and 3, a down
     # pulse (C482) on scan 5.  The box rung has no contact before its own and
     # both pins have only their own, so CLICK draws the pins from the rail.
     counter = ClickCounter(184)
@@ -169,7 +169,7 @@ group = Group(
             ladder=prove_box_pin_on_own_rung,
             expect={"Result1": 0, "Result2": 1},
             scans=SCANS,
-            probe="S5 #2: the box on its own rung, the control for the continued wire",
+            probe="the box on its own rung, the control for the continued wire",
         ),
         case(
             "A box rung with no contact in front of its own, its pins drawn from the "
@@ -180,7 +180,7 @@ group = Group(
             expect={"Result1": 1, "Result2": 2, "Result3": 1},
             scans=SCANS,
             tee=TeeSpec("count_up(", (".down()", ".reset()"), after=0, bare=True),
-            probe="S5 #3: a box rung with no trunk contact, tee-drawn",
+            probe="a box rung with no trunk contact, tee-drawn",
         ),
     ],
 )
