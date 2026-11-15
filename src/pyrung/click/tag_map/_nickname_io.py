@@ -119,6 +119,29 @@ def _row_label(row: AddressRecord) -> str:
     return f"{row.nickname or '(no nickname)'} at {format_address_display(row.memory_type, row.address)}"
 
 
+def _refuse_names_that_differ_in_case(rows: Iterable[AddressRecord], path: str | Path) -> None:
+    """CLICK compares nicknames ignoring case, so ``Pump`` and ``pump`` are one name to it.
+
+    CLICK fills in the SC and SD nicknames itself and may repeat one, so an SC or SD row is
+    never refused. Another row that repeats an SC or SD nickname is.
+    """
+    seen: dict[str, AddressRecord] = {}
+    for row in rows:
+        if not row.nickname:
+            continue
+        first = seen.setdefault(row.nickname.lower(), row)
+        if first is row or row.memory_type in {"SC", "SD"}:
+            continue
+        # Two ordinary rows with the same name get pyrung's own duplicate error further on.
+        # That check never sees the system rows, so a repeat of one is refused here.
+        if first.nickname == row.nickname and first.memory_type not in {"SC", "SD"}:
+            continue
+        raise ValueError(
+            f"{Path(path).name}: nickname {_row_label(row)} repeats {_row_label(first)}. "
+            "CLICK compares nicknames ignoring letter case."
+        )
+
+
 @contextmanager
 def _naming(row: AddressRecord) -> Iterator[None]:
     """Prefix a ``ValueError`` with *row*'s nickname and address, so a project load says where."""
@@ -185,10 +208,12 @@ def tag_map_from_nickname_file(
     _HARDWARE_BLOCK_CACHE.clear()
 
     records = pyclickplc.read_csv(path)
+    # pyclickplc keeps the file as written. CLICK strips the spaces around a nickname.
     rows = sorted(
-        records.values(),
+        (replace(row, nickname=row.nickname.strip()) for row in records.values()),
         key=lambda row: (MEMORY_TYPE_BASES[row.memory_type], row.address),
     )
+    _refuse_names_that_differ_in_case(rows, path)
     system_repairs = tuple(
         SystemNicknameRepair(
             memory_type=row.memory_type,

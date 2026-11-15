@@ -51,6 +51,40 @@ def test_from_nickname_file_surfaces_documented_system_repairs(tmp_path):
     assert "CLICK system nicknames need repair" in str(exc_info.value)
 
 
+_CSV_HEADER = "Address,Data Type,Nickname,Initial Value,Retentive,Address Comment\n"
+
+
+def test_from_nickname_file_strips_the_spaces_around_a_nickname(tmp_path):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(_CSV_HEADER + 'C1,BIT," Pump ",0,No,""\n', encoding="utf-8")
+
+    mapping = TagMap.from_nickname_file(path)
+
+    assert mapping.resolve("Pump") == "C1"
+
+
+def test_from_nickname_file_refuses_names_that_differ_only_in_case(tmp_path):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(
+        _CSV_HEADER + 'C1,BIT,"Pump",0,No,""\n' + 'C2,BIT,"pump",0,No,""\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"nicknames\.csv: nickname pump at C2 repeats Pump at C1"):
+        TagMap.from_nickname_file(path)
+
+
+@pytest.mark.parametrize("name", ["_always_on", "_Always_ON"], ids=["other_case", "exact"])
+def test_from_nickname_file_refuses_a_row_that_repeats_a_system_nickname(tmp_path, name):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(
+        _CSV_HEADER + 'SC1,BIT,"_Always_ON",0,No,""\n' + f'DS1,INT,"{name}",0,No,""\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=f"{name} at DS1 repeats _Always_ON at SC1"):
+        TagMap.from_nickname_file(path)
+
+
 def test_resolve_block_slot():
     alarms = Block("Alarm", TagType.BOOL, 1, 3)
     mapping = TagMap({alarms: c.select(101, 103)})
@@ -2430,6 +2464,27 @@ def test_load_snapshot_returns_system_state(tmp_path, monkeypatch):
     assert state.tags["Valve_LS"] is True
     assert state.tags["Speed"] == 42
     assert "DS999" not in state.tags
+
+
+def test_load_snapshot_reads_a_dump_as_click_writes_it(tmp_path):
+    import math as _math
+
+    import pyclickplc
+
+    note = Tag("Note", TagType.CHAR)
+    level = Tag("Level", TagType.REAL)
+    mapping = TagMap({note: txt[1], level: df[1]})
+    dump = tmp_path / "data.csv"
+    pyclickplc.write_plc_data(dump, {"TXT1": " ", "DF1": 1.5})
+    # CLICK writes a text space as $20, and shows a float it can't display as Err-Format.
+    text = dump.read_text(encoding="utf-8")
+    assert "$20" in text
+    dump.write_text(text.replace("1.50000000", "Err-Format", 1), encoding="utf-8")
+
+    state = mapping.load_snapshot(dump)
+
+    assert state.tags["Note"] == " "
+    assert _math.isnan(state.tags["Level"])
 
 
 # ===================================================================
