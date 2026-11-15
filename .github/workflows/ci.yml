@@ -68,3 +68,13 @@ jobs:
         run: make test
         env:
           PYTEST_WORKERS: auto
+
+  # main requires this check, so the required name stays the same when the matrix changes.
+  # Without always(), a failed build would skip this job. A skipped required check counts
+  # as passing.
+  ci:
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.build.result }}" = "success"
