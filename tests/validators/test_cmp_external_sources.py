@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung import Bool, Int, Program, Real, Rung, copy, math, out
+from pyrung import Bool, Dint, Int, Program, Real, Rung, copy, math, out, rung
 from pyrung.core import Block, TagType
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive
 from pyrung.core.validation.context import ValidationContext
@@ -94,3 +94,27 @@ def test_ladder_only_zero_writer_still_proves_comparison_false():
             out(Bool("Result"))
     (finding,) = program.check(select={"CMP_ALWAYS_FALSE"})
     assert finding.code == "CMP_ALWAYS_FALSE"
+
+
+def test_a_wide_math_result_has_no_listed_domain():
+    # One Bool times 100,000,000 spans 0..100,000,000; listing it took gigabytes.
+    flag, big = Bool("Flag", external=True), Dint("Big")
+    with Program(strict=False) as program:
+        with rung(Bool("Go", external=True)):
+            math(flag * 100_000_000, big)
+        with rung(big == 5):
+            out(Bool("Result"))
+    assert big.name not in ValidationContext(program).produced_domains
+    assert not program.check(select={"CMP_ALWAYS_FALSE"})
+
+
+def test_a_math_result_that_wraps_keeps_every_value():
+    # 32760..32770 into an Int stores 32760..32767 and -32768..-32766.
+    small, wrapped = Int("Small", min=0, max=10, external=True), Int("Wrapped")
+    with Program(strict=False) as program:
+        with rung(Bool("Go", external=True)):
+            math(small + 32760, wrapped)
+        with rung(wrapped == -32767):
+            out(Bool("Result"))
+    assert ValidationContext(program).produced_domains.get(wrapped.name) != ()
+    assert not program.check(select={"CMP_ALWAYS_FALSE"})
