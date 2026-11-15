@@ -452,7 +452,7 @@ keep to these limits:
 - They stay small: wait, set one input, release a force, or stop and go back to
   RUN. They run only when the pilot is about to stop, so a plan that reaches
   without them cannot change.
-- It relaxes "absence of a diagnosis does not authorize motion" there and nowhere
+- They relax "absence of a diagnosis does not authorize motion" there and nowhere
   else. Anything may be tried on a fork; only the result keeps it.
 - A `REACHED` plan says in `str(plan)` when it relied on one of these moves. A
   plan that rests on a wait or an input change names a gap to teach the normal

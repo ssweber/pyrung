@@ -75,6 +75,19 @@ def test_from_nickname_file_refuses_names_that_differ_only_in_case(tmp_path):
         TagMap.from_nickname_file(path)
 
 
+def test_from_nickname_file_refuses_a_row_that_repeats_a_system_nickname_in_another_case(
+    tmp_path,
+):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(
+        _CSV_HEADER + 'SC1,BIT,"_Always_ON",0,No,""\n' + 'DS1,INT,"_always_on",0,No,""\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="_always_on at DS1 is the same as _Always_ON at SC1"):
+        TagMap.from_nickname_file(path)
+
+
 def test_resolve_block_slot():
     alarms = Block("Alarm", TagType.BOOL, 1, 3)
     mapping = TagMap({alarms: c.select(101, 103)})

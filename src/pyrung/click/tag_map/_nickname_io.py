@@ -122,13 +122,16 @@ def _row_label(row: AddressRecord) -> str:
 def _refuse_names_that_differ_in_case(rows: Iterable[AddressRecord], path: str | Path) -> None:
     """CLICK compares nicknames ignoring case, so ``Pump`` and ``pump`` are one name to it.
 
-    CLICK fills in the SC and SD nicknames itself and may repeat one, so those are left alone.
+    CLICK fills in the SC and SD nicknames itself and may repeat one, so an SC or SD row is
+    never refused. Another row that repeats an SC or SD nickname is.
     """
     seen: dict[str, AddressRecord] = {}
     for row in rows:
-        if not row.nickname or row.memory_type in {"SC", "SD"}:
+        if not row.nickname:
             continue
         first = seen.setdefault(row.nickname.lower(), row)
+        if row.memory_type in {"SC", "SD"}:
+            continue
         if first.nickname != row.nickname:  # an exact repeat has its own error further on
             raise ValueError(
                 f"{Path(path).name}: nickname {_row_label(row)} is the same as "
