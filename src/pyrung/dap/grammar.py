@@ -27,8 +27,8 @@ SlotKind = Literal["tag", "expression", "value", "choices", "flag", "text"]
 ``tag`` — a single tag name.  ``expression`` — tags mixed with operators
 (``Motor & ~Pump``, ``State == 3``); a completer should offer tag names here
 too.  ``value`` — a literal (``true``, ``42``).  ``choices`` — one of
-:attr:`Slot.choices`.  ``flag`` — a ``--flag``.  ``text`` — freeform (a note, a
-filepath); nothing to complete.
+:attr:`Slot.choices`.  ``flag`` — a ``--flag``.  ``text`` — freeform (a filepath);
+nothing to complete.
 """
 
 

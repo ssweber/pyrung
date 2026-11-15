@@ -1182,6 +1182,8 @@ def _render(expr: Expr, parent: type | None) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Nothing in pyrung calls this, but test files that `spec test` wrote import it.
+# Roadmap item 1c decides whether it stays.
 def expr_requires(expr: Expr, tag: str, *, negated: bool = False) -> bool:
     """True if *tag* must be true (or false when *negated*) for *expr* to be true.
 
@@ -1208,6 +1210,8 @@ def _required_tags(expr: Expr, *, form: str) -> frozenset[str]:
     return frozenset()
 
 
+# Nothing in pyrung calls this, but test files that `spec test` wrote import it.
+# Roadmap item 1c decides whether it stays.
 def reset_dominance(
     program: Program, latch_tag: str, guard_tag: str, *, negated: bool = False
 ) -> bool:

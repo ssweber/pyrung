@@ -125,7 +125,7 @@ Generate a self-contained scan loop for the P1AM-200 with 35 supported I/O modul
 
 ### [VS Code debugger](https://pyrung.com/pyrung/guides/dap-vscode/)
 
-Step through scans rung by rung, set breakpoints on rungs, force tags, and time-travel through history. Watch tags live, see the dependency graph, and turn a captured session into pytest invariants.
+Step through scans rung by rung, set breakpoints on rungs, force tags, and time-travel through history. Watch tags live, see the dependency graph, and record a session to replay later.
 
 ## Disclaimers
 

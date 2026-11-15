@@ -86,6 +86,8 @@ ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `ca
 
 Plan item 3. `pyrung`, `pyrung.click` and `pyrung.circuitpy` are public. The few names users need move to the top
 level, and validation gets one public module. ClickNick's test of its named imports is ClickNick's work.
+- Decide `expr_requires` and `reset_dominance` (analysis/simplified.py). Nothing in src calls them since the record
+  machinery went, but test files that `spec test` wrote import them.
 
 ### 1d. Then the `Rung` -> `rung` rename in tests
 
@@ -128,7 +130,7 @@ Plan item 1.2. The design is `session-recording/design.md`. Sam's rulings of 202
 All [nothing].
 
 - **Fix `replay`.** It stops after the first `step`, `run` or `reload`, because those return `"stopped"` and
-  capture.py:186-200 treats that as a breakpoint. The tests miss it because every replay transcript ends on the step.
+  capture.py:182-196 treats that as a breakpoint. The tests miss it because every replay transcript ends on the step.
 - **Add** `assert` (a tolerance on Reals, an error on an unknown tag) and `run until <condition> within N`. Today
   `run` takes only a count or a duration. dap/expressions.py has a parser to reuse.
 - `record` saves the raw transcript, and a recording carries its scan time. The pytest plugin collects recordings.
