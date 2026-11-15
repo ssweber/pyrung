@@ -12,11 +12,12 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make test-pilot` — pilot (`how()` planner) tests
 - `make test-tumbler` — generated-program PILOT fixtures; run after `make test-pilot`
 - `make test-hypothesis` — property-based tests
-- `make test-soundness` — prove agreement checks (`--prove-agreement`)
+- `make test-soundness` — prove agreement checks (`--prove-agreement`), only in the test files that call `always`
 - `make test-fuzz` — fuzzer suite
 - `make test-fold` — the suite again, with every long run checked scan by scan against plain stepping (`--fold-check`, `tests/fold_check.py`). Long runs go through the jit, the guarded loop over the compiled kernel. Run it only after a change to the jit or to how timers, counters or clocks compute. The jit is `core/scan_trace.py`, `coast_run.py`, `cycle_jump.py`, `rung_firings.py`, `compiled_run.py`, `kernel.py`, `read_trace.py` and `tests/fold_check.py`. A test program that only uses timers is no reason to run it.
 - `make test-fold-new` — only the test files this branch adds, under `--fold-check` (mergeq's `fold-new` stage; judges mismatches, not vacuity)
 - `make test-conformance` — conformance cases over Modbus TCP against the local soft PLC (`PLC=host[:port]` for a real CLICK, `TARGET=circuitpy` for the generated P1AM-200 code run locally, `GROUP=name` for some groups); `make conformance-export OUT=dir` writes the CLICK project
+- `make test-conformance-repeat` — the suite twice on one PLC, then each group alone. It takes as long as several suite runs, so run it before a hardware round. It is not in the gate
 - `make test-integration` — integration tests (needs hardware/network)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
 

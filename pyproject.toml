@@ -202,11 +202,9 @@ markers = [
     "known_answer: hand-enumerated reachable-state oracle tests",
     "tumbler: slow full-program tumbler fixture tests (run separately)",
     "conformance: conformance cases over Modbus TCP (local soft PLC or a real CLICK)",
+    "suite_repeat: the whole conformance suite again on one PLC (make test-conformance-repeat)",
 ]
-testpaths = [
-    "src",
-    "tests",
-]
+testpaths = ["tests"]
 # The conformance workspace holds ClickNick-generated source and a seeded smoke test.
 norecursedirs = ["tests/fuzz/reproducers", "tests/conformance/workspace"]
 filterwarnings = [

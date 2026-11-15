@@ -105,6 +105,7 @@ def _passes(results, label: str) -> None:
         raise AssertionError(f"{label}:\n{exc}") from None
 
 
+@pytest.mark.suite_repeat
 def test_suite_repeats_without_restarting(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
