@@ -11,7 +11,7 @@ DOCS_ADDR ?= localhost:8000
 PYTEST_WORKERS ?= 6
 PYTEST_PARALLEL = -n $(PYTEST_WORKERS) --dist=loadfile --max-worker-restart=0
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-conformance test-conformance-repeat conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-bytecode test-conformance test-conformance-repeat conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -31,6 +31,13 @@ test-fold:
 # cannot first meet the lockstep in the full `test-fold` run.
 test-fold-new:
 	uv run python devtools/fold_new_tests.py
+
+# The tests of the code that reads bytecode or source positions, which can change with any Python
+# release. CI runs the full suite on the oldest and newest Python, and only these between them.
+BYTECODE_TESTS = tests/core/test_tag.py tests/core/test_tag_type_classes.py 	tests/core/test_function_source.py tests/core/test_kernel_calls_the_function.py 	tests/core/test_reentrant_scan.py tests/core/test_run_function_arguments.py 	tests/core/analysis/test_prove_function_gate.py
+
+test-bytecode:
+	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --runner-backend=both -q $(BYTECODE_TESTS)
 
 test-prove:
 	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
