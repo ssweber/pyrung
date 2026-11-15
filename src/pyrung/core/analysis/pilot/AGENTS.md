@@ -446,14 +446,17 @@ that was not running although `AdvanceStep.progress` names the live one; `Pulse`
 feedback had no `AdvanceProfile`; intrascan interprets only failed effect
 expectations, so a prerequisite hold that promises nothing never asks it.
 
-The last resort (`last_resort.py`, with restarts in `restart.py`) keeps to these limits:
+The last resort (`last_resort.py`) and the force release and restart (`restart.py`)
+keep to these limits:
 
-- It stays small: wait, set an input, and later restart. It runs only when the
-  pilot is about to stop, so a plan that reaches without it cannot change.
+- They stay small: wait, set one input, release a force, or stop and go back to
+  RUN. They run only when the pilot is about to stop, so a plan that reaches
+  without them cannot change.
 - It relaxes "absence of a diagnosis does not authorize motion" there and nowhere
   else. Anything may be tried on a fork; only the result keeps it.
-- A `REACHED` plan must say when it relied on these moves, in `str(plan)`. Each
-  such plan names a gap to teach the normal pilot.
+- A `REACHED` plan says in `str(plan)` when it relied on one of these moves. A
+  plan that rests on a wait or an input change names a gap to teach the normal
+  pilot.
 
 Run:
 
