@@ -9,8 +9,9 @@ Repo-specific rules for the /bob skill. Another repo replaces this file.
   landing (user, 2026-10-30); never push bob/* branches or main.
 - Worktrees `../pyrung-wt/<name>` on `bob/<name>`; mergeq home `../pyrung-wt/buildbot`
   (queue, logs, results, `jobs/<id>/{HANDOFF,REVIEW,LEDGER}.md`).
-- Current arc doc: `scratchpad/conform-readings/arc.md` (untracked, so give builders the absolute
-  main-checkout path). One arc doc: fold rulings and leftovers into it, not side notes.
+- Plan: `scratchpad/roadmap.md`. An arc doc lives in `../pyrung-wt/buildbot/jobs/<arc>/` (out of git, so give
+  builders the absolute path). One arc doc per arc: fold rulings and leftovers into it, not side notes. When the
+  arc closes, its open items move into the roadmap.
 
 ## Correctness contract (put in every builder and reviewer brief)
 
