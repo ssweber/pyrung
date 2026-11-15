@@ -22,14 +22,6 @@ Specs that later work needs are kept beside this file:
 
 ## Before new work
 
-- **Delete `dev` on GitHub.** The queue and BOB already gate on main (#52). [Sam]
-- **CI on 3.11 and 3.14 only** (Sam, 2026-11-15). Trim the `build` matrix in `.github/workflows/ci.yml` to the oldest
-  and newest supported Python. Wait until Sam's ruleset requires only `ci` and the docs `build`. Before that, the
-  `build (ubuntu-latest, 3.12)` and `3.13` checks are required, and a PR without them can't merge. [nothing, after Sam]
-  - The same PR adds one small job on 3.12 and 3.13 (Sam, 2026-11-15). It runs only the tests of the three modules
-    that read bytecode: `core/_naming.py` (via `executing`), the opcode reads in `core/runner.py`, and
-    `core/function_source.py`. It has no lint and no docs build. Add it to the `ci` job's `needs` and to its test.
-    If choosing those tests takes more than a path list or one marker, ask Sam first.
 - **Bump to `pyclickplc>=0.5.2`** in pyproject.toml. [nothing]
 - **pilot/AGENTS.md:449** says the last resort is "planned, not built". It was built on 2026-11-05. [nothing]
 - **prove/AGENTS.md** says how() reads `_ExploreContext`. It reads `_PriorFacts`. This fix goes with step 1. [nothing]
@@ -40,13 +32,13 @@ Specs that later work needs are kept beside this file:
 
 ## 0. Gate fixes, and the range bound
 
-Every later step pays the gate, so it comes first. All [nothing]. The range bound, the soundness and conformance
-trims and the cleanups landed in #52: `train-jit` took 61 min (it took 78.9). Per-test times from that run are in
+Every later step pays the gate, so it comes first. All [nothing]. The range bound, the soundness and conformance trims
+and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9). Per-test times from that run are in
 `pyrung-wt/buildbot/logs/gate-trim/`.
 
 - **Narrow `fold`** to the test files whose long runs use the loop (`run_for`/`run_until`). Today it reruns all of
-  `test`'s selection (1,873 s in the trimmed run). `test_pilot_long_wait.py` alone takes 1,146 s under fold, and less
-  than 112 s in `test`. Look at it first.
+  `test`'s selection (1,873 s in the trimmed run). `test_pilot_long_wait.py` alone takes 1,146 s under fold and
+  31 s in `test`. Look at it first.
 - **Fuzz runs in no gate.** The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given`
   on an inner function. Decide its fate with the search deletion, since most of it tests the search.
 

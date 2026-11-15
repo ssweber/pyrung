@@ -60,7 +60,7 @@ def _has_a_kernel(program) -> bool:
     return PLC(program, dt=0.01)._compiled_replay_supported_kernel() is not None
 
 
-def _from_code_py(fn, name: str):
+def _from_code_py(fn, name: str, v: int = 0):
     """Call the ``def`` a generated code.py carries for *fn*."""
     hardware = P1AM()
     hardware.slot(1, "P1-08SIM")
@@ -72,7 +72,7 @@ def _from_code_py(fn, name: str):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             namespace: dict = {}
             exec(compile(ast.Module([node], []), "code.py", "exec"), namespace)  # noqa: S102
-            return namespace[name](0)
+            return namespace[name](v)
     raise AssertionError(f"no def {name} in code.py")
 
 
@@ -120,6 +120,37 @@ def test_a_multiline_string_in_an_indented_function_keeps_its_text(fn):
 def test_code_py_carries_the_same_string(fn, name):
     assert fn(0) == {"out": 11}
     assert _from_code_py(fn, name) == {"out": 11}
+
+
+# Python 3.12 inlines list, dict and set comprehensions into the function's own code (each was a
+# nested code object). A generator expression stays nested. The comparison walks both shapes.
+def _list_comprehension(v):
+    return {"out": sum([x % 7 for x in range(v % 5)])}
+
+
+def _dict_comprehension(v):
+    return {"out": len({x: x for x in range(v % 5)})}
+
+
+def _set_comprehension(v):
+    return {"out": len({x % 3 for x in range(v % 5)})}
+
+
+def _generator(v):
+    return {"out": sum(x % 7 for x in range(v % 5))}
+
+
+COMPREHENSIONS = [_list_comprehension, _dict_comprehension, _set_comprehension, _generator]
+
+
+@pytest.mark.parametrize("fn", COMPREHENSIONS, ids=lambda fn: fn.__name__.lstrip("_"))
+def test_a_body_with_a_comprehension_is_the_function(fn):
+    assert is_the_function(embedded_source(fn), fn)
+    program = _program(fn)
+    assert _has_a_kernel(program)
+    _seeks_as_it_ran(program)
+    assert fn(4)["out"] > 0
+    assert _from_code_py(fn, fn.__name__, 4) == fn(4)
 
 
 def test_a_whitespace_only_line_in_a_string_at_column_0_is_kept(tmp_path, monkeypatch):
@@ -269,6 +300,13 @@ def test_the_comparison_sees_each_part_of_a_function():
     assert not is_the_function("@dec\n" + same, fn)
     assert not is_the_function(same + same, fn)
     assert not is_the_function("def f(:\n", fn)
+
+    listed = "def f(v):\n    return {'out': sum([x for x in range(v)])}\n"
+    assert is_the_function(listed, source_of(listed))
+    assert not is_the_function(listed.replace("[x for", "[x + 1 for"), source_of(listed))
+    generated = listed.replace("[", "(").replace("]", ")")
+    assert is_the_function(generated, source_of(generated))
+    assert not is_the_function(generated.replace("(x for", "(x + 1 for"), source_of(generated))
 
     outer = source_of("def f(v):\n    def g():\n        return 1\n    return {'out': g()}\n")
     assert not is_the_function(
