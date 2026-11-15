@@ -11,13 +11,13 @@ call, so call 2k-1 and call 2k are the two calls of scan k.  The window is 9
 calls, so ``firings`` lists the calls an edge contact passed power on as one
 digit each.
 
-- ``rise_once_per_scan`` (answered as adopted): C701 is on for calls 5 and 6 (scan 3), its
+- ``rise_once_per_scan``: C701 is on for calls 5 and 6 (scan 3), its
   out rung between a rise and a fall contact above it and another pair below.
-  Each contact keeps a memory of its own, updated on each call (adopted, the
+  Each contact keeps a memory of its own, updated on each call (the
   CLICK model of the coils group): above the writer the rise fires on call 6
-  and the fall on call 8, below it on calls 5 and 7 (6, 5, 8, 7), as
-  pyrung's do.  Edge contacts that compare the bit with its value at the end
-  of the previous scan (pyrung before) see the same edge again on the second
+  and the fall on call 8, below it on calls 5 and 7 (6, 5, 8, 7).
+  Edge contacts that compare the bit with its value at the end
+  of the previous scan would see the same edge again on the second
   call of a scan: 6, 56, 8, 78.  One memory per bit updated by every read: 0,
   5, 0, 7.
 """

@@ -16,13 +16,11 @@ it holds ``Acc = 0`` and ``Done`` off while the case is idle.  ``ClickCounter``
 results are DINT; the slot copies them into DS, and the values are small, except
 in ``acc_clamps_at_dint_range``, which compares against the limits in a contact.
 
-The expectations are what a CLICK does (hardware round 1, 2026-10-29): a
+The expectations are what a CLICK does.  A
 counter counts the rising edges of its count inputs, with a memory of its own
 updated on every scan, reset scans included, so an input held through a reset
 does not count again; a down counter starts at 0 and is done at ``Acc <=
-preset``, and pyrung does the same.  (pyrung used to count every scan an
-input was on and had a down counter done at ``Acc <= -preset``; the cases that
-showed it were pending S2.)  Most cases pulse their inputs for one scan at a
+preset``.  Most cases pulse their inputs for one scan at a
 time, so each asks its own question under either counting rule.  What each
 tells apart:
 
@@ -50,8 +48,8 @@ tells apart:
   0 to -3 (Result1), -1 after scan 2 (Result3), done from scan 1 (Result2), as
   0 <= 3.  pyrung's ``Acc <= -preset`` is done on scan 6; a down counter that
   a reset loads with its preset reads Result1 = 0, Result3 = 2.
-- ``up_down_same_scan`` (answered as adopted): up pulses on 1, 3, 5, 7, down pulses on 5 and
-  7, preset 2.  Both edges on one scan cancel (adopted): 2, 2, 6.  Up taking
+- ``up_down_same_scan``: up pulses on 1, 3, 5, 7, down pulses on 5 and
+  7, preset 2.  Both edges on one scan cancel: 2, 2, 6.  Up taking
   priority reads 3, 4, 6; down taking priority 1, 0, 2.
 - ``acc_clamps_at_dint_range``: ``Acc`` is staged a few counts inside each
   limit and pulses into it.  A wrapping accumulator is at the limit for two
@@ -60,18 +58,18 @@ tells apart:
   1 on scan 3); reset on scan 4 with the input still on, it does not count
   again (Result2 = 0).  Counting scans reads 3 and 4; an edge memory that a
   reset clears reads 1 and 1.
-- ``count_down_done_at_preset`` (answered as adopted): staged at 5 and pulsed down on every
+- ``count_down_done_at_preset``: staged at 5 and pulsed down on every
   even scan to -3, a down counter done at ``Acc <= preset`` (3) is first done
-  on scan 4 (Result2, adopted); done at ``Acc <= 0`` on scan 10; at ``Acc <=
+  on scan 4 (Result2); done at ``Acc <= 0`` on scan 10; at ``Acc <=
   -preset`` on scan 16.
-- ``edge_on_reset_scan`` (answered as adopted): the input rises on scan 3, the reset's last
+- ``edge_on_reset_scan``: the input rises on scan 3, the reset's last
   scan, and stays on through 5; it rises again on 7.  Edge memory updated on
-  reset scans (adopted): 0 after scan 5 (Result1), 1 at the end (Result2).
+  reset scans: 0 after scan 5 (Result1), 1 at the end (Result2).
   Memory left alone while reset is on counts scan 4 too: 1, 2.
-- ``first_scan_input_already_on`` (answered as adopted): an unconditional rung turns the
+- ``first_scan_input_already_on``: an unconditional rung turns the
   count input on from the first scan, and the counter is held in reset on every
   scan but the first.  Edge memory that starts off at STOP->RUN counts on the
-  first scan and latches a flag (Result1 = 1, adopted); memory seeded from the
+  first scan and latches a flag (Result1 = 1); memory seeded from the
   input, or carried over STOP, does not (Result1 = 0).  It reads the loaded
   program's first scan, whatever run reads it.
 - ``pins_read_before_count`` (probe, box atomicity): a box reads its enable and
@@ -80,7 +78,7 @@ tells apart:
   each adds a pulse bit of its own; the ``.reset()`` pin shares it too and adds
   Cmd == 0, so it resets the counter at idle (Done is off then).  Preset 2, up pulses on scans 1
   and 3, a down pulse on scan 3: the second count turns Done on during that
-  very scan.  All inputs read before the box writes (adopted, pyrung's model):
+  very scan.  All inputs read before the box writes (pyrung's model):
   up and down both see ~Done on scan 3 and cancel, Acc = 1 (Result1) and Done
   off (Result2 = 0).  A down pin read after the box counted sees Done on, drops
   the down, and reads Acc = 2, Done on (Result1 = 2, Result2 = 1).

@@ -1,7 +1,6 @@
 """A debounce's off side: the ``coil_timing`` group (part ``follow_timing``).
 
-Two questions the fix step ``timed-coils`` (5 in the ``conform-fix`` arc) built on with no
-reading, beside ``deb_zero``'s, answered on a CLICK on 2026-11-06.
+Two cases on a debounce's off TD, beside ``deb_zero``'s.
 
 - ``off_td_held``: does a debounce's off TD keep its value while the rung is true?  A debounce of
   0 / 500 ms, in steps that ``Scratch`` holds.  The reset leaves the off TD timed out (500 ms or
@@ -20,23 +19,21 @@ reading, beside ``deb_zero``'s, answered on a CLICK on 2026-11-06.
 
   - 1, 2, 1: the rung's rise clears the off TD, and the fall times from 0.
   - 1, 1, 1: the off TD is held while the rung is true (as for the on side), and a fall starts it
-    from 0 (pyrung from timed-coils to 2026-11-06).
+    from 0.
   - 0, 1, 0: it is held while the rung is true and a fall resumes it.  It is past its preset at
     once, and the coil drops on the scan after the fall.
 
-  A CLICK read an earlier ladder that timed it all on one clock from ``Cmd``.  It read 1, 2, and
-  an off TD of 101 at 100 ms after the fall.  That is the first reading.  So the off TD is under
-  100 on the scan of the fall, as ``deb_fall/off_td_at_fall`` read (1..2).
+  A CLICK reads the first of these, so the off TD is under 100 on the scan of the fall
+  (``deb_fall/off_td_at_fall``, 1..2).
 - ``deb_off_against_tof``: a debounce of 0 / 5 ms and a TOF of 5 ms on one rung, on scans 2 and 3.
   The scan each goes off first (Result1 the debounce, Result2 the TOF, up to 40, 0 for never) and
   ErrorCode = Result1 - Result2: 1 where the debounce's off side takes a scan more than a TOF of
-  its preset, as ``zero_and_below`` read at 0, 0 where they agree.  A CLICK read 6, 5, 1: a scan
+  its preset, as ``zero_and_below`` reads at 0, 0 where they agree.  A CLICK reads 6, 5, 1, a scan
   more.  pyrung reads 5, 4, 1 at the in-process 10 ms scan (on a CLICK the scans are shorter, so
   the off comes later), so the scans are ranges and ErrorCode is exact.  The reset writes none of
-  the three TDs: it wrote 0 to them every reset scan until a CLICK hung in that reset on a repeat
-  run (2026-11-06), since a TOF whose Acc is zeroed while its rung is false keeps its Done on
-  (``timers/tof_times_only_when_false``), so ``ready`` (the TOF's Done off) never held.  None needs
-  that write.  The rung's rise clears the debounce's on TD and the TOF's, and holds the
+  the three TDs.  A TOF whose Acc is zeroed while its rung is false keeps its Done on
+  (``timers/tof_times_only_when_false``), so a reset that zeroed them would never see ``ready``
+  (the TOF's Done off).  No case needs that write.  The rung's rise clears the debounce's on TD and the TOF's, and holds the
   debounce's off TD at 0.  The case lists the three TDs in ``keep`` only because they move
   after it fires.
 

@@ -1,7 +1,7 @@
-"""S6 drum probes, the rule: the ``drum_rule`` group (subroutine ``Conf_DrumRule``).
+"""Drum probes, the rule: the ``drum_rule`` group (subroutine ``Conf_DrumRule``).
 
-Part ``drum1`` (``suite.PARTS``).  S5 read the drum rule on event
-drums (``drum_trace``); these ask the same of ``time_drum`` and
+Part ``drum1`` (``suite.PARTS``).  ``drum_trace`` reads the drum rule on event
+drums, and these cases ask the same of ``time_drum`` and
 ``time_event_drum``.  Each scenario runs one of each on the same inputs
 (``drum_rig.Pair``) and records them together: a drum's state at the end of a
 scan is two digits, ``S`` the step then ``X = 4 * flag + 2 * B + A`` (22 is
@@ -15,13 +15,12 @@ The time drum's presets are 30 s (the cases that need a step to time out
 stage its accumulator past a preset of 2 s instead, since over the wire a
 preset cannot be timed in scans), and it moves by a jog; the time & event
 drum's steps are event-only and move on their events.  The expectations are
-what pyrung reads, which is the S5 drum rule (CHANGELOG: all three drums follow
-it): a drum writes its outputs when its step moves or its rung comes back, not
-on every scan, and a write to its step register is not a move.  A snapshot
-that reads otherwise on a CLICK is an answer for that kind of drum.
+what pyrung reads, which is the drum rule all three drums follow:
+a drum writes its outputs when its step moves or its rung comes back, not
+on every scan, and a write to its step register is not a move.
 
 The time & event drum is moved on scan 2 and the time drum on scan 1: a one-scan
-event on scan 1 did not move it on a CLICK (2026-11-02), which ``drum_settle`` asks
+event on scan 1 does not move it on a CLICK, which ``drum_settle`` asks
 of its own, and every scenario here starts from step 2.
 
 - ``writes_on_move_only`` (probe): both drums on step 2 with B on from scan 2.

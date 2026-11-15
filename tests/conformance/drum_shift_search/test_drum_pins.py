@@ -1,19 +1,17 @@
 """Drum probes: a pin against a step's own end, and every other branch of the routine.
 
 Three groups: ``drum_pins`` (part ``drum2``), ``drum_branch`` (``drum3``), ``drum_limits`` (``drum1``).  The cases
-ask what no recording in ``test_drum.py``, ``test_drum_trace.py``, ``test_drum_rule.py``,
+ask what no case in ``test_drum.py``, ``test_drum_trace.py``, ``test_drum_rule.py``,
 ``test_drum_jump.py``, ``test_drum_settle.py``, ``test_drum_close.py`` or
-``test_drum_idle.py`` separates.  ``drum_pins`` and ``drum_limits`` were read on a CLICK
-on 2026-11-05, and ``drum_branch`` on 2026-11-05 and 2026-11-09.  Each case expects what
-the CLICK read.
+``test_drum_idle.py`` separates.  Each case expects what a CLICK does.
 
 Snapshots as in ``test_drum_settle``: two digits a drum, ``S`` then ``4 * flag + 2 * B +
 A``, the first drum named above the other.  On a 3-step drum row 1 is 11, row 2 is 22 and
 row 3 is 33; complete with the outputs off is 14, 24 or 34.
 
 ``drum_pins``, Q1: a pin and the step's own end on one scan.  M1: the pin's move takes
-the scan.  M2: the drum's own logic runs first, then the pins.  The CLICK read M1 in every
-case, and 9 for ``acc_jog_completing``'s control.
+the scan.  M2: the drum's own logic runs first, then the pins.  A CLICK follows M1 in every
+case, and reads 9 for ``acc_jog_completing``'s control.
 
 =======================  ===========  ===========  ============================
 Case                     M1           M2           Read
@@ -48,8 +46,8 @@ A jump that is not on the last step does not separate them: step 1's end and a j
 read 33 under both, a jump to 1 reads 11 under both.
 
 Q2: a paused forward jog with the flag on.  A jog forward with the flag on writes the
-row when the rung is true (``drum_settle/after_jump_jog_alone``).  With the rung false the
-CLICK read "never":
+row when the rung is true (``drum_settle/after_jump_jog_alone``).  With the rung false a
+CLICK writes it "never":
 
 ======================  ============  ============  ==================
 Row written             at the jog    at the return  never
@@ -66,7 +64,7 @@ Reading at the return   2626          2626           2424
 - ``paused_flag_moves``: a jump with the flag on while paused: 1414 at the jump and 1414 at
   the return, or the return writes the row, 1515 (Result2, Result3).  A jog on the last
   step with the flag on while paused: 2424 both times, or the return writes the row, 2626
-  (Result4, ErrorCode).  The CLICK read 1414 and 2424: the return writes no row.
+  (Result4, ErrorCode).  A CLICK reads 1414 and 2424: the return writes no row.
 
 ``drum_branch``, the routine's other branches:
 
@@ -74,41 +72,40 @@ Reading at the return   2626          2626           2424
   to 0 (Result2), and to 4 with a jog on its scan (Result3).  Dropped reads 1111, 1111 and,
   the jog acting, 2222.  Standing reads 9191; clamping to the last step 3333.  ErrorCode is
   the time drum's Acc in thousands after the jump to 9.  The Acc is staged at 9000 the scan
-  before.  It reads 9 if a dropped jump keeps the time and 0 if the jump clears it.  The CLICK
-  read (2026-11-05) 1111 for all three and ErrorCode 9: the jumps are dropped, even with a jog
-  on the scan, and the time is kept.  That run staged 900 and read hundreds, which two scans
-  of 50 ms push to 10.
+  before.  It reads 9 if a dropped jump keeps the time and 0 if the jump clears it.  A CLICK
+  reads 1111 for all three and ErrorCode 9: the jumps are dropped, even with a jog
+  on the scan, and the time is kept.
 - ``jump_on_bad_step``: step 5 staged on the scan of a jump to 2.  The jump lands with its
   row, 2222; the correction wins, 1111 (Result2, next scan Result1).  With a jog as well
   (Result3, Result4): the jump wins, 2222; the jog freezes the scan as it does alone, 5151.
   ErrorCode: step 5 on the scan of a jump to 9 from step 2, the correction writes nothing,
-  1212.  The CLICK read (2026-11-05) 2222 in all four, so the jump wins with a jog as well, and
+  1212.  A CLICK reads 2222 in all four, so the jump wins with a jog as well, and
   5252 for ErrorCode: step 5 stands.
 - ``correction_with_flag``: a completed drum with step 5 staged: corrects with the flag on,
   1414, or the flag stops it, 5454 (Result2, Result3).  Staged while paused, read paused,
-  5454 (Result4), and on the return, 1414 (ErrorCode).  The CLICK read 1414, 1414, 5454 and
+  5454 (Result4), and on the return, 1414 (ErrorCode).  A CLICK reads 1414, 1414, 5454 and
   1414, so the correction runs with the flag on.
 - ``flag_cleared``: a jumped completed drum's flag reset from outside writes no row, 1010, or
   does, 1111 (Result2); its own end on the next scan moves it, 2222 (Result3).  A completed
   drum's flag reset while paused: the return writes the row, 2222, or leaves it, 2020
-  (Result4).  The CLICK read 1010, 2222 and 2222.  Clearing the flag writes no row, and the
+  (Result4).  A CLICK reads 1010, 2222 and 2222.  Clearing the flag writes no row, and the
   return writes it.
 - ``reset_paths``: a reset while paused on a completed drum, 1010 at the reset (Result2),
   and the return writes the row, 1111 (Result3).  A jump that rises on a reset's scan and
   holds is spent (Result4 on the next scan, ErrorCode on the one after), 1111, or lands
   when the reset ends, 3333.  The jog's twin is recorded (``drum/reset_swallows_held_jog``).
-  The CLICK read 1010, 1111, 1111 and 1111, so the held jump is spent.
+  A CLICK reads 1010, 1111, 1111 and 1111, so the held jump is spent.
 - ``written_and_paused_acc``: a step written with a jog on one scan moves from what was
   written, 3333, or from what the drum held, 2222 (Result2).  A paused drum's Acc holds, 9
   thousands, or clears, 0 (Result3); a paused jog (Result4) and a paused jump (ErrorCode)
-  clear it, 0, or leave it, 9.  The Acc is staged at 9000 the scan before the pause.  The
-  CLICK read 3333, 9, 0 and 0, with 900 staged and read in hundreds.  The jog moves from what
+  clear it, 0, or leave it, 9.  The Acc is staged at 9000 the scan before the pause.  A
+  CLICK reads 3333, 9, 0 and 0.  The jog moves from what
   was written.  A pause keeps Acc, and a paused jog or jump clears it.
 - ``event_rises_in_pause``: step 1's event rises during a pause and holds through the return.
   An event drum that kept tracking its event never moves (1 in the top digit); one whose
   memory stood still moves after the return (2).  The time & event drum below takes the
   level on the scan after the return (2) as ``te_level_from_scan_1`` says.  Result2 on the
-  return, Result3 and Result4 after it.  The CLICK read 1111, 1122 and 1122, so the event drum
+  return, Result3 and Result4 after it.  A CLICK reads 1111, 1122 and 1122, so the event drum
   keeps tracking its event while paused.
 - ``te_event_before_time``: on a timed time & event step, an event pulse before the time is up
   is lost, and with the time up later and no event the drum stays, 11; one latched moves,
@@ -116,14 +113,13 @@ Reading at the return   2626          2626           2424
   (Result3).  Recorded: a level event, and a held event (``te_level_event_already_on``).
   Result4: Acc 32760 on a time & event step waiting for its event, read once a TON started
   on the same scan reads 50 ms.  It reads 1 if the Acc stops at 32767, 2 if it wraps
-  negative, and 3 for neither.  ``Fired`` waits for that reading.  The CLICK read 1111, 1122
-  and 1.  The early pulse is lost, and Acc stops at 32767.  That run read Result4 five scans
-  on (0 for neither then), which on scans under about 1.2 ms falls short of 32767.
+  negative, and 3 for neither.  ``Fired`` waits for that reading.  A CLICK reads 1111, 1122
+  and 1.  The early pulse is lost, and Acc stops at 32767.
 - ``drum_in_loop``: a time drum in a For of 3 beside the same drum outside it, both from Acc
   0 for 150 ms by a free TON.  Result2 = 10 * inside / outside: 30 if the body's time adds up
   per pass, 10 if a scan's time is once.  Result3: a jog bit up once, in the loop: 2 (one
   move; the edge is spent on the first pass) or 4 (every pass).  An event drum with an
-  event up on one scan (Result4) likewise.  The CLICK read 30, 2 and 2.  Each pass adds the
+  event up on one scan (Result4) likewise.  A CLICK reads 30, 2 and 2.  Each pass adds the
   scan's time, and an edge acts on the first pass only.  Result2 keeps the range 20..60,
   since it moves with the scan time.  pyrung reads 31 at its 10 ms in-process scan.
 
@@ -132,18 +128,17 @@ Reading at the return   2626          2626           2424
 - ``preset_from_ds``: a preset in a DS lowered below Acc on a step (Result2, a time drum over a
   time & event drum).  Read live, the step ends that scan, 2222.  Read at entry, it does not,
   1111.  With a preset DS of 0 (Result3) or -5 (Result4), the time drum's step ends on its first
-  timing scan (2), or never (1).  The CLICK read 2222, 2 and 2 (2026-11-12).  The drum reads a DS
+  timing scan (2), or never (1).  A CLICK reads 2222, 2 and 2.  The drum reads a DS
   preset live, as an Out coil does (``out_more/preset_mid_phase``), and a DS of 0 or below ends
-  the step at once.  The readings before 2026-11-12 (1111, 1, 1) measured a drum that laddercodec
-  had pasted with a wrong encoding.
+  the step at once.
 - ``units``: a time drum in seconds beside a free TON: Result2 is Acc after 2100 ms, 2 in
   seconds, 2100 if the unit does not reach the drum.  Result3 is the same in minutes, 0, or
-  2100 likewise.  Result4 is the seconds drum on scan 3, 0 unless it starts at 1.  The
-  CLICK read 2, 0 and 0.
+  2100 likewise.  Result4 is the seconds drum on scan 3, 0 unless it starts at 1.  A
+  CLICK reads 2, 0 and 0.
 - ``single_step``: 1-step drums.  A time drum's end (Result2 on scan 3) and an event drum's
   (Result3 on scan 5) complete them, 1411 then 1414; a jog completes an event-only time &
-  event drum, 14 (Result4), or does nothing, 11.  The editor took a 1-step drum, and the
-  CLICK read 1411, 1414 and 14.
+  event drum, 14 (Result4), or does nothing, 11.  The editor takes a 1-step drum, and a
+  CLICK reads 1411, 1414 and 14.
 
 Not asked: 16 steps and 16 outputs are the editor's limits, static; a drum twice called in
 one scan is ``call_more/called_twice``.

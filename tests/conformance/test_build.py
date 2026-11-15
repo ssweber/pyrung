@@ -103,8 +103,8 @@ def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
         for owned in memory.ranges(banks.get("DS", ())):
             assert staging.start <= owned.start and owned.stop <= staging.stop, group
             owned_ds.update(owned)
-    # A block may sit in the staging area on registers no group owns (the S6
-    # probes' blocks do), never on registers a group stages in.
+    # A block may sit in the staging area on registers no group owns (the drum
+    # and store probes' blocks do), never on registers a group stages in.
     for layout in load_manifest(suite.MANIFEST_PATH).groups.values():
         block = range(layout.base, layout.last_register + 1)
         assert not owned_ds.intersection(block), layout

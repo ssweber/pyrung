@@ -1,10 +1,10 @@
 """A drum jump toward a step the drum does not have: the ``bad_jump`` group (part ``follow_timing``).
 
-``drum_branch`` read two answers on a CLICK that one rule fits: a jump that fires takes the scan
+``drum_branch`` has two answers on a CLICK that one rule fits: a jump that fires takes the scan
 even when its target is bad, so a jog on that scan does nothing (``jump_to_bad_step`` Result3)
 and a bad step is not corrected that scan (``jump_on_bad_step`` ErrorCode, 5252).  This group
-asks whether the drum's own time and event are skipped too, and what the next scan does.  The
-CLICK read 1111, 2222, 5252, 1212, 1212 (2026-11-06): the jump takes the whole scan, and the next
+asks whether the drum's own time and event are skipped too, and what the next scan does.  A
+CLICK reads 1111, 2222, 5252, 1212, 1212.  The jump takes the whole scan, and the next
 scan runs as if nothing happened, correcting a bad step with the row left as it was.
 
 Snapshots as in ``test_drum_pins``: two digits a drum, the step then ``4 * flag + 2 * B + A``, the

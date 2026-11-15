@@ -26,9 +26,9 @@ MEDIAN.  Unread: a SUM that wraps, a SUM of bits, and each aggregate's sign, NaN
 - ``rand_sites``: pyrung's RAND is one draw per site per scan.  Two sites over 8 scans, 1..30000:
   they differ on some scan (Result1 = equal scans, 0 for independent); a site changes
   from scan to scan (Result2 = changes of 7, above 2).  One formula with two (Result3 = scans
-  they cancel to 0, 0).  A bound written above the Math on its own scan (Result4) was to tell the
+  they cancel to 0, 0).  A bound written above the Math on its own scan (Result4) would tell the
   bound as the scan began (5) from the bound live (9), but both bounds are DD tags holding one
-  value either way, a math error: the RAND reads 0 (hardware, 2026-11-05).  When a bound is read
+  value either way, a math error: the RAND reads 0.  When a bound is read
   is still open.
 pyrung refuses ``randint`` in a For body, so a draw per iteration is not asked here.
 

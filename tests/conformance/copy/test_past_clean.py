@@ -5,20 +5,19 @@ whose memory matters; delete its call rung in main to leave it out.  It ends by 
 again, which ``faults/pointer_past_bank_lands`` (part ``system``) expects to read.  The simulator
 and the P1AM code have no memory there.
 
-``past_write/past_bank_write`` read 5, 5, 0 on a CLICK whose DD1531 already held 5, so it skipped
-its write and answered nothing.  This case writes whatever is there.  The ruling on the copy guard
-(``conform-fix`` arc, 1h) waits on it.
+``past_write/past_bank_write`` skips its write when DD1531 already holds 5.  This case writes
+whatever is there.
 
 ``clear_then_write``, through the pointer DS4226 = 1531 (``past_write``'s), each read into a field
 preset to -7 on its scan, so -7 is a read that left its destination alone:
 
-- ErrorCode: DD1531 before anything is written, as found (0 after the round's clear).
+- ErrorCode: DD1531 before anything is written, as found.
 - Result1: after a Copy of 0 into it.
 - Result2: after a Copy of 1234 into it: 1234 where the write lands, 0 where it is dropped.
 - Result3: after a Copy of 0 again: 0 where it lands, 1234 where only the first write landed.
 - Result4: SC43 (bit 1) and SC44 (bit 2) right after the write of 1234, latched by coils.
 
-A CLICK read 0, 1234, 0, 0 and 0 on 2026-11-06 and 2026-11-09.  Each write lands, and no write
+A CLICK reads 0, 1234, 0, 0 and 0.  Each write lands, and no write
 raises either flag.  pyrung drops the writes and reads 0, 0, 0, 0 and 0, so the case is pending
 ``PASTBANK``.  ErrorCode expects 0, what this case and ``modbus_raw`` leave there.
 

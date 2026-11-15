@@ -11,8 +11,8 @@ clock.
 
 ``literal_zero``: a step preset written as the constant 0, not from a DS.  Result1 has presets
 0 / 30 s / 30 s.  It reads 2 if 0 ends the step at once, and 1 if the step never ends.  Result2,
-the control, has presets 1 ms / 30 s / 30 s and reads 2.  The CLICK read 2, 2 (2026-11-06).  The
-rows were pasted.  Whether the editor's dialog takes a typed 0 is unread.
+the control, has presets 1 ms / 30 s / 30 s and reads 2.  A CLICK reads 2, 2.  The
+rows are pasted.  Whether the editor's dialog takes a typed 0 is unknown.
 
 ``entry_or_first_timing_scan``: drums jogged from step 1 to step 2 on scan 3, step 2's preset from
 a DS.
@@ -24,8 +24,7 @@ a DS.
   4 the step is written 5 and the DS 1 ms from then on.  The bad step goes back to step 1, which
   reads the 1 ms and ends, 2.
 
-The CLICK read 2, 3, 2, twice (2026-11-12).  The readings before 2026-11-12 (2, 2, 1) measured a
-drum that laddercodec had pasted with a wrong encoding.
+A CLICK reads 2, 3, 2.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

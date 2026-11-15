@@ -17,18 +17,17 @@ the instant after it; only once every probe has run do later rungs record, as
 digits over scans 2..8, the scans each probe was on (346 means scans 3, 4 and
 6, 0 means never): Result1 after a plain copy, Result2 after a Math of
 another kind (one that cannot raise the flag), Result3 after a successful
-instruction of the faulting kind.  Hardware round 1 read 346 right after the
-fault and 0 after a later successful one, so a CLICK flag does not hold to the
-end of the scan.  The model first adopted: a flag follows the last instruction, any
-instruction (Result1..3 = 0, 0, 0).  The others: any Math clears it (346, 0,
-0); only an instruction of its own kind (346, 346, 0); a flag on from the
-fault to the end of the scan (346, 346, 346).  hardware round 2, 2026-10-30:
+instruction of the faulting kind.  A CLICK reads 346 right after the
+fault and 0 after a later successful one, so a flag does not hold to the
+end of the scan.  The candidate models: a flag follows the last instruction, any
+instruction (Result1..3 = 0, 0, 0), any Math clears it (346, 0,
+0), only an instruction of its own kind clears it (346, 346, 0), or a flag stays on from the
+fault to the end of the scan (346, 346, 346).  On a CLICK
 SC43 and SC44 follow the last Copy-family instruction or Math (0, 0, 0).  A coil,
 an open rung, a timer or a counter leaves them (``address_flag_vs_other_instructions``).
 SC40 follows the last Math (346, 0, 0), so a Copy leaves it as it is.
 
-What else clears a flag (probes).  Round 2 tried a Copy and a
-Math only.  Three more cases raise their fault again before each instruction
+What else clears a flag (probes).  Three more cases raise their fault again before each instruction
 under test, so each probe reads the flag right after one instruction and
 nothing else: a fault, the instruction, the probe coil, the next fault, ...
 Result1 is the control, a probe right after the fault with nothing between
@@ -45,16 +44,14 @@ Result1 is the control, a probe right after the fault with nothing between
   open rung does not: 346, 0, 346, 0, 0; only box instructions (Copy, Math,
   timer, counter) clear it: 346, 346, 346, 0, 0; coils too, even unexecuted:
   346, 0, 0, 0, 0; the flag on to the end of the scan: 346 in every
-  field.  Hardware round 2 (2026-10-31): SC44 reads 346 in every field, so a
+  field.  SC44 reads 346 in every field on a CLICK, so a
   coil, an open rung, a TON and a CTU all leave it as it is (only a Copy or a
   Math clears it, ``address_flag_clears_each_scan``).
-  Since then the case records scans 3, 4 and 6 only, which leaves that
-  reading as it was and keeps the other SC44 cases' faults out of it.
-  SC43 (hardware round 2, 2026-10-31) read 0 in every field, the control
-  too: a Dint Math that wraps does not raise SC43 on a CLICK (an Int Math
-  overflow does, ``out_of_range_flag_clears_each_scan``), so the case asked
-  nothing about what clears it (pyrung raised SC43 on the Dint wrap and read
-  346 in every field).  It is retired, its slot never reused:
+  The case records scans 3, 4 and 6 only, which keeps the other SC44 cases'
+  faults out of it.  The SC43 case reads 0 in every field on a CLICK, the control
+  too: a Dint Math that wraps does not raise SC43 there (an Int Math
+  overflow does, ``out_of_range_flag_clears_each_scan``), so it asked
+  nothing about what clears it.  It is retired, its slot never reused:
   ``out_of_range_int_vs_other_instructions`` asks its question with an Int
   overflow, and ``faults/math_store_out_of_range`` (a) asks whether a Dint
   wrap raises SC43.
@@ -65,27 +62,25 @@ Result1 is the control, a probe right after the fault with nothing between
   steps on their own bits.  The fault writes a slot field, so the scans are
   recorded in DD961..DD965, on scans 3, 4 and 6 only, and copied into the
   fields once the window ends.
-  Adopted, as SC44 read: only a Copy or a Math clears it, 346 in every field.
+  As for SC44, only a Copy or a Math clears it, 346 in every field.
   Every instruction that executes clears it: 346, 0,
   346, 0, 0; and so on, as above.
 - ``division_flag_vs_hex_math`` (SC40, a division by ``Fired``): Result2 after
   a hex-mode Math (WORDs only, no division), Result3 after a Copy, Result4
-  after a decimal Math.  Round 2 read Result3 = 346 and Result4 = 0.  Adopted,
+  after a decimal Math.  A CLICK reads Result3 = 346 and Result4 = 0, so
   any Math clears it, hex or decimal: 346, 0, 346, 0; a decimal Math only:
   346, 346, 346, 0.
 
 Scan clock and counter.  ``scan_counter_steps_by_one`` shows SD9 counts every
 scan (7 steps of one over scans 1..8), and ``scan_clock_follows_counter`` that
 SC3 toggles every scan (8 edges over 8 scans) and is on exactly when SD9 is
-even, as round 1 read on a CLICK (pyrung's SC3 was on when SD9 is odd, and
-read Result2 = 0, until hardware round 2).  ``first_scan_counter_and_clock`` pins
-which of the two is offset from pyrung's: rungs outside the ``Cmd`` gate copy
+even, as on a CLICK (a model with SC3 on when SD9 is odd reads Result2 = 0).  ``first_scan_counter_and_clock`` pins
+which of the two is offset: rungs outside the ``Cmd`` gate copy
 SD9 and SC3 on the first scan (SC2) into DD981..DD983, which the reset leaves
-alone.  SD9 starts at 0 with SC3 on (Result1 = 0, Result3 = 1; hardware round 2, 2026-10-30,
-where SD9 starting at 1 with SC3 off was adopted); pyrung read 0, 0 before
-round 2: its SD9 was right and its SC3 a scan out of phase.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
+alone.  SD9 starts at 0 with SC3 on (Result1 = 0, Result3 = 1).  SD9 starting at 1 with SC3 off, or SC3 a scan out of phase, would
+read differently.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
 the least SD9 seen since the first scan in DD991: SD9 wrapping from 32767 to
-0 (adopted) reads Result1 = 0, one counting on into negative values (an
+0 reads Result1 = 0, one counting on into negative values (an
 unsigned 16-bit counter read as an Int) reads 1.  It only tells once the PLC
 has run 32768 scans since it went to RUN (5.5 minutes at 10 ms a scan); before
 that both read 0, so against a CLICK the wire test first waits for SD9 to pass

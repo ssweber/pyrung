@@ -3,10 +3,9 @@
 
 A CLICK's debounce and flasher keep their state in their TDs and, for a flasher, a phase of its
 own: they never set T (probe O6) and their TDs freeze while the rung is false.  A TON counts on
-from a TD the ladder writes (``timers/acc_clamps_at_32767``).  Does a debounce, which counts its
-sides in its TDs, or a flasher move with a TD written while it runs?  A CLICK answered all three
-on 2026-11-06: a written TD is counted on from, and a flasher's phase is its own, not read from
-its TDs.
+from a TD the ladder writes (``timers/acc_clamps_at_32767``).  A debounce, which counts its
+sides in its TDs, also counts on from a TD written while it runs.  A flasher's phase is its own,
+not read from its TDs.
 
 Each case runs in steps that ``Scratch`` holds, and its rung is on throughout.  Step 0 ends on
 the scan the coil's own TD crosses a threshold, so the side or phase is timing and not on its
@@ -44,20 +43,15 @@ past the on preset, once the on TD reads 100 or more.
 past the off preset, once the off TD reads 150 or more with the coil off.
 
 - Result1 is 1 if the coil comes on before the clock reads 250, and 2 if not.  An off phase that
-  runs its own time ends about 350 ms after the write.  pyrung before 2026-11-06 read the phase
-  from the TDs.  Its on TD, held past its preset of 200 through the off phase, ended the new on
-  phase on the spot and began a new off phase from 0.
+  runs its own time ends about 350 ms after the write.  A flasher that read its phase from the
+  TDs would instead end the new on phase on the spot, since its on TD is held past its preset of
+  200 through the off phase, and begin a new off phase from 0.
 - Result2, at a clock of 50: 1 if the off TD is 600..650 (the write and at most one scan's
   tick, standing), 2 if it is under 500 (a new off phase from 0, or the write ignored).
 - Result3, at a clock of 50: 1 if the on TD is above 0 and under 200 (an on phase from 0 since
   the write), 2 if it is 200 or more (held from the last on phase).  0 is a cleared TD.
 
-A CLICK read an earlier ladder that timed each write from the rung's rise and read each value at
-a set time, on 2026-11-06.  The debounce came on 2 ms after its write.  Its on TD read 551 at
-50 ms past the write and 1101 at 600 ms.  The on flasher went off 4 ms after its write.  At 50 ms
-its off TD read 48 and its on TD 602, and the coil was on at 600 ms.  The off flasher came on
-4 ms after its write.  At 70 ms its off TD read 602 and its on TD 69.  So every expectation here
-is 1.  A flasher keeps its phase as hidden state (``FlasherInstruction``).  A TD ends its phase
+Every expectation here is 1.  A flasher keeps its phase as hidden state (``FlasherInstruction``).  A TD ends its phase
 only while that phase runs.  The 600..650 bounds hold for any scan up to 50 ms.  They start at
 600 because a scan under 1 ms adds nothing to the written TD.  The cases own what
 ``memory.OWNED_APART`` lists under this group.

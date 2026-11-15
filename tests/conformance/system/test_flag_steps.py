@@ -2,18 +2,18 @@
 
 Parts ``follow2_flags`` (``flag_steps``) and ``follow2_values`` (``flag_reads``, its first group).
 
-The 2026-11-06 round read SC44 off after a Search, a Shift, a Drum, a TON and a CTU
-(``flag_boxes/boxes_by_pointer`` 31/0/0/7) and off in ``ton_ctu_by_pointer``'s control (1/1/1).
-The confirmed ``system/address_flag_vs_other_instructions`` reads it left on after a TON and a
-CTU.  One construction explains all of it (H).  ``flag_boxes`` read a flag with a Math on a rung
-``Scratch == scan, flag``, so the read rungs of earlier scans sat between a raise and its read as
-Maths on false rungs.  H says a Math on a false rung clears SC44.  Every reading that had no false
-Math between the raise and the read found the flag on.
+``flag_boxes/boxes_by_pointer`` (31/0/0/7) reads SC44 off after a Search, a Shift, a Drum, a TON
+and a CTU, and ``ton_ctu_by_pointer``'s control (1/1/1) reads it off too.
+``system/address_flag_vs_other_instructions`` reads it left on after a TON and a
+CTU.  One construction explains all of it (H).  ``flag_boxes`` reads a flag with a Math on a rung
+``Scratch == scan, flag``, so the read rungs of earlier scans sit between a raise and its read as
+Maths on false rungs.  H says a Math on a false rung clears SC44.  Every reading with no false
+Math between the raise and the read finds the flag on.
 
 So here every flag is read by an Out coil on the rung right after the step, with nothing between
 raise, step and read.  The coils are recorded into the slot (a Pack, or a Copy) only once every
-probe of the scan has run, the layout of ``system/address_flag_vs_other_instructions``.  The CLICK
-answered every case on 2026-11-10, and each case expects what it read.  H holds.
+probe of the scan has run, the layout of ``system/address_flag_vs_other_instructions``.  A CLICK agrees with H in
+every case.
 
 ``flag_steps`` (F1), one case a flag.  The flag is raised on scans 3 and 4 right before each step,
 and the step's coil is a bit of Result1 (scan 3) and Result2 (scan 4), set when the flag is still
@@ -23,42 +23,42 @@ on after the step.  Result3 is scan 5, with no raise, so it reads 0 (the coils f
   to 512: none (the control), a false-rung ``DS + 1`` Math, a false-rung ``copy(1, DS)``, a
   false-rung Copy through a good pointer, a false-rung Math with an SC44 contact on its rung (the
   shape of ``flag_boxes``' read rungs), a Search into a DS Result, a Shift, an event Drum, a TON and
-  a CTU.  The last five are enabled on every scan of the window.  The CLICK read 1005, 1005, 0.
+  a CTU.  The last five are enabled on every scan of the window.  A CLICK reads 1005, 1005, 0.
   Only the two false Maths (bits 2 and 16) clear SC44.  The false Copies and the boxes leave it.
-  pyrung read 1023 when it let no false rung touch a flag.
+  A model where no false rung touches a flag reads 1023.
 - ``sc43_steps``: the same steps after SC43, raised by a Copy of DD 40000 into a DS (it clamps,
-  ``faults/copy_clamp_out_of_range``).  The CLICK read 1005, 1005, 0, as for SC44.
+  ``faults/copy_clamp_out_of_range``).  A CLICK reads 1005, 1005, 0, as for SC44.
 - ``sc40_steps``: SC40, raised by a division by 0, and the Math steps only (a Copy and the boxes
   leave SC40, ``system/division_flag_vs_hex_math``).  The steps are none, a false-rung ``DS + 1``
-  Math and a false-rung Math with an SC40 contact, bits 1, 2, 4.  The CLICK read 1, 1, 0, so both
-  false Maths clear SC40 (pyrung read 7).
+  Math and a false-rung Math with an SC40 contact, bits 1, 2, 4.  A CLICK reads 1, 1, 0, so both
+  false Maths clear SC40.  A model where no false rung touches a flag reads 7.
 
-``flag_reads``, the questions the audit left beside it:
+``flag_reads``, more questions beside it:
 
 - ``unpowered_division`` (F2): ``1 / DS`` (DS 0) on a rung that is never true, then a coil read of
   SC40.  Result1, scan 3: SC40 is off right before (a clean Math clears it), and on after the
   false Math only if an unpowered Math still evaluates.  Result2, scan 4: SC40 raised by a true
   division right before, off after if the false Math clears it.  Result3, scan 5, is the control,
-  the raise alone: 1.  The CLICK read 0, 0, 1.  A Math on a false rung does not evaluate, and it
-  clears SC40 (pyrung read 0, 1, 1).
+  the raise alone: 1.  A CLICK reads 0, 0, 1.  A Math on a false rung does not evaluate, and it
+  clears SC40.  A model where it does not clear SC40 reads 0, 1, 1.
 - ``oneshot_held`` (F3): a oneshot Copy and a oneshot Math held on over scans 3 and 4, so they fire
   on 3 and not on 4, each with its flag raised right before.  Bits: SC44 then the Copy (1), SC44
   then the Math (2), SC43 then the Copy (4), SC43 then the Math (8), SC40 then the Math (16).
   Result1, scan 4: set when the flag is still on after the oneshot that does not fire.  Result3,
-  scan 3: the same when it fires, 0.  Result2, the controls, each raise alone: 7.  The CLICK read
+  scan 3: the same when it fires, 0.  Result2, the controls, each raise alone: 7.  A CLICK reads
   5, 7, 0.  A oneshot Copy that does not fire leaves SC44 and SC43, and a oneshot Math that does
-  not fire clears all three (pyrung read 0, 7, 0).  ``flag_probe/oneshot_that_does_not_fire`` read
-  0 for both behind a false Math.
+  not fire clears all three.  A model where neither clears a flag reads 0, 7, 0.
+  ``flag_probe/oneshot_that_does_not_fire`` reads 0 for both behind a false Math.
 - ``pointer_minus_one`` (F4): SC44 raised by a pointer of -1, read straight after by a coil (bit
   1), after a TON (bit 2) and after a CTU (bit 4), enabled every scan of the window.  Result1 is
   scan 3, Result2 scan 4.  Result3, the pointer of 0 read straight after on scan 3, is the
-  control: 1.  The CLICK read 7, 7, 1.  A pointer of -1 raises SC44, and the TON and the CTU leave
-  it (``ton_ctu_by_pointer`` read the -1 raise off behind a false Math).
+  control: 1.  A CLICK reads 7, 7, 1.  A pointer of -1 raises SC44, and the TON and the CTU leave
+  it (``ton_ctu_by_pointer`` reads the -1 raise off behind a false Math).
 - ``math_after_sqrt`` (F5): SC46 from ``SQRT(DF -1.0)`` on scan 3, then an enabled ``DS + 1``
   Math, then a coil.  Result1 = 1 when the Math leaves SC46.  Result2 is the control, the root
   alone on scan 5: 1.  Result3, SC46 at the top of scan 3 before the root: 0 (nothing raised it).
-  Result4 is SC46 on scan 4 after the same steps with no root.  The CLICK read 0, 1, 0, 0.  A Math
-  that runs clears SC46 as it clears SC40 (pyrung read 1, 1, 0, 0).
+  Result4 is SC46 on scan 4 after the same steps with no root.  A CLICK reads 0, 1, 0, 0.  A Math
+  that runs clears SC46 as it clears SC40.  A model where it does not reads 1, 1, 0, 0.
 
 No case here raises SC46 but ``math_after_sqrt``, and every read follows its own raise.  In part
 ``follow2_values`` ``flag_reads`` runs first, above ``term_zero``, whose quiet errors may raise

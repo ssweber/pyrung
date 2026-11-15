@@ -35,7 +35,7 @@ none.
 
 ``for_wide``:
 
-- ``count_forms``: a For's count from a DD past 16 bits is read whole (hardware 2026-11-05): 65537
+- ``count_forms``: a For's count from a DD past 16 bits is read whole: 65537
   runs 65537 (Result1 = 2; 1 for the low word's 1), 65536 runs 65536 (Result2 = 2; 1 for none).
   A DD counts, since an Int would wrap back onto 1.  A TD at 3 (Result3) and a CTD at 3 (Result4)
   count 3.  Whole, those two For loops take about 2.2 s, and the case starts them 1 s after its

@@ -1,6 +1,6 @@
-"""Copy forms nothing has read: the ``copy_more`` and ``block_more`` groups.
+"""Copy forms the other copy groups leave out: the ``copy_more`` and ``block_more`` groups.
 
-Part ``copy`` (``suite.PARTS``).  An expectation is what a CLICK read on 2026-11-05.  Text is read as a pair of characters, 128 * first + second,
+Part ``copy`` (``suite.PARTS``).  An expectation is what a CLICK does.  Text is read as a pair of characters, 128 * first + second,
 so 6197 is "15" (49, 53); a NUL reads 0.
 
 ``copy_more``:

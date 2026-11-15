@@ -9,7 +9,7 @@ the completion flag, step 2's output (B) and step 1's output (A), so 5010 is
 step 5 with B on.  Result2, Result3 and Result4 hold three scans named per case
 and ErrorCode the last scan of the window, 8; Result1 is the step register.
 
-Answered on hardware (2026-11-01), with step 5 of 2 staged on scan 3:
+With step 5 of 2 staged on scan 3:
 
 - ``tied_jog`` (scans 3, 4, 5): the ladder of
   ``drum/pins_read_before_step_fix``.  The jog scan leaves step 5 with the

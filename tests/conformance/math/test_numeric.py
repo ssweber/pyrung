@@ -23,8 +23,8 @@ on their third, after the others have fired (one sets SC40, the other SC43).  Th
 the wire the cases fire when their ``Cmd`` lands, and another group's fault
 on the same scan would also read as on.
 
-The expectations are what a CLICK does where hardware round 1 (2026-10-29)
-answered, and the adopted answer of an open probe otherwise.  Where a CLICK
+The expectations are what a CLICK does, and the likeliest answer of an open probe
+otherwise.  Where a CLICK
 could plausibly differ, these cases tell the models apart:
 
 - ``int_calc_wraps``, ``dint_calc_wraps``, ``word_calc_wraps``: Math wraps at
@@ -37,34 +37,31 @@ could plausibly differ, these cases tell the models apart:
   with the constant 65536 (Result1), with 65536 staged in a DD (Result2), and
   -2147418112 / 65536 (Result3).  Exact quotients read -32768, -32768 and
   -32767, which a CLICK reads with the constant pasted as CLICK's editor writes
-  it (2026-11-11).  A constant cut to 16 bits (65536 -> 0, a division by zero
-  that writes 0) reads 0, -32768, 0.  An earlier round read that, from an
-  export that wrote every constant in 16 bits.  A quotient of -32768 refused
+  it.  A constant cut to 16 bits (65536 -> 0, a division by zero
+  that writes 0) would read 0, -32768, 0.  A quotient of -32768 refused
   by the Int reads 99 (or a clamp, -32767), the same for Result2, and -32767.
   (SC40 is not read, because other cases divide by zero on the same scan.)
 - ``int_math_wide_constant`` (probe): what else an Int Math does with its
   constants.  Preset to 99, 65536 staged in DD171 is divided by the constant
   40000 (Result1) and by -40000 (Result3), and 10 in DD172 is multiplied by
-  the constant 1.5 (Result2).  Kept whole: 1, 15, -1, which a CLICK reads
-  (2026-11-11).  Cut to its low 16 bits, signed: 40000 is -25536 and -40000
+  the constant 1.5 (Result2).  Kept whole: 1, 15, -1, which a CLICK reads.  Cut to its low 16 bits, signed: 40000 is -25536 and -40000
   is 25536, so -2, 15, 2.  Clamped to the Int range: 2 (/ 32767), 15, -2
   (/ -32768).  Refused by the Math (the write skipped): 99 for Result1 and
   Result3.  A float constant cut to an integer reads Result2 = 10 (1) or 20
   (2), and kept reads 15.  Paste refused: never fires.
 - ``int_math_rand_wide_bounds`` (a case of its own so a refused paste loses
   only it): RAND ( 70000 , 70000 ) / 2 into an Int, preset 99.  The
-  candidates were: bounds kept whole (pyrung): 35000, which wraps to -30536
+  candidates are: bounds kept whole: 35000, which wraps to -30536
   (Result1); bounds cut to 16 bits, signed, like the other constants: 70000 is
   4464, so 2232; clamped to 32767: 16383; CLICK refusing the bounds at paste:
-  never fires.  Hardware round 2 (2026-10-31): a CLICK reads 0, none of them,
-  so the Math wrote 0 (as a Math error does), as pyrung does.  Which flag, if
+  never fires.  A CLICK reads 0, none of them,
+  so the Math writes 0, as a Math error does.  Which flag, if
   any, comes with it is
   ``faults/rand_wide_bounds_flags``, which finds equal bounds the likely cause.
   CLICK's editor refuses them typed in; a paste gets them through.
 - ``int_math_real_operand_constant`` (probe): a wide constant when the other
   operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into
-  an Int, preset 99 (Result1).  Kept whole: 25000, which a CLICK reads
-  (2026-11-11).  Cut to its low 16 bits, signed: 100000 is -31072, so -7768.
+  an Int, preset 99 (Result1).  Kept whole: 25000, which a CLICK reads.  Cut to its low 16 bits, signed: 100000 is -31072, so -7768.
   Cut to unsigned 16 bits: 100000 is 34464, so 8616.  Clamped
   to the Int range, 32767: 8191.  Refused by the Math (write skipped): 99.
   A REAL operand turning the Math into floating point and the constant kept
@@ -94,9 +91,9 @@ could plausibly differ, these cases tell the models apart:
   staged through a DD: the exporter spells a REAL constant in 7 digits, and
   16777216.0 would export as 16777220.0.
 - ``real_overflow_stays_finite``: 3.0E+38 * 10 and * -10 in a Real.  A CLICK
-  stores +Inf and -Inf with SC43 on (round 1), so half of each is still past
+  stores +Inf and -Inf with SC43 on, so half of each is still past
   3.0E+38 (Result1 = 1, Result2 = 1) and SC43 is on (Result3 = 1).  A Real
-  that saturates at +/-3.4028235E+38 (pyrung before step INF) reads halves of
+  that saturates at +/-3.4028235E+38 reads halves of
   1.7E+38 (Result1 = 0, Result2 = 0); one that overflows without the flag
   reads Result3 = 0.
 - ``div_by_zero``, ``real_div_by_zero``: division by zero writes 0 and sets

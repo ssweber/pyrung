@@ -14,7 +14,7 @@ The cases that raise SC43 (``to_value_rejects``, ``pack_text_word_hex``,
 ``pack_text_whitespace``) come last in the group: every case fires on the same
 scan, so an earlier fault would still be on at a later case's flag probe.
 
-The expectations are what a CLICK does (hardware round 1, 2026-10-29): TXT
+The expectations are what a CLICK does: TXT
 is 8-bit (Copy Binary of 200 stores 200), Pack Copy into an INT or DINT clamps
 a value past its range and stops at a decimal point ("12.5" is 12), and
 Character Value of NUL writes 0.  A fault flag is read on the rung right after the
@@ -27,8 +27,8 @@ tells apart:
 - ``null_ascii``: an unwritten TXT holds NUL, and ASCII Code Value of NUL writes
   0 over the destination's 77.  A model that skips empty text leaves 77.
 - ``to_value_rejects``: Character Value of a letter is a fault (SC43) and
-  leaves the destination alone (77); of NUL it writes 0 over 66 (Result3) and,
-  adopted, raises no fault (Result4 = 0).  A model that stores the code minus 48
+  leaves the destination alone (77); of NUL it writes 0 over 66 (Result3) and
+  raises no fault (Result4 = 0).  A model that stores the code minus 48
   reads 17 for the letter.
 - ``to_text_suppress``: 123 converts to the three characters "123", the rest
   of the TXT range is untouched (90).  A model that pads to the Int's five
@@ -44,35 +44,31 @@ tells apart:
   character per slot, and stops at its length.
 - ``to_binary``: Copy Binary of an Int writes one character, the low byte; a
   model that writes both bytes of the word also changes the next TXT (1 where
-  this reads 90).  A byte above 127 is stored as is (200, Result3) and,
-  adopted, raises no fault (Result4 = 0).
+  this reads 90).  A byte above 127 is stored as is (200, Result3) and
+  raises no fault (Result4 = 0).
 - ``pack_text_word_hex``: Pack Copy text into a WORD parses hex: "00FF" is 255
   and "0010" is 16, where a decimal parse refuses the first and reads 10 for
   the second; text that is not hex leaves the destination alone.
 - ``pack_text_int``: into an INT parses signed decimal ("0042" is 42, not
   hex 66), clamps 123456 to 32767 (Result3), and reads "12.5" as 12 (Result4).
-  The clamp raises the fault (ErrorCode = 1; hardware round 2, 2026-10-30, where no fault
-  was adopted).  pyrung before step TEXT refused both and left 5 and 9.
+  The clamp raises the fault (ErrorCode = 1).  A refusal would leave 5 and 9.
 - ``pack_text_dint``: into a DINT parses signed decimal over 32 bits, and
-  clamps 2147483648 to 2147483647 (Result3 = 1) with the fault (Result4 = 1;
-  hardware round 2, 2026-10-30).  pyrung before step TEXT refused it (Result3 = 0,
-  Result4 = 1).
+  clamps 2147483648 to 2147483647 (Result3 = 1) with the fault (Result4 = 1).
+  A refusal would read Result3 = 0, Result4 = 1.
 - ``pack_text_int_fraction``: "12.9" reads 12 if the parse stops at
-  the point (adopted), 13 if it rounds, 99 (the preset) if refused (Result1);
+  the point, 13 if it rounds, 99 (the preset) if refused (Result1);
   "12x" reads 12 if the parse stops at the first non-digit, 99 if refused
   (Result2).  Result3 and Result4 are SC43 after each.  A CLICK reads 12, 99,
-  0, 1: "12.9" stops at the point with no fault, "12x" is refused with SC43
-  (hardware round 2, 2026-10-30).
+  0, 1: "12.9" stops at the point with no fault, "12x" is refused with SC43.
 - ``pack_text_whitespace``: leading or trailing whitespace faults and leaves
   the destination alone unless ``allow_whitespace``, which trims it.  A model
-  that always trims reads 12 in Result1.  Round 1 read Result2 = 0 with an
-  in-range copy between the pack and the flag rung; read right after the pack,
-  a refusal that faults reads 1 (adopted), one that does not reads 0.
+  that always trims reads 12 in Result1.  The flag is read right after the pack, so a refusal
+  that faults reads 1 and one that does not reads 0.
 - ``fill_blank_ascii``: Fill with empty text blanks a TXT to NUL, the one blank
   a TXT byte has, so ASCII Code Value of it writes 0 over the destination's 77
   and 66.  A model where Fill of empty text writes nothing reads the seed's 90;
   one with an empty state apart from NUL, which ASCII Code Value skips, leaves
-  77 and 66 (pyrung did, before a blank TXT was stored as NUL).
+  77 and 66.
 - ``reset_blank_ascii`` (in-process only): ``reset()`` of a TXT stores the same
   NUL, so its ASCII code is 0 too.  CLICK's Reset coil takes bit memory only
   (X, Y, C, T, CT, SC), so this is pyrung's answer with nothing to compare.

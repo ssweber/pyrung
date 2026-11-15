@@ -2,10 +2,9 @@
 
 **Run it alone, with the watchdog at 10000 ms: two of its scans take over a second on a CLICK.**
 A CLICK reads a DS count through its low 16 bits, unsigned.  It reads a DD count, a CTD count and a
-constant whole, and a DD or CTD count signed (hardware, 2026-11-10, one run, whose longest scan,
-SD12, read 1287 ms).  So a DS of -1 runs 65535, a constant 70000 runs 70000, and a negative DD or
-CTD runs none.  ``for_dd_minus`` had read a DD of -1 run none, and ``for_wide/count_forms`` a DD of
-65536 run 65536.
+constant whole, and a DD or CTD count signed (the longest scan, SD12, reads 1287 ms).  So a DS of -1 runs 65535, a constant 70000 runs 70000, and a negative DD or
+CTD runs none.  ``for_dd_minus`` shows a DD of -1 running none, and ``for_wide/count_forms`` a DD of
+65536 running 65536.
 
 One count a scan, each For on a scan of its own, so that no scan makes more than about 1.2 s of
 runs (about 17 us a run).  Each field reads 1 for the CLICK's count and 2 for the other model's:

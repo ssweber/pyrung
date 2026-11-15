@@ -15,13 +15,12 @@ shows ("10000.0000000"), on the float32 value, writes:
 - 0.0: "0.0000000", 9.
 - 123456.7: "123456.7031250", 14 (float32 123456.703125).
 - 1.0E+10: "10000000000.0000000", 19.  Exponential would be "1.0000000E+10", 13.
-- 66.7: "66.6999969", 10, then 11..20 of the span say what the round's '0' was.
+- 66.7: "66.6999969", 10, then 11..20 of the span stay as the init left them.
 
 pyrung writes the digits as ``to_text()`` does, from the Real's 64-bit value.  That gives CLICK's text
 where the float32 and float64 digits agree, and "123456.7000000" and "66.7000000" where they
-do not.  A CLICK read every case the same way on 2026-11-06 and 2026-11-09, and each case
-expects the 10 characters it read (``CASES``).  The CLICK wrote "123456.7031250" for 123456.7
-and left the TXTs past the digits alone, with no NUL after them.  pyrung's digits for 123456.7
+do not.  Each case expects the 10 characters a CLICK writes (``CASES``).  A CLICK writes
+"123456.7031250" for 123456.7 and leaves the TXTs past the digits alone, with no NUL after them.  pyrung's digits for 123456.7
 differ, so ``six_digits_first`` and ``six_digits_past`` are pending ``F32``.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.

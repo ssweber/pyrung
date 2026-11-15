@@ -32,10 +32,8 @@ Result4, the control, is the rises of a flasher of 5 ms / 5 ms off a DS, on a ru
 under the same condition: about 10, at least 1, so the DS off preset, the window and the count
 work.
 
-Before 2026-11-06 pyrung read, in-process (10 ms scans), 0, 0, 10, 5 and ErrorCode 28800 (on TD
-160, off TD 0) in both cases: dark, the on TD running on.  A CLICK read 0, 0, 59, 10, 0 for 0 and
-0, 0, 60, 10, 0 for -5 (2026-11-06): dark, both TDs at 0, so a preset of 0 or below holds the
-flasher reset (``FlasherInstruction``), and pyrung now does so.  Whether its first on phase shows
+A CLICK reads 0, 0, 59, 10, 0 for 0 and 0, 0, 60, 10, 0 for -5.  The flasher is dark and both
+TDs are at 0, so a preset of 0 or below holds the flasher reset (``FlasherInstruction``).  Whether its first on phase shows
 before the reset takes hold has no reading: the window starts well after it.  Over the wire the
 scan counts follow the target's scan, so Result3 and Result4 are ranges; pyrung's in-process
 readings (0, 0, 10, 5, 0) are pinned in ``test_pyrung_holds_the_flasher_reset``.

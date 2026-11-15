@@ -1,24 +1,24 @@
-"""S6 store probes: the ``store_probe`` group (subroutine ``Conf_StoreProbe``).
+"""Store probes: the ``store_probe`` group (subroutine ``Conf_StoreProbe``).
 
 The last group of part ``math`` (``suite.PARTS``): the editor may refuse a RAND bound form at paste.  What a RAND, a Math of NaN, a
 Copy of an infinity stores and which fault flag follows, for the
-stores the ``bob/stores`` arc chose without a reading.  Each case probes as the
+stores that no CLICK reading backs.  Each case probes as the
 ``faults`` group does (an op once, on the first scan from 3 on which the flag
 it reads is off just before it, a flag after an op read by running it again;
 every case has a 40-scan window).  A random draw asserts its range, not a
 value.  Expectations are what pyrung reads today, so a CLICK that reads
-otherwise is an answer; ``non_finite_into_word`` and ``real_into_text_and_fill``
-are what a CLICK read on 2026-11-05.
+otherwise is an answer.  ``non_finite_into_word`` and ``real_into_text_and_fill``
+expect what a CLICK does.
 
 - ``rand_int_cuts`` (probe): what a RAND into an Int does with constant bounds
   past 16 bits.  A CLICK draws over the whole bounds, and the Int keeps the low
-  16 bits of the draw, signed, with SC43 (2026-11-11).  RAND ( 65000 , 66000 )
+  16 bits of the draw, signed, with SC43.  RAND ( 65000 , 66000 )
   is -536..464 (Result1).  RAND ( 70000 , 4464 ) and RAND ( 70000 , 135536 )
   can be any Int (Result2, Result3), and reversed bounds are no error.  None
   raises SC46 (Result4 = 0).  Each draw past 32767 raises SC43 (ErrorCode bits
   1, 2 and 4).  The first and third always are, and the second is unless it
-  draws 4464..32767, so ErrorCode is 7 or 5.  The CLICK drew 65284, 53040 and
-  97521, which read -252, -12496 and 31985 with ErrorCode 7.  Bounds cut to 16
+  draws 4464..32767, so ErrorCode is 7 or 5.  Draws of 65284, 53040 and
+  97521 read -252, -12496 and 31985 with ErrorCode 7.  Bounds cut to 16
   bits, signed, read 0 for the second and third, equal after the cut, with
   SC46 (Result4 = 6) and no SC43.  A draw that clamps reads 32767 or -32768.
 - ``rand_other_stores`` (probe): RAND ( 70000 , 70002 ) into a Dint is not cut,
@@ -27,15 +27,15 @@ are what a CLICK read on 2026-11-05.
   (Result3 = 0..2 over 70000).  RAND ( 70000 , 70000 ) into a Dint is a math
   error, 0 (Result4; 32767 if it draws 70000).  Flags in ErrorCode: SC43 after
   the Dint (bit 1), the Word (bit 2), the Real (bit 4), and SC46 and SC43 after
-  the equal bounds (bits 8 and 16).  Answered on a CLICK (2026-11-05): the Word's
-  draw raises no SC43, only the equal bounds' SC46 (ErrorCode = 8).
+  the equal bounds (bits 8 and 16).  On a CLICK the Word's draw raises no SC43, only
+  the equal bounds' SC46 (ErrorCode = 8).
 - ``rand_tag_bounds`` (probe): two Dint tags holding 7 and 7 as bounds draw 7
   with no flag (Result1 = 7; 0 if equal tags are an error), randint ( df , df )
   + 5 with DF 3.0 reads 5 (Result2: a Real bound reads 0 and the 5 still
   lands, without a flag), and equal constants zero the whole calc, 0 (Result3)
   with SC46 (Result4 = 4).  RAND ( 7 , 7 ) + 5 reading 5 puts the 0 on the
-  RAND alone.  Answered on a CLICK (2026-11-05): equal tags are a math error, 0
-  with SC46, and RAND ( 7 , 7 ) + 5 is 5 with SC46 (Result4 = 5).
+  RAND alone.  On a CLICK equal tags are a math error, 0 with SC46, and
+  RAND ( 7 , 7 ) + 5 is 5 with SC46 (Result4 = 5).
 - ``inf_and_nan_to_text`` (probe): -Inf and NaN copied as text (Copy Option 4c),
   as ``faults/copy_inf_to_text`` does +Inf (``inf``, no flag).  A text register
   seeded ``Z``, then the copy, then each pair of TXT codes packed as 128 *

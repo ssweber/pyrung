@@ -19,8 +19,7 @@ The reset is the instructions' own: every TON and TOF rung is gated on ``Cmd``,
 and each RTON's reset input is ``Cmd == 0``.  A TOF has no reset: once its rung
 drops it times out and its TD keeps counting, so the TOF cases ``keep`` it.
 
-Every case but the six stepped ones passed on a CLICK as written (hardware round 1, 2026-10-29).
-The six run on a CLICK at the next hardware round.  Which case tells pyrung's model from which other model:
+Which case tells pyrung's model from which other model:
 
 - ``ton_auto_reset``: step 0 runs the TON until its Acc reads 500, and step 1
   is the first scan its rung is false.  A TON that held its accumulator when

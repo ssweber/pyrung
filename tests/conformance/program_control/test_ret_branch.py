@@ -8,8 +8,8 @@ It owns no raw memory.
   output copies 1 into Scratch and whose branch, under a contact, carries a
   Return.  The rung above writes Result1 = 1 and ``Fired``; the rung below the
   return writes Result2 = 1 (the marker).  A Return on a branch that is taken
-  ends the subroutine there: Result1 = 1, Result2 = 0 (pyrung today, and the
-  answer adopted).  If CLICK accepts the Return but ignores it on a branch,
+  ends the subroutine there: Result1 = 1, Result2 = 0 (what pyrung does, and the
+  likeliest answer).  If CLICK accepts the Return but ignores it on a branch,
   the marker is written: Result1 = 1, Result2 = 1.  If CLICK refuses the
   ladder at paste or transfer, that is the answer: the project does not
   load, nothing runs, and the case is not run against it.
