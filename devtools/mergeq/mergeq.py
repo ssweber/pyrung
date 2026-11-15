@@ -62,6 +62,7 @@ class Config:
         path = Path(os.environ.get("MERGEQ_CONFIG") or HERE / "mergeq.toml")
         with path.open("rb") as fh:
             raw = tomllib.load(fh)
+        self.path = path.resolve()
         self.raw = raw
         self.repo = _main_checkout()
         self.base: str = raw.get("base", "main")
@@ -706,6 +707,9 @@ def cmd_next(_args: argparse.Namespace) -> int:
         result["merged_sha"] = _sha("HEAD", cwd=cand)
 
         env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "PYTHONPATH")}
+        # A stage that reads the config (fold-new reads the base) gets the queue's, not
+        # the copy in the merged tree, which may still name an older base.
+        env["MERGEQ_CONFIG"] = str(CFG.path)
         if CFG.install:
             rc, secs, to, _ = run_group(
                 CFG.install["cmd"],
