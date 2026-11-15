@@ -3,13 +3,12 @@
 
 name: CI
 
+# This workflow does not run on a push to main. A PR must be up to date to merge, so its
+# own run already tested the code that merges.
 on:
-  push:
-    # Use ["main", "master"] for CI only on the default branch.
-    # Use ["**"] for CI on all branches.
-    branches: ["main", "master"]
   pull_request:
     branches: ["main", "master"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -68,3 +67,14 @@ jobs:
         run: make test
         env:
           PYTEST_WORKERS: auto
+
+  # main requires only this check, so the matrix can change without editing branch protection.
+  # Without always(), a failed build would skip this job. A skipped required check counts
+  # as passing. A new test job must go into needs and into the test below, or ci passes
+  # without it.
+  ci:
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.build.result }}" = "success"
