@@ -112,7 +112,6 @@ def _has_metadata(meta: _TagMetadata | None) -> bool:
             or meta.external
             or meta.final
             or meta.public
-            or meta.lock
             or meta.physical is not None
             or meta.link is not None
             or meta.min is not None
@@ -142,8 +141,6 @@ def _append_metadata_kwargs(
         kwargs.append("final=True")
     if meta.public:
         kwargs.append("public=True")
-    if meta.lock:
-        kwargs.append("lock=True")
     if meta.physical is not None:
         kwargs.append(f"physical={_format_physical_expr(meta.physical, collection)}")
     if meta.link is not None:
@@ -547,7 +544,6 @@ def _emit_plain_block_decl(
             external=slot.external if slot.external_overridden else False,
             final=slot.final if slot.final_overridden else False,
             public=slot.public if slot.public_overridden else False,
-            lock=slot.lock if slot.lock_overridden else False,
             physical=slot.physical if slot.physical_overridden else None,
             link=slot.link if slot.link_overridden else None,
             min=slot.min if slot.min_overridden else None,

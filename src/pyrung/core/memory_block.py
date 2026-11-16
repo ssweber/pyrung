@@ -56,7 +56,6 @@ class SlotConfig:
     external: Any = UNSET
     final: Any = UNSET
     public: Any = UNSET
-    lock: Any = UNSET
     physical: Any = UNSET
     link: Any = UNSET
     min: Any = UNSET
@@ -70,7 +69,6 @@ class _SlotHints(NamedTuple):
     external: bool
     final: bool
     public: bool
-    lock: bool
     physical: Physical | None = None
     link: str | None = None
     min: int | float | None = None
@@ -127,10 +125,6 @@ class SlotView:
     @property
     def public(self) -> bool:
         return self._block._effective_slot_hints(self._addr).public
-
-    @property
-    def lock(self) -> bool:
-        return self._block._effective_slot_hints(self._addr).lock
 
     @property
     def physical(self) -> Physical | None:
@@ -191,10 +185,6 @@ class SlotView:
     @property
     def public_overridden(self) -> bool:
         return self._overridden("public")
-
-    @property
-    def lock_overridden(self) -> bool:
-        return self._overridden("lock")
 
     @property
     def physical_overridden(self) -> bool:
@@ -446,7 +436,6 @@ class Block:
     _pyrung_field_external: bool = field(default=False, init=False, repr=False)
     _pyrung_field_final: bool = field(default=False, init=False, repr=False)
     _pyrung_field_public: bool = field(default=False, init=False, repr=False)
-    _pyrung_field_lock: bool = field(default=False, init=False, repr=False)
     _pyrung_field_physical: Physical | None = field(default=None, init=False, repr=False)
     _pyrung_field_link: str | None = field(default=None, init=False, repr=False)
     _pyrung_field_min: int | float | None = field(default=None, init=False, repr=False)
@@ -552,7 +541,6 @@ class Block:
                     external=hints.external,
                     final=hints.final,
                     public=hints.public,
-                    lock=hints.lock,
                     physical=hints.physical,
                     link=hints.link,
                     min=hints.min,
@@ -589,7 +577,6 @@ class Block:
         external: bool,
         final: bool,
         public: bool,
-        lock: bool,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -607,7 +594,6 @@ class Block:
             external=external,
             final=final,
             public=public,
-            lock=lock,
             physical=physical,
             link=link,
             min=min,
@@ -712,7 +698,6 @@ class Block:
             self._slot_field(addr, "external", self._pyrung_field_external),
             self._slot_field(addr, "final", self._pyrung_field_final),
             self._slot_field(addr, "public", self._pyrung_field_public),
-            self._slot_field(addr, "lock", self._pyrung_field_lock),
             self._slot_field(addr, "physical", self._pyrung_field_physical),
             self._slot_field(addr, "link", self._pyrung_field_link),
             self._slot_field(addr, "min", m_min),
@@ -849,7 +834,6 @@ class Block:
         external: object = UNSET,
         final: object = UNSET,
         public: object = UNSET,
-        lock: object = UNSET,
         physical: object = UNSET,
         link: object = UNSET,
         min: object = UNSET,
@@ -895,7 +879,6 @@ class Block:
             or external is not UNSET
             or final is not UNSET
             or public is not UNSET
-            or lock is not UNSET
             or physical is not UNSET
             or link is not UNSET
             or min is not UNSET
@@ -930,8 +913,6 @@ class Block:
                 self._apply_slot_override(addr, "final", bool(final))
             if public is not UNSET:
                 self._apply_slot_override(addr, "public", bool(public))
-            if lock is not UNSET:
-                self._apply_slot_override(addr, "lock", bool(lock))
             if physical is not UNSET:
                 self._apply_slot_override(addr, "physical", cast(Physical | None, physical))
             if link is not UNSET:
@@ -1226,7 +1207,6 @@ class InputBlock(Block):
         external: bool,
         final: bool,
         public: bool,
-        lock: bool,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -1244,7 +1224,6 @@ class InputBlock(Block):
             external=external,
             final=final,
             public=public,
-            lock=lock,
             physical=physical,
             link=link,
             min=min,
@@ -1332,7 +1311,6 @@ class OutputBlock(Block):
         external: bool,
         final: bool,
         public: bool,
-        lock: bool,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -1350,7 +1328,6 @@ class OutputBlock(Block):
             external=external,
             final=final,
             public=public,
-            lock=lock,
             physical=physical,
             link=link,
             min=min,

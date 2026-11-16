@@ -235,18 +235,6 @@ assert StartButton.external                # now True — stamped by TagMap
 
 Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not stamped `external`. Tags that are `readonly` are skipped, because `readonly` and `external` are mutually exclusive.
 
-### Output inference
-
-When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. The flag marks the tag as a physical output, and the nickname CSV keeps it. You don't need to declare `lock=True` yourself.
-
-```python
-MotorOut = Bool()                              # lock=False initially
-mapping = TagMap({MotorOut: y[1]})
-assert MotorOut.lock                           # now True — stamped by TagMap
-```
-
-Tags mapped to input or memory banks (`x`, `c`, `ds`, etc.) are not affected.
-
 ### Type validation at map time
 
 `TagMap` validates that logical and hardware data types match:
