@@ -41,6 +41,7 @@ from pyrung import (
     off_delay,
     on_delay,
     out,
+    pack_words,
     receive,
     reset,
     return_early,
@@ -1212,4 +1213,85 @@ def pointer_copy_of_a_source_is_no_dependency() -> Any:
             copy(Int("DepInput", external=True, min=0, max=3), source)
         with Rung():
             copy(source, regs[pointer])
+    return prog
+
+
+# ---------------------------------------------------------------------------
+# Reals that hold NaN or Inf
+# ---------------------------------------------------------------------------
+
+
+@idiom
+def math_overflow_then_difference() -> Any:
+    """A math() past the Real range stores Inf, and Inf minus Inf is NaN.
+
+    Inf compares like a large number, but a later formula tells it apart.  A NaN is
+    neither >= 0 nor < 0, and a copy of it into an Int stores 0.
+    """
+    big = Real("BigReal")
+    over = Real("OverReal")
+    diff = Real("DiffReal")
+    with Program() as prog:
+        with Rung(Bool("LoadBig", external=True)):
+            copy(3.0e38, big)
+        with Rung(Bool("ClearBig", external=True)):
+            copy(1.0, big)
+        with Rung(Bool("Scale", external=True)):
+            math(big * 10, over)
+        with Rung(over > 1.0e38):
+            out(Bool("OverHigh"))
+        with Rung(Bool("Subtract", external=True)):
+            math(over - over, diff)
+        with Rung(diff >= 0):
+            out(Bool("DiffNotBelow"))
+        with Rung(diff < 0):
+            out(Bool("DiffBelow"))
+        with Rung(Bool("ShowDiff", external=True)):
+            copy(diff, Int("DiffShown"))
+    return prog
+
+
+@idiom
+def nan_copied_and_compared_with_itself() -> Any:
+    """A division by a tiny Real stores Inf, and 0 to a negative power is Inf in a formula.
+
+    Inf minus Inf is NaN, a copy of a NaN is a NaN, and a NaN is not equal to itself.
+    """
+    divisor = Real("Divisor", external=True, choices={0.0: "zero", 1.0e-39: "tiny", 2.0: "two"})
+    inverse = Real("Inverse")
+    gap = Real("InverseGap")
+    kept = Real("KeptGap")
+    with Program() as prog:
+        with Rung(Bool("Invert", external=True)):
+            math(1.0 / divisor, inverse)
+        with Rung(inverse > 1.0):
+            out(Bool("InverseAboveOne"))
+        with Rung(Bool("Cancel", external=True)):
+            math(divisor**-1 - divisor**-1, gap)
+        with Rung(Bool("KeepGap", external=True)):
+            copy(gap, kept)
+        with Rung(kept == kept):
+            out(Bool("KeptIsANumber"))
+        with Rung(Bool("ShowInverse", external=True)):
+            copy(inverse, Int("InverseShown"))
+    return prog
+
+
+@idiom
+def words_packed_into_a_real() -> Any:
+    """Two words packed into a Real can be the bits of a NaN or an Inf."""
+    words = Block("PackedWord", TagType.INT, 1, 2)
+    high = Int("HighWord", external=True, choices={0: "zero", 0x7F80: "Inf", 0x7FC0: "NaN"})
+    packed = Real("PackedReal")
+    with Program() as prog:
+        with Rung(Bool("LoadWords", external=True)):
+            copy(high, words[2])
+        with Rung(Bool("PackWords", external=True)):
+            pack_words(words.select(1, 2), packed)
+        with Rung(packed >= 0):
+            out(Bool("PackedNotBelow"))
+        with Rung(packed < 0):
+            out(Bool("PackedBelow"))
+        with Rung(Bool("ShowPacked", external=True)):
+            copy(packed, Int("PackedShown"))
     return prog

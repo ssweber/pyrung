@@ -26,7 +26,6 @@ _PAIR = (
     "TD302 = TD305 = 10.  The rungs compare the two, and no pair of their domain values is"
     " equal, above 0 and below 20."
 )
-_NOT_FINITE = "A Real domain has no value that stands for {}."
 
 #: Facts the runs refute, by case: ``(fact, tag)`` -> the first scan that refutes it, and why.
 KNOWN: dict[str, dict[tuple[str, str], str]] = {
@@ -45,13 +44,6 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
             "scan 20.  Slice elision drops DS4016, but the time drum reads it as a step"
             " preset on scans that do not write it."
         ),
-    },
-    "word_floor/below_int_and_nan": {
-        ("stateful domain", "DF32"): "scan 3.  " + _NOT_FINITE.format("NaN"),
-    },
-    "modbus_raw/raw_values": {
-        ("stateful domain", "DF114"): "scan 3.  " + _NOT_FINITE.format("NaN"),
-        ("stateful domain", "DF115"): "scan 3.  " + _NOT_FINITE.format("NaN"),
     },
 }
 
