@@ -285,6 +285,9 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
   finding. It waits on laddercodec's release. [nothing]
 
+- **A TXT initial value with edge spaces.** pyclickplc 0.8.0 loads `  a ` as written, where pyrung's last
+  release loaded `a`. Whether CLICK keeps the edge spaces is unconfirmed. [CLICK]
+
 ## Small fixes
 
 All [nothing] unless marked.

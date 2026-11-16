@@ -73,6 +73,21 @@ def test_from_nickname_file_names_the_line_of_a_malformed_row(tmp_path):
         TagMap.from_nickname_file(path)
 
 
+def test_from_nickname_file_reads_true_and_1_as_retentive(tmp_path):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(
+        _CSV_HEADER + 'C1,BIT,"Pump",0,True,""\n' + 'C2,BIT,"Fan",0,1,""\n', encoding="utf-8"
+    )
+
+    mapping = TagMap.from_nickname_file(path)
+    out_path = tmp_path / "out.csv"
+    mapping.to_nickname_file(out_path)
+    rows = pyclickplc.read_csv(out_path)
+
+    assert rows[get_addr_key("C", 1)].retentive is True
+    assert rows[get_addr_key("C", 2)].retentive is True
+
+
 def test_from_nickname_file_refuses_names_that_differ_only_in_case(tmp_path):
     path = tmp_path / "nicknames.csv"
     path.write_text(
