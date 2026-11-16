@@ -8,6 +8,7 @@ from pyrung.core import (
     Counter,
     Dint,
     Int,
+    Physical,
     Program,
     Rung,
     Tag,
@@ -88,6 +89,16 @@ class TestOperandNoWriter:
         assert not _codes(_comparison_program(external), CMP_OPERAND_NO_WRITER)
         assert not _codes(_comparison_program(constant), CMP_OPERAND_NO_WRITER)
 
+    def test_linked_feedback_is_a_declared_source(self) -> None:
+        # A linked feedback answers its command in the field, and a harness drives it in a test.
+        linked = Int("LinkedLevel", link="Result")
+        assert not _codes(_comparison_program(linked), CMP_OPERAND_NO_WRITER)
+
+    def test_unlinked_physical_operand_is_reported(self) -> None:
+        # A physical= without link= is only metadata, so nothing outside writes the tag.
+        level = Int("SensedLevel", physical=Physical("SensedLevel", on_delay="100ms"))
+        assert _codes(_comparison_program(level), CMP_OPERAND_NO_WRITER)
+
     def test_literal_zero_is_intentional(self) -> None:
         value = Int("Value", default=1, readonly=True)
         result = Bool("Result", external=True)
@@ -164,6 +175,14 @@ class TestPresetStaysZero:
                 on_delay(written_timer, written)
             with Rung(enable):
                 on_delay(external_timer, external)
+
+        assert not _codes(program, CMP_PRESET_STAYS_ZERO)
+
+    def test_linked_preset_is_clean(self) -> None:
+        enable = Bool("Enable", external=True)
+        with Program(strict=False) as program:
+            with Rung(enable):
+                on_delay(Timer.clone("LinkedDelay"), Int("LinkedPreset", link="Enable"))
 
         assert not _codes(program, CMP_PRESET_STAYS_ZERO)
 

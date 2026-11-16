@@ -81,8 +81,7 @@ class _PassContext:
     # Each init constant with its representative value and method.
     _init_constant_projections: dict[str, tuple[str, Any]] | None = None
     # Written tags the classification found no finite domain for, and the tags an
-    # Intractable classification named.  how() leaves them out of its key, and the
-    # facts check in tests/facts makes no claim about them.
+    # Intractable classification named.  Only the facts check in tests/facts reads them.
     _unclassified_written: frozenset[str] = frozenset()
     _pending_infeasible_tags: list[str] = field(default_factory=list)
     # The (domains, blockers) fixpoint, computed once per pipeline run (see

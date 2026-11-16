@@ -66,6 +66,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import ProgramGraph, _extract_write_targets
+from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -206,13 +207,10 @@ def _iter_program_instructions(program: Program) -> Any:
 
 
 def _instruction_write_targets(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
-    """Return the set of tag names written by *instr*."""
+    """Return the set of tag names written by *instr*, as ``write_sites`` lists them."""
     targets: set[str] = set()
-    for field_name in getattr(type(instr), "_writes", ()):
-        value = getattr(instr, field_name, None)
-        if value is None:
-            continue
-        writes, _ = _extract_write_targets(value, tag_refs)
+    for target in instruction_write_targets(instr):
+        writes, _ = _extract_write_targets(target, tag_refs)
         targets.update(writes)
     return targets
 

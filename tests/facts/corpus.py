@@ -35,11 +35,13 @@ from pyrung import (
     event_drum,
     fall,
     fill,
+    forloop,
     latch,
     math,
     off_delay,
     on_delay,
     out,
+    receive,
     reset,
     return_early,
     rise,
@@ -942,7 +944,10 @@ def _harness(plc: PLC) -> None:
 
 @idiom
 def valve_with_limit_switch_watchdog() -> Any:
-    """A valve's limit switch follows it through the harness, and a watchdog trips on a stall."""
+    """A valve's limit switch follows it through the harness, and a watchdog trips on a stall.
+
+    The watchdog's 100 ms is shorter than the switch's 200 ms delay, so it trips on every opening.
+    """
     command = Bool("OpenCmd", external=True)
     valve = Bool("Valve")
     opened = Bool("ValveOpen", physical=Physical("ValveOpen", on_delay="200ms"), link="Valve")
@@ -953,7 +958,7 @@ def valve_with_limit_switch_watchdog() -> Any:
         with Rung(command):
             out(valve)
         with Rung(valve, ~opened):
-            on_delay(stall, 3000)
+            on_delay(stall, 100)
         with Rung(stall.Done):
             latch(fault)
         with Rung(clear):
@@ -962,6 +967,116 @@ def valve_with_limit_switch_watchdog() -> Any:
 
 
 PREPARE["valve_with_limit_switch_watchdog"] = _harness
+
+
+@idiom
+def field_value_copied_and_compared() -> Any:
+    """A level that answers a fill valve in the field is copied, and only the copy is compared.
+
+    The level has ``link=`` and no ``physical=``, so no harness drives it.
+    """
+    fill = Bool("FillValve")
+    level = Int("FieldLevel", link="FillValve")
+    held = Int("SampledLevel")
+    with Program() as prog:
+        with Rung(Bool("FillCmd", external=True)):
+            out(fill)
+        with Rung(Bool("TakeSample", external=True)):
+            copy(level, held)
+        with Rung(held > 50):
+            out(Bool("SampleHigh"))
+    return prog
+
+
+@idiom
+def field_value_summed_and_compared() -> Any:
+    """A field level plus an operator's bias is stored on a sample, and the sum is compared.
+
+    The facts trace a comparison back through a copy, but not through a sum of two tags.
+    """
+    level = Int("SumLevel", link="SumFill")
+    bias = Int("Bias", external=True, min=0, max=10)
+    total = Int("BiasedLevel")
+    with Program() as prog:
+        with Rung(Bool("SumFillCmd", external=True)):
+            out(Bool("SumFill"))
+        with Rung(Bool("TakeSum", external=True)):
+            math(level + bias, total)
+        with Rung(total > 50):
+            out(Bool("BiasedHigh"))
+    return prog
+
+
+@idiom
+def field_count_the_ladder_clears() -> Any:
+    """A count the field sets on a linked counter, which the ladder clears on a reset button."""
+    count = Int("FieldCount", link="CountEnable")
+    with Program() as prog:
+        with Rung(Bool("CountCmd", external=True)):
+            out(Bool("CountEnable"))
+        with Rung(Bool("ClearCount", external=True)):
+            copy(0, count)
+        with Rung(count > 10):
+            out(Bool("CountHigh"))
+    return prog
+
+
+@idiom
+def loop_adds_three_times() -> Any:
+    """A forloop adds 1 to a total three times on each scan Go is on, and a rung clears it."""
+    total = Int("LoopTotal")
+    with Program() as prog:
+        with Rung(Bool("LoopGo", external=True)):
+            with forloop(3):
+                math(total + 1, total)
+        with Rung(total > 5):
+            copy(0, total)
+    return prog
+
+
+def _receive_from_peer(dest: Any) -> None:
+    # A string target does no I/O, so in a run no peer answers.  The run sets the payload
+    # as a peer would.
+    receive(
+        target="peer",
+        remote_start="DS501",
+        dest=dest,
+        receiving=Bool("Receiving"),
+        success=Bool("ReceiveOk"),
+        error=Bool("ReceiveError"),
+        exception_response=Int("ReceiveCode"),
+    )
+
+
+@idiom
+def received_value_the_ladder_clears() -> Any:
+    """A value a peer sends through receive(), which the ladder clears once it reads 1."""
+    incoming = Int("Remote")
+    with Program() as prog:
+        with Rung(Bool("Poll", external=True)):
+            _receive_from_peer(incoming)
+        with Rung(incoming == 1):
+            copy(0, incoming)
+        with Rung(incoming > 5):
+            out(Bool("RemoteHigh"))
+    return prog
+
+
+@idiom
+def received_count_the_ladder_adds_to() -> Any:
+    """Registers a peer sends, one of which the ladder also counts up.
+
+    The peer can lower the count, so the count is no up counter.
+    """
+    regs = Block("Regs", TagType.INT, 501, 510)
+    with Program() as prog:
+        with Rung(Bool("PollRegs", external=True)):
+            _receive_from_peer(regs.select(501, 510))
+        with Rung(Bool("Tick", external=True)):
+            math(regs[503] + 1, regs[503])
+        with Rung(regs[503] > 100):
+            out(Bool("CountHigh2"))
+    return prog
 
 
 @idiom

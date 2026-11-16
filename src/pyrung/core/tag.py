@@ -728,6 +728,16 @@ class InputTag(Tag):
         return ImmediateRef(self)
 
 
+def tag_written_from_outside(tag: Tag) -> bool:
+    """Return whether something outside the ladder can write *tag*.
+
+    That is an ``external`` tag, a physical input, or a field feedback (``link=``).  The
+    field sets a field feedback, and a harness sets it in a test.  A ``physical=`` without
+    ``link=`` is only metadata, so it does not count.
+    """
+    return tag.external or isinstance(tag, InputTag) or tag.link is not None
+
+
 @dataclass(frozen=True)
 class OutputTag(Tag):
     """Tag representing a physical output channel.

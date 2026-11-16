@@ -62,10 +62,17 @@ UNJUDGED: dict[str, dict[str, str]] = {
     "stepper_with_math_advance": {
         "absorbed value": "State only holds 0..3, and each of them is a threshold",
     },
-    "valve_with_limit_switch_watchdog": {
-        "done spec": "the limit switch follows the valve, so the watchdog never finishes",
-        "Stall_Done on": "the limit switch follows the valve, so the watchdog never finishes",
-        "Stall_Done off": "Stall_Done never turns on",
+}
+
+
+#: Instruction classes that write nothing in an idiom's runs, by idiom, with why.  Any other
+#: class that writes nothing is one the check can't see write.
+SILENT: dict[str, dict[str, str]] = {
+    "received_value_the_ladder_clears": {
+        "ModbusReceiveInstruction": "no peer answers in a run, so the run sets the payload",
+    },
+    "received_count_the_ladder_adds_to": {
+        "ModbusReceiveInstruction": "no peer answers in a run, so the run sets the payload",
     },
 }
 
@@ -90,6 +97,7 @@ def test_facts_hold(name: str) -> None:
     # The runs move every stepping tag, so they reach the values its writes produce.
     assert not report.unmoved
     assert sorted(report.unjudged) == sorted(UNJUDGED.get(name, {}))
+    assert report.silent_writers == sorted(SILENT.get(name, {}))
 
 
 @pytest.mark.parametrize(
