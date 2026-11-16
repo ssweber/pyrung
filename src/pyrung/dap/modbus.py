@@ -106,7 +106,7 @@ class ModbusSimServer:
             self._shutdown_loop()
             return False
         self._server = server
-        self.port = _bound_port(server, config.port)
+        self.port = server.bound_port or config.port
         return True
 
     def stop(self) -> None:
@@ -155,15 +155,6 @@ class ModbusSimServer:
             thread.join(timeout=_LOOP_TIMEOUT)
         if not loop.is_running():
             loop.close()
-
-
-def _bound_port(server: Any, fallback: int) -> int:
-    """Return the port actually bound (differs from the request for port 0)."""
-    try:
-        sockets = server._server.transport.sockets
-        return int(sockets[0].getsockname()[1])
-    except Exception:
-        return fallback
 
 
 def _bind_error(config: ModbusConfig, exc: Exception) -> str:
