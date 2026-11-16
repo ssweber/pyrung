@@ -2683,3 +2683,17 @@ def test_tag_named_after_its_address_exports_without_a_nickname(tmp_path):
     assert (back["DS1"].readonly, back["DS1"].min, back["DS1"].max) == (True, 0, 100)
     assert back["DS1"].comment == "speed"
     assert back["X001"].external is True
+
+
+def test_load_snapshot_reports_a_malformed_row_as_a_snapshot_error(tmp_path, monkeypatch):
+    mapping = TagMap({Bool("Valve_LS"): c[1]})
+    csv = tmp_path / "data.csv"
+    csv.write_text("")
+
+    def reject(path, **kw):
+        raise ValueError("row 7: expected 4 cells, found 5")
+
+    monkeypatch.setattr("pyclickplc.read_plc_data", reject)
+
+    with pytest.raises(ValueError, match="Cannot load snapshot: row 7: expected 4 cells, found 5"):
+        mapping.load_snapshot(csv)
