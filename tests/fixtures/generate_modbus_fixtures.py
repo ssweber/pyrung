@@ -27,7 +27,7 @@ def _handle(ctx: _ClickDeviceContext, request: bytes) -> bytes:
     if fc in (1, 2):
         start, count = struct.unpack(">HH", request[8:12])
         values = ctx.getValues(fc, start, count)
-        if isinstance(values, ExcCodes):
+        if isinstance(values, int):
             return _err(tid, uid, fc, int(values))
         payload = bytearray((count + 7) // 8)
         for offset, bit in enumerate(values):
@@ -40,7 +40,7 @@ def _handle(ctx: _ClickDeviceContext, request: bytes) -> bytes:
     if fc in (3, 4):
         start, count = struct.unpack(">HH", request[8:12])
         values = ctx.getValues(fc, start, count)
-        if isinstance(values, ExcCodes):
+        if isinstance(values, int):
             return _err(tid, uid, fc, int(values))
         payload = bytearray()
         for reg in values:
