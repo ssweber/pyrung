@@ -876,6 +876,58 @@ def test_launch_with_snapshot_rejects_file_without_plc_data(tmp_path: Path, monk
     assert "no PLC data found in nicknames.csv" in response["message"]
 
 
+def test_launch_with_snapshot_reports_a_malformed_row_as_a_launch_error(
+    tmp_path: Path, monkeypatch: Any
+):
+    """A row the reader rejects fails the launch with the reader's message."""
+
+    def reject(path: Any, **kw: Any) -> Any:
+        raise ValueError("row 7: expected 4 cells, found 5")
+
+    monkeypatch.setattr("pyclickplc.read_plc_data", reject)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "tags", raising=False)
+    _write_script(
+        tmp_path,
+        "tags.py",
+        "from pyrung.click import ClickBlocks, TagMap\n"
+        "from pyrung.core import Bool\n"
+        "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()\n"
+        "Sensor = Bool('Sensor')\n"
+        "mapping = TagMap({Sensor: c[1]})\n",
+    )
+    _write_script(
+        tmp_path,
+        "run.py",
+        "from pyrung.core import PLC, Program, Rung, out\n"
+        "from tags import Sensor\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(Sensor):\n"
+        "        out(Sensor)\n"
+        "runner = PLC(prog)\n",
+    )
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    try:
+        messages = _send_request(
+            adapter,
+            out_stream,
+            seq=1,
+            command="launch",
+            arguments={
+                "program": str(tmp_path / "run.py"),
+                "snapshotPath": str(tmp_path / "data.csv"),
+            },
+        )
+    finally:
+        sys.modules.pop("tags", None)
+
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "Cannot load snapshot: row 7: expected 4 cells, found 5" in response["message"]
+
+
 def test_variables_non_object_arguments_keep_legacy_internal_error_shape(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)

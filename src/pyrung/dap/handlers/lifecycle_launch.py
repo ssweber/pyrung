@@ -183,7 +183,11 @@ def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
     # (a nickname export, say) that would otherwise seed nothing without a word.
     from pyclickplc import read_plc_data
 
-    if not read_plc_data(resolved):
+    try:
+        plc_data = read_plc_data(resolved)
+    except ValueError as exc:
+        raise ValueError(f"Cannot load snapshot: {exc}") from exc
+    if not plc_data:
         raise ValueError(
             f"Cannot load snapshot: no PLC data found in {resolved.name}. "
             "Expected a CSV saved from PLC > Read Data from PLC in CLICK."

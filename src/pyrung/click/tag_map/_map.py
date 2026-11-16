@@ -484,12 +484,19 @@ class TagMap:
 
         Returns:
             A :class:`SystemState` seeded with the mapped tag values.
+
+        Raises:
+            ValueError: If the file is not a readable PLC data dump. The message
+                keeps the reader's detail, such as the row that is malformed.
         """
         from pyclickplc import read_plc_data
 
         from pyrung.core.state import SystemState
 
-        data = read_plc_data(path, skip_default=skip_default)
+        try:
+            data = read_plc_data(path, skip_default=skip_default)
+        except ValueError as exc:
+            raise ValueError(f"Cannot load snapshot: {exc}") from exc
         tags = self.tags_from_plc_data(data, blocks=blocks)
         return SystemState().with_tags(tags)
 
