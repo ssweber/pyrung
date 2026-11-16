@@ -36,6 +36,8 @@
 - `program.check()`, `how()` and `program.dataview()` now see every TXT a `to_text()` copy can write (they saw only the first).
 - `program.check()` no longer reports a dead write for a `to_text()` copy whose first TXT a later copy overwrites.
 - `how()` no longer assumes that a `Real` holds a number when it may hold NaN or Inf, such as after a `math()` past the Real range or a `pack_words()` into it.
+- `how()` no longer assumes that a timer's or counter's Acc starts at 0 when a copy or a `math()` writes it, or that an up counter with a down input stays between 0 and its preset.
+- `how()` no longer misses the states where two tags the rungs compare with each other are equal, such as the Accs of two timers.
 - `how()` and `program.check()` no longer assume that a copy or fill through a pointer writes every element the pointer can reach.
 - `how()` and `program.check()` no longer treat an element of a block of more than 1000 elements as never written when a write through a pointer with no declared bounds can store into it.
 - `program.check()` no longer reports these findings on a field feedback (a tag with `link=`):

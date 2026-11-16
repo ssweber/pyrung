@@ -22,23 +22,8 @@ from tests.facts.conformance import cases, check_case
 
 _CASES = {case_label(group.name, case): (group, case) for group, case in cases()}
 
-_PAIR = (
-    "TD302 = TD305 = 10.  The rungs compare the two, and no pair of their domain values is"
-    " equal, above 0 and below 20."
-)
-
 #: Facts the runs refute, by case: ``(fact, tag)`` -> the first scan that refutes it, and why.
 KNOWN: dict[str, dict[tuple[str, str], str]] = {
-    "counters/count_down_done_at_preset": {
-        ("stateful domain", "CTD101"): (
-            "scan 3.  The domain of the down counter's Acc is (0,), but a copy stages it at 5"
-            " and the counter counts it down from there."
-        ),
-    },
-    "reset_pins/rton_reset_held": {
-        ("stateful domain", "TD302"): "scan 43.  " + _PAIR,
-        ("stateful domain", "TD305"): "scan 43.  " + _PAIR,
-    },
     "drum_ds/ds_preset_ends": {
         ("scan-local", "DS4016"): (
             "scan 20.  Slice elision drops DS4016, but the time drum reads it as a step"

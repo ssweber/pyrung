@@ -47,8 +47,7 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - Two kinds of `Real` keep an input domain with no NaN or Inf in it, so how() never sets one there. No run refutes it, because the runs never write one. A `Real` the program writes gets no domain when it may hold NaN or Inf (`prove/non_finite.py`).
     - an input `Real` the outside writes and no rung writes
     - a `receive()` payload
-  - A down counter's Acc domain misses the value a copy stages it at. `test_facts_conformance.py`, `[counters/count_down_done_at_preset-stateful domain-CTD101]`.
-  - Two timer Accs the rungs compare with each other have no domain pair that is equal, above 0 and below 20. `test_facts_conformance.py`, `[reset_pins/rton_reset_held-stateful domain-TD302]` (TD305 too).
+  - A tag the rungs compare with a tag that has no domain keeps a domain that may have no value equal to the other's. No run refutes it yet. Tags compared with each other that both have domains share their values (`_close_tag_comparisons` in classify.py). The other tag may have been absorbed, or have no claim, as `Loop_Result3` beside `TD211` in `loop/skipped_body_holds_timer_and_counter`. A sound fix gives the first tag no claim, unless its domain lists every value it can hold.
   - Slice elision drops a tag that a time drum reads as a step preset. `test_facts_conformance.py`, `[drum_ds/ds_preset_ends-scan-local-DS4016]`.
   - A functional dependency is claimed before the rung first writes the tag. `test_facts_idioms.py`, `[funcdep_follows_its_source-functional dep-PosOffset]`.
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.

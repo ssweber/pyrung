@@ -326,6 +326,70 @@ def counter_acc_bands() -> Any:
     return prog
 
 
+@idiom
+def down_counter_staged_by_a_copy() -> Any:
+    """A copy loads the count of parts on a tray, and each pick counts it down."""
+    load = Bool("TrayLoad", external=True)
+    pick = Bool("Pick", external=True)
+    clear = Bool("TrayClear", external=True)
+    tray = Counter.clone("Tray")
+    left = Dint("TrayLeft")
+    empty = Bool("TrayEmpty")
+    with Program() as prog:
+        with Rung(load):
+            copy(5, tray.Acc)
+        with Rung(pick):
+            count_down(tray, 3).reset(clear)
+        with Rung(tray.Done):
+            out(empty)
+        with Rung():
+            copy(tray.Acc, left)
+    return prog
+
+
+@idiom
+def up_down_counter_shown() -> Any:
+    """An up/down counter whose count a copy reads.  It counts below 0 and past its preset."""
+    enter = Bool("BinIn", external=True)
+    leave = Bool("BinOut", external=True)
+    clear = Bool("BinClear", external=True)
+    bins = Counter.clone("Bins")
+    shown = Dint("BinsShown")
+    full = Bool("BinsFull")
+    with Program() as prog:
+        with Rung(enter):
+            count_up(bins, 1).down(leave).reset(clear)
+        with Rung(bins.Done):
+            out(full)
+        with Rung():
+            copy(bins.Acc, shown)
+    return prog
+
+
+@idiom
+def timer_accs_compared_with_each_other() -> Any:
+    """Two timers that start together, rungs that compare their Accs, and a copy of one."""
+    run = Bool("Run", external=True)
+    hold = Bool("HoldTrail", external=True)
+    lead = Timer.clone("Lead")
+    trail = Timer.clone("Trail")
+    shown = Int("LeadShown")
+    with Program() as prog:
+        with Rung(run):
+            on_delay(lead, 300)
+        with Rung(run, ~hold):
+            on_delay(trail, 300)
+        with Rung(lead.Acc == trail.Acc, trail.Acc != 0):
+            out(Bool("InStep"))
+        with Rung(lead.Acc > trail.Acc):
+            out(Bool("TrailBehind"))
+        with Rung(trail.Acc >= 100):
+            out(Bool("TrailHalfway"))
+        with Rung():
+            copy(lead.Acc, shown)
+    return prog
+
+
 # ---------------------------------------------------------------------------
 # Integer steppers
 # ---------------------------------------------------------------------------
