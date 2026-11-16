@@ -50,6 +50,7 @@ from pyrung import (
     subroutine,
     system,
     time_drum,
+    to_text,
     toggle,
 )
 from pyrung.core import PLC, Or
@@ -1148,4 +1149,67 @@ def compared_input_copied_and_compared() -> Any:
             copy(raw, level)
         with Rung(level > 50):
             out(Bool("LevelHigh"))
+    return prog
+
+
+# ---------------------------------------------------------------------------
+# Writes a rung makes only for some values
+# ---------------------------------------------------------------------------
+
+
+@idiom
+def short_text_keeps_the_characters_after_it() -> Any:
+    """A short to_text() leaves a character another rung wrote, and a rung reads it."""
+    msg = Block("ShortMsg", TagType.CHAR, 1, 10)
+    value = Int("ShortValue", external=True, choices={1: "one", 12345: "five digits"})
+    seen = Int("ShortSeen")
+    with Program() as prog:
+        with Rung(Bool("ShortMark", external=True)):
+            copy("4", msg[5])
+        with Rung():
+            call("ShortText")
+        with subroutine("ShortText"):
+            with Rung():
+                copy(value, msg[1], convert=to_text())
+            with Rung(msg[5] != "4"):
+                copy(7, seen)
+            with Rung():
+                copy(seen, Int("ShortShown"))
+    return prog
+
+
+@idiom
+def pointer_write_keeps_the_other_element() -> Any:
+    """A copy through a pointer leaves the element it does not point at, and a rung reads it."""
+    regs = Block("PtrReg", TagType.INT, 1, 4)
+    pointer = Int("PtrAt", external=True, choices={1: "first", 2: "second"})
+    seen = Int("PtrSeen")
+    with Program() as prog:
+        with Rung(Bool("PtrMark", external=True)):
+            copy(4, regs[1])
+        with Rung():
+            call("PtrWrite")
+        with subroutine("PtrWrite"):
+            with Rung():
+                copy(9, regs[pointer])
+            with Rung(regs[1] != 4):
+                copy(7, seen)
+            with Rung():
+                copy(seen, Int("PtrShown"))
+    return prog
+
+
+@idiom
+def pointer_copy_of_a_source_is_no_dependency() -> Any:
+    """A copy through a pointer follows its source only at the element it points at."""
+    regs = Block("DepReg", TagType.INT, 1, 4)
+    pointer = Int("DepAt", external=True, choices={1: "first", 2: "second"})
+    source = Int("DepSource")
+    with Program() as prog:
+        with Rung(regs[1] == 2):
+            out(Bool("DepSeen"))
+        with Rung(Bool("DepLoad", external=True)):
+            copy(Int("DepInput", external=True, min=0, max=3), source)
+        with Rung():
+            copy(source, regs[pointer])
     return prog

@@ -620,7 +620,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_case,
         frozenset({"TextEn"}),
         data_reads=frozenset({"TextSource"}),
-        writes=frozenset({"TextChars1"}),
+        # Every character of the longest text, -32768.
+        writes=frozenset({f"TextChars{i}" for i in range(1, 7)}),
         implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
@@ -629,7 +630,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_unsuppressed_case,
         frozenset({"UnsuppressedEn"}),
         data_reads=frozenset({"UnsuppressedSource"}),
-        writes=frozenset({"UnsuppressedChars1"}),
+        # Every character of the longest text, -32768.
+        writes=frozenset({f"UnsuppressedChars{i}" for i in range(1, 7)}),
         implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
@@ -638,7 +640,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_exponential_case,
         frozenset({"ExpEn"}),
         data_reads=frozenset({"ExpSource"}),
-        writes=frozenset({"ExpChars1"}),
+        # Every character of the longest text, -4.9406565E-324.
+        writes=frozenset({f"ExpChars{i}" for i in range(1, 16)}),
         implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
@@ -647,7 +650,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_nul_case,
         frozenset({"NulEn"}),
         data_reads=frozenset({"NulSource"}),
-        writes=frozenset({"NulChars1"}),
+        # Every character of the longest text, -32768 and the NUL.
+        writes=frozenset({f"NulChars{i}" for i in range(1, 8)}),
         implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(
@@ -656,7 +660,8 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _copy_to_text_hex_term_case,
         frozenset({"HexTermEn"}),
         data_reads=frozenset({"HexTermSource"}),
-        writes=frozenset({"HexTermChars1"}),
+        # Every character of the longest text, -32768 and the CR.
+        writes=frozenset({f"HexTermChars{i}" for i in range(1, 8)}),
         implicit_writes=_COPY_FAULTS,
     ),
     GraphCase(

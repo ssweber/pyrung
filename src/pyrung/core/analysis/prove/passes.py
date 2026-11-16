@@ -265,6 +265,8 @@ def _writers_all_unconditional(
             return False
         if y_node.rung_index >= len(scope_rungs):
             return False
+        if y_name not in y_node.sure_writes:
+            return False  # a pointer or a text writes Y only for some values
         rung = scope_rungs[y_node.rung_index]
         if rung._conditions:
             return False
@@ -365,6 +367,8 @@ def _is_sequential_unconditional_same_scope(
             return False
         if y_node.rung_index >= len(scope_rungs):
             return False
+        if y_name not in y_node.sure_writes:
+            return False  # a pointer or a text writes Y only for some values
         rung = scope_rungs[y_node.rung_index]
         if rung._conditions:
             return False

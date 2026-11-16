@@ -61,9 +61,17 @@ def _conditions(value: Any) -> tuple[Any, ...]:
 def footprint(c: Case) -> tuple[frozenset[str], frozenset[str]]:
     """The tags case *c* reads or writes, and the ones it writes, outside its slot.
 
-    System tags and pyrung's internal tags (a leading ``_``) are left out.
+    System tags and pyrung's internal tags (a leading ``_``) are left out.  So are the
+    characters a ``to_text()`` copy of a tag may write past its first.  The analyses
+    count every character the source's type can write, up to 48 for a Real.  A case
+    copies a value it sets, and its own TXTs hold that value's text.
     """
-    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pdg import _extract_write_targets, build_program_graph
+    from pyrung.core.analysis.write_sites import (
+        instruction_partial_write_targets,
+        instruction_write_targets,
+    )
+    from pyrung.core.validation._common import walk_instructions
 
     slots = make_slot(1, name="Footprint")
     with Program(strict=False) as program:
@@ -71,11 +79,23 @@ def footprint(c: Case) -> tuple[frozenset[str], frozenset[str]]:
     graph = build_program_graph(program)
     own = {getattr(slots[1], f).name for f in SLOT_FIELDS}
 
+    may: set[str] = set()
+    sure: set[str] = set(graph.readers_of)
+    for instr in walk_instructions(program):
+        partial = instruction_partial_write_targets(instr)
+        for target in instruction_write_targets(instr):
+            names = _extract_write_targets(target, {})[0]
+            (may if any(target is p for p in partial) else sure).update(names)
+    left_out = may - sure
+
     def outside(names: Any) -> frozenset[str]:
         return frozenset(
             n
             for n in names
-            if n not in own and n not in SYSTEM_TAGS_BY_NAME and not n.startswith("_")
+            if n not in own
+            and n not in left_out
+            and n not in SYSTEM_TAGS_BY_NAME
+            and not n.startswith("_")
         )
 
     return outside(graph.tags), outside(graph.writers_of)

@@ -7,19 +7,39 @@ sequences contribute their elements, immediate references retain the wrapped
 destination, and dynamic destinations remain opaque for their specialized
 consumer to resolve.
 
-The one derived shape is a statically sized sequential ``CopyInstruction``
-fan-out.  Its additional destinations are concrete tags because the literal
-source fixes the number of writes before execution.
+The one derived shape is a ``CopyInstruction`` that writes text over several
+elements.  A literal source fixes how many it writes.  A ``to_text()`` copy of a
+tag writes as many characters as its value has, so the list holds every element
+that the longest text of the source's type reaches.  The elements past the first
+that such a copy may leave alone are its partial writes
+(:func:`instruction_partial_write_targets`).
 """
 
 from __future__ import annotations
 
+import math
+import sys
+import weakref
 from collections.abc import Iterator
 from typing import Any
 
+from pyrung.core.instruction.conversions import (
+    _DINT_MAX,
+    _DINT_MIN,
+    _INT_MAX,
+    _INT_MIN,
+    _render_text_from_numeric,
+)
 from pyrung.core.instruction.data_transfer import CopyInstruction
-from pyrung.core.instruction.resolvers import _sequential_tags
-from pyrung.core.memory_block import BlockRange
+from pyrung.core.instruction.resolvers import _sequential_tags, _termination_char
+from pyrung.core.memory_block import (
+    BlockRange,
+    IndirectBlockRange,
+    IndirectExprRef,
+    IndirectRef,
+    block_room,
+)
+from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 
@@ -38,36 +58,177 @@ def _iter_target_leaves(value: Any) -> Iterator[Any]:
     yield value
 
 
-def _static_copy_fanout(instr: Any) -> tuple[Tag, ...]:
-    """Additional concrete destinations of a statically sized scalar copy."""
-    if not isinstance(instr, CopyInstruction):
-        return ()
+#: The values of each type whose text is the longest or the shortest that ``to_text()``
+#: writes.  An integer's text grows with its magnitude and a minus sign.  A Real's fixed
+#: text grows with its magnitude, and its exponential text with the digits of its
+#: exponent.  pyrung keeps a Real at 64-bit precision, so the smallest one has a 3-digit
+#: exponent.
+_TEXT_EXTREMES: dict[TagType, tuple[Any, ...]] = {
+    TagType.BOOL: (False, True),
+    TagType.INT: (_INT_MIN, 0, _INT_MAX),
+    TagType.DINT: (_DINT_MIN, 0, _DINT_MAX),
+    TagType.WORD: (0, 0xFFFF),
+    TagType.REAL: (
+        *(
+            sign * value
+            for sign in (1.0, -1.0)
+            for value in (REAL_MAX, sys.float_info.min * sys.float_info.epsilon, 0.0, math.inf)
+        ),
+        math.nan,
+    ),
+    TagType.CHAR: ("0", "9"),
+}
 
-    dest = instr.dest
-    if isinstance(dest, ImmediateRef):
-        dest = dest.value
-    if not isinstance(dest, Tag):
-        return ()
+
+def _source_text_type(source: Any) -> tuple[TagType, bool] | None:
+    """The type a ``to_text()`` copy formats *source* as, and whether it reads the type.
+
+    The copy formats a tag or a pointer by its type.  It formats an ``immediate()``
+    tag by its value alone, as it does a literal.  ``None`` for an expression, whose
+    text has no bound.
+    """
+    if isinstance(source, ImmediateRef):
+        value = source.value
+        return (value.type, False) if isinstance(value, Tag) else None
+    if isinstance(source, Tag):
+        return source.type, True
+    if isinstance(source, (IndirectRef, IndirectExprRef)):
+        return source.block.type, True
+    return None
+
+
+def _to_text_length(instr: CopyInstruction) -> int | None:
+    """The most characters a ``to_text()`` copy writes, its termination code included.
+
+    The count comes from the formatter the copy runs, at the values of
+    :data:`_TEXT_EXTREMES` for a tag.  A tag's ``min``/``max`` does not narrow it,
+    because a CLICK does not honour them.  ``None`` for an expression source, whose
+    text has no bound.
+    """
+    converter = instr.convert
+    assert converter is not None and converter.mode == "text"
+    tail = len(_termination_char(converter.termination_code))
+
+    def length(value: Any, source_tag: Tag | None) -> int:
+        try:
+            text = _render_text_from_numeric(
+                value,
+                source_tag=source_tag,
+                suppress_zero=converter.suppress_zero,
+                pad=None,
+                exponential=converter.exponential,
+            )
+        except (TypeError, ValueError, OverflowError):
+            return 0  # the copy raises its fault and writes nothing
+        return len(text) + tail
 
     source = instr.source
-    converter = instr.convert
-    count = 0
-    if converter is None and isinstance(source, str) and len(source) > 1:
-        if dest.type is TagType.CHAR:
-            count = len(source)
-    elif (
-        converter is not None
-        and getattr(converter, "mode", None) in {"value", "ascii"}
-        and isinstance(source, str)
-    ):
-        count = len(source)
+    if isinstance(source, (bool, int, float, str)):
+        return length(source, None)
+    typed = _source_text_type(source)
+    if typed is None:
+        return None
+    source_type, by_type = typed
+    source_tag = Tag("_text_source", source_type) if by_type else None
+    return max(length(value, source_tag) for value in _TEXT_EXTREMES[source_type])
 
+
+def _fanout_count(instr: CopyInstruction, dest_type: TagType) -> tuple[int | None, bool]:
+    """How many elements *instr* writes from its destination on, and whether always.
+
+    ``None`` when the count runs to the end of the block.
+    """
+    source = instr.source
+    converter = instr.convert
+    if converter is None:
+        if isinstance(source, str) and len(source) > 1 and dest_type is TagType.CHAR:
+            return len(source), True
+        return 1, True
+    if converter.mode in {"value", "ascii"}:
+        return (len(source), True) if isinstance(source, str) else (1, True)
+    if converter.mode == "text" and dest_type is TagType.CHAR:
+        literal = isinstance(source, (bool, int, float, str))
+        return _to_text_length(instr), literal
+    return 1, True
+
+
+def _static_fanout(dest: Tag, count: int | None) -> tuple[Tag, ...]:
+    """The elements after *dest* that *count* characters from it reach in its block."""
+    if count is None:
+        count = block_room(dest)
+        if count is None:
+            # A tag in no block has no end to stop the text at.
+            return ()
     if count <= 1:
         return ()
     try:
         return tuple(_sequential_tags(dest, count)[1:])
     except ValueError:
         return ()
+
+
+def _pointer_fanout(dest: IndirectRef | IndirectExprRef, count: int | None) -> tuple[Any, ...]:
+    """The elements after a pointer destination, as the addresses ``pointer + k``.
+
+    Each consumer bounds ``block[pointer + k]`` from the pointer, as it bounds the
+    destination itself.  Text of no bound covers the rest of the block.
+    """
+    expr = dest.pointer if isinstance(dest, IndirectRef) else dest.expr
+    if count is None:
+        return (IndirectBlockRange(dest.block, expr + 1, dest.block.end),)
+    return tuple(IndirectExprRef(dest.block, expr + k) for k in range(1, count))
+
+
+_Fanout = tuple[tuple[Any, ...], tuple[Any, ...]]
+#: Per instruction, what its fan-out reads from the instruction alone: the count, and the
+#: targets past a pointer destination.  A tag destination's targets are not kept.  They
+#: depend on the bank the tag is mapped onto, which a later ``map_to`` moves, and holding
+#: them would keep a bank alive that the mapping holds only weakly.
+_FANOUT_CACHE: weakref.WeakKeyDictionary[Any, tuple[Any, ...]] = weakref.WeakKeyDictionary()
+
+
+def _cached(instr: CopyInstruction) -> tuple[Any, ...] | None:
+    cached = _FANOUT_CACHE.get(instr)
+    if (
+        cached is not None
+        and cached[0] is instr.dest
+        and cached[1] is instr.source
+        and cached[2] is instr.convert
+    ):
+        return cached
+    return None
+
+
+def _copy_fanout(instr: Any) -> _Fanout:
+    """The destinations past the first of a copy that writes several elements.
+
+    Returns the ones it always writes, then the ones it may leave alone.  A pointer
+    destination's targets are the same objects on every call, so a consumer that keys
+    them by ``id`` finds them again.
+    """
+    if not isinstance(instr, CopyInstruction):
+        return (), ()
+    dest = instr.dest
+    if isinstance(dest, ImmediateRef):
+        dest = dest.value
+    if isinstance(dest, Tag):
+        cached = _cached(instr)
+        if cached is None:
+            cached = (instr.dest, instr.source, instr.convert, _fanout_count(instr, dest.type))
+            _FANOUT_CACHE[instr] = cached
+        count, always = cached[3]
+        extra = _static_fanout(dest, count)
+        return (extra, ()) if always else ((), extra)
+    if isinstance(dest, (IndirectRef, IndirectExprRef)):
+        cached = _cached(instr)
+        if cached is None:
+            # A pointer write is a write the copy may not make to each element it reaches.
+            count, _always = _fanout_count(instr, dest.block.type)
+            partial = _pointer_fanout(dest, count) if count is None or count > 1 else ()
+            cached = (instr.dest, instr.source, instr.convert, partial)
+            _FANOUT_CACHE[instr] = cached
+        return (), cached[3]
+    return (), ()
 
 
 def instruction_write_targets(instr: Any) -> tuple[Any, ...]:
@@ -84,8 +245,19 @@ def instruction_write_targets(instr: Any) -> tuple[Any, ...]:
     targets: list[Any] = []
     for field_name in fields:
         targets.extend(_iter_target_leaves(getattr(instr, field_name, None)))
-    targets.extend(_static_copy_fanout(instr))
+    definite, partial = _copy_fanout(instr)
+    targets.extend(definite)
+    targets.extend(partial)
     return tuple(targets)
+
+
+def instruction_partial_write_targets(instr: Any) -> tuple[Any, ...]:
+    """The targets of :func:`instruction_write_targets` that *instr* may leave alone.
+
+    A ``to_text()`` copy of a tag writes only as many characters as its value has.  A
+    write-before-read analysis must not count these as writes that always happen.
+    """
+    return _copy_fanout(instr)[1]
 
 
 def instruction_fault_writes(instr: Any) -> tuple[str, ...]:
@@ -123,6 +295,7 @@ def instruction_writes_tag(instr: Any, tag_name: str) -> bool:
 
 __all__ = [
     "instruction_fault_writes",
+    "instruction_partial_write_targets",
     "instruction_write_targets",
     "instruction_writes_tag",
     "static_write_target_names",

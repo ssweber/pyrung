@@ -627,7 +627,9 @@ class _SliceElision:
             writes = [
                 node.rung_index
                 for node in sub_nodes
-                if name in node.all_writes and not node.branch_path and not node.own_condition_reads
+                if name in node.sure_writes
+                and not node.branch_path
+                and not node.own_condition_reads
             ]
             return bool(writes) and (not reads or min(writes) < min(reads))
 
