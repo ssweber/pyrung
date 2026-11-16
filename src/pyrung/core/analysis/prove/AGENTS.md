@@ -15,6 +15,10 @@ PILOT runs the PLC to check every plan it returns. So a domain that is too wide 
 ### Where a tag's values come from
 
 - A tag the program writes holds its power-on value and what its writers store. A copy's or a `math()`'s store conversion applies (`_stored_domain`).
+- A timer's or counter's Acc starts from 0, from its default and from every value another write stores, such as a copy or a `math()` (`_acc_start_values`). Its instruction times or counts on from each of them.
+  - An up counter with a down input can cross its preset either way. So its domain also holds the preset and the values one and two below it and one above it.
+  - An Acc gets no domain when the outside writes it, or when a write stores values no list holds.
+- Tags the rungs compare with each other share the values of their domains, plus one value past each end (`_close_tag_comparisons`). Then `A == B` and `A < B` each have a pair of domain values that answers as the run does.
 - An `external` tag or a field feedback (`link=`) that the program writes also holds a free input's values, because the outside can write it any value (`_extract_value_domain`).
 - A system tag the runtime writes, such as a clock or an RTC field, holds the values `RUNTIME_VALUES` lists (`core/system_points.py`). The scan counter and the other tags with too many values to list get no domain. So a copy of one of them gets none either.
 - A `Real` the program writes gets no domain when it may hold NaN or Inf (`non_finite.py`). A NaN is not equal to itself, so no list of values can stand for it. A `Real` may hold one when:

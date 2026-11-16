@@ -2553,30 +2553,210 @@ def _with_done_boundary(
     return tuple(sorted({*domain, boundary}))
 
 
+def _close_tag_comparisons(
+    domains: Mapping[str, dict[str, tuple[Any, ...]]],
+    tags: Mapping[str, Tag],
+    atom_index: Mapping[str, list[Atom]],
+) -> None:
+    """Give tags the rungs compare with each other the split points of one another.
+
+    A domain stands for the values between its split points.  For ``A == B`` to answer
+    True on a swap, the two domains need a common value between the same split points,
+    and for ``A < B`` an ordered pair there.  So every tag of a group the rungs compare
+    with each other gets the values of every domain in the group.  One more value below
+    and one above stand for two tags both past the outermost split point.
+
+    *domains* maps each kind of domain to its dict, which this updates in place.  A tag
+    with ``choices=`` keeps its domain, since it holds no other value.
+    """
+    owner = {name: kind for kind, found in domains.items() for name in found}
+
+    def numeric(name: str) -> bool:
+        tag = tags.get(name)
+        return (
+            name in owner
+            and tag is not None
+            and tag.type not in {TagType.BOOL, TagType.CHAR}
+            and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool)
+                for v in domains[owner[name]][name]
+            )
+        )
+
+    parent: dict[str, str] = {}
+
+    def root(name: str) -> str:
+        while parent.get(name, name) != name:
+            name = parent[name]
+        return name
+
+    for name in sorted(atom_index):
+        for atom in atom_index[name]:
+            if not atom.operand_is_tag or atom.form not in {"eq", "ne", "lt", "le", "gt", "ge"}:
+                continue
+            left, right = atom.tag, atom.operand
+            if left == right or not (numeric(left) and numeric(right)):
+                continue
+            a, b = sorted((root(left), root(right)))
+            if a != b:
+                parent[b] = a
+
+    groups: dict[str, list[str]] = {}
+    for name in sorted(parent.keys() | set(parent.values())):
+        groups.setdefault(root(name), []).append(name)
+    for members in groups.values():
+        points = {v for name in members for v in domains[owner[name]][name]}
+        points |= {min(points) - 1, max(points) + 1}
+        for name in members:
+            tag = tags[name]
+            if tag.choices is not None:
+                continue
+            values = set(domains[owner[name]][name]) | held_candidates(tag, points)
+            if tag.min is not None:
+                values = {v for v in values if v >= tag.min}
+            if tag.max is not None:
+                values = {v for v in values if v <= tag.max}
+            domains[owner[name]][name] = tuple(sorted(values))
+
+
+class _AccStarts(NamedTuple):
+    """The values a timer's or counter's Acc starts timing or counting from."""
+
+    values: frozenset[Any]
+    # An up counter with a down input moves its Acc both ways.
+    both_ways: bool
+
+
+def _acc_start_values(
+    program: Program,
+    graph: ProgramGraph,
+    acc_names: Iterable[str],
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]],
+    non_finite: frozenset[str],
+) -> dict[str, _AccStarts | None]:
+    """The values each Acc in *acc_names* can start from, or None when no list holds them.
+
+    The Acc's own instruction resets it to 0, and power-on gives its default.  Every other
+    write, such as a copy or a ``math()``, stores the values that write can store, and the
+    instruction times or counts on from there.  An Acc gets None when the outside writes it,
+    when a write stores values no list holds, or when two instructions time or count it.
+    """
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction, TimeEventDrumInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    owner_types = (
+        CountDownInstruction,
+        CountUpInstruction,
+        OffDelayInstruction,
+        OnDelayInstruction,
+        TimeDrumInstruction,
+        TimeEventDrumInstruction,
+    )
+    wanted = set(acc_names)
+    values: dict[str, set[Any]] = {}
+    owners: dict[str, int] = {}
+    both_ways: set[str] = set()
+    unknown: set[str] = set()
+    for name in wanted:
+        tag = graph.tags.get(name)
+        if tag is None or graph.written_from_outside(name):
+            unknown.add(name)
+        else:
+            values[name] = {0, tag.default}
+    for instr in walk_instructions(program):
+        for name, _itype in _all_write_targets(instr, graph.indirect_reach):
+            if name not in wanted or name in unknown:
+                continue
+            accumulator = getattr(instr, "accumulator", None)
+            if isinstance(instr, owner_types) and getattr(accumulator, "name", None) == name:
+                owners[name] = owners.get(name, 0) + 1
+                if isinstance(instr, CountUpInstruction) and instr.down_condition is not None:
+                    both_ways.add(name)
+                continue
+            stored = _domain_from_write_instruction(
+                instr,
+                name,
+                graph.tags[name],
+                graph,
+                all_exprs,
+                known_domains,
+                atom_index,
+                real_gap_points=False,
+                non_finite=non_finite,
+            )
+            if stored is None or len(values[name]) + len(stored) > 1000:
+                unknown.add(name)
+            else:
+                values[name].update(stored)
+    return {
+        name: None
+        if name in unknown or owners.get(name, 0) > 1
+        else _AccStarts(frozenset(values[name]), name in both_ways)
+        for name in wanted
+    }
+
+
+def _crossing_points(preset: int, starts: _AccStarts) -> set[int]:
+    """The values beside *preset* that an Acc counting both ways needs.
+
+    A count up from preset - 1 turns the Done on, and a count down from the preset turns
+    it off.  The value preset - 2 stands for every value below those, and preset + 1 for
+    every value above.
+    """
+    return {preset - 2, preset - 1, preset, preset + 1} if starts.both_ways else set()
+
+
+def _with_acc_starts(
+    domain: tuple[Any, ...],
+    tag: Tag,
+    preset: int | None,
+    starts: _AccStarts,
+) -> tuple[Any, ...]:
+    """*domain* with the values the Acc starts from and, counting both ways, its crossings."""
+    added = set(starts.values)
+    if preset is not None:
+        added |= _crossing_points(preset, starts)
+    values = set(domain) | held_candidates(tag, added)
+    if tag.min is not None:
+        values = {v for v in values if v >= tag.min}
+    if tag.max is not None:
+        values = {v for v in values if v <= tag.max}
+    return tuple(sorted(values))
+
+
 def _done_acc_concrete_domain(
     tag: Tag,
     done_name: str,
     done_acc_info: Any,
+    starts: _AccStarts,
 ) -> tuple[Any, ...] | None:
-    """Finite exact domain for a Done/Acc accumulator that must stay explicit."""
+    """Every value a Done/Acc accumulator takes from *starts* until it reaches its preset.
+
+    Past the preset, the preset stands for every value, since the Done stays on.
+    """
     preset = done_acc_info.presets.get(done_name)
     if preset is None:
         return None
     kind = done_acc_info.kinds.get(done_name)
+    lo, hi = min(starts.values), max(starts.values)
     if kind == _DONE_KIND_COUNT_DOWN:
-        # Counts down from 0 and is done at Acc <= preset (from the start for
-        # a preset >= 0).
-        if preset < -1000:
-            return None
-        values = range(min(preset, 0), 1)
+        # Counts down and is done at Acc <= preset (from the start for a preset >= 0).
+        lo = min(lo, preset)
     elif kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
-        if preset < 0 or preset > 1000:
+        if preset < 0:
             return None
-        values = range(0, preset + 1)
+        hi = max(hi, preset)
+        if starts.both_ways:
+            lo, hi = min(lo, preset - 2), max(hi, preset + 1)
     else:
         return None
-    result = set(values)
-    result.add(tag.default)
+    if hi - lo > 1000:
+        return None
+    result = set(range(lo, hi + 1))
     if tag.min is not None:
         result = {v for v in result if v >= tag.min}
     if tag.max is not None:
@@ -2595,15 +2775,16 @@ def _compressed_acc_boundary_domain(
     done_name: str,
     done_acc_info: Any,
     atom_index: dict[str, list[Atom]],
+    starts: _AccStarts,
 ) -> tuple[Any, ...] | None:
     """Boundary-compressed domain for a consumed accumulator.
 
     When all comparison atoms for the accumulator can be normalized and
     the accumulator has no forbidden data reads, the domain can be
     compressed to just the comparison boundary values plus the preset
-    boundary and default.  The program only distinguishes the accumulator
-    through these comparison partitions, so intermediate values are
-    indistinguishable.
+    boundary and the values the Acc starts from (*starts*).  The program
+    only distinguishes the accumulator through these comparison partitions,
+    so intermediate values are indistinguishable.
     """
     source_kinds = _collect_progress_source_kinds(program)
     kind = source_kinds.get(acc_name)
@@ -2623,7 +2804,7 @@ def _compressed_acc_boundary_domain(
             if isinstance(spec.threshold, (int, float)):
                 boundaries.add(int(spec.threshold))
 
-    boundaries.add(int(tag.default or 0))
+    boundaries.update(int(v) for v in starts.values)
     preset = done_acc_info.presets.get(done_name)
     if preset is not None:
         done_kind = done_acc_info.kinds.get(done_name)
@@ -2631,6 +2812,7 @@ def _compressed_acc_boundary_domain(
             boundaries.add(preset)  # done at Acc <= preset
         elif done_kind in {_DONE_KIND_COUNT_UP, _DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
             boundaries.add(preset)
+            boundaries |= _crossing_points(preset, starts)
 
     if tag.min is not None:
         boundaries = {v for v in boundaries if v >= tag.min}
@@ -3091,6 +3273,15 @@ def _classify_dimensions_from_graph(
     infeasible_tags: list[str] = []
     unmodeled_accs = frozenset(_unmodeled_accumulators(program))
     non_finite = non_finite_reals(program, graph, receive_dest_names)
+    acc_starts = _acc_start_values(
+        program,
+        graph,
+        consumed_accs & set(done_acc_info.pairs.values()),
+        all_exprs,
+        known_domains,
+        atom_idx,
+        non_finite,
+    )
 
     # Unwritten internal tags that never influence a comparison are constant
     # storage (Block slots, unused tags).  Everything else -- external inputs,
@@ -3197,82 +3388,41 @@ def _classify_dimensions_from_graph(
             continue
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
-            if atom_idx.get(tag_name):
-                domain = _extract_value_domain(
-                    tag_name,
-                    tag,
-                    all_exprs,
-                    graph.tags,
-                    literal_write_domains,
-                    known_domains,
-                    graph,
-                    atom_idx,
-                    real_gap_points=False,
-                )
-                if domain:
-                    stateful[tag_name] = _with_done_boundary(
-                        domain,
-                        tag,
-                        tag_name,
-                        done_acc_info,
-                        done_by_acc,
-                    )
-                elif tag_name in known_domains:
-                    stateful[tag_name] = _with_done_boundary(
-                        known_domains[tag_name],
-                        tag,
-                        tag_name,
-                        done_acc_info,
-                        done_by_acc,
-                    )
+            done_name = done_by_acc[tag_name]
+            starts = acc_starts[tag_name]
+            if starts is None:
+                # The outside or a write may store values no list holds, so no domain.
+                if unclassified is not None:
+                    unclassified.add(tag_name)
                 else:
-                    done_name = done_by_acc.get(tag_name)
-                    if done_name is not None:
-                        domain = _done_acc_concrete_domain(tag, done_name, done_acc_info)
-                    else:
-                        domain = None
-                    if domain is not None:
-                        stateful[tag_name] = _with_done_boundary(
-                            domain,
-                            tag,
-                            tag_name,
-                            done_acc_info,
-                            done_by_acc,
-                        )
-                    else:
-                        infeasible_tags.append(tag_name)
+                    infeasible_tags.append(tag_name)
+                continue
+            if atom_idx.get(tag_name):
+                domain = (
+                    _extract_value_domain(
+                        tag_name,
+                        tag,
+                        all_exprs,
+                        graph.tags,
+                        literal_write_domains,
+                        known_domains,
+                        graph,
+                        atom_idx,
+                        real_gap_points=False,
+                    )
+                    or known_domains.get(tag_name)
+                    or _done_acc_concrete_domain(tag, done_name, done_acc_info, starts)
+                )
+                if domain is not None:
+                    domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
             elif tag_name in known_domains:
-                stateful[tag_name] = _with_done_boundary(
-                    known_domains[tag_name],
-                    tag,
-                    tag_name,
-                    done_acc_info,
-                    done_by_acc,
+                domain = _with_done_boundary(
+                    known_domains[tag_name], tag, tag_name, done_acc_info, done_by_acc
                 )
             else:
-                done_name = done_by_acc.get(tag_name)
-                if done_name is not None:
-                    domain = _done_acc_concrete_domain(tag, done_name, done_acc_info)
-                else:
-                    domain = None
-                if domain is not None and len(domain) > _BOUNDARY_DOMAIN_CAP:
-                    compressed = (
-                        _compressed_acc_boundary_domain(
-                            program,
-                            graph,
-                            tag,
-                            tag_name,
-                            done_name,
-                            done_acc_info,
-                            atom_idx,
-                        )
-                        if done_name is not None
-                        else None
-                    )
-                    if compressed is not None:
-                        domain = compressed
-                if domain is None and done_name is not None:
-                    domain = _compressed_acc_boundary_domain(
+                domain = _done_acc_concrete_domain(tag, done_name, done_acc_info, starts)
+                if domain is None or len(domain) > _BOUNDARY_DOMAIN_CAP:
+                    compressed = _compressed_acc_boundary_domain(
                         program,
                         graph,
                         tag,
@@ -3280,11 +3430,16 @@ def _classify_dimensions_from_graph(
                         done_name,
                         done_acc_info,
                         atom_idx,
+                        starts,
                     )
-                if domain is not None:
-                    stateful[tag_name] = domain
-                else:
-                    infeasible_tags.append(tag_name)
+                    if compressed is not None:
+                        domain = compressed
+            if domain is None:
+                infeasible_tags.append(tag_name)
+                continue
+            stateful[tag_name] = _with_acc_starts(
+                domain, tag, done_acc_info.presets.get(done_name), starts
+            )
             continue
 
         if tag_name in unmodeled_accs:
@@ -3361,6 +3516,9 @@ def _classify_dimensions_from_graph(
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
         stateful[tag_name] = domain
+    _close_tag_comparisons(
+        {"stateful": stateful, "nondeterministic": nondeterministic}, graph.tags, atom_idx
+    )
     if profile:
         profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
