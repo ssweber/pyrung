@@ -28,7 +28,11 @@ from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag, tag_written_
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
 from .affine import extract_affine_expression
-from .write_sites import instruction_fault_writes, instruction_write_targets
+from .write_sites import (
+    instruction_fault_writes,
+    instruction_partial_write_targets,
+    instruction_write_targets,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -111,10 +115,22 @@ class RungNode:
     # be a guard read too.
     own_condition_reads: frozenset[str]
     guard_reads: frozenset[str] = frozenset()
+    # The writes the node may leave alone when it runs, from :func:`_instruction_may_writes`.
+    may_writes: frozenset[str] = frozenset()
 
     @property
     def all_writes(self) -> frozenset[str]:
         return self.writes | self.implicit_writes
+
+    @property
+    def sure_writes(self) -> frozenset[str]:
+        """The tags the node writes every time it runs.
+
+        An analysis that asks whether a rung always writes a tag reads this.  It
+        leaves out the fault flags, which most instructions only ever set, and the
+        writes in ``may_writes``.
+        """
+        return self.writes - self.may_writes
 
 
 @dataclass(frozen=True)
@@ -717,6 +733,8 @@ class _AccessEvent:
     condition_reads: frozenset[str] = frozenset()
     data_reads: frozenset[str] = frozenset()
     writes: frozenset[str] = frozenset()
+    # The writes the instruction may not make, so the value before it can last past it.
+    may_writes: frozenset[str] = frozenset()
 
 
 def _register_tag(tag: Tag, tag_refs: dict[str, Tag], found: set[str]) -> None:
@@ -1201,6 +1219,8 @@ def _extract_rung_node(
     writes: set[str] = set()
     implicit_writes: set[str] = set()
     ote_writes: set[str] = set()
+    may_writes: set[str] = set()
+    sure_writes: set[str] = set()
     calls: list[str] = []
 
     for condition in rung._conditions:
@@ -1227,6 +1247,9 @@ def _extract_rung_node(
         writes.update(instruction_writes)
         implicit_writes.update(instr_implicit_writes)
         data_reads.update(target_reads)
+        instr_may = _instruction_may_writes(instr, tag_refs)
+        may_writes.update(instr_may)
+        sure_writes.update(instruction_writes - instr_may)
         # An out() in a forloop body is not a level follower of this node's
         # guard: a false For rung skips the body (the coil holds), a count of 0
         # runs no iteration, and in a body rung it follows that rung's contacts
@@ -1272,6 +1295,7 @@ def _extract_rung_node(
         source_file=getattr(rung, "source_file", None),
         source_line=getattr(rung, "source_line", None),
         own_condition_reads=frozenset(condition_reads),
+        may_writes=frozenset(may_writes - sure_writes),
     )
 
 
@@ -1303,7 +1327,31 @@ def _extract_instruction_event(
         condition_reads=frozenset(condition_reads),
         data_reads=frozenset(data_reads),
         writes=frozenset(writes),
+        may_writes=frozenset(_instruction_may_writes(instr, tag_refs) & writes),
     )
+
+
+def _instruction_may_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
+    """The tags *instr* may leave alone when it runs, though it can write them.
+
+    Two kinds of write reach a tag only for some values.  A pointer, or a range
+    with a pointer at an end, writes one of the elements it can reach.  A
+    ``to_text()`` copy of a tag writes as many characters as its value has
+    (``instruction_partial_write_targets``).  A tag that another target of
+    *instr* always writes is not in the set.
+    """
+    partial = instruction_partial_write_targets(instr)
+    sure: set[str] = set()
+    may: set[str] = set()
+    for target in instruction_write_targets(instr):
+        names = _extract_write_targets(target, tag_refs)[0]
+        leaf = target.value if isinstance(target, ImmediateRef) else target
+        dynamic = isinstance(leaf, IndirectRef | IndirectExprRef | IndirectBlockRange)
+        if any(target is p for p in partial) or (dynamic and len(names) > 1):
+            may |= names
+        else:
+            sure |= names
+    return may - sure
 
 
 def _extract_instruction_writes(
@@ -1491,6 +1539,10 @@ def _build_def_use_chains(
         for tag_name in event.condition_reads:
             versions_by_tag[tag_name][-1]["read_by"].add(event.node_index)
         for tag_name in event.data_reads:
+            versions_by_tag[tag_name][-1]["read_by"].add(event.node_index)
+        # A write the instruction may not make carries the version before it, so
+        # that version counts as read there.
+        for tag_name in event.may_writes:
             versions_by_tag[tag_name][-1]["read_by"].add(event.node_index)
         for tag_name in event.writes:
             versions_by_tag[tag_name].append({"defined_at": event.node_index, "read_by": set()})

@@ -465,7 +465,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DS": range(3923, 3931),
         "T": range(205, 211),
     },
-    "real_text": {"DF": range(21, 31), "TXT": range(101, 301)},
+    "real_text": {"DF": (range(21, 31), range(33, 35)), "TXT": (range(101, 301), range(501, 601))},
     "deb_zero": {"C": range(221, 223), "T": range(111, 115)},
     "coil_timing": {"C": range(241, 247), "T": range(115, 125)},
     "td_write": {"C": range(261, 264), "T": range(150, 159)},

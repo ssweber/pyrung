@@ -50,7 +50,7 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - Slice elision drops a tag that a time drum reads as a step preset. `test_facts_conformance.py`, `[drum_ds/ds_preset_ends-scan-local-DS4016]`.
   - A functional dependency is claimed before the rung first writes the tag. `test_facts_idioms.py`, `[funcdep_follows_its_source-functional dep-PosOffset]`.
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
-  - `write_sites` lists only the first character that a `to_text()` copy of a tag writes. How many follow depends on the value, up to 48 for a `Real` without `exponential`. So the program graph and the facts miss the others. `test_facts_conformance.py`, `[text/to_text_fixed-declared writes-CopyInstruction]` and the 19 other cases in `_TO_TEXT_OF_A_TAG`. A fix needs a static bound for each source type, and a bound that covers a whole `Real` may clash with the lints.
+  - A `to_text()` copy of an expression into a tag in no block declares only that tag. The runtime counts on by name (`Msg1`, `Msg2`, ...), and an expression's text has no bound, so the analyses miss the rest.
   - A copy of an input takes only the values the ladder writes or the input's split points, not values the outside sets. `test_facts_idioms.py`, `[hmi_value_copied_after_ladder_default-stateful domain-WorkingSetpoint]` and `[compared_input_copied_and_compared-stateful domain-HeldLevel]`. The fixpoint adds an input's split points after it computes the copy, so the fix is not a one-liner.
 - **System tags pyrung never writes.** On a CLICK, `fault.plc_error` (SC19) and `fault.code` (SD1) change, and the firmware version (SD5-SD8) is not 0. pyrung leaves them at 0, so the facts hold them at 0. A run on pyrung refutes nothing. Decide whether pyrung sets them, and then add them to `RUNTIME_VALUES`.
 - **Left over from the search deletion.**
@@ -181,8 +181,8 @@ The list to sort:
 - Drop the holds a replay shows unneeded.
 - A reconnect fallback. The dropped bob/how-gaps tried one; the notes are `specs/reconnect-findings.md`.
 - The drum profile reads a tag preset live, where the drum latches it at step entry.
-- Static proofs R4-B2 (a text Copy spilling past its first slot from a tag source, write_sites.py:41), N1 (a block
-  write onto a plain tag named like the slot) and N3 (an AttributeError at build).
+- Static proofs N1 (a block write onto a plain tag named like the slot) and N3 (an AttributeError at
+  build).
 - A plain watchdog and a latched valve say STOPPED.
 - Goals on system tags say STOPPED, for example `how(sys.always_on)`, `how(sys.scan_counter > 5)`, and
   `rtc.new_second == 0` before any write. `target_reached` reads a missing tag as False, while stepping reads its
