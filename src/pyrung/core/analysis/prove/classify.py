@@ -102,6 +102,7 @@ from .absorb import (
     _ThresholdBlocker,
 )
 from .expr import _build_atom_index, _collect_atoms_for_tag
+from .non_finite import non_finite_reals
 from .results import PENDING, Intractable
 
 if TYPE_CHECKING:
@@ -851,8 +852,14 @@ def _domain_for_source_tag(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
+    non_finite: frozenset[str] = frozenset(),
 ) -> tuple[Any, ...] | None:
-    """Resolve the best current finite domain for a source tag."""
+    """Resolve the best current finite domain for a source tag.
+
+    A Real in *non_finite* may hold NaN or Inf, which its split points do not stand for.
+    """
+    if tag_name in non_finite:
+        return None
     if tag_name in known_domains:
         return known_domains[tag_name]
 
@@ -890,6 +897,7 @@ def _domain_from_indirect_source(
     target: Tag,
     graph: ProgramGraph,
     known_domains: dict[str, tuple[Any, ...]],
+    non_finite: frozenset[str] = frozenset(),
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from an indirect-ref copy/fill source.
 
@@ -936,6 +944,8 @@ def _domain_from_indirect_source(
             values.add(target.default)
             continue
         element_name = block._effective_slot_name(raw_addr)
+        if element_name in non_finite:
+            return None
         if element_name in known_domains:
             values.update(known_domains[element_name])
         elif element_name in graph.writers_of:
@@ -959,6 +969,7 @@ def _domain_from_copy_like_value(
     *,
     real_gap_points: bool = True,
     calc_mode: str | None = None,
+    non_finite: frozenset[str] = frozenset(),
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a copy/fill-style source operand.
 
@@ -969,6 +980,13 @@ def _domain_from_copy_like_value(
 
     source_tag_name = _tag_name_from_value(raw_value)
     if source_tag_name is not None:
+        # An input Real keeps its input domain, so a store of it into another type takes
+        # that domain plus what a NaN or an Inf stores (0, or the end of the type).
+        stores_input = (
+            source_tag_name in non_finite
+            and source_tag_name not in graph.writers_of
+            and target.type is not TagType.REAL
+        )
         domain = _domain_for_source_tag(
             source_tag_name,
             graph,
@@ -976,10 +994,17 @@ def _domain_from_copy_like_value(
             known_domains,
             atom_index,
             real_gap_points=real_gap_points,
+            non_finite=frozenset() if stores_input else non_finite,
         )
         if domain is None:
             return None
-        return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
+        if not stores_input:
+            return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
+        domain = (*domain, math.nan, math.inf, -math.inf)
+        stored = _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
+        if stored is None or any(isinstance(v, float) and not math.isfinite(v) for v in stored):
+            return None
+        return stored
 
     literal = _literal_value_from_value(raw_value)
     if literal is not None:
@@ -990,7 +1015,7 @@ def _domain_from_copy_like_value(
             return None
         return (stored,)
 
-    domain = _domain_from_indirect_source(raw_value, target, graph, known_domains)
+    domain = _domain_from_indirect_source(raw_value, target, graph, known_domains, non_finite)
     if domain is None:
         return None
     return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
@@ -1110,6 +1135,7 @@ def _domain_from_calc_expression(
     *,
     real_gap_points: bool = True,
     mode: str = "decimal",
+    non_finite: frozenset[str] = frozenset(),
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a supported calc expression shape."""
     from pyrung.core.expression import BinaryExpr
@@ -1123,6 +1149,7 @@ def _domain_from_calc_expression(
         atom_index,
         real_gap_points=real_gap_points,
         calc_mode=mode,
+        non_finite=non_finite,
     )
     if direct is not None:
         return direct
@@ -1300,11 +1327,12 @@ def _domain_from_write_instruction(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
+    non_finite: frozenset[str] = frozenset(),
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from one supported writer instruction.
 
     *real_gap_points* is :func:`_extract_value_domain`'s, for a source tag's
-    domain.
+    domain.  A source in *non_finite* has none (:func:`_domain_for_source_tag`).
     """
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import (
@@ -1324,6 +1352,7 @@ def _domain_from_write_instruction(
             known_domains,
             atom_index,
             real_gap_points=real_gap_points,
+            non_finite=non_finite,
         )
 
     if isinstance(instr, FillInstruction):
@@ -1335,6 +1364,7 @@ def _domain_from_write_instruction(
             known_domains,
             atom_index,
             real_gap_points=real_gap_points,
+            non_finite=non_finite,
         )
 
     if isinstance(instr, BlockCopyInstruction):
@@ -1358,6 +1388,7 @@ def _domain_from_write_instruction(
             atom_index,
             real_gap_points=real_gap_points,
             mode=instr.mode,
+            non_finite=non_finite,
         )
 
     from pyrung.core.instruction.drums import (
@@ -1432,10 +1463,18 @@ def _collect_structural_domain_info(
     timings: list[tuple[str, float]] = []
     profile_start = profile_last = time.perf_counter() if profile else 0.0
 
-    known_domains = dict(
-        literal_write_domains
-        or _collect_literal_write_domains(program, graph.tags, graph.indirect_reach)
-    )
+    from .passes import _collect_receive_dest_names
+
+    # A Real that may hold NaN or Inf gets no domain, so its literal writes are no seed.
+    non_finite = non_finite_reals(program, graph, frozenset(_collect_receive_dest_names(program)))
+    known_domains = {
+        name: domain
+        for name, domain in (
+            literal_write_domains
+            or _collect_literal_write_domains(program, graph.tags, graph.indirect_reach)
+        ).items()
+        if name not in non_finite
+    }
     if profile:
         profile_last = _classify_profile_mark(timings, "literal_domain_seed", profile_last)
 
@@ -1492,7 +1531,7 @@ def _collect_structural_domain_info(
     self_feed_boundary_targets: set[str] = set()
     # Each target that adds to itself (`math(T + 1, T)`) is seeded from the targets
     # seeded before it.  So they go in sorted order, or the facts change with the hash seed.
-    for target_name in sorted(monotone_self_feed_targets):
+    for target_name in sorted(monotone_self_feed_targets - non_finite):
         target = graph.tags.get(target_name)
         if target is None:
             continue
@@ -1536,7 +1575,7 @@ def _collect_structural_domain_info(
             if profile:
                 fixpoint_target_visits += 1
             target = graph.tags.get(target_name)
-            if target is None or not writers:
+            if target is None or not writers or target_name in non_finite:
                 continue
 
             candidate_values: set[Any] = set()
@@ -1558,6 +1597,7 @@ def _collect_structural_domain_info(
                     known_domains,
                     atom_idx,
                     real_gap_points=real_gap_points,
+                    non_finite=non_finite,
                 )
                 if domain is None:
                     candidate_values = set()
@@ -1584,7 +1624,7 @@ def _collect_structural_domain_info(
 
     if discovered_domains is not None:
         for name, domain in discovered_domains.items():
-            if name not in known_domains:
+            if name not in known_domains and name not in non_finite:
                 known_domains[name] = domain
     if profile:
         profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
@@ -3040,6 +3080,7 @@ def _classify_dimensions_from_graph(
     combinational: set[str] = set()
     infeasible_tags: list[str] = []
     unmodeled_accs = frozenset(_unmodeled_accumulators(program))
+    non_finite = non_finite_reals(program, graph, receive_dest_names)
 
     # Unwritten internal tags that never influence a comparison are constant
     # storage (Block slots, unused tags).  Everything else -- external inputs,
@@ -3252,6 +3293,14 @@ def _classify_dimensions_from_graph(
             and not _reads_scan_entry_value(tag_name, graph)
         ):
             combinational.add(tag_name)
+            continue
+
+        if tag_name in non_finite:
+            # It may hold NaN, which compares like no split point, so it gets no domain.
+            if unclassified is not None:
+                unclassified.add(tag_name)
+            else:
+                infeasible_tags.append(tag_name)
             continue
 
         domain = _extract_value_domain(

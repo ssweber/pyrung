@@ -17,6 +17,13 @@ PILOT runs the PLC to check every plan it returns. So a domain that is too wide 
 - A tag the program writes holds its power-on value and what its writers store. A copy's or a `math()`'s store conversion applies (`_stored_domain`).
 - An `external` tag or a field feedback (`link=`) that the program writes also holds a free input's values, because the outside can write it any value (`_extract_value_domain`).
 - A system tag the runtime writes, such as a clock or an RTC field, holds the values `RUNTIME_VALUES` lists (`core/system_points.py`). The scan counter and the other tags with too many values to list get no domain. So a copy of one of them gets none either.
+- A `Real` the program writes gets no domain when it may hold NaN or Inf (`non_finite.py`). A NaN is not equal to itself, so no list of values can stand for it. A `Real` may hold one when:
+  - a `math()` can pass the Real range, divides by a `Real`, or raises to a power other than a whole number from 0 to 64
+  - a pack fills it
+  - the outside writes it too
+  - it copies a `Real` that may hold one, such as an input or a receive payload
+- An input `Real` with no ladder writer and a `receive()` payload keep an input domain, which has no NaN in it. A copy of an input `Real` with no ladder writer into another type takes that domain plus what a NaN or an Inf stores. So does a `math()` of the bare tag. A copy stores 0 for a NaN and clamps an Inf (a Word stores 65535 or 32768). A `math()` stores 0 for all three.
+- A pointer write into a block past the element cap lists no targets. `non_finite.py` counts every `Real` element of that block as one that may hold NaN or Inf. The classification still sees such an element as unwritten, so it keeps an input or a constant domain today. This is a known gap (roadmap 1b).
 - A tag with no ladder writer holds its default only when `tag_written_from_outside` (`core/tag.py`) is False. That covers `external`, physical inputs, `link=` feedbacks and the system tags the runtime writes. The facts, the pilot and the lints ask it before they read "no writer" as "constant".
 - The validators' produced domains (`collect_produced_value_domains`) treat a tag with no writer as an input when it is `external`, a physical input or a `link=` feedback.
   - An input holds its declared `choices=` or integer `min=`/`max=`. A `Real` input gets no domain, because it can hold any value between its bounds.
@@ -49,6 +56,7 @@ Each module has a docstring with implementation details. This map is for navigat
 - **`results.py`** — `Intractable` (with `tags` and `hints`) and `PENDING`, the third value of an absorbed Done.
 - **`passes.py`** — The pass pipeline (`_PRIOR_PASSES`) that fills a `_PassContext` and returns `_PriorFacts`.
 - **`classify.py`** — Dimension classification and domain inference. See its docstring for the 7-level domain inference stack. It also holds `collect_produced_value_domains` for the validators.
+- **`non_finite.py`** — The `Real` tags that may hold NaN or Inf, found from the bounds of each writer's values.
 - **`absorb.py`** — Done/Acc pairing, the data-read exclusivity check, and the absorptions of the world key.
 - **`expr.py`** — Expression helpers for partial evaluation, tag references and atom indexing. PILOT evaluates conditions with `_eval_expr_from_state`.
 - **`elision/`** — Slice-based world-key elision.
@@ -90,6 +98,7 @@ A `For` loop whose count can pass `PROVE_FOR_ITERATION_CAP` ends the pipeline wi
 - `test_prove_matrix.py` — classification over a matrix of instruction shapes
 - `test_prove_passes.py` — pass pipeline unit tests
 - `test_prove_edge_demotion.py` — edge-source tags leaving the key while their contacts' memory stays
+- `test_prove_non_finite.py` — `Real` tags that may hold NaN or Inf
 - `test_prove_system_points.py` — system tags in the facts
 - `test_prove_slice_elision.py` — slice elision
 - `test_packml_diagnosis.py` — PackML-specific regression tests

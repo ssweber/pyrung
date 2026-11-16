@@ -44,7 +44,9 @@ ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `ca
 tests/facts checks the facts against real runs, over the idiom corpus and the conformance programs.
 
 - **Facts the runs refute.** The check in tests/facts holds each one as a strict xfail, `test_known_failure_is_fixed[...]` in the file named.
-  - A Real domain has no value that stands for NaN or Inf. `test_facts_conformance.py`, `[word_floor/below_int_and_nan-stateful domain-DF32]` and `[modbus_raw/raw_values-stateful domain-DF114]` (DF115 too).
+  - Two kinds of `Real` keep an input domain with no NaN or Inf in it, so how() never sets one there. No run refutes it, because the runs never write one. A `Real` the program writes gets no domain when it may hold NaN or Inf (`prove/non_finite.py`).
+    - an input `Real` the outside writes and no rung writes
+    - a `receive()` payload
   - A down counter's Acc domain misses the value a copy stages it at. `test_facts_conformance.py`, `[counters/count_down_done_at_preset-stateful domain-CTD101]`.
   - Two timer Accs the rungs compare with each other have no domain pair that is equal, above 0 and below 20. `test_facts_conformance.py`, `[reset_pins/rton_reset_held-stateful domain-TD302]` (TD305 too).
   - Slice elision drops a tag that a time drum reads as a step preset. `test_facts_conformance.py`, `[drum_ds/ds_preset_ends-scan-local-DS4016]`.
@@ -52,6 +54,7 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
   - A `to_text()` copy of an expression into a tag in no block declares only that tag. The runtime counts on by name (`Msg1`, `Msg2`, ...), and an expression's text has no bound, so the analyses miss the rest.
   - A copy of an input takes only the values the ladder writes or the input's split points, not values the outside sets. `test_facts_idioms.py`, `[hmi_value_copied_after_ladder_default-stateful domain-WorkingSetpoint]` and `[compared_input_copied_and_compared-stateful domain-HeldLevel]`. The fixpoint adds an input's split points after it computes the copy, so the fix is not a one-liner.
+- **Pointer writes past the element cap.** The classification's "unwritten" test reads `writers_of`, which leaves out a pointer write into a block past the element cap. So an element such a write reaches gets an input or a constant domain, of any type. In the real-nan review probes, `BigR5` gets (0.0, 1.0, 2.0) and a run stores inf. `Big5Shown` gets (-32768, 0, 50, 200, 32767) and a run stores 100. [nothing]
 - **System tags pyrung never writes.** On a CLICK, `fault.plc_error` (SC19) and `fault.code` (SD1) change, and the firmware version (SD5-SD8) is not 0. pyrung leaves them at 0, so the facts hold them at 0. A run on pyrung refutes nothing. Decide whether pyrung sets them, and then add them to `RUNTIME_VALUES`.
 - **Left over from the search deletion.**
   - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
@@ -92,6 +95,11 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   - Re-paste part control from the current build, which clears the false "Changed" results.
   - Unread: whether a TD write keeps any part of a ms left over, and a ladder write to the next phase's TD on the scan
     a phase ends.
+  - Read the stores that pyrung models but no CLICK has recorded. These are a Copy of NaN or +/-Inf into an Int or a
+    Dint, and a Math of +/-Inf into an Int or a Dint. Also read what a CLICK stores for a pack_text of text just past
+    the Real range, such as "3.40282352E38" (pyrung stores +Inf).
+- **`math()` of a Real into a Word.** pyrung runs it, but a CLICK refuses it. The CLICK check reports
+  `CLK_MATH_MODE_MIXED`. Decide whether pyrung runs it or refuses it. [nothing]
 - **CLICK v4 send/receive forms** (laddercodec's asks, ruled for after 0.16.0). [CLICK]
   - `com_port="wlan"` on ModbusTcpTarget (a missing com_port means Ethernet), and `"cpu3"` for RTU.
   - `device_id` as an int or a DS address. CLICK refuses DD, DH and C there. What an out-of-range ID does at request

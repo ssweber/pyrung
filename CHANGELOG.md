@@ -35,6 +35,7 @@
 - `program.check()` no longer calls a comparison always false when a copy clamps the value it stores, or when a `Real` input has whole-number `min`/`max`.
 - `program.check()`, `how()` and `program.dataview()` now see every TXT a `to_text()` copy can write (they saw only the first).
 - `program.check()` no longer reports a dead write for a `to_text()` copy whose first TXT a later copy overwrites.
+- `how()` no longer assumes that a `Real` holds a number when it may hold NaN or Inf, such as after a `math()` past the Real range or a `pack_words()` into it.
 - `how()` and `program.check()` no longer assume that a copy or fill through a pointer writes every element the pointer can reach.
 - `program.check()` no longer reports these findings on a field feedback (a tag with `link=`):
   - It has no writer.
