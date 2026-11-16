@@ -734,13 +734,17 @@ def _exact_value_sets(
     A constant (readonly, or *constant_storage*: unwritten internal tags the
     search holds at their default) holds its default, a Bool both values, and a free
     input (external, physical, a receive destination or unwritten) what its
-    ``choices=`` or integer ``min=``/``max=`` allow.  A tag only the program
-    writes (an ``external`` one too: the search changes a written tag through
-    its writers only) holds its power-on value and what its writers store: literals, and
+    ``choices=`` or integer ``min=``/``max=`` allow.  A tag the program writes
+    holds its power-on value and what its writers store.  That is literals, and
     the values of exact tags copied in (``copy``/``fill``/``blockcopy``, with
     the copy's store conversion).  A tag with any other writer (``calc``, a
     timer, a function, ...) is not exact.  Sets are capped at
     ``_TAG_COMPARED_DOMAIN_CAP`` values.
+
+    Only the search uses these sets.  It changes an ``external`` tag the program
+    writes through the writers alone, so the set leaves out what the outside can
+    write.  The outside can write such a tag any value, so its value domain
+    (``_extract_value_domain``) holds a free input's values as well.
     """
     from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
     from pyrung.core.instruction.data_transfer import (
