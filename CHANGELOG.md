@@ -38,6 +38,9 @@
   - A preset stays 0.
   - A comparison is always false.
   - A latch is never reset.
+- `program.check()` no longer reports these findings on a system tag that the PLC sets, such as `rtc.hour` or `sys.scan_counter`:
+  - It has no writer.
+  - A preset stays 0.
 
 ## v0.16.0 (2026-11-14)
 

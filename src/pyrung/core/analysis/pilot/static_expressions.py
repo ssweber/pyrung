@@ -298,7 +298,9 @@ def single_calc_source(idx_tag: str, pdg: Any, program: Any) -> tuple[Any, str] 
             names = _expr_tag_names(instr.expression)
             if not names:
                 return None
-            mutable = {name for name in names if pdg.writers_of.get(name)} - {idx_tag}
+            mutable = {
+                name for name in names if pdg.writers_of.get(name) or pdg.written_from_outside(name)
+            } - {idx_tag}
             if len(mutable) != 1:
                 return None
             return instr.expression, next(iter(mutable))

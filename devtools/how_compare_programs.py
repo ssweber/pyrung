@@ -29,6 +29,8 @@ Groups (the brief for this tool, written after two branches regressed how() unse
                shows as the same answer with no last_resort on the row
     forloop    a For calling a subroutine over Int and Dint counts (declared 0..5, choices, a
                body-rung contact the body writes), and a producer in a subroutine the For calls
+    system     a copy of a system tag the runtime writes (the scan counter, an RTC field),
+               compared with a value the runtime gives it
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
 and never reuse it, because two runs are compared by name.
@@ -40,6 +42,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1661,4 +1664,41 @@ _add(
     "forloop",
     "forloop/producer in a sub under int 1..5",
     _forloop_producer_envelope(lambda: Int("Dc", external=True, min=1, max=5, default=1)),
+)
+
+
+# --------------------------------------------------------------------------- system
+
+
+def _copied_system_tag(source, at_least, rtc=None):
+    """Go latches Hit once a copy of *source* is at least *at_least*.
+
+    The runtime writes *source*, so the copy holds values no rung writes.
+    """
+
+    def build():
+        go = Bool("Go", external=True)
+        copied, hit = Int("Copied"), Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(source, copied)
+            with Rung(go, copied >= at_least):
+                latch(hit)
+        plc = PLC(prog, dt=0.01)
+        if rtc is not None:
+            plc.set_rtc(rtc)
+        return dict(plc=plc, targets=(hit,), goal=_tag_goal(hit))
+
+    return build
+
+
+_add(
+    "system",
+    "system/copy of the scan counter reaches 50",
+    _copied_system_tag(system.sys.scan_counter, 50),
+)
+_add(
+    "system",
+    "system/copy of the rtc hour reaches 13",
+    _copied_system_tag(system.rtc.hour, 13, datetime(2026, 6, 15, 13, 30, 20)),
 )

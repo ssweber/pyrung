@@ -16,14 +16,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import fields
 from typing import Any
 
+from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.conformance._case import Case, Group
 from pyrung.conformance._ladder import case_label
 from pyrung.core import PLC
+from pyrung.core.analysis.prove import passes as prove_passes
 from pyrung.core.tag import Tag, note_metadata_edit
 from tests.conformance import loop_corpus, suite
-from tests.facts.check import RandomInputs, Report, Step, check_program
+from tests.facts.check import DT, RandomInputs, Report, Step, check_program
 
 #: Scans a case may take to report ``Ready``: ``run()``'s 10 s.
 READY_SCANS = 1000
@@ -83,6 +86,33 @@ def check_case(group: Group, case: Case) -> Report:
 
     with _external(cmd):
         return check_program(subject.label, lambda: subject.program, seeds=(1,), driver=drive)
+
+
+def prior_text(label: str) -> str:
+    """The facts how() reads for the case *label*, one per line, every set sorted."""
+    (subject,) = [
+        loop_corpus.case_alone(group, case)
+        for group, case in cases()
+        if case_label(group.name, case) == label
+    ]
+    with _external(subject.entries[0].fields.Cmd):
+        compiled = compile_kernel(subject.program, blockless=True, proof_metadata=True)
+        ctx = prove_passes._PassContext(program=subject.program, dt=DT, compiled=compiled)
+        prior = prove_passes._run_prior_pipeline(ctx)
+    lines = [f"{f.name} {_sorted(getattr(prior, f.name))!r}" for f in fields(prior)]
+    unclassified = set(ctx._pending_infeasible_tags) | ctx._unclassified_written
+    return "\n".join([*lines, f"unclassified {sorted(unclassified)!r}"])
+
+
+def _sorted(value: Any) -> Any:
+    """*value* with each dict and set as a list sorted by repr, so no hash order shows."""
+    if isinstance(value, dict):
+        return sorted(((_sorted(k), _sorted(v)) for k, v in value.items()), key=repr)
+    if isinstance(value, (set, frozenset)):
+        return sorted((_sorted(item) for item in value), key=repr)
+    if isinstance(value, (list, tuple)):
+        return [_sorted(item) for item in value]
+    return value
 
 
 def _only(patch: Mapping[str, Any], name: str) -> dict[str, Any]:

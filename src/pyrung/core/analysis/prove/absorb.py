@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import Atom, Expr
-from pyrung.core.tag import TagType
+from pyrung.core.tag import TagType, tag_written_from_outside
 
 from .expr import _build_atom_index, _collect_atoms_for_tag
 from .results import PENDING
@@ -549,7 +549,7 @@ def _find_redundant_acc_absorptions(
                 continue
 
             preset_tag = graph.tags.get(preset_tag_name)
-            if preset_tag is not None and preset_tag.external:
+            if preset_tag is not None and tag_written_from_outside(preset_tag):
                 acc_tag = graph.tags.get(acc_name)
                 preset_default = preset_tag.default if preset_tag is not None else 0
                 acc_default = acc_tag.default if acc_tag is not None else 0
@@ -598,11 +598,11 @@ def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
     if not isinstance(value, str):
         return False
     tag = graph.tags.get(value)
-    if tag is None:
+    if tag is None or tag_written_from_outside(tag):
         return False
-    if value not in graph.writers_of and not tag.external:
+    if value not in graph.writers_of:
         return True
-    if tag.external or tag.public:
+    if tag.public:
         return False
     if tag.readonly:
         return True
@@ -861,14 +861,14 @@ def _find_comparison_absorptions(
             continue
         if tag_name in preset_source_tags:
             continue
-        # A receive() dest is written, so it isn't caught by tag.external, but
+        # A receive() dest is written, so it isn't caught by tag_written_from_outside, but
         # it is classified nondeterministic (its value is externally sourced).
         # Absorbing its concrete value into a comparison vector would hide
         # that, so it is skipped, matching classify.py's receive-dest
         # carve-out at the nondeterministic gate.
         if tag_name in receive_dest_names:
             continue
-        if tag.readonly or tag.external or tag.public:
+        if tag.readonly or tag_written_from_outside(tag) or tag.public:
             continue
         if tag_name not in graph.writers_of:
             continue
@@ -1027,7 +1027,7 @@ def _stable_int_tag_value(
     from pyrung.core.instruction.data_transfer import CopyInstruction
 
     tag = graph.tags.get(tag_name)
-    if tag is None or tag.external or tag.public:
+    if tag is None or tag_written_from_outside(tag) or tag.public:
         return None
 
     writes = by_target.get(tag_name, [])
@@ -1258,7 +1258,7 @@ def _collect_int_progress_source_kinds(
     for tag_name, tag in graph.tags.items():
         if tag.type not in {TagType.INT, TagType.DINT}:
             continue
-        if tag.external or tag.public or tag.readonly:
+        if tag_written_from_outside(tag) or tag.public or tag.readonly:
             continue
         if tag_name not in atom_index:
             continue
@@ -1433,7 +1433,7 @@ def _collect_real_progress_source_kinds(
     for tag_name, tag in graph.tags.items():
         if tag.type is not TagType.REAL:
             continue
-        if tag.external or tag.public or tag.readonly:
+        if tag_written_from_outside(tag) or tag.public or tag.readonly:
             continue
         if tag_name not in atom_index:
             continue
@@ -1514,7 +1514,7 @@ def _find_threshold_absorptions(
 
     for acc_name, kind in sorted(source_kinds.items()):
         tag = graph.tags.get(acc_name)
-        if tag is not None and (tag.external or tag.public):
+        if tag is not None and (tag_written_from_outside(tag) or tag.public):
             continue
         atoms = _collect_atoms_for_tag(atom_index, acc_name)
         if not atoms:
@@ -1687,7 +1687,7 @@ def _find_threshold_absorptions(
             if tname is None:
                 continue
             ttag = graph.tags.get(tname)
-            if ttag is None or not ttag.external:
+            if ttag is None or not tag_written_from_outside(ttag):
                 continue
             tdefault = ttag.default if ttag.default is not None else 0
             if not isinstance(tdefault, (int, float)):

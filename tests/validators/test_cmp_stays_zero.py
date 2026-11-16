@@ -94,6 +94,19 @@ class TestOperandNoWriter:
         linked = Int("LinkedLevel", link="Result")
         assert not _codes(_comparison_program(linked), CMP_OPERAND_NO_WRITER)
 
+    def test_system_tags_the_runtime_writes_are_declared_sources(self) -> None:
+        # The runtime moves these, and the ladder can't write them.
+        result = Bool("Result", external=True)
+        with Program(strict=False) as program:
+            with Rung(system.rtc.hour >= 8):
+                copy(1, result)
+            with Rung(system.rtc.minute < system.rtc.second):
+                copy(1, result)
+            with Rung(system.sys.scan_counter == 5):
+                copy(1, result)
+
+        assert not _codes(program, CMP_OPERAND_NO_WRITER)
+
     def test_unlinked_physical_operand_is_reported(self) -> None:
         # A physical= without link= is only metadata, so nothing outside writes the tag.
         level = Int("SensedLevel", physical=Physical("SensedLevel", on_delay="100ms"))
@@ -183,6 +196,14 @@ class TestPresetStaysZero:
         with Program(strict=False) as program:
             with Rung(enable):
                 on_delay(Timer.clone("LinkedDelay"), Int("LinkedPreset", link="Enable"))
+
+        assert not _codes(program, CMP_PRESET_STAYS_ZERO)
+
+    def test_system_tag_preset_is_clean(self) -> None:
+        enable = Bool("Enable", external=True)
+        with Program(strict=False) as program:
+            with Rung(enable):
+                on_delay(Timer.clone("ClockDelay"), system.rtc.second)
 
         assert not _codes(program, CMP_PRESET_STAYS_ZERO)
 

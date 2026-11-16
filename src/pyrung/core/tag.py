@@ -730,11 +730,22 @@ class InputTag(Tag):
 def tag_written_from_outside(tag: Tag) -> bool:
     """Return whether something outside the ladder can write *tag*.
 
-    That is an ``external`` tag, a physical input, or a field feedback (``link=``).  The
-    field sets a field feedback, and a harness sets it in a test.  A ``physical=`` without
-    ``link=`` is only metadata, so it does not count.
+    A tag with no ladder writer is a constant only when this is False.  So every check
+    that reads "no writer" as "constant" asks this first.  Four kinds of tag count.
+
+    - An ``external`` tag.
+    - A physical input.
+    - A field feedback (``link=``).  The field sets it, and a harness sets it in a test.
+      A ``physical=`` without ``link=`` is only metadata, so it does not count.
+    - A system tag the runtime writes, such as a clock or an RTC field.  ``RUNTIME_VALUES``
+      in ``core/system_points.py`` lists the values the runtime gives it.
     """
-    return tag.external or isinstance(tag, InputTag) or tag.link is not None
+    if tag.external or isinstance(tag, InputTag) or tag.link is not None:
+        return True
+    # system_points imports this module, so the import waits until a call.
+    from pyrung.core.system_points import RUNTIME_VALUES
+
+    return tag.name in RUNTIME_VALUES
 
 
 @dataclass(frozen=True)

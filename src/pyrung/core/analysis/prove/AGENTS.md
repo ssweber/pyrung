@@ -16,6 +16,8 @@ PILOT runs the PLC to check every plan it returns. So a domain that is too wide 
 
 - A tag the program writes holds its power-on value and what its writers store. A copy's or a `math()`'s store conversion applies (`_stored_domain`).
 - An `external` tag or a field feedback (`link=`) that the program writes also holds a free input's values, because the outside can write it any value (`_extract_value_domain`).
+- A system tag the runtime writes, such as a clock or an RTC field, holds the values `RUNTIME_VALUES` lists (`core/system_points.py`). The scan counter and the other tags with too many values to list get no domain. So a copy of one of them gets none either.
+- A tag with no ladder writer holds its default only when `tag_written_from_outside` (`core/tag.py`) is False. That covers `external`, physical inputs, `link=` feedbacks and the system tags the runtime writes. The facts, the pilot and the lints ask it before they read "no writer" as "constant".
 - The validators' produced domains (`collect_produced_value_domains`) treat a tag with no writer as an input when it is `external`, a physical input or a `link=` feedback.
   - An input holds its declared `choices=` or integer `min=`/`max=`. A `Real` input gets no domain, because it can hold any value between its bounds.
   - Any other tag with no writer holds its default.

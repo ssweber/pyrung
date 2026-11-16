@@ -640,8 +640,8 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
         tag = tag_map.get(tag_name)
         if tag is not None and tag.readonly:
             continue
-        # Skip a tag the outside writes (external, or a field feedback with link=).  The
-        # field or the HMI handles the missing side.
+        # Skip a tag the outside writes (see tag_written_from_outside).  The field, the
+        # HMI or the runtime handles the missing side.
         if tag is not None and tag_written_from_outside(tag):
             continue
 

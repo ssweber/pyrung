@@ -27,7 +27,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
-from pyrung.core.tag import ImmediateRef, InputTag, Tag
+from pyrung.core.tag import ImmediateRef, Tag, tag_written_from_outside
 
 # Largest value set kept per tag, and largest cross product evaluated.
 _VALUE_CAP = 4096
@@ -269,7 +269,7 @@ class _ValueSets:
                 domain = lookup[tag.name]
                 if domain is not None and tag.name in self._written_first:
                     domain = domain | self._initial_values(tag)
-            elif tag.external or isinstance(tag, InputTag):
+            elif tag_written_from_outside(tag):
                 domain = None
             else:
                 domain = frozenset({tag.default})  # unwritten storage
@@ -319,7 +319,7 @@ class _ValueSets:
         tag = self._tags.get(name)
         if tag is None:
             return None
-        if name in self._unbounded or tag.external or isinstance(tag, InputTag):
+        if name in self._unbounded or tag_written_from_outside(tag):
             return self.declared(tag) if self._declared_inputs else None
         if name in self._written_first:
             return frozenset()
