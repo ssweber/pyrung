@@ -36,9 +36,11 @@ power-on defaults that no scan produced, so the checks start at the end of scan 
   found no finite domain for is not one of them, since the prior claims nothing about it.
 - **Absorbed values** (``state_key_done_specs``, ``threshold_vector_specs``).  The world key
   keeps which side of each threshold a timer, counter or progress value is on, not the
-  value itself.  A probe moves the value, or a threshold tag, without crossing a threshold.
-  Then nothing else changes.  Each Done also turns on or off only when its Acc is on the
-  matching side of a literal preset.
+  value itself.  A probe moves the value, or a threshold tag, without crossing a threshold
+  or landing on one.  Then nothing else changes, scan-local tags aside.  The world key never sees their values.
+  Each Done also turns on or off only when its Acc is on the matching side of its preset,
+  the literal the fact gives or the tag the instruction reads.  A time drum's completion
+  flag turns on only at its last step's time, and off only on a reset.
 - **Projections.**  A tag elided as ``functional_dep`` equals ``offset + scale * source``
   after every scan.  An init constant has one value for each value of its representative.
 - **Stepping tags.**  A stepping tag has writes that can move it through values, such as a
@@ -57,11 +59,22 @@ program writes too.  A tag the program never writes and that is not external is 
 constant, so the run leaves it alone.  Each driven tag draws from its declared ``choices``
 or ``min``/``max``, every value of its input domain and those values plus and minus one.
 It also draws every literal the program compares it with, plus and minus one.  An integer
-without declared bounds also gets 0 and its type's extremes.  A seeded random walk changes
-the inputs in stretches.  A stretch chatters (each input changes on half the scans), changes
-slowly or holds still.  Chatter gives every edge combination.  A hold outlasts the longest
-literal timer preset, so each timer and counter reaches Done.  The same seed gives the same
-run every time.
+without declared bounds also gets 0 and its type's extremes.  A ``Real`` also draws the
+midpoint of each pair of neighbouring values.
+
+A seeded random walk picks a mode, runs it for some scans, then picks again:
+
+- In chatter, each input changes on half the scans, which gives every edge combination.
+- A slow walk changes each input on one scan in twenty.
+- A hold keeps every input still for longer than the longest literal timer preset.
+- An aim drives the inputs of one counter, timer or time drum until its Done turns on.  A
+  counter's input flips every scan.  Then the aim holds the reset on for three scans.
+
+The same seed gives the same run every time.
+
+A fact the runs never reach passes unchecked.  So the report lists each kind of fact the
+program has that no scan judged, and each Done that never turned on or never turned off.
+The tests assert that list, with a reason for each entry they allow.
 """
 
 from __future__ import annotations
@@ -308,8 +321,13 @@ def _nearest(value: Any, members: list[Any]) -> list[Any]:
     """The members to swap for *value*, the nearest first.
 
     A small domain gives all its members.  A large one gives the two nearest on each side.
+    An infinity is nearest the members at its own end.
     """
-    if not (_is_finite(value) and all(_is_number(m) for m in members)):
+    if not all(_is_number(m) for m in members):
+        return members[:8]
+    if _is_number(value) and math.isinf(value):
+        return sorted(members, reverse=value > 0)[:8]
+    if not _is_finite(value):
         return members[:8]
     ordered = sorted(members, key=lambda m: abs(m - value))
     if len(members) <= 8:
@@ -371,6 +389,9 @@ def candidate_values(name: str, facts: Facts, plc: PLC) -> list[Any]:
             values += [float(tag.min), float(tag.max)]
         else:
             values = [float(v) for v in values if _is_number(v)] + [0.0, 0.5, -1.5, 1e6]
+        # A Real holds the values between whole numbers too.
+        points = sorted({v for v in values if math.isfinite(v)})
+        values += [(a + b) / 2 for a, b in itertools.pairwise(points)]
     elif tag.type is TagType.CHAR:
         values = [v for v in values if isinstance(v, str) and len(v) <= 1] + ["A", "0"]
     unique: list[Any] = []
@@ -381,7 +402,7 @@ def candidate_values(name: str, facts: Facts, plc: PLC) -> list[Any]:
 
 
 def hold_scans(program: Any) -> int:
-    """Scans a hold lasts: past the longest literal timer preset, at most 400."""
+    """Scans a hold lasts, past the longest literal timer preset and at most 400."""
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
@@ -394,31 +415,202 @@ def hold_scans(program: Any) -> int:
     return min(400, max(30, longest + 10))
 
 
-class RandomInputs:
-    """A seeded walk over each driven tag's candidate values, in stretches."""
+@dataclass
+class Aim:
+    """Inputs that run one counter, timer or drum until its Done turns on, then reset it.
 
-    def __init__(self, values: Mapping[str, list[Any]], seed: int, hold: int) -> None:
+    *run* holds the driven Bools that enable it and keep its reset off.  A counter
+    counts edges, so *toggle* names a Bool that flips every scan.  *reset* turns the
+    reset on, when one is found.
+    """
+
+    run: dict[str, bool]
+    toggle: str | None
+    reset: dict[str, bool] | None
+    scans: int
+
+
+def _holds(expr: Any, assign: Mapping[str, bool]) -> bool | None:
+    """Whether *expr* holds with the Bools in *assign*, or ``None`` if other tags decide.
+
+    A rise or fall reads as its tag, so a Bool that flips every scan gives it edges.
+    """
+    if expr is None:
+        return True
+    if isinstance(expr, Atom):
+        if expr.tag not in assign:
+            return None
+        value = assign[expr.tag]
+        if expr.form in ("xic", "truthy", "rise"):
+            return value
+        if expr.form in ("xio", "fall"):
+            return not value
+        return None
+    if not isinstance(expr, (And, Or)):
+        return None
+    answers = [_holds(term, assign) for term in expr.terms]
+    if isinstance(expr, And):
+        return False if False in answers else None if None in answers else True
+    return True if True in answers else None if None in answers else False
+
+
+def _tag_names(expr: Any) -> set[str]:
+    if isinstance(expr, Atom):
+        return {expr.tag}
+    if isinstance(expr, (And, Or)):
+        return set().union(*(_tag_names(term) for term in expr.terms))
+    return set()
+
+
+def _preset_scans(preset: Any, unit_ns: int | None, values: Mapping[str, list[Any]]) -> int:
+    """Scans to reach *preset*, a count for a counter or a time in *unit_ns* for a timer."""
+    if _is_number(preset):
+        reach = preset
+    else:
+        drawn = [v for v in values.get(getattr(preset, "name", ""), ()) if _is_number(v)]
+        reach = max(drawn, default=getattr(preset, "default", 0) or 0)
+    reach = abs(reach)
+    if unit_ns is None:
+        return int(2 * reach + 6)
+    return math.ceil(reach * unit_ns / (DT * 1e9)) + 10
+
+
+def aims(program: Any, values: Mapping[str, list[Any]]) -> list[Aim]:
+    """An aim for each counter, timer and time drum whose inputs the run drives.
+
+    A random walk seldom counts a counter up to its preset.  Each scan that a chattering
+    input changes, the reset may change too.
+    """
+    from pyrung.core.analysis.simplified import _condition_to_expr
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction
+    from pyrung.core.instruction.timers import OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    bools = {n for n, v in values.items() if v == [False, True]}
+
+    def expr(condition: Any) -> Any:
+        return None if condition is None else _condition_to_expr(condition)
+
+    found = []
+    for instr in walk_instructions(program):
+        if isinstance(instr, CountUpInstruction):
+            run, edges = instr.up_condition, True
+            stops = [instr.reset_condition, instr.down_condition]
+            scans = _preset_scans(instr.preset, None, values)
+        elif isinstance(instr, CountDownInstruction):
+            run, stops, edges = instr.down_condition, [instr.reset_condition], True
+            scans = _preset_scans(instr.preset, None, values)
+        elif isinstance(instr, OnDelayInstruction):
+            run, stops, edges = instr.enable_condition, [instr.reset_condition], False
+            scans = _preset_scans(instr.preset, instr.unit.ns, values)
+        elif isinstance(instr, TimeDrumInstruction):
+            run, stops, edges = instr.auto_condition, [instr.reset_condition], False
+            scans = sum(_preset_scans(p, instr.unit.ns, values) for p in instr.presets)
+        else:
+            continue
+        run_expr = expr(run)
+        stop_exprs = [expr(c) for c in stops if c is not None]
+        names = _tag_names(run_expr).union(*map(_tag_names, stop_exprs)) & bools
+        if len(names) > 10:
+            continue
+        ordered = sorted(names)
+        rows = [
+            dict(zip(ordered, row, strict=True))
+            for row in itertools.product((False, True), repeat=len(ordered))
+        ]
+        aim = _aim_from(rows, run_expr, stop_exprs, edges, min(scans, 400))
+        if aim is not None:
+            found.append(aim)
+    return found
+
+
+def _aim_from(
+    rows: list[dict[str, bool]], run: Any, stops: list[Any], edges: bool, scans: int
+) -> Aim | None:
+    """The first row that runs the instruction with its stops off, and a row that resets it."""
+
+    def runs(row: Mapping[str, bool]) -> bool:
+        return _holds(run, row) is not False and all(_holds(s, row) is False for s in stops)
+
+    for row in rows:
+        if not runs(row):
+            continue
+        toggle = None
+        if edges:
+            flipped = [{**row, n: not row[n]} for n in row]
+            flips = [
+                n
+                for n, other in zip(row, flipped, strict=True)
+                if _holds(run, other) is False and all(_holds(s, other) is False for s in stops)
+            ]
+            if not flips:
+                continue
+            toggle = flips[0]
+        reset = next((r for r in rows if stops and _holds(stops[0], r) is True), None)
+        return Aim(row, toggle, reset, scans)
+    return None
+
+
+class RandomInputs:
+    """A seeded walk over each driven tag's candidate values, one mode at a time."""
+
+    def __init__(
+        self,
+        values: Mapping[str, list[Any]],
+        seed: int,
+        hold: int,
+        aims: Iterable[Aim] = (),
+    ) -> None:
         self.values = values
         self.random = random.Random(seed)
         self.hold = hold
+        self.aims = list(aims)
+        self.turn = seed
         self.left = 0
         self.rate = 0.0
+        self.script: list[dict[str, Any]] = []
         self.current: dict[str, Any] = {}
 
     def next(self) -> dict[str, Any]:
-        if self.left == 0:
-            mode = self.random.choice(("chatter", "slow", "hold"))
-            self.rate = {"chatter": 0.5, "slow": 0.05, "hold": 0.0}[mode]
-            self.left = self.hold if mode == "hold" else self.random.randint(10, 80)
-        self.left -= 1
+        if self.left == 0 and not self.script:
+            modes = ["chatter", "slow", "hold"] + ["aim"] * bool(self.aims)
+            mode = self.random.choice(modes)
+            if mode == "aim":
+                self.script = self._aim_script()
+            else:
+                self.rate = {"chatter": 0.5, "slow": 0.05, "hold": 0.0}[mode]
+                self.left = self.hold if mode == "hold" else self.random.randint(10, 80)
+        if self.script:
+            # An aim sets only its own inputs, and the others hold still.
+            want = self.script.pop(0)
+        else:
+            self.left -= 1
+            want = {
+                name: self.random.choice(choices)
+                for name, choices in self.values.items()
+                if name not in self.current or self.random.random() < self.rate
+            }
         changed = {}
-        for name, choices in self.values.items():
-            if name not in self.current or self.random.random() < self.rate:
-                value = self.random.choice(choices)
-                if name not in self.current or not _same(value, self.current[name]):
-                    changed[name] = value
-                self.current[name] = value
+        for name, value in want.items():
+            if name not in self.current or not _same(value, self.current[name]):
+                changed[name] = value
+            self.current[name] = value
         return changed
+
+    def _aim_script(self) -> list[dict[str, Any]]:
+        """Each scan's inputs for the next aim: run it, then hold its reset for three scans."""
+        aim = self.aims[self.turn % len(self.aims)]
+        self.turn += 1
+        script = []
+        for scan in range(aim.scans):
+            row: dict[str, Any] = dict(aim.run)
+            if aim.toggle is not None and scan % 2:
+                row[aim.toggle] = not aim.run[aim.toggle]
+            script.append(row)
+        if aim.reset is not None:
+            script += [dict(aim.reset) for _ in range(3)]
+        return script
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +664,8 @@ class Judge:
         self.became: set[tuple[str, Any]] = set()
         self.start: Mapping[str, Any] = {}
         self.done = _done_relations(facts)
+        #: Each Done and the value it turned to, in some scan.
+        self.flips: set[tuple[str, bool]] = set()
 
     def fail(self, fact: str, scan: int, detail: str, key: str) -> None:
         """Record a violation, once for each fact and key."""
@@ -543,19 +737,19 @@ class Judge:
                 self.fail("producers", scan, detail, repr(key))
 
     def _judge_done(self, scan: int, tags: Mapping[str, Any], before: Mapping[str, Any]) -> None:
-        for done, (kind, acc, preset) in self.done.items():
+        for done, rule in self.done.items():
             was = bool(_value(before, done, self.facts))
             now = bool(_value(tags, done, self.facts))
             if was == now:
                 continue
+            self.flips.add((done, now))
             self.tally.note("done spec")
-            value = _value(tags, acc, self.facts)
-            reached = value >= preset
-            # An on-delay or up counter turns Done on at its preset and off below it.  An
-            # off-delay turns Done off once its Acc reaches the preset.
-            ok = reached == now if kind in ("on_delay", "count_up") else now or reached
-            if not ok:
-                detail = f"{done} went {was} -> {now} with {acc} = {value!r}, preset {preset}"
+            if not rule.allows(now, tags, before, self.facts):
+                acc = _value(tags, rule.acc, self.facts)
+                detail = (
+                    f"{done} went {was} -> {now} with {rule.acc} = {acc!r},"
+                    f" {rule.kind} preset {rule.preset!r}"
+                )
                 self.fail("done spec", scan, detail, done)
 
     def finish(self) -> None:
@@ -588,15 +782,82 @@ class Judge:
                 self.fail("linked block", self.tally.scans, detail, repr((name, value)))
 
 
-def _done_relations(facts: Facts) -> dict[str, tuple[str, str, int]]:
-    """Each world-key Done with a literal preset above 0, whose Acc a run can judge it by."""
+@dataclass(frozen=True)
+class _DoneRule:
+    """When a world-key Done may turn on or off, by the Acc its spec pairs it with.
+
+    *preset* is the fact's literal preset, or the name of the tag the instruction reads it
+    from.  A time drum's Done is its completion flag, and *last* is its last step.
+    """
+
+    kind: str
+    acc: str
+    preset: Any
+    step: str | None = None
+    last: int = 0
+
+    def allows(
+        self, now: bool, tags: Mapping[str, Any], before: Mapping[str, Any], facts: Facts
+    ) -> bool:
+        acc = _value(tags, self.acc, facts)
+        if isinstance(self.preset, str):
+            # The instruction reads its preset tag during the scan, so either end will do.
+            presets = [_value(tags, self.preset, facts), _value(before, self.preset, facts)]
+        else:
+            presets = [self.preset]
+        presets = [p for p in presets if _is_number(p)]
+        if not _is_number(acc) or not presets:
+            return True
+        if self.kind == "time_drum":
+            step = _value(tags, self.step or "", facts)
+            # The flag turns on at the last step's time, and only a reset turns it off.
+            if now:
+                return step == self.last and any(acc >= p for p in presets)
+            return step == 1
+        if self.kind == "off_delay":
+            return now or any(acc >= p for p in presets)
+
+        def reached(p: Any) -> bool:
+            return acc <= p if self.kind == "count_down" else acc >= p
+
+        # A reset or a disabled timer clears the Acc with Done.
+        if now:
+            return any(reached(p) for p in presets)
+        return acc == 0 or not all(reached(p) for p in presets)
+
+
+def _done_relations(facts: Facts) -> dict[str, _DoneRule]:
+    """Each world-key Done, with what its instruction says about when it turns on or off."""
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    kinds = (OnDelayInstruction, OffDelayInstruction, CountUpInstruction, CountDownInstruction)
+    owners: dict[str, Any] = {}
+    for instr in walk_instructions(facts.program):
+        if isinstance(instr, kinds):
+            owners[instr.done_bit.name] = instr
+        elif isinstance(instr, TimeDrumInstruction):
+            owners[instr.completion_flag.name] = instr
     names = facts.prior.stateful_names
     found = {}
     for spec in facts.prior.state_key_done_specs:
         done = names[spec.index]
-        preset = facts.done_presets.get(done)
-        if spec.kind in ("on_delay", "count_up", "off_delay") and preset is not None and preset > 0:
-            found[done] = (spec.kind, spec.acc_name, preset)
+        instr = owners.get(done)
+        if instr is None:
+            continue
+        if isinstance(instr, TimeDrumInstruction):
+            last = instr.presets[-1]
+            preset = last if _is_number(last) else last.name
+            found[done] = _DoneRule(
+                spec.kind, spec.acc_name, preset, instr.current_step.name, len(instr.presets)
+            )
+        elif _is_number(instr.preset):
+            preset = facts.done_presets.get(done, instr.preset)
+            found[done] = _DoneRule(spec.kind, spec.acc_name, preset)
+        else:
+            found[done] = _DoneRule(spec.kind, spec.acc_name, instr.preset.name)
     return found
 
 
@@ -696,19 +957,22 @@ def threshold_tags(facts: Facts) -> list[str]:
 
 @dataclass
 class _Band:
-    """The values an absorbed value is compared with: numbers, or tags read at the time."""
+    """The numbers an absorbed value is compared with, and tags read at the time.
+
+    *unit* is how far the value moves in one scan.
+    """
 
     bounds: list[Any]
-    margin: int
+    unit: int
 
-    def sides(self, value: Any, tags: Mapping[str, Any], facts: Facts, margin: int) -> Any:
-        """Which side of each bound *value* is on, or ``None`` within *margin* of one."""
+    def sides(self, value: Any, tags: Mapping[str, Any], facts: Facts) -> Any:
+        """Below, at or above each bound, as -1, 0 or 1, or ``None`` for a value not a number."""
         out = []
         for bound in self.bounds:
             at = _value(tags, bound, facts) if isinstance(bound, str) else bound
-            if not _is_number(at) or not _is_number(value) or abs(value - at) <= margin:
+            if not _is_number(at) or not _is_number(value):
                 return None
-            out.append(value > at)
+            out.append((value > at) - (value < at))
         return tuple(out)
 
 
@@ -748,7 +1012,7 @@ def _bands(facts: Facts) -> dict[str, _Band]:
 
     def band(acc: str) -> _Band:
         if acc not in bands:
-            bands[acc] = _Band([0, *presets.get(acc, ())], steps.get(acc, 1) + 1)
+            bands[acc] = _Band([0, *presets.get(acc, ())], steps.get(acc, 1))
         return bands[acc]
 
     for spec in prior.state_key_done_specs:
@@ -786,6 +1050,8 @@ class Prober:
         self.random = random.Random(seed)
         skip = set(driven)
         self.scan_local = [n for n in scan_local_tags(facts) if n not in skip]
+        #: Scan-local tags, whose values the world key never sees.
+        self.unseen = set(scan_local_tags(facts))
         self.thresholds = [n for n in threshold_tags(facts) if n not in skip]
         self.bands = _bands(facts)
         prior = facts.prior
@@ -823,7 +1089,9 @@ class Prober:
                 self.turn += 1
                 out.append(self._fork(plc, patch, "scan-local", {one: change[one]}))
             for name, moved in self._band_moves(tags):
-                out.append(self._fork(plc, patch, "absorbed value", {name: moved}))
+                fork = self._fork(plc, patch, "absorbed value", {name: moved})
+                fork.leave_out |= self.unseen
+                out.append(fork)
         near = self._domain_swaps(tags, probe)
         if near is not None:
             change = {name: _value(tags, name, self.facts) for name in near}
@@ -864,12 +1132,12 @@ class Prober:
         moves = []
         for acc, band in self.bands.items():
             value = _value(tags, acc, facts)
-            want = band.sides(value, tags, facts, band.margin)
+            want = band.sides(value, tags, facts)
             if want is None:
                 continue
             for _ in range(8):
-                moved = self._step(value, band.margin)
-                if band.sides(moved, tags, facts, band.margin) == want:
+                moved = self._step(value, band.unit)
+                if band.sides(moved, tags, facts) == want:
                     moves.append((acc, moved))
                     break
         for name in self.thresholds:
@@ -877,23 +1145,21 @@ class Prober:
             if not _is_number(value):
                 continue
             related = [(acc, b) for acc, b in self.bands.items() if name in b.bounds]
-            want = [b.sides(_value(tags, acc, facts), tags, facts, b.margin) for acc, b in related]
+            want = [b.sides(_value(tags, acc, facts), tags, facts) for acc, b in related]
             if not related or any(w is None for w in want):
                 continue
             for _ in range(8):
-                moved = self._step(value, 2)
+                moved = self._step(value, 1)
                 moved_tags = {**tags, name: moved}
-                now = [
-                    b.sides(_value(tags, acc, facts), moved_tags, facts, b.margin)
-                    for acc, b in related
-                ]
+                now = [b.sides(_value(tags, acc, facts), moved_tags, facts) for acc, b in related]
                 if now == want:
                     moves.append((name, moved))
                     break
         return moves
 
-    def _step(self, value: Any, margin: int) -> Any:
-        size = self.random.choice((1, 2, 3, 5, 10, 50, 200)) * margin
+    def _step(self, value: Any, unit: int) -> Any:
+        """A move of *value* up or down, from one count to far past a scan's move."""
+        size = self.random.choice((1, 2, unit, 2 * unit, 5 * unit, 50 * unit, 200 * unit))
         step = size * self.random.choice((1, -1))
         if isinstance(value, int):
             return int(max(-32768, min(32767, value + step)))
@@ -909,7 +1175,8 @@ class Prober:
         for name, (kind, members) in self.domains.items():
             value = _value(tags, name, self.facts)
             if not members or any(_same(value, m) for m in members):
-                self.tally_members[kind] = self.tally_members.get(kind, 0) + 1
+                key = f"{kind}, value in it"
+                self.tally_members[key] = self.tally_members.get(key, 0) + 1
                 continue
             near = _nearest(value, members)
             outside[name] = near
@@ -970,8 +1237,8 @@ class Prober:
         facts = self.facts
         ta, tb = a.current_state.tags, b.current_state.tags
         return all(
-            band.sides(_value(ta, acc, facts), ta, facts, 0)
-            == band.sides(_value(tb, acc, facts), tb, facts, 0)
+            band.sides(_value(ta, acc, facts), ta, facts)
+            == band.sides(_value(tb, acc, facts), tb, facts)
             for acc, band in self.bands.items()
         )
 
@@ -980,8 +1247,9 @@ class Prober:
 
         A swap must answer every comparison as the run's state does at the scan's start,
         and show the same at its end.  A swap whose own comparisons answer otherwise at the
-        end crossed a value the domain need not split at, so it judges nothing.  A tag is to
-        blame when swapping all the others, with it left as it is, does pass.
+        end crossed a value the domain need not split at, so it judges nothing.  One such
+        swap leaves the whole judgement out, though another swap may differ at the end.  A
+        tag is to blame when swapping all the others, with it left as it is, does pass.
         """
         assert fork.base is not None
         facts = self.facts
@@ -1013,7 +1281,7 @@ class Prober:
             return False
 
         for name in fork.change:
-            judge.tally.note(self.domains[name][0])
+            judge.tally.note(f"{self.domains[name][0]}, swapped")
         if passes(fork.near):
             return
         if crossed:
@@ -1082,9 +1350,47 @@ class Report:
     tally: Tally
     intractable: str | None = None
     unmoved: list[str] = field(default_factory=list)
+    #: Kinds of fact the program has that no scan judged, and Dones that never turned
+    #: on (``"<Done> on"``) or off.  A fact the runs never reach passes unchecked.
+    unjudged: list[str] = field(default_factory=list)
 
     def problems(self) -> list[str]:
         return [str(v) for v in self.violations]
+
+
+def _unjudged(judge: Judge, prober: Prober | None) -> list[str]:
+    """What :attr:`Report.unjudged` lists (see there)."""
+    facts = judge.facts
+    has = {
+        "produced domain": bool(facts.produced),
+        "functional dep": bool(judge.projected),
+        "transient rest": bool(facts.transient_rests),
+        "init constant": bool(facts.init_constant_reps),
+        "reference constant": bool(facts.reference_constants),
+        "producers": bool(set(facts.pdg.writers_of) - facts.proofs.free),
+        "done spec": bool(judge.done),
+        "exclusion": len(judge.bools) > 1,
+        "linked block": bool(facts.proofs.couplings),
+    }
+    if prober is not None:
+        kinds = {kind for kind, _members in prober.domains.values()}
+        has["input domain"] = "input domain" in kinds
+        has["stateful domain"] = "stateful domain" in kinds
+        has["scan-local"] = bool(prober.scan_local)
+        has["absorbed value"] = bool(prober.bands or prober.thresholds)
+    judged = judge.tally.judged
+    out = [
+        kind
+        for kind, present in has.items()
+        if present and not any(n for key, n in judged.items() if key.startswith(kind))
+    ]
+    for done in sorted(judge.done):
+        out += [
+            f"{done} {word}"
+            for word, now in (("on", True), ("off", False))
+            if (done, now) not in judge.flips
+        ]
+    return out
 
 
 Step = Callable[[Mapping[str, Any]], None]
@@ -1118,7 +1424,9 @@ def check_program(
     # A randint draw differs between a fork and its parent, so a probe would see noise.
     probing = not randint_sites(facts.pdg.tags)
     hold = hold_scans(program)
+    aimed = aims(program, values)
     every = max(1, scans // PROBES_PER_RUN)
+    prober: Prober | None = None
     for seed in seeds:
         run = PLC(program, dt=DT)
         if prepare is not None:
@@ -1126,7 +1434,7 @@ def check_program(
         judge.tally.runs += 1
         judge.power_on(run.current_state.tags)
         prober = Prober(facts, driven, seed)
-        walk = RandomInputs(values, seed, hold)
+        walk = RandomInputs(values, seed, hold, aimed)
         count = 0
 
         def one_scan(patch: Mapping[str, Any], run: PLC = run, prober: Prober = prober) -> None:
@@ -1151,4 +1459,5 @@ def check_program(
         for kind, members in prober.tally_members.items():
             judge.tally.note(kind, members)
     judge.finish()
-    return Report(label, judge.violations, judge.tally, unmoved=judge.unmoved)
+    unjudged = _unjudged(judge, prober if probing else None)
+    return Report(label, judge.violations, judge.tally, None, judge.unmoved, unjudged)

@@ -18,7 +18,9 @@ from pyrung import (
     Char,
     Counter,
     Dint,
+    Harness,
     Int,
+    Physical,
     Program,
     Real,
     Rung,
@@ -48,7 +50,7 @@ from pyrung import (
     time_drum,
     toggle,
 )
-from pyrung.core import Or
+from pyrung.core import PLC, Or
 from pyrung.core.tag import TagType
 
 CORPUS: dict[str, Callable[[], Any]] = {}
@@ -923,4 +925,112 @@ def hmi_request_taken_when_nonzero() -> Any:
             copy(0, request)
         with Rung(busy, done):
             reset(busy)
+    return prog
+
+
+# ---------------------------------------------------------------------------
+# Inputs the outside sets, harness feedback, and stores that convert
+# ---------------------------------------------------------------------------
+
+#: Idioms that need a harness on each PLC: name -> the function that installs it.
+PREPARE: dict[str, Callable[[PLC], None]] = {}
+
+
+def _harness(plc: PLC) -> None:
+    Harness(plc).install()
+
+
+@idiom
+def valve_with_limit_switch_watchdog() -> Any:
+    """A valve's limit switch follows it through the harness, and a watchdog trips on a stall."""
+    command = Bool("OpenCmd", external=True)
+    valve = Bool("Valve")
+    opened = Bool("ValveOpen", physical=Physical("ValveOpen", on_delay="200ms"), link="Valve")
+    stall = Timer.clone("Stall")
+    fault = Bool("ValveFault")
+    clear = Bool("FaultClear", external=True)
+    with Program() as prog:
+        with Rung(command):
+            out(valve)
+        with Rung(valve, ~opened):
+            on_delay(stall, 3000)
+        with Rung(stall.Done):
+            latch(fault)
+        with Rung(clear):
+            reset(fault)
+    return prog
+
+
+PREPARE["valve_with_limit_switch_watchdog"] = _harness
+
+
+@idiom
+def real_input_between_whole_numbers() -> Any:
+    """A Real input with whole-number bounds holds the values between them too."""
+    pressure = Real("LinePressure", external=True, min=0.0, max=10.0)
+    high = Bool("PressureHigh")
+    with Program() as prog:
+        with Rung(pressure > 5):
+            out(high)
+    return prog
+
+
+@idiom
+def math_result_wraps() -> Any:
+    """A math() into an Int wraps what a copy() would clamp."""
+    go = Bool("Load", external=True)
+    total = Dint("BigTotal")
+    low = Int("LowWord")
+    negative = Bool("LowNegative")
+    with Program() as prog:
+        with Rung(go):
+            copy(40000, total)
+        with Rung():
+            math(total, low)
+        with Rung(low < 0):
+            out(negative)
+    return prog
+
+
+@idiom
+def math_literal_wraps() -> Any:
+    """A math() of a constant past an Int's range stores it wrapped."""
+    go = Bool("LoadConst", external=True)
+    low = Int("WrappedConst")
+    small = Bool("ConstSmall")
+    with Program() as prog:
+        with Rung(go):
+            math(70000, low)
+        with Rung(low < 5000, low > 0):
+            out(small)
+    return prog
+
+
+@idiom
+def hmi_value_copied_after_ladder_default() -> Any:
+    """An HMI writes a setpoint the ladder also defaults, and a copy of it is compared."""
+    setpoint = Int("HmiSetpoint", external=True)
+    working = Int("WorkingSetpoint")
+    with Program() as prog:
+        with Rung(Bool("LoadDefault", external=True)):
+            copy(5, setpoint)
+        with Rung(Bool("Apply", external=True)):
+            copy(setpoint, working)
+        with Rung(working > 50):
+            out(Bool("HighSetpoint"))
+    return prog
+
+
+@idiom
+def compared_input_copied_and_compared() -> Any:
+    """An input compared with one literal is copied, and the copy is compared with another."""
+    raw = Int("RawLevel", external=True)
+    level = Int("HeldLevel")
+    with Program() as prog:
+        with Rung(raw > 10):
+            out(Bool("RawAbove"))
+        with Rung(Bool("Sample", external=True)):
+            copy(raw, level)
+        with Rung(level > 50):
+            out(Bool("LevelHigh"))
     return prog

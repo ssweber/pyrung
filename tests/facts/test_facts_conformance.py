@@ -51,9 +51,6 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
             " preset on scans that do not write it."
         ),
     },
-    "store_probe/non_finite_into_word": {
-        ("stateful domain", "DF427"): "scan 4.  " + _NOT_FINITE.format("+Inf"),
-    },
     "word_floor/below_int_and_nan": {
         ("stateful domain", "DF32"): "scan 3.  " + _NOT_FINITE.format("NaN"),
     },
@@ -62,6 +59,12 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
         ("stateful domain", "DF115"): "scan 3.  " + _NOT_FINITE.format("NaN"),
     },
 }
+
+
+#: Facts a case's run may leave unjudged.  A case runs its script once, with ``Cmd`` its
+#: only input.  So a Done may never turn on or off, and an absorbed value may sit on a
+#: threshold.  The idioms reach both with inputs aimed at each counter and timer.
+MAY_GO_UNJUDGED = ("done spec", "absorbed value")
 
 
 @cache
@@ -77,6 +80,8 @@ def test_facts_hold(label: str) -> None:
     known = KNOWN.get(label, {})
     new = [str(v) for v in report.violations if (v.fact, v.key) not in known]
     assert not new, "\n".join(new)
+    unjudged = [k for k in report.unjudged if k not in MAY_GO_UNJUDGED]
+    assert [k for k in unjudged if not k.endswith((" on", " off"))] == []
 
 
 @pytest.mark.parametrize(

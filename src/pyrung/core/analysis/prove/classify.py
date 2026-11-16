@@ -1923,8 +1923,15 @@ def _domain_from_copy_like_value(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
+    calc_mode: str | None = None,
 ) -> tuple[Any, ...] | None:
-    """Infer a target domain from a copy/fill-style source operand."""
+    """Infer a target domain from a copy/fill-style source operand.
+
+    *calc_mode* is the mode of a ``math()`` that stores the operand, or ``None`` for a
+    Copy or Fill.  A ``math()`` wraps where a Copy clamps.
+    """
+    from pyrung.core.instruction.conversions import copy_source_kind
+
     source_tag_name = _tag_name_from_value(raw_value)
     if source_tag_name is not None:
         domain = _domain_for_source_tag(
@@ -1937,33 +1944,46 @@ def _domain_from_copy_like_value(
         )
         if domain is None:
             return None
-        from pyrung.core.instruction.conversions import copy_source_kind
-
-        return _stored_domain(domain, copy_source_kind(raw_value), target)
+        return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
 
     literal = _literal_value_from_value(raw_value)
     if literal is not None:
+        if calc_mode is not None:
+            return _stored_domain((literal,), None, target, calc_mode)
         stored = _normalize_literal_write_value(literal, target)
         if stored is _NO_LITERAL_WRITE:
             return None
         return (stored,)
 
-    return _domain_from_indirect_source(raw_value, target, graph, known_domains)
+    domain = _domain_from_indirect_source(raw_value, target, graph, known_domains)
+    if domain is None:
+        return None
+    return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
 
 
-def _stored_domain(domain: tuple[Any, ...], source: Any, target: Tag) -> tuple[Any, ...] | None:
+def _stored_domain(
+    domain: tuple[Any, ...], source: Any, target: Tag, calc_mode: str | None = None
+) -> tuple[Any, ...] | None:
     """The values a Copy from a *source* with *domain* stores in *target*.
 
     A Copy converts as it stores, so a DD 40000 copied into a DS stores 32767.  *source*
-    is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the source.
+    is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the source.  With
+    a *calc_mode* the store is a ``math()`` result's, which wraps (40000 stores -25536).
     """
-    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+    from pyrung.core.instruction.conversions import (
+        _store_copy_value_to_tag_type,
+        _truncate_to_tag_type,
+    )
 
     stored: list[Any] = []
     for value in domain:
         if not isinstance(value, (bool, int, float)):
-            return domain if target.type is TagType.CHAR and isinstance(value, str) else None
-        each = _store_copy_value_to_tag_type(value, target, source)
+            keep = calc_mode is None and target.type is TagType.CHAR and isinstance(value, str)
+            return domain if keep else None
+        if calc_mode is None:
+            each = _store_copy_value_to_tag_type(value, target, source)
+        else:
+            each = _truncate_to_tag_type(value, target, calc_mode)
         if each not in stored:
             stored.append(each)
     return tuple(stored)
@@ -2052,6 +2072,7 @@ def _domain_from_calc_expression(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
+    mode: str = "decimal",
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a supported calc expression shape."""
     from pyrung.core.expression import BinaryExpr
@@ -2064,6 +2085,7 @@ def _domain_from_calc_expression(
         known_domains,
         atom_index,
         real_gap_points=real_gap_points,
+        calc_mode=mode,
     )
     if direct is not None:
         return direct
@@ -2087,7 +2109,7 @@ def _domain_from_calc_expression(
                 values = range(1 - modulus, modulus)
             from pyrung.core.instruction.conversions import _truncate_to_tag_type
 
-            return tuple(sorted({_truncate_to_tag_type(value, target) for value in values}))
+            return tuple(sorted({_truncate_to_tag_type(value, target, mode) for value in values}))
 
     bounds = _interval_bounds(expression, graph, all_exprs, known_domains, atom_index)
     if bounds is None:
@@ -2096,8 +2118,8 @@ def _domain_from_calc_expression(
     from pyrung.core.expression import RangeAggregateExpr
     from pyrung.core.instruction.conversions import _truncate_to_tag_type
 
-    lo_t = _truncate_to_tag_type(lo, target)
-    hi_t = _truncate_to_tag_type(hi, target)
+    lo_t = _truncate_to_tag_type(lo, target, mode)
+    hi_t = _truncate_to_tag_type(hi, target, mode)
     if not isinstance(lo_t, (int, float)) or not isinstance(hi_t, (int, float)):
         return None
     if isinstance(expression, RangeAggregateExpr) and (lo_t != int(lo) or hi_t != int(hi)):
@@ -2298,6 +2320,7 @@ def _domain_from_write_instruction(
             known_domains,
             atom_index,
             real_gap_points=real_gap_points,
+            mode=instr.mode,
         )
 
     from pyrung.core.instruction.drums import (
@@ -2652,7 +2675,9 @@ def collect_produced_value_domains(
             known[name] = (tag.default,)
         elif not writers:
             declared = _declared_domain(tag)
-            if tag.external or graph.is_physical_input(name):
+            # A linked feedback tag answers its command in the field, and the harness
+            # writes it in a test.
+            if tag.external or graph.is_physical_input(name) or tag.link is not None:
                 # A Real between whole-number bounds can hold any value between them, so
                 # the whole numbers alone would leave values out.
                 if declared is not None and tag.type is not TagType.REAL:

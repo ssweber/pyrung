@@ -1,11 +1,15 @@
 """The conformance cases as programs for the facts check, each case alone on its slot.
 
 A case runs the way the harness runs it.  ``Cmd`` goes to 0 until the case reports
-``Ready``, then to 1 for the case's scans and a few more.  Then ``Cmd`` toggles at random,
-in the stretches ``RandomInputs`` makes, so a case also starts, stops and restarts at scans
-the harness never picks.  The harness
-writes ``Cmd`` from outside, so the check marks it ``external`` while the facts are built.
-Every other tag a case reads is the case's own.
+``Ready``, then to 1 for the case's scans and a few more.  Then ``RandomInputs`` toggles
+``Cmd`` at random, so a case also starts, stops and restarts at scans the harness never
+picks.  The harness writes ``Cmd`` from outside, so the check marks it
+``external`` while the facts are built.  Every other tag a case reads is the case's own.
+
+The check counts each tag the outside may write (``Facts.steerable``) as an input.  So it
+never probes such a tag as scan-local, because how() may set it at any scan.  The idiom runs
+drive each of them.  This driver writes ``Cmd`` alone.  A case's other such tags, like its
+command bits, change only when its rungs write them.
 """
 
 from __future__ import annotations
@@ -73,7 +77,7 @@ def check_case(group: Group, case: Case) -> Report:
         scan({cmd.name: 1})
         for _ in range(case.scans + AFTER_SCANS):
             scan({})
-        walk.values = {cmd.name: [0, 1]}
+        walk.values, walk.aims = {cmd.name: [0, 1]}, []
         for _ in range(RANDOM_SCANS):
             scan(_only(walk.next(), cmd.name))
 

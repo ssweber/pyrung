@@ -175,3 +175,17 @@ def test_system_tags_have_no_produced_domain():
         with Rung(system.sys.scan_counter > 3):
             out(Bool("Running"))
     assert system.sys.scan_counter.name not in ValidationContext(program).produced_domains
+
+
+def test_a_copy_through_a_pointer_stores_the_converted_value():
+    wide = Block("WideByPointer", TagType.DINT, 1, 2)
+    pointer = Int("Pointer", external=True, min=1, max=2)
+    narrow = Int("NarrowByPointer")
+    with Program() as program:
+        with Rung():
+            copy(40000, wide[1])
+            copy(wide[pointer], narrow)
+        with Rung(narrow == 32767):
+            out(Bool("AtMax"))
+    assert not program.check(select={"CMP_ALWAYS_FALSE"})
+    assert ValidationContext(program).produced_domains[narrow.name] == (0, 32767)
