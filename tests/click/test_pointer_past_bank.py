@@ -257,3 +257,21 @@ def test_a_range_wider_than_the_value_cap_still_reports_its_end():
     mapping = TagMap({start: ds[1], end: ds[2], dest: ds.select(2001, 4000)}, include_system=False)
     (finding,) = _found(prog, mapping)
     assert "ends at DD4200" in finding.message
+
+
+def test_a_pointer_write_into_its_bank_keeps_the_declared_range():
+    # copy(0, DS[At]) may store into Ptr's slot DS1.  Ptr then holds its declared 1..1010
+    # and the 0 that write stores, so it still reaches past DD1000.
+    ptr = Int("Ptr", min=1, max=1010)
+    at = Int("At", external=True)
+    out = Int("Out")
+    with Program(strict=False) as prog:
+        with rung():
+            copy(dd[ptr], out)
+        with rung():
+            copy(0, ds[at])
+    mapping = TagMap({ptr: ds[1], out: ds[2], at: ds[3]}, include_system=False)
+    (finding,) = _found(prog, mapping)
+    assert finding.message == (
+        f"DD[Ptr] {_AT} can reach DD1001. DD ends at DD1000. pyrung reads 0 there."
+    )

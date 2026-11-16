@@ -162,7 +162,7 @@ def compute_reference_constants(
         _scan_indirect_reads(subroutine_rungs)
 
     def _is_program_constant(name: str) -> bool:
-        if pdg.writers_of.get(name, frozenset()):
+        if pdg.may_be_written(name):
             return False
         tag = known.get(name) if known is not None else None
         if tag is None:
@@ -229,6 +229,10 @@ def scan_transient_rest(
     from pyrung.core.analysis.simplified import Atom, Or
 
     if pdg.tag_roles.get(tag) == TagRole.INPUT:
+        return False, None
+    if pdg.unlisted_writers_of(tag):
+        # A write through a pointer that lists no targets may store any value after the
+        # writes listed here.
         return False, None
 
     writer_indices = pdg.writers_of.get(tag, frozenset())

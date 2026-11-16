@@ -1427,3 +1427,42 @@ def test_a_search_cut_short_makes_no_claim() -> None:
     assert _proved_on(_harnessed(program), hit) is not None
     plan = _harnessed(program).how(hit, max_scans=1)
     assert plan.status is PlanStatus.STOPPED, plan.reason
+
+
+def _named_like_a_slot(bank: Block, other: Block) -> Int:
+    return Int(f"{bank.name}5")
+
+
+def _mapped_onto_two_banks(bank: Block, other: Block) -> Int:
+    # map_to keeps only the last slot on the tag.  Each bank keeps its own.
+    tag = Int("TwiceMapped")
+    tag.map_to(bank[5])
+    tag.map_to(other[6])
+    return tag
+
+
+@pytest.mark.parametrize("make", [_named_like_a_slot, _mapped_onto_two_banks])
+def test_a_pointer_write_reaches_a_tag_the_bank_names(make: Callable[..., Int]) -> None:
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.static_proofs import ProofFacts, _pointer_written_blocks
+
+    # Past 1000 elements, so the graph does not take the bank's own tag for every slot.
+    bank = Block("Pw", TagType.INT, 1, 2000)
+    other = Block("Other", TagType.INT, 1, 10)
+    tag = make(bank, other)
+    with Program(strict=False) as prog:
+        with Rung(Bool("Go", external=True)):
+            copy(Int("Src", external=True), bank[Int("At", external=True)])
+        with Rung(tag > 50):
+            out(Bool("High"))
+    facts = ProofFacts(
+        snapshot={},
+        pdg=build_program_graph(prog),
+        program=prog,
+        free=frozenset(),
+        overridden=frozenset(),
+        couplings=(),
+        dt_ms=None,
+        pointer_written_blocks=_pointer_written_blocks(prog),
+    )
+    assert facts._writable_through_pointer(tag.name)

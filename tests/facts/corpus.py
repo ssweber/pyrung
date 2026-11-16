@@ -1295,3 +1295,114 @@ def words_packed_into_a_real() -> Any:
         with Rung(Bool("ShowPacked", external=True)):
             copy(packed, Int("PackedShown"))
     return prog
+
+
+# ---------------------------------------------------------------------------
+# Writes through a pointer into a block of more than 1000 elements
+# ---------------------------------------------------------------------------
+
+
+@idiom
+def pointer_write_into_a_big_real_block() -> Any:
+    """A write through a pointer with no declared bounds, into a block of more than 1000
+    elements, lists no targets.  It can store into the element a rung reads.
+
+    The write stores Inf here, and Inf minus Inf is NaN.  A copy of the element into an
+    Int stores 100 too.
+    """
+    far = Block("FarReal", TagType.REAL, 1, 2000)
+    at = Int("FarRealAt", external=True)
+    base = Real("FarRealBase")
+    over = Real("FarRealOver")
+    shown = Int("FarRealShown")
+    with Program() as prog:
+        with Rung(at == 5):
+            out(Bool("FarRealAtFive"))
+        with Rung(Bool("FarRealLoad", external=True)):
+            copy(3.0e38, base)
+        with Rung(Bool("FarRealTen", external=True)):
+            copy(10.0, base)
+        with Rung(Bool("FarRealScale", external=True)):
+            math(base * 10, over)
+        with Rung(Bool("FarRealWrite", external=True)):
+            copy(over, far[at])
+        with Rung(far[5] - far[5] == 0.0):
+            out(Bool("FarRealIsNumber"))
+        with Rung(Bool("FarRealShow", external=True)):
+            copy(far[5], shown)
+        with Rung(shown > 50):
+            out(Bool("FarRealAbove"))
+        with Rung(shown < 200):
+            out(Bool("FarRealBelow"))
+    return prog
+
+
+@idiom
+def pointer_write_into_a_big_int_block() -> Any:
+    """The Int form, and the element has a write of its own too."""
+    far = Block("FarInt", TagType.INT, 1, 2000)
+    at = Int("FarIntAt", external=True)
+    source = Int("FarIntSource", external=True, choices={0: "zero", 100: "hundred"})
+    shown = Int("FarIntShown")
+    with Program() as prog:
+        with Rung(at == 5):
+            out(Bool("FarIntAtFive"))
+        with Rung(Bool("FarIntSet", external=True)):
+            copy(3, far[5])
+        with Rung(Bool("FarIntWrite", external=True)):
+            copy(source, far[at])
+        with Rung(far[5] > 50):
+            out(Bool("FarIntHigh"))
+        with Rung(Bool("FarIntShow", external=True)):
+            copy(far[5], shown)
+        with Rung(shown > 50):
+            out(Bool("FarIntShownHigh"))
+    return prog
+
+
+@idiom
+def index_sum_write_into_a_big_int_block() -> Any:
+    """An index that adds two tags lists no targets past 1000 elements, bounds or not."""
+    far = Block("SumInt", TagType.INT, 1, 2000)
+    at = Int("SumIntAt", external=True, min=0, max=10)
+    offset = Int("SumIntOffset", external=True, min=0, max=10)
+    source = Int("SumIntSource", external=True, choices={0: "zero", 100: "hundred"})
+    with Program() as prog:
+        with Rung(Bool("SumIntWrite", external=True)):
+            copy(source, far[at + offset])
+        with Rung(far[5] > 50):
+            out(Bool("SumIntHigh"))
+    return prog
+
+
+def _acknowledge_write(prefix: str, read_at: int) -> Any:
+    """A write the tumbler makes: ``math(Cmd * 10 + 2999, At)`` under ``Cmd`` 1..100, then
+    ``copy(source, far[At])``.  So the write reaches 3009..3999 and nothing else."""
+    far = Block(f"{prefix}Int", TagType.INT, 1, 4500)
+    cmd = Int(f"{prefix}Cmd", external=True)
+    at = Int(f"{prefix}At")
+    source = Int(f"{prefix}Source", external=True, choices={0: "zero", 100: "hundred"})
+    shown = Int(f"{prefix}Shown")
+    with Program() as prog:
+        with Rung(Bool(f"{prefix}Set", external=True)):
+            copy(3, far[read_at])
+        with Rung(cmd >= 1, cmd <= 100):
+            math(cmd * 10 + 2999, at)
+            copy(source, far[at])
+        with Rung(Bool(f"{prefix}Show", external=True)):
+            copy(far[read_at], shown)
+        with Rung(shown > 50):
+            out(Bool(f"{prefix}ShownHigh"))
+    return prog
+
+
+@idiom
+def guarded_pointer_write_reaches_the_element_read() -> Any:
+    """``Cmd`` 1 makes the write store into element 3009, so its copy may hold 100."""
+    return _acknowledge_write("AckIn", 3009)
+
+
+@idiom
+def guarded_pointer_write_leaves_the_element_read() -> Any:
+    """The write never reaches element 5, so element 5 keeps its domain (0, 3)."""
+    return _acknowledge_write("AckOut", 5)

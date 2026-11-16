@@ -293,6 +293,33 @@ def _store_block(tag: Tag) -> tuple[Block, int] | None:
     return block, addr
 
 
+def block_positions(tag: Tag | None) -> tuple[tuple[Block, int], ...]:
+    """Each block element that *tag* is, as ``(block, address)``.
+
+    A write through a pointer into any of them stores into *tag*.  They are the block
+    that made the tag and the bank slot it was mapped onto (``_pyrung_hw_slot``), as
+    ``_store_block`` reads them.  Both are set when the tag is made or mapped.  So the
+    answer is the same before and after a run reads the bank.  A tag with neither gives
+    the block it is stamped with.
+    """
+    found: list[tuple[Block, int]] = []
+    home = getattr(tag, "_pyrung_home_block", None)
+    home_addr = getattr(tag, "_pyrung_home_addr", None)
+    if isinstance(home, Block) and isinstance(home_addr, int):
+        found.append((home, home_addr))
+    hw_slot = getattr(tag, "_pyrung_hw_slot", None)
+    # Held weakly: once the bank is gone, nothing maps the tag there.
+    bank = hw_slot[0]() if hw_slot is not None else None
+    if isinstance(bank, Block) and isinstance(hw_slot[1], int):
+        found.append((bank, hw_slot[1]))
+    if not found:
+        block = getattr(tag, "_pyrung_block", None)
+        addr = getattr(tag, "_pyrung_block_addr", None)
+        if isinstance(block, Block) and isinstance(addr, int):
+            found.append((block, addr))
+    return tuple(found)
+
+
 def block_room(tag: Tag) -> int | None:
     """How many elements *tag*'s block holds from *tag* to its end, *tag* included.
 

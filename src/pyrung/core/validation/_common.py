@@ -1255,8 +1255,9 @@ def _build_ote_alias_map(program: Program) -> _AliasMap:
     for tag_name, writers in graph.writers_of.items():
         facts = facts_by_tag.get(tag_name, ())
         ote_facts = [f for f in facts if f.is_ote_bit]
-        # Every writer must be an OTE bit for the disjunction to be exact/sound.
-        if not ote_facts or len(ote_facts) != len(writers):
+        # Every writer must be an OTE bit for the disjunction to be exact/sound.  A write
+        # through a pointer that lists no targets is a writer of unknown kind.
+        if not ote_facts or len(ote_facts) != len(writers) or graph.unlisted_writers_of(tag_name):
             continue
         alias_map[tag_name] = tuple(f.conditions for f in ote_facts)
     return alias_map

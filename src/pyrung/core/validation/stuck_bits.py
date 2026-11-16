@@ -581,9 +581,12 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
 
     Returns a StuckBitReport with one finding per stuck tag.
     """
+    from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
 
     sites = _collect_write_sites(program, target_extractor=_latch_reset_write_targets)
+    # A write through a pointer that lists no targets may supply the missing side.
+    unlisted = build_program_graph(program).unlisted_written()
     caller_map = _build_caller_map(program)
     tag_map = _build_tag_map(program)
     domains = _domain_map(tag_map)
@@ -643,6 +646,8 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
         # Skip a tag the outside writes (see tag_written_from_outside).  The field, the
         # HMI or the runtime handles the missing side.
         if tag is not None and tag_written_from_outside(tag):
+            continue
+        if tag_name in unlisted:
             continue
 
         latches = latch_sites.get(tag_name, [])

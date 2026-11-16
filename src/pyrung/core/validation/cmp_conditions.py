@@ -619,7 +619,7 @@ def _tag_stays_zero(tag: Tag, graph: Any) -> bool:
         return False
     if tag.readonly or graph.written_from_outside(tag.name):
         return False
-    return not graph.writers_of.get(tag.name)
+    return not graph.may_be_written(tag.name)
 
 
 def _tag_has_no_writer(tag: Tag, graph: Any) -> bool:
@@ -628,7 +628,7 @@ def _tag_has_no_writer(tag: Tag, graph: Any) -> bool:
         return False
     if tag.readonly or graph.written_from_outside(tag.name):
         return False
-    return not graph.writers_of.get(tag.name)
+    return not graph.may_be_written(tag.name)
 
 
 def _no_writer_operand(cmp: _Compare, graph: Any) -> tuple[_Operand, Tag] | None:
@@ -670,7 +670,7 @@ def _is_default_only_boolish_compare(cmp: _Compare, graph: Any) -> bool:
         tag is not None
         and not tag.readonly
         and tag.default == 0
-        and not graph.writers_of.get(tag.name)
+        and not graph.may_be_written(tag.name)
         and not graph.written_from_outside(tag.name)
         and declared_value_domain(tag) is None
         for tag in (_operand_tag(cmp.left), _operand_tag(cmp.right))

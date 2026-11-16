@@ -452,7 +452,7 @@ def _constant_feedback_lookup_routes(
         except (IndexError, TypeError, ValueError, ZeroDivisionError):
             continue
         slot_name = table.block._effective_slot_name(address)
-        if pdg.writers_of.get(slot_name):
+        if pdg.may_be_written(slot_name) or pdg.unlisted_writers_at(table.block, address):
             continue
         request_value = _read_table(
             table,

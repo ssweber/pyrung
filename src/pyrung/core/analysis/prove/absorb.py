@@ -351,7 +351,7 @@ def _condition_dependency_reaches_targets(
         visited.add(current)
         if current not in graph.tags:
             return True
-        for rung_idx in graph.writers_of.get(current, frozenset()):
+        for rung_idx in graph.all_writers_of(current):
             node = graph.rung_nodes[rung_idx]
             for upstream in node.condition_reads | node.data_reads:
                 if upstream not in visited:
@@ -388,7 +388,7 @@ def _reset_feedback_is_threshold_mediated(
         visited.add(current)
         if current not in graph.tags:
             return False
-        for rung_idx in graph.writers_of.get(current, frozenset()):
+        for rung_idx in graph.all_writers_of(current):
             node = graph.rung_nodes[rung_idx]
             for upstream in node.data_reads:
                 if upstream in target_tags:
@@ -402,7 +402,7 @@ def _reset_feedback_is_threshold_mediated(
                     queue.append(upstream)
 
     for tag_name in visited:
-        for rung_idx in graph.writers_of.get(tag_name, frozenset()):
+        for rung_idx in graph.all_writers_of(tag_name):
             node = graph.rung_nodes[rung_idx]
             upstream = frozenset(node.condition_reads | node.data_reads)
             if not _condition_dependency_reaches_targets(graph, upstream, target_tags):
@@ -598,7 +598,7 @@ def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
     if not isinstance(value, str):
         return False
     tag = graph.tags.get(value)
-    if tag is None or tag_written_from_outside(tag):
+    if tag is None or tag_written_from_outside(tag) or graph.unlisted_writers_of(value):
         return False
     if value not in graph.writers_of:
         return True
@@ -870,7 +870,7 @@ def _find_comparison_absorptions(
             continue
         if tag.readonly or tag_written_from_outside(tag) or tag.public:
             continue
-        if tag_name not in graph.writers_of:
+        if not graph.may_be_written(tag_name):
             continue
         if not _comparison_domain_is_worth_absorbing(tag_name, tag, structural_domains):
             continue

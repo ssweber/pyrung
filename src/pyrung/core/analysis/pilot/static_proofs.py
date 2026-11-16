@@ -59,7 +59,7 @@ from pyrung.core.crossing import CrossingContext, Literal
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import ForLoopInstruction
 from pyrung.core.instruction.timers import OnDelayInstruction
-from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.memory_block import Block, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.synthesis import coil_timer
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import ImmediateRef, TagType, tag_written_from_outside
@@ -89,7 +89,7 @@ class ProofFacts:
     overridden: frozenset[str]
     couplings: tuple[Coupling, ...]
     dt_ms: float | None
-    pointer_written_blocks: frozenset[str]
+    pointer_written_blocks: frozenset[Block]
 
     def holds(self, tag: str, value: Any) -> bool:
         """Does *tag* have *value* now?  A tag no scan has written yet has its default."""
@@ -102,8 +102,7 @@ class ProofFacts:
         return resolve_rung(self.program, self.pdg.rung_nodes[node_index])
 
     def _writable_through_pointer(self, tag: str) -> bool:
-        block = getattr(self.pdg.tags.get(tag), "_pyrung_block", None)
-        return block is not None and block.name in self.pointer_written_blocks
+        return bool(self.pdg.tag_positions(tag, self.pointer_written_blocks))
 
     def _can_write(self, written: Any, tag: str, value: Any) -> bool:
         """Might this static write leave *tag* at *value*?  Only a literal can rule it out."""
@@ -156,16 +155,16 @@ def _has_a_loop(rung: Any) -> bool:
     return any(isinstance(instr, ForLoopInstruction) for instr in rung._instructions)
 
 
-def _pointer_written_blocks(program: Any) -> frozenset[str]:
+def _pointer_written_blocks(program: Any) -> frozenset[Block]:
     """Every block some instruction writes at an address only the scan knows."""
-    names: set[str] = set()
+    blocks: set[Block] = set()
     for instr in walk_instructions(program):
         for target in instruction_write_targets(instr):
             if isinstance(target, ImmediateRef):
                 target = target.value
             if isinstance(target, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
-                names.add(target.block.name)
-    return frozenset(names)
+                blocks.add(target.block)
+    return frozenset(blocks)
 
 
 def facts_for(setup: DriveSetup) -> ProofFacts:

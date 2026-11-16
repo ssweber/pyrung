@@ -742,7 +742,12 @@ def _indirect_constant_table_index(
         addr = scale * value + offset
         if addr < block.start or addr > block.end:
             continue
-        if block._effective_slot_name(addr) in writers:
+        slot = block._effective_slot_name(addr)
+        if (
+            slot in writers
+            or graph.unlisted_writers_at(block, int(addr))
+            or graph.unlisted_writers_of(slot)
+        ):
             return None
     return root
 
@@ -857,8 +862,9 @@ def _domain_for_source_tag(
     """Resolve the best current finite domain for a source tag.
 
     A Real in *non_finite* may hold NaN or Inf, which its split points do not stand for.
+    A tag a write through a pointer may store into unlisted has no known writer values.
     """
-    if tag_name in non_finite:
+    if tag_name in non_finite or graph.unlisted_writers_of(tag_name):
         return None
     if tag_name in known_domains:
         return known_domains[tag_name]
@@ -915,7 +921,8 @@ def _domain_from_indirect_source(
 
     Returns None when the index set cannot be bounded, or when an in-range
     element is written but has no inferred domain — the caller then leaves
-    the source unresolved.
+    the source unresolved.  A write through a pointer that lists no targets
+    counts as a writer with no domain (``ProgramGraph.unlisted_writers_of``).
     """
     from pyrung.core.memory_block import IndirectRef
 
@@ -944,7 +951,11 @@ def _domain_from_indirect_source(
             values.add(target.default)
             continue
         element_name = block._effective_slot_name(raw_addr)
-        if element_name in non_finite:
+        if (
+            element_name in non_finite
+            or graph.unlisted_writers_at(block, raw_addr)
+            or graph.unlisted_writers_of(element_name)
+        ):
             return None
         if element_name in known_domains:
             values.update(known_domains[element_name])
@@ -1467,13 +1478,16 @@ def _collect_structural_domain_info(
 
     # A Real that may hold NaN or Inf gets no domain, so its literal writes are no seed.
     non_finite = non_finite_reals(program, graph, frozenset(_collect_receive_dest_names(program)))
+    # Nor does a tag a write through a pointer may store into unlisted, whatever its type.
+    unlisted = graph.unlisted_written()
+    no_domain = non_finite | unlisted
     known_domains = {
         name: domain
         for name, domain in (
             literal_write_domains
             or _collect_literal_write_domains(program, graph.tags, graph.indirect_reach)
         ).items()
-        if name not in non_finite
+        if name not in no_domain
     }
     if profile:
         profile_last = _classify_profile_mark(timings, "literal_domain_seed", profile_last)
@@ -1510,7 +1524,7 @@ def _collect_structural_domain_info(
     if profile:
         profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
     for tag_name, tag in graph.tags.items():
-        if tag_name in known_domains:
+        if tag_name in known_domains or tag_name in no_domain:
             continue
         if tag_name in RUNTIME_VALUES:
             # The runtime writes it, so it is not a constant.
@@ -1531,7 +1545,7 @@ def _collect_structural_domain_info(
     self_feed_boundary_targets: set[str] = set()
     # Each target that adds to itself (`math(T + 1, T)`) is seeded from the targets
     # seeded before it.  So they go in sorted order, or the facts change with the hash seed.
-    for target_name in sorted(monotone_self_feed_targets - non_finite):
+    for target_name in sorted(monotone_self_feed_targets - no_domain):
         target = graph.tags.get(target_name)
         if target is None:
             continue
@@ -1575,7 +1589,7 @@ def _collect_structural_domain_info(
             if profile:
                 fixpoint_target_visits += 1
             target = graph.tags.get(target_name)
-            if target is None or not writers or target_name in non_finite:
+            if target is None or not writers or target_name in no_domain:
                 continue
 
             candidate_values: set[Any] = set()
@@ -1624,7 +1638,7 @@ def _collect_structural_domain_info(
 
     if discovered_domains is not None:
         for name, domain in discovered_domains.items():
-            if name not in known_domains and name not in non_finite:
+            if name not in known_domains and name not in no_domain:
                 known_domains[name] = domain
     if profile:
         profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
@@ -1637,6 +1651,10 @@ def _collect_structural_domain_info(
         atom_idx,
         real_gap_points=real_gap_points,
     )
+    # Carrying a comparison back can give a source a domain, which a write through a
+    # pointer that lists no targets voids.
+    for name in unlisted & known_domains.keys():
+        del known_domains[name]
     if profile:
         _classify_profile_mark(timings, "reverse_boundary_blockers", profile_last)
         _classify_profile_emit(
@@ -1688,7 +1706,7 @@ def collect_produced_value_domains(
     fixed point covers literal and named copies, bounded calculations, and
     constant/finite indirect-table reads through the same write-domain helpers
     used by fact classification.  Unknown sources, self-fed calculations, and
-    over-cap indirect destinations cause a conservative punt.
+    writes through a pointer that list no targets cause a conservative punt.
     """
     from pyrung.core.analysis.sp_values import _expr_tag_names
     from pyrung.core.instruction.calc import CalcInstruction
@@ -1708,19 +1726,11 @@ def collect_produced_value_domains(
         for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
             by_target.setdefault(target_name, []).append(instr)
 
-    # An over-cap indirect destination is intentionally absent from the normal
-    # static target list.  Any materialized slot in that block may still be its
-    # runtime target, so none of those slots can carry a complete producer set.
-    opaque_dest_blocks = {ref.block for ref in graph.indirect_writes}
-    opaque_targets = {
-        name
-        for name, tag in graph.tags.items()
-        if getattr(tag, "_pyrung_block", None) in opaque_dest_blocks
-    }
-    # The remote device decides what a receive() stores in its payload, so a
-    # payload has no complete set of writers, even without ``external``.
+    # A write through a pointer may store into a tag unlisted, so that tag has no
+    # complete set of writers.  The remote device decides what a receive() stores in
+    # its payload, so a payload has none either, even without ``external``.
     incomplete_targets = (
-        opaque_targets
+        graph.unlisted_written()
         | _collect_receive_dest_names(program)
         | {
             name
@@ -3089,10 +3099,12 @@ def _classify_dimensions_from_graph(
     # under-specified and must surface as Intractable (or heuristic seeding)
     # so the user adds bounds.  ``atom_idx`` only records *direct* comparison
     # participation, so the transitive data-flow closure is used.
+    unlisted = graph.unlisted_written()
     constant_storage = frozenset(
         name
         for name, tag in graph.tags.items()
         if name not in graph.writers_of
+        and name not in unlisted
         and not graph.written_from_outside(name)
         and name not in receive_dest_names
         and name not in influences_comparison
@@ -3118,6 +3130,15 @@ def _classify_dimensions_from_graph(
         is_written = tag_name in graph.writers_of
 
         if tag_name in SYSTEM_TAGS_BY_NAME and not is_written:
+            continue
+
+        if tag_name in unlisted:
+            # A write through a pointer may store into it, and no list says what that
+            # write stores here.  So it is written, with no domain.
+            if unclassified is not None:
+                unclassified.add(tag_name)
+            else:
+                infeasible_tags.append(tag_name)
             continue
 
         if role == TagRole.INPUT or not is_written or tag_name in receive_dest_names:

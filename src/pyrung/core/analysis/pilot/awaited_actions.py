@@ -300,7 +300,7 @@ def is_program_constant(name: str, ctx: WalkContext) -> bool:
     """
     if not name:
         return False
-    if ctx.pdg.writers_of.get(name, frozenset()) or ctx.pdg.written_from_outside(name):
+    if ctx.pdg.may_be_written(name) or ctx.pdg.written_from_outside(name):
         return False
     if name in ctx.steerable:
         return False

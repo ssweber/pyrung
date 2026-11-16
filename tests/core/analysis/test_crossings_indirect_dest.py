@@ -219,8 +219,8 @@ def test_attribution_never_promotes(monkeypatch) -> None:
     orig = pdg_mod._collect_indirect_writes
 
     def _no_attr(program, rung_nodes, tag_refs, writer_instrs):
-        refs, _attr = orig(program, rung_nodes, tag_refs, writer_instrs)
-        return refs, {}
+        refs, _attr, unlisted = orig(program, rung_nodes, tag_refs, writer_instrs)
+        return refs, {}, unlisted
 
     plc = PLC(logic)
     plc.step()

@@ -16,7 +16,9 @@ These are the ways a Real gets one:
 - A ``pack_text()`` of a number just past the Real range stores +/-Inf.
 - The outside writes a tag ``tag_written_from_outside`` names, and a ``receive()`` payload
   holds what a peer sends.  Both can be the words of a NaN.
-- A write through a pointer into a block past the element cap may store into any element.
+- A write through a pointer with no declared bounds, into a block of more than 1000
+  elements (``_INDIRECT_BLOCK_CAP`` in pdg.py), lists no targets.  So it may store into
+  any element its pointer can reach.
 
 A Real with ``choices=`` or with ``min=`` and ``max=`` holds only those values.  The facts
 take a declaration as given everywhere else too.
@@ -79,9 +81,9 @@ def non_finite_reals(
     reals = [name for name, tag in graph.tags.items() if tag.type is TagType.REAL]
     if not reals:
         return frozenset()
-    # A write through a pointer into a block past the element cap lists no targets.  So any
-    # element of that block may hold what the write stores.
-    opaque_blocks = {ref.block for ref in graph.indirect_writes}
+    # A write through a pointer may store into a tag unlisted, so that tag may hold what
+    # the write stores (``ProgramGraph.unlisted_writers_of``).
+    unlisted = graph.unlisted_written()
     bounds: dict[str, Bounds | None] = {}
     moving: set[str] = set()
     for name in reals:
@@ -94,11 +96,7 @@ def non_finite_reals(
         elif name in SYSTEM_TAGS_BY_NAME and name not in graph.writers_of:
             # The runtime writes it, and only with finite values.
             bounds[name] = _FINITE
-        elif (
-            graph.written_from_outside(name)
-            or name in receive_dests
-            or getattr(tag, "_pyrung_block", None) in opaque_blocks
-        ):
+        elif graph.written_from_outside(name) or name in receive_dests or name in unlisted:
             bounds[name] = None
         else:
             bounds[name] = (tag.default, tag.default)
@@ -232,15 +230,11 @@ class _Bounds:
         """A read through a pointer, of any element of its block."""
         block = getattr(ref, "block", None)
         kind = getattr(block, "type", None)
-        if kind is None:
+        if block is None or kind is None:
             return None
         if kind is not TagType.REAL:
             return _INTEGER_SPANS.get(kind)
-        elements = [
-            name
-            for name, tag in self.graph.tags.items()
-            if getattr(tag, "_pyrung_block", None) is block
-        ]
+        elements = [name for name in self.graph.tags if self.graph.tag_positions(name, (block,))]
         if any(self.reals.get(name, _FINITE) is None for name in elements):
             return None
         return _FINITE

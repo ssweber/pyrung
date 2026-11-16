@@ -143,6 +143,9 @@ def _clear_only_command(tag: str, t: Any, pdg: ProgramGraph, program: Any) -> bo
     writers = pdg.writers_of.get(tag, frozenset())
     if not writers or not pdg.readers_of.get(tag, frozenset()):
         return False
+    if pdg.unlisted_writers_of(tag):
+        # A write through a pointer may store any value here.
+        return False
     from pyrung.core.instruction.coils import reset_value_for_type
 
     tag_ref = t if t is not None else pdg.tags.get(tag)
@@ -197,6 +200,10 @@ def _operator_interface(
     disqualifies (the program owns the rest state); the clear-only arm is exempt,
     since resetting to rest is precisely what an ack-cleared command expects.
     """
+    if pdg.unlisted_writers_of(tag):
+        # A write through a pointer that lists no targets may store into it, so the
+        # program may author it, even when the outside writes it too.
+        return False
     writers = pdg.writers_of.get(tag, frozenset())
     if not writers:
         # Pure input: chosen entirely outside the program.  Require a reader so a
