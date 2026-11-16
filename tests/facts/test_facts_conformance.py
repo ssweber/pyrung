@@ -39,12 +39,6 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
         ("stateful domain", "TD302"): "scan 43.  " + _PAIR,
         ("stateful domain", "TD305"): "scan 43.  " + _PAIR,
     },
-    "drum_ds/ds_preset_ends": {
-        ("scan-local", "DS4016"): (
-            "scan 20.  Slice elision drops DS4016, but the time drum reads it as a step"
-            " preset on scans that do not write it."
-        ),
-    },
 }
 
 #: Facts a case's run may leave unjudged.  A case runs its script once, with ``Cmd`` its

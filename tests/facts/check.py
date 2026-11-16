@@ -1127,7 +1127,8 @@ class Prober:
         fork = plc.fork(inherit_log=False)
         fork.patch({**patch, **change})
         leave_out = set(change) | {f"_frac:{n}" for n in change}
-        return _Fork(why, change, fork, leave_out)
+        # A fork drops the patches pending on its source, so _culprits patches the scan again.
+        return _Fork(why, change, fork, leave_out, patch=dict(patch))
 
     def _other(self, name: str, value: Any) -> Any:
         """A value of *name*'s type other than *value*, often one the program compares it with."""
@@ -1331,7 +1332,7 @@ class Prober:
         found = []
         for name, value in sorted(fork.change.items()):
             alone = before.fork(inherit_log=False)
-            alone.patch({name: value})
+            alone.patch({**fork.patch, name: value})
             alone.step()
             if _differences(alone, after, fork.leave_out):
                 found.append(name)

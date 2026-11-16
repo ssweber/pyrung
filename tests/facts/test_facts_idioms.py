@@ -47,6 +47,13 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
             " points at 10 only.  No value of it is above 50."
         ),
     },
+    "text_copy_skipped_on_a_bad_digit": {
+        ("scan-local", "KeyLevel"): (
+            "scan 10.  The copy writes nothing when KeyChar is not a digit, so KeyLevel keeps"
+            " the value of the scan before.  The prover takes the copy for a write on every"
+            " scan."
+        ),
+    },
 }
 
 #: Facts the runs cannot reach, by idiom.  Each maps a kind of fact, or ``"<Done> on"``, to why.

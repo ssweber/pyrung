@@ -36,6 +36,8 @@
 - `program.check()`, `how()` and `program.dataview()` now see every TXT a `to_text()` copy can write (they saw only the first).
 - `program.check()` no longer reports a dead write for a `to_text()` copy whose first TXT a later copy overwrites.
 - `how()` no longer assumes that a `Real` holds a number when it may hold NaN or Inf, such as after a `math()` past the Real range or a `pack_words()` into it.
+- `how()` now keeps a drum step's preset or an off-delay's preset that a rung below the instruction sets (it took the preset for a value set before each read).
+- `how()` now keeps a continuous `search()`'s result, which the search reads to resume after it (it took the result for a value set before each read).
 - `how()` and `program.check()` no longer assume that a copy or fill through a pointer writes every element the pointer can reach.
 - `how()` and `program.check()` no longer treat an element of a block of more than 1000 elements as never written when a write through a pointer with no declared bounds can store into it.
 - `program.check()` no longer reports these findings on a field feedback (a tag with `link=`):

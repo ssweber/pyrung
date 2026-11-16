@@ -52,6 +52,7 @@ from pyrung import (
     system,
     time_drum,
     to_text,
+    to_value,
     toggle,
 )
 from pyrung.core import PLC, Or
@@ -1406,3 +1407,155 @@ def guarded_pointer_write_reaches_the_element_read() -> Any:
 def guarded_pointer_write_leaves_the_element_read() -> Any:
     """The write never reaches element 5, so element 5 keeps its domain (0, 3)."""
     return _acknowledge_write("AckOut", 5)
+
+
+# ---------------------------------------------------------------------------
+# Reads an instruction's own state decides
+# ---------------------------------------------------------------------------
+
+
+@idiom
+def drum_preset_written_below_the_drum() -> Any:
+    """A time drum reads its step's preset tag on each scan the step times.
+
+    The rungs below the drum write the preset every scan, so the drum reads the value of the
+    scan before.
+    """
+    slow = Bool("SlowMix", external=True)
+    preset = Int("MixTime")
+    with Program() as prog:
+        with Rung(Bool("MixRun", external=True)):
+            time_drum(
+                outputs=[Bool("MixA"), Bool("MixB")],
+                presets=[preset, 50],
+                unit="ms",
+                pattern=[[1, 0], [0, 1]],
+                current_step=Int("MixStep"),
+                accumulator=Int("MixAcc"),
+                completion_flag=Bool("MixDone"),
+            ).reset(Bool("MixClear", external=True))
+        with Rung(slow):
+            copy(300, preset)
+        with Rung(~slow):
+            copy(100, preset)
+    return prog
+
+
+@idiom
+def drum_preset_set_in_its_subroutine() -> Any:
+    """A time drum in a subroutine reads a preset tag that its rungs write only now and then."""
+    preset = Int("RinseTime")
+    with Program() as prog:
+        with Rung():
+            call("Rinse")
+        with subroutine("Rinse"):
+            with Rung(Bool("RinseLong", external=True)):
+                copy(300, preset)
+            with Rung(Bool("RinseShort", external=True)):
+                copy(100, preset)
+            with Rung(Bool("RinseRun", external=True)):
+                time_drum(
+                    outputs=[Bool("RinseA"), Bool("RinseB")],
+                    presets=[preset, 50],
+                    unit="ms",
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Int("RinseStep"),
+                    accumulator=Int("RinseAcc"),
+                    completion_flag=Bool("RinseDone"),
+                ).reset(Bool("RinseClear", external=True))
+    return prog
+
+
+@idiom
+def drum_event_written_below_the_drum() -> Any:
+    """An event drum reads only its current step's event, and a rung below the drum writes it."""
+    ready = Bool("FeedReady")
+    with Program() as prog:
+        with Rung(Bool("FeedRun", external=True)):
+            event_drum(
+                outputs=[Bool("FeedA"), Bool("FeedB")],
+                events=[Bool("FeedStart", external=True), ready],
+                pattern=[[1, 0], [0, 1]],
+                current_step=Int("FeedStep"),
+                completion_flag=Bool("FeedDone"),
+            ).reset(Bool("FeedClear", external=True))
+        with Rung(Bool("FeedSensor", external=True)):
+            out(ready)
+    return prog
+
+
+@idiom
+def off_delay_preset_written_below_the_timer() -> Any:
+    """An off-delay timer reads its preset tag only while it times, after its rung goes false."""
+    long = Bool("LongPurge", external=True)
+    preset = Int("PurgeTime")
+    purge = Timer.clone("Purge")
+    with Program() as prog:
+        with Rung(Bool("Burner", external=True)):
+            off_delay(purge, preset)
+        with Rung(purge.Done):
+            out(Bool("Blower"))
+        with Rung(long):
+            copy(300, preset)
+        with Rung(~long):
+            copy(100, preset)
+    return prog
+
+
+@idiom
+def search_stops_before_the_element_written_below() -> Any:
+    """A search reads no element past its first match, so whether it reads Bin2 turns on Bin1."""
+    bins = Block("Bin", TagType.INT, 1, 2)
+    wanted = Int("BinWant", external=True, min=0, max=3)
+    full = Bool("BinFull", external=True)
+    with Program() as prog:
+        with Rung(Bool("BinLook", external=True)):
+            search(bins.select(1, 2) <= wanted, result=Int("BinAt"), found=Bool("BinHit"))
+        with Rung(Bool("BinStock", external=True)):
+            copy(5, bins[1])
+        with Rung(full):
+            copy(1, bins[2])
+        with Rung(~full):
+            copy(3, bins[2])
+    return prog
+
+
+@idiom
+def continuous_search_resumes_after_its_result() -> Any:
+    """A continuous search reads its last result to start after it."""
+    lanes = Block("Lane", TagType.INT, 1, 3)
+    at = Int("LaneAt")
+    with Program() as prog:
+        with Rung():
+            search(lanes.select(1, 3) == 5, result=at, found=Bool("LaneHit"), continuous=True)
+        with Rung(at == 2):
+            out(Bool("LaneTwo"))
+        with Rung(Bool("LaneStock1", external=True)):
+            copy(5, lanes[1])
+        with Rung(Bool("LaneStock2", external=True)):
+            copy(5, lanes[2])
+        with Rung(Bool("LaneRestart", external=True)):
+            copy(0, at)
+    return prog
+
+
+# ---------------------------------------------------------------------------
+# Writes an instruction may skip
+# ---------------------------------------------------------------------------
+
+
+@idiom
+def text_copy_skipped_on_a_bad_digit() -> Any:
+    """A copy from text to a number writes nothing when the text is not a number."""
+    key = Char("KeyChar", external=True, choices={"7": "seven", "x": "bad"})
+    level = Int("KeyLevel")
+    with Program() as prog:
+        with Rung():
+            copy(key, level, convert=to_value)
+        with Rung(level > 5):
+            latch(Bool("KeyHigh"))
+        with Rung(Bool("KeyClear", external=True)):
+            reset(Bool("KeyHigh"))
+        with Rung(Bool("KeyHigh")):
+            out(Bool("KeyLamp"))
+    return prog
