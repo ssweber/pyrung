@@ -373,6 +373,64 @@ RTC_FIELD_TAG_NAMES = frozenset(
 )
 
 
+def _span(low: int, high: int) -> tuple[int, ...]:
+    return tuple(range(low, high + 1))
+
+
+_BOTH = (False, True)
+
+# Every value the runtime can give each system tag it writes, for the static facts.
+# A system tag missing here holds its default until the ladder writes it.  None means
+# too many values to list, so the facts make no claim about a copy of the tag.
+RUNTIME_VALUES: dict[str, tuple[Any, ...] | None] = {
+    system.sys.always_on.name: (True,),
+    **{
+        tag.name: _BOTH
+        for tag in (
+            system.sys.first_scan,
+            system.sys.scan_clock_toggle,
+            system.sys.clock_10ms,
+            system.sys.clock_100ms,
+            system.sys.clock_500ms,
+            system.sys.clock_1s,
+            system.sys.clock_1m,
+            system.sys.clock_1h,
+            system.sys.mode_switch_run,
+            system.sys.mode_run,
+            system.sys.fixed_scan_mode,
+            system.sys.battery_present,
+            system.rtc.apply_date_error,
+            system.rtc.apply_time_error,
+            system.storage.sd.ready,
+            system.storage.sd.write_status,
+            system.storage.sd.error,
+        )
+    },
+    **{name: _BOTH for name in _FAULT_FLAG_NAMES},
+    **{
+        tag.name: None
+        for tag in (
+            system.sys.scan_counter,
+            system.sys.scan_time_current_ms,
+            system.sys.scan_time_min_ms,
+            system.sys.scan_time_max_ms,
+            system.sys.scan_time_fixed_setup_ms,
+            system.sys.dt,
+            # Any year a datetime holds, 1..9999.
+            system.rtc.year4,
+        )
+    },
+    system.rtc.year2.name: _span(0, 99),
+    system.rtc.month.name: _span(1, 12),
+    system.rtc.day.name: _span(1, 31),
+    system.rtc.weekday.name: _span(1, 7),
+    system.rtc.hour.name: _span(0, 23),
+    system.rtc.minute.name: _span(0, 59),
+    system.rtc.second.name: _span(0, 59),
+    system.storage.sd.error_code.name: _span(_SD_ERROR_NONE, _SD_ERROR_SAVE_FAILURE),
+}
+
+
 def _click_weekday(value: datetime) -> int:
     # Click returns Sunday=1 ... Saturday=7.
     return ((value.weekday() + 1) % 7) + 1

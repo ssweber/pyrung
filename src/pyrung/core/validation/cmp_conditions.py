@@ -671,6 +671,7 @@ def _is_default_only_boolish_compare(cmp: _Compare, graph: Any) -> bool:
         and not tag.readonly
         and tag.default == 0
         and not graph.writers_of.get(tag.name)
+        and not graph.written_from_outside(tag.name)
         and declared_value_domain(tag) is None
         for tag in (_operand_tag(cmp.left), _operand_tag(cmp.right))
     )

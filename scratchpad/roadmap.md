@@ -44,7 +44,6 @@ ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `ca
 tests/facts checks the facts against real runs, over the idiom corpus and the conformance programs.
 
 - **Facts the runs refute.** The check in tests/facts holds each one as a strict xfail, `test_known_failure_is_fixed[...]` in the file named.
-  - The how() prior holds system tags at their defaults, so a copy of a clock or the RTC gets 0 only. `test_facts_conformance.py`, `[system/scan_counter_steps_by_one-stateful domain-System_Result2]` and `[rtc_set/date_and_time_apply-stateful domain-DD74]` (DD75, DD84 and DD85 too).
   - A Real domain has no value that stands for NaN or Inf. `test_facts_conformance.py`, `[word_floor/below_int_and_nan-stateful domain-DF32]` and `[modbus_raw/raw_values-stateful domain-DF114]` (DF115 too).
   - A down counter's Acc domain misses the value a copy stages it at. `test_facts_conformance.py`, `[counters/count_down_done_at_preset-stateful domain-CTD101]`.
   - Two timer Accs the rungs compare with each other have no domain pair that is equal, above 0 and below 20. `test_facts_conformance.py`, `[reset_pins/rton_reset_held-stateful domain-TD302]` (TD305 too).
@@ -53,12 +52,7 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
   - `write_sites` lists only the first character that a `to_text()` copy of a tag writes. How many follow depends on the value, up to 48 for a `Real` without `exponential`. So the program graph and the facts miss the others. `test_facts_conformance.py`, `[text/to_text_fixed-declared writes-CopyInstruction]` and the 19 other cases in `_TO_TEXT_OF_A_TAG`. A fix needs a static bound for each source type, and a bound that covers a whole `Real` may clash with the lints.
   - A copy of an input takes only the values the ladder writes or the input's split points, not values the outside sets. `test_facts_idioms.py`, `[hmi_value_copied_after_ladder_default-stateful domain-WorkingSetpoint]` and `[compared_input_copied_and_compared-stateful domain-HeldLevel]`. The fixpoint adds an input's split points after it computes the copy, so the fix is not a one-liner.
-- **Tags set from outside.** `tag_written_from_outside` covers `external`, physical inputs and `link=` feedbacks. These places still check `external` (and `InputTag`) only.
-  - absorb.py: the external-preset guard, `_is_stable_threshold`, `_stable_int_tag_value`, and the `external` skips in `_find_comparison_absorptions` and four more absorptions.
-  - `pilot/static_proofs.py` `facts_for`, the free set. A harness coupling adds its feedback already. A linked tag with no harness is not free in that run.
-  - `value_sets.py` reads an unwritten linked pointer as its default. The CLICK pointer-range lint reads those value sets.
-  - Probes with a bounded linked tag refute nothing, and an unbounded one gets no domain, so the facts make no claim. Change them when an idiom fails.
-- **The facts change with the hash seed.** On main, `for_more/clock_edges_in_a_body` gets one of three classifications by `PYTHONHASHSEED`. With some seeds DD82 is stateful, and with others it has no domain. So how()'s key for it changes from run to run. No seed gives a wrong fact.
+- **System tags pyrung never writes.** On a CLICK, `fault.plc_error` (SC19) and `fault.code` (SD1) change, and the firmware version (SD5-SD8) is not 0. pyrung leaves them at 0, so the facts hold them at 0. A run on pyrung refutes nothing. Decide whether pyrung sets them, and then add them to `RUNTIME_VALUES`.
 - **Left over from the search deletion.**
   - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
     were the search's. Only tests pass them now. The `indirect_reach` maps they fill are then always empty. [nothing]

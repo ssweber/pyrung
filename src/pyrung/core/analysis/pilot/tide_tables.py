@@ -515,7 +515,9 @@ def table_from_indirect_src(
         if not names:
             return None
         candidates = (
-            {name for name in names if pdg.writers_of.get(name)} if single_mutable_index else names
+            {name for name in names if pdg.writers_of.get(name) or pdg.written_from_outside(name)}
+            if single_mutable_index
+            else names
         )
         if len(candidates) != 1:
             return None
@@ -638,9 +640,9 @@ def _model_constant(
     pdg: ProgramGraph,
 ) -> Any | None:
     """A constant operand value: a never-written / readonly tag read from the
-    snapshot.  Returns ``None`` when *tag* is (re)written by the program and so
-    is not a constant we can pin."""
-    if pdg.writers_of.get(tag):
+    snapshot.  Returns ``None`` when the program or anything outside the ladder
+    writes *tag*, so it is not a constant we can pin."""
+    if pdg.writers_of.get(tag) or pdg.written_from_outside(tag):
         return None
     return snapshot.get(tag)
 

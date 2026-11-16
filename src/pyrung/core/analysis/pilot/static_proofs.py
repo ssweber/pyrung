@@ -62,7 +62,7 @@ from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.synthesis import coil_timer
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-from pyrung.core.tag import ImmediateRef, InputTag, TagType
+from pyrung.core.tag import ImmediateRef, TagType, tag_written_from_outside
 from pyrung.core.time_mode import TimeMode
 from pyrung.core.validation._common import walk_instructions
 
@@ -179,11 +179,7 @@ def facts_for(setup: DriveSetup) -> ProofFacts:
         | overridden
         | {coupling.fb_name for coupling in couplings}
         | SYSTEM_TAGS_BY_NAME.keys()
-        | {
-            name
-            for name, tag in setup.pdg.tags.items()
-            if tag.external or isinstance(tag, InputTag)
-        }
+        | {name for name, tag in setup.pdg.tags.items() if tag_written_from_outside(tag)}
     )
     return ProofFacts(
         snapshot=setup.diag_snapshot,

@@ -74,7 +74,7 @@ from pyrung.core.instruction.conversions import (
     copy_store_transform,
 )
 from pyrung.core.storage import BLANK_CHAR
-from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME, system
+from pyrung.core.system_points import RUNTIME_VALUES, SYSTEM_TAGS_BY_NAME, system
 from pyrung.core.tag import TagType, tag_written_from_outside
 
 from .absorb import (
@@ -859,6 +859,9 @@ def _domain_for_source_tag(
     tag = graph.tags.get(tag_name)
     if tag is None:
         return None
+    if tag_name in RUNTIME_VALUES:
+        # The runtime writes it, so its default is not its only value.
+        return RUNTIME_VALUES[tag_name]
     # Unwritten internal tags are at their default for fixpoint resolution
     # purposes.  This is broader than the structural seeding (which excludes
     # tags with comparison atoms), but that's fine: this only affects how
@@ -1470,7 +1473,12 @@ def _collect_structural_domain_info(
     for tag_name, tag in graph.tags.items():
         if tag_name in known_domains:
             continue
-        if tag.readonly:
+        if tag_name in RUNTIME_VALUES:
+            # The runtime writes it, so it is not a constant.
+            runtime_values = RUNTIME_VALUES[tag_name]
+            if runtime_values is not None:
+                known_domains[tag_name] = runtime_values
+        elif tag.readonly:
             known_domains[tag_name] = (tag.default,)
         elif (
             tag_name not in graph.writers_of
@@ -1482,7 +1490,9 @@ def _collect_structural_domain_info(
         profile_last = _classify_profile_mark(timings, "constant_seed", profile_last)
 
     self_feed_boundary_targets: set[str] = set()
-    for target_name in monotone_self_feed_targets:
+    # Each target that adds to itself (`math(T + 1, T)`) is seeded from the targets
+    # seeded before it.  So they go in sorted order, or the facts change with the hash seed.
+    for target_name in sorted(monotone_self_feed_targets):
         target = graph.tags.get(target_name)
         if target is None:
             continue

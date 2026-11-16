@@ -14,6 +14,7 @@ from pyrung.core.analysis.pdg import ProgramGraph, TagRole, resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import single_calc_source
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import _expr_tag_names, _values_match
+from pyrung.core.tag import tag_written_from_outside
 
 
 def compute_reference_constants(
@@ -34,8 +35,8 @@ def compute_reference_constants(
     2. Used as a copy/fill source feeding some destination D
     3. D consumes that tag as a static reference, either through a table
        pipeline or an explicit tag-valued comparison
-    4. Tag is **not** ``external`` — a declared program constant, not an
-       operator/field interface (given *known*; unchecked when *known* is None).
+    4. Nothing outside the ladder writes the tag (``tag_written_from_outside``).  So
+       it is a declared program constant, not an operator or field interface.
     """
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
@@ -163,9 +164,10 @@ def compute_reference_constants(
     def _is_program_constant(name: str) -> bool:
         if pdg.writers_of.get(name, frozenset()):
             return False
-        if known is not None and getattr(known.get(name), "external", False):
-            return False
-        return True
+        tag = known.get(name) if known is not None else None
+        if tag is None:
+            tag = pdg.tags.get(name)
+        return tag is None or not tag_written_from_outside(tag)
 
     return frozenset(name for name in candidates if _is_program_constant(name))
 
