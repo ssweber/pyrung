@@ -49,7 +49,7 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
     },
 }
 
-#: Facts the runs cannot reach, by idiom: a kind of fact, or ``"<Done> on"`` -> why.
+#: Facts the runs cannot reach, by idiom.  Each maps a kind of fact, or ``"<Done> on"``, to why.
 UNJUDGED: dict[str, dict[str, str]] = {
     "retentive_timer_with_reset": {
         "absorbed value": (

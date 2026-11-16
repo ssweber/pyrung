@@ -28,19 +28,20 @@ power-on defaults that no scan produced, so the checks start at the end of scan 
   such a comparison only through a pair of values.
 - **Produced value domains** (``produced_value_domains``).  These list every value exactly,
   so each value a tag holds is one of them.
-- **Scan-local tags.**  These are the written tags outside the world key
-  (``stateful_names``), the elided tags and the absorbed values below excepted.  Their
-  value at the start of a scan reaches no other tag and no memory by its end.  A probe
-  changes them all on one fork and one of them alone on another.  Then it compares each
-  fork's result with the run's.  A tag the classification
-  found no finite domain for is not one of them, since the prior claims nothing about it.
+- **Scan-local tags.**  The world key (``stateful_names``) lists the tags whose values
+  how() keeps from one scan to the next.  The scan-local tags are the written tags outside
+  it, the elided tags and the absorbed values below excepted.  Their value at the start of
+  a scan reaches no other tag and no memory by its end.  A probe changes them all on one
+  fork and one of them alone on another.  Then it compares each fork's result with the
+  run's.  A tag the classification found no finite domain for is not one of them, since
+  the prior claims nothing about it.
 - **Absorbed values** (``state_key_done_specs``, ``threshold_vector_specs``).  The world key
   keeps which side of each threshold a timer, counter or progress value is on, not the
   value itself.  A probe moves the value, or a threshold tag, without crossing a threshold
-  or landing on one.  Then nothing else changes, scan-local tags aside.  The world key never sees their values.
-  Each Done also turns on or off only when its Acc is on the matching side of its preset,
-  the literal the fact gives or the tag the instruction reads.  A time drum's completion
-  flag turns on only at its last step's time, and off only on a reset.
+  or landing on one.  Then no tag of the world key changes.  Each Done also turns on or off
+  only when its Acc is on the matching side of its preset.  That is the literal the fact
+  gives, or the tag the instruction reads.  A time drum's completion flag turns on only at
+  its last step's time, and off only on a reset.
 - **Projections.**  A tag elided as ``functional_dep`` equals ``offset + scale * source``
   after every scan.  An init constant has one value for each value of its representative.
 - **Stepping tags.**  A stepping tag has writes that can move it through values, such as a
@@ -599,7 +600,7 @@ class RandomInputs:
         return changed
 
     def _aim_script(self) -> list[dict[str, Any]]:
-        """Each scan's inputs for the next aim: run it, then hold its reset for three scans."""
+        """Each scan's inputs for the next aim, then three scans of its reset."""
         aim = self.aims[self.turn % len(self.aims)]
         self.turn += 1
         script = []
@@ -966,7 +967,7 @@ class _Band:
     unit: int
 
     def sides(self, value: Any, tags: Mapping[str, Any], facts: Facts) -> Any:
-        """Below, at or above each bound, as -1, 0 or 1, or ``None`` for a value not a number."""
+        """-1, 0 or 1 for below, at or above each bound.  ``None`` if a value is not a number."""
         out = []
         for bound in self.bounds:
             at = _value(tags, bound, facts) if isinstance(bound, str) else bound
