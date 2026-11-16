@@ -118,3 +118,12 @@ def test_a_math_result_that_wraps_keeps_every_value():
             out(Bool("Result"))
     assert ValidationContext(program).produced_domains.get(wrapped.name) != ()
     assert not program.check(select={"CMP_ALWAYS_FALSE"})
+
+
+def test_a_real_input_between_whole_number_bounds_stays_open():
+    pressure = Real("Pressure", external=True, min=0.0, max=10.0)
+    with Program() as program:
+        with Rung(pressure == 7.5):
+            out(Bool("AtSetpoint"))
+    assert pressure.name not in ValidationContext(program).produced_domains
+    assert not program.check(select={"CMP_ALWAYS_FALSE"})

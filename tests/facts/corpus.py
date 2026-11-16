@@ -831,7 +831,7 @@ def funcdep_written_before_its_source_moves() -> Any:
             math(x + 1, x)
         with Rung(x >= 4):
             copy(0, x)
-            copy(5, y)
+            math(x + 5, y)
         with Rung(y > 7):
             out(far)
     return prog
@@ -875,5 +875,52 @@ def busy_bit_cleared_each_scan() -> Any:
         with Rung(b, ~busy):
             out(granted_b)
         with Rung():
+            reset(busy)
+    return prog
+
+
+@idiom
+def hmi_command_word_cleared_by_ladder() -> Any:
+    """An HMI writes a command number, and the ladder clears it once taken."""
+    command = Int("HmiCommand", external=True)
+    running = Bool("ConveyorRun")
+    with Program() as prog:
+        with Rung(command == 1):
+            latch(running)
+            copy(0, command)
+        with Rung(command == 2):
+            reset(running)
+            copy(0, command)
+    return prog
+
+
+@idiom
+def hmi_setpoint_clamped_by_ladder() -> Any:
+    """An HMI writes a setpoint, and the ladder pulls it back into range."""
+    setpoint = Int("SpeedSetpoint", external=True)
+    fast = Bool("FastMode")
+    with Program() as prog:
+        with Rung(setpoint > 100):
+            copy(100, setpoint)
+        with Rung(setpoint < 0):
+            copy(0, setpoint)
+        with Rung(setpoint >= 60):
+            out(fast)
+    return prog
+
+
+@idiom
+def hmi_request_taken_when_nonzero() -> Any:
+    """Any nonzero request starts a job, and the ladder clears the request."""
+    request = Int("JobRequest", external=True)
+    job = Int("JobNumber")
+    busy = Bool("JobBusy")
+    done = Bool("JobDone", external=True)
+    with Program() as prog:
+        with Rung(request != 0, ~busy):
+            copy(request, job)
+            latch(busy)
+            copy(0, request)
+        with Rung(busy, done):
             reset(busy)
     return prog

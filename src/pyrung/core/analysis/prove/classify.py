@@ -1267,6 +1267,9 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
         return _NO_LITERAL_WRITE
     if not isinstance(value, (bool, int, float, str)):
         return _NO_LITERAL_WRITE
+    # A Copy of "ABC" into a CHAR writes one character into each of the next three.
+    if target.type is TagType.CHAR and isinstance(value, str) and len(value) > 1:
+        return _NO_LITERAL_WRITE
     return _store_copy_value_to_tag_type(value, target, source)
 
 
@@ -1920,7 +1923,7 @@ def _domain_from_copy_like_value(
     """Infer a target domain from a copy/fill-style source operand."""
     source_tag_name = _tag_name_from_value(raw_value)
     if source_tag_name is not None:
-        return _domain_for_source_tag(
+        domain = _domain_for_source_tag(
             source_tag_name,
             graph,
             all_exprs,
@@ -1928,6 +1931,11 @@ def _domain_from_copy_like_value(
             atom_index,
             real_gap_points=real_gap_points,
         )
+        if domain is None:
+            return None
+        from pyrung.core.instruction.conversions import copy_source_kind
+
+        return _stored_domain(domain, copy_source_kind(raw_value), target)
 
     literal = _literal_value_from_value(raw_value)
     if literal is not None:
@@ -1937,6 +1945,24 @@ def _domain_from_copy_like_value(
         return (stored,)
 
     return _domain_from_indirect_source(raw_value, target, graph, known_domains)
+
+
+def _stored_domain(domain: tuple[Any, ...], source: Any, target: Tag) -> tuple[Any, ...] | None:
+    """The values a Copy from a *source* with *domain* stores in *target*.
+
+    A Copy converts as it stores, so a DD 40000 copied into a DS stores 32767.  *source*
+    is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the source.
+    """
+    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+
+    stored: list[Any] = []
+    for value in domain:
+        if not isinstance(value, (bool, int, float)):
+            return domain if target.type is TagType.CHAR and isinstance(value, str) else None
+        each = _store_copy_value_to_tag_type(value, target, source)
+        if each not in stored:
+            stored.append(each)
+    return tuple(stored)
 
 
 def _interval_bounds(
@@ -2251,7 +2277,11 @@ def _domain_from_write_instruction(
     if isinstance(instr, BlockCopyInstruction):
         if instr.convert is not None:
             return None
-        return _domain_from_blockcopy(instr, target_name, known_domains, graph.indirect_reach)
+        domain = _domain_from_blockcopy(instr, target_name, known_domains, graph.indirect_reach)
+        if not domain:
+            return domain
+        source = getattr(getattr(instr.source, "block", None), "type", None)
+        return None if source is None else _stored_domain(domain, source, target)
 
     if isinstance(instr, CalcInstruction):
         if instr.dest.name != target_name:
@@ -2577,6 +2607,8 @@ def collect_produced_value_domains(
     from pyrung.core.memory_block import IndirectRef
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+
     from .passes import _collect_receive_dest_names
 
     by_target: dict[str, list[Any]] = {}
@@ -2609,7 +2641,8 @@ def collect_produced_value_domains(
 
     known: dict[str, tuple[Any, ...]] = {}
     for name, tag in graph.tags.items():
-        if name in incomplete_targets:
+        # The runtime and the fault flags of instructions write the system tags, not rungs.
+        if name in incomplete_targets or name in SYSTEM_TAGS_BY_NAME:
             continue
         writers = graph.writers_of.get(name)
         if tag.readonly:
@@ -2617,7 +2650,9 @@ def collect_produced_value_domains(
         elif not writers:
             declared = _declared_domain(tag)
             if tag.external or graph.is_physical_input(name):
-                if declared is not None:
+                # A Real between whole-number bounds can hold any value between them, so
+                # the whole numbers alone would leave values out.
+                if declared is not None and tag.type is not TagType.REAL:
                     known[name] = declared
             else:
                 known[name] = (tag.default,)
@@ -3230,6 +3265,27 @@ def _extract_value_domain(
         base_domain = known_domains[tag_name]
     elif literal_write_domains and tag_name in literal_write_domains:
         base_domain = literal_write_domains[tag_name]
+
+    if base_domain is not None and tag.external:
+        # The outside can write an external tag any value, so its domain is a free
+        # input's as well as what the program writes.
+        others = None
+        if known_domains is not None:
+            others = {name: d for name, d in known_domains.items() if name != tag_name}
+        free = _extract_value_domain(
+            tag_name,
+            tag,
+            all_exprs,
+            all_tags,
+            known_domains=others,
+            graph=graph,
+            atom_index=atom_index,
+            real_gap_points=real_gap_points,
+            split_neighbours=split_neighbours,
+        )
+        if free is None:
+            return None
+        return tuple(sorted(set(base_domain) | set(free)))
 
     if atom_index is None:
         atom_index = _build_atom_index(all_exprs)

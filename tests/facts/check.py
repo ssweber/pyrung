@@ -24,9 +24,10 @@ power-on defaults that no scan produced, so the checks start at the end of scan 
 - **Produced value domains** (``produced_value_domains``).  These list every value exactly,
   so each value a tag holds is one of them.
 - **Scan-local tags.**  These are the written tags outside the world key
-  (``stateful_names``), the elided tags and the absorbed values below excepted.  Their value
-  at the start of a scan reaches no other tag and no memory by its end.  A probe changes
-  them all on a fork and compares the two results.
+  (``stateful_names``), the elided tags and the absorbed values below excepted.  Their
+  value at the start of a scan reaches no other tag and no memory by its end.  A probe
+  changes them all on a fork and compares the two results.  A tag the classification
+  found no finite domain for is not one of them, since the prior claims nothing about it.
 - **Absorbed values** (``state_key_done_specs``, ``threshold_vector_specs``).  The world key
   keeps which side of each threshold a timer, counter or progress value is on, not the
   value itself.  A probe moves the value, or a threshold tag, without crossing a threshold.
@@ -34,7 +35,10 @@ power-on defaults that no scan produced, so the checks start at the end of scan 
   matching side of a literal preset.
 - **Projections.**  A tag elided as ``functional_dep`` equals ``offset + scale * source``
   after every scan.  An init constant has one value for each value of its representative.
-- **Stepping tags.**  Each one takes at least two values over the runs.
+- **Stepping tags.**  A stepping tag has writes that can move it through values, such as a
+  self-increment or two literal writes.  The claim is about the writes, so a run cannot
+  refute it.  A rung that fires once leaves its tag still.  The report lists the stepping
+  tags no run moved, and the idiom test asks that each idiom move all of them.
 - **CANNOT_REACH facts** (``static_proofs``).  A tag only becomes a value that some rung in
   ``ProofFacts.producers`` writes.  Two values that ``exclusion_evidence`` keeps apart never
   hold together.  A value that ``linked_feedback_block`` says is blocked never appears.
@@ -124,6 +128,9 @@ class Facts:
     pdg: ProgramGraph
     atoms: list[Atom]
     atoms_by_tag: dict[str, list[Atom]]
+    #: Written tags the classification found no finite domain for.  The world key leaves
+    #: them out with no claim about them.
+    unclassified: frozenset[str] = frozenset()
 
 
 def compute_facts(program: Any, plc: PLC) -> Facts | Intractable:
@@ -170,6 +177,7 @@ def compute_facts(program: Any, plc: PLC) -> Facts | Intractable:
         pdg=pdg,
         atoms=atoms,
         atoms_by_tag=by_tag,
+        unclassified=frozenset(ctx._pending_infeasible_tags) | ctx._unclassified_written,
     )
 
 
@@ -232,6 +240,10 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _is_finite(value: Any) -> bool:
+    return _is_number(value) and math.isfinite(value)
+
+
 def _members(domain: Iterable[Any]) -> list[Any]:
     return [v for v in domain if not (isinstance(v, str) and v == PENDING)]
 
@@ -289,7 +301,7 @@ def _nearest(value: Any, members: list[Any]) -> list[Any]:
 
     A small domain gives all its members.  A large one gives the two nearest on each side.
     """
-    if not (_is_number(value) and all(_is_number(m) for m in members)):
+    if not (_is_finite(value) and all(_is_number(m) for m in members)):
         return members[:8]
     ordered = sorted(members, key=lambda m: abs(m - value))
     if len(members) <= 8:
@@ -427,6 +439,8 @@ class Judge:
         self.facts = facts
         self.tally = Tally()
         self.violations: list[Violation] = []
+        #: Stepping tags no run moved (see the module docstring).
+        self.unmoved: list[str] = []
         self._marks: set[str] = set()
         prior = facts.prior
         # An advice-only projection is a hint the walker tries on a fork, and it claims
@@ -538,11 +552,8 @@ class Judge:
 
     def finish(self) -> None:
         """Judge what only all the runs together answer."""
-        for name, seen in self.stepping_values.items():
-            self.tally.note("stepping")
-            if len(seen) < 2:
-                detail = f"{name} only ever held {seen!r}"
-                self.fail("stepping", self.tally.scans, detail, name)
+        self.unmoved = sorted(n for n, seen in self.stepping_values.items() if len(seen) < 2)
+        self.tally.note("stepping", len(self.stepping_values))
         self._judge_exclusions()
         self._judge_links()
 
@@ -632,6 +643,7 @@ def scan_local_tags(facts: Facts) -> list[str]:
         - set(prior.nondeterministic_dims)
         - set(threshold_tags(facts))
         - set(SYSTEM_TAGS_BY_NAME)
+        - facts.unclassified
     )
     return sorted((outside | set(prior.elided_tags)) - projections - absorbed)
 
@@ -713,6 +725,10 @@ class _Fork:
     plc: PLC
     leave_out: set[str]
     alternatives: list[PLC] = field(default_factory=list)
+    # For a domain judgement: the state before the scan, its patch, and each tag's swaps.
+    base: PLC | None = None
+    patch: dict[str, Any] = field(default_factory=dict)
+    near: dict[str, list[Any]] = field(default_factory=dict)
 
 
 class Prober:
@@ -731,6 +747,8 @@ class Prober:
             **{n: ("stateful domain", _members(d)) for n, d in prior.stateful_dims.items()},
         }
         self.judged_cells: set[tuple[str, Any]] = set()
+        #: Values found in their domains at a scan's start, by kind of domain.
+        self.tally_members: dict[str, int] = {}
 
     # -- building the forks before the scan ---------------------------------
 
@@ -745,11 +763,13 @@ class Prober:
                 out.append(self._fork(plc, patch, "scan-local", change))
             for name, moved in self._band_moves(tags):
                 out.append(self._fork(plc, patch, "absorbed value", {name: moved}))
-        swaps = self._domain_swaps(tags, probe)
-        if swaps is not None:
-            change, combos = swaps
-            fork = _Fork("domain", change, plc, set(change) | {f"_frac:{n}" for n in change})
-            for combo in combos:
+        near = self._domain_swaps(tags, probe)
+        if near is not None:
+            change = {name: _value(tags, name, self.facts) for name in near}
+            leave_out = set(change) | {f"_frac:{n}" for n in change}
+            fork = _Fork("domain", change, plc, leave_out, base=plc.fork(inherit_log=False))
+            fork.patch, fork.near = dict(patch), near
+            for combo in _combos(near):
                 alt = plc.fork(inherit_log=False)
                 alt.patch({**patch, **combo})
                 fork.alternatives.append(alt)
@@ -819,18 +839,17 @@ class Prober:
             return int(max(-32768, min(32767, value + step)))
         return value + step
 
-    def _domain_swaps(
-        self, tags: Mapping[str, Any], probe: bool
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
-        """The values outside their domains at a scan's start, and the swaps to try for them.
+    def _domain_swaps(self, tags: Mapping[str, Any], probe: bool) -> dict[str, list[Any]] | None:
+        """The tags outside their domains at a scan's start, each with the values to swap in.
 
         Each gap between domain values is judged once per run, and again at probe scans.
         """
         outside: dict[str, list[Any]] = {}
         fresh = False
-        for name, (_kind, members) in self.domains.items():
+        for name, (kind, members) in self.domains.items():
             value = _value(tags, name, self.facts)
             if not members or any(_same(value, m) for m in members):
+                self.tally_members[kind] = self.tally_members.get(kind, 0) + 1
                 continue
             near = _nearest(value, members)
             outside[name] = near
@@ -840,12 +859,7 @@ class Prober:
                 fresh = True
         if not outside or not (fresh or probe):
             return None
-        change = {name: _value(tags, name, self.facts) for name in outside}
-        combos = [
-            dict(zip(outside, values, strict=True))
-            for values in itertools.islice(itertools.product(*outside.values()), _MAX_SWAPS)
-        ]
-        return change, combos
+        return outside
 
     # -- judging the forks after the scan -----------------------------------
 
@@ -884,23 +898,45 @@ class Prober:
         )
 
     def _judge_domain(self, plc: PLC, fork: _Fork, judge: Judge, scan: int) -> None:
+        """Pass if some swap of domain values gives what *plc* shows, else blame each tag.
+
+        A tag is to blame when swapping all the others, with it left as it is, does pass.
+        """
         want = _seen_by_program(plc, self.facts, fork.leave_out)
-        closest: list[str] | None = None
-        for alt in fork.alternatives:
-            alt.step()
-            mismatch = _mismatch(_seen_by_program(alt, self.facts, fork.leave_out), want)
-            if not mismatch:
-                for name in fork.change:
-                    judge.tally.note(self.domains[name][0])
-                return
-            if closest is None or len(mismatch) < len(closest):
-                closest = mismatch
-        for name, value in fork.change.items():
+        closest: list[str] = []
+
+        def passes(alternatives: Iterable[PLC]) -> bool:
+            nonlocal closest
+            for alt in alternatives:
+                alt.step()
+                mismatch = _mismatch(_seen_by_program(alt, self.facts, fork.leave_out), want)
+                if not mismatch:
+                    return True
+                if not closest or len(mismatch) < len(closest):
+                    closest = mismatch
+            return False
+
+        for name in fork.change:
+            judge.tally.note(self.domains[name][0])
+        if passes(fork.alternatives):
+            return
+        blamed = list(fork.change)
+        if len(fork.change) > 1 and fork.base is not None:
+            base = fork.base
+            blamed = [
+                name
+                for name in fork.change
+                if passes(
+                    _forked(base, {**fork.patch, **combo})
+                    for combo in _combos({n: v for n, v in fork.near.items() if n != name})
+                )
+            ] or blamed
+        for name in blamed:
             kind, members = self.domains[name]
-            judge.tally.note(kind)
+            value = fork.change[name]
             detail = (
                 f"{name} = {value!r} at the start behaves like no value of {tuple(members)!r}"
-                f" (the nearest differ in {(closest or [])[:4]})"
+                f" (the nearest differ in {closest[:4]})"
             )
             judge.fail(kind, scan, detail, name)
 
@@ -916,6 +952,19 @@ class Prober:
             if _differences(alone, after, fork.leave_out):
                 found.append(name)
         return found
+
+
+def _combos(near: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
+    """Joint swaps of every tag in *near*, the nearest values first, at most ``_MAX_SWAPS``."""
+    names = list(near)
+    values = itertools.product(*(near[n] for n in names))
+    return [dict(zip(names, each, strict=True)) for each in itertools.islice(values, _MAX_SWAPS)]
+
+
+def _forked(base: PLC, patch: Mapping[str, Any]) -> PLC:
+    fork = base.fork(inherit_log=False)
+    fork.patch(dict(patch))
+    return fork
 
 
 def _short(change: Mapping[str, Any]) -> str:
@@ -937,6 +986,7 @@ class Report:
     violations: list[Violation]
     tally: Tally
     intractable: str | None = None
+    unmoved: list[str] = field(default_factory=list)
 
     def problems(self) -> list[str]:
         return [str(v) for v in self.violations]
@@ -1003,5 +1053,7 @@ def check_program(
         else:
             for _ in range(scans):
                 one_scan(walk.next())
+        for kind, members in prober.tally_members.items():
+            judge.tally.note(kind, members)
     judge.finish()
-    return Report(label, judge.violations, judge.tally)
+    return Report(label, judge.violations, judge.tally, unmoved=judge.unmoved)
