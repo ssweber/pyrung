@@ -158,7 +158,7 @@ class ModbusSimServer:
 
 
 def _bind_error(config: ModbusConfig, exc: Exception) -> str:
-    """Describe a start failure, preferring the OS reason over pymodbus' generic one."""
+    """Describe a start failure, preferring the OS reason over the server's own error."""
     reason = str(exc) or type(exc).__name__
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
