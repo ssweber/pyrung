@@ -2605,9 +2605,8 @@ def collect_produced_value_domains(
         FillInstruction,
     )
     from pyrung.core.memory_block import IndirectRef
-    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
-
     from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
     from .passes import _collect_receive_dest_names
 

@@ -2,10 +2,16 @@
 
 import pytest
 
-from pyrung import Bool, Dint, Int, Program, Real, Rung, copy, math, out, rung
+from pyrung import Bool, Dint, Int, Program, Real, Rung, blockcopy, copy, math, out, rung
 from pyrung.core import Block, TagType
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive
 from pyrung.core.validation.context import ValidationContext
+
+
+def _program_tags(program):
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    return build_program_graph(program).tags
 
 
 def _receive(dest):
@@ -127,3 +133,45 @@ def test_a_real_input_between_whole_number_bounds_stays_open():
             out(Bool("AtSetpoint"))
     assert pressure.name not in ValidationContext(program).produced_domains
     assert not program.check(select={"CMP_ALWAYS_FALSE"})
+
+
+def test_a_copy_stores_the_converted_value():
+    big, clamped = Dint("Big"), Int("Clamped")
+    with Program() as program:
+        with Rung():
+            copy(40000, big)
+            copy(big, clamped)
+    assert ValidationContext(program).produced_domains[clamped.name] == (0, 32767)
+
+
+def test_a_block_copy_stores_the_converted_value():
+    wide = Block("Wide", TagType.DINT, 1, 2)
+    narrow = Block("Narrow", TagType.INT, 1, 2)
+    with Program() as program:
+        with Rung():
+            copy(70000, wide[1])
+            copy(-70000, wide[2])
+            blockcopy(wide.select(1, 2), narrow.select(1, 2))
+    domains = ValidationContext(program).produced_domains
+    assert domains[narrow[1].name] == (0, 32767)
+    assert domains[narrow[2].name] == (-32768, 0)
+
+
+def test_a_text_literal_into_a_char_claims_no_value():
+    from pyrung.core.analysis.prove.classify import _collect_literal_write_domains
+
+    text = Block("Text", TagType.CHAR, 1, 3)
+    with Program() as program:
+        with Rung():
+            copy("ABC", text[1])
+    # The Copy writes one character into each of Text1..Text3, not "ABC" into Text1.
+    assert text[1].name not in _collect_literal_write_domains(program, _program_tags(program))
+
+
+def test_system_tags_have_no_produced_domain():
+    from pyrung.core.system_points import system
+
+    with Program() as program:
+        with Rung(system.sys.scan_counter > 3):
+            out(Bool("Running"))
+    assert system.sys.scan_counter.name not in ValidationContext(program).produced_domains

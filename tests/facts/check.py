@@ -19,14 +19,20 @@ power-on defaults that no scan produced, so the checks start at the end of scan 
 - **Value domains** (``stateful_dims``, ``nondeterministic_dims``).  A domain lists one
   value for each way the program's comparisons can answer.  So a value outside it must
   behave like some value in it.  At the start of a scan the check swaps each such value for
-  the nearest values of its domain, runs the scan on a fork, and compares what the program
-  can see.  That is every Bool, every comparison in a rung condition and every memory key.
+  the nearest values of its domain.  A swap must answer each comparison in a rung condition
+  the same way.  Then the check runs the scan on a fork and compares what the program can
+  see at its end.  That is every Bool, every memory key and every comparison of a tag not
+  swapped.  A swap whose own comparisons answer otherwise at the end judges nothing.  A
+  counter one count short of a literal crosses it in a scan, but the domain need not hold
+  that neighbour.  A tag compared with a swapped one may move too, since the domains cover
+  such a comparison only through a pair of values.
 - **Produced value domains** (``produced_value_domains``).  These list every value exactly,
   so each value a tag holds is one of them.
 - **Scan-local tags.**  These are the written tags outside the world key
   (``stateful_names``), the elided tags and the absorbed values below excepted.  Their
   value at the start of a scan reaches no other tag and no memory by its end.  A probe
-  changes them all on a fork and compares the two results.  A tag the classification
+  changes them all on one fork and one of them alone on another.  Then it compares each
+  fork's result with the run's.  A tag the classification
   found no finite domain for is not one of them, since the prior claims nothing about it.
 - **Absorbed values** (``state_key_done_specs``, ``threshold_vector_specs``).  The world key
   keeps which side of each threshold a timer, counter or progress value is on, not the
@@ -107,6 +113,8 @@ class Violation:
     program: str
     scan: int
     detail: str
+    #: What failed: a tag's name, or the names a probe blamed.
+    key: str = ""
 
     def __str__(self) -> str:
         return f"{self.program}: {self.fact} fails at scan {self.scan}: {self.detail}"
@@ -470,7 +478,7 @@ class Judge:
         mark = f"{fact}|{key}"
         if mark not in self._marks:
             self._marks.add(mark)
-            self.violations.append(Violation(fact, self.label, scan, detail))
+            self.violations.append(Violation(fact, self.label, scan, detail, key))
 
     def power_on(self, tags: Mapping[str, Any]) -> None:
         self.start = tags
@@ -610,24 +618,50 @@ def _differences(a: PLC, b: PLC, leave_out: Iterable[str]) -> list[str]:
 
 
 def _seen_by_program(plc: PLC, facts: Facts, leave_out: set[str]) -> dict[str, Any]:
-    """What the program can see of *plc*'s state: Bools, comparison answers and memory."""
+    """What the program can see of *plc*'s state: Bools, comparison answers and memory.
+
+    A comparison of a tag in *leave_out* is left out too.
+    """
     state = plc.current_state
     seen: dict[str, Any] = {}
     for name, value in state.tags.items():
         if isinstance(value, bool) and name not in leave_out:
             seen[name] = value
     for atom in facts.atoms:
-        if atom.form not in ("rise", "fall"):
-            seen[repr(atom._key())] = _answer(atom, state.tags, facts)
+        if (
+            atom.form in ("rise", "fall")
+            or atom.tag in leave_out
+            or _names(atom.operand, leave_out)
+        ):
+            continue
+        seen[repr(atom._key())] = _answer(atom, state.tags, facts)
     for key, value in state.memory.items():
         if key not in leave_out:
             seen[f"memory {key}"] = _hashable(value)
     return seen
 
 
+def _names(operand: Any, names: set[str]) -> bool:
+    return isinstance(operand, str) and operand in names
+
+
+def _start_answers(
+    tags: Mapping[str, Any], facts: Facts, about: set[str] | None = None
+) -> dict[str, Any]:
+    """What each comparison in a rung condition answers on *tags*, or each one *about* names."""
+    return {
+        repr(atom._key()): _answer(atom, tags, facts)
+        for atom in facts.atoms
+        if atom.form not in ("rise", "fall")
+        and (about is None or atom.tag in about or _names(atom.operand, about))
+    }
+
+
 def _mismatch(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
     return sorted(
-        f"{k}: {a.get(k)!r} vs {b.get(k)!r}" for k in set(a) | set(b) if not _same(a.get(k), b.get(k))
+        f"{k}: {a.get(k)!r} vs {b.get(k)!r}"
+        for k in set(a) | set(b)
+        if not _same(a.get(k), b.get(k))
     )
 
 
@@ -681,26 +715,40 @@ class _Band:
 def _bands(facts: Facts) -> dict[str, _Band]:
     """The band of every absorbed value, by its name."""
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.out_variants import (
+        DebounceInstruction,
+        FlasherInstruction,
+        TimedInstruction,
+    )
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
     timers = (OnDelayInstruction, OffDelayInstruction)
     steps: dict[str, int] = {}
-    presets: dict[str, Any] = {}
+    presets: dict[str, list[Any]] = {}
+
+    def bound(value: Any) -> Any:
+        return value if _is_number(value) else value.name
+
     for instr in walk_instructions(facts.program):
         if isinstance(instr, timers):
             steps[instr.accumulator.name] = math.ceil(DT * 1e9 / instr.unit.ns)
         if isinstance(instr, (*timers, CountUpInstruction, CountDownInstruction)):
-            preset = instr.preset
-            presets[instr.accumulator.name] = preset if _is_number(preset) else preset.name
+            presets[instr.accumulator.name] = [bound(instr.preset)]
+        # A coil with its own timers compares each accumulator with both its presets.
+        if isinstance(instr, (DebounceInstruction, FlasherInstruction, TimedInstruction)):
+            accs = [getattr(instr, f, None) for f in ("on_acc", "off_acc", "timer_acc")]
+            ends = [getattr(instr, f, None) for f in ("on_preset", "off_preset")]
+            for acc in accs:
+                if acc is not None:
+                    steps[acc.name] = math.ceil(DT * 1e9 / instr.unit.ns)
+                    presets[acc.name] = [bound(end) for end in ends if end is not None]
     prior = facts.prior
     bands: dict[str, _Band] = {}
 
     def band(acc: str) -> _Band:
         if acc not in bands:
-            bands[acc] = _Band([0], steps.get(acc, 1) + 1)
-            if acc in presets:
-                bands[acc].bounds.append(presets[acc])
+            bands[acc] = _Band([0, *presets.get(acc, ())], steps.get(acc, 1) + 1)
         return bands[acc]
 
     for spec in prior.state_key_done_specs:
@@ -724,7 +772,6 @@ class _Fork:
     change: dict[str, Any]
     plc: PLC
     leave_out: set[str]
-    alternatives: list[PLC] = field(default_factory=list)
     # For a domain judgement: the state before the scan, its patch, and each tag's swaps.
     base: PLC | None = None
     patch: dict[str, Any] = field(default_factory=dict)
@@ -746,7 +793,17 @@ class Prober:
             **{n: ("input domain", _members(d)) for n, d in prior.nondeterministic_dims.items()},
             **{n: ("stateful domain", _members(d)) for n, d in prior.stateful_dims.items()},
         }
+        #: The tags each domain tag is compared with in a rung condition.
+        self.partners: dict[str, set[str]] = {}
+        for atom in facts.atoms:
+            other = atom.operand
+            if atom.operand_is_tag and isinstance(other, str) and other != atom.tag:
+                if atom.tag in self.domains and other in self.domains:
+                    self.partners.setdefault(atom.tag, set()).add(other)
+                    self.partners.setdefault(other, set()).add(atom.tag)
         self.judged_cells: set[tuple[str, Any]] = set()
+        #: Which scan-local tag the next probe changes alone.
+        self.turn = 0
         #: Values found in their domains at a scan's start, by kind of domain.
         self.tally_members: dict[str, int] = {}
 
@@ -761,18 +818,19 @@ class Prober:
             if self.scan_local:
                 change = {n: self._other(n, _value(tags, n, self.facts)) for n in self.scan_local}
                 out.append(self._fork(plc, patch, "scan-local", change))
+                # A change that only reaches other scan-local tags hides in the joint fork.
+                one = self.scan_local[self.turn % len(self.scan_local)]
+                self.turn += 1
+                out.append(self._fork(plc, patch, "scan-local", {one: change[one]}))
             for name, moved in self._band_moves(tags):
                 out.append(self._fork(plc, patch, "absorbed value", {name: moved}))
         near = self._domain_swaps(tags, probe)
         if near is not None:
             change = {name: _value(tags, name, self.facts) for name in near}
-            leave_out = set(change) | {f"_frac:{n}" for n in change}
+            near = {**near, **self._partner_swaps(near, tags)}
+            leave_out = set(near) | {f"_frac:{n}" for n in near}
             fork = _Fork("domain", change, plc, leave_out, base=plc.fork(inherit_log=False))
             fork.patch, fork.near = dict(patch), near
-            for combo in _combos(near):
-                alt = plc.fork(inherit_log=False)
-                alt.patch({**patch, **combo})
-                fork.alternatives.append(alt)
             out.append(fork)
         return out
 
@@ -790,6 +848,8 @@ class Prober:
             return not value
         if kind is TagType.CHAR or isinstance(value, str):
             return "Z" if value != "Z" else "A"
+        if tag is not None and tag.choices:
+            return self.random.choice([c for c in tag.choices if c != value] or [value])
         literals = _literals(self.facts, name)
         options = [v for v in (*literals, value + 1, value - 1, 0, 100) if v != value]
         pick = self.random.choice(options)
@@ -861,6 +921,24 @@ class Prober:
             return None
         return outside
 
+    def _partner_swaps(
+        self, near: Mapping[str, list[Any]], tags: Mapping[str, Any]
+    ) -> dict[str, list[Any]]:
+        """Values for each tag compared with a swapped one, its own value first.
+
+        A domain covers a comparison of two tags only through a pair of values, so the
+        partner of a swapped tag may need to move as well.
+        """
+        out: dict[str, list[Any]] = {}
+        for name in near:
+            for partner in sorted(self.partners.get(name, ())):
+                if partner in near or partner in out:
+                    continue
+                value = _value(tags, partner, self.facts)
+                others = _nearest(value, self.domains[partner][1])
+                out[partner] = [value, *[v for v in others if not _same(v, value)][:2]]
+        return out
+
     # -- judging the forks after the scan -----------------------------------
 
     def judge(self, plc: PLC, forks: list[_Fork], judge: Judge, scan: int) -> None:
@@ -886,7 +964,7 @@ class Prober:
                 detail = f"changing {_short(fork.change)} at the start changed {differs[:6]}"
                 if culprits:
                     detail += f", and {culprits} each do it alone"
-                judge.fail(fork.why, scan, detail, repr(culprits or sorted(fork.change)))
+                judge.fail(fork.why, scan, detail, ", ".join(culprits or sorted(fork.change)))
 
     def _same_sides(self, a: PLC, b: PLC) -> bool:
         facts = self.facts
@@ -900,36 +978,53 @@ class Prober:
     def _judge_domain(self, plc: PLC, fork: _Fork, judge: Judge, scan: int) -> None:
         """Pass if some swap of domain values gives what *plc* shows, else blame each tag.
 
-        A tag is to blame when swapping all the others, with it left as it is, does pass.
+        A swap must answer every comparison as the run's state does at the scan's start,
+        and show the same at its end.  A swap whose own comparisons answer otherwise at the
+        end crossed a value the domain need not split at, so it judges nothing.  A tag is to
+        blame when swapping all the others, with it left as it is, does pass.
         """
-        want = _seen_by_program(plc, self.facts, fork.leave_out)
+        assert fork.base is not None
+        facts = self.facts
+        entry = {**fork.base.current_state.tags, **fork.patch}
+        want_start = _start_answers(entry, facts)
+        want = _seen_by_program(plc, facts, fork.leave_out)
+        swapped = set(fork.near)
+        want_own = _start_answers(plc.current_state.tags, facts, about=swapped)
         closest: list[str] = []
+        crossed = False
 
-        def passes(alternatives: Iterable[PLC]) -> bool:
-            nonlocal closest
-            for alt in alternatives:
-                alt.step()
-                mismatch = _mismatch(_seen_by_program(alt, self.facts, fork.leave_out), want)
+        def passes(near: Mapping[str, list[Any]]) -> bool:
+            nonlocal closest, crossed
+            for combo in _combos(near):
+                mismatch = _mismatch(_start_answers({**entry, **combo}, facts), want_start)
                 if not mismatch:
-                    return True
+                    alt = _forked(fork.base, {**fork.patch, **combo})
+                    alt.step()
+                    own = _start_answers(alt.current_state.tags, facts, about=swapped)
+                    if own != want_own:
+                        crossed = True
+                        continue
+                    mismatch = _mismatch(_seen_by_program(alt, facts, fork.leave_out), want)
+                    if not mismatch:
+                        return True
+                    mismatch = [f"at the end, {m}" for m in mismatch]
                 if not closest or len(mismatch) < len(closest):
                     closest = mismatch
             return False
 
         for name in fork.change:
             judge.tally.note(self.domains[name][0])
-        if passes(fork.alternatives):
+        if passes(fork.near):
+            return
+        if crossed:
+            judge.tally.note("domain swap crossed a comparison, not judged")
             return
         blamed = list(fork.change)
-        if len(fork.change) > 1 and fork.base is not None:
-            base = fork.base
+        if len(fork.change) > 1:
             blamed = [
                 name
                 for name in fork.change
-                if passes(
-                    _forked(base, {**fork.patch, **combo})
-                    for combo in _combos({n: v for n, v in fork.near.items() if n != name})
-                )
+                if passes({n: v for n, v in fork.near.items() if n != name})
             ] or blamed
         for name in blamed:
             kind, members = self.domains[name]
@@ -1023,6 +1118,7 @@ def check_program(
     # A randint draw differs between a fork and its parent, so a probe would see noise.
     probing = not randint_sites(facts.pdg.tags)
     hold = hold_scans(program)
+    every = max(1, scans // PROBES_PER_RUN)
     for seed in seeds:
         run = PLC(program, dt=DT)
         if prepare is not None:
@@ -1031,7 +1127,6 @@ def check_program(
         judge.power_on(run.current_state.tags)
         prober = Prober(facts, driven, seed)
         walk = RandomInputs(values, seed, hold)
-        every = max(1, scans // PROBES_PER_RUN)
         count = 0
 
         def one_scan(patch: Mapping[str, Any], run: PLC = run, prober: Prober = prober) -> None:
