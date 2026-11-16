@@ -16,15 +16,20 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
+    Timer,
     call,
     copy,
     fall,
     latch,
     math,
+    off_delay,
+    on_delay,
     out,
     reset,
     rise,
+    search,
     subroutine,
+    time_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove.elision import _elide_scan_local_stateful_dims
@@ -303,3 +308,129 @@ def test_observed_slot_is_kept() -> None:
     )
 
     assert "DS19" not in elided
+
+
+# ---------------------------------------------------------------------------
+# Reads an instruction's own state decides
+# ---------------------------------------------------------------------------
+
+_PRESET_INPUTS = {"Run": (False, True), "Clear": (False, True), "Slow": (False, True)}
+
+
+def _preset_box(kind: str, preset: Int) -> None:
+    if kind == "drum":
+        time_drum(
+            outputs=[Bool("A"), Bool("B")],
+            presets=[preset, 50],
+            unit="ms",
+            pattern=[[1, 0], [0, 1]],
+            current_step=Int("Step"),
+            accumulator=Int("Acc"),
+            completion_flag=Bool("Done"),
+        ).reset(Bool("Clear", external=True))
+    elif kind == "off_delay":
+        off_delay(Timer.clone("Purge"), preset)
+    else:
+        on_delay(Timer.clone("Dwell"), preset)
+
+
+def _preset_program(kind: str, *, writes_above: bool) -> Program:
+    """*kind*'s preset, which a rung of each value of ``Slow`` writes, above it or below it."""
+    slow = Bool("Slow", external=True)
+    preset = Int("Preset")
+
+    def write() -> None:
+        with Rung(slow):
+            copy(300, preset)
+        with Rung(~slow):
+            copy(100, preset)
+
+    with Program(strict=False) as logic:
+        if writes_above:
+            write()
+        with Rung(Bool("Run", external=True)):
+            _preset_box(kind, preset)
+        if not writes_above:
+            write()
+    return logic
+
+
+@pytest.mark.parametrize("kind", ["drum", "off_delay"])
+def test_preset_read_on_some_scans_is_kept(kind: str) -> None:
+    """The box reads its preset only on scans its memory picks, which the check's scans never set.
+
+    A drum reads it while its step times, and an off-delay while it times.  The rungs below
+    write it every scan, so the box reads the value of the scan before.
+    """
+    logic = _preset_program(kind, writes_above=False)
+
+    _reduced, elided = _slice_elide(logic, {"Preset": (0, 100, 300)}, dict(_PRESET_INPUTS))
+
+    assert "Preset" not in elided
+
+
+def test_drum_preset_set_in_its_subroutine_is_kept() -> None:
+    """A call that writes no preset leaves the one the drum reads on its next timing scan."""
+    preset = Int("Preset")
+
+    @subroutine("mixer", strict=False)
+    def mixer() -> None:
+        with Rung(Bool("Slow", external=True)):
+            copy(300, preset)
+        with Rung(Bool("Run", external=True)):
+            _preset_box("drum", preset)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            call(mixer)
+
+    _reduced, elided = _slice_elide(logic, {"Preset": (0, 300)}, dict(_PRESET_INPUTS))
+
+    assert "Preset" not in elided
+
+
+@pytest.mark.parametrize("kind", ["drum", "off_delay", "on_delay"])
+def test_preset_written_above_each_scan_is_elided(kind: str) -> None:
+    """A preset that a rung above the box writes on every scan holds that scan's value."""
+    logic = _preset_program(kind, writes_above=True)
+
+    _reduced, elided = _slice_elide(logic, {"Preset": (0, 100, 300)}, dict(_PRESET_INPUTS))
+
+    assert "Preset" in elided
+
+
+def test_search_table_filled_above_each_scan_is_elided() -> None:
+    """A search reads the elements before its first match, and each scan fills them first."""
+    table = Block("Tbl", TagType.INT, 1, 4)
+    inputs: dict[str, tuple[object, ...]] = {"Look": (False, True)}
+
+    with Program(strict=False) as logic:
+        for i in range(1, 5):
+            sel = Bool(f"Sel{i}", external=True)
+            inputs[sel.name] = (False, True)
+            with Rung(sel):
+                copy(i * 10, table[i])
+            with Rung(~sel):
+                copy(0, table[i])
+        with Rung(Bool("Look", external=True)):
+            search(table.select(1, 4) == 30, result=Int("At"), found=Bool("Hit"))
+
+    dims = {f"Tbl{i}": (0, i * 10) for i in range(1, 5)}
+    _reduced, elided = _slice_elide(logic, dims, inputs)
+
+    assert set(dims) <= set(elided)
+
+
+def test_continuous_search_result_is_kept() -> None:
+    """A continuous search reads its last result to resume after it, before it writes one."""
+    bins = Block("Bin", TagType.INT, 1, 3)
+
+    with Program(strict=False) as logic:
+        with Rung():
+            search(bins.select(1, 3) == 5, result=Int("At"), found=Bool("Hit"), continuous=True)
+        with Rung(Int("At") == 2):
+            out(Bool("AtTwo"))
+
+    _reduced, elided = _slice_elide(logic, {"At": (-1, 0, 1, 2, 3)}, {})
+
+    assert "At" not in elided

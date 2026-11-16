@@ -23,14 +23,7 @@ from tests.facts.conformance import cases, check_case
 _CASES = {case_label(group.name, case): (group, case) for group, case in cases()}
 
 #: Facts the runs refute, by case: ``(fact, tag)`` -> the first scan that refutes it, and why.
-KNOWN: dict[str, dict[tuple[str, str], str]] = {
-    "drum_ds/ds_preset_ends": {
-        ("scan-local", "DS4016"): (
-            "scan 20.  Slice elision drops DS4016, but the time drum reads it as a step"
-            " preset on scans that do not write it."
-        ),
-    },
-}
+KNOWN: dict[str, dict[tuple[str, str], str]] = {}
 
 #: Facts a case's run may leave unjudged.  A case runs its script once, with ``Cmd`` its
 #: only input.  So a Done may never turn on or off, and an absorbed value may sit on a

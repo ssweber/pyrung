@@ -48,10 +48,15 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
     - an input `Real` the outside writes and no rung writes
     - a `receive()` payload
   - A tag the rungs compare with a tag that has no domain keeps a domain that may have no value equal to the other's. No run refutes it yet. Tags compared with each other that both have domains share their values (`_close_tag_comparisons` in classify.py). The other tag may have been absorbed, or have no claim, as `Loop_Result3` beside `TD211` in `loop/skipped_body_holds_timer_and_counter`. A sound fix gives the first tag no claim, unless its domain lists every value it can hold.
-  - Slice elision drops a tag that a time drum reads as a step preset. `test_facts_conformance.py`, `[drum_ds/ds_preset_ends-scan-local-DS4016]`.
   - A functional dependency is claimed before the rung first writes the tag. `test_facts_idioms.py`, `[funcdep_follows_its_source-functional dep-PosOffset]`.
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
   - A `to_text()` copy of an expression into a tag in no block declares only that tag. The runtime counts on by name (`Msg1`, `Msg2`, ...), and an expression's text has no bound, so the analyses miss the rest.
+  - Slice elision takes a write that an instruction can skip for a write on every scan. `ProgramGraph.unconditional_write_before_read` counts each write an unconditional rung declares. These instructions can skip theirs. `test_facts_idioms.py`, `[text_copy_skipped_on_a_bad_digit-scan-local-KeyLevel]`.
+    - `send()` and `receive()` on a scan with no reply, for the status tags and the payload. The runs set those tags as a peer would, so the check cannot refute this case.
+    - a `copy()` through a pointer out of range, past the end of its source, or from text that is not a number
+    - a `pack_text()` of text that does not parse
+    - a pack or unpack through a bad pointer
+    - a `search()` through a range or value pointer out of range
   - A copy of an input takes only the values the ladder writes or the input's split points, not values the outside sets. `test_facts_idioms.py`, `[hmi_value_copied_after_ladder_default-stateful domain-WorkingSetpoint]` and `[compared_input_copied_and_compared-stateful domain-HeldLevel]`. The fixpoint adds an input's split points after it computes the copy, so the fix is not a one-liner.
 - **A pointer's input domain leaves out the addresses past its block.** An `external` pointer with no declared
   bounds and a default of 5 gets (1..100) for a block of 100 elements. A run sets it to 0, and the copy through it sets
