@@ -102,6 +102,8 @@ six_digits_past = 7
 ten_billion_first = 8
 ten_billion_past = 9
 round_value_past = 10
+most_negative_first = 11
+most_negative_end = 12
 
 [groups.deb_zero]
 base = 841 # Conf_DebZero: DS841..DS870
