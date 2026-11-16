@@ -15,6 +15,8 @@
 
 ### Behaviour changes
 
+- Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
+  Rename them in a nickname file you wrote by hand, or export it again.
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
   Fix the row, or leave its Data Type blank.
 - The console no longer has the `log`, `note`, `candidates`, `accept`, `deny`, `suppress` and `spec` commands.

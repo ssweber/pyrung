@@ -284,10 +284,6 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
   finding. It waits on laddercodec's release. [nothing]
-- **pyclickplc's `read_csv` changes, and the tag map reads through it.** It raises on a bad row with its line
-  number, keeps nickname and comment as written, accepts true and 1 for Retentive, doesn't fail on a repeated
-  nickname, and reports which columns were present. Check the tag map's tests against it when pyclickplc releases.
-  [nothing]
 
 ## Small fixes
 
