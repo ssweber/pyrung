@@ -879,11 +879,6 @@ def _commit_reload(adapter: Any, staged: _StagedReload) -> None:
     adapter._pending_stop = False
     commit_click_project(adapter, staged.binding)
     adapter._bounds_accumulator.clear()
-    adapter._notes.clear()
-    adapter._action_log.clear()
-    adapter._miner_candidates.clear()
-    adapter._miner_accepted.clear()
-    adapter._miner_suppressed.clear()
     commit_harness(adapter, staged.harness)
 
 

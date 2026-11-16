@@ -36,7 +36,6 @@ data:
   link <feedback> <[~]enable[:trigger]> key=value ...   (bench wiring)
   links [bench on|off | enable <tag> | disable <tag>]
   monitor <tag>
-  note <text>
   patch <tag> <value>
   restore <tag>                                         (drop a bench change)
   unforce <tag>
@@ -45,7 +44,6 @@ data:
 
 analysis:
   check [RULE_OR_CATEGORY ...]
-  log [N]
 
   dataview <text | i: | p: | t: | upstream:tag>
   downstream <tag>
@@ -65,13 +63,6 @@ capture:
   harness <install|remove|status>                       needs physical+link=
   record <action> | record stop
   replay <filepath> [--harness current|recorded|off]
-
-review:
-  accept <id>
-  candidates [list]
-  deny <id>
-  spec [list] | spec test <filepath>
-  suppress <id>
 
 other:
   help
@@ -174,19 +165,6 @@ monitor Button             # watch Button for value changes
 unmonitor Button           # stop watching
 ```
 
-## Notes and log
-
-Annotate the timeline with free-text notes and review recent activity.
-
-```text
-note testing startup sequence   # attach a note to the current scan
-note momentary start press      # another note before the next action
-log                             # show last 20 scans of activity
-log 50                          # show last 50 scans
-```
-
-`log` shows everything that happened in the scan window. That covers patches, force changes, tag transitions and notes.
-
 ## Session capture
 
 Record a sequence of console commands as a replayable transcript. ClickNick doesn't support `record` or `replay` yet.
@@ -209,17 +187,6 @@ replay session.txt --harness off              # ignore harness inputs
 ```
 
 Replay executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line. The default `current` harness mode installs the harness declared by the current program and skips recorded harness inputs. `recorded` removes the current harness and applies provenance-tagged harness inputs from the transcript. `off` removes the harness and skips those inputs.
-
-Stopping a recording also mines candidate invariants from the captured scan range. Review them before turning accepted formulas into tests:
-
-```text
-candidates                     # list mined candidates and their IDs
-accept c-01                    # keep a candidate
-deny c-02                      # discard this occurrence
-suppress c-03                  # discard and suppress the formula in later captures
-spec                           # list accepted formulas
-spec test tests/test_specs.py  # generate pytest tests for accepted formulas
-```
 
 ## Autoharness
 
@@ -295,18 +262,7 @@ print(text)                         # "Stepped 5 scan(s), now at scan 10"
 
 ### Pair commissioning
 
-One person drives VS Code (breakpoints, Data View, Graph View). Another person runs `pyrung live` from a terminal. Both work on the same PLC state. Commands from the live client show `(live)` in the `log` output, so you can tell who did what:
-
-```text
-scan 10:
-  patch StartBtn True
-  Running: False -> True
-scan 11:  (live)
-  force EntrySensor True
-  State: 0 -> 1
-```
-
-The live client can do everything the Console can, including forces, patches, causal queries and recording. Stepping from either side advances the same scan counter.
+One person drives VS Code (breakpoints, Data View, Graph View). Another person runs `pyrung live` from a terminal. Both work on the same PLC state. The live client can do everything the Console can, including forces, patches, causal queries and recording. Stepping from either side advances the same scan counter.
 
 ## Reload
 

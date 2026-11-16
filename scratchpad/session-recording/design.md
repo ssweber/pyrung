@@ -12,22 +12,22 @@ Sam ruled on 2026-11-13 that recording stays out of 0.16.0 and becomes the headl
 - One recorder sits under everything. The ScanLog is its clock and its audit, not its source.
 - Every accepted command is broadcast to all participants.
 
-## What exists today (checked 2026-11-13)
+## What exists today (checked 2026-11-13, updated after the record machinery went)
 
-- `dispatch()` calls `record_command()`, which feeds both the capture buffer and `_action_log` (`dap/console.py`).
+- `dispatch()` calls `capture_hook()`, which feeds the capture buffer (`dap/console.py`).
 - These structured requests call the runner directly and are recorded nowhere: pyrungForce, Unforce, ClearForces, Patch, SetMode and StepScan.
-- Link requests call `capture_hook` directly and miss `_action_log`.
+- Link requests call `capture_hook` directly.
 - Modbus writes reach `runner.patch()` through `click/data_provider.py` and are recorded nowhere.
 - The capture leaves out pause and continue (`_CAPTURE_EXCLUDED`), so a free run between two actions is lost.
-- `record stop` prints the condensed transcript and saves nothing.
+- `record stop` prints the raw transcript and saves nothing.
 - `CaptureEntry` keeps the command, scan_id, timestamp and provenance, but not the command's output.
-- The condenser drops queries.
+- The transcript keeps queries.
 - Every launch starts a LiveServer named after the session. A `pyrung live` command runs the same `dispatch` on the same adapter, so an agent and the panel already share one session.
 - DAP `evaluate` calls `dispatch` with no source.
 - `;` chaining is split only by two clients: the `pyrung live` CLI (`live.py:343`) and ClickNick's console panel. Each sends the pieces one by one, each under its own hold of the state lock. Neither split knows about quotes.
 - STOP->RUN (`set_mode_locked`) resets non-retentive memory and clears forces and patches, then applies the request's forces and patches with no scan in between. A transcript writes it as `mode run`, then the force and patch lines.
 - `speed [N|max]` exists. Speed paces wall time against simulated time, so the scan counts between actions are exact at any speed.
-- There are three partial records: the capture, `_action_log` and the ScanLog.
+- There are two partial records: the capture and the ScanLog.
 
 ## Work list, in order
 
@@ -39,13 +39,13 @@ Sam ruled on 2026-11-13 that recording stays out of 0.16.0 and becomes the headl
 3. **`;` on the server.** It splits with a quote-aware tokenizer, runs the whole chain under one hold of the state lock, and records the chain as one entry. Both clients stop splitting. This replaces a separate multi-pair `patch`. Decide what an error halfway through a chain does. My suggestion: check every write before applying any, and keep steps and runs in order.
 4. **Literals typed by the tag**, in place of `_parse_literal`'s guess. The renderer quotes text values. Add a round-trip property test (render(parse(x)) == x).
 5. **A `pyrungCommand {text, source, scan_id}` event** for each accepted mutation, sent to every participant. ClickNick shows it in place of its own echo.
-6. **A SessionRecorder** replaces CaptureBuffer and `_action_log`:
+6. **A SessionRecorder** replaces CaptureBuffer:
    - it is always on, and `record X` / `record stop` mark named ranges inside it;
    - it records a free run as a scan count;
    - Modbus writes come in as `patch` with source `modbus`;
    - `record save <file>` writes the transcript.
 7. **The ScanLog audit**, as a test. Every patch and force change in the ScanLog must match a recorder event.
-8. **The check and the replay report** (see below). Then `pytest` generation from a transcript, as plain PLC calls the way `spec test` writes them.
+8. **The check and the replay report** (see below). Then `pytest` generation from a transcript, as plain PLC calls the way `spec test` wrote them (commit 5d0569a still has `src/pyrung/dap/spec.py`).
 
 **The reload plan stays structured.** It is recorded as `reload` followed by the carried outcomes.
 

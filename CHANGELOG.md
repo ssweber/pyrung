@@ -17,6 +17,10 @@
 
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
   Fix the row, or leave its Data Type blank.
+- The console no longer has the `log`, `note`, `candidates`, `accept`, `deny`, `suppress` and `spec` commands.
+  Read past scans in the VS Code History panel or with `cause` and `effect`. Write tests in pytest.
+- `record stop` prints every command recorded (it printed a shortened transcript).
+  Cut the lines you don't want from the transcript before you replay it.
 
 ### Fixes
 

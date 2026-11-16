@@ -142,12 +142,6 @@ class DAPAdapter:
         self._bench_links_on = True
         self._links_revision = 0
         self._bounds_accumulator: dict[str, Any] = {}
-        self._notes: dict[int, list[str]] = {}
-        self._action_log: list[tuple[int | None, str, str]] = []
-
-        self._miner_candidates: list[Any] = []
-        self._miner_accepted: list[Any] = []
-        self._miner_suppressed: set[str] = set()
 
         # Simulator controls: real-time pacing, STOP requests from Modbus,
         # Click address resolution, and the optional Modbus TCP server.
@@ -173,9 +167,7 @@ class DAPAdapter:
         import pyrung.dap.bounds_console  # noqa: F401
         import pyrung.dap.harness_console  # noqa: F401
         import pyrung.dap.links  # noqa: F401
-        import pyrung.dap.miner_console  # noqa: F401
         import pyrung.dap.reload_console  # noqa: F401
-        import pyrung.dap.spec_console  # noqa: F401
 
     @property
     def _runner(self) -> PLC | None:

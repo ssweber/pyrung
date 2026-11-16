@@ -77,7 +77,7 @@ With physical annotations in place, the VS Code debugger auto-installs the harne
 
 - **[VS Code Debugger](dap-vscode.md)** — breakpoints, monitors, Data View, Graph View, history scrubber with Chain tab for causal queries.
 - **[pyrung live](console.md#pyrung-live)** — attach to a running debug session from another terminal. Chain commands, force tags, run causal queries. Pair VS Code (human stepping through scans) with `pyrung live` (an LLM or script running causal queries and forcing tags) for assisted commissioning.
-- **[Session capture](console.md#session-capture)** — record a debug session as a replayable transcript. Condense to a minimal reproducer, mine invariants, generate pytest files.
+- **[Session capture](console.md#session-capture)** — record a debug session as a transcript that `replay` runs again.
 
 For hardware deployment, see [CLICK PLC](../dialects/click.md) (TagMap, validation, soft-PLC) or [CircuitPython](../dialects/circuitpy.md) (P1AM code generation).
 

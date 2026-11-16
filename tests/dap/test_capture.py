@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from pyrung.dap.adapter import DAPAdapter
-from pyrung.dap.capture import CaptureBuffer, CaptureEntry
+from pyrung.dap.capture import CaptureBuffer, CaptureEntry, parse_provenance_line
 from pyrung.dap.protocol import read_message
 
 # ---------------------------------------------------------------------------
@@ -298,7 +298,12 @@ class TestTranscriptFormat:
         transcript = resp["body"]["result"].split("\n", 1)[1]  # skip "Recording stopped."
 
         lines = [line for line in transcript.strip().splitlines() if not line.startswith("#")]
-        assert lines == ["patch Button true", "step 1"]
+        assert lines == ["patch Button true", "step 2"]
+
+    def test_provenance_keeps_every_colon_of_its_source(self):
+        parsed = parse_provenance_line("harness:analog:thermal: patch Temp 1.5")
+        assert parsed.source == "harness:analog:thermal"
+        assert parsed.command == "patch Temp 1.5"
 
     def test_transcript_starts_with_action_comment(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -325,7 +330,7 @@ class TestTranscriptFormat:
         assert "step 1" not in t1
 
         assert "# action: second" in t2
-        assert "step 1" not in t2
+        assert "step 1" in t2
         assert "patch Button true" not in t2
 
 

@@ -132,6 +132,56 @@ def test_a_stop_inside_a_compiled_range_seeks_like_stepping(fine_loop: None) -> 
     _assert_history(twin, truth, samples)
 
 
+# --- Forces ----------------------------------------------------------------------------
+
+
+def _forces_in_effect(plc: PLC) -> dict[int, dict[str, Any]]:
+    """The forces in effect at each scan, read from the scan log's force records."""
+    records = plc._scan_log.snapshot().force_changes_by_scan
+    forces: dict[str, Any] = {}
+    in_effect: dict[int, dict[str, Any]] = {}
+    for scan in range(plc.state.scan_id + 1):
+        forces = records.get(scan, forces)
+        in_effect[scan] = forces
+    return in_effect
+
+
+def _lamp_follows_run() -> Program:
+    with Program(strict=False) as program:
+        with Rung(Run):
+            out(Lamp)
+    return program
+
+
+def test_a_compiled_run_logs_the_forces_stepping_logs(
+    fine_loop: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkpoint repeats the forces in effect, so the two runs may keep different records.
+
+    What the records say about each scan has to agree, and so does each scan they rebuild.
+    """
+    plc, twin = PLC(_lamp_follows_run(), dt=0.01), PLC(_lamp_follows_run(), dt=0.01)
+    truth: dict[int, Any] = {}
+    for force, seconds in ((True, 11.0), (False, 2.0), (None, 2.0)):
+        for runner in (plc, twin):
+            if force is None:
+                runner.unforce(Run)
+            else:
+                runner.force(Run, force)
+        start = plc.state.scan_id
+        plc.run_for(seconds)
+        _scan(twin, plc.state.scan_id - start, truth)
+    # A compiled scan leaves no causal record, so these are the scans the kernel ran.
+    assert sum(last - first + 1 for first, last in plc._unrecorded_scans) > 1400
+    assert plc.state.scan_id == twin.state.scan_id
+    assert len(plc._scan_log.snapshot().force_changes_by_scan) > 3
+    assert _forces_in_effect(plc) == _forces_in_effect(twin)
+    _assert_history(plc, truth)
+    # Rebuild the same scans with no kernel.
+    monkeypatch.setattr(PLC, "_compiled_replay_supported_kernel", lambda _self: None)
+    _assert_history(plc, truth)
+
+
 # --- The RTC ---------------------------------------------------------------------------
 
 

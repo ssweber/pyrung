@@ -22,8 +22,6 @@ Specs that later work needs are kept beside this file:
 
 ## Before new work
 
-- **Bump to `pyclickplc>=0.5.2`** in pyproject.toml. [nothing]
-- **pilot/AGENTS.md:449** says the last resort is "planned, not built". It was built on 2026-11-05. [nothing]
 - **prove/AGENTS.md** says how() reads `_ExploreContext`. It reads `_PriorFacts`. This fix goes with step 1. [nothing]
 
 ## 0. Gate fixes, and the range bound
@@ -33,34 +31,16 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
 `pyrung-wt/buildbot/logs/gate-trim/`.
 
 - **Narrow `fold`** to the test files whose long runs use the loop (`run_for`/`run_until`). Today it reruns all of
-  `test`'s selection. It took 964 s on 2026-11-15, after the 16 slowest cases of `test_pilot_long_wait.py` left it
-  (1,873 s before).
+  `test`'s selection, less the 16 slowest cases of `test_pilot_long_wait.py`. It took 964 s on 2026-11-15 (1,873 s
+  with those cases).
 - **Fuzz runs in no gate.** The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given`
   on an inner function. Decide its fate with the search deletion, since most of it tests the search.
 
 ## 1. The deletions release
 
-Plan items 1.1 (record machinery), 3 (public surface) and 6 (search removal). Delete the record machinery first,
-because miner.py reads lock files. All [nothing].
-
-### 1a. The April record machinery
-
-- **Whole files.** condenser.py 577, miner.py 860, miner_console.py 67, spec.py 307, spec_console.py 85. Tests:
-  test_condenser 149, test_miner 809, test_spec 315. About 3,420 lines with the partial edits.
-- **Partial edits.** The `log` verb and `_format_forces` (console.py ~1469-1569), and the action log
-  (`adapter._action_log`). The review verbs are `candidates`, `accept`, `deny`, `suppress` and `spec`. The `note`
-  verb has no other reader, so it goes too.
-- **Move first.**
-  - `parse_provenance_line` (condenser.py:94). Its only caller is capture.py:233.
-  - TestLogVerb's `test_compiled_log_is_the_stepped_log` is the only test that the jit and stepping print the same
-    scan log. Move the check rather than delete it.
-  - tests/core/test_instruction_tables.py:77 and 194 use `miner._instruction_owned_tags`.
-  - `record stop` runs the condenser and the miner (capture.py:112-136). Split them out.
-- **The capture layer stays.** It is the base of the recording core.
-- **Docs.** console.md (help listing 66-74, "Notes and log", "Session capture", 257, and the `log` example 296-310),
-  commissioning.md:80, AGENTS.md:125-127, prove/AGENTS.md:127.
-- **ClickNick.** It refuses `record` and `replay` (console_panel.py:205) and reads `command_grammar()`, so its verb
-  list changes. Tell Sam when this lands.
+Plan items 3 (public surface) and 6 (search removal). All [nothing]. The record machinery (plan item 1.1) is gone.
+ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `candidates`, `accept`, `deny`,
+`suppress` and `spec` left it.
 
 ### 1b. The prover search, and the check that replaces it
 
@@ -106,6 +86,8 @@ because miner.py reads lock files. All [nothing].
 
 Plan item 3. `pyrung`, `pyrung.click` and `pyrung.circuitpy` are public. The few names users need move to the top
 level, and validation gets one public module. ClickNick's test of its named imports is ClickNick's work.
+- Decide `expr_requires` and `reset_dominance` (analysis/simplified.py). Nothing in src calls them since the record
+  machinery went, but test files that `spec test` wrote import them.
 
 ### 1d. Then the `Rung` -> `rung` rename in tests
 
@@ -148,7 +130,7 @@ Plan item 1.2. The design is `session-recording/design.md`. Sam's rulings of 202
 All [nothing].
 
 - **Fix `replay`.** It stops after the first `step`, `run` or `reload`, because those return `"stopped"` and
-  capture.py:186-200 treats that as a breakpoint. The tests miss it because every replay transcript ends on the step.
+  capture.py:182-196 treats that as a breakpoint. The tests miss it because every replay transcript ends on the step.
 - **Add** `assert` (a tolerance on Reals, an error on an unknown tag) and `run until <condition> within N`. Today
   `run` takes only a count or a duration. dap/expressions.py has a parser to reuse.
 - `record` saves the raw transcript, and a recording carries its scan time. The pytest plugin collects recordings.

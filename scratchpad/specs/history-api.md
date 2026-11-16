@@ -14,8 +14,8 @@ write to this path, so the orchestrator saved it from the hand-back.)
   (runner.py:94-95, 3010-3065), and only one slab is kept. A test pins this (tests/core/test_replay_capture.py:194-198).
   - Backward walks are cheap after the first miss.
   - Forward walks and `at(s-1), at(s)` pairs refill the slab on every step (inference).
-  - `effect()`, the DAP miner and condenser, and pilot's sparse pairs all walk forward. The DAP console already works
-    around it (dap/console.py:1507).
+  - `effect()` and pilot's sparse pairs walk forward. (The DAP miner, condenser and `log` verb did too. They were
+    deleted after 5d0569a.)
 - **`range()` may disagree with `at()` on IO scans.** `_replay_range_compiled` (runner.py:3984-4031) never applies the
   recorded `send`/`receive` writes. The other replay paths do (runner.py:3640-3645, 4084-4091, 3491-3494).
   - CHANGELOG.md:342 promises recorded answers for `at`, `replay_to`, `cause` and `effect`, not `range`.
@@ -27,10 +27,9 @@ write to this path, so the orchestrator saved it from the hand-back.)
   (inference).
 - **`previous_transition` settles every unrecorded scan from the oldest one** (history.py:238). It has no lower bound.
   That is why bob/tail-speed went past it.
-- **The same "last change of a tag in a window" question is written four times:**
+- **The same "last change of a tag in a window" question is written three times:**
   - correction_candidates.py:106
   - pilot/causal.py:64
-  - dap/condenser.py:495
   - dap/handlers/history_seek.py:243, the only one that uses records
 
 ## 0. Three facts the rest depends on
@@ -95,9 +94,9 @@ write to this path, so the orchestrator saved it from the hand-back.)
 | 11 | causal/recorded.py:1964 forward `effect()` walk; :2220 via the capture path (runner.py:3804) | the state each scan of a forward slice evaluates | partly (SP-tree reads) | per user `effect()`, up to 1,000 scans | up to 1,000 slab refills on cold history (inference) |
 | 12 | causal/recorded.py:484, 536, 795, 798, 1075, 1362; causal/history.py:45-46, 161-162, 268-269; crossings_recorded.py:133-134, 197-199; projected.py:717, 1070 | one or two tags at one scan, or an SP view | mostly | per causal step, mostly backward | see 3.2 |
 | 13 | causal/_rung_writes.py:640-641 | entry and exit tags of one scan | the capture usually supplies them | rare | ascending pair |
-| 14 | dap/condenser.py:511 | the last change of a few tags in a span | yes | per command, forward pairs | slab thrash (inference) |
-| 15 | dap/miner.py:413 (called twice, :83 and :648), :633, :795-798 | edges, Bool values per scan, values after a trigger | yes | per command, forward loops | as #14 |
-| 16 | dap/console.py:1508 | the last n states for a log | mostly changes | per command, already newest first | no |
+| 14 | (deleted, in 5d0569a) dap/condenser.py:511 | the last change of a few tags in a span | yes | per command, forward pairs | slab thrash (inference) |
+| 15 | (deleted, in 5d0569a) dap/miner.py:413 (called twice, :83 and :648), :633, :795-798 | edges, Bool values per scan, values after a trigger | yes | per command, forward loops | as #14 |
+| 16 | (deleted, in 5d0569a) dap/console.py:1508 | the last n states for a log | mostly changes | per command, already newest first | no |
 | 17 | dap/handlers/history_seek.py:286-287 | how named tags differ between two scans | yes | per page | no |
 | 18 | runner.py:2035 seek, 2044-2049 rewind, 2236 diff, 2403; history.py:291-331, 337-411 labels | a whole state, a timestamp, a diff | named-tag `diff` yes | per user call | `find_all` walks forward |
 | 19 | prove/blackbox.py:772, :941 | the state just before the tip | not needed (cached) | per explored state | no |
@@ -114,7 +113,7 @@ against the local epoch's timelines. Nobody has checked whether those match on a
 4. Row #5.
 5. Rows #6 and #7.
 6. Rows #8 and #9: one slab each.
-7. Outside how(): `effect()` on cold history (#11), then the DAP miner and condenser.
+7. Outside how(): `effect()` on cold history (#11).
 
 ## 2. The API
 
@@ -163,7 +162,7 @@ Each reader settles only the scans it reads, routes through the epoch that ran e
 
 1. **`history.changes(tags, lo, hi, *, newest_first=True)`.** It yields `Transition(tag, scan, before, after)` for
    every change in the inclusive window `lo..hi`.
-   - It serves Q1 to Q5, `previous_transition`, DAP's `_changes_within`, the condenser, and the miner's edges.
+   - It serves Q1 to Q5, `previous_transition`, and DAP's `_changes_within`.
    - It settles lazily, one segment at a time, newest first.
    - The before-value fallback is the one in `_committed_transition` (runner.py:2012).
    - Size: about 100 lines, moved from effect_observation.py:822, runner.py:1971-2026 and history_seek.py:243.
@@ -188,7 +187,7 @@ Each reader settles only the scans it reads, routes through the epoch that ran e
    - Size: about 20 lines. Not public.
 
 How the other consumers map onto these readers:
-- **DAP.** Seek, the condenser and the miner use `changes`. `_window_entry` uses `values`. The variables view uses
+- **DAP.** Seek uses `changes`. `_window_entry` uses `values`. The variables view uses
   `state_at`.
 - **Causal.** `_find_last_transition_scan` and `_boundary_transition_at_scan` become wrappers over `changes`. `effect()`
   keeps `state_at` for SP views, behind a forward-aware slab.
@@ -248,7 +247,7 @@ Migration and CHANGELOG impact:
 
 | # | Proposal | Benefit | Size | Risk | Public |
 |---|---|---|---|---|---|
-| 4.1 | Forward-aware slab: extend when a miss is the slab's end + 1, or centre the slab on the miss | ends per-scan refills in `effect()`, the pairs, the miner and the condenser, with no caller changes | ~15 lines | low (update test_replay_capture.py:194-224) | no |
+| 4.1 | Forward-aware slab: extend when a miss is the slab's end + 1, or centre the slab on the miss | ends per-scan refills in `effect()` and the pairs, with no caller changes | ~15 lines | low (update test_replay_capture.py:194-224) | no |
 | 4.2 | IO writes in `_replay_range_compiled` | `range` agrees with `at` | ~6 lines + test | low | fix line |
 | 4.3 | Settle in projected modes | no stale `held_since` | ~4 lines | can now raise | fix line |
 | 4.4 | `changes()`, with pilot Q1-Q4 and DAP moved onto it | one cheap reader replaces four copies | ~120 added, more removed | medium | yes |
