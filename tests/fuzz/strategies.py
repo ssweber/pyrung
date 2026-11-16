@@ -262,7 +262,7 @@ def _pick_source(draw: st.DrawFn, choices: list[Any], recent_dests: list[Any] | 
     """Pick a numeric source tag, biased toward a recently written dest.
 
     Reusing a recent dest as a source builds copy/calc chains organically across
-    rungs — the feature adjacency the prover fuzzer most often finds bugs in.
+    rungs — the feature adjacency the fuzzer most often finds bugs in.
     """
     # Identity membership: Tag.__eq__ is DSL-overloaded (builds an expression),
     # so `in` / `==` cannot be used to test pool membership.
@@ -277,7 +277,6 @@ def instruction_specs(
     draw: st.DrawFn,
     pool: TagPool,
     *,
-    soundness_only: bool = False,
     recent_dests: list[Any] | None = None,
 ) -> InstrSpec:
     writable_bool = pool.writable_bool()
@@ -346,8 +345,6 @@ def instruction_specs(
         choices.append(("time_drum", 2))
     if pool.char_block is not None and has_numeric:
         choices.append(("pack_text", 2))
-    if soundness_only and has_numeric and has_bool and pool.int_tags:
-        choices.append(("receive", 3))
 
     kinds = [c[0] for c in choices]
     kind = draw(st.sampled_from(kinds))
@@ -736,25 +733,6 @@ def instruction_specs(
                 "jump_step": jump_step,
             },
         )
-    elif kind == "receive":
-        rid = _next_drum_id()
-        dest = draw(st.sampled_from(writable_numeric))
-        receiving = Bool(f"RxBusy{rid}")
-        success = Bool(f"RxOK{rid}")
-        error = Bool(f"RxErr{rid}")
-        ex_code = Int(f"RxCode{rid}")
-        return InstrSpec(
-            kind="receive",
-            args={
-                "target": "device1",
-                "remote_start": "DS1",
-                "dest": dest,
-                "receiving": receiving,
-                "success": success,
-                "error": error,
-                "exception_response": ex_code,
-            },
-        )
     elif kind == "pack_text":
         blk = pool.char_block
         r = _block_range_args(draw, blk)
@@ -1111,7 +1089,6 @@ def rung_specs(
     draw: st.DrawFn,
     pool: TagPool,
     *,
-    soundness_only: bool = False,
     min_conditions: int = 0,
     recent_dests: list[Any] | None = None,
 ) -> RungSpec:
@@ -1119,8 +1096,7 @@ def rung_specs(
     n_instrs = draw(st.integers(1, 3))
     conditions = [draw(condition_specs(pool)) for _ in range(n_conds)]
     instructions = [
-        draw(instruction_specs(pool, soundness_only=soundness_only, recent_dests=recent_dests))
-        for _ in range(n_instrs)
+        draw(instruction_specs(pool, recent_dests=recent_dests)) for _ in range(n_instrs)
     ]
 
     non_terminal = [i for i in instructions if not _is_terminal(i)]
@@ -1151,9 +1127,7 @@ class ProgramSpec:
 
 
 @st.composite
-def program_specs(
-    draw: st.DrawFn, *, soundness_only: bool = False, min_conditions: int = 0
-) -> ProgramSpec:
+def program_specs(draw: st.DrawFn, *, min_conditions: int = 0) -> ProgramSpec:
     pool = draw(tag_pools())
     n_rungs = draw(st.integers(2, 8))
     rungs: list[RungSpec] = []
@@ -1162,7 +1136,6 @@ def program_specs(
         rung = draw(
             rung_specs(
                 pool,
-                soundness_only=soundness_only,
                 min_conditions=min_conditions,
                 recent_dests=recent_dests,
             )
@@ -1176,7 +1149,7 @@ def program_specs(
     subs: list[SubroutineSpec] = []
     if available:
         # Weight adjacency patterns up so the fuzzer spends most of its budget
-        # in the feature-interaction corners where prover soundness bugs live,
+        # in the feature-interaction corners where bugs live,
         # while incidental patterns keep weight 1 to preserve diversity.
         weighted = [
             p
@@ -1260,75 +1233,3 @@ def build_program(spec: ProgramSpec) -> Program:
                     with Rung(*conds):
                         _emit_rung_body(rs)
     return logic
-
-
-# ---------------------------------------------------------------------------
-# Property specs
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class PropertySpec:
-    kind: str
-    tags: list[Any] = field(default_factory=list)
-    bound: int | None = None
-
-
-@st.composite
-def property_specs(draw: st.DrawFn, pool: TagPool) -> PropertySpec:
-    writable_bool = pool.writable_bool()
-    numerics = pool.all_numeric()
-
-    choices: list[tuple[str, int]] = []
-    if writable_bool:
-        choices.append(("always_false", 30))
-        choices.append(("always_true", 15))
-    if numerics:
-        choices.append(("bounded", 20))
-    if len(writable_bool) >= 2:
-        choices.append(("mutual_exclusion", 10))
-    if pool.timers:
-        choices.append(("timer_never_fires", 15))
-    if pool.counters:
-        choices.append(("counter_bounded", 10))
-
-    assume(len(choices) > 0)
-    kind = draw(st.sampled_from([c[0] for c in choices]))
-
-    if kind == "always_false":
-        tag = draw(st.sampled_from(writable_bool))
-        return PropertySpec(kind="always_false", tags=[tag])
-    elif kind == "always_true":
-        tag = draw(st.sampled_from(writable_bool))
-        return PropertySpec(kind="always_true", tags=[tag])
-    elif kind == "bounded":
-        tag = draw(st.sampled_from(numerics))
-        bound = draw(st.integers(1, 200))
-        return PropertySpec(kind="bounded", tags=[tag], bound=bound)
-    elif kind == "mutual_exclusion":
-        pair = draw(st.lists(st.sampled_from(writable_bool), min_size=2, max_size=2))
-        return PropertySpec(kind="mutual_exclusion", tags=pair)
-    elif kind == "timer_never_fires":
-        timer = draw(st.sampled_from(pool.timers))
-        return PropertySpec(kind="timer_never_fires", tags=[timer.Done])
-    else:
-        counter = draw(st.sampled_from(pool.counters))
-        bound = draw(st.integers(1, 50))
-        return PropertySpec(kind="counter_bounded", tags=[counter.Acc], bound=bound)
-
-
-def build_property(spec: PropertySpec) -> Any:
-    if spec.kind == "always_false":
-        return spec.tags[0] == False  # noqa: E712
-    elif spec.kind == "always_true":
-        return spec.tags[0] == True  # noqa: E712
-    elif spec.kind == "bounded":
-        return spec.tags[0] < spec.bound
-    elif spec.kind == "mutual_exclusion":
-        return Or(~spec.tags[0], ~spec.tags[1])
-    elif spec.kind == "timer_never_fires":
-        return spec.tags[0] == False  # noqa: E712
-    elif spec.kind == "counter_bounded":
-        return spec.tags[0] < spec.bound
-    else:
-        return spec.tags[0] == False  # noqa: E712

@@ -1,16 +1,10 @@
-"""Shared partial-evaluation walk over simplified boolean expressions.
+"""Partial evaluation of simplified boolean expressions.
 
-The prover (`prove/expr.py`) and PILOT (`pilot/trace.py`) both partial-evaluate a
-simplified ``And``/``Or``/``Atom``/``Const`` tree against a dict of known tag
-values, folding decided atoms into ``Const`` and short-circuit-simplifying the
-boolean structure.  The And/Or/Const walk is identical between them; only the
-*atom* decision differs (the prover substitutes operand tags manually and calls
-``_eval_atom``; PILOT gates on a subset check and calls ``_eval_expr_from_state``).
-
-This module owns the shared skeleton, parameterized by an atom-evaluator
-callable so each call site keeps its own atom semantics.  It imports only the
-expression types — neither ``prove`` nor ``pilot`` — so both can depend on it
-without a cross-dependency.
+PILOT (``pilot/availability.py``) partial-evaluates a simplified
+``And``/``Or``/``Atom``/``Const`` tree against a dict of known tag values.  The
+walk folds decided atoms into ``Const`` and simplifies the boolean structure.
+The caller passes the atom decision, so this module imports only the
+expression types.
 """
 
 from __future__ import annotations

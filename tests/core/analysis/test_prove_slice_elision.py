@@ -27,7 +27,6 @@ from pyrung.core import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import Counterexample, always
 from pyrung.core.analysis.prove.elision import _elide_scan_local_stateful_dims
 
 
@@ -37,14 +36,13 @@ def _slice_elide(
     nondeterministic_dims: dict[str, tuple[object, ...]],
     observed_tags: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, tuple[object, ...]], dict[str, str]]:
-    reduced, elided, _details, _subs = _elide_scan_local_stateful_dims(
+    return _elide_scan_local_stateful_dims(
         program,
         build_program_graph(program),
         stateful_dims,
         nondeterministic_dims,
-        observed_tags=observed_tags,
+        observed=observed_tags,
     )
-    return reduced, elided
 
 
 def test_unconditional_write_before_read_is_elided() -> None:
@@ -194,29 +192,6 @@ def test_all_conditional_writers_can_all_skip_keeps_tag() -> None:
     assert reduced == {"Pulse": (0, 1)}
 
 
-def test_strategy_toggle_dispatches_both_paths() -> None:
-    """Both strategies honor the shared return contract."""
-    tmp = Bool("Tmp")
-    seen = Bool("Seen")
-
-    with Program(strict=False) as logic:
-        with Rung():
-            reset(tmp)
-        with Rung(tmp):
-            out(seen)
-
-    graph = build_program_graph(logic)
-    dims = {"Tmp": (False, True), "Seen": (False, True)}
-
-    result = _elide_scan_local_stateful_dims(logic, graph, dims, {})
-    assert len(result) == 4
-    reduced, elided, details, subs = result
-    assert isinstance(reduced, dict)
-    assert isinstance(elided, dict)
-    assert isinstance(details, dict)
-    assert isinstance(subs, dict)
-
-
 def _indexed_entry_read_program() -> tuple[Program, Bool]:
     """``DS[P]`` reads DS2 before the rung that writes it, but only at P = 2."""
     hit = Bool("Hit")
@@ -243,12 +218,6 @@ def test_index_pointer_seeds_the_slice() -> None:
 
     assert "DS2" not in elided
     assert reduced == {"DS2": (0, 7)}
-
-
-def test_index_entry_read_is_found() -> None:
-    logic, hit = _indexed_entry_read_program()
-
-    assert isinstance(always(logic, ~hit), Counterexample)
 
 
 def _historian_program(shape: str) -> tuple[Program, Bool]:
@@ -317,16 +286,6 @@ def test_slot_read_before_its_write_is_kept() -> None:
     assert "DS19" not in elided
 
 
-def test_slot_compared_before_its_write_is_kept() -> None:
-    """A rung condition's read counts: running the body alone must see it too."""
-    logic, hit = _historian_program("compare_first")
-
-    _reduced, elided = _slice_elide(logic, dict(_HISTORIAN_DIMS), dict(_HISTORIAN_INPUTS))
-
-    assert "DS19" not in elided
-    assert isinstance(always(logic, ~hit), Counterexample)
-
-
 def test_slot_a_call_reads_without_writing_is_kept() -> None:
     logic, _hit = _historian_program("write_some")
 
@@ -344,10 +303,3 @@ def test_observed_slot_is_kept() -> None:
     )
 
     assert "DS19" not in elided
-
-
-def test_slot_kept_from_an_earlier_call_is_found() -> None:
-    """A call with Bit on stores 7; a later one with Bit off echoes it."""
-    logic, hit = _historian_program("write_some")
-
-    assert isinstance(always(logic, ~hit), Counterexample)

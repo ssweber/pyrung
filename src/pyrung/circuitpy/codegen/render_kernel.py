@@ -24,7 +24,6 @@ from pyrung.circuitpy.codegen._helpers import (
     _with_helper_deps,
 )
 from pyrung.circuitpy.codegen._util import (
-    _first_defined_name,
     _global_line,
     _subroutine_symbol,
 )
@@ -197,17 +196,10 @@ def compile_kernel(
     force_rung_enable: bool = False,
     blockless: bool = False,
     proof_metadata: bool = False,
-    abstract_timers: bool = False,
     split_after: int | None = None,
     timings: dict[str, float] | None = None,
 ) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel.
-
-    ``abstract_timers`` (the prover's kernel only) replaces every timed tick
-    with a call to ``_bb_tick``: the accumulator moves to a value the caller's
-    oracle (``memory["_bb"]``) chooses instead of by the scan's dt, so one
-    compiled scan stands for a scan of any length.  Enable, reset and preset
-    logic stay the runtime's.  Without an oracle a tick never advances.
 
     ``split_after`` (a rung count) emits a second ``pre_step_fn`` covering the
     leading rungs — the synthesis ``plant`` pass — so the caller can drain inputs
@@ -223,16 +215,15 @@ def compile_kernel(
         force_rung_enable=force_rung_enable,
         blockless=blockless,
         proof_metadata=proof_metadata,
-        abstract_timers=abstract_timers,
     )
-    source, lock_source = _render_kernel_source(ctx, split_after=split_after)
+    source = _render_kernel_source(ctx, split_after=split_after)
     rendered = clock()
 
     namespace: dict[str, Any] = {
         **ctx.function_objects,
         **ctx.function_constants,
         "_dt_to_ns": dt_to_ns,
-        # A proof_metadata kernel's For past the verifier's cap raises it.
+        # A proof_metadata kernel's For past the facts' iteration cap raises it.
         "_ForIterationsBeyondCap": ForIterationsBeyondCap,
         "_for_cap_sites": tuple(ctx.for_cap_sites),
     }
@@ -272,7 +263,6 @@ def compile_kernel(
         # (``_edge:e{N}``); nothing reads a previous-scan tag copy.
         edge_tags=set(),
         source=source,
-        lock_source=lock_source,
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
@@ -316,26 +306,8 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
     return specs
 
 
-# The abstract-timer tick (see ``compile_kernel``).  Kernel only: CircuitPython
-# output never calls it.
-_BB_TICK_HELPER = [
-    "def _bb_tick(_mem, key, acc, limit):",
-    "    oracle = _mem.get('_bb')",
-    "    if oracle is None:",
-    "        return acc",
-    "    return oracle(key, acc, limit)",
-    "",
-]
-
-
-def _render_kernel_source(
-    ctx: CodegenContext, *, split_after: int | None = None
-) -> tuple[str, str]:
-    """The source a kernel runs, and that source with each called function's text in it.
-
-    A kernel calls the function itself, so its text isn't run.  A lock still has to see an
-    edit to it, and hashes the second string.
-    """
+def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None) -> str:
+    """The source a kernel runs.  A kernel calls each function itself, so its text isn't run."""
     sub_fn_lines = _compile_subroutines(ctx)
     rungs = ctx.program.rungs
     if split_after is None:
@@ -354,8 +326,6 @@ def _render_kernel_source(
     head: list[str] = []
     head.extend(_render_imports(ctx))
     head.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
-    if ctx.abstract_timers:
-        head.extend(_BB_TICK_HELPER)
     head.extend(_render_indirect_helpers(ctx))
     tail: list[str] = []
     tail.extend(_render_declarations(ctx))
@@ -364,8 +334,7 @@ def _render_kernel_source(
         tail.extend(_render_step_function(ctx, pre_body, fn_name="_kernel_step_pre"))
     tail.extend(_render_step_function(ctx, main_body))
     source = "\n".join([*head, *tail]).rstrip() + "\n"
-    lock_source = "\n".join([*head, *_render_function_texts(ctx), *tail]).rstrip() + "\n"
-    return source, lock_source
+    return source
 
 
 # -- Compilation (populates ctx side-effects) --------------------------------
@@ -446,18 +415,6 @@ def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
         key=lambda b: ctx.index_helper_name(b.block_id),
     ):
         lines.extend(_render_index_helpers(ctx, binding, fault_sym, fault_sym))
-    return lines
-
-
-def _render_function_texts(ctx: CodegenContext) -> list[str]:
-    lines: list[str] = ctx.function_constant_lines()
-    for symbol in sorted(ctx.function_sources):
-        src = ctx.function_sources[symbol].rstrip()
-        lines.append(src)
-        fn_name = _first_defined_name(src)
-        if fn_name is not None and fn_name != symbol:
-            lines.append(f"{symbol} = {fn_name}")
-        lines.append("")
     return lines
 
 

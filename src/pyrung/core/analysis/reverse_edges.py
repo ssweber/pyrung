@@ -5,8 +5,8 @@ build a map from source tags to target tags with inverse transforms.  This
 lets a snapshot value for the target be back-propagated to constrain the
 source: if ``Y = X + 5`` and ``Y = 42``, then ``X = 37``.
 
-Diagnosis uses the map to narrow snapshot explanations.  The prover builds its
-own map from ``calc_reverse_edge`` and ``IDENTITY`` to seed BFS domains.
+Diagnosis uses the map to narrow snapshot explanations.  The static facts build
+their own map from ``calc_reverse_edge`` and ``IDENTITY`` to seed input domains.
 """
 
 from __future__ import annotations

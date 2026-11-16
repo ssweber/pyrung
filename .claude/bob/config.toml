@@ -68,10 +68,9 @@ install = { cmd = ["make", "install"], timeout = 900 }
 [queue.stages]
 lint = { cmd = ["make", "lint"], timeout = 600, light = true }   # light: agents may run it
 fold-new = { cmd = ["make", "test-fold-new"], timeout = 900 }   # only the test files the branch adds; instant when it adds none
-prove = { cmd = ["make", "test-prove"], timeout = 300 }
+prove = { cmd = ["make", "test-prove"], timeout = 300 }   # the static fact tests that how() and validation read
 pilot = { cmd = ["make", "test-pilot"], timeout = 420 }
 test = { cmd = ["make", "test"], timeout = 1200 }   # a loaded machine reached 99% at 900 s (2026-11-09)
-soundness = { cmd = ["make", "test-soundness"], timeout = 1200 }
 fold = { cmd = ["make", "test-fold"], timeout = 2700 }   # 964 s alone on 2026-11-15, with the slow long-wait cases skipped (1,873 s with them)
 tumbler = { cmd = ["make", "test-tumbler"], timeout = 900 }
 conf = { cmd = ["make", "test-conformance"], timeout = 1200 }
@@ -84,8 +83,8 @@ docs = { cmd = ["make", "docs-check"], timeout = 600 }   # strict docs build plu
 # test_pilot_long_wait.py, so a jit branch gates on pilot too.
 # fold reruns test's tests under --fold-check (16 min against test's 11 on 2026-11-15).
 # So only a jit change runs it, through train-jit and the profile's jit file rule.
-default = ["lint", "fold-new", "test", "soundness"]
+default = ["lint", "fold-new", "test"]
 fast = ["lint", "docs", "fold-new", "prove", "pilot"]
-heavy = ["lint", "docs", "fold-new", "test", "soundness", "conf", "conf-cp"]
-train = ["lint", "docs", "fold-new", "test", "soundness", "tumbler", "conf", "conf-cp", "hypothesis"]
-train-jit = ["lint", "docs", "test", "soundness", "fold", "tumbler", "conf", "conf-cp", "hypothesis"]
+heavy = ["lint", "docs", "fold-new", "test", "conf", "conf-cp"]
+train = ["lint", "docs", "fold-new", "test", "tumbler", "conf", "conf-cp", "hypothesis"]
+train-jit = ["lint", "docs", "test", "fold", "tumbler", "conf", "conf-cp", "hypothesis"]

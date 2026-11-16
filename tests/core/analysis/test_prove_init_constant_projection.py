@@ -14,7 +14,6 @@ from pyrung.core import (
     reset,
     rise,
 )
-from pyrung.core.analysis.prove import Proven, always
 from pyrung.core.analysis.prove.passes import (
     _pass_build_graph,
     _pass_classify_dimensions,
@@ -28,14 +27,7 @@ from pyrung.core.tag import TagType
 
 
 def _run_through_initconst(program: Program) -> _PassContext:
-    ctx = _PassContext(
-        program=program,
-        scope=None,
-        project=None,
-        extra_exprs=None,
-        dt=0.01,
-        compiled=None,
-    )
+    ctx = _PassContext(program=program, dt=0.01)
     _pass_build_graph(ctx)
     _pass_classify_dimensions(ctx)
     _pass_elide_scan_local_state(ctx)
@@ -316,44 +308,6 @@ def test_colatch_single_tag_no_projection() -> None:
     assert ctx.stateful_dims is not None
 
     assert "X" in ctx.stateful_dims
-
-
-def test_prove_soundness_with_init_constant() -> None:
-    """Prove a property that references an init-constant tag."""
-    init_done = Bool("InitDone")
-    cfg = Int("Cfg", min=0, max=100)
-    seen = Bool("Seen")
-
-    with Program(strict=False) as logic:
-        with Rung(cfg > 50):
-            out(seen)
-        with Rung(~init_done):
-            copy(42, cfg)
-            latch(init_done)
-
-    result = always(logic, cfg <= 42)
-    assert isinstance(result, Proven)
-
-
-def test_first_scan_pattern_soundness() -> None:
-    """Prove soundness with co-latching first_scan-style pattern."""
-    inp = InputBlock("Inp", TagType.BOOL, 1, 1)
-    f = inp[1]
-    x = Int("X", min=0, max=10)
-    y = Int("Y", min=0, max=10)
-    seen = Bool("Seen")
-
-    with Program(strict=False) as logic:
-        with Rung(x > 3):
-            out(seen)
-        with Rung(y > 5):
-            out(seen)
-        with Rung(f):
-            copy(5, x)
-            copy(7, y)
-
-    result = always(logic, x <= 5)
-    assert isinstance(result, Proven)
 
 
 # --- Pattern C: system.sys.first_scan guard ---

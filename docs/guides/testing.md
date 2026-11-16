@@ -395,6 +395,5 @@ When your UDTs declare `physical=` and `link=` on feedback fields, the autoharne
 
 - [Physical Annotations and Autoharness](physical-harness.md) — annotate devices, eliminate feedback boilerplate
 - [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
-- [Verification](verification.md) — always(), never(), fault coverage, lock files
 - [Runner Guide](runner.md) — time modes, execution methods, numeric behavior
 - [Quickstart](../getting-started/quickstart.md) — the traffic light example

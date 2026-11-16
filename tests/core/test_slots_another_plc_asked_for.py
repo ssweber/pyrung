@@ -1,7 +1,7 @@
 """A PLC answers as one built first, whatever another PLC or an analysis asked of a block.
 
 A block makes a tag for each slot anything asks for, and keeps it.  Scans through a
-pointer, how(), a coverage report and the prover all ask.  None of that may change what
+pointer, how(), a coverage report and the static facts all ask.  None of that may change what
 a PLC built later knows, holds or answers.
 """
 
@@ -16,7 +16,7 @@ import pytest
 from pyrung.core import PLC, Block, Bool, Char, Int, Program, Rung, TagType, copy, out
 from pyrung.core.analysis.causal.recorded import _tag_in_block
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import always
+from pyrung.core.analysis.prove import _build_prior_facts
 from pyrung.core.harness import Coupling, link_problem
 from pyrung.core.physical import Physical
 from pyrung.dap.expressions import parse, to_conditions
@@ -52,8 +52,8 @@ def _coverage(program: Program, _lamp: Bool) -> None:
     CoverageCollector().collect(other)
 
 
-def _prove(program: Program, lamp: Bool) -> None:
-    always(program, ~lamp)
+def _static_facts(program: Program, _lamp: Bool) -> None:
+    _build_prior_facts(program)
 
 
 def _program_graph(program: Program, _lamp: Bool) -> None:
@@ -64,7 +64,7 @@ ACTIVITIES = [
     pytest.param(_pointer_scans, id="pointer-scans"),
     pytest.param(_how, id="how"),
     pytest.param(_coverage, id="coverage"),
-    pytest.param(_prove, id="prove"),
+    pytest.param(_static_facts, id="static-facts"),
     pytest.param(_program_graph, id="program-graph"),
 ]
 

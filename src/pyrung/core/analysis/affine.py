@@ -1,6 +1,6 @@
 """Stable single-source affine-expression analysis.
 
-The helpers here intentionally live below PDG and prover modules so static
+The helpers here intentionally live below the PDG and the static facts so static
 analysis consumers can share one definition without importing each other.
 """
 

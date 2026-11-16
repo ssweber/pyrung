@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # What `make test-fold` selects: this marker expression, minus tests/fuzz (--ignore). The other
 # excluded suites are left to `-m`, so a file new in them is collected the same way.
-MARKERS = "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance"
+MARKERS = "not integration and not hypothesis and not fuzz and not tumbler and not conformance"
 SKIPPED_DIRS = ("tests/fuzz/", "tests/conformance/workspace/")  # --ignore and norecursedirs
 NO_TESTS_COLLECTED = 5
 

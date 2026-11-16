@@ -13,7 +13,6 @@ from pyrung.core import (
     return_early,
     subroutine,
 )
-from pyrung.core.analysis.prove import Proven, always
 from pyrung.core.analysis.prove.passes import (
     _pass_build_graph,
     _pass_classify_dimensions,
@@ -25,14 +24,7 @@ from pyrung.core.program import call
 
 
 def _run_through_funcdep(program: Program) -> _PassContext:
-    ctx = _PassContext(
-        program=program,
-        scope=None,
-        project=None,
-        extra_exprs=None,
-        dt=0.01,
-        compiled=None,
-    )
+    ctx = _PassContext(program=program, dt=0.01)
     _pass_build_graph(ctx)
     _pass_classify_dimensions(ctx)
     _pass_elide_scan_local_state(ctx)
@@ -246,23 +238,6 @@ def test_cross_scope_not_projected() -> None:
     ctx = _run_through_funcdep(logic)
     assert ctx.stateful_dims is not None
     assert "Y" in ctx.stateful_dims
-
-
-def test_prove_soundness_with_functional_dep() -> None:
-    """Prove a property that references both X and Y with Y projected."""
-    x = Int("X", min=0, max=3)
-    y = Int("Y", min=0, max=8)
-    seen = Bool("Seen")
-
-    with Program(strict=False) as logic:
-        with Rung(y > 7):
-            out(seen)
-        with Rung():
-            math(x + 5, y)
-            copy(0, x)
-
-    result = always(logic, y <= 10)
-    assert isinstance(result, Proven)
 
 
 def _historian_with_loop(count: object, *, oneshot: bool = False) -> Program:

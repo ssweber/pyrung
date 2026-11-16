@@ -1,27 +1,18 @@
 """A coil read above the rung that writes it is state, not combinational.
 
 A read that comes before a tag's first write in scan order sees the value the
-tag ended the previous scan with.  classify used to drop an unconditional OTE
-coil from the state key without checking for such a read, so a chain of coils
-written below their readers (``Rung(Y2): out(Y3)`` above ``Rung(Y1): out(Y2)``)
-merged distinguishable states and ``never(Y3)`` came back Proven although a
-concrete PLC reaches ``Y3``.
-
-Each shape here is checked three ways: the verdict under the default, the
-all-off and the sound-baseline configurations, against an exhaustive concrete
-search over the inputs, and every Counterexample replays on a concrete PLC.
+tag ended the previous scan with.  So a chain of coils written below their
+readers (``Rung(Y2): out(Y3)`` above ``Rung(Y1): out(Y2)``) keeps each coil as
+state in the facts.
 """
 
 from __future__ import annotations
 
-import itertools
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from pyrung.core import (
-    PLC,
     And,
     Bool,
     Int,
@@ -39,20 +30,8 @@ from pyrung.core import (
     rise,
     subroutine,
 )
-from pyrung.core.analysis.prove import (
-    Counterexample,
-    Intractable,
-    Proven,
-    _classify_dimensions,
-    never,
-)
-from pyrung.core.analysis.prove.passes import _OptConfig
-
-_CONFIGS = {
-    "default": _OptConfig(),
-    "all_off": _OptConfig.all_off(),
-    "sound_baseline": _OptConfig.sound_baseline(),
-}
+from pyrung.core.analysis.prove import Intractable
+from pyrung.core.analysis.prove.classify import _classify_dimensions
 
 Btn = Bool("Btn", external=True)
 G = Bool("G", external=True)
@@ -61,56 +40,6 @@ Y2 = Bool("Y2")
 Y3 = Bool("Y3")
 D = Int("D")
 E = Int("E")
-
-
-def _concrete_reaches(
-    program: Program,
-    inputs: list[str],
-    predicate: Callable[[Any], bool],
-    depth: int = 6,
-) -> bool:
-    """Exhaustive concrete search: every input combination on every scan."""
-    plc = PLC(program, dt=0.010)
-
-    def key(runner: PLC) -> tuple[frozenset, frozenset]:
-        state = runner.current_state
-        return (
-            frozenset((k, v) for k, v in state.tags.items() if not k.startswith("sys.")),
-            frozenset(
-                (k, v) for k, v in state.memory.items() if not k.startswith("_sys") and k != "_dt"
-            ),
-        )
-
-    combos = [
-        dict(zip(inputs, values, strict=True))
-        for values in itertools.product((False, True), repeat=len(inputs))
-    ]
-    frontier = [plc]
-    seen = {key(plc)}
-    for _ in range(depth):
-        following = []
-        for runner in frontier:
-            for combo in combos:
-                child = runner.fork()
-                child.patch(combo)
-                child.step()
-                if predicate(child.current_state.tags):
-                    return True
-                child_key = key(child)
-                if child_key not in seen:
-                    seen.add(child_key)
-                    following.append(child)
-        frontier = following
-    return False
-
-
-def _replays(program: Program, result: Counterexample, predicate: Callable[[Any], bool]) -> bool:
-    plc = PLC(program, dt=0.010)
-    for step in result.trace:
-        plc.patch(step.inputs)
-        for _ in range(step.scans):
-            plc.step()
-    return predicate(plc.current_state.tags)
 
 
 def _y3(tags: Any) -> bool:
@@ -254,8 +183,7 @@ def _fall_reader_pulse():
 
 def _rise_reader_level():
     # rise() compares against the previous scan's end value, so a rise(Y2) above
-    # Y2's only writer never fires: the property is unreachable, and the case
-    # checks the prover gives no spurious counterexample.
+    # Y2's only writer never fires, so Y3 is never on.
     with Program(strict=False) as logic:
         with Rung(rise(Y2)):
             out(Y3)
@@ -336,25 +264,6 @@ _SHAPES = {
     "two_writers_read_between": _two_writers_read_between,
     "return_early_skips_writer": _return_early_skips_writer,
 }
-
-
-@pytest.mark.parametrize("config_name", sorted(_CONFIGS))
-@pytest.mark.parametrize("shape_name", sorted(_SHAPES))
-def test_verdict_agrees_with_concrete_stepping(shape_name: str, config_name: str) -> None:
-    logic, inputs, prop, predicate = _SHAPES[shape_name]()
-    reachable = _concrete_reaches(logic, inputs, predicate)
-
-    result = never(logic, prop, _opt_config=_CONFIGS[config_name])
-
-    if reachable:
-        assert isinstance(result, Counterexample), (
-            f"{shape_name}: a concrete PLC reaches the state, prove said {type(result).__name__}"
-        )
-        assert _replays(logic, result, predicate), f"{shape_name}: trace does not replay"
-    else:
-        assert isinstance(result, Proven), (
-            f"{shape_name}: unreachable concretely, prove said {type(result).__name__}"
-        )
 
 
 @pytest.mark.parametrize("shape_name", ["main_chain", "subroutine_chain", "through_or"])

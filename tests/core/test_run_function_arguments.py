@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import math as pymath
-import os
-import subprocess
-import sys
-from decimal import Decimal
 from enum import Enum
 
 import pytest
@@ -25,8 +21,7 @@ from pyrung import (
 )
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.circuitpy.codegen import compile_kernel
-from pyrung.circuitpy.codegen.context import _text_for_the_lock
-from pyrung.core.analysis.prove.lockfile import program_hash
+from pyrung.core.analysis.prove import Intractable, _build_prior_facts
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.runner import PLC, calls_that_depend_on_more_than_their_inputs
 from tests import fold_check
@@ -163,11 +158,6 @@ class TestDeclaredOrder:
 
         by_out = _called(two_keys, outs={"b": B, "a": B})
         assert _a_run_lands_where_stepping_does(lambda: by_out, B) == (1,)
-
-    def test_a_lock_changes_with_the_order_a_call_is_declared_in(self):
-        first = program_hash(_always_called(first_keyword, ins={"z": First, "a": Second}))
-        second = program_hash(_always_called(first_keyword, ins={"a": Second, "z": First}))
-        assert first != second
 
 
 def two_keys_enabled(enabled, v):
@@ -439,78 +429,11 @@ class TestConstants:
         with pytest.raises(ValueError, match="Rename the function"):
             _generate(program)
 
-    @pytest.mark.parametrize(
-        "one, other",
-        [
-            pytest.param(pymath.inf, -pymath.inf, id="inf and -inf"),
-            pytest.param(pymath.nan, pymath.inf, id="nan and inf"),
-            pytest.param(frozenset({1}), frozenset({2}), id="frozensets"),
-            pytest.param(1j, 2j, id="complex"),
-            pytest.param({1}, {2}, id="sets"),
-            pytest.param((pymath.inf, 1), (pymath.inf, 2), id="in a tuple"),
-            pytest.param([pymath.inf], [-pymath.inf], id="in a list"),
-            pytest.param((A, B), (A, First), id="tags in a tuple"),
-            pytest.param(Decimal("1.5"), Decimal("2.5"), id="decimals"),
-            pytest.param({"k": {1}}, {"k": {2}}, id="a set in a dict"),
-        ],
-    )
-    def test_a_lock_sees_a_constant_with_a_text(self, one, other):
-        def lock_of(value) -> str:
-            return program_hash(_always_called(constant, ins={"v": A, "value": value}))
-
-        assert lock_of(one) != lock_of(other)
-        assert lock_of(one) == lock_of(one)
-
-    def test_a_sets_text_is_the_same_in_any_process(self):
-        script = (
-            "from pyrung.circuitpy.codegen.context import _text_for_the_lock as t;"
-            "print(t([frozenset({'a', 'b', 'c', 'd'}), {'x', 'y', ('z', 1)}]))"
-        )
-        said = set()
-        for seed in ("1", "2", "3"):
-            said.add(
-                subprocess.run(
-                    [sys.executable, "-c", script],
-                    env={**os.environ, "PYTHONHASHSEED": seed},
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                ).stdout.strip()
-            )
-        assert said == {"[frozenset({'a', 'b', 'c', 'd'}), set({'x', 'y', ('z', 1, )})]"}
-
-    def test_a_lock_tells_one_list_held_twice_from_two(self):
-        inner = [1]
-        shared = _always_called(constant, ins={"v": A, "value": [inner, inner]})
-        apart = _always_called(constant, ins={"v": A, "value": [[1], [1]]})
-        assert program_hash(shared) != program_hash(apart)
-
-    def test_a_list_holding_itself_has_a_text(self):
-        cycle: list = []
-        cycle.append(cycle)
-        assert _text_for_the_lock(cycle) == "[<as 0>]"
-
-    def test_a_lock_takes_a_function_with_no_source_by_its_name(self):
-        """A def nobody can read passes the gate: only a text can say what's inside it."""
-
-        def made_as(name: str):
-            scope: dict = {}
-            exec(f"def {name}(v):\n    return {{'out': v}}\n", scope)
-            return scope[name]
-
-        def lock_of(function) -> str:
-            return program_hash(_always_called(function, ins={"v": A}))
-
-        made = made_as("made")
-        assert not calls_that_depend_on_more_than_their_inputs(_always_called(made, ins={"v": A}))
-        assert lock_of(made) == lock_of(made_as("made"))
-        assert lock_of(made) != lock_of(made_as("other"))
-
-    def test_what_has_no_text_gets_its_name_and_no_address(self):
-        kept = _text_for_the_lock(_Thing())
-        assert kept == _text_for_the_lock(_Thing())
-        assert "0x" not in kept
-        assert "_Thing" in kept
+    def test_a_function_with_no_source_passes_the_gate(self):
+        scope: dict = {}
+        exec("def made(v):\n    return {'out': v}\n", scope)
+        program = _always_called(scope["made"], ins={"v": A})
+        assert not calls_that_depend_on_more_than_their_inputs(program)
 
     def test_analysis_takes_any_constant(self):
         for value in (
@@ -525,17 +448,8 @@ class TestConstants:
         ):
             program = _always_called(constant, ins={"v": A, "value": value})
             assert compile_kernel(program, blockless=True, proof_metadata=True).source
-            assert program_hash(program)
+            assert not isinstance(_build_prior_facts(program), Intractable)
             CompiledPLC(program, dt=0.01)
-
-    def test_a_lock_reads_a_constant_and_outlives_an_objects_address(self):
-        def locked(value) -> str:
-            return program_hash(_always_called(constant, ins={"v": A, "value": value}))
-
-        assert locked([1]) == locked([1])
-        assert locked([1]) != locked([2])
-        assert locked(_Thing()) == locked(_Thing())
-        assert locked(_Thing()) != locked(_LooksLikeFive())
 
 
 def names_it_got(**kw):

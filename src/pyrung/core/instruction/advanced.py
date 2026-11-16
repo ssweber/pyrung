@@ -120,7 +120,7 @@ class SearchInstruction(OneShotMixin, Instruction):
         self.search_range = comparison.search_range
         if isinstance(self.search_range, IndirectBlockRange) or reads_indexed_element(self.value):
             # A window out of its block, or a value read below it, sets SC44: the
-            # analyses (PDG, prover) see the flag written where it can be.
+            # analyses (PDG, static facts) see the flag written where it can be.
             self._fault_writes = ("fault.address_error",)
         self.result = result
         self.found = found

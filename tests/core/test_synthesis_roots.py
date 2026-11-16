@@ -1,8 +1,8 @@
 """Two-roots discipline + replay model for the synthesis overlay.
 
 Synthesis (harness couplings, PILOT holds) is injected only on the soft-exec
-PLC; it must never reach the *deploy* root (Click ladder / CircuitPython codegen)
-or the ``prove`` verifier — both of which walk the user ``Program``.  And because
+PLC; it must never reach the *deploy* root (Click ladder / CircuitPython codegen),
+which walks the user ``Program``.  And because
 synthesis is *logic* (rungs), its writes are **recomputed** on replay, not
 recorded as nondeterministic input.
 """
@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 
 from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, latch, on_delay, out
-from pyrung.core.analysis.prove import Counterexample, Intractable, always
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Coupling, Harness
 from pyrung.core.physical import Physical
@@ -48,7 +47,7 @@ def test_synthesis_lives_on_plc_not_program() -> None:
     assert plc._synthesis.plant  # bool coupling lowered to plant rungs
 
     # ...but the user Program is pristine — no synthesis rungs, no overlay
-    # subroutines, no internal coupling tags anywhere in the deploy/prove root.
+    # subroutines, no internal coupling tags anywhere in the deploy root.
     assert "__holds__" not in prog.subroutines
     assert "__plant__" not in prog.subroutines
     assert prog.subroutines == {}
@@ -71,8 +70,8 @@ def test_synthesis_absent_from_deploy_compile_root() -> None:
 
 def test_holds_live_on_overlay_not_program_or_deploy_root() -> None:
     # PILOT holds are synthesis-overlay rungs on the PLC, never in the user
-    # Program — so deploy (compile the bare program) and prove never see them,
-    # the same two-roots discipline as the plant.
+    # Program — so deploy (compile the bare program) never sees them, the same
+    # two-roots discipline as the plant.
     from pyrung.circuitpy.codegen import compile_kernel
     from pyrung.core.synthesis import Synthesis, copy_hold_rung
 
@@ -89,25 +88,6 @@ def test_holds_live_on_overlay_not_program_or_deploy_root() -> None:
     # The soft-exec root brackets the hold in; the deploy root (bare program) omits it.
     assert len(plc._soft_exec_program().rungs) == 2
     assert "Held" not in compile_kernel(plc._program).referenced_tags
-
-
-def test_prove_treats_coupling_feedback_as_free() -> None:
-    # ``prove`` walks the bare program with no harness, so the feedback tag ``Fb``
-    # is a free/nondeterministic input (sound over-approximation): it can be both
-    # True and False, so "Stage is always 0" must NOT hold (a counterexample where
-    # Enable & Fb fires the copy exists), proving feedback is unconstrained.
-    Enable = Bool("Enable", external=True)
-    Fb = Bool("Fb", physical=_SWITCH, link="Enable")
-    Stage = Int("Stage")
-    with Program() as prog:
-        with Rung(Enable, Fb):
-            copy(1, Stage)
-
-    result = always(prog, Stage == 0, max_states=10_000, depth_budget=10)
-    if isinstance(result, Intractable):
-        return  # pragma: no cover - environment-dependent
-    # Free feedback ⇒ the prover finds Enable & Fb ⇒ Stage := 1, refuting "always 0".
-    assert isinstance(result, Counterexample)
 
 
 # ── Replay model: bool feedback recomputes (it is logic, not recorded) ────────

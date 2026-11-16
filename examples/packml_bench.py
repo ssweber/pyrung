@@ -1,7 +1,7 @@
-"""PackML-style lock benchmark focused on indirect Click block access.
+"""PackML-style benchmark focused on indirect Click block access.
 
 This example is intentionally pointer-heavy. It mirrors the real template's
-state-machine lookup patterns so ``pyrung lock`` profiles spend meaningful time
+state-machine lookup patterns so scan and how() profiles spend meaningful time
 in block synchronization for indirect ``dh[]`` / ``ds[]`` access.
 
 Uses X001-X008 (8 inputs, built in or in Slot 0) and X101-X110 (a 16-point

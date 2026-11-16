@@ -29,7 +29,8 @@ from pyrung import (
     subroutine,
 )
 from pyrung.core import forloop, randint
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
+from pyrung.core.analysis.prove import Intractable
+from pyrung.core.analysis.prove.classify import _classify_dimensions
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.expression import RandIntExpr, format_expr, randint_draw, randint_sites, sqrt
 from pyrung.core.runner import PLC
@@ -811,46 +812,7 @@ class TestBuild:
         assert randint(Int("Lo"), 9).tag.min is None
 
 
-class TestProver:
-    def test_draw_reaches_every_value(self):
-        die, six = Int("Die"), Bool("Six")
-        with Program(strict=False) as logic:
-            with Rung():
-                math(randint(1, 6), die)
-            with Rung(die == 6):
-                latch(six)
-        verdict = always(logic, ~six)
-        assert isinstance(verdict, Counterexample)
-        plc = PLC(logic, dt=0.01)
-        for step in verdict.trace:
-            plc.patch(step.inputs)
-            for _ in range(step.scans):
-                plc.step()
-        assert plc.state.tags["Six"] is True
-
-    def test_draw_stays_in_range(self):
-        die = Int("Die")
-        with Program(strict=False) as logic:
-            with Rung():
-                math(randint(1, 6), die)
-        assert isinstance(always(logic, die <= 6), Proven)
-
-    def test_a_cut_draw_stays_in_its_cut_range(self):
-        die = Int("Die", default=4464)
-        with Program(strict=False) as logic:
-            with Rung():
-                math(randint(70000, 70002), die)
-        assert isinstance(always(logic, die <= 4466), Proven)
-        assert isinstance(always(logic, die >= 4464), Proven)
-
-    def test_a_real_bound_reads_zero(self):
-        die = Int("Die")
-        lo = Real("Lo", min=1.0, max=3.0, default=1.0)
-        with Program(strict=False) as logic:
-            with Rung():
-                math(randint(lo, 5), die)
-        assert isinstance(always(logic, die == 0), Proven)
-
+class TestStaticFacts:
     @pytest.mark.parametrize(
         "make, writes_it",
         [
@@ -872,8 +834,8 @@ class TestProver:
         instr = logic.rungs[0]._instructions[0]
         assert ("fault.math_operation_error" in instr._fault_writes) is writes_it
 
-    def test_a_domain_error_in_a_bound_is_no_proof_the_flag_stays_off(self):
-        """N = -1 sets SC46, so ``always(~B)`` is false and must not be Proven."""
+    def test_a_domain_error_in_a_bound_sets_the_flag(self):
+        """N = -1 makes ``sqrt(N)`` a math error, which sets SC46."""
         n = Int("N", external=True, min=-1, max=1)
         d, b = Dint("D"), Bool("B")
 
@@ -890,14 +852,13 @@ class TestProver:
         plc.step()
         plc.step()
         assert plc.state.tags["B"] is True
-        assert not isinstance(always(build(), ~b), Proven)
 
     def test_equal_constants_are_intractable_naming_the_math_error(self):
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
                 math(randint(7, 7), die)
-        verdict = always(logic, die == 0)
+        verdict = _classify_dimensions(logic)
         assert isinstance(verdict, Intractable)
         hint = verdict.hints[0]
         assert "randint(7, 7)" in hint
@@ -911,7 +872,7 @@ class TestProver:
                 math(randint(lo, 6), die)
             with Rung(die == 6):
                 latch(six)
-        verdict = always(logic, ~six)
+        verdict = _classify_dimensions(logic)
         assert isinstance(verdict, Intractable)
         assert any("randint(Lo, 6)" in hint for hint in verdict.hints)
 
@@ -922,4 +883,4 @@ class TestProver:
                 math(randint(lo, 6), die)
             with Rung(die == 6):
                 latch(six)
-        assert isinstance(always(logic, ~six), Counterexample)
+        assert not isinstance(_classify_dimensions(logic), Intractable)

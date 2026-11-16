@@ -8,10 +8,9 @@ import types
 
 import pytest
 
-from pyrung import Bool, Int, Or, Program, Rung, math, run_function
+from pyrung import Bool, Int, Program, Rung, math, run_function
 from pyrung.circuitpy.codegen import compile_kernel
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
-from pyrung.core.analysis.prove.lockfile import program_hash
+from pyrung.core.analysis.prove import Intractable, _build_prior_facts
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.runner import PLC, _may_be_called_again
 
@@ -92,23 +91,12 @@ def test_a_kernel_binds_the_function_itself():
     assert kernel.step_fn.__globals__["_fn_plain"] is plain
 
 
-def test_a_kernel_runs_no_text_of_the_function_and_a_lock_hashes_it():
+def test_a_kernel_runs_no_text_of_the_function():
     kernel = compile_kernel(_program(plain))
 
     assert "def plain" not in kernel.source
     assert "_fn_plain = plain" not in kernel.source
     assert "_fn_plain(v=" in kernel.source
-    assert "def plain(v):" in kernel.lock_source
-    assert "_fn_plain = plain" in kernel.lock_source
-
-
-def test_a_program_with_no_function_locks_the_source_it_runs():
-    with Program(strict=False) as program:
-        with Rung():
-            math(A + 1, A)
-    kernel = compile_kernel(program)
-
-    assert kernel.lock_source == kernel.source
 
 
 @pytest.mark.parametrize(
@@ -131,35 +119,8 @@ def test_analysis_takes_any_callable_a_scan_can_call(fn):
             math(1, Lamp)
 
     assert compile_kernel(program, blockless=True, proof_metadata=True).source
-    assert program_hash(program) == program_hash(program)
-    result = always(program, Or(~Lamp, In1))
-    assert isinstance(result, Proven | Counterexample | Intractable)
+    assert not isinstance(_build_prior_facts(program), Intractable)
     CompiledPLC(program, dt=0.01).step()
-
-
-def test_a_callable_with_no_text_has_a_lock_that_outlives_its_address():
-    assert program_hash(_program(functools.partial(plain))) == program_hash(
-        _program(functools.partial(plain))
-    )
-    assert program_hash(_program(_Callable())) == program_hash(_program(_Callable()))
-    assert program_hash(_program(_Callable())) != program_hash(_program(functools.partial(plain)))
-
-
-def test_a_lock_changes_with_the_functions_text():
-    def twice(v):
-        return {"out": v * 2}
-
-    first = program_hash(_program(twice))
-
-    def twice(v):  # noqa: F811
-        return {"out": v * 3}
-
-    assert program_hash(_program(twice)) != first
-
-
-def test_a_lock_does_not_change_when_the_function_does_not():
-    first = program_hash(_program(plain))
-    assert program_hash(_program(plain)) == first
 
 
 def _lands(program, go) -> tuple:

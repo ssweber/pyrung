@@ -56,7 +56,8 @@ from pyrung.core import (
     unpack_to_words,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.prove import Intractable, _classify_dimensions
+from pyrung.core.analysis.prove import Intractable
+from pyrung.core.analysis.prove.classify import _classify_dimensions
 from pyrung.core.analysis.prove.elision.slice import _collect_hidden_memory_info
 from pyrung.core.analysis.reverse_edges import back_propagate_value, build_reverse_edge_map
 from pyrung.core.analysis.sp_values import _written_value_for_tag
@@ -1264,7 +1265,7 @@ def test_causal_why_labels_child_writer_inside_forloop() -> None:
     assert labels["WhyLoopDest"] == "copy"
 
 
-def test_prover_domains_cover_callbacks_receive_search_and_timer_counter_abstractions() -> None:
+def test_fact_domains_cover_callbacks_receive_and_search() -> None:
     callback_enable = Bool("DomainCallbackEnable", external=True)
     callback_source = Int("DomainCallbackSource", external=True, min=0, max=2)
     callback_dest = Int("DomainCallbackDest", min=0, max=2)
@@ -1318,12 +1319,6 @@ def test_prover_domains_cover_callbacks_receive_search_and_timer_counter_abstrac
     assert set(nondeterministic["DomainReceiveDest"]) == {0, 1, 2, 3}
     assert set(stateful["DomainSearchFound"]) == {False, True}
     assert set(stateful["DomainSearchResult"]) >= {-1, 1, 2}
-    # Black-box timers: Done is a plain Bool, and the accumulators are state
-    # (a timer's by its preset, a counter's up to its preset).
-    assert stateful["DomainTimer_Done"] == (False, True)
-    assert stateful["DomainCounter_Done"] == (False, True)
-    assert set(stateful["DomainTimer_Acc"]) >= {0, 10}
-    assert set(stateful["DomainCounter_Acc"]) == {0, 1, 2}
 
 
 def test_hidden_memory_info_tracks_shift_and_drums() -> None:

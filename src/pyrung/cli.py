@@ -5,16 +5,13 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NoReturn
 
 
 def _find_program(module_path: str) -> tuple:
     """Import a module and find the Program instance.
 
-    Returns ``(program, module)`` so callers can inspect module-level
-    declarations like ``__lock__``.
+    Returns ``(program, module)``.
 
     Accepts ``module:variable`` syntax to select a specific Program
     when a module defines more than one.
@@ -57,116 +54,6 @@ def _find_program(module_path: str) -> tuple:
     return found[0][1], mod
 
 
-def _exit_intractable(intractable: Any) -> NoReturn:
-    print(f"Intractable: {intractable.reason}", file=sys.stderr)
-    for hint in intractable.hints:
-        print(hint, file=sys.stderr)
-    raise SystemExit(1)
-
-
-_DEPTH_BUDGET_DOCS = "https://pyrung.com/pyrung/guides/verification/#cli-reference"
-
-
-def _warn_truncated(states: Any, consequence: str) -> None:
-    if not states.truncated:
-        return
-    budget = states.depth_budget
-    print(
-        f"Warning: the search stopped at --depth-budget {budget}."
-        f" A state more than {budget} scans from power-on {consequence}.",
-        file=sys.stderr,
-    )
-    print(f"Raise --depth-budget to search further. See {_DEPTH_BUDGET_DOCS}", file=sys.stderr)
-
-
-def _cmd_lock(args: argparse.Namespace) -> None:
-    from pyrung.core.analysis.prove import (
-        Intractable,
-        program_hash,
-        reachable_states,
-        write_lock,
-    )
-
-    if args.check:
-        _cmd_lock_check(args)
-        return
-
-    program, mod = _find_program(args.module)
-    lock_path = Path(args.output)
-
-    if args.project:
-        projection = args.project
-        joint_inputs: tuple[tuple[str, ...], ...] = ()
-        exclusive_inputs: tuple[tuple[str, ...], ...] = ()
-        split_at: list[str] | None = None
-    else:
-        lock_config = getattr(mod, "__lock__", None)
-        projection, joint_inputs, exclusive_inputs, split_at = _apply_lock_config(
-            _default_projection_names(program), lock_config
-        )
-        print(f"Projecting to: {', '.join(projection)}", file=sys.stderr)
-
-    states = reachable_states(
-        program,
-        project=projection,
-        depth_budget=args.depth_budget,
-        max_states=args.max_states,
-        progress=True,
-        joint_inputs=joint_inputs,
-        exclusive_inputs=exclusive_inputs,
-        split_at=split_at,
-    )
-    if isinstance(states, Intractable):
-        _exit_intractable(states)
-
-    write_lock(lock_path, states, projection, program_hash(program))
-    print(f"Wrote {lock_path} ({len(states)} reachable states)")
-    _warn_truncated(states, "may be missing from the lock file")
-
-
-def _cmd_lock_check(args: argparse.Namespace) -> None:
-    from pyrung.core.analysis.prove import LockIntractable
-    from pyrung.core.analysis.prove.lockfile import _check_lock_states
-
-    program, mod = _find_program(args.module)
-    lock_path = Path(args.output)
-
-    if args.project:
-        print("--project cannot be used with --check", file=sys.stderr)
-        raise SystemExit(2)
-
-    if not lock_path.exists():
-        print(f"Lock file not found: {lock_path}", file=sys.stderr)
-        raise SystemExit(1)
-
-    lock_config = getattr(mod, "__lock__", None)
-    _, joint_inputs, exclusive_inputs, split_at = _apply_lock_config([], lock_config)
-
-    try:
-        diff, states = _check_lock_states(
-            program,
-            lock_path,
-            depth_budget=args.depth_budget,
-            max_states=args.max_states,
-            progress=True,
-            joint_inputs=joint_inputs,
-            exclusive_inputs=exclusive_inputs,
-            split_at=split_at,
-        )
-    except LockIntractable as exc:
-        _exit_intractable(exc.intractable)
-    _warn_truncated(states, "may be missing, so the check can report it lost or miss a new one")
-    if diff is None:
-        print("OK: program matches lock file")
-    else:
-        print("CHANGED: program does not match lock file", file=sys.stderr)
-        if diff.added:
-            print(f"  {len(diff.added)} new reachable state(s)", file=sys.stderr)
-        if diff.removed:
-            print(f"  {len(diff.removed)} lost reachable state(s)", file=sys.stderr)
-        raise SystemExit(1)
-
-
 def _cmd_check(args: argparse.Namespace) -> None:
     from dataclasses import replace
     from pathlib import Path
@@ -207,47 +94,6 @@ def _cmd_check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
-def _default_projection_names(program) -> list[str]:
-    from pyrung.core.analysis.prove import _default_projection
-
-    return _default_projection(program)
-
-
-def _apply_lock_config(
-    projection: list[str], lock_config: dict | None
-) -> tuple[
-    list[str],
-    tuple[tuple[str, ...], ...],
-    tuple[tuple[str, ...], ...],
-    list[str] | None,
-]:
-    if lock_config is None:
-        return projection, (), (), None
-    tags = set(projection)
-    tags.update(lock_config.get("include", ()))
-    tags -= set(lock_config.get("exclude", ()))
-
-    def _parse_groups(raw: dict[str, list[str] | tuple[str, ...]]) -> tuple[tuple[str, ...], ...]:
-        groups: list[tuple[str, ...]] = []
-        for members in raw.values():
-            if isinstance(members, (list, tuple)) and len(members) >= 2:
-                groups.append(tuple(members))
-        return tuple(groups)
-
-    raw_joint = lock_config.get("joint")
-    raw_exclusive = lock_config.get("exclusive")
-
-    joint_inputs = _parse_groups(raw_joint) if isinstance(raw_joint, dict) else ()
-    exclusive_inputs = _parse_groups(raw_exclusive) if isinstance(raw_exclusive, dict) else ()
-
-    raw_split_at = lock_config.get("split_at")
-    split_at: list[str] | None = (
-        list(raw_split_at) if isinstance(raw_split_at, (list, tuple)) else None
-    )
-
-    return sorted(tags), joint_inputs, exclusive_inputs, split_at
-
-
 def _cmd_dap(_args: argparse.Namespace) -> None:
     from pyrung.dap import main as dap_main
 
@@ -261,59 +107,12 @@ def _cmd_live(_args: argparse.Namespace) -> None:
     live_main()
 
 
-def _run_with_optional_profile(
-    args: argparse.Namespace, func: Callable[[argparse.Namespace], None]
-) -> None:
-    profile_path = getattr(args, "profile", None)
-    if not profile_path:
-        func(args)
-        return
-
-    import cProfile
-
-    p = Path(profile_path).absolute()
-    if p.suffix != ".prof":
-        p = p.with_suffix(p.suffix + ".prof")
-    out_path = str(p)
-    profiler = cProfile.Profile()
-    try:
-        profiler.enable()
-        func(args)
-    finally:
-        profiler.disable()
-        profiler.dump_stats(out_path)
-        print(f"Wrote profile {out_path}", file=sys.stderr)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="pyrung",
         description="pyrung: ladder logic in Python",
     )
     sub = parser.add_subparsers(dest="command")
-
-    # -- lock --
-    lock_p = sub.add_parser("lock", help="Write or check a behavioral lock file")
-    lock_p.add_argument("module", help="Python module containing the Program")
-    lock_p.add_argument("-o", "--output", default="pyrung.lock", help="Output path")
-    lock_p.add_argument("--project", nargs="*", help="Tags to project onto")
-    lock_p.add_argument(
-        "--check",
-        action="store_true",
-        help="Compare the program with the lock file instead of writing it",
-    )
-    lock_p.add_argument(
-        "--depth-budget",
-        type=int,
-        default=50,
-        help="BFS depth budget: the longest scan sequence explored",
-    )
-    lock_p.add_argument("--max-states", type=int, default=100_000)
-    lock_p.add_argument(
-        "--profile",
-        help="Write cProfile stats to FILE; dumped even if interrupted",
-    )
-    lock_p.set_defaults(func=_cmd_lock)
 
     # -- check --
     check_p = sub.add_parser("check", help="Run static ladder checks")
@@ -350,4 +149,4 @@ def main() -> None:
     if not args.command:
         parser.print_help()
         raise SystemExit(1)
-    _run_with_optional_profile(args, args.func)
+    args.func(args)

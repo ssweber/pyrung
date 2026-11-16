@@ -313,11 +313,37 @@ The [`TAG_RANGE_VIOLATION` ladder lint](ladder-lints.md#rule-reference) catches 
 
 ## Fault coverage
 
-For fault coverage (proving every device has an alarm path), see [Verification](verification.md#fault-coverage). The workflow uses `harness.couplings()` to iterate device couplings and `always()` to check structural detection paths.
+```python
+from pyrung import Harness, PLC
+
+plc = PLC(logic, dt=0.001)
+harness = Harness(plc)
+harness.install()
+
+for coupling in harness.couplings():
+    print(coupling.en_name, "->", coupling.fb_name)
+```
+
+`Harness.couplings()` yields one `Coupling` per device the harness drives, so a fault test needs no hand-kept device list. Each `Coupling` has `en_name`, `fb_name`, `physical` and `trigger_value`. `trigger_value` is None for a plain bool link and the matched value for a `link="Tag:value"` trigger.
+
+A test per coupling turns the enable on, then holds the feedback off and checks that an alarm trips in time:
+
+```python
+for coupling in harness.couplings():
+    plc2 = PLC(logic, dt=0.001)
+    Harness(plc2).install()
+    plc2.force(coupling.en_name, True)
+    plc2.run_for(1.5)
+    plc2.force(coupling.fb_name, False)
+    plc2.run_for(6.0)
+    with plc2:
+        assert AlarmExtent.value != 0, f"{coupling.fb_name}: no alarm in time"
+```
+
+The test fails on a device with no fault timer, and on one whose fault timer is too slow. Each coupling gets a fresh `PLC`, so one device's alarm can't hide another's. See `examples/fault_coverage.py` for a complete working example.
 
 ## Next steps
 
-- [Verification](verification.md) — always(), never(), fault coverage, lock files
 - [Testing Guide](testing.md) — deterministic testing patterns, forces, monitors
 - [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
 - [VS Code Debugger](dap-vscode.md) — Data View, breakpoints, step-through debugging

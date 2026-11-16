@@ -69,7 +69,6 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "guides/analysis-diagnosis.md",
             "guides/analysis-causal.md",
             "guides/analysis-coverage.md",
-            "guides/verification.md",
         ),
     ),
     (

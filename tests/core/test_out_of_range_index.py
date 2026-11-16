@@ -36,14 +36,13 @@ from pyrung.core import (
     out,
     system,
 )
-from pyrung.core.analysis.prove import Counterexample, Proven, never
-from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ScanContext
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.state import SystemState
 from pyrung.core.storage import BLANK_CHAR
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
+from tests.core.kernel_step import step_compiled_kernel
 
 _OPS: dict[str, Callable[[Any, Any], Any]] = {
     "eq": operator.eq,
@@ -102,7 +101,7 @@ def _first_scan(prog: Program, engine: str, tags: dict[str, Any], monkeypatch) -
     if engine in ("kernel_legacy", "kernel_blockless"):
         compiled = compile_kernel(prog, blockless=engine == "kernel_blockless")
         kernel = compiled.create_kernel()
-        _step_compiled_kernel(compiled, kernel, dt=0.010)
+        step_compiled_kernel(compiled, kernel, dt=0.010)
         return {name: kernel.tags[name] for name in tags}
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
@@ -486,7 +485,7 @@ def test_condition_trace_marks_out_of_range_element() -> None:
     assert detail_map["right_value"] == 0
 
 
-def _prove_program(
+def _pointer_program(
     cond: Callable[[Block, Int, Int], Any], pointer_max: int
 ) -> tuple[Program, Bool]:
     Tbl = Block("KTbl", TagType.INT, 1, 10)
@@ -502,7 +501,7 @@ def _prove_program(
     return logic, A
 
 
-_PROVE_CONDS: dict[str, Callable[[Block, Int, Int], Any]] = {
+_POINTER_CONDS: dict[str, Callable[[Block, Int, Int], Any]] = {
     "ptr": lambda Tbl, P, S: Tbl[P] == 0,
     "expr": lambda Tbl, P, S: Tbl[P + 0] == 0,
     "tag_left": lambda Tbl, P, S: S == Tbl[P],
@@ -510,15 +509,25 @@ _PROVE_CONDS: dict[str, Callable[[Block, Int, Int], Any]] = {
 }
 
 
-@pytest.mark.parametrize("form", list(_PROVE_CONDS))
-def test_never_finds_a_rung_true_only_out_of_range(form: str) -> None:
+def _latches_on_some_input(logic: Program, pointer_max: int) -> bool:
+    """Step every KP and KS the tags allow, and say whether KA latched."""
+    plc = PLC(logic, dt=0.010)
+    for pointer in range(1, pointer_max + 1):
+        for value in range(6):
+            plc.patch({"KP": pointer, "KS": value})
+            plc.step()
+    return plc.current_state.tags["KA"]
+
+
+@pytest.mark.parametrize("form", list(_POINTER_CONDS))
+def test_a_rung_true_only_out_of_range_turns_on(form: str) -> None:
     # Every element in 1..10 is at least 10, so only an address past the end
     # (reading 0) makes the rung true.
-    logic, A = _prove_program(_PROVE_CONDS[form], pointer_max=20)
-    assert isinstance(never(logic, A), Counterexample)
+    logic, _A = _pointer_program(_POINTER_CONDS[form], pointer_max=20)
+    assert _latches_on_some_input(logic, 20) is True
 
 
-@pytest.mark.parametrize("form", list(_PROVE_CONDS))
-def test_never_proves_a_rung_false_over_an_in_range_pointer(form: str) -> None:
-    logic, A = _prove_program(_PROVE_CONDS[form], pointer_max=10)
-    assert isinstance(never(logic, A), Proven)
+@pytest.mark.parametrize("form", list(_POINTER_CONDS))
+def test_a_rung_stays_false_over_an_in_range_pointer(form: str) -> None:
+    logic, _A = _pointer_program(_POINTER_CONDS[form], pointer_max=10)
+    assert _latches_on_some_input(logic, 10) is False

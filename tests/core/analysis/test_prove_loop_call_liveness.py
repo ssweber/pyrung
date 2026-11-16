@@ -6,10 +6,9 @@ calls in forloop bodies, and gave a write in a subroutine called from another
 subroutine only its own call site's conditions; the PDG's upstream slice
 likewise stopped one caller up.  An indirect comparison (``DS[P] != 0``, or a
 loop counting ``DS[P]``) lowers to an atom that names neither the pointer nor
-the elements.  The guard's inputs were then pruned as dead (or left out of
-scope), and ``never(And(Y3, ~Btn))`` came back Proven although a concrete PLC
-reaches it: scan 1 runs the call with ``Btn`` on, scan 2 skips it with ``Btn``
-off, and ``Y2`` holds.
+the elements.  The guard's inputs were then pruned as dead, although a
+concrete PLC reaches ``And(Y3, ~Btn)``.  Scan 1 runs the call with ``Btn`` on,
+scan 2 skips it with ``Btn`` off, and ``Y2`` holds.
 
 The shared caller map keeps only conditions that hold on every scan that runs
 the call: a body rung's contacts count only where no iteration can change them.
@@ -20,10 +19,8 @@ inexact and the validators and pilot guards do not claim anything from them.
 A condition the lowering does not understand (``(DQ + 0) != 0``) becomes an
 opaque atom too, and the inputs it reads stay live the same way.
 
-Each shape is checked under the default, the all-off and the sound-baseline
-configurations against an exhaustive concrete search over its inputs, and
-every Counterexample replays on a concrete PLC.  Every shape reads ``Y2`` in
-a main rung so that it is state on its own account.
+Every shape reads ``Y2`` in a main rung so that it is state on its own
+account.
 """
 
 from __future__ import annotations
@@ -36,7 +33,6 @@ import pytest
 
 from pyrung.core import (
     PLC,
-    And,
     Block,
     Bool,
     Dint,
@@ -57,8 +53,6 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.corrections import _producer_caller_scope
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, never
-from pyrung.core.analysis.prove.passes import _OptConfig
 from pyrung.core.analysis.simplified import _build_guard_ctx
 from pyrung.core.condition import CompareNe
 from pyrung.core.instruction.control import ForLoopInstruction
@@ -73,12 +67,6 @@ from pyrung.core.validation._common import (
 from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
 from pyrung.core.validation.stuck_bits import COIL_STUCK_HIGH, validate_stuck_bits
 
-_CONFIGS = {
-    "default": _OptConfig(),
-    "all_off": _OptConfig.all_off(),
-    "sound_baseline": _OptConfig.sound_baseline(),
-}
-
 Btn = Bool("Btn", external=True)
 G = Bool("G", external=True)
 R = Bool("R", external=True)
@@ -92,7 +80,6 @@ Y3 = Bool("Y3")
 LDS = Block("LDS", TagType.INT, 1, 2)
 
 _BOOL = (False, True)
-_PROPERTY = And(Y3, ~Btn)
 
 
 def _violates(tags: Any) -> bool:
@@ -138,15 +125,6 @@ def _concrete_reaches(
                     following.append(child)
         frontier = following
     return False
-
-
-def _replays(program: Program, result: Counterexample, predicate: Callable[[Any], bool]) -> bool:
-    plc = PLC(program, dt=0.010)
-    for step in result.trace:
-        plc.patch(step.inputs)
-        for _ in range(step.scans):
-            plc.step()
-    return predicate(plc.current_state.tags)
 
 
 def _coil_work() -> None:
@@ -520,23 +498,6 @@ _SHAPES = {
 }
 
 
-@pytest.mark.parametrize("config_name", sorted(_CONFIGS))
-@pytest.mark.parametrize("shape_name", sorted(_SHAPES))
-def test_verdict_agrees_with_concrete_stepping(shape_name: str, config_name: str) -> None:
-    logic, space = _SHAPES[shape_name]()
-    reachable = _concrete_reaches(logic, space, _violates)
-    result = never(logic, _PROPERTY, _opt_config=_CONFIGS[config_name])
-    if reachable:
-        assert isinstance(result, Counterexample), (
-            f"{shape_name} under {config_name}: concrete PLC reaches the state, got {result!r}"
-        )
-        assert _replays(logic, result, _violates), f"{shape_name}: trace does not replay"
-    else:
-        assert isinstance(result, Proven), (
-            f"{shape_name} under {config_name}: unreachable concretely, got {result!r}"
-        )
-
-
 def test_expected_reachability() -> None:
     """The shapes mean what they say: only the two controls are safe."""
     safe = {"always_called_loop", "zero_count_loop"}
@@ -580,23 +541,12 @@ def test_upstream_slice_climbs_every_caller(shape_name: str) -> None:
 
 
 # The prover does not model forloop body rungs, break_loop() or
-# continue_loop() yet: it must say so, never Proven.
+# continue_loop() yet: it must say so.
 _UNMODELED_SHAPES = {
     "break_before_call": _break_before_call,
     "continue_before_call": _continue_before_call,
     "body_rung_call": _body_rung_call,
 }
-
-
-@pytest.mark.parametrize("config_name", sorted(_CONFIGS))
-@pytest.mark.parametrize("shape_name", sorted(_UNMODELED_SHAPES))
-def test_unmodeled_loop_exits_are_never_proven(shape_name: str, config_name: str) -> None:
-    logic, space = _UNMODELED_SHAPES[shape_name]()
-    assert _concrete_reaches(logic, space, _violates)
-    result = never(logic, _PROPERTY, _opt_config=_CONFIGS[config_name])
-    assert isinstance(result, Intractable | Counterexample), (shape_name, result)
-    if isinstance(result, Counterexample):
-        assert _replays(logic, result, _violates)
 
 
 # -- The shared caller map: what holds on every scan that runs the call --------
@@ -749,8 +699,8 @@ _DINT_COUNTS: dict[str, tuple[Callable[[], Program], bool]] = {
 @pytest.mark.parametrize("case", sorted(_DINT_COUNTS))
 def test_a_dint_count_is_exact_when_declared_small(case: str) -> None:
     # count != 0 decides the call only when the declared values are all in
-    # 0..cap: a negative count's reading on CLICK is unread, and the verifier
-    # refuses a loop past the cap.
+    # 0..cap: a negative count's reading on CLICK is unread, and the facts'
+    # kernel stops a loop past the cap.
     build, exact = _DINT_COUNTS[case]
     logic = build()
     (entry,) = _build_caller_map(logic)["work"]
@@ -1015,58 +965,3 @@ def test_indirect_write_meets_a_tag_mapped_onto_the_block_after_the_build() -> N
         _assert_split_reported(logic)
     finally:
         CBX.reset()
-
-
-# -- Unsupported conditions keep their inputs live -----------------------------
-
-B = Bool("B", external=True)
-Y = Bool("Y")
-DIn = Int("DIn", external=True, min=0, max=1)
-Mid = Int("Mid")
-
-
-def _expr_compare_coil():
-    with Program(strict=False) as logic:
-        with Rung((DQ + 0) != 0, B):
-            out(Y)
-    return logic, {"B": _BOOL, "DQ": (0, 1)}
-
-
-def _expr_compare_internal():
-    with Program(strict=False) as logic:
-        with Rung():
-            copy(DIn, Mid)
-        with Rung((Mid + 0) != 0, B):
-            out(Y)
-    return logic, {"B": _BOOL, "DIn": (0, 1)}
-
-
-def _expr_compare_call():
-    with Program(strict=False) as logic:
-        with Rung((DQ + 0) != 0, B):
-            call("set_y")
-        with subroutine("set_y"):
-            with Rung():
-                out(Y)
-    return logic, {"B": _BOOL, "DQ": (0, 1)}
-
-
-_EXPR_SHAPES = {
-    "expr_compare_coil": _expr_compare_coil,
-    "expr_compare_internal": _expr_compare_internal,
-    "expr_compare_call": _expr_compare_call,
-}
-
-
-def _y_on(tags: Any) -> bool:
-    return bool(tags["Y"])
-
-
-@pytest.mark.parametrize("config_name", sorted(_CONFIGS))
-@pytest.mark.parametrize("shape_name", sorted(_EXPR_SHAPES))
-def test_unsupported_condition_inputs_stay_live(shape_name: str, config_name: str) -> None:
-    logic, space = _EXPR_SHAPES[shape_name]()
-    assert _concrete_reaches(logic, space, _y_on)
-    result = never(logic, Y, _opt_config=_CONFIGS[config_name])
-    assert isinstance(result, Counterexample), (shape_name, config_name, result)
-    assert _replays(logic, result, _y_on)

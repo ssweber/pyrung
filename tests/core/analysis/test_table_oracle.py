@@ -209,9 +209,9 @@ def _enable_modes(tree):
 
 
 def _compiled(cond):
-    from pyrung.core.analysis.prove import _compile_property
+    from pyrung.core.runner import _compile_avoid_member
 
-    pred, _, _ = _compile_property(cond)
+    pred, _, _ = _compile_avoid_member(cond)
     return pred
 
 

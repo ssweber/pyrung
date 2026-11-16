@@ -20,10 +20,6 @@ Specs that later work needs are kept beside this file:
 - `specs/conformance-tidy.md` is the recommendation for tidying the conformance suite.
 - `specs/reconnect-findings.md` holds the notes from a reconnect fallback for how() that was tried and dropped.
 
-## Before new work
-
-- **prove/AGENTS.md** says how() reads `_ExploreContext`. It reads `_PriorFacts`. This fix goes with step 1. [nothing]
-
 ## 0. Gate fixes, and the range bound
 
 Every later step pays the gate, so it comes first. All [nothing]. The range bound, the soundness and conformance trims
@@ -34,7 +30,8 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
   `test`'s selection, less the 16 slowest cases of `test_pilot_long_wait.py`. It took 964 s on 2026-11-15 (1,873 s
   with those cases).
 - **Fuzz runs in no gate.** The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given`
-  on an inner function. Decide its fate with the search deletion, since most of it tests the search.
+  on an inner function. What is left checks `PLC` against `CompiledPLC` and the fold check. Decide whether a gate
+  runs it. [Sam]
 
 ## 1. The deletions release
 
@@ -42,33 +39,17 @@ Plan items 3 (public surface) and 6 (search removal). All [nothing]. The record 
 ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `candidates`, `accept`, `deny`,
 `suppress` and `spec` left it.
 
-### 1b. The prover search, and the check that replaces it
+### 1b. The static facts
 
-- **Whole files.** bfs.py 1041, inputs.py 561, independence.py 319, lockfile.py 295, blackbox.py 1333.
-- **Partial edits, about 2,500 lines.**
-  - prove/__init__.py (~940 of 1277) and passes.py (~750: `freeze`, `_BFSConfig`/`_OptConfig`, the search passes).
-  - kernel.py (~300: `_EdgeCompressor`, `_LiveInputCache`, `_step_kernel`, the edge helpers).
-  - results.py, classify's search branches, cli.py (`lock`, `__lock__`) and console.py (`prove`).
-  - The `abstract_timers`/`_bb_tick` code in circuitpy/codegen (6 files). `proof_metadata=True` stays, because pilot
-    uses it.
-- **Callers to repoint.**
-  - runner.py:914 imports `_compile_property` for `avoid=`. Move it out of prove/__init__.
-  - analysis/__init__ re-exports `always`, `never`, `Proven`, `Counterexample`, `reachable_states` and `diff_states`.
-  - examples/fault_coverage.py and examples/fill_station.py use them.
-  - The Makefile targets `test-prove`, `test-soundness` and `bench`, and the mergeq stages `prove` and `soundness`.
-- **Search modes.** classify, passes and elision keep two modes. Removing the search mode touches the files that
-  stay.
-- **Tests.** The 41 `test_prove_*` files and test_packml_diagnosis have 23,865 lines.
-  - About 655 tests reach the facts through `always`/`never`/`Proven`, and they go.
-  - About 277 tests (4.1k lines) test the facts directly and stay. 44 of them go through `_build_explore_context`
-    and need repointing.
-  - About 70 more search tests sit in 25 other files.
-  - Also tied to the search: tests/verification/test_known_reachable.py, the fuzz suite (~4.3k), and the
-    `--prove-debug` hooks in tests/conftest.py.
-- **The check that replaces the search (Sam, 2026-11-15).** The search was the facts' only soundness check, so the
-  new check is built with the deletion. It checks the facts against real runs over the idiom corpus and the
-  conformance programs. Every fact must hold on every scan of every run: domains, stepping tags, produced value
-  domains and prior facts.
+tests/facts checks the facts against real runs, over the idiom corpus and the conformance programs.
+
+- **The next branch for the check.**
+  - `_unjudged` in tests/facts/check.py matches tally keys by prefix. So "absorbed value crossed a threshold, not
+    judged" counts as judged. Match exact keys. Then lower the valve idiom's stall preset below its 200 ms feedback
+    delay, so the check reaches a linked program's Done.
+  - Three places still treat an unwritten tag that is not an input as a constant. They are `physical=` delay tags
+    without `link=`, `_domain_for_source_tag` and the constant seeding. `CMP_OPERAND_NO_WRITER` also fires on a
+    linked `Int` feedback.
 - **Facts the runs refute.** The check in tests/facts holds each one as a strict xfail, `test_known_failure_is_fixed[...]` in the file named.
   - The how() prior holds system tags at their defaults, so a copy of a clock or the RTC gets 0 only. `test_facts_conformance.py`, `[system/scan_counter_steps_by_one-stateful domain-System_Result2]` and `[rtc_set/date_and_time_apply-stateful domain-DD74]` (DD75, DD84 and DD85 too).
   - A Real domain has no value that stands for NaN or Inf. `test_facts_conformance.py`, `[word_floor/below_int_and_nan-stateful domain-DF32]` and `[modbus_raw/raw_values-stateful domain-DF114]` (DF115 too).
@@ -84,12 +65,11 @@ ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `ca
     classify handles timer and counter status bits on their own (classify.py:210).
   - The check above covers it. Each instruction's `_writes` is compared with the writes a run records. This is what
     "derived from the engine" means.
-- **Docs.** Most of verification.md (457 lines), commissioning.md "Verify" (48-73),
-  docs/internal/prove-formal-foundations.md (161), and about 8 lines in testing.md, click.md, physical-harness.md,
-  tag-structures.md and two instruction pages.
-- **Changelog.** Removing `always`, `never` and `Proven` is a breaking change. The website's blog post and
-  overview.md change in the same release (the website session's work).
-- **Then delete** the old "Prover sweep" items and the known false Provens. They go with the search.
+- **Left over from the search deletion.**
+  - `Tag(band=...)` was read only by lock files, so nothing reads it now. `lock=` stays, because TagMap stamps it on
+    output banks and codegen and the nickname CSV keep it. Decide whether either goes. [Sam]
+  - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
+    were the search's. Only tests pass them now. The `indirect_reach` maps they fill are then always empty. [nothing]
 
 ### 1c. The public surface
 

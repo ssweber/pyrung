@@ -6,12 +6,12 @@ Answers a single structural question per candidate stateful tag ``X``:
     single-scan scenario?"
 
 If yes, ``X``'s scan-entry value never reaches any computation, so ``X`` is
-scan-local and can be dropped from the BFS state key.
+scan-local and can be dropped from PILOT's world key.
 
 This is a single-scan hypothetical over *all* entry states.  Because the
 reachable entry states are a subset of all entry states, an answer that holds
 for every entry state holds for the reachable ones too — which decouples
-elision from BFS reachability entirely.
+elision from reachability entirely.
 
 Pipeline per candidate:
 
@@ -61,9 +61,8 @@ sound; it only costs aggressiveness.
 from __future__ import annotations
 
 import itertools
-import sys
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import ProgramGraph, _extract_write_targets
@@ -93,88 +92,17 @@ from pyrung.core.instruction.out_variants import (
     TimedInstruction,
     ToggleInstruction,
 )
-from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 from pyrung.core.rung import Rung
 from pyrung.core.site_memory import EDGE_MEMORY, site_table_of
 from pyrung.core.state import SystemState
 from pyrung.core.tag import ImmediateRef
 
-from ..expr import _referenced_tags
+from ..classify import FAULT_FLAGS
 from ..results import PENDING
-from ..system_points import FAULT_FLAGS
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.simplified import Expr
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
-
-
-_ExitSubstitution = tuple[str, Callable[[Any], Any]]
-
-
-def _compute_exit_substitutions(
-    program: Program,
-    graph: ProgramGraph,
-    candidates: set[str],
-    surviving_names: frozenset[str],
-) -> dict[str, _ExitSubstitution]:
-    """Compute exit-expression substitutions for elidable observer tags.
-
-    For each candidate, finds the single unconditional write instruction and
-    extracts (source_tag_name, invert_fn).  Only succeeds for identity copies
-    and invertible linear calcs where the source is a surviving dimension.
-    """
-    from pyrung.core.analysis.reverse_edges import (
-        calc_reverse_edge as _calc_reverse_edge,
-    )
-    from pyrung.core.analysis.reverse_edges import (
-        tag_name_from_value as _tag_name_from_value,
-    )
-    from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.data_transfer import CopyInstruction
-
-    if not candidates:
-        return {}
-
-    unconditional_rung_indices: set[int] = set()
-    for ni, node in enumerate(graph.rung_nodes):
-        if not node.condition_reads and node.subroutine is None:
-            unconditional_rung_indices.add(ni)
-
-    candidate_writers: dict[str, list[tuple[str, Callable[[Any], Any]]]] = {
-        name: [] for name in candidates
-    }
-
-    for ni in unconditional_rung_indices:
-        rung = program.rungs[ni] if ni < len(program.rungs) else None
-        if rung is None:
-            continue
-        for item in rung._execution_items:
-            if isinstance(item, CopyInstruction):
-                target_name = _tag_name_from_value(item.dest)
-                if target_name not in candidates:
-                    continue
-                source_name = _tag_name_from_value(item.source)
-                if source_name is None:
-                    continue
-                if source_name in surviving_names:
-                    candidate_writers[target_name].append((source_name, lambda v: v))
-            elif isinstance(item, CalcInstruction):
-                target_name = _tag_name_from_value(item.dest)
-                if target_name not in candidates:
-                    continue
-                edge = _calc_reverse_edge(item.expression)
-                if edge is None:
-                    continue
-                source_name, invert = edge
-                if source_name in surviving_names:
-                    candidate_writers[target_name].append((source_name, invert))
-
-    result: dict[str, _ExitSubstitution] = {}
-    for name, writers in candidate_writers.items():
-        if len(writers) == 1:
-            result[name] = writers[0]
-    return result
 
 
 # Maximum size of a candidate's free-variable cross product.  Larger ⇒ bail.
@@ -292,8 +220,6 @@ def _instruction_write_targets(instr: Any, tag_refs: dict[str, Tag]) -> set[str]
 def _collect_hidden_memory_info(
     program: Program,
     tag_refs: dict[str, Tag],
-    *,
-    black_box_timers: bool = True,
 ) -> tuple[frozenset[str], tuple[tuple[str, frozenset[str]], ...]]:
     """Survey instructions for unmodelled cross-scan memory and oneshot keys.
 
@@ -303,13 +229,6 @@ def _collect_hidden_memory_info(
     oneshot instruction's ``_oneshot`` memory key with the tags it writes.  A
     oneshot forloop runs its whole body only on its rung's rising edge, so its
     key pairs with every tag written in the body, not just the loop index.
-
-    Under *black_box_timers* (the search's model) an on/off-delay timer's
-    Done and accumulator join *drum_shift_writes*: the slice runs a scan on
-    the concrete runtime at a fixed tick, where a timer moves by that tick,
-    while the search lets it jump to any value, so a slice reading the timer
-    would judge a write it gates by the wrong value.  How()'s domain prior
-    keeps the exact model and passes False.
     """
     drum_shift_writes: set[str] = set()
     oneshot_key_writes: list[tuple[str, frozenset[str]]] = []
@@ -331,7 +250,7 @@ def _collect_hidden_memory_info(
                 FlasherInstruction,
                 TimedInstruction,
             ),
-        ) or (black_box_timers and isinstance(instr, (OnDelayInstruction, OffDelayInstruction))):
+        ):
             drum_shift_writes.update(targets)
         if getattr(instr, "_oneshot", False):
             oneshot_key_writes.append((instr.memory_key("_oneshot"), frozenset(targets)))
@@ -421,19 +340,17 @@ class _SliceElision:
         stateful_dims: Mapping[str, tuple[Any, ...]],
         nondeterministic_dims: Mapping[str, tuple[Any, ...]],
         observed: frozenset[str] = frozenset(),
-        *,
-        black_box_timers: bool = True,
     ) -> None:
         self.program = program
         self.graph = graph
         self.stateful_dims = stateful_dims
         self.nondeterministic_dims = nondeterministic_dims
-        # Tags read from outside the program (properties, the projection).
+        # Tags read from outside the program.
         self.observed = observed
 
         tag_refs = dict(graph.tags)
         self.drum_shift_writes, self.oneshot_key_writes = _collect_hidden_memory_info(
-            program, tag_refs, black_box_timers=black_box_timers
+            program, tag_refs
         )
         # Tags written by a oneshot instruction.  A oneshot write does not fire
         # every scan, so def-use chains (sequential SSA, which assumes every
@@ -496,7 +413,7 @@ class _SliceElision:
         """Memoized, cycle-safe test of whether *name* is always written before read.
 
         A scan-local tag's entry value is never observed, so it can be dropped
-        from the BFS state key.  Used both for top-level candidates and,
+        from the world key.  Used both for top-level candidates and,
         recursively, for unclassified tags found inside a candidate's closure.
         A dependency cycle means the tag's value depends on its own scan-entry
         value — cross-scan state — so it is conservatively not scan-local.
@@ -599,8 +516,8 @@ class _SliceElision:
                 if self._is_scan_local(name):
                     continue
                 domain = self.stateful_dims[name]
-                # An absorbed timer's Done (how()'s prior only; the search's
-                # timers bail above as drum_shift_writes).
+                # An absorbed timer's Done has a third value, PENDING, that no
+                # scan stores.
                 if PENDING in domain:
                     return False
             elif name in self.nondeterministic_dims:
@@ -799,117 +716,21 @@ def _elide_sliced(
     stateful_dims: Mapping[str, tuple[Any, ...]],
     nondeterministic_dims: Mapping[str, tuple[Any, ...]],
     *,
-    observer_exprs: tuple[Expr, ...] = (),
-    observer_tag_names: frozenset[str] = frozenset(),
-    projected_observers: frozenset[str] = frozenset(),
-    observed_tags: frozenset[str] = frozenset(),
-    progress: Callable[[str], None] | None = None,
-    progress_prefix: Callable[[], str] | None = None,
-    unclassified_tags: frozenset[str] = frozenset(),
-    infeasible_out: set[str] | None = None,
-    black_box_timers: bool = True,
-) -> tuple[
-    dict[str, tuple[Any, ...]],
-    dict[str, str],
-    dict[str, tuple[tuple[str, str], ...]],
-    dict[str, _ExitSubstitution],
-]:
-    """Slice elision with the pipeline-compatible return signature.
+    observed: frozenset[str] = frozenset(),
+) -> tuple[dict[str, tuple[Any, ...]], dict[str, str]]:
+    """Return the stateful dims that stay, and each elided tag with its method.
 
-    Returns ``(reduced_stateful_dims, elided_dict, proof_details, substitutions)``
-    matching the contract of ``_elide_scan_local_stateful_dims``.
-
-    *observed_tags* are read from outside the program besides the observers
-    (the projection, what a callable property reads); the subroutine-local
-    check leaves them alone.  *black_box_timers* is the search's timer model
-    (see ``_collect_hidden_memory_info``); how()'s domain prior passes False.
+    *observed* names the tags read from outside the program.  The
+    subroutine-local check leaves them alone.
     """
-    del projected_observers  # slice elision does not need scratch projection
-
     if not stateful_dims:
-        return {}, {}, {}, {}
-
-    use_dots = progress_prefix is not None
-    if use_dots:
-        assert progress_prefix is not None
-        header = f"{progress_prefix()}elision | sliced {len(stateful_dims)} tags "
-        print(header, end="", file=sys.stderr, flush=True)
-
-    stateful_names = sorted(name for name, domain in stateful_dims.items() if PENDING not in domain)
-
-    observer_seeds: set[str] = set(observer_tag_names)
-    for expr in observer_exprs:
-        observer_seeds.update(_referenced_tags(expr))
+        return {}, {}
 
     analyzer = _SliceElision(
-        program,
-        graph,
-        stateful_dims,
-        nondeterministic_dims,
-        observed=frozenset(observer_seeds) | observed_tags,
-        black_box_timers=black_box_timers,
+        program, graph, stateful_dims, nondeterministic_dims, observed=observed
     )
-
-    elidable: dict[str, str] = {}
-    proof_details: dict[str, tuple[tuple[str, str], ...]] = {}
-    for name in stateful_names:
-        ok, reason = analyzer.candidate_elidable(name)
-        if ok:
-            elidable[name] = "slice"
-            proof_details[name] = (("slice", reason),)
-        if use_dots:
-            print("x" if ok else ".", end="", file=sys.stderr, flush=True)
-
-    # Observer-referenced elidable tags need an exit-expression substitution so
-    # the property can still be evaluated; those that cannot be substituted are
-    # kept stateful.
-    observer_elidable = {name for name in elidable if name in observer_seeds}
-    substitutions: dict[str, _ExitSubstitution] = {}
-    if observer_elidable:
-        surviving = frozenset(nondeterministic_dims) | (
-            frozenset(stateful_names) - frozenset(elidable)
-        )
-        substitutions = _compute_exit_substitutions(program, graph, observer_elidable, surviving)
-        for name in observer_elidable - set(substitutions):
-            del elidable[name]
-            proof_details.pop(name, None)
-
-    # An unclassified tag (no inferrable domain) only forces an Intractable
-    # result when its *entry* value matters — i.e. it is not itself scan-local.
-    # A scan-local unclassified tag is recomputed every scan and never needs a
-    # domain, even when it feeds a surviving stateful tag or observer.
-    if unclassified_tags and infeasible_out is not None:
-        survivor_seeds = (frozenset(stateful_names) - frozenset(elidable)) | frozenset(
-            observer_seeds
-        )
-        survivor_closure = _upstream_closure(graph, survivor_seeds)
-        for name in unclassified_tags:
-            if name not in survivor_closure:
-                continue
-            scan_local, _reason = analyzer.candidate_elidable(name)
-            if not scan_local:
-                infeasible_out.add(name)
-
-    reduced: dict[str, tuple[Any, ...]] = {}
-    elided: dict[str, str] = {}
-    if use_dots:
-        print(" ", end="", file=sys.stderr, flush=True)
-    for name, domain in stateful_dims.items():
-        if name in elidable:
-            elided[name] = "slice"
-            if use_dots:
-                print("x", end="", file=sys.stderr, flush=True)
-        else:
-            reduced[name] = domain
-            if use_dots:
-                print(".", end="", file=sys.stderr, flush=True)
-
-    removed = len(stateful_dims) - len(reduced)
-    if use_dots:
-        print(f"  removed={removed}", file=sys.stderr)
-    elif progress is not None:
-        progress(
-            f"elision | sliced phase complete | removed={removed:,} | retained={len(reduced):,}"
-        )
-
-    return reduced, elided, proof_details, substitutions
+    candidates = sorted(name for name, domain in stateful_dims.items() if PENDING not in domain)
+    elidable = {name for name in candidates if analyzer.candidate_elidable(name)[0]}
+    reduced = {name: domain for name, domain in stateful_dims.items() if name not in elidable}
+    elided = {name: "slice" for name in stateful_dims if name in elidable}
+    return reduced, elided

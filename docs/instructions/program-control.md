@@ -63,10 +63,6 @@ As on CLICK, an `Int` count is read as unsigned 16-bit, so -1 runs 65535
 iterations (a scan of a second or more on a CLICK). A `Dint` count is read whole
 and signed, so 65536 runs 65536 and -1 runs none. A literal is read whole, so
 `forloop(70000)` runs 70000. A count of 0 runs none.
-The verifier (`always()`, `never()`, `pyrung lock`) answers `Intractable` when
-a loop can run more than 1,000,000 iterations in a scan, or when its count
-comes from an input without `choices=` or a `min=`/`max=` range of 1000
-values or fewer.
 
 For CLICK, the count must be a constant or a `DS`, `DD`, `TD`, `CTD` or `SD`
 tag. CLICK validation reports `CLK_FORLOOP_COUNT_BANK` for a count in any other

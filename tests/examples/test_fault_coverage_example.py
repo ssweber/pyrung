@@ -1,4 +1,4 @@
-"""Smoke test for the fault_coverage example — imports and runs without error."""
+"""The fault_coverage example runs, and every coupling trips its alarm."""
 
 from __future__ import annotations
 
@@ -15,4 +15,4 @@ def test_fault_coverage_example_runs():
     if module_name in sys.modules:
         del sys.modules[module_name]
     mod = importlib.import_module(module_name)
-    assert len(mod.structural_pass) == 2
+    assert sorted(mod.tripped_couplings) == ["Fb", "PumpFb"]

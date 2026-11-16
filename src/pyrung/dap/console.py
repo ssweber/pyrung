@@ -82,7 +82,6 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
         "recovers",
         "why",
         "how",
-        "prove",
         None,
         "simplified",
     ],
@@ -996,116 +995,6 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     except AvoidCheckError as exc:
         raise adapter.DAPAdapterError(f"how avoid: {exc}") from exc
     return ConsoleResult(str(path))
-
-
-@register(
-    "prove",
-    usage="prove always|never <expression> [--settled] [--paced]",
-    group="analysis",
-    hint="(exhaustive, needs annotations)",
-)
-def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
-    parts = expression.strip().split(maxsplit=2)
-    if len(parts) < 2:
-        raise adapter.DAPAdapterError(
-            "Usage: prove always|never <expression>  "
-            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
-        )
-    mode = parts[1].lower()
-    if mode not in ("always", "never"):
-        raise adapter.DAPAdapterError(
-            "Usage: prove always|never <expression>  "
-            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
-        )
-    if len(parts) < 3 or not parts[2].strip():
-        raise adapter.DAPAdapterError(
-            "Usage: prove always|never <expression>  "
-            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
-        )
-    expr_str = parts[2].strip()
-    runner = adapter._require_runner_locked()
-    if runner._program is None:
-        raise adapter.DAPAdapterError("prove requires a program loaded from a .py file")
-
-    settled = False
-    paced = False
-    if "--settled" in expr_str:
-        settled = True
-        expr_str = expr_str.replace("--settled", "").strip()
-    if "--paced" in expr_str:
-        paced = True
-        expr_str = expr_str.replace("--paced", "").strip()
-    if not expr_str:
-        raise adapter.DAPAdapterError(
-            "Usage: prove always|never <expression>  "
-            "(e.g. prove always Done, prove never OverTemp, ~CoolingPump)"
-        )
-
-    from pyrung.dap.expressions import (
-        ExpressionParseError,
-        compile_for_dict,
-        referenced_tags,
-    )
-    from pyrung.dap.expressions import (
-        parse as parse_expr,
-    )
-
-    try:
-        expr = parse_expr(expr_str)
-    except ExpressionParseError as exc:
-        raise adapter.DAPAdapterError(f"prove: {exc}") from exc
-
-    scope = sorted(referenced_tags(expr))
-    predicate = compile_for_dict(expr, tags=runner.tags)
-
-    adapter._send_event("output", {"category": "console", "output": "Verifying...\n"})
-
-    from pyrung.core.analysis.prove import always as always_fn
-
-    if mode == "never":
-        predicate = (lambda p: lambda s: not p(s))(predicate)
-
-    result = always_fn(
-        runner._program,
-        predicate,
-        scope=scope if scope else None,
-        settled=settled,
-        paced=paced,
-    )
-
-    return ConsoleResult(_format_prove_result(result))
-
-
-def _format_prove_result(result: Any) -> str:
-    from pyrung.core.analysis.prove.results import Counterexample, Intractable, Proven
-
-    if isinstance(result, Proven):
-        lines = [f"Proven ({result.states_explored} states explored)"]
-        for caveat in result.caveats:
-            lines.append(f"  caveat: {caveat}")
-        if result.aggressive_counterexample is not None:
-            lines.append("  note: aggressive (non-paced) counterexample exists")
-        return "\n".join(lines)
-
-    if isinstance(result, Counterexample):
-        lines = ["Counterexample found:"]
-        for i, step in enumerate(result.trace):
-            inputs = ", ".join(f"{k}={v}" for k, v in sorted(step.inputs.items()))
-            scans = f" ({step.scans} scans)" if step.scans > 1 else ""
-            lines.append(f"  step {i}: {inputs}{scans}")
-        for caveat in result.caveats:
-            lines.append(f"  caveat: {caveat}")
-        return "\n".join(lines)
-
-    if isinstance(result, Intractable):
-        lines = [f"Intractable: {result.reason}"]
-        if result.tags:
-            lines.append(f"  blocking tags: {', '.join(result.tags)}")
-        for hint in result.hints:
-            lines.append(f"  hint: {hint}")
-        return "\n".join(lines)
-
-    return str(result)
 
 
 def _resolve_tags(runner: Any, names: list[str], *, verb: str) -> list[Any]:

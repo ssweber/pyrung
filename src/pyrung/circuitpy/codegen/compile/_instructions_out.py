@@ -38,20 +38,8 @@ def _use_memory(ctx: CodegenContext) -> None:
         ctx.mark_function_global(ctx._current_function, "_mem")
 
 
-def _tick_lines(
-    acc: Tag, preset: Tag | int, unit: TimeUnit, ctx: CodegenContext, sp: str
-) -> list[str]:
-    """Advance *acc* by this scan's dt into ``_acc``; leave the remainder in ``_new_frac``.
-
-    The prover's abstract kernel lets its oracle choose the advance toward
-    *preset* instead (``render_kernel.compile_kernel``), with no remainder.
-    """
-    if ctx.abstract_timers:
-        return [
-            f"{sp}_new_frac = 0",
-            f"{sp}_acc = _bb_tick(_mem, {acc.name!r}, int({_compile_value(acc, ctx)}),"
-            f" int({_compile_value(preset, ctx)}))",
-        ]
+def _tick_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -> list[str]:
+    """Advance *acc* by this scan's dt into ``_acc``; leave the remainder in ``_new_frac``."""
     return [
         *_timer_carry_lines(acc, unit, ctx, sp),
         f"{sp}_acc = min(int({_compile_value(acc, ctx)}) + _int_units, {_INT_MAX})",
@@ -113,7 +101,7 @@ def _compile_debounce_instruction(
         # A rise starts the on side from 0.
         f"{sp8}{on_write} = 0",
         f'{sp8}_mem["{on_frac}"] = 0',
-        *_tick_lines(instr.on_acc, instr.on_preset, instr.unit, ctx, sp4),
+        *_tick_lines(instr.on_acc, instr.unit, ctx, sp4),
         f'{sp4}_mem["{on_frac}"] = _new_frac',
         f'{sp4}_mem["{off_frac}"] = 0',
         f"{sp4}{on_write} = _acc",
@@ -129,7 +117,7 @@ def _compile_debounce_instruction(
         # The off side compares what it had reached before this scan, and not on the fall.
         f"{sp8}_timed_out = not _was and int({_compile_value(instr.off_acc, ctx)})"
         f" >= int({_compile_value(instr.off_preset, ctx)})",
-        *_tick_lines(instr.off_acc, instr.off_preset, instr.unit, ctx, sp8),
+        *_tick_lines(instr.off_acc, instr.unit, ctx, sp8),
         f'{sp8}_mem["{off_frac}"] = _new_frac',
         f"{sp8}{off_write} = _acc",
         f"{sp8}if _timed_out:",
@@ -148,23 +136,21 @@ def _compile_flasher_phase(
     on_frac = f"_frac:{instr.on_acc.name}"
     off_frac = f"_frac:{instr.off_acc.name}"
     if on_phase:
-        acc, other, preset, limit, other_phase = (
+        acc, other, limit, other_phase = (
             instr.on_acc,
             instr.off_acc,
-            instr.on_preset,
             "_on_preset",
             _FLASH_OFF_NEXT,
         )
     else:
-        acc, other, preset, limit, other_phase = (
+        acc, other, limit, other_phase = (
             instr.off_acc,
             instr.on_acc,
-            instr.off_preset,
             "_off_preset",
             _FLASH_ON_NEXT,
         )
     return [
-        *_tick_lines(acc, preset, instr.unit, ctx, sp),
+        *_tick_lines(acc, instr.unit, ctx, sp),
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
         f"{sp}if _acc >= {limit}:",
         f"{sp4}_phase = {other_phase}",
@@ -259,7 +245,7 @@ def _compile_timed_instruction(
         f"{sp4}{acc_write} = 0",
         f'{sp4}_mem["{frac_key}"] = 0',
         f"{sp}if _timing:",
-        *_tick_lines(instr.timer_acc, instr.on_preset, instr.unit, ctx, sp4),
+        *_tick_lines(instr.timer_acc, instr.unit, ctx, sp4),
         f'{sp4}_mem["{frac_key}"] = _new_frac',
         f"{sp4}{target_write} = {timing_target}",
         f"{sp4}{acc_write} = _acc",

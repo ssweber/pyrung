@@ -637,18 +637,15 @@ def _drum_tick_lines(
     """Add this scan's time to Acc; the step's preset, ``_limit``, is the tick's limit."""
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     lines = [f"_acc = int({_compile_value(instr.accumulator, ctx)})"]
-    if ctx.abstract_timers:
-        lines.append(f"_acc = _bb_tick(_mem, {instr.accumulator.name!r}, _acc, _limit)")
-    else:
-        frac_key = f"_frac:{instr.accumulator.name}"
-        max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
-        lines.extend(
-            [
-                *_timer_carry_lines(instr.accumulator, instr.unit, ctx, ""),
-                f"_mem[{frac_key!r}] = _new_frac",
-                f"_acc = min(_acc + _int_units, {max_acc})",
-            ]
-        )
+    frac_key = f"_frac:{instr.accumulator.name}"
+    max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
+    lines.extend(
+        [
+            *_timer_carry_lines(instr.accumulator, instr.unit, ctx, ""),
+            f"_mem[{frac_key!r}] = _new_frac",
+            f"_acc = min(_acc + _int_units, {max_acc})",
+        ]
+    )
     lines.append(f"{acc_write} = _acc")
     return lines
 

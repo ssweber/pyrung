@@ -7,12 +7,11 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make install` — install deps (`uv sync --locked --all-extras --dev`)
 - `make` — install, then lint, test, test-conformance, test-hypothesis and docs-check
 - `make lint` — ruff (fixes and formats files), `devtools/semantic_lint.py`, ty, and a syntax check of the extension's JS
-- `make test` — pytest without the integration, hypothesis, soundness, fuzz, tumbler and conformance markers (run the whole suite through make, never a bare `uv run pytest`). It, `make test-pilot` and `make test-fold` run on `PYTEST_WORKERS` xdist workers (default 6; `PYTEST_WORKERS=0` for one process, a file stays on one worker)
-- `make test-prove` — prover (verifier) subsystem only
+- `make test` — pytest without the integration, hypothesis, fuzz, tumbler and conformance markers (run the whole suite through make, never a bare `uv run pytest`). It, `make test-pilot` and `make test-fold` run on `PYTEST_WORKERS` xdist workers (default 6; `PYTEST_WORKERS=0` for one process, a file stays on one worker)
+- `make test-prove` — the static fact tests (`analysis/prove/`) that how() and validation read, and `tests/facts`, which checks those facts against real runs
 - `make test-pilot` — pilot (`how()` planner) tests
 - `make test-tumbler` — generated-program PILOT fixtures; run after `make test-pilot`
 - `make test-hypothesis` — property-based tests
-- `make test-soundness` — prove agreement checks (`--prove-agreement`), only in the test files that call `always`
 - `make test-fuzz` — fuzzer suite
 - `make test-fold` — the suite again, with every long run checked scan by scan against plain stepping (`--fold-check`, `tests/fold_check.py`). `make test-fold` skips the slowest cases of `test_pilot_long_wait.py`. Long runs go through the jit, the guarded loop over the compiled kernel. Run it only after a change to the jit or to how timers, counters or clocks compute. The jit is `core/scan_trace.py`, `coast_run.py`, `cycle_jump.py`, `rung_firings.py`, `compiled_run.py`, `kernel.py`, `read_trace.py` and `tests/fold_check.py`. A test program that only uses timers is no reason to run it.
 - `make test-fold-new` — only the test files this branch adds, under `--fold-check` (mergeq's `fold-new` stage; judges mismatches, not vacuity)
@@ -74,7 +73,7 @@ The reviewer then reads every flagged line, and every new noun, against the test
 ```
 src/pyrung/
 ├── __init__.py          # Public re-exports
-├── cli.py               # Unified CLI (lock, check, dap, live)
+├── cli.py               # Unified CLI (check, dap, live)
 ├── pytest_plugin.py     # Coverage plugin (pyrung_coverage fixture)
 ├── core/
 │   ├── tag.py           # Tag types (Bool, Int, Dint, Real, Word, Char)
@@ -104,7 +103,7 @@ src/pyrung/
 │       ├── query.py     # Whole-program surveys (cold_rungs, stranded_bits, coverage)
 │       ├── causal/      # cause()/effect() over scan history, projected paths
 │       ├── simplified.py # Resolved Boolean form per terminal
-│       ├── prove/       # Exhaustive state-space verifier (has its own AGENTS.md)
+│       ├── prove/       # Static facts how() and validation read: value domains, timer and counter facts (has its own AGENTS.md)
 │       └── pilot/       # PILOT — how() steering, backward-trace + forward-simulate (has its own AGENTS.md)
 ├── click/
 │   ├── __init__.py      # Pre-built blocks (x, y, c, ds, dd, etc.), type aliases
@@ -132,12 +131,12 @@ src/pyrung/
 
 ## Sub-AGENTS.md Files
 
-- `src/pyrung/core/analysis/prove/AGENTS.md` — Prover internals, optimization glossary, module map, invariants
+- `src/pyrung/core/analysis/prove/AGENTS.md` — Static fact internals, glossary, module map, invariants
 - `src/pyrung/core/analysis/pilot/AGENTS.md` — PILOT contracts and invariants, where to start, vocabulary
 - `editors/vscode/pyrung-debug/AGENTS.md` — VS Code extension event architecture, key files, packaging. Plain JS with no dependencies, so no `npm install`
 - `docs/AGENTS.md` — Documentation tone and style, API design decisions, technical details
 - `tests/conformance/AGENTS.md` — Conformance suite protocol, groups and manifest, register layout, wire pacing, coverage checklist
-- `tests/fuzz/reproducers/AGENTS.md` — Fuzz reproducer workflow, diagnose script usage
+- `tests/fuzz/reproducers/AGENTS.md` — Fuzz reproducer workflow
 
 ## Docs Index
 
@@ -145,7 +144,7 @@ src/pyrung/
 - `docs/getting-started/` — Installation, core concepts, quickstart
 - `docs/learn/` — Ladder logic tutorial for Python developers
 - `docs/instructions/` — Full DSL reference by instruction group
-- `docs/guides/` — Runner, testing, commissioning, analysis, verification, conformance, architecture, DAP
+- `docs/guides/` — Runner, testing, commissioning, analysis, conformance, architecture, DAP
 - `docs/dialects/` — Click and CircuitPython dialect details
 - `docs/internal/debug-spec.md` — Debug architecture spec
 

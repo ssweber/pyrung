@@ -1,14 +1,8 @@
-"""Fault coverage: structural + timing verification for every physical device.
+"""Fault coverage: a timing check for every physical device.
 
-Two-pass workflow using the same coupling list from the autoharness:
-
-1. **Structural** — `always()` checks that every feedback has a path to an
-   alarm in all reachable states.  Counterexample = structural gap.
-2. **Timing** — `force()` + `run_for()` checks that the alarm trips within
-   the required time.  This catches timers that exist but are too slow.
-
-Run `always()` first — there's no point testing timing on a coupling that
-never reaches an alarm.
+The autoharness lists every device coupling.  For each one, `force()` and
+`run_for()` break the feedback and check that the alarm trips in time.  This
+catches a fault timer that is missing or too slow.
 """
 
 from pyrung import (
@@ -17,7 +11,6 @@ from pyrung import (
     Bool,
     Harness,
     Int,
-    Or,
     Physical,
     rung,
     Timer,
@@ -29,7 +22,6 @@ from pyrung import (
     program,
     rise,
 )
-from pyrung.core.analysis import Counterexample, Intractable, Proven, always
 from pyrung.core.tag import TagType
 
 # ---------------------------------------------------------------------------
@@ -91,41 +83,16 @@ def logic():
 
 
 # ---------------------------------------------------------------------------
-# Pass 1 — structural coverage with always()
+# Timing coverage with force
 # ---------------------------------------------------------------------------
-print("=== Structural coverage ===")
-structural_pass: list[str] = []
+print("=== Timing coverage ===")
+tripped_couplings: list[str] = []
 
 plc = PLC(logic, dt=0.001)
 harness = Harness(plc)
 harness.install()
 
-couplings = list(harness.couplings())
-conditions = [
-    Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
-    for c in couplings
-]
-results = always(logic, conditions, settled=True)
-
-for coupling, result in zip(couplings, results, strict=True):
-    if isinstance(result, Proven):
-        print(f"  PASS  {coupling.fb_name}: alarm path exists")
-        structural_pass.append(coupling.fb_name)
-    elif isinstance(result, Counterexample):
-        print(f"  FAIL  {coupling.fb_name}: no alarm path — structural gap")
-    elif isinstance(result, Intractable):
-        print(f"  SKIP  {coupling.fb_name}: intractable")
-
-# ---------------------------------------------------------------------------
-# Pass 2 — timing coverage with force
-# ---------------------------------------------------------------------------
-print("\n=== Timing coverage ===")
-
 for coupling in harness.couplings():
-    if coupling.fb_name not in structural_pass:
-        print(f"  SKIP  {coupling.fb_name}: no structural path, skipping timing")
-        continue
-
     plc2 = PLC(logic, dt=0.001)
     h2 = Harness(plc2)
     h2.install()
@@ -142,5 +109,6 @@ for coupling in harness.couplings():
         tripped = AlarmExtent.value != 0
     if tripped:
         print(f"  PASS  {coupling.fb_name}: alarm tripped within time budget")
+        tripped_couplings.append(coupling.fb_name)
     else:
         print(f"  FAIL  {coupling.fb_name}: alarm did NOT trip in time")

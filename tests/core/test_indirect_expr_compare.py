@@ -32,7 +32,6 @@ from pyrung.core import (
     math,
     out,
 )
-from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from pyrung.core.condition import (
     CompareEq,
     Condition,
@@ -48,6 +47,7 @@ from pyrung.core.context import ScanContext
 from pyrung.core.memory_block import IndirectExprRef
 from pyrung.core.state import SystemState
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
+from tests.core.kernel_step import step_compiled_kernel
 
 _OPS: dict[str, Callable[[Any, Any], Any]] = {
     "eq": operator.eq,
@@ -147,7 +147,7 @@ def _first_scan_tags(prog: Program, engine: str) -> dict[str, Any]:
         return dict(runner.current_state.tags)
     compiled = compile_kernel(prog, blockless=engine == "kernel_blockless")
     kernel = compiled.create_kernel()
-    _step_compiled_kernel(compiled, kernel, dt=0.010)
+    step_compiled_kernel(compiled, kernel, dt=0.010)
     return dict(kernel.tags)
 
 

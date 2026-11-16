@@ -58,7 +58,6 @@ nav:
         - Diagnosis: guides/analysis-diagnosis.md
         - Cause & Effect: guides/analysis-causal.md
         - Test Coverage: guides/analysis-coverage.md
-        - Verification: guides/verification.md
       - Platform:
         - CLICK Quickstart: guides/click-quickstart.md
         - CLICK Cheatsheet: guides/click-cheatsheet.md

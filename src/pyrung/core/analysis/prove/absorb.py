@@ -1,12 +1,10 @@
 """Done/Acc pairing, and the accumulator absorption of how()'s domain prior.
 
-The search does not absorb: its timers are black boxes (``blackbox.py``) and
-its counters count concretely, so every accumulator it tracks is plain state.
 What lives here is structural (Done/Acc pairs, write targets, the data-read
-exclusivity check ``_has_forbidden_data_read``, which classify and the
-black-box model share) plus the absorptions PILOT's ``how()`` prior is built
-from (``_build_prior_facts``): its world key projects a timer's Done and
-Acc onto ``False``/``PENDING``/``True`` (``_done_acc_state``) and a progress
+exclusivity check ``_has_forbidden_data_read``, which classify shares) plus
+the absorptions PILOT's ``how()`` prior is built from (``_build_prior_facts``).
+Its world key projects a timer's Done and Acc onto
+``False``/``PENDING``/``True`` (``_done_acc_state``).  It projects a progress
 accumulator onto threshold-crossing bits (``_ThresholdVectorSpec``), and its
 earned-work ordinal sources come from the same vectors.  PILOT replays every
 route it plans, so these are steering heuristics, not soundness claims.
@@ -172,7 +170,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
     """Derive the three-valued timer/counter state from Done and Acc.
 
-    The verifier collapses concrete ``(Done, Acc)`` pairs into one of
+    how()'s facts collapse concrete ``(Done, Acc)`` pairs into one of
     ``False``, ``PENDING``, or ``True``:
 
     Kind                     Done   Acc != 0   Abstract state
@@ -952,20 +950,12 @@ def _find_comparison_absorptions(
     all_exprs: list[Expr],
     structural_domains: dict[str, tuple[Any, ...]],
     *,
-    project: tuple[str, ...] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
     atom_index: dict[str, list[Atom]] | None = None,
-    stable_partners_only: bool = False,
 ) -> _ThresholdAbsorptions:
-    """Find written tags whose value is only ever observed through comparisons.
-
-    *stable_partners_only* (the BFS) also requires every comparison partner to
-    be a literal or a stable tag; the ``how()`` domain prior keeps the wider
-    rule.
-    """
+    """Find written tags whose value is only ever observed through comparisons."""
     if atom_index is None:
         atom_index = _build_atom_index(all_exprs)
-    projected = frozenset(project or ())
     progress_sources = set(_collect_progress_source_kinds(program))
     progress_sources.update(
         _collect_int_progress_source_kinds(program, graph, all_exprs, atom_index)
@@ -978,15 +968,15 @@ def _find_comparison_absorptions(
     vector_specs: list[_ThresholdVectorSpec] = []
 
     for tag_name, tag in sorted(graph.tags.items()):
-        if tag_name in projected or tag_name in progress_sources:
+        if tag_name in progress_sources:
             continue
         if tag_name in preset_source_tags:
             continue
         # A receive() dest is written, so it isn't caught by tag.external, but
         # it is classified nondeterministic (its value is externally sourced).
-        # Absorbing its concrete value into a comparison vector would hide the
-        # nondeterminism the BFS must inject — skip it, matching classify.py's
-        # receive-dest carve-out at the nondeterministic gate.
+        # Absorbing its concrete value into a comparison vector would hide
+        # that, so it is skipped, matching classify.py's receive-dest
+        # carve-out at the nondeterministic gate.
         if tag_name in receive_dest_names:
             continue
         if tag.readonly or tag.external or tag.public:
@@ -1010,12 +1000,6 @@ def _find_comparison_absorptions(
                 break
             normalized.extend(specs)
         if not normalized:
-            continue
-        # The vector holds each comparison as of the end of the scan.  Against
-        # a tag the program or the outside rewrites, the next scan compares
-        # with a new value (``copy(rtc.minute, C)``, then ``Rung(C != P)``),
-        # which the hidden value of *tag_name* decides: keep it concrete.
-        if stable_partners_only and any(spec.mode != _THRESHOLD_MODE_EXACT for spec in normalized):
             continue
 
         absorbed_tags.add(tag_name)
@@ -1544,8 +1528,7 @@ def _collect_real_progress_source_kinds(
     """Find conservative monotone Real progress tags.
 
     This covers finite same-sign strides such as ``math(R0 + ExtStep, R0)``
-    where ``ExtStep`` has positive-only choices.  The event scheduler still
-    uses the concrete per-scan delta observed from the current BFS edge.
+    where ``ExtStep`` has positive-only choices.
     """
     from pyrung.core.validation._common import walk_instructions
 
@@ -1625,13 +1608,11 @@ def _find_threshold_absorptions(
     graph: ProgramGraph,
     all_exprs: list[Expr],
     *,
-    project: tuple[str, ...] | None = None,
     atom_index: dict[str, list[Atom]] | None = None,
 ) -> _ThresholdAbsorptions:
     """Find progress accumulator threshold comparisons that can be event-abstracted."""
     if atom_index is None:
         atom_index = _build_atom_index(all_exprs)
-    projected = frozenset(project or ())
     done_acc_info = _collect_done_acc_pairs(program)
     done_by_acc = {acc: done for done, acc in done_acc_info.pairs.items()}
     source_kinds = _collect_progress_source_kinds(program)
@@ -1643,8 +1624,6 @@ def _find_threshold_absorptions(
     blockers: list[_ThresholdBlocker] = []
 
     for acc_name, kind in sorted(source_kinds.items()):
-        if acc_name in projected:
-            continue
         tag = graph.tags.get(acc_name)
         if tag is not None and (tag.external or tag.public):
             continue
@@ -1755,24 +1734,6 @@ def _find_threshold_absorptions(
                     )
                 )
                 continue
-        projected_thresholds = [
-            _threshold_tag_name(spec)
-            for spec in unique_atoms
-            if _threshold_tag_name(spec) in projected
-        ]
-        if projected_thresholds:
-            blockers.append(
-                _ThresholdBlocker(
-                    acc_name,
-                    kind,
-                    tuple(
-                        f"{name}: in projection; remove from project= to allow abstraction"
-                        for name in projected_thresholds
-                    ),
-                )
-            )
-            continue
-
         candidate_vectors[acc_name] = _ThresholdVectorSpec(
             acc_name=acc_name,
             kind=kind,

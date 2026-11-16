@@ -36,7 +36,7 @@ from pyrung.core import (
     to_binary,
     to_text,
 )
-from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
+from tests.core.kernel_step import step_compiled_kernel
 
 
 def _assert_states_equivalent(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> None:
@@ -61,8 +61,8 @@ def _assert_compiled_kernels_match(
     for patch in steps:
         legacy_kernel.tags.update(patch)
         blockless_kernel.tags.update(patch)
-        _step_compiled_kernel(legacy, legacy_kernel, dt=dt)
-        _step_compiled_kernel(blockless, blockless_kernel, dt=dt)
+        step_compiled_kernel(legacy, legacy_kernel, dt=dt)
+        step_compiled_kernel(blockless, blockless_kernel, dt=dt)
         assert legacy_kernel.tags == blockless_kernel.tags
         assert legacy_kernel.memory == blockless_kernel.memory
         assert legacy_kernel.prev == blockless_kernel.prev
@@ -546,8 +546,8 @@ def test_recompile_keeps_mapped_condition_tag_scalar(blockless: bool) -> None:
 
     first_kernel = first.create_kernel()
     second_kernel = second.create_kernel()
-    _step_compiled_kernel(first, first_kernel, dt=0.010)
-    _step_compiled_kernel(second, second_kernel, dt=0.010)
+    step_compiled_kernel(first, first_kernel, dt=0.010)
+    step_compiled_kernel(second, second_kernel, dt=0.010)
 
     assert first_kernel.tags == second_kernel.tags
     assert second_kernel.tags["MappedObserved"] is True

@@ -3,7 +3,7 @@
 Detects tags written only under first-scan or monotonic latch guards with
 literal values.  These tags have deterministic values after scan 0 and never
 change again — they are evidence anchors in diagnosis and can be projected
-out of the BFS state key in the prover.
+out of PILOT's world key.
 
 Three detection patterns:
 

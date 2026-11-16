@@ -37,17 +37,13 @@ class TestCommandGrammar:
         assert kinds == ["tag", "value"]
 
     def test_choices_are_enumerated(self, grammar: dict):
-        prove = grammar["prove"].slots[0]
-        assert prove.kind == "choices"
-        assert set(prove.choices) == {"always", "never"}
-
         harness = grammar["harness"].slots[0]
         assert harness.kind == "choices"
         assert set(harness.choices) == {"install", "remove", "status"}
 
     def test_flags_are_flags(self, grammar: dict):
-        flags = {s.choices[0] for s in grammar["prove"].slots if s.kind == "flag"}
-        assert flags == {"--settled", "--paced"}
+        flags = {s.choices[0] for s in grammar["replay"].slots if s.kind == "flag"}
+        assert flags == {"--harness"}
 
     def test_check_is_an_analysis_command(self, grammar: dict):
         assert grammar["check"].group == "analysis"

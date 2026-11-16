@@ -3,9 +3,8 @@
 ``_ValueSets`` bounds what each tag can hold from its default, its writers and
 the indirect writes that may reach its slot, as a least fixpoint, and from
 that the addresses an indexed access (``DS[Ptr]``, ``DS[Ptr * 10 + 2991]``)
-can resolve to.  It lives below the PDG and the prover so both can use it:
-``prove/deadness.py`` for its dead-guard check, the PDG for the elements an
-index with no declared bounds reads.
+can resolve to.  It lives below the PDG so the PDG and the validators can both
+use it.
 """
 
 from __future__ import annotations

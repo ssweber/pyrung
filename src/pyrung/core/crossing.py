@@ -16,7 +16,7 @@ The same contract serves both reverse mechanisms; they differ only in how a
 - **Recorded** — a :class:`Prior` is read out of an observed prior scan
   (``causal/`` resolves it against history).
 - **Projected** — a :class:`Prior` is chased by recursing the planner on the
-  prior-scan value (walk / prover seeding).
+  prior-scan value (walk / static fact seeding).
 
 Soundness (``prove/AGENTS.md``): a reverse may **over**-approximate the allowed
 input domain (a superset is safe) but never **under**-approximate.  A crossing
