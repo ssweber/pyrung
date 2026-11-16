@@ -28,6 +28,7 @@
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
 - `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
 - `program.check()` no longer calls a comparison always false when the `math()` that writes the tag wraps past the end of its type.
+- `program.check()` no longer calls a comparison always false when a copy clamps the value it stores, or when a `Real` input has whole-number `min`/`max`.
 
 ## v0.16.0 (2026-11-14)
 

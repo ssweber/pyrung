@@ -69,6 +69,15 @@ ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `ca
   new check is built with the deletion. It checks the facts against real runs over the idiom corpus and the
   conformance programs. Every fact must hold on every scan of every run: domains, stepping tags, produced value
   domains and prior facts.
+- **Facts the runs refute.** The check in tests/facts holds each one as a strict xfail, `test_known_failure_is_fixed[...]` in the file named.
+  - The how() prior holds system tags at their defaults, so a copy of a clock or the RTC gets 0 only. `test_facts_conformance.py`, `[system/scan_counter_steps_by_one-stateful domain-System_Result2]` and `[rtc_set/date_and_time_apply-stateful domain-DD74]` (DD75, DD84 and DD85 too).
+  - A Real domain has no value that stands for NaN or Inf. `test_facts_conformance.py`, `[word_floor/below_int_and_nan-stateful domain-DF32]` and `[modbus_raw/raw_values-stateful domain-DF114]` (DF115 too).
+  - A down counter's Acc domain misses the value a copy stages it at. `test_facts_conformance.py`, `[counters/count_down_done_at_preset-stateful domain-CTD101]`.
+  - Two timer Accs the rungs compare with each other have no domain pair that is equal, above 0 and below 20. `test_facts_conformance.py`, `[reset_pins/rton_reset_held-stateful domain-TD302]` (TD305 too).
+  - Slice elision drops a tag that a time drum reads as a step preset. `test_facts_conformance.py`, `[drum_ds/ds_preset_ends-scan-local-DS4016]`.
+  - A functional dependency is claimed before the rung first writes the tag. `test_facts_idioms.py`, `[funcdep_follows_its_source-functional dep-PosOffset]`.
+  - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
+  - A copy of an input takes only the values the ladder writes or the input's split points, not values the outside sets. `test_facts_idioms.py`, `[hmi_value_copied_after_ladder_default-stateful domain-WorkingSetpoint]` and `[compared_input_copied_and_compared-stateful domain-HeldLevel]`. The fixpoint adds an input's split points after it computes the copy, so the fix is not a one-liner.
 - **One writer list.** `pilot/static_proofs.py` already uses `analysis/write_sites.py`. The separate list is
   `absorb._all_write_targets` (absorb.py:244-382), an isinstance chain. Move it onto write_sites.
   - It changes meaning in two places. absorb leaves out the receive payload on purpose (classify.py ~2590), and

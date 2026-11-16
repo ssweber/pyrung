@@ -734,13 +734,17 @@ def _exact_value_sets(
     A constant (readonly, or *constant_storage*: unwritten internal tags the
     search holds at their default) holds its default, a Bool both values, and a free
     input (external, physical, a receive destination or unwritten) what its
-    ``choices=`` or integer ``min=``/``max=`` allow.  A tag only the program
-    writes (an ``external`` one too: the search changes a written tag through
-    its writers only) holds its power-on value and what its writers store: literals, and
+    ``choices=`` or integer ``min=``/``max=`` allow.  A tag the program writes
+    holds its power-on value and what its writers store.  That is literals, and
     the values of exact tags copied in (``copy``/``fill``/``blockcopy``, with
     the copy's store conversion).  A tag with any other writer (``calc``, a
     timer, a function, ...) is not exact.  Sets are capped at
     ``_TAG_COMPARED_DOMAIN_CAP`` values.
+
+    Only the search uses these sets.  It changes an ``external`` tag the program
+    writes through the writers alone, so the set leaves out what the outside can
+    write.  The outside can write such a tag any value, so its value domain
+    (``_extract_value_domain``) holds a free input's values as well.
     """
     from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
     from pyrung.core.instruction.data_transfer import (
@@ -1266,6 +1270,9 @@ def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     if isinstance(value, Expression):
         return _NO_LITERAL_WRITE
     if not isinstance(value, (bool, int, float, str)):
+        return _NO_LITERAL_WRITE
+    # A Copy of "ABC" into a CHAR writes one character into each of the next three.
+    if target.type is TagType.CHAR and isinstance(value, str) and len(value) > 1:
         return _NO_LITERAL_WRITE
     return _store_copy_value_to_tag_type(value, target, source)
 
@@ -1916,11 +1923,18 @@ def _domain_from_copy_like_value(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
+    calc_mode: str | None = None,
 ) -> tuple[Any, ...] | None:
-    """Infer a target domain from a copy/fill-style source operand."""
+    """Infer a target domain from a copy/fill-style source operand.
+
+    *calc_mode* is the mode of a ``math()`` that stores the operand, or ``None`` for a
+    Copy or Fill.  A ``math()`` wraps where a Copy clamps.
+    """
+    from pyrung.core.instruction.conversions import copy_source_kind
+
     source_tag_name = _tag_name_from_value(raw_value)
     if source_tag_name is not None:
-        return _domain_for_source_tag(
+        domain = _domain_for_source_tag(
             source_tag_name,
             graph,
             all_exprs,
@@ -1928,15 +1942,53 @@ def _domain_from_copy_like_value(
             atom_index,
             real_gap_points=real_gap_points,
         )
+        if domain is None:
+            return None
+        return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
 
     literal = _literal_value_from_value(raw_value)
     if literal is not None:
+        if calc_mode is not None:
+            return _stored_domain((literal,), None, target, calc_mode)
         stored = _normalize_literal_write_value(literal, target)
         if stored is _NO_LITERAL_WRITE:
             return None
         return (stored,)
 
-    return _domain_from_indirect_source(raw_value, target, graph, known_domains)
+    domain = _domain_from_indirect_source(raw_value, target, graph, known_domains)
+    if domain is None:
+        return None
+    return _stored_domain(domain, copy_source_kind(raw_value), target, calc_mode)
+
+
+def _stored_domain(
+    domain: tuple[Any, ...], source: Any, target: Tag, calc_mode: str | None = None
+) -> tuple[Any, ...] | None:
+    """The values a Copy from a *source* with *domain* stores in *target*.
+
+    A Copy converts as it stores, so a DD 40000 copied into a DS stores 32767.  *source*
+    is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the source.  With
+    a *calc_mode* the store is a ``math()`` result's, which wraps (40000 stores -25536).
+    """
+    from pyrung.core.instruction.conversions import calc_store_transform, copy_store_transform
+    from pyrung.core.storage import store_value
+
+    if any(not isinstance(value, (bool, int, float)) for value in domain):
+        keep = calc_mode is None and target.type is TagType.CHAR
+        return domain if keep and all(isinstance(v, str) for v in domain) else None
+    if calc_mode is None:
+        storage = copy_store_transform(target.type, source)
+    else:
+        storage = calc_store_transform(target.type, calc_mode)
+    # A dict keeps the first of equal values in order, and a domain can hold thousands.
+    if storage is None:
+        return tuple(dict.fromkeys(domain))
+    low, high = storage.lower, storage.upper
+    if storage.kind in ("clamp", "wrap", "word") and low is not None and high is not None:
+        # Each of these stores a whole number already in its range as it is.
+        if all(type(v) is int and low <= v <= high for v in domain):
+            return tuple(dict.fromkeys(domain))
+    return tuple(dict.fromkeys(store_value(value, storage) for value in domain))
 
 
 def _interval_bounds(
@@ -2022,6 +2074,7 @@ def _domain_from_calc_expression(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
+    mode: str = "decimal",
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a supported calc expression shape."""
     from pyrung.core.expression import BinaryExpr
@@ -2034,6 +2087,7 @@ def _domain_from_calc_expression(
         known_domains,
         atom_index,
         real_gap_points=real_gap_points,
+        calc_mode=mode,
     )
     if direct is not None:
         return direct
@@ -2057,7 +2111,7 @@ def _domain_from_calc_expression(
                 values = range(1 - modulus, modulus)
             from pyrung.core.instruction.conversions import _truncate_to_tag_type
 
-            return tuple(sorted({_truncate_to_tag_type(value, target) for value in values}))
+            return tuple(sorted({_truncate_to_tag_type(value, target, mode) for value in values}))
 
     bounds = _interval_bounds(expression, graph, all_exprs, known_domains, atom_index)
     if bounds is None:
@@ -2066,8 +2120,8 @@ def _domain_from_calc_expression(
     from pyrung.core.expression import RangeAggregateExpr
     from pyrung.core.instruction.conversions import _truncate_to_tag_type
 
-    lo_t = _truncate_to_tag_type(lo, target)
-    hi_t = _truncate_to_tag_type(hi, target)
+    lo_t = _truncate_to_tag_type(lo, target, mode)
+    hi_t = _truncate_to_tag_type(hi, target, mode)
     if not isinstance(lo_t, (int, float)) or not isinstance(hi_t, (int, float)):
         return None
     if isinstance(expression, RangeAggregateExpr) and (lo_t != int(lo) or hi_t != int(hi)):
@@ -2251,7 +2305,11 @@ def _domain_from_write_instruction(
     if isinstance(instr, BlockCopyInstruction):
         if instr.convert is not None:
             return None
-        return _domain_from_blockcopy(instr, target_name, known_domains, graph.indirect_reach)
+        domain = _domain_from_blockcopy(instr, target_name, known_domains, graph.indirect_reach)
+        if not domain:
+            return domain
+        source = getattr(getattr(instr.source, "block", None), "type", None)
+        return None if source is None else _stored_domain(domain, source, target)
 
     if isinstance(instr, CalcInstruction):
         if instr.dest.name != target_name:
@@ -2264,6 +2322,7 @@ def _domain_from_write_instruction(
             known_domains,
             atom_index,
             real_gap_points=real_gap_points,
+            mode=instr.mode,
         )
 
     from pyrung.core.instruction.drums import (
@@ -2575,6 +2634,7 @@ def collect_produced_value_domains(
         FillInstruction,
     )
     from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
     from .passes import _collect_receive_dest_names
@@ -2609,15 +2669,20 @@ def collect_produced_value_domains(
 
     known: dict[str, tuple[Any, ...]] = {}
     for name, tag in graph.tags.items():
-        if name in incomplete_targets:
+        # The runtime and the fault flags of instructions write the system tags, not rungs.
+        if name in incomplete_targets or name in SYSTEM_TAGS_BY_NAME:
             continue
         writers = graph.writers_of.get(name)
         if tag.readonly:
             known[name] = (tag.default,)
         elif not writers:
             declared = _declared_domain(tag)
-            if tag.external or graph.is_physical_input(name):
-                if declared is not None:
+            # A linked feedback tag answers its command in the field, and the harness
+            # writes it in a test.
+            if tag.external or graph.is_physical_input(name) or tag.link is not None:
+                # A Real between whole-number bounds can hold any value between them, so
+                # the whole numbers alone would leave values out.
+                if declared is not None and tag.type is not TagType.REAL:
                     known[name] = declared
             else:
                 known[name] = (tag.default,)
@@ -3230,6 +3295,27 @@ def _extract_value_domain(
         base_domain = known_domains[tag_name]
     elif literal_write_domains and tag_name in literal_write_domains:
         base_domain = literal_write_domains[tag_name]
+
+    if base_domain is not None and tag.external:
+        # The outside can write an external tag any value, so its domain is a free
+        # input's as well as what the program writes.
+        others = None
+        if known_domains is not None:
+            others = {name: d for name, d in known_domains.items() if name != tag_name}
+        free = _extract_value_domain(
+            tag_name,
+            tag,
+            all_exprs,
+            all_tags,
+            known_domains=others,
+            graph=graph,
+            atom_index=atom_index,
+            real_gap_points=real_gap_points,
+            split_neighbours=split_neighbours,
+        )
+        if free is None:
+            return None
+        return tuple(sorted(set(base_domain) | set(free)))
 
     if atom_index is None:
         atom_index = _build_atom_index(all_exprs)
