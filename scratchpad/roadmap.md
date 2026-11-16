@@ -74,6 +74,14 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
     out a literal-only root's default. Its region can miss addresses the pointer reaches. Today it only removes levers.
   - `_ValueSets._indexed_values` takes an element's default when the element is missing from the tag table, even
     when a write through a pointer reaches it. The pointer-range lint and `_UnboundedReads` use it.
+- **A slot with a mapped tag and a name override has two names.** `_effective_slot_name` (memory_block.py)
+  gives the override. The runtime stores under the mapped tag's name (`_get_tag`). So a caller that looks a
+  store up by `_effective_slot_name` may miss the mapped tag. These callers do that.
+  - classify.py:745 and :953
+  - pilot/evidence.py:454 and pilot/tide_tables.py:607
+  - causal/recorded.py:1327 and crossings/indirect_dest.py:192
+  - input_overrides.py:251 and :393
+  The fix is in memory_block.py. Either one name wins everywhere, or the second assignment is refused. [nothing]
 - **System tags pyrung never writes.** On a CLICK, `fault.plc_error` (SC19) and `fault.code` (SD1) change, and the firmware version (SD5-SD8) is not 0. pyrung leaves them at 0, so the facts hold them at 0. A run on pyrung refutes nothing. Decide whether pyrung sets them, and then add them to `RUNTIME_VALUES`.
 - **Left over from the search deletion.**
   - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py

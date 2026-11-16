@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
 from types import BuiltinFunctionType, FunctionType, MethodType
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
@@ -17,6 +17,7 @@ from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
 from pyrung.core.memory_block import (
+    UNSET,
     Block,
     BlockRange,
     IndirectBlockRange,
@@ -188,7 +189,12 @@ class ProgramGraph:
     unlisted_writes: dict[Block, tuple[tuple[int, frozenset[int] | None], ...]] = field(
         default_factory=dict
     )
-    # ``_slot_addresses`` by block and its count of slot-name changes.
+    # The named slots of a block with no formatter (name -> addresses), and every address with
+    # a name.  Keyed by the block and its count of slot-name changes.
+    _slot_named: dict[tuple[Block, int], tuple[dict[str, set[int]], set[int]]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    # Each slot name of a block with a custom formatter, from one walk, keyed the same way.
     _slot_index: dict[tuple[Block, int], dict[str, frozenset[int]]] = field(
         default_factory=dict, repr=False, compare=False
     )
@@ -398,12 +404,14 @@ class ProgramGraph:
     def tag_positions(
         self, tag_name: str, blocks: Collection[Block]
     ) -> frozenset[tuple[Block, int]]:
-        """Each ``(block, address)`` of *blocks* that a store into reaches ``tag_name``.
+        """Each ``(block, address)`` in *blocks* where a store reaches ``tag_name``.
 
         They are the elements the tag is (``block_positions``), and the addresses whose
         slot name is the tag's name.  The runtime stores by the name the bank gives the
         address.  So a store also reaches a tag mapped onto a second slot, or a plain tag
-        named like a slot.
+        named like a slot.  A block with a custom ``address_formatter`` and more than
+        ``_MAX_BLOCK_SCAN`` elements is not scanned.  There every tag counts as reached,
+        at the block's first address and at each address an unlisted write reaches.
         """
         found = {
             (block, addr)
@@ -411,19 +419,65 @@ class ProgramGraph:
             if block in blocks
         }
         for block in blocks:
-            found.update((block, addr) for addr in self._slot_addresses(block).get(tag_name, ()))
+            if self._is_unscannable(block):
+                found.update(self._unscanned_positions(block))
+            else:
+                found.update((block, addr) for addr in self._slot_addresses(block, tag_name))
         return frozenset(found)
 
-    def _slot_addresses(self, block: Block) -> dict[str, frozenset[int]]:
-        """Each slot name of *block*, with its addresses, as the bank resolves them now."""
-        key = (block, block._slot_names_changed)
-        found = self._slot_index.get(key)
-        if found is None:
-            index: dict[str, set[int]] = {}
-            for addr in range(block.start, block.end + 1):
-                index.setdefault(block._effective_slot_name(addr), set()).add(addr)
-            found = self._slot_index[key] = {name: frozenset(a) for name, a in index.items()}
+    @staticmethod
+    def _is_unscannable(block: Block) -> bool:
+        from .value_sets import _MAX_BLOCK_SCAN
+
+        return block.address_formatter is not None and block.end - block.start + 1 > _MAX_BLOCK_SCAN
+
+    def _unscanned_positions(self, block: Block) -> set[tuple[Block, int]]:
+        """The positions in a block too large to scan where a store may reach any tag."""
+        found: set[tuple[Block, int]] = {(block, block.start)}
+        for _node, reach in self.unlisted_writes.get(block, ()):
+            if reach is not None:
+                found.update((block, addr) for addr in reach)
         return found
+
+    def _slot_addresses(self, block: Block, name: str) -> frozenset[int]:
+        """The addresses of *block* whose slot name is *name*, as the bank resolves them now.
+
+        A slot's name is its override, else its mapped tag's name, else the default
+        ``<block><address>``.  The first two are read from the few slots that have them.
+        The default is parsed from *name*, so no block is walked.  A block with a custom
+        ``address_formatter`` is walked once, and the walk is kept.
+        """
+        if block.address_formatter is not None:
+            key = (block, block._slot_names_changed)
+            index = self._slot_index.get(key)
+            if index is None:
+                built: dict[str, set[int]] = {}
+                for addr in range(block.start, block.end + 1):
+                    built.setdefault(block._effective_slot_name(addr), set()).add(addr)
+                index = self._slot_index[key] = {n: frozenset(a) for n, a in built.items()}
+            return index.get(name, frozenset())
+        key = (block, block._slot_names_changed)
+        cached = self._slot_named.get(key)
+        if cached is None:
+            by_name: dict[str, set[int]] = {}
+            named: set[int] = set()
+            for addr, entry in block._slot_config.items():
+                if entry.name is not UNSET:
+                    named.add(addr)
+                    by_name.setdefault(entry.name, set()).add(addr)
+            for addr, mapped in block._mapped_tags.items():
+                if addr not in named:
+                    named.add(addr)
+                    by_name.setdefault(mapped.name, set()).add(addr)
+            cached = self._slot_named[key] = (by_name, named)
+        by_name, named = cached
+        found = set(by_name.get(name, ()))
+        digits = name[len(block.name) :]
+        if name.startswith(block.name) and digits.isascii() and digits.isdecimal():
+            addr = int(digits)
+            if str(addr) == digits and block.start <= addr <= block.end and addr not in named:
+                found.add(addr)
+        return frozenset(found)
 
     def unlisted_writers_at(self, block: Block, addr: int) -> frozenset[int]:
         """The nodes whose write through a pointer may store into ``block[addr]`` unlisted."""
@@ -966,11 +1020,9 @@ class _UnboundedReads:
                 name for name in graph.writers_of if graph.unconditional_write_before_read(name)
             ),
         )
+        self._graph = graph
         self._written: dict[str, list[Tag]] = defaultdict(list)
-        for name in sorted(graph.writers_of):
-            tag = graph.tags.get(name)
-            for block, _addr in block_positions(tag):
-                self._written[block.name].append(cast(Tag, tag))
+        self._written_in: dict[int, list[Tag]] = {}
         # Elements an over-cap write through an unbounded index reaches, and
         # what each read through one reaches, by id of the ref.
         self.reached: dict[int, list[Tag]] = {}
@@ -1004,19 +1056,26 @@ class _UnboundedReads:
 
     def tags(self, ref: IndirectRef | IndirectExprRef) -> list[Tag]:
         block = ref.block
-        changing = {tag.name: tag for tag in self._written.get(block.name, ())}
+        graph = self._graph
+        written = self._written_in.get(id(block))
+        if written is None:
+            written = self._written_in[id(block)] = [
+                graph.tags[name]
+                for name in sorted(graph.writers_of)
+                if name in graph.tags and graph.tag_positions(name, (block,))
+            ]
+        changing = {tag.name: tag for tag in written}
+        changing.update({tag.name: tag for tag in self._written.get(block.name, ())})
         for tag in _input_slots(block):
             changing.setdefault(tag.name, tag)
         addresses = self._values.addresses(ref)
         tags = list(changing.values())
-        if addresses is not None:
+        if addresses is not None and not graph._is_unscannable(block):
             tags = [
                 tag
                 for tag in tags
                 if any(
-                    addr in addresses
-                    for owner, addr in block_positions(tag)
-                    if owner.name == block.name
+                    addr in addresses for _owner, addr in graph.tag_positions(tag.name, (block,))
                 )
             ]
         self.read_reach[id(ref)] = tuple(tag.name for tag in tags)
