@@ -154,3 +154,21 @@ def test_provider_write_sc50_stops_runner_immediately():
         True,
         False,
     )
+
+
+def test_system_nicknames_come_from_the_pyclickplc_catalog():
+    from pyclickplc.system import AUTOMATIONDIRECT_SYSTEM_NICKNAMES
+    from pyclickplc.validation import validate_nickname
+
+    from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
+
+    # CLICK writes these shorter than the catalog's help-file label.
+    shortened = {"SD21", "SD22", "SD24", "SD25", "SD26"}
+    for slot in SYSTEM_CLICK_SLOTS:
+        bank, number = slot.hardware.name[:2], int(slot.hardware.name[2:])
+        catalog_name = AUTOMATIONDIRECT_SYSTEM_NICKNAMES[(bank, number)].nickname
+        if slot.hardware.name in shortened:
+            assert catalog_name.startswith(slot.click_nickname)
+        else:
+            assert slot.click_nickname == catalog_name
+        assert validate_nickname(slot.click_nickname, system_bank=bank) == (True, "")
