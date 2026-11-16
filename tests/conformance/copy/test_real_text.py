@@ -15,13 +15,12 @@ shows ("10000.0000000"), on the float32 value, writes:
 - 0.0: "0.0000000", 9.
 - 123456.7: "123456.7031250", 14 (float32 123456.703125).
 - 1.0E+10: "10000000000.0000000", 19.  Exponential would be "1.0000000E+10", 13.
-- 66.7: "66.6999969", 10, then 11..20 of the span say what the round's '0' was.
+- 66.7: "66.6999969", 10, then 11..20 of the span stay as the init left them.
 
 pyrung writes the digits as ``to_text()`` does, from the Real's 64-bit value.  That gives CLICK's text
 where the float32 and float64 digits agree, and "123456.7000000" and "66.7000000" where they
-do not.  A CLICK read every case the same way on 2026-11-06 and 2026-11-09, and each case
-expects the 10 characters it read (``CASES``).  The CLICK wrote "123456.7031250" for 123456.7
-and left the TXTs past the digits alone, with no NUL after them.  pyrung's digits for 123456.7
+do not.  Each case expects the 10 characters a CLICK writes (``CASES``).  A CLICK writes
+"123456.7031250" for 123456.7 and leaves the TXTs past the digits alone, with no NUL after them.  pyrung's digits for 123456.7
 differ, so ``six_digits_first`` and ``six_digits_past`` are pending ``F32``.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
@@ -37,7 +36,7 @@ from tests.conformance.memory import df, txt
 from tests.conformance.probe_kit import once
 
 #: The case's value, the window of its span it reads (0 the first 10 TXT, 1 the next 10), the
-#: id, and the 10 characters a CLICK read there.  Each case's DF is DF21 on, and its span TXT101
+#: id, and the 10 characters a CLICK writes there.  Each case's DF is DF21 on, and its span TXT101
 #: on, 20 a case.
 CASES: list[tuple[float, int, str, str]] = [
     (1.5, 0, "one_and_a_half_first", "1.5000000Z"),

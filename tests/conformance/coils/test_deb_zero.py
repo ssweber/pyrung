@@ -1,9 +1,8 @@
 """A debounce of 0/0, scan by scan: the ``deb_zero`` group (part ``follow_timing``).
 
-``out_more/zero_and_below`` read the first off of a 0/0 debounce at scan 7 on a CLICK, a scan after
-its rung's 6, where pyrung read 6.  One reading cannot say whether the off side always takes a
-scan more (the off delay times a scan before it is done, even at 0) or that reading was a scan's
-lag of the case.
+``out_more/zero_and_below`` has a CLICK turn a 0/0 debounce off at scan 7, a scan after its
+rung's 6.  This case asks whether the off side always takes a scan more (the off delay times a
+scan before it is done, even at 0) or that was a scan's lag of the case.
 
 ``off_side_lag``: one rung, an Out on scans 3, 4, 5, 7, 8 and 11 (a one-scan dropout at 6, a
 two-scan one at 9 and 10, a one-scan pulse at 11), drives a 0/0 debounce, a TON of 0 and a TOF of
@@ -11,14 +10,14 @@ two-scan one at 9 and 10, a one-scan pulse at 11), drives a 0/0 debounce, a TON 
 ..., scan 14 is 1.
 
 - ErrorCode, the rung's own coil, is the control: 3784 (scans 3, 4, 5, 7, 8, 11).
-- Result1, the debounce.  Following its rung, 3784 (pyrung before 2026-11-06).  An off side a
+- Result1, the debounce.  Following its rung, 3784.  An off side a
   scan late: 4076 (scans 3..9, 11, 12), the dropout at 6 filtered.
 - Result2, the TON of 0: 3784 when it is done on its rung's first scan, 1600 a scan late (scans 4,
   5, 8).
 - Result3, the TOF of 0: 3784 when it is off on its rung's first false scan, 4076 a scan late.
 
-A CLICK read 4076, 3784, 3784 (2026-11-06): the debounce's off side always takes a scan more,
-even at 0, where a TON and a TOF of 0 take none.  pyrung reads the same
+A CLICK reads 4076, 3784, 3784.  The debounce's off side always takes a scan more,
+even at 0, where a TON and a TOF of 0 take none
 (``DebounceInstruction``: the scan of the fall compares nothing).
 
 The cases own what ``memory.OWNED_APART`` lists under this group.

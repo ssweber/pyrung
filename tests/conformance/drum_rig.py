@@ -1,6 +1,6 @@
-"""A time drum and a time & event drum side by side, for the S6 drum probes.
+"""A time drum and a time & event drum side by side, for the drum probes.
 
-``drum_trace`` reads one event drum scan by scan.  The S6 probes ask the same
+``drum_trace`` reads one event drum scan by scan.  The probes ask the same
 kind of question of ``time_drum`` and ``time_event_drum``, so a scenario here
 runs one of each on the same inputs (:class:`Pair`) and records them together.
 

@@ -11,7 +11,7 @@ An expectation is pyrung's reading today; a CLICK that reads otherwise prints wh
   takes one bit.  A search above 0x8000 over a DH holding 5, 0xFFFF, 7 (Result4): 73 for an
   unsigned compare, -1 for a signed one, where ``search`` read no Word table.  A one-shot search, its
   table moved after the first scan, its rung held: ErrorCode = 1 kept the first hit, 2 searched again.
-  Its result is a DS (a Search into a DD is refused; the first round read one, and nothing stored).
+  Its result is a DS (a Search into a DD is refused).
 
 The cases own what ``memory.OWNED`` lists under this group.
 """

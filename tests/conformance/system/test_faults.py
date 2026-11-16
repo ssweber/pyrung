@@ -7,8 +7,8 @@ Int, a pointer past its bank, and Inf and NaN in a Real.  Part ``system`` (``sui
 
 Each probe runs one instruction (its *op*) once and reads one flag on the
 rung right after it.  A flag that is on shows only that some instruction set
-it: SC40 follows the last Math and SC43 and SC44 the last Copy or Math
-(hardware round 2), and over the wire the cases start on different scans.  So
+it: SC40 follows the last Math and SC43 and SC44 the last Copy or Math,
+and over the wire the cases start on different scans.  So
 a probe runs its op on the first scan from 3 on which the flag it reads is off
 just before the op (:func:`_probe`): a bit (``now``) comes on on that scan
 only, and another (``taken``) latches so the op runs once.  An op whose flag
@@ -27,8 +27,8 @@ case from C201, staged DD501..DD600, DF451..DF495 and TXT401..TXT500.  A
 flag bit is 1 when the flag is on right after the op; a destination a model
 could leave alone is preset (99, or 1.0 for a Real) on the rung before.
 
-The expectations are what a CLICK does where it has answered, and the
-adopted answer of an open probe otherwise.  CLICK's help names the stores
+The expectations are what a CLICK does where that is known, and the
+likeliest answer of an open probe otherwise.  CLICK's help names the stores
 that raise SC43: a Copy (Single, Block, Pack) that clamps, a text->number
 conversion that fails, a Modbus Send/Receive Slave ID out of range, a Send
 ASCII numeric out of range; it never names SC43 for a Math.  What each case
@@ -39,19 +39,16 @@ tells apart:
   39999 + 1 from a DD into an Int, 40000, which wraps to -25536 (Result4);
   (c) 2147483647 + 2147483647 + 7 into an Int: 4294967301, which wraps
   through 32 bits to 5 (ErrorCode) and fits.  Result1..3 are SC43 after (a),
-  (b) and (c).  Hardware (2026-11-01) answers that every wrap raises it: 1, 1,
-  1, as pyrung reads.  The 2026-10-31 reading of the since retired
-  ``system/out_of_range_flag_vs_other_instructions``, where a Dint wrap raised
-  nothing, does not stand.
+  (b) and (c).  A CLICK raises it on every wrap: 1, 1, 1.
 - ``copy_clamp_out_of_range`` (probe): a Copy that clamps, 40000 and -40000
   from a DD and 1.0E+10 from a DF into an Int: 32767, -32768, 32767
-  (Result1..3; ``numeric/copy_clamps_calc_wraps`` read the clamp), and SC43
-  after each as bits 1, 2 and 4 of Result4.  Adopted (the help): 7.
+  (Result1..3; ``numeric/copy_clamps_calc_wraps`` shows the clamp), and SC43
+  after each as bits 1, 2 and 4 of Result4.  The help says 7.
 - ``rand_wide_bounds_flags`` (probe): the flags of
-  ``numeric/int_math_rand_wide_bounds``, which a CLICK read as 0 (2026-10-31).
+  ``numeric/int_math_rand_wide_bounds``, which a CLICK reads as 0.
   RAND ( 70000 , 70000 ) / 2 into an Int preset 99 (Result4), and SC40, SC43
   and SC46 after it as bits 1, 2 and 4 of Result1.  The control RAND ( 7 , 7
-  ) into Result3, its flags in Result2.  Hardware (2026-11-01) reads 4, 4, 0,
+  ) into Result3, its flags in Result2.  A CLICK reads 4, 4, 0,
   0: the control fails the same way, a Math error with SC46 alone, so the
   equal bounds look like the error and not the width.  CLICK's editor refuses
   RAND ( 7 , 7 ) typed in, so this is what a pasted one does.
@@ -60,13 +57,11 @@ tells apart:
   Int preset 99 (Result4), SC43 and SC46 after it as bits 2 and 4 of Result1;
   RAND ( 7 , 9 ) into Result3 and RAND of DF 3.0 and DF 5.0 into ErrorCode, SC46
   after them as bits 1 and 2 of Result2.  CLICK's editor takes the first two
-  typed in and refuses the DFs, which only a paste gets through.  Hardware
-  (2026-11-01) reads 0, 0, 7, 2233, 0.  The DFs write 0 as
-  ``paste_risk/rand_real_bounds`` read.  2233 is half of 4466, with the bounds
-  cut to 16 bits by an export that wrote every constant in 16 bits.  With the
-  bounds pasted as CLICK's editor writes them, ``store_probe/rand_int_cuts``
-  reads them kept whole (2026-11-11).  So pyrung expects 35000..35001, wrapped
-  to -30536..-30535 (Result4) with SC43 (Result1 = 2).
+  typed in and refuses the DFs, which only a paste gets through.  The DFs write 0
+  (``paste_risk/rand_real_bounds``).  With the bounds pasted as CLICK's editor
+  writes them, ``store_probe/rand_int_cuts`` shows them kept whole.  So the
+  case expects 35000..35001, wrapped to -30536..-30535 (Result4) with SC43
+  (Result1 = 2).
 - ``rand_real_bounds``: moved to the ``paste_risk`` group (part ``control``), since
   a CLICK may refuse a DF bound at paste; DF461..DF462 stay unused here and
   ``pointer_past_bank_lands`` has its C bits.
@@ -78,20 +73,20 @@ tells apart:
   there is no flag, and Result1 = 1 records only that each read wrote something
   other than the preset, DD1000's 1000000 (a clamp) and, for 1533, DD533's
   2000000 (a wrap).  What it wrote is not asked: there is memory past the bank
-  on a CLICK (hardware, 2026-11-01: 1 at DD1001, 0 at DD1531 and DD1532) and
+  on a CLICK (1 at DD1001, 0 at DD1531 and DD1532) and
   none in pyrung, which reads 0.
 - ``pointer_past_bank_lands`` (probe): DD531 = 1234 and DD532 = 5678, read
   through pointers 1531 (Result1) and 1532 (Result2), each over a preset 99,
   SC43 and SC44 after the first as bits 1 and 2 of Result4, SC44 after the second
-  as Result3.  Hardware (2026-11-01) reads 0, 0, 0, 0: no wrap.
+  as Result3.  A CLICK reads 0, 0, 0, 0: no wrap.
 - ``power_overflow_is_inf`` (probe): 10.0 ^ 100 and -10.0 ^ 101 into a Real
-  preset 1.0, past a float32.  Adopted, as ``numeric/real_overflow...``
-  read for a product: +Inf (half of it still past 3.0E+38, Result1 = 1) and
+  preset 1.0, past a float32.  As ``numeric/real_overflow...``
+  shows for a product, +Inf (half of it still past 3.0E+38, Result1 = 1) and
   -Inf (Result3 = 1), SC43 on after each (Result2, Result4).  A ^ that
   saturates reads Result1 = 0; one that is a Math error writes 0 (Result1 =
   0, Result3 = 0).
 - ``real_intermediate_range`` (probe): 3.0E+38 * 10 / 100 into a Real.  An
-  intermediate wider than a float32 (pyrung, adopted) holds 3.0E+39 and
+  intermediate wider than a float32 (pyrung) holds 3.0E+39 and
   stores 3.0E+37 (Result1 = 1, Result2 = 0, Result3 = 0).  A float32
   intermediate overflows to +Inf, and Inf / 100 is +Inf (Result1 = 0, Result2
   = 1, SC43 Result3 = 1).  (``numeric/real_is_64_bit_in_pyrung`` is the
@@ -100,29 +95,29 @@ tells apart:
   is +Inf (Result1 = 1) with SC43 on (Result2).  Inf - Inf into a Real is
   NaN: Result3 has bit 1 for NaN = NaN, 2 for NaN > 0, 4 for NaN < 0 and 8
   for NaN <> NaN; IEEE compares read 8.  SC43 and SC46 after Inf - Inf are
-  bits 1 and 2 of Result4.  Hardware (2026-11-01) reads 1, 1, 8, 0: IEEE, and
+  bits 1 and 2 of Result4.  A CLICK reads 1, 1, 8, 0: IEEE, and
   a Math that produces NaN raises neither flag.
 - ``non_finite_math_into_int`` (probe): a Math of +Inf into an Int preset 99
   (Result1), of NaN into an Int (Result2), of +Inf into a DD preset 99
   (Result3: 1 for 0, 2 for 99, 3 for 2147483647, 4 for -2147483648, 5 for
   anything else), and SC43 after each as bits 1, 2 and 4 of Result4.
-  Hardware (2026-11-01) reads 0, 0, 1, 5: each writes 0, and NaN raises no
+  A CLICK reads 0, 0, 1, 5: each writes 0, and NaN raises no
   SC43.
 - ``copy_non_finite_to_int`` (probe): a Copy of +Inf, -Inf and NaN into an
   Int preset 99 (Result1..3), SC43 after each as bits 1, 2 and 4 of Result4.
-  Hardware (2026-11-01) reads 32767, -32768, 0, 3: +Inf and -Inf clamp with
+  A CLICK reads 32767, -32768, 0, 3: +Inf and -Inf clamp with
   SC43, and NaN writes 0 without it.
 - ``copy_inf_to_text`` (probe): +Inf copied into TXT401 as text (Copy
   Option 4c), TXT401 seeded ``Z``: Result1 is TXT401's code, Result2 SC43, and
-  Result3, Result4 and ErrorCode the codes of TXT402..404.  Hardware
-  (2026-11-01) reads 105 and no flag: a lowercase i, not a failure.  Adopted for
-  the rest: ``inf`` and nothing after it, 105, 0, 110, 102, 0.
+  Result3, Result4 and ErrorCode the codes of TXT402..404.  A CLICK
+  reads 105 and no flag, a lowercase i and not a failure.  The case expects
+  ``inf`` and nothing after it, 105, 0, 110, 102, 0.
 - ``non_finite_functions`` (probe): SIN ( +Inf ) and SQRT ( -Inf ) into a
   Real preset 1.0: Result1 says what SIN left, 1 for 0, 2 for the preset, 4 for
   NaN, Result2 SC46 and Result3 SC43 after it; Result4 = 1 if SQRT wrote 0,
-  ErrorCode SC46 after it.  Hardware (2026-11-01) reads no 0 and no flag from
-  SIN, and 0 with SC46 from SQRT, as ``math_error`` reads SQRT ( -4.0 ).
-  Adopted for what SIN left, which that reading did not name: NaN, so 4, 0, 0,
+  ErrorCode SC46 after it.  A CLICK reads no 0 and no flag from
+  SIN, and 0 with SC46 from SQRT, as ``math_error`` shows for SQRT ( -4.0 ).
+  The case expects NaN for what SIN left, which no CLICK reading names, so 4, 0, 0,
   1, 1.
 
 Not asked here, because the conformance harness cannot: a Modbus Send or

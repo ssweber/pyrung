@@ -1,20 +1,18 @@
 """Follow-up flag probes: the ``flag_boxes`` and ``flag_halves`` groups (part ``follow_flags``).
 
-The 2026-11-05 round left two holes in ``flag_probe`` (part ``system``), and the fix step
-``flags-settle`` (4b in the ``conform-fix`` arc) waits on both:
+Two follow-ups to ``flag_probe`` (part ``system``):
 
-- ``flag_probe/boxes_leave_flags`` read SC44 off after a Search, a Shift, a Drum, a TON and a
-  CTU, where the confirmed ``system/address_flag_vs_other_instructions`` reads SC44 left on after
-  a TON and a CTU.  The first raised SC44 with a pointer of -1, the second with a pointer of 0.
-- Every SC43 half of ``flag_probe`` said nothing: it raised SC43 with ``copy(DF 1.0E+10, DD)``,
-  which raises no SC43 on a CLICK.  Here SC43 comes from a Copy of DD 40000 into a DS, which
-  does (``faults/copy_clamp_out_of_range``, confirmed).
+- ``flag_probe/boxes_leave_flags`` reads SC44 off after a Search, a Shift, a Drum, a TON and a
+  CTU, where ``system/address_flag_vs_other_instructions`` reads SC44 left on after a TON and a
+  CTU.  The first raises SC44 with a pointer of -1, the second with a pointer of 0.
+- ``copy(DF 1.0E+10, DD)`` raises no SC43 on a CLICK, so it cannot raise the flag for the SC43
+  half of ``flag_probe``.  Here SC43 comes from a Copy of DD 40000 into a DS, which
+  does (``faults/copy_clamp_out_of_range``).
 
 Each probe raises its flag right before the instruction under test and reads it on the rung
 after, as ``flag_probe`` does, so another group's rungs on the same scan cannot reach it, and
 each case has a control: the raise alone, read the same way, so a raise that does not take shows
-as a control that reads 0.  A CLICK read every case the same way on 2026-11-06 and 2026-11-09,
-and each case expects what it read.
+as a control that reads 0.
 
 ``flag_boxes``:
 
@@ -22,15 +20,15 @@ and each case expects what it read.
   scans: SC43 raised on its first, SC44 by pointer 0 on its second, SC44 by pointer -1 on its
   third (as ``boxes_leave_flags`` raised it).  Bits 1, 2, 4, 8, 16 for the Search, Shift, Drum,
   TON and CTU, set when the flag is still on after the box: Result1 SC43, Result2 SC44 by 0,
-  Result3 SC44 by -1.  The round read 0 for Result3; Result2 = 31 says the pointer decides, 0
+  Result3 SC44 by -1.  Result2 = 31 says the pointer decides, 0
   that the box clears SC44 however it was raised.  Result4 is the control: bits 1, 2, 4 for the
-  three raises alone, 7.  The CLICK read 31, 0, 0 and 7.  SC43 is on after each box, and SC44
+  three raises alone, 7.  A CLICK reads 31, 0, 0 and 7.  SC43 is on after each box, and SC44
   reads off however it was raised.  Each SC44 read sits behind the read rungs of the scans
-  before it, Maths on false rungs, and each clears SC44 (``flag_steps``).  pyrung reads the same.
+  before it, Maths on false rungs, and each clears SC44 (``flag_steps``).
 - ``ton_ctu_by_pointer``: ``address_flag_vs_other_instructions``'s layout, the TON and the CTU
   enabled on every scan of the window and the raise on the rung above each: pointer 0 on scan 3
   (bit 1), pointer -1 on scan 4 (bit 2), set when SC44 is still on after it.  Result2 the TON,
-  Result3 the CTU.  Result1 is the control.  The CLICK read 1, 1 and 1.  In this layout the
+  Result3 the CTU.  Result1 is the control.  A CLICK reads 1, 1 and 1.  In this layout the
   raise by pointer -1 alone reads SC44 off, so bit 2 says nothing about the TON or the CTU.
   Bit 1 says both leave SC44 raised by pointer 0 on, as ``address_flag_vs_other_instructions``
   reads.  In this layout the raise by pointer -1 sits behind the read rung of scan 3, a Math on a
@@ -40,25 +38,25 @@ and each case expects what it read.
 
 - ``bulk_ops_settle_sc43``: a Block copy, Fill, Pack (bits, words, text) and Unpack (bits, words)
   right after the raise.  Result1 bits 1..64, set when SC43 is off after each.  127 is what SC44
-  read (``bulk_ops_clear_flags``).  Result2 = 1 is the control.  The CLICK read 127 and 1, so
+  read (``bulk_ops_clear_flags``).  Result2 = 1 is the control.  A CLICK reads 127 and 1, so
   each op settles SC43.  pyrung reads the same.
 - ``oneshot_settles_sc43``: a oneshot Copy (bit 1) and a oneshot Math (bit 2), on the scan it
   fires (Result2, set when SC43 is off after it) and the next, when it does not fire (Result1,
-  set when SC43 is still on).  Result3 = 1 is the control.  The CLICK read 0, 3 and 1.  Result1
+  set when SC43 is still on).  Result3 = 1 is the control.  A CLICK reads 0, 3 and 1.  Result1
   says nothing about the oneshot.  The read rung of the scan before sits between the oneshot and
   its read, and as a Math on a false rung it clears SC43.  ``flag_reads/oneshot_held`` reads it
   with a coil, and a oneshot Copy that does not fire leaves SC43.  pyrung reads the same.
 - ``source_sc43``: ``copy(SC43, C)`` right after the raise.  Result1 = 1 when the C bit saw SC43
   on, 0 when the Copy settles the flag before it reads (SC44 read 0,
   ``source_flag_is_read_before_the_copy_settles``).  Result2 = 1 when SC43 is off after the
-  Copy.  Result3 = 1 is the control.  The CLICK read 0, 1 and 1, so the Copy settles SC43 before
-  it reads it.  pyrung reads the same.
+  Copy.  Result3 = 1 is the control.  A CLICK reads 0, 1 and 1, so the Copy settles SC43 before
+  it reads it.
 - ``df_into_dd``: what a Copy of DF 1.0E+10 into a DD (preset 99) writes, the store that raised
   no SC43.  Result1: 1 for 2147483647 (a clamp), 2 for 1410065408 (the low 32 bits), 3 for 99
   (left as it was), 4 for 0, 5 for -2147483648, 0 for any other.  Result2 is the DD / 100000, so
   any other reading still shows its size (21474 or 21475 for the clamp, 14100 or 14101 for the
-  low bits).  Result3 has SC43 after it (bit 1; the round read none).  The CLICK read 1, 21474
-  and 0, so the Copy clamps and raises no SC43.  pyrung reads the same.
+  low bits).  Result3 has SC43 after it (bit 1).  A CLICK reads 1, 21474
+  and 0, so the Copy clamps and raises no SC43.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """

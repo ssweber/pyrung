@@ -16,18 +16,16 @@ M2 (MDN of an even count: mean of the middle two, or one of them) and M4
 (MAX/MIN on DH: signed or unsigned), plus M3 (RAND with lo > hi). RAND cases
 check only the range, never a value.
 
-MDN of an integer range is an integer on a CLICK (hardware round 1,
-2026-10-29: the MDN of {4, 1, 3, 10} read back as a whole number, where pyrung
-keeps 3.5).  Round 1's data could not tell the
-truncated mean of the middle two from the middle value nearer zero, so the
-case now uses data that does:
+MDN of an integer range is an integer on a CLICK (the MDN of {4, 1, 3, 10}
+reads back as a whole number, where an exact mean would be 3.5).  The data below tells the
+truncated mean of the middle two from the middle value nearer zero:
 
 - ``mdn_even_count``: {9, 2, 10, 1} (middle 2 and 9) and {-9, -2, -10, -1}
   (middle -9 and -2).  The mean of the middle two, truncated toward zero, as
-  an integer (adopted): 5, 50, 50, -5.  The middle value nearer zero: 2, 20,
+  an integer: 5, 50, 50, -5.  The middle value nearer zero: 2, 20,
   20, -2.  The lower middle value: 2, 20, 20, -9.  The mean floored: 5, 50,
   50, -6.  pyrung's exact mean: 5, 55, 55, -5.
-- ``mdn_real_range`` (answered as adopted): MDN of a DF range.  Exact in a Real (adopted):
+- ``mdn_real_range``: MDN of a DF range.  Exact in a Real:
   {9.0, 2.0, 10.0, 1.0} is 5.5 (read back x10 as 55, Result1) and {1.5, 2.5,
   0.5} is 1.5 (15, Result2).  An integer MDN, as for DS: 50 and 10; the
   middle value nearer zero: 20.

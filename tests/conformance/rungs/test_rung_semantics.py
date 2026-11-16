@@ -1,7 +1,6 @@
 """Rung semantics: the ``rungs`` group (subroutine ``Conf_Rungs``).
 
-What a rung reads, when, and in what order.  What a CLICK does (hardware
-round 1, 2026-10-29, two identical passes; CLICK manual ch. 1,
+What a rung reads, when, and in what order.  What a CLICK does (CLICK manual ch. 1,
 "Program Execution"):
 
 - A rung is solved row by row, top to bottom.  Each contact is read once,
@@ -13,10 +12,10 @@ round 1, 2026-10-29, two identical passes; CLICK manual ch. 1,
 - When two rungs drive the same ``out`` coil, the lower one decides how the
   scan leaves it.
 
-pyrung solves a rung the same way since S4 (the live row solve).  Before it,
-pyrung froze a snapshot of memory on rung entry and read every contact of the
-rung, branches and continued wires included, against it; what the live-read
-cases read under that model is ``test_solve_order.RUNGS_SNAPSHOT``.
+pyrung solves a rung the same way.  A model that froze a snapshot of memory on rung
+entry would read every contact of the rung, branches and continued wires included,
+against it.  What the live-read cases read under that model is
+``test_solve_order.RUNGS_SNAPSHOT``.
 
 The bits are C bits; the cases own C1601..C1700 and counters CT151..CT160 (unused since
 ``box_leg_reads_rows_above`` retired)
@@ -29,7 +28,7 @@ either way the ladder means the same, but it would no longer export byte for
 byte, and the ClickNick workspace round trip (``test_workspace``) needs it to.
 
 Models the cases tell apart, and what each reads (L = live row by row, CLICK;
-S = rung-entry snapshot, pyrung; W = every row's whole path re-solved live;
+S = rung-entry snapshot; W = every row's whole path re-solved live;
 B = a branch snapshots where it leaves its parent):
 
 - ``memory_is_immediate``: instruction operands read a rung-entry snapshot

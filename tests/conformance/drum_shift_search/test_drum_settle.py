@@ -1,11 +1,10 @@
-"""S6 drum probes, what the others left open: the ``drum_settle`` group (``Conf_DrumSettle``).
+"""Drum probes, what the others leave open: the ``drum_settle`` group (``Conf_DrumSettle``).
 
-Part ``drum2`` (``suite.PARTS``).  The 2026-11-02 run of ``drum_rule``,
-``drum_jump`` and ``drum_idle`` left two kinds of question.  A time & event drum
-did not move on a one-scan event on the harness's scan 1, though the same pulse
-moves it on later scans; and a completed drum did not take a jump, its own time or
-its own event as pyrung then did.  These cases told the readings apart, on a CLICK
-the same day: their expectations are what the CLICK read.
+Part ``drum2`` (``suite.PARTS``).  ``drum_rule``, ``drum_jump`` and ``drum_idle`` leave two
+kinds of question.  A time & event drum does not move on a one-scan event on the
+harness's scan 1, though the same pulse moves it on later scans.  A completed drum
+does not take a jump, its own time or its own event.  These cases tell the readings
+apart, and their expectations are what a CLICK does.
 
 Snapshots as in ``test_drum_rule``: two digits a drum, ``S`` then ``4 * flag + 2 *
 B + A``, and the drum named first above the other, so 2211 is the first on step 2
@@ -49,8 +48,6 @@ and leaves the row alone, 1111, and neither Acc clears, 9 thousands each.  The t
 moves on all of scans 4..8; the other on none, an event-only step not timing.
 
 Both Acc cases read in thousands, so a few scans of up to 50 ms leave the reading alone.
-The CLICK read 25 and 9 in hundreds, from 2500 staged on a 2 s step and from 900 staged.
-Two scans of 50 ms add a hundred there.
 
 The cases own C1852..C1900 and C582..C660, T359..T376, DD718..DD753 and DS4208..DS4222,
 DS4227..DS4230 (``memory.OWNED``).

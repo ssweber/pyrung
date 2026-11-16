@@ -3,9 +3,8 @@
 Part ``copy`` (``suite.PARTS``).  The harness reads slots, so the raw IEEE bits a CLICK
 keeps in a DF, which is what two Modbus registers would show, come through an
 Unpack Copy into two DH and a compare on each.  ``underflow`` and ``float32_equality``
-expect what a CLICK read (2026-11-07) and are ``pending="F32"``.  The other cases still
-expect what pyrung reads (a float64 packed to a float32), so a CLICK that reads
-otherwise is an answer.
+expect what a CLICK does and are ``pending="F32"``.  The other cases expect what pyrung
+reads (a float64 packed to a float32).
 
 - ``minus_zero_math``: DF 0.0 * -1.0.  IEEE keeps the sign: high word 0x8000
   (Result1 = 1; 2 is 0x0000, any other 0), low word 0 (ErrorCode = 1).  A store that
@@ -23,12 +22,12 @@ otherwise is an answer.
   its low word, 1 for zero, 2 for 0xFFFF.  A CLICK's NaN reads 0xFFFF:0xFFFF, and so
   does pyrung's, whichever NaN it holds.  The word is compared after an XOR with 0x0080, each bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these
   registers; a client (ClickNick, the sim) shows what these bits decode to.
-- ``underflow``: 1.0E-20 * 1.0E-20 and 1.0E-30 * 1.0E-30 compared with 0.  A CLICK (2026-11-07)
+- ``underflow``: 1.0E-20 * 1.0E-20 and 1.0E-30 * 1.0E-30 compared with 0.  A CLICK
   keeps the first as a float32 denormal (Result1 = 0, Result4 = 1) and stores the second as
-  0 (Result2 = 1), with no SC43 (Result3 = 0).  The other candidate flushed the first to 0.
+  0 (Result2 = 1), with no SC43 (Result3 = 0).
   pyrung keeps a Real at 64 bits, so 1E-60 is not 0 (Result2 = 0): ``pending="F32"``.
 - ``float32_equality``: DF 0.1 + DF 0.2 compared with 0.3 (Result1), and DD 16777217 with DF
-  16777216.0 (Result2).  A CLICK (2026-11-07) compares the sum at float32, so it is equal
+  16777216.0 (Result2).  A CLICK compares the sum at float32, so it is equal
   (Result1 = 1), and does not compare the Dint as a float32 (Result2 = 0).  pyrung reads
   Result1 = 0 at 64 bits: ``pending="F32"``.  Controls: DF 0.1 == 0.1 (Result3 = 1), DF 0.5 +
   DF 0.25 == 0.75 (Result4 = 1), exact in both widths.

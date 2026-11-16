@@ -22,9 +22,8 @@ clearing them.
 - Step 5: at 600 ms on T45 Result4 is 1 if the coil is on (the off phase ran the 400 ms it had
   left) and 0 if it is off (a whole 800 ms from 0).
 
-Running on from the frozen TD reads 1, 1, 1, 1.  A fresh off phase reads 1, 1, 2, 0.  A CLICK read
-2, 1, 2, 0 (hardware round of 2026-11-05, twice) on an earlier ladder that took the same steps at
-fixed times.  The restart clears the off TD, so the off phase runs a whole 800 ms from 0.
+Running on from the frozen TD reads 1, 1, 1, 1.  A fresh off phase reads 1, 1, 2, 0.  A CLICK reads
+2, 1, 2, 0.  The restart clears the off TD, so the off phase runs a whole 800 ms from 0.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

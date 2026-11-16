@@ -1,13 +1,11 @@
 """A Real copied as text where its digits run past TXT1000: the ``txt_end`` group (part
 ``follow_extra``).
 
-``copy_more/to_text_real`` read on a CLICK that 1.5 copied as text (Copy Option 4c) writes
-"1.5000000", nine characters.  Started at TXT995 only six of them fit before the bank ends.  The
-fix step ``store-click`` (3 in the ``conform-fix`` arc) waited on what CLICK does then (store-click
-review NB4).
+On a CLICK, 1.5 copied as text (Copy Option 4c) writes
+"1.5000000", nine characters.  Started at TXT995 only six of them fit before the bank ends.
 
 ``by_pointer`` stages TXT994..TXT1000 to 'Z' on scan 1, copies the DF 1.5 as text through a DS
-pointer of 995 on scan 2 (the path pyrung's NB4 is about), and reads TXT995..TXT1000 as pairs of codes, ``128 * first + second``: Result1 TXT995-996,
+pointer of 995 on scan 2, and reads TXT995..TXT1000 as pairs of codes, ``128 * first + second``: Result1 TXT995-996,
 Result2 TXT997-998, Result3 TXT999-1000.  "ZZ" is 11610, a pair the Copy left alone.  The digits
 up to TXT1000 read 6318 ("1."), 6832 ("50"), 6192 ("00"); a NUL is 0.
 
@@ -21,10 +19,10 @@ a Copy of DD 40000 into a DS (bit 4, ``faults/copy_clamp_out_of_range``) and SC4
 through a DD pointer of 0 (bit 8), so 12 is two raises that took and the flags read as they
 should.  The bits are 1 SC43 and 2 SC44 after the Copy, 4 and 8 the controls.
 
-A CLICK read 6318, 6832, 6192, 12 and 90 (2026-11-06).  The Copy writes what fits and stops,
-raises no flag, and leaves TXT994 alone.  pyrung reads the same.
+A CLICK reads 6318, 6832, 6192, 12 and 90.  The Copy writes what fits and stops,
+raises no flag, and leaves TXT994 alone.
 
-CLICK's editor took this Copy into a TXT by pointer (``to_text_real`` pasted the form by address).
+CLICK's editor takes this Copy into a TXT by pointer (``to_text_real`` pastes the form by address).
 A case by address would need the same TXT, which no two cases may share.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.

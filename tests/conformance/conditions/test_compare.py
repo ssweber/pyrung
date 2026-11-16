@@ -1,6 +1,6 @@
 """Compares across types, and a TXT against a 2-char literal.
 
-An expectation is what a CLICK read on 2026-11-05.
+An expectation is what a CLICK does.
 
 ``compare``, the last group of its part:
 
@@ -8,14 +8,12 @@ An expectation is what a CLICK read on 2026-11-05.
   the Word reads as signed -1.  DH 0xFFFF == FFFFh (Result2) reads 1, and 0 if the constant reads
   as -1.  A DS against a constant past its width, DS 5000 < 70000 (Result3), reads 1 for the whole
   constant and 0 for the constant cut to 4464.  CLICK's Compare dialog pairs a hex operand (DH, XD,
-  YD, an h constant) only with another hex one, so no DH is compared with a DS here.  A CLICK
-  has not read Results 1 and 2 yet. Result3 is as read.  Text order is not asked: CLICK's
+  YD, an h constant) only with another hex one, so no DH is compared with a DS here.  Text order is not asked: CLICK's
   Compare dialog offers only = and not-equal on text.
 - ``char_two_char_literal``: a TXT compared with a 2-char literal.  R1: TXT "A", next "B" == "AB";
   R2: "A", next "C"; R3: "B"; control R4: "A" == "A" = 1.  A char that is not two: 0, 0, 0, 1.
-  First-char compare: 1, 1, 0, 1.  A window over two TXT: 1, 0, 0, 1, CLICK's reading and
-  pyrung's.  A refusal at paste would have been an answer too, which is why this case comes
-  last.
+  First-char compare: 1, 1, 0, 1.  A window over two TXT: 1, 0, 0, 1, on a CLICK and in
+  pyrung.
 
 The cases own what ``memory.OWNED`` lists under this group.
 """

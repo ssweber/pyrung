@@ -1,14 +1,13 @@
-"""S6 drum probes, where the rules stop: ``drum_close`` (``Conf_DrumClose``).
+"""Drum probes, where the rules stop: ``drum_close`` (``Conf_DrumClose``).
 
-Part ``drum2`` (``suite.PARTS``).  ``test_drum_settle`` found that a drum takes
+Part ``drum2`` (``suite.PARTS``).  ``test_drum_settle`` shows that a drum takes
 no event or time end on the scan its rung returns, that a completed drum's own time and
-event do nothing, and that its accumulator holds.  These asked where those rules stop, on a
-CLICK the same day (2026-11-02).  Snapshots as in ``test_drum_settle``, the first drum named
+event do nothing, and that its accumulator holds.  These cases ask where those rules stop.  Snapshots as in ``test_drum_settle``, the first drum named
 above the other.
 
 - ``return_scan_ticks``: paused on scans 3..4 with Acc 1000 staged on a time drum and a timed
   time & event drum: Acc - 1000 is 0 on the return scan (Result2, Result3), which times
-  nothing, and above 0 on the next (Result4, ErrorCode; 9 on the CLICK).
+  nothing, and above 0 on the next (Result4, ErrorCode; 9 on a CLICK).
 - ``flag_cleared_from_outside``: completed by a jog, 2424, the flag reset by a rung on scan 5,
   2020, and the step's own end on scan 6 completes it again, 2424: the flag is what stops
   the drum, not a memory of its own.
@@ -24,7 +23,7 @@ above the other.
   preset and a level event from the return scan: 2222 on it (Result4), not done, and 2424
   on the next (ErrorCode).
 - ``te_acc_by_step_kind``: a timed time & event drum's correction keeps the 9000 staged in
-  its Acc, 9 in thousands (Result1), and it counts on (Result2 above 0).  The CLICK read 9 in
+  its Acc, 9 in thousands (Result1), and it counts on (Result2 above 0).  A CLICK reads 9 in
   hundreds of 900 staged, which a scan of 100 ms pushes to 10.  An event-only one with Acc
   500 staged does not move (Result3 = 0).  One with an event-only step 1 and a timed step 2,
   jogged to it, does (Result4 above 0).  A timed one completed by a jog holds (ErrorCode = 0).

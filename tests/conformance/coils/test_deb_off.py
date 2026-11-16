@@ -15,12 +15,12 @@ each new step starts on the next scan.
 - Step 5: the input stays off until a second TON clock reads 200 ms.  Result3 is A's off TD then,
   and Result4 is B's.  The case fires on the next scan.
 
-A CLICK read 50, 0, 50, 50 and a Result4 of 201 (2026-11-12).  So a debounce's off TD counts only
+A CLICK reads 50, 0, 50, 50 and a Result4 of 201.  So a debounce's off TD counts only
 while its coil is on and its input is off.  With the coil off, the off TD holds its value,
-including one the ladder wrote.  The input's rise clears it.  pyrung reads the same.
+including one the ladder wrote.  The input's rise clears it.
 
-Result4 is the control.  B's coil came on with the input.  B's off TD counts from the fall, as a
-CLICK read (``deb_fall/off_td_at_fall``, ``coil_timing/off_td_held``).  So Result4 is the clock's
+Result4 is the control.  B's coil comes on with the input.  B's off TD counts from the fall, as on a
+CLICK (``deb_fall/off_td_at_fall``, ``coil_timing/off_td_held``).  So Result4 is the clock's
 200 ms plus the fall scan, 200..300.  A reading under 200 means B's off side did not count, and
 then the other readings say nothing.
 

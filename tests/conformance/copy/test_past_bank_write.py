@@ -16,9 +16,8 @@ under the same guard, so the 5 does not outlive the case: it once outlived two
 project loads and broke ``faults/pointer_past_bank_lands``.  A nonzero DD1531 is left
 alone, and ``past_clean`` clears it.
 
-A CLICK (2026-11-07) answered that the write lands and raises no flag: 0, 5, 0.
+On a CLICK the write lands and raises no flag: 0, 5, 0.
 pyrung drops the write and reads 0, 0, 0, so the case is ``pending="PASTBANK"``.
-The other candidates were a dropped write (pyrung's) and a flag (Result3).
 
 Why DD1531, and one address: ``faults/pointer_past_bank`` and
 ``faults/pointer_past_bank_lands`` read past the bank on a CLICK as 1 at DD1001 and

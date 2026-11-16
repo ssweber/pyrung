@@ -2,8 +2,7 @@
 
 Part ``math`` (``suite.PARTS``).  ``numeric``, ``faults`` and ``store_probe`` read a Math's
 wrap, its wide intermediates and its Inf; none reads the shapes below.  An expectation
-is pyrung's reading today, and a CLICK that reads otherwise fails and prints what it read,
-which is the answer.  Each case runs once (``probe_kit``), so a flag is read on the rung
+is what a CLICK does where that is known, and pyrung's reading otherwise.  Each case runs once (``probe_kit``), so a flag is read on the rung
 right after its op.
 
 ``math_more``:
@@ -19,14 +18,13 @@ right after its op.
 - ``abs_and_precision``: DD 2147483647 ^ 2 less itself less 1 (Result1): 1 exact, 0 in a double.
   a * a * 4 / (a * a) (Result2): 4, or another if the intermediate wraps at 64 bits.
   ABS(-32768) into an Int (Result3): -32768 wrapped, 32767 clamped; Result4 bit 1 is SC43.
-  ABS(-2147483648) into a DD (ErrorCode): 1 for itself, 2 for 2147483647.  Answered on a CLICK
-  (2026-11-05): a double (0); ABS(-32768) is neither, 0 with SC43; ABS(-2147483648) is neither
-  too (0), its value not read yet.
+  ABS(-2147483648) into a DD (ErrorCode): 1 for itself, 2 for 2147483647.  A CLICK
+  reads a double as 0, ABS(-32768) as neither (0 with SC43), and ABS(-2147483648) as neither
+  too (0).
 - ``mod_signs``: MOD's sign.  -7 MOD 2 (Result1): 1 floored, -1 truncated as C.  7 MOD -2
   (Result2): -1 or 1.  7.5 MOD 2.0 * 10 (Result3): 15.  -7.5 MOD 2.0 * 10 (Result4): 5 floored,
-  -15 truncated.  Answered on a CLICK (2026-11-05): truncated, the dividend's sign.
-- ``power_edges``: 0 ^ 0 (Result1): 1, or 0 where a CLICK takes it for an error (it does,
-  2026-11-05).  (-2) ^ 3
+  -15 truncated.  A CLICK truncates, with the dividend's sign.
+- ``power_edges``: 0 ^ 0 (Result1): 1, or 0 where a CLICK takes it for an error (it does).  (-2) ^ 3
   (Result2): -8; 2 ^ -1 into a DF * 10 (Result3): 5.  2 ^ -1 into an Int (Result4): 0 cut, 1
   rounded.  2 ^ 40 into an Int (ErrorCode): 0 wrapped, 32767 clamped.  Each of those two starts at
   99, which stays where the store is refused.
@@ -34,7 +32,7 @@ right after its op.
   off (``GuardedProbes``), the destination staged at 99: 0 ^ -1 into a DF (Result1, by 1: 0 or
   99 kept); -8.0 ^ 0.5 (Result2); 7 MOD 0 (Result3); 7.5 MOD 0.0 (Result4).  ErrorCode bits: 1
   and 2 SC46 after the first two, 4 and 8 SC40 after the last two, 16 SC40 after the first,
-  which pyrung took for a division by 0.  Answered on a CLICK (2026-11-05): all four write 0,
+  which would be a division by 0.  A CLICK writes 0 for all four,
   and only -8.0 ^ 0.5 raises a flag, SC46 (ErrorCode = 2).
 - ``functions``: radians or degrees, and which log.  SIN(1), COS(1), TAN(1), ATAN(1) and LN(10),
   each * 1000: 841, 540, 1557, 785, 2302 in radians.  In degrees 17, 999, 17, 785 and the rest
@@ -43,8 +41,7 @@ right after its op.
   asks of an Int.  DD 131072 / 65536 is 2, or 0 with SC40 where the constant
   is cut to 16 bits (Result1 = 1 for 2, 2 for 0, and ErrorCode bit 1 is SC40).  DD 2 * 40000
   is 80000 (1) or -51072 (2) (Result2), and the same into a DF (Result3).  A CLICK keeps the
-  constants whole (1, 1, 1, ErrorCode 0, 2026-11-11).  An earlier round read the cut, from an
-  export that wrote every constant in 16 bits.  CLICK's editor refuses a constant past a DD's
+  constants whole (1, 1, 1, ErrorCode 0).  CLICK's editor refuses a constant past a DD's
   range, such as 3000000000, so no case asks about one.
 
 ``hex_math`` (WORD only: ``numeric`` reads hex Math's store, not these):
@@ -53,7 +50,7 @@ right after its op.
   rotate; 0 for any other); << 16 and << 17 (Result2, by digits: 1 for 0 and 2 for
   anything else); RSH 0xFFFF >> 1 (Result3): 1 logical 0x7FFF, 2 arithmetic 0xFFFF; RSH 0x8000
   >> 16 (Result4): 1 for 0, 2 for unchanged.  ErrorCode: SC43 after the first shift, bit 1,
-  after 0xFFFF + 1, bit 2, after 1 - 2, bit 4.  Answered on a CLICK (2026-11-05): the bit
+  after 0xFFFF + 1, bit 2, after 1 - 2, bit 4.  On a CLICK the bit
   shifted out raises no SC43 (ErrorCode = 6).
 - ``rotates_and_bits``: LRO 0x8001 by 1 (Result1, 1 for 0x0003), by 16 (Result2, 1 for itself,
   2 for 0), by 17 (Result3, 1 for 0x0003).  RRO 0x8001 by 2 (Result4, 1 for 0x6000).

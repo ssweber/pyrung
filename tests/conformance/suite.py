@@ -327,7 +327,7 @@ APART_GROUPS = [
     test_word_floor.group,
     test_flasher_off.group,
     test_txt_end.group,
-    # The 2026-11-06 round's follow-up, the follow2_* parts.
+    # The follow2_* parts.
     test_flag_steps.flag_steps,
     test_flag_steps.flag_reads,
     # Alone in its part: its op is the scan's last Math, its reads the next scan's first rungs.
@@ -359,23 +359,23 @@ APART_PARTS: dict[str, ApartPart] = {
     # block of the suite has a slot left, and a blank needs TXT that no project has written.
     # And what a flasher's frozen off TD does when a lowered preset ends its on phase.
     "text_flasher": ApartPart(("text_compare", "flasher_td")),
-    # The 2026-11-05 round's follow-up, for the fixes of the conform-fix arc, in three parts
-    # since CLICK's editor freezes on a paste much over 150 rungs: what SC43 and SC44 follow;
+    # The follow-up cases are in parts, since CLICK's editor freezes on a paste much over 150
+    # rungs.  This part asks what SC43 and SC44 follow.
     "follow_flags": ApartPart(("flag_boxes", "flag_halves")),
-    # the values the round read as none of the candidates, or left unread;
+    # This part asks about values.
     "follow_values": ApartPart(
         ("math_terms", "search_more", "real_text", "past_clean", "for_dd_minus")
     ),
-    # and timing: a drum's jump to a bad step and when it reads a step's preset, a debounce's
-    # off side and a flasher's on phase of 0; and, for room, a Word store below -32768.
+    # This part asks about timing.  It covers a drum's jump to a bad step, when a drum reads a
+    # step's preset, a debounce's off side and a flasher's on phase of 0.  For room it also holds
+    # a Word store below -32768.
     "follow_timing": ApartPart(
         ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
     ),
     # A fourth, of what the others left: a flasher's off phase of 0 or below, a TD written
     # into a running debounce and flasher, and a Real's text running past TXT1000.
     "follow_extra": ApartPart(("flasher_off", "td_write", "txt_end")),
-    # The 2026-11-06 round's follow-up, for the probes the convergence audit asked for: what
-    # leaves a fault flag on, each flag read by a coil right after its step;
+    # What leaves a fault flag on, each flag read by a coil right after its step;
     "follow2_flags": ApartPart(("flag_steps",)),
     # a flag after a box that did not run, a quiet math error's 0 in a larger formula, and a
     # decimal point packed into a DD;
@@ -388,7 +388,7 @@ APART_PARTS: dict[str, ApartPart] = {
     "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
     # For counts whose runs stop the PLC on a 200 ms watchdog, alone.
     "follow2_for": ApartPart(("for_signed",)),
-    # The 2026-11-11 round: a down counter's and an RTON's reset held on while its rung is on,
+    # A down counter's and an RTON's reset held on while its rung is on,
     # and a debounce's off TD while its coil is off.
     "follow3_reset": ApartPart(("reset_pins", "deb_off")),
     # Values staged for raw Modbus reads, and the echo of raw writes, for test_raw_requests.
@@ -403,7 +403,7 @@ PART_SCAN_LIMITS_MS: dict[str, int] = {
     "boot": 3000,
     # CLICK's fixed scan of 100 ms, and a margin.
     "fixed_scan": 150,
-    # ``for_signed``'s run on a CLICK read 1287 ms in SD12, its longest scan (2026-11-10).
+    # ``for_signed``'s run on a CLICK takes 1287 ms, its longest scan in SD12.
     "follow2_for": 2000,
 }
 

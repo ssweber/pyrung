@@ -19,15 +19,13 @@ the record is final, so every expectation is an exact int.  The time drum case
 paces itself on its accumulator instead (each control fires once the step has
 timed 100 ms), so it runs on a CLICK whose scan is far shorter than 10 ms.
 
-The expectations are what a CLICK does where hardware round 1 (2026-10-29)
-answered, and the adopted answer of an open probe otherwise.  A CLICK event
+The expectations are what a CLICK does, and the likeliest answer of an open probe
+otherwise.  A CLICK event
 drum: jump and jog act on their rising edges even while the drum is paused;
 reset is a level that wins, taking the drum to step 1 with its flag off and ALL its outputs off,
 and drops a jump or jog on its scan; jump beats jog on one scan; a paused drum
 does not write its outputs; at completion all its outputs go off until a jog
-(hardware round 2: a jump moves the step but leaves them off).  pyrung matches
-each since step DRUM; what pyrung read before it is noted below as "pyrung
-before DRUM".
+(a jump moves the step but leaves them off).
 What each case tells apart:
 
 - ``te_acc_counts_while_waiting``, ``te_level_event_already_on``: the open
@@ -55,39 +53,39 @@ What each case tells apart:
   Result3 = 5); if a jog does, 3 scans, last on scan 6.
 - ``reset_no_stale_outputs``: a drum on step 2 of 3 (never complete) reset
   on scans 5 and 6.  A reset that turns every output off keeps step 1's
-  output off until the reset ends, on from scan 7 (Result2 = 7); pyrung
-  before DRUM wrote step 1's outputs on the reset scan (Result2 = 5).  A
+  output off until the reset ends, on from scan 7 (Result2 = 7).  A drum that
+  writes step 1's outputs on the reset scan reads Result2 = 5.  A
   drum that writes its outputs before it handles the reset leaves step 2's
   output on for a stale scan (Result3 = 5).  Result4 = 1: the step on scan 5.
 - ``reset_jump_jog_order``: reset wins, and jump beats jog: steps on scans 3
   and 5 read 1 (Result2 = 1, Result3 = 1), and jump with jog on scan 7 leaves
-  step 3 (Result1 = 3).  pyrung before DRUM applied the reset, then the
-  jump, then the jog, each from where the last left the step: 3, 2, 4.
+  step 3 (Result1 = 3).  A drum that applies the reset, then the jump, then
+  the jog, each from where the last left the step, reads 3, 2, 4.
 - ``pause_holds_and_drops_jog``: retired, the drum it asked about acts on a
   paused jog (see ``paused_drum_jogs_and_resets``).
 - ``paused_drum_jogs_and_resets``: paused on step 2 for scans 3..5, a jog on
   scan 4 still steps (the step on scan 4 reads 3, Result2), the paused drum
   leaves step 2's output on through scan 4 (Result3 = 4), a reset on scan 5
   turns every output off, and step 1's output comes on when the rung comes
-  back, scan 6 (Result4).  pyrung before DRUM ignored the paused jog
-  (Result2 = 2) and wrote step 1's output on the reset scan (Result4 = 5).
+  back, scan 6 (Result4).  A drum that ignores the paused jog reads Result2 = 2,
+  and one that writes step 1's output on the reset scan reads Result4 = 5.
 - ``completion_turns_outputs_off``: a 2-step drum completed on scan 3 turns
   its outputs off, so step 2's output is on for scan 2 only, and on scan 8
   again after a jog (Result2 = 2 scans).  After completion a jump to step 1
   on scan 6 moves the step but leaves step 1's output off (Result3 = 0); the
-  jog on scan 8 brings step 2's back (ErrorCode = 8) (hardware round 2, 2026-10-30: the adopted
-  answer was Result3 = 6, the jump turning step 1's output on).  pyrung
-  before DRUM left step 2's output on until the jump (Result2 = 5).
-- ``paused_drum_jumps`` (answered as adopted): paused on step 1 for scans 3..5, a jump to
-  step 3 on scan 4.  A jump taken while paused (adopted) reads step 3 on scan
+  jog on scan 8 brings step 2's back (ErrorCode = 8).  A jump that turned step 1's
+  output on would read Result3 = 6.  A drum that left step 2's output on until
+  the jump would read Result2 = 5.
+- ``paused_drum_jumps``: paused on step 1 for scans 3..5, a jump to
+  step 3 on scan 4.  A jump taken while paused reads step 3 on scan
   4 (Result2) and at the end (Result1); step 1's output stays on until the
   rung comes back (last on scan 5, Result3) and step 3's comes on then
   (Result4 = 6).  A paused drum that ignores the jump reads 1, 1, 8, 0.
-- ``reset_swallows_held_jog`` (answered as adopted): a jog that rises on a reset scan (4)
-  and is held to scan 6.  Reset drops it and its edge is spent (adopted): the
+- ``reset_swallows_held_jog``: a jog that rises on a reset scan (4)
+  and is held to scan 6.  Reset drops it and its edge is spent: the
   drum stays on step 1 (Result1 = 1) and never enters step 2 (Result2 = 0).
-  An edge kept for the scan after the reset enters step 2 on scan 5; pyrung
-  before DRUM applied the jog after the reset on scan 4 (Result2 = 4).
+  An edge kept for the scan after the reset enters step 2 on scan 5, and a jog applied
+  after the reset on scan 4 reads Result2 = 4.
 - ``invalid_step_corrects_to_1``: an enabled drum whose step register is out of
   range goes to step 1 and writes step 1's outputs; a paused one leaves the
   register alone.  Clamping to the last step reads Result3 = 3, wrapping
@@ -107,32 +105,30 @@ What each case tells apart:
   adds Cmd == 0, the jog pin a bit that is on at scan 3).  The condition is
   also true while idle, at step 0, so the reset pin works.  From scan 4 on
   the step reads 1, so the rung is false and the drum is paused: whatever its
-  outputs are after scan 3 they stay.  Hardware round 2 (2026-10-31): a CLICK
+  outputs are after scan 3 they stay.  A CLICK
   reads Result1 = 1 with neither output ever on (Result3 = 0, Result4 = 0), in
-  both drawings.  That was neither candidate: pins read before the correction
+  both drawings.  That fits neither of two other models: pins read before the correction
   with the jog taken from the corrected step (pyrung) reads 2, 3, 0; a jog pin
   read after the correction (no jog) reads 1, 0, 3, as
   ``invalid_step_corrects_to_1`` shows a correction scan writes step 1's
   outputs.  So the pins are read before the drum runs and the jog does
-  something to the bad step itself.  Hardware (2026-11-01) answers that it does
-  not complete (Result2 = 0): the jog scan leaves step 5 and the outputs alone,
+  something to the bad step itself.  The jog does not complete the drum (Result2 = 0).  The jog scan leaves step 5 and the outputs alone,
   the next scan corrects the step and writes no output, and the rung is then
   false (``drum_trace/tied_jog`` reads it scan by scan).  So 1, 0, 0, 0.
 - ``pins_read_before_step_fix_tee``: the same ladder on its own bits (the same
   conditions, the same pins), with the ``.reset()`` and ``.jog()`` pins drawn
   teeing off the drum's input wire after the shared contact (Result1 != 1)
-  instead of from the rail.  Same readings as above (a CLICK read the same 1,
-  0, 0 on 2026-10-31).  The reset pin is teed too because a tee cannot cross a
+  instead of from the rail.  Same readings as above.  The reset pin is teed too because a tee cannot cross a
   rail pin row and the pin order is fixed.  pyrung runs the same rungs in
   every target; the CLICK export redraws the pins (``tee=``), and
   ``test_tee_twins.py`` imports the drawing and compares it with the rail
   drawing.
 - ``correction_without_jog`` (probe): the rail ladder of
   ``pins_read_before_step_fix`` on its own bits with the jog bit never on, so
-  the drum's rung is true on scan 3 and nothing else happens.  Adopted (as
-  ``invalid_step_corrects_to_1`` read): the step goes to 1 (Result1) and step
+  the drum's rung is true on scan 3 and nothing else happens.  As
+  ``invalid_step_corrects_to_1`` shows, the step goes to 1 (Result1) and step
   1's output comes on at scan 3 (Result4 = 3), never complete (Result2 = 0),
-  step 2's output never on (Result3 = 0); pyrung reads the same.  A CLICK that
+  step 2's output never on (Result3 = 0).  A drum that
   reads Result4 = 0 here turns the outputs off on a correction scan of this
   shape whatever the jog does, which explains the reading above without a
   completion.
@@ -140,8 +136,8 @@ What each case tells apart:
   since a CLICK may refuse the drum's own step register as its jump step; its
   C837..C840 stay unused here.
 - ``jog_on_last_step`` (probe): a jog on scan 2 takes a 2-step drum to step 2,
-  its last; a second jog on scan 4 is a jog from the last step.  Hardware
-  (2026-11-01) answers that it completes the drum (flag first on at scan 4,
+  its last; a second jog on scan 4 is a jog from the last step.  A CLICK
+  completes the drum (flag first on at scan 4,
   Result2 = 4), turns its outputs off (step 2's last on at scan 3, Result3 = 3,
   step 1's never, Result4 = 0) and stays on step 2 (Result1 = 2).  Leaving step
   1 would read 1, 4, 3, 0; wrapping to step 1 without completing 1, 0, 3, 4.

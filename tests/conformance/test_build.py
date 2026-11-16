@@ -103,8 +103,8 @@ def test_owned_ds_is_staging_and_no_group_block_reaches_it() -> None:
         for owned in memory.ranges(banks.get("DS", ())):
             assert staging.start <= owned.start and owned.stop <= staging.stop, group
             owned_ds.update(owned)
-    # A block may sit in the staging area on registers no group owns (the S6
-    # probes' blocks do), never on registers a group stages in.
+    # A block may sit in the staging area on registers no group owns (the drum
+    # and store probes' blocks do), never on registers a group stages in.
     for layout in load_manifest(suite.MANIFEST_PATH).groups.values():
         block = range(layout.base, layout.last_register + 1)
         assert not owned_ds.intersection(block), layout
@@ -347,7 +347,7 @@ def test_each_part_carries_a_scan_limit(tmp_path, capsys: pytest.CaptureFixture[
     assert set(suite.PART_SCAN_LIMITS_MS) <= set(parts)
     assert suite.scan_limit_ms("units") == suite.SCAN_LIMIT_MS == 50
     assert suite.scan_limit_ms("fixed_scan") > suite.APART_PARTS["fixed_scan"].fixed_scan_ms
-    # for_signed's longest scan on a CLICK read 1287 ms (SD12).
+    # for_signed's longest scan on a CLICK takes 1287 ms (SD12).
     assert suite.scan_limit_ms("follow2_for") > 1287
     for part in parts:
         assert suite.build(part).scan_limit_ms == suite.scan_limit_ms(part)

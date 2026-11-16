@@ -1,4 +1,4 @@
-"""S6 drum probes, a drum not reached: the ``drum_idle`` group (rungs in main).
+"""Drum probes, a drum not reached: the ``drum_idle`` group (rungs in main).
 
 Part ``drum2`` (``suite.PARTS``).  CLICK has no nested call, so
 the group's rungs run in the main program (``in_main``), and the first case's
@@ -8,7 +8,7 @@ rung has not "come back" and writes no row.  Each case runs a time drum and a
 time & event drum, moved to step 2 with B on (the time drum on scan 1, the other on
 scan 2, see ``test_drum_rule``), B reset on scan 3, and not reached on scans 3..4.  Snapshots as in ``test_drum_rule`` (``S`` then
 ``4 * flag + 2 * B + A``, the time drum's above the time & event drum's), on
-scans 2, 4, 5 and 6: 2222, 2020 and then pyrung reads 2020 (Result4,
+scans 2, 4, 5 and 6: 2222, 2020 and then 2020 (Result4,
 ErrorCode) when the drums are reached again on scan 5: a reset output stays
 off.  A drum that treats the unreached scans as a false rung writes the row
 when it is reached again and reads 2222 on scan 5.

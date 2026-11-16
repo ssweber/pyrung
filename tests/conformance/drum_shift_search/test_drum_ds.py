@@ -1,13 +1,11 @@
 """A drum step's DS preset, and a bad jump on the rung's return: ``drum_ds`` and ``jump_return``.
 
-Part ``follow2_drums``.  A CLICK answered ``jump_return`` on 2026-11-10 and ``drum_ds`` on
-2026-11-12.
+Part ``follow2_drums``.
 
 ``drum_ds/ds_preset_ends``: four time drums of three steps.  Each field is a drum's step.  It
 reads 1 while step 1 still times, 2 once step 1 has ended, and 3 once step 2 has.  The case reads
 them, and raises ``Fired``, once the control drum has timed 50 ms on its step 2.  A 1 ms step has
-ended by then at any scan length, and so has the 5 ms step of Result3.  The run the CLICK read
-took them on scan 20 instead.  Every step but the one asked about is a constant 30 s.  Each DS
+ended by then at any scan length, and so has the 5 ms step of Result3.  Every step but the one asked about is a constant 30 s.  Each DS
 holds the value the case means from the reset on, as the init writes it.
 
 - Result1 (D1): step 1's preset a DS holding 1 ms from the reset on, never written again.  Step 1
@@ -19,12 +17,10 @@ holds the value the case means from the reset on, as the init writes it.
   3.
 - Result4, the control: step 1 a constant 1 ms, 2.
 
-The CLICK read 2, 1, 3, 2 (2026-11-12), and pyrung reads the same.  The drum reads a DS preset on
-every scan its step times.  The reading before 2026-11-12 (1, 1, 2, 2) measured a drum that
-laddercodec had pasted with a wrong encoding.
+A CLICK reads 2, 1, 3, 2.  The drum reads a DS preset on every scan its step times.
 
 ``jump_return/bad_jump_on_return``: does a jump to a bad step on the scan the drum's rung comes
-back keep the drum from writing its row?  ``bad_jump`` read on a CLICK that a jump to a bad step
+back keep the drum from writing its row?  ``bad_jump`` shows that on a CLICK a jump to a bad step
 takes its scan (a bad step 5 is corrected the scan after, 5252 then 1212), and the drum rule
 writes a row on a move or on the rung's return.  Two pairs of a time drum and a time & event drum
 (3 steps, 30 s, events never on), snapshots as in ``test_drum_pins`` (the step, then ``4 * flag +
@@ -38,7 +34,7 @@ of 3 on scan 6; pair P none.
 - Result4, Q on scan 7: the row waits for a move (2020), and does not come a scan late.
 - ErrorCode, P on scan 7: the row held (2222).
 
-A CLICK read 2222, 2020, 2020, 2020, 2222, and pyrung reads the same.
+A CLICK reads 2222, 2020, 2020, 2020, 2222.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """

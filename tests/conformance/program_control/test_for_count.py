@@ -1,10 +1,9 @@
 """A FOR whose count is a Real: the ``for_count`` group, in-process only.
 
 CLICK's editor takes a FOR count from a constant, DS, DD, TD, CTD or SD and
-refuses a DF.  A pasted one stops the PLC: hardware (2026-11-01, as a project of
-its own) ran its first FOR, over DF496 = 3.0, 545130 times (DD601) until a 10 s
-watchdog raised error 0107, and never reached the +Inf and NaN ones.  That fits
-the Real's 32 bits read whole, 1077936128 for 3.0.  So no CLICK run can pass
+refuses a DF.  A pasted one stops the PLC.  A CLICK runs the first FOR, over DF496 = 3.0, about
+545000 times (DD601) until a 10 s watchdog raises error 0107, and never reaches the
++Inf and NaN ones.  That fits the Real's 32 bits read whole, 1077936128 for 3.0.  So no CLICK run can pass
 this, and the case holds what pyrung does with such a count.
 
 - ``non_finite_count``: one FOR each, counted by its body into DD601..DD603,
@@ -63,7 +62,7 @@ group = Group(
             expect={"Result1": 3, "Result2": 0, "Result3": 0, "Result4": 0},
             in_process_only=(
                 "CLICK's editor refuses a Real FOR count, and a pasted one stops the PLC on "
-                "its watchdog (hardware 2026-11-01)"
+                "its watchdog"
             ),
         ),
     ],

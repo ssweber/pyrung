@@ -34,8 +34,7 @@ class TeeSpec:
 
     ``bare=True`` (with ``after=0``) is the box rung that has no contact in front
     of its own.  Its export keeps the rail drawing.  CLICK's syntax check redraws a
-    tee off a bare wire (``R,-,T`` over ``,,-``) as pins from the rail (save of
-    2026-11-13).
+    tee off a bare wire (``R,-,T`` over ``,,-``) as pins from the rail.
     """
 
     box: str

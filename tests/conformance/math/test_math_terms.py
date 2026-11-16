@@ -1,29 +1,28 @@
 """Follow-up Math probes: the ``math_terms`` group (part ``follow_values``).
 
-What the 2026-11-05 round left unread in ``math_more``, for the fix step ``math-click`` (2 in the
-``conform-fix`` arc).  A question's field holds every candidate (``probe_kit.between``), so a
-pass answers nothing and a run on a CLICK records what it read; an answered one expects what
-the CLICK read.
+Math cases that ``math_more`` leaves open.  A question's field holds every candidate
+(``probe_kit.between``), so a pass answers nothing and a run on a CLICK records what it reads.
+An answered one expects what the CLICK reads.
 
-- ``wide_values``: the value ``math_more`` read as "neither listed".  ABS(-2147483648) into a
+- ``wide_values``: the value ``math_more`` reads as "neither listed".  ABS(-2147483648) into a
   DD preset 99 (``abs_and_precision`` ErrorCode): Result1 1 for itself, 2 for 2147483647, 3 for 0
   (as ABS(-32768) into an Int reads), 4 for 99 (no store), 0 for any other, and Result2 the DD /
   100000, which shows any other reading's size.  Result4 has SC43 after the ABS (bit 1).  A CLICK
-  read 3, 0 and 1 (2026-11-06).  The case once also divided 3000000000 by a DD.  CLICK's editor
-  refuses that constant typed in, so no case pastes it.
+  reads 3, 0 and 1.  CLICK's editor refuses 3000000000 typed in as a constant, so no case
+  pastes it.
 - ``error_terms``: is a math error's 0 put on its term or on the whole formula, outside RAND
-  (``store_probe/rand_tag_bounds`` read RAND ( 7 , 7 ) + 5 as 5)?  Answered on a CLICK
-  (2026-11-06): the term, 5, 5, 5, 0, 7, and 0 ^ 0 raises no flag.  DD 7 / DD 0 + 5 (Result1): 5
+  (``store_probe/rand_tag_bounds`` reads RAND ( 7 , 7 ) + 5 as 5)?  A CLICK puts it on the
+  term: 5, 5, 5, 0, 7, and 0 ^ 0 raises no flag.  DD 7 / DD 0 + 5 (Result1): 5
   for the term, 0 for the formula, 99 for no store.  (DD 7 / DD 0 + 1) * 5 (Result2): 5 for the
   term, 0 for the formula.  SQRT(DF -4.0) + 5 (Result3): 5 or 0.  DD 0 ^ DD 0 (Result4): 0
-  (``power_edges`` read it), 99 for no store.  ErrorCode has the flags: SC40 after the first two
+  (``power_edges`` covers it), 99 for no store.  ErrorCode has the flags: SC40 after the first two
   (bits 1, 2), SC46 after the root (bit 4), and after 0 ^ 0 SC40 (bit 8), SC43 (bit 16) and SC46
   (bit 32): which flag 0 ^ 0 raises.  Into an Int a 0 for the formula is also what a term that
   went non-finite and carried through writes (``non_finite_math_into_int`` stores 0), and SQRT of
   -4.0 alone is 0 with SC46 (``math_error``): Result3 = 0 with bit 4 off is a NaN carried through
   and stored as 0 with no flag.  ``error_terms_real`` tells these apart.
 - ``error_terms_real``: the same three formulas into DFs preset 99.0, where a non-finite value is
-  kept.  Answered on a CLICK (2026-11-06): the term, 1, 1, 1, 50, 50.  Result1 (7 / 0 + 5),
+  kept.  A CLICK puts it on the term: 1, 1, 1, 50, 50.  Result1 (7 / 0 + 5),
   Result2 ((7 / 0 + 1) * 5) and Result3 (SQRT(-4.0) + 5): 1 for 5.0 (the term is 0), 2 for 0.0 (the formula is), 3 for 99.0 (no store), 4 for +Inf (a Real division
   by 0 carried through), 5 for -Inf, 0 for any other: NaN or a finite value none of these (7 / 0
   stored as 7 makes 12.0).  Result4 is DF12 * 10 and ErrorCode DF14 * 10, each into an Int, to

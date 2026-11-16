@@ -25,7 +25,7 @@ compensated (Neumaier, fsum)      1, 1, 1      1, 1, 1      2
   survives every order.  pyrung reads 1, 1, 1 on every backend.
 - ``f64_row``: the same orderings of {1e30, 1, -1e30}, where double absorbs the 1 too.
   Only a compensated sum reads 1, 1, 1 at a width a CLICK could have.  A CLICK reads
-  0, 0, 1 (2026-11-05 and 2026-11-09), and so does pyrung on every backend.  With
+  0, 0, 1, and so does pyrung on every backend.  With
   ``f32_row`` at 1, 1, 1, a CLICK's SUM is a double added left to right.
 - ``sum_absorbs``: {16777216, 1, 1}, read as the sum less 16777216.  float32 left to right
   or largest first absorbs each 1 (0); anything else reads 2.  It alone tells float32

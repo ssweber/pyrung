@@ -1,13 +1,13 @@
-"""S6 drum probes, jog, jump and pause: the ``drum_jump`` group (subroutine ``Conf_DrumJump``).
+"""Drum probes, jog, jump and pause: the ``drum_jump`` group (subroutine ``Conf_DrumJump``).
 
 Part ``drum1`` (``suite.PARTS``).  The snapshots are those of
 ``test_drum_rule`` (two digits a drum, ``S`` then ``4 * flag + 2 * B + A``,
 the time drum's above the time & event drum's), taken on a time drum and a
 time & event drum side by side.  The expectations are what pyrung reads, the
-S5 drum rule extended to the two kinds (docs/instructions/drum-shift-search.md);
-a snapshot that reads otherwise on a CLICK is an answer.
+drum rule extended to the two kinds (docs/instructions/drum-shift-search.md).
+A case marked as a probe expects what pyrung reads until a CLICK says otherwise.
 
-- ``paused_jog_cases`` (answered 2026-11-02): scenario A, a jog on the
+- ``paused_jog_cases``: scenario A, a jog on the
   last step while the rung is false (scans 3..5) completes the drum at once with its
   outputs off, 2424 on scan 4 (Result2) and on scan 6 when the rung returns (Result3).
   Scenario B, a jog rising on a bad step (5, written on scan 3) while the rung is
@@ -21,7 +21,7 @@ a snapshot that reads otherwise on a CLICK is an answer.
   already on (2, with B reset above the drums on scan 4): it counts as a move
   and writes the row, 2222 (Result4, ErrorCode); a drum that ignores it reads
   2020.
-- ``jump_after_completion`` (answered 2026-11-02): scenario A, a 2-step
+- ``jump_after_completion``: scenario A, a 2-step
   drum completed by a jog on scan 3, then a jump to step 1 on scan 5: the step moves
   but the outputs stay off, flag on, 1414 (Result2), and a jog with a jump on scan 7
   leaves it, 1414 (Result3), the jump beating the jog.  Scenario B, after the same jump
@@ -34,15 +34,14 @@ a snapshot that reads otherwise on a CLICK is an answer.
   from outside on scan 5 stays on while the drums fire again (their time and event
   still true) and rewrite only the flag: 2626 (Result3, Result4, ErrorCode).  A drum
   that writes every output off again reads 2424 throughout.
-- ``acc_through_jog_completion`` (answered 2026-11-02): a time drum with
+- ``acc_through_jog_completion``: a time drum with
   Acc 9000 staged on scan 2 is jogged on its last step on scan 3: the completion keeps
   the accumulator, Acc / 1000 = 9 (Result2), and it then holds, moving on none of scans
   4..8 (Result3 = 0).  A second drum is given step 5 and a
   jog (the hold scan) on scan 3 with Acc 9000 staged above it: the hold scan does not
   tick the accumulator, so Acc - 9000 = 0 (Result4), and the next scan's correction
-  keeps it, Acc / 1000 = 9 (ErrorCode).  The CLICK read 9, 0, 0 and 910 from 900 staged.
-  ErrorCode now reads thousands, so the time the drum adds after the correction leaves it
-  at 9 (it read the whole Acc, 900..999).
+  keeps it, Acc / 1000 = 9 (ErrorCode).  ErrorCode reads thousands, so the time the drum adds after the correction
+  leaves it at 9.
 
 The cases own C1110..C1200 and C1401..C1470, T251..T270, DD661..DD680 and the DS
 the group's rigs name (``memory.OWNED``).

@@ -1,9 +1,9 @@
 """Pack Copy of text with a decimal point into a DD: the ``pack_point`` group (part ``follow2_values``).
 
-``text/pack_text_int_fraction`` read on a CLICK that "12.9" packed into an Int is 12, with no
-SC43: the parse stops at the point.  CLICK's help (topic 059) says that "12.345" packed into a DD
+On a CLICK "12.9" packed into an Int is 12, with no SC43 (``text/pack_text_int_fraction``).
+The parse stops at the point.  CLICK's help (topic 059) says that "12.345" packed into a DD
 is an error, "Period separator not allowed".  A CLICK stops at the point for a DD too, with no
-SC43 (hardware, 2026-11-10), as pyrung does.
+SC43.
 
 ``point_into_dd``: each text is staged into TXT and packed into a DD preset to 99, on one rung,
 with SC43 read by a coil on the rung right after it:

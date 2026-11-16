@@ -1,19 +1,15 @@
 """A one-shot Search against a plain one: the ``search_more`` group (part ``follow_values``).
 
-``coil_range/ranges_and_search`` ran the only one-shot Search of the suite, and on a CLICK it
-stored nothing: DD77 read 0, its found bit off, and no -1 (a miss) written.  Its result was a DD,
-a form CLICK's Search refuses (a Search takes a DS Result only), so the case now asks the
-one-shot alone, with DS results.  The fix step ``search-oneshot`` (8 in the ``conform-fix`` arc)
-waits on this.  The id says ``dd_result`` for the case's first form; it is kept so its readings
-stay under it.
+A CLICK's Search takes a DS Result only, so this case asks the one-shot alone, with DS results.
+The id says ``dd_result`` for the case's first form, and it is kept so its readings stay under it.
 
 ``oneshot_against_dd_result``: four Searches into a DS each, every rung true from scan 2 on, as
 in ``coil_range``.  The one-shots search DH11..DH12 for 9, which is at DH11 on scan 2 and moves to
 DH12 on scan 3; the others search DH13..DH14, 9 at DH13 throughout.  Read on scan 6:
 
 - Result1 and Result2, a one-shot each: 11 for the first hit kept, 12 for a search again on a
-  later scan, 0 for nothing stored, -1 for a miss.  The 2026-11-06 reading of the DS form was 11.
-- Result3 and Result4, a plain Search each, the control: 13 (read the same day).
+  later scan, 0 for nothing stored, -1 for a miss.  A CLICK reads 11 for the DS form.
+- Result3 and Result4, a plain Search each, the control: 13.
 - ErrorCode, the found bits: 1, 2, 4 and 8 in the same order, 15.
 
 pyrung reads 11, 11, 13, 13, 15.  A one-shot that never runs reads 0 in Result1 and Result2.

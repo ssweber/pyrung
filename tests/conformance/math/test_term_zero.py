@@ -1,8 +1,8 @@
 """A quiet Math error's 0 in a larger formula: the ``term_zero`` group (part ``follow2_values``).
 
-``math_terms/error_terms`` read on a CLICK that a division by 0 and a SQRT of a negative each zero
-their own term, not the formula (5, 5, 5 for ``... + 5``).  A CLICK zeroes the term of a MOD by 0,
-of ``0 ^ 0`` and of ABS of the least Int too (hardware, 2026-11-10).  0 to a negative power is no
+On a CLICK a division by 0 and a SQRT of a negative each zero
+their own term, not the formula (5, 5, 5 for ``... + 5``, ``math_terms/error_terms``).  A CLICK
+zeroes the term of a MOD by 0, of ``0 ^ 0`` and of ABS of the least Int too.  0 to a negative power is no
 error there.  It is +Inf.  Each formula here runs once, on a scan whose first rung stages its
 operands, into a register preset to 99 (no store reads 99).
 

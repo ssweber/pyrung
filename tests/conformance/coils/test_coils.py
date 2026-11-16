@@ -17,11 +17,9 @@ coil drops and its one-shot rearms while ``Cmd == 0``, and edge history follows
 the bits.  Latched bits are reset in ``init``.
 
 The expectations are what a CLICK does.  A CLICK edge contact keeps a memory of
-its own: the bit as that contact saw it when it last ran (hardware round 1,
-2026-10-29), and so does each of pyrung's.  pyrung's edge contacts compared
-the bit with its value at the end of the previous scan, one history per bit,
-until per-contact memory landed; the two cases below tell the models apart.
-Each lists the scans its edge contacts passed power as digits (``firings``):
+its own: the bit as that contact saw it when it last ran.  The two cases
+below tell that apart from one history per bit, the bit's value at the end of
+the previous scan.  Each lists the scans its edge contacts passed power as digits (``firings``):
 
 - ``edge_sees_previous_scan_end``: a bit set above two rise contacts and
   cleared below them on scans 3..5.  Per-contact memory: each contact rises on
@@ -33,22 +31,19 @@ Each lists the scans its edge contacts passed power as digits (``firings``):
   pair above fires a scan late, rise on 4 and fall on 7; the pair below on 3
   and 6.  The end-of-scan history: the pair above never fires (0, 0).
 
-The round 2 probes, each answered as the expectation adopts:
+Three more cases ask what an edge contact does without power on its left:
 
 - ``edge_behind_open_contact``: an edge contact behind an open series contact.
-  Its memory is updated every scan the contact is solved ("scanned", adopted):
+  Its memory is updated every scan the contact is solved ("scanned"):
   rise and fall behind the gate read 0 and 0.  Updated only when power reaches
   it ("powered"): the rise fires on scan 5 and the fall on scan 8 (5, 8).  The
   rail contacts beside them read 3 and 7 under both, the bit's own edges.
 - ``edge_in_false_rung_branch``: the same question for edge contacts in the
   branches of a rung whose rail contact is open.  Scanned: 0 and 0.
   Powered: 5 and 8.
-  Both were asked again on 2026-11-02, reading scanned: until then their gate had
-  two Out rungs, the second writing it off on scan 5, so it was on only on scan 8,
-  when a powered memory reads 0 and 0 as well.
 - ``edge_on_first_scan``: a bit an unconditional rung turns on from the first
   scan, read by a rise contact below it.  Edge memory that starts off at
-  STOP->RUN fires on the first scan and latches a flag (Result1 = 1, adopted);
+  STOP->RUN fires on the first scan and latches a flag (Result1 = 1, as on a CLICK);
   memory seeded from the bit, or carried over STOP, never fires (Result1 = 0).
   Only the first scan after the PLC last went to RUN counts, so this one reads
   the loaded program's first scan, whatever run reads it.

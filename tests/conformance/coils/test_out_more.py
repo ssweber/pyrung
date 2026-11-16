@@ -1,16 +1,15 @@
 """The v4 Out family, past what ``out`` reads.
 
-Every expectation is what a CLICK read (hardware round of 2026-11-05).  The timed coils of
+Every expectation is what a CLICK does.  The timed coils of
 ``toggle_and_timed``, ``timed_maintained`` and ``preset_mid_phase`` run in steps that ``Scratch``
 holds.  A step ends on a TD or on a flasher's phase, so no reading depends on how long a scan
 takes.  A step's rungs come below the coils in reverse order, so each new step starts on the next
 scan.  Each case has a clock, a TON that starts with its coils.  It times what the coils' own TDs
-cannot.  A time below is the first scan the clock reads that time or more.  The CLICK read each
-case on an earlier ladder, which read the same things in windows of the clock.
+cannot.  A time below is the first scan the clock reads that time or more.
 
 ``out_more``:
 
-- ``toggle_and_timed``: ``out`` reads a toggle's first flip and a timed coil's held rung.  A toggle
+- ``toggle_and_timed``: ``out`` covers a toggle's first flip and a timed coil's held rung.  A toggle
   over two edges, scan 3 reads it on, scan 5 with the rung false, scan 7 past the second edge.
   Result1 = 110, by digit.  100 if the rung's fall turns it off, 111 if the second edge is
   lost.  The timed coils start on scan 9, with the clock, TD226.
@@ -25,7 +24,7 @@ case on an earlier ladder, which read the same things in windows of the clock.
   - That rung falls at 550 ms.  At 700 ms Result4 is 1 if the TD is 0 and 2 if it is kept.
 
   A CLICK reads 110, 0, 1, 2 and ErrorCode 1.  The TD is kept.
-- ``timed_maintained``: nothing has read a maintained coil.  The clock is TD229.
+- ``timed_maintained``: a maintained coil.  The clock is TD229.
 
   - One coil's rung goes at 100 ms into a 400 ms time.  Result1 is the coil at 250 ms (0 if a
     maintained coil follows its rung throughout).  Result2 is the coil at 500 ms (1 if it holds).
@@ -36,8 +35,8 @@ case on an earlier ladder, which read the same things in windows of the clock.
   0/0: first on (Result1), first off past it (Result2); 3 and 6 are the rung's own scans, later ones
   mean a scan's lag.  A timed coil from a DS holding -5: scans on (ErrorCode), 1 as a preset of 0,
   3 (the rung's) where -5 reads as unsigned, 65531 ms.  A CLICK reads 3, 7, 0: no pulse from a
-  preset of 0 or below, and -5 is signed.  Its debounce turns off a scan after the rung falls, as
-  pyrung's has since 2026-11-06 (``deb_zero/off_side_lag``: the off side always takes a scan more).
+  preset of 0 or below, and -5 is signed.  Its debounce turns off a scan after the rung falls
+  (``deb_zero/off_side_lag``: the off side always takes a scan more).
   CLICK's dialog takes a debounce preset of 0 but refuses 0 for a flasher or a timed coil, so this
   case asks neither of those.
 - ``preset_mid_phase``: a preset in a DS moved mid-phase, read live or at the phase's start.  The
@@ -351,7 +350,7 @@ def test_out_more_at_any_scan(monkeypatch, dt, case_id):
 
 
 def test_debounce_of_zero_goes_off_a_scan_after_its_rung():
-    """``zero_and_below`` Result2 takes 6 or 7; pyrung reads CLICK's 7."""
+    """``zero_and_below`` Result2 takes 6 or 7; pyrung reads 7, as a CLICK does."""
     zero = next(c for c in group.cases if c.id == "zero_and_below")
     (result,) = run(Group("out_more", [zero]))
     assert result.actual["Result2"] == 7

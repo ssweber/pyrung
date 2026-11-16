@@ -10,8 +10,7 @@ the range (1, 2, ...) reads differently from the register number.  Every table
 has several matches, so first-match reads differently from last-match.
 pyrung returns the register number of the first match (``DS4204``, not 2).
 
-The expectations are what a CLICK does (hardware round 1, 2026-10-29:
-every case but one passed as written).  A continuous search on a CLICK
+The expectations are what a CLICK does.  A continuous search on a CLICK
 restarts at the first address when its result is 0, resumes after an old
 result that lies inside the range, and misses (-1) from anything else.
 Where a case detects an alternative model:
@@ -40,9 +39,9 @@ Where a case detects an alternative model:
   strictly after the old result (4386, not 4385), also when the old result is
   not itself a match (4384 -> 4385), -1 past the last register, and -1 when
   the old result lies below the range (5; pyrung restarts there, 4383).
-- ``continuous_cursor_outside_range`` (answered as adopted): the edges of that rule, over
+- ``continuous_cursor_outside_range``: the edges of that rule, over
   DD411..DD416 = {7, 1, 7, 7, 2, 7}: an old result one below the range (410),
-  one above it (417) and negative (-5) each miss, -1 (adopted); a search that
+  one above it (417) and negative (-5) each miss, -1; a search that
   restarts from below the range reads 411 for 410 (and for -5); the first
   register (411, a match) resumes after it, 413.  (A reversed range is not
   probed: the exporter writes it as an address list, which a CLICK Search

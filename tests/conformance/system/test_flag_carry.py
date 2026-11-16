@@ -22,7 +22,7 @@ the layout hash, the call and the reset rung's Fill and Copies (on a false rung)
 - Result3 and Result4 are the controls, SC40 and SC46 read by Copies right after the op on its own
   scan: 1, 1.  A 0 there is an op that did not raise its flag, and the reads above it say nothing.
 
-The CLICK read 1, 1, 1, 1 on 2026-11-10.  A flag carries into the next scan, and nothing clears it
+A CLICK reads 1, 1, 1, 1.  A flag carries into the next scan, and nothing clears it
 as the scan starts.  The case owns what ``memory.OWNED_APART`` lists under this group.
 """
 

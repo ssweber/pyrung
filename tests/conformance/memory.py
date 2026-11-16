@@ -48,7 +48,7 @@ BANKS: Mapping[str, int] = {
 
 #: Raw DS a case stages in (a contiguous source range, a search table, ...)
 #: lives in this area.  No manifest block may overlap a DS range a group owns;
-#: the registers inside it that no group's cases use are free for the S6 probes'
+#: the registers inside it that no group's cases use are free for the drum and store probes'
 #: blocks (``drum_idle``, ``drum_rule``, ``store_probe``, ``drum_jump``);
 #: ``drum_settle``'s block sits on the slots ``math`` never used, DS391..DS500,
 #: and ``drum_close``'s on those ``rungs`` never used, DS221..DS300.
@@ -81,7 +81,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DH": range(1, 5),
     },
     "drum": {"C": (range(1901, 2001), range(801, 851)), "T": range(401, 501)},
-    # S6 probes (tests/conformance/drum_shift_search/test_drum_rule.py, test_drum_jump.py,
+    # Drum and store probes (tests/conformance/drum_shift_search/test_drum_rule.py, test_drum_jump.py,
     # test_drum_idle.py, test_store_probe.py).  Their C, T, DD and DS come from
     # what the groups around them leave unused.
     "drum_rule": {
@@ -238,7 +238,7 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "T": range(151, 161),
         "CT": range(161, 171),
     },
-    # Row solve, round 3 (tests/conformance/rungs/test_row_solve.py).
+    # Row solve (tests/conformance/rungs/test_row_solve.py).
     # C414..C450 and C27..C50 are drum_close's.
     "row_solve": {"C": (range(401, 414), range(1, 27)), "CT": range(191, 196)},
     # A box on a continued wire (tests/conformance/rungs/test_cont_box.py).
@@ -481,7 +481,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
         "DF": range(41, 42),
         "TXT": range(994, 1001),
     },
-    # The 2026-11-06 round's follow-up (the follow2_* parts).
+    # The follow2_* parts.
     "flag_steps": {
         "C": range(501, 564),
         "DS": range(3951, 3979),

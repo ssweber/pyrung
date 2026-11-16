@@ -1,10 +1,9 @@
 """A Copy into a Word from below an Int and from NaN: the ``word_floor`` group (part
 ``follow_timing``, where there is room).
 
-``word_store/word_below_zero`` read on a CLICK that DD -1 copied into a DH writes 65535, the
-wrap.  It does not say what a value below -32768 writes, where a store could wrap all 16 bits or
-first floor the value at the least Int, nor what a NaN writes.  The fix step ``store-click`` (3 in
-the ``conform-fix`` arc) guessed both, and this case reads them.
+On a CLICK, DD -1 copied into a DH writes 65535, the wrap (``word_store/word_below_zero``).
+This case asks what a value below -32768 writes, where a store could wrap all 16 bits or
+first floor the value at the least Int, and what a NaN writes.
 
 ``below_int_and_nan``: the values are staged on scan 1 (making the NaN raises SC43, which scan 2
 starts without) and stored on scan 2, each into a DH preset to 0x1234 (4660), so a store that is
@@ -27,8 +26,8 @@ refused reads apart from one that writes:
   halved, 0 where both are classed.  The DH into a DD may read unsigned or signed
   (``word_store/word_into_signed`` asks), so a DH past 32767 reads 16384..32767 or -16384..-1.
 
-A CLICK read 2, 2, 1, 1 and 0 (2026-11-06).  It floors each value at -32768, which a Word holds
-as 32768, and a NaN writes 0.  No store raises SC43.  pyrung reads the same.
+A CLICK reads 2, 2, 1, 1 and 0.  It floors each value at -32768, which a Word holds
+as 32768, and a NaN writes 0.  No store raises SC43.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

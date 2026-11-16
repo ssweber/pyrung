@@ -1,15 +1,14 @@
 """A debounce's off TD at its fall, and flashers with a phase of 0: ``deb_fall`` and ``flash_zero``.
 
-Part ``follow2_coils``.  A CLICK answered every case on 2026-11-10, twice.  It read ``on_zero_tds``
-again on 2026-11-12, after other parts had left values in T275 and T276 (see below).
+Part ``follow2_coils``.
 
 ``deb_fall/off_td_at_fall`` (B1): a debounce of 0 / 100 ms on a rung on scans 2 and 3, off from
 scan 4.  Result1 is the off TD copied on scan 4, the fall, on the rung right after the debounce.
 Result2 is the off TD on scan 5.  Result3 is 1 where the off TD is 0 on scan 3, with the rung
-true.  A CLICK read 1..2, 3, 1.  The off count starts on the scan of the fall (0 would be a count
+true.  A CLICK reads 1..2, 3, 1.  The off count starts on the scan of the fall (0 would be a count
 that starts a scan late), so the debounce turns off a scan after its off TD reaches the preset
-(``DebounceInstruction``).  The rise cleared the off TD, as ``coil_timing/off_td_held`` read.
-pyrung reads the same, 10, 20, 1 at the in-process 10 ms scan.  Result1 and Result2 are
+(``DebounceInstruction``).  The rise clears the off TD (``coil_timing/off_td_held``).
+pyrung reads 10, 20, 1 at the in-process 10 ms scan.  Result1 and Result2 are
 milliseconds and follow the target's scan, so they are ranges for any scan up to 50 ms.
 
 ``flash_zero``: each flasher's presets of 0 are DS (CLICK's editor takes no constant of 0), and
@@ -19,13 +18,12 @@ with a preset of 0 or below is dark and its TDs stand where they are (``FlasherI
 A flasher runs on whatever its TDs hold when it starts, so each case's init writes 0 to its TDs.
 
 - ``off_zero_first_phase`` (L1): 1000 ms on, a DS off preset of 0.  Result4 the on TD and
-  ErrorCode the off TD on scan 14.  A CLICK read 0, 0, 0, 0, 0.  The flasher was dark from the
+  ErrorCode the off TD on scan 14.  A CLICK reads 0, 0, 0, 0, 0.  The flasher is dark from the
   start, with no first on phase and both TDs at 0 from the init.
-- ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off, read as L1.  A CLICK read 0, 0, 0, 0, 0.
-  The flasher was dark and left both TDs at 0 from the init.  An off TD running would be
-  the empty on phase passing to the off phase.  On 2026-11-12 the TDs were not cleared, and a CLICK
-  read 0, 0, 0, 164, 1000.  T275 and T276 held 164 and 1000 from an earlier program, and the dark
-  flasher left them there.  The case now clears them.
+- ``on_zero_tds`` (L2): a DS on preset of 0, 1000 ms off, read as L1.  A CLICK reads 0, 0, 0, 0, 0.
+  The flasher is dark and leaves both TDs at 0 from the init.  An off TD running would be
+  the empty on phase passing to the off phase.  A dark flasher leaves its TDs as they are, so the
+  case clears them.
 - ``lowered_to_zero`` (L3): two flashers on DS presets, their rungs on from ``Cmd``.  The reset
   writes 0 to their four TDs.  A, 1000 / 1000 ms, has its on preset lowered to 0 on the scan its on
   TD first reads 100 or more, in its on phase.  B, 5 / 1000 ms, has its off preset lowered on the
@@ -35,16 +33,14 @@ A flasher runs on whatever its TDs hold when it starts, so each case's init writ
   Result4 is 1 from B's lowering, and 2 once B's off TD is off Result3 or its on TD is under its 5
   ms preset.  ErrorCode is 1 if A is lit after its lowering, and 2 if B is.  ``Fired`` goes up once
   B's preset is 0.  The three verdicts go on watching after that, through the harness's two reads.
-  A CLICK read an earlier ladder that lowered A's preset on scan 6 and B's on scan 10, with
-  ``on TD * 180 + off TD`` read before and on scan 14.  A read 1260 both times and B 907..908 both
-  times.  Both flashers went dark, and their TDs froze where the 0 found them.  So Result2 and
-  Result4 are 1 and ErrorCode is 0 here.  That CLICK held the TDs for 8 scans, and this ladder
-  holds them for longer.  pyrung zeroed both TDs before (Result2 and Result4 2 here).
-- ``short_first_phase`` (L4): 1 ms on, 1000 ms off.  Result4 the on TD on scan 1.  A CLICK read 1,
+  A CLICK turns both flashers dark and freezes their TDs where the 0 found them.  So Result2 and
+  Result4 are 1 and ErrorCode is 0.  A flasher that zeroed its TDs would read 2 in Result2 and
+  Result4.
+- ``short_first_phase`` (L4): 1 ms on, 1000 ms off.  Result4 the on TD on scan 1.  A CLICK reads 1,
   1, 1, 1..2.  The coil is on on the rung's first true scan, though the on TD reached its preset
   on that scan.  The coil shows the phase that ran on a scan, and the next phase shows from the
-  scan after.  pyrung read 0, 0, 0, 10 before.  Its coil showed the next phase at once, so an on
-  phase of a scan or less stayed dark.  Result4 follows the target's scan, so it is a range.
+  scan after.  A coil that showed the next phase at once would read 0, 0, 0, 10, because an on
+  phase of a scan or less would stay dark.  Result4 follows the target's scan, so it is a range.
 
 The cases own what ``memory.OWNED_APART`` lists under these groups.
 """

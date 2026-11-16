@@ -2,11 +2,11 @@
 
 CLICK's help: "SC46 _Math_Operation_Error: Data Registers used in the Math
 formula have Invalid values.  SC50 is turned to ON, the PLC is put in Stop
-Mode."  A CLICK does not do that (hardware round 1, 2026-10-29: all seven
-errors below, one per run).  The Math writes 0 over its destination, SC46 is on
+Mode."  A CLICK does not do that for any of the seven
+errors below.  The Math writes 0 over its destination, SC46 is on
 until a later Math clears it, and the PLC stays in RUN.  SC46 and SC50 are off
 when the harness reads them afterwards.  No CLICK setting is known to change
-this; record the firmware version with the next round.  pyrung matches the
+this.  pyrung matches the
 hardware, so the group runs with every other group, last in
 ``suite.ALL_GROUPS``.
 
