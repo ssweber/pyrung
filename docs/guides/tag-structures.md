@@ -169,7 +169,7 @@ WideSlot = Slot.clone("WideSlot", stride=5)
 BinACounter = Counter.clone("BinACounter", public=True)
 ```
 
-Available flags: `readonly`, `external`, `final`, `public`, `lock`. See [Tag flags](#tag-flags) for details.
+Available flags: `readonly`, `external`, `final`, `public`. See [Tag flags](#tag-flags) for details.
 
 Use it to define a template structure once and clone it for each subsystem.
 
@@ -288,7 +288,7 @@ metadata supplies a matching choice label.
 
 ## Tag flags
 
-Tags carry flags that control validation and presentation. Three semantic flags are enforced by [ladder lints](ladder-lints.md). Two metadata flags mark the tags that matter to the operator and to the machine.
+Tags carry flags that control validation and presentation. Three semantic flags are enforced by [ladder lints](ladder-lints.md). One metadata flag marks the tags that matter to the operator.
 
 ### Semantic flags
 
@@ -306,19 +306,16 @@ FilteredVal   = Int(final=True)      # exactly one writer
 
 `readonly` + `final` and `readonly` + `external` are mutually exclusive and raise `ValueError` at construction. `external` + `final` is allowed (one ladder writer plus external writers).
 
-### Metadata flags
+### Metadata flag
 
 ```python
 Running = Bool(public=True)          # operator-facing status
 State   = Int(choices=SortState, public=True)
-MotorOut = Bool(lock=True)           # a physical output
 ```
 
 **`public`** — part of the intended API surface. Examples are setpoints, mode commands, alarms and key status bits. The VS Code Data View shows a **P** badge and provides a **Public** filter checkbox to hide plumbing tags. It has no validator consequence.
 
 The absence of `public` means plumbing. A plumbing tag is not hidden and not forbidden, just not the featured interface. This is the same convention as Python's `foo` vs `_foo`.
-
-**`lock`** — marks a tag as part of the program's behavioural contract, such as a physical output. The nickname CSV and generated code keep it. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity. It can combine freely with any other flag. Programs using CLICK `TagMap` get this automatically. Output-mapped tags are stamped `lock=True` at construction.
 
 ### Flags on structures
 
@@ -351,7 +348,6 @@ All flags round-trip through the CLICK nickname CSV comment parser using bracket
 [external]
 [final]
 [public]
-[lock]
 [readonly, choices=Off:0|On:1]
 [choices=Bool]
 ```

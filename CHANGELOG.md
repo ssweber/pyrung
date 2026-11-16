@@ -23,6 +23,8 @@
   Cut the lines you don't want from the transcript before you replay it.
 - pyrung no longer checks properties over every reachable state. `always()`, `never()`, `reachable_states()`, `diff_states()`, `Proven`, `Counterexample`, lock files, `pyrung lock` and the console's `prove` command are gone.
   Test each property in pytest with `force()` and `run_for()`, and use `how()` to find a path to a state. Delete `pyrung lock --check` from CI and your `pyrung.lock` files.
+- Tags, blocks, `.slot()`, `Field()`, `@udt`, `@named_array` and `TagMeta` no longer take `lock=`. A nickname file that still holds `[lock]` loads. pyrung drops the flag when it writes the file.
+  Delete `lock=True` from your tag declarations, or regenerate a `tags.py` that pyrung generated.
 
 ### Fixes
 

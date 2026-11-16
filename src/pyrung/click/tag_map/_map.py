@@ -235,7 +235,6 @@ class TagMap:
                 self._system_read_only[slot.logical.name] = slot.read_only
 
         self._stamp_input_externals()
-        self._stamp_output_locks()
         note_metadata_edit()
         self._populate_programmatic_structures()
         self._freeze_entries()
@@ -754,21 +753,6 @@ class TagMap:
                     tag = entry.logical._tag_at(addr)
                     if not tag.external and not tag.readonly:
                         object.__setattr__(tag, "external", True)
-
-    def _stamp_output_locks(self) -> None:
-        """Mark logical tags mapped to output banks as lock."""
-        from pyrung.core.memory_block import OutputBlock
-        from pyrung.core.tag import OutputTag
-
-        for entry in self._tag_entries:
-            if isinstance(entry.hardware, OutputTag) and not entry.logical.lock:
-                object.__setattr__(entry.logical, "lock", True)
-        for entry in self._block_entries:
-            if isinstance(entry.hardware.block, OutputBlock):
-                for addr in entry.logical_addresses:
-                    tag = entry.logical._tag_at(addr)
-                    if not tag.lock:
-                        object.__setattr__(tag, "lock", True)
 
     def _populate_programmatic_structures(self) -> None:
         structures: dict[str, StructuredImport] = {}

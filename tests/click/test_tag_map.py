@@ -2532,48 +2532,59 @@ def test_no_stamp_for_non_input():
 
 
 # ===================================================================
-# Output-mapped tags stamped lock
+# The old lock flag in a nickname comment
 # ===================================================================
 
 
-def test_stamp_lock_standalone_tags():
-    from pyrung.core import Int
-
-    button = Bool("Button")
-    motor = Bool("Motor")
-    speed = Int("Speed")
-
-    TagMap({button: x[1], motor: y[1], speed: ds[1]})
-
-    assert not button.lock
-    assert motor.lock
-    assert not speed.lock
+@pytest.mark.parametrize(
+    ("comment", "meta", "rest"),
+    [
+        ("[lock] Motor", None, "Motor"),
+        ("[readonly, lock] Motor", TagMeta(readonly=True), "Motor"),
+        ("[lock, readonly, min=0] Motor", TagMeta(readonly=True, min=0), "Motor"),
+    ],
+)
+def test_tag_meta_parser_drops_the_old_lock_flag(comment, meta, rest):
+    assert parse_tag_meta(comment) == (meta, rest)
 
 
-def test_stamp_lock_block_range():
-    sensors = Block("Sensor", TagType.BOOL, 1, 4)
-    outputs = Block("Out", TagType.BOOL, 1, 4)
+def test_from_nickname_file_drops_the_old_lock_flag_and_never_writes_it(tmp_path):
+    """An older pyrung wrote ``lock`` on output rows, so reading one must not fail."""
+    path = tmp_path / "old_lock.csv"
+    records = {
+        get_addr_key("Y", 1): AddressRecord(
+            memory_type="Y",
+            address=1,
+            nickname="Motor",
+            comment="[lock] Main motor",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("DS", 1): AddressRecord(
+            memory_type="DS",
+            address=1,
+            nickname="Speed",
+            comment="[readonly, lock] Line speed",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
 
-    TagMap(
-        {sensors: x.select(1, 4), outputs: y.select(1, 4)},
-        include_system=False,
-    )
+    restored = TagMap.from_nickname_file(path)
+    by_name = {entry.logical.name: entry.logical for entry in restored.tags()}
+    assert by_name["Motor"].comment == "Main motor"
+    assert by_name["Speed"].comment == "Line speed"
+    assert by_name["Speed"].readonly is True
+    assert not hasattr(by_name["Motor"], "lock")
 
-    assert all(not sensors[i].lock for i in range(1, 5))
-    assert all(outputs[i].lock for i in range(1, 5))
-
-
-def test_stamp_lock_noop_when_already_lock():
-    motor = Bool("Motor", lock=True)
-
-    TagMap({motor: y[1]}, include_system=False)
-    assert motor.lock
-
-
-def test_no_lock_stamp_for_non_output():
-    button = Bool("Button")
-    TagMap({button: x[1]}, include_system=False)
-    assert not button.lock
+    out = tmp_path / "rewritten.csv"
+    restored.to_nickname_file(out)
+    rows = pyclickplc.read_csv(out)
+    assert rows[get_addr_key("Y", 1)].comment == "Main motor"
+    assert rows[get_addr_key("DS", 1)].comment == "[readonly] Line speed"
 
 
 def test_block_map_to_stamps_slot_identity_onto_bank():

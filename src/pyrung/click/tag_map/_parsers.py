@@ -68,7 +68,6 @@ class TagMeta:
     external: bool = False
     final: bool = False
     public: bool = False
-    lock: bool = False
     link: str | None = None
     physical: str | None = None
     # The response keys of ``pyrung.core.physical.PHYSICAL_KEYS``, as the comment writes them.
@@ -480,7 +479,9 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
     return choices
 
 
-_BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public", "lock"})
+_BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public"})
+#: Flags an older pyrung or ClickNick wrote that mean nothing now. The parser drops them.
+_DROPPED_FLAG_TOKENS = frozenset({"lock"})
 _PHYSICAL_FLAG_TOKENS = frozenset(name for name, key in PHYSICAL_KEYS.items() if key.is_flag)
 _PHYSICAL_VALUE_TOKENS = frozenset(name for name, key in PHYSICAL_KEYS.items() if not key.is_flag)
 _VALUE_TOKENS = frozenset(
@@ -507,6 +508,7 @@ def _is_tag_meta(tokens: list[str]) -> bool:
         return False
     return (
         first in _BOOL_FLAG_TOKENS
+        or first in _DROPPED_FLAG_TOKENS
         or first.startswith("choices=")
         or any(first.startswith(f"{name}=") for name in _VALUE_TOKENS)
         or first.startswith(_OLD_FORM_TOKENS)
@@ -530,6 +532,8 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
     for token in tokens:
         if token in _BOOL_FLAG_TOKENS:
             flags[token] = True
+            continue
+        if token in _DROPPED_FLAG_TOKENS:
             continue
         if token in _PHYSICAL_FLAG_TOKENS:
             response[token] = True
@@ -585,7 +589,6 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         external=flags.get("external", False),
         final=flags.get("final", False),
         public=flags.get("public", False),
-        lock=flags.get("lock", False),
         link=link,
         physical=physical,
         system=system,
@@ -606,7 +609,6 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
     external = False
     final = False
     public = False
-    lock = False
     link: str | None = None
     physical: str | None = None
     response: dict[str, str | bool] = {}
@@ -626,7 +628,6 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
             external = external or parsed.external
             final = final or parsed.final
             public = public or parsed.public
-            lock = lock or parsed.lock
             if parsed.link is not None:
                 link = parsed.link
             if parsed.physical is not None:
@@ -655,7 +656,6 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
         and not external
         and not final
         and not public
-        and not lock
         and link is None
         and physical is None
         and not response
@@ -671,7 +671,6 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
         external=external,
         final=final,
         public=public,
-        lock=lock,
         link=link,
         physical=physical,
         system=system,
@@ -692,7 +691,6 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         and not meta.external
         and not meta.final
         and not meta.public
-        and not meta.lock
         and meta.link is None
         and meta.physical is None
         and not response
@@ -712,8 +710,6 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         tokens.append("final")
     if meta.public:
         tokens.append("public")
-    if meta.lock:
-        tokens.append("lock")
     if meta.link is not None:
         if _LINK_VALUE_RE.fullmatch(meta.link) is None:
             raise ValueError(f"Invalid TagMeta link value {meta.link!r}.")

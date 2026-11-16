@@ -60,8 +60,6 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - Probes with a bounded linked tag refute nothing, and an unbounded one gets no domain, so the facts make no claim. Change them when an idiom fails.
 - **The facts change with the hash seed.** On main, `for_more/clock_edges_in_a_body` gets one of three classifications by `PYTHONHASHSEED`. With some seeds DD82 is stateful, and with others it has no domain. So how()'s key for it changes from run to run. No seed gives a wrong fact.
 - **Left over from the search deletion.**
-  - `Tag(band=...)` was read only by lock files, so nothing reads it now. `lock=` stays, because TagMap stamps it on
-    output banks and codegen and the nickname CSV keep it. Decide whether either goes. [Sam]
   - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
     were the search's. Only tests pass them now. The `indirect_reach` maps they fill are then always empty. [nothing]
 
