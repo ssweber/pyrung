@@ -205,7 +205,7 @@ def validate_math_conditions(
             for index, division in enumerate(_division_nodes(instr.expression)):
                 guards_stable = not (
                     isinstance(division.right, TagExpr)
-                    and graph.writers_of.get(division.right.tag.name)
+                    and graph.may_be_written(division.right.tag.name)
                 )
                 if not _definitely_zero(
                     division.right,

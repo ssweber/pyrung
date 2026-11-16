@@ -797,7 +797,7 @@ def _ote_resolvable(graph: ProgramGraph) -> frozenset[str]:
         if role != TagRole.PIVOT:
             continue
         writer_indices = graph.writers_of.get(tag_name, frozenset())
-        if not writer_indices:
+        if not writer_indices or graph.unlisted_writers_of(tag_name):
             continue
         if all(tag_name in graph.rung_nodes[ni].ote_writes for ni in writer_indices):
             resolvable.add(tag_name)
@@ -1300,7 +1300,8 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
             continue
 
         writer_indices = graph.writers_of.get(tag_name, frozenset())
-        if not writer_indices:
+        if not writer_indices or graph.unlisted_writers_of(tag_name):
+            # A write through a pointer that lists no targets has no form here.
             continue
 
         stats: dict[str, int] = {"pivot_count": 0, "depth": 0}

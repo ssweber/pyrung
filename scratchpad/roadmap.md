@@ -54,7 +54,26 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
   - A `to_text()` copy of an expression into a tag in no block declares only that tag. The runtime counts on by name (`Msg1`, `Msg2`, ...), and an expression's text has no bound, so the analyses miss the rest.
   - A copy of an input takes only the values the ladder writes or the input's split points, not values the outside sets. `test_facts_idioms.py`, `[hmi_value_copied_after_ladder_default-stateful domain-WorkingSetpoint]` and `[compared_input_copied_and_compared-stateful domain-HeldLevel]`. The fixpoint adds an input's split points after it computes the copy, so the fix is not a one-liner.
-- **Pointer writes past the element cap.** The classification's "unwritten" test reads `writers_of`, which leaves out a pointer write into a block past the element cap. So an element such a write reaches gets an input or a constant domain, of any type. In the real-nan review probes, `BigR5` gets (0.0, 1.0, 2.0) and a run stores inf. `Big5Shown` gets (-32768, 0, 50, 200, 32767) and a run stores 100. [nothing]
+- **A pointer's input domain leaves out the addresses past its block.** An `external` pointer with no declared
+  bounds and a default of 5 gets (1..100) for a block of 100 elements. A run sets it to 0, and the copy through it sets
+  `fault.address_error`. No value of the domain does that. Found while fixing the writes through a pointer that list
+  no targets (over-cap-writes). [nothing]
+- **A pointer's declared bounds stand for what the ladder writes into it.** `_indirect_ref_tags` (pdg.py) lists only
+  the addresses a pointer's `choices=` or `min=`/`max=` allow. A CLICK stores a ladder write past a declared bound, and
+  pyrung only reports it. So a `math()` that sets a pointer with `max=10` to 50 writes element 50, and no writer list
+  names it. The narrowing of writes that list no targets trusts no bound the ladder can pass, except here. A write
+  through such a pointer reaches only the listed elements there too (`_declared_reach` in pdg.py). Without that, the
+  tumbler's `AlmHistorian__*_idx` writes reach all of DS, and the tumbler loses 1100 levers. [nothing]
+- **Unchecked leads from over-cap-writes.** [nothing]
+  - `causal/why.py` and the `cause()`/`effect()` walks read `writers_of` and never ask
+    `ProgramGraph.unlisted_writers_of`. So they miss a write through a pointer that lists no targets.
+  - `causal/recorded.py:1370` (`_resolve_indirect_writers`) matches a tag to a write through a pointer by
+    `_pyrung_block_addr` alone. That address moves when a run resolves a mapped slot. `Logi5` mapped onto bank 1005
+    gives 5 before and 1005 after. So the walk can miss the write before the slot is resolved.
+  - `writable_slots` (crossings/indirect_dest.py) takes an `external` root's default as its only value. It also leaves
+    out a literal-only root's default. Its region can miss addresses the pointer reaches. Today it only removes levers.
+  - `_ValueSets._indexed_values` takes an element's default when the element is missing from the tag table, even
+    when a write through a pointer reaches it. The pointer-range lint and `_UnboundedReads` use it.
 - **System tags pyrung never writes.** On a CLICK, `fault.plc_error` (SC19) and `fault.code` (SD1) change, and the firmware version (SD5-SD8) is not 0. pyrung leaves them at 0, so the facts hold them at 0. A run on pyrung refutes nothing. Decide whether pyrung sets them, and then add them to `RUNTIME_VALUES`.
 - **Left over from the search deletion.**
   - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
@@ -96,8 +115,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   - Unread: whether a TD write keeps any part of a ms left over, and a ladder write to the next phase's TD on the scan
     a phase ends.
   - Read the stores that pyrung models but no CLICK has recorded. These are a Copy of NaN or +/-Inf into an Int or a
-    Dint, and a Math of +/-Inf into an Int or a Dint. Also read what a CLICK stores for a pack_text of text just past
-    the Real range, such as "3.40282352E38" (pyrung stores +Inf).
+    Dint, a Math of NaN into an Int, and a Math of +/-Inf into an Int or a Dint. Also read what a CLICK stores for a
+    pack_text of text just past the Real range, such as "3.40282352E38" (pyrung stores +Inf).
 - **`math()` of a Real into a Word.** pyrung runs it, but a CLICK refuses it. The CLICK check reports
   `CLK_MATH_MODE_MIXED`. Decide whether pyrung runs it or refuses it. [nothing]
 - **CLICK v4 send/receive forms** (laddercodec's asks, ruled for after 0.16.0). [CLICK]
@@ -180,9 +199,11 @@ planner, which is fixed in the planner. The last resort is not widened into a se
    - The replay kernel is compiled per search on purpose (pilot.py:519). A shared cache saved about 2 s of compiling
      and nothing on the trio (`specs/jit-catalogue.md`).
    - The three pilot `lru_cache`s ignore `_invalidate_graph_cache`. [nothing]
+7. **Speculative narrowing for steering.** Sam asked for it on 2026-11-16. `how()` may guess a tighter range for a tag than the facts allow, and use the guess to order its candidates and routes. The guess reads declared `min`/`max`/`choices`, even on a tag the ladder also writes. Each guess is checked by running the plan. A failed run drops the guess and falls back to the sound facts. A guess never feeds `static_proofs`, a stop reason or any other claim. So a "can't reach" or a "never changes" rests only on the sound facts. [nothing]
 
 The list to sort:
 - The last resort can't see inputs through plant links.
+- The planner's guesses read `writers_of` alone, so they miss a write through a pointer that lists no targets. These are tide_tables.py:518 and :645, static_expressions.py:302, trace_constraints.py:235, options.py:150 and :155, and guidance.py:75. A run checks each plan, so none of them makes a false claim. [nothing]
 - Chains past the trace depth of 15 reach only through the last resort.
 - An En misread. It reads the scan end where it should read at the rung.
 - Fold the frontier projection into `read_program_step`.

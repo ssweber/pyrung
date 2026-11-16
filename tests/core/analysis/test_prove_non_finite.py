@@ -136,9 +136,9 @@ def test_a_tangent_is_unbounded() -> None:
     assert _non_finite(prog) == {"Result"}
 
 
-def test_the_non_finite_set_holds_an_element_past_the_element_cap() -> None:
-    """This checks only the set.  The classification still gives BigR5 a domain, because it
-    counts no writer for it (roadmap 1b)."""
+def test_an_element_a_pointer_write_lists_no_target_for_may_hold_one() -> None:
+    """A write through a pointer with no declared bounds, into a block of more than 1000
+    elements, lists no targets.  So it may store Inf into BigR5."""
     big = Block("BigR", TagType.REAL, 1, 2000)
     pointer = Int("WritePointer", external=True)
     with Program(strict=False) as prog:
@@ -150,6 +150,10 @@ def test_the_non_finite_set_holds_an_element_past_the_element_cap() -> None:
         with Rung(big[5] > 1.0):
             out(Bool("Big5High"))
     assert "BigR5" in _non_finite(prog)
+    ctx = passes._PassContext(program=prog, dt=0.01)
+    prior = passes._run_prior_pipeline(ctx)
+    assert "BigR5" not in prior.stateful_dims
+    assert "BigR5" not in prior.nondeterministic_dims
 
 
 def test_a_real_the_outside_and_a_rung_both_write_has_no_domain() -> None:
@@ -248,3 +252,28 @@ def test_an_input_real_copied_into_an_int_keeps_a_domain() -> None:
         plc.patch({"Go": True, "DryerTemp": value})
         plc.step()
         assert plc.current_state.tags["TempShown"] in domain
+
+
+def _real_named_like_a_slot(bank: Block, other: Block) -> Any:
+    return Real(f"{bank.name}5")
+
+
+def _real_mapped_onto_two_banks(bank: Block, other: Block) -> Any:
+    # map_to keeps only the last slot on the tag.  Each bank keeps its own.
+    tag = Real("TwiceMappedR")
+    tag.map_to(bank[5])
+    tag.map_to(other[6])
+    return tag
+
+
+@pytest.mark.parametrize("make", [_real_named_like_a_slot, _real_mapped_onto_two_banks])
+def test_a_read_through_a_pointer_sees_a_real_the_bank_names(make: Any) -> None:
+    bank = Block("ReadR", TagType.REAL, 1, 10)
+    other = Block("OtherR", TagType.REAL, 1, 10)
+    tag = make(bank, other)
+    prog = _with(
+        (GO, lambda: copy(3.0e38, BIG)),
+        (GO, lambda: math(BIG * 10, tag)),
+        (GO, lambda: copy(bank[Int("ReadAt", external=True)], COPY)),
+    )
+    assert "Copied" in _non_finite(prog)

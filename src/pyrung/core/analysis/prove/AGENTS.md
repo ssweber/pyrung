@@ -22,13 +22,25 @@ PILOT runs the PLC to check every plan it returns. So a domain that is too wide 
   - a pack fills it
   - the outside writes it too
   - it copies a `Real` that may hold one, such as an input or a receive payload
-- An input `Real` with no ladder writer and a `receive()` payload keep an input domain, which has no NaN in it. A copy of an input `Real` with no ladder writer into another type takes that domain plus what a NaN or an Inf stores. So does a `math()` of the bare tag. A copy stores 0 for a NaN and clamps an Inf (a Word stores 65535 or 32768). A `math()` stores 0 for all three.
-- A pointer write into a block past the element cap lists no targets. `non_finite.py` counts every `Real` element of that block as one that may hold NaN or Inf. The classification still sees such an element as unwritten, so it keeps an input or a constant domain today. This is a known gap (roadmap 1b).
-- A tag with no ladder writer holds its default only when `tag_written_from_outside` (`core/tag.py`) is False. That covers `external`, physical inputs, `link=` feedbacks and the system tags the runtime writes. The facts, the pilot and the lints ask it before they read "no writer" as "constant".
+- An input `Real` with no ladder writer and a `receive()` payload keep an input domain, which has no NaN in it. A copy of an input `Real` with no ladder writer into another type takes that domain plus what a NaN or an Inf stores. So does a `math()` of the bare tag. A copy stores 0 for a NaN and clamps an Inf (a Word stores 65535 or 32768). A `math()` stores 0 for a NaN and for either Inf.
+- A write through a pointer with no declared bounds, into a block of more than 1000 elements (`_INDIRECT_BLOCK_CAP` in pdg.py), lists no targets. `ProgramGraph.unlisted_writers_of` names the rungs that make such writes, for every element the pointer can reach. The facts give such an element no domain, whatever its type. A window or an index expression into such a block counts too, even with declared bounds.
+  - The pointer reaches its power-on value and what its writers store (`_UnlistedReach` in pdg.py, over `value_sets`).
+  - A tag the scan writes before every read of it (`unconditional_write_before_read`) never shows its power-on value.
+  - A writer stores under its rung's comparisons of a tag with a constant (`value_sets.rung_guards`). So `math(Cmd * 10 + 2999, At)` under `Cmd >= 1, Cmd <= 100` reaches only 3009..3999.
+  - An input with declared `choices` or `min`/`max` holds those, unless the ladder writes it too. A CLICK stores a ladder write past a declared bound, and pyrung only reports it.
+  - A write through a pointer the graph lists by its declared bounds (`_indirect_ref_tags`) reaches only those elements here too (`_declared_reach`). Roadmap 1b holds that question.
+  - A pointer the outside or a `receive()` sets reaches the whole block.
+  - An address outside the block is no write, as the runtime drops it.
+- A tag with no ladder writer holds its default only when two checks are False:
+  - `tag_written_from_outside` (`core/tag.py`). That covers `external`, physical inputs, `link=` feedbacks and the system tags the runtime writes.
+  - `ProgramGraph.unlisted_writers_of`, the writes through a pointer that list no targets. `ProgramGraph.may_be_written` asks it and `writers_of` together.
+
+  The facts, the pilot and the lints ask both before they read "no writer" as "constant" or "input".
 - The validators' produced domains (`collect_produced_value_domains`) treat a tag with no writer as an input when it is `external`, a physical input or a `link=` feedback.
   - An input holds its declared `choices=` or integer `min=`/`max=`. A `Real` input gets no domain, because it can hold any value between its bounds.
   - Any other tag with no writer holds its default.
   - The runtime writes the system tags, so these domains leave them out.
+  - A tag a write through a pointer that lists no targets may reach gets none.
 
 ## Build and test
 

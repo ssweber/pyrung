@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
 from types import BuiltinFunctionType, FunctionType, MethodType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
@@ -23,6 +23,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
     InputBlock,
+    block_positions,
 )
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag, tag_written_from_outside
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
@@ -181,6 +182,16 @@ class ProgramGraph:
     block_ranges: dict[str, list[str]]  # range label → member tag names
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
+    # The writes through a pointer that list no targets, by block.  Each is a writer node
+    # and the addresses it can reach (None for every element).  See
+    # ``unlisted_writers_of``.
+    unlisted_writes: dict[Block, tuple[tuple[int, frozenset[int] | None], ...]] = field(
+        default_factory=dict
+    )
+    # ``_slot_addresses`` by block and its count of slot-name changes.
+    _slot_index: dict[tuple[Block, int], dict[str, frozenset[int]]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
     # In an ``unbounded_index_reads`` graph, the elements each over-cap write
     # through an unbounded index reaches, by ``id`` of its destination ref
     # (refs overload ``==``).  Empty otherwise.
@@ -368,6 +379,73 @@ class ProgramGraph:
         """
         tag = self.tags.get(tag_name)
         return tag is not None and tag_written_from_outside(tag)
+
+    def unlisted_writers_of(self, tag_name: str) -> frozenset[int]:
+        """The nodes whose write through a pointer may store into ``tag_name`` unlisted.
+
+        A write through a pointer with no declared bounds, into a block of more than 1000
+        elements, names none of its targets.  ``writers_of`` and the facts' writer lists
+        leave it out, so a check that reads "no writer" as "constant" or "input" asks this
+        too.  The answer covers every element the pointer can reach.
+        """
+        if not self.unlisted_writes:
+            return frozenset()
+        nodes: frozenset[int] = frozenset()
+        for block, addr in self.tag_positions(tag_name, self.unlisted_writes):
+            nodes |= self.unlisted_writers_at(block, addr)
+        return nodes
+
+    def tag_positions(
+        self, tag_name: str, blocks: Collection[Block]
+    ) -> frozenset[tuple[Block, int]]:
+        """Each ``(block, address)`` of *blocks* that a store into reaches ``tag_name``.
+
+        They are the elements the tag is (``block_positions``), and the addresses whose
+        slot name is the tag's name.  The runtime stores by the name the bank gives the
+        address.  So a store also reaches a tag mapped onto a second slot, or a plain tag
+        named like a slot.
+        """
+        found = {
+            (block, addr)
+            for block, addr in block_positions(self.tags.get(tag_name))
+            if block in blocks
+        }
+        for block in blocks:
+            found.update((block, addr) for addr in self._slot_addresses(block).get(tag_name, ()))
+        return frozenset(found)
+
+    def _slot_addresses(self, block: Block) -> dict[str, frozenset[int]]:
+        """Each slot name of *block*, with its addresses, as the bank resolves them now."""
+        key = (block, block._slot_names_changed)
+        found = self._slot_index.get(key)
+        if found is None:
+            index: dict[str, set[int]] = {}
+            for addr in range(block.start, block.end + 1):
+                index.setdefault(block._effective_slot_name(addr), set()).add(addr)
+            found = self._slot_index[key] = {name: frozenset(a) for name, a in index.items()}
+        return found
+
+    def unlisted_writers_at(self, block: Block, addr: int) -> frozenset[int]:
+        """The nodes whose write through a pointer may store into ``block[addr]`` unlisted."""
+        return frozenset(
+            node
+            for node, reach in self.unlisted_writes.get(block, ())
+            if reach is None or addr in reach
+        )
+
+    def unlisted_written(self) -> frozenset[str]:
+        """Every tag of the graph that :meth:`unlisted_writers_of` names a writer for."""
+        if not self.unlisted_writes:
+            return frozenset()
+        return frozenset(name for name in self.tags if self.unlisted_writers_of(name))
+
+    def all_writers_of(self, tag_name: str) -> frozenset[int]:
+        """The nodes that may write ``tag_name``: ``writers_of`` and :meth:`unlisted_writers_of`."""
+        return self.writers_of.get(tag_name, frozenset()) | self.unlisted_writers_of(tag_name)
+
+    def may_be_written(self, tag_name: str) -> bool:
+        """Whether a rung may write ``tag_name``, listed in ``writers_of`` or not."""
+        return bool(self.writers_of.get(tag_name)) or bool(self.unlisted_writers_of(tag_name))
 
     def is_physical_output(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical output tag."""
@@ -891,9 +969,8 @@ class _UnboundedReads:
         self._written: dict[str, list[Tag]] = defaultdict(list)
         for name in sorted(graph.writers_of):
             tag = graph.tags.get(name)
-            block = getattr(tag, "_pyrung_block", None)
-            if tag is not None and block is not None:
-                self._written[block.name].append(tag)
+            for block, _addr in block_positions(tag):
+                self._written[block.name].append(cast(Tag, tag))
         # Elements an over-cap write through an unbounded index reaches, and
         # what each read through one reaches, by id of the ref.
         self.reached: dict[int, list[Tag]] = {}
@@ -933,7 +1010,15 @@ class _UnboundedReads:
         addresses = self._values.addresses(ref)
         tags = list(changing.values())
         if addresses is not None:
-            tags = [tag for tag in tags if getattr(tag, "_pyrung_block_addr", None) in addresses]
+            tags = [
+                tag
+                for tag in tags
+                if any(
+                    addr in addresses
+                    for owner, addr in block_positions(tag)
+                    if owner.name == block.name
+                )
+            ]
         self.read_reach[id(ref)] = tuple(tag.name for tag in tags)
         return tags
 
@@ -1979,7 +2064,7 @@ def _build_program_graph(
     # them into the writer node's ``writes`` BEFORE writers_of is built, so a
     # program-authored status band stops masquerading as never-written free words.
     writer_instrs = _build_writer_instrs(program)
-    indirect_writes, indirect_attribution = _collect_indirect_writes(
+    indirect_writes, indirect_attribution, unlisted_writes = _collect_indirect_writes(
         program, rung_nodes, tag_refs, writer_instrs
     )
     for node_index, slots in indirect_attribution.items():
@@ -2036,6 +2121,8 @@ def _build_program_graph(
         fault_writes=fault_writes,
         unread_fault_writes=frozenset(implicit) - fault_writes,
     )
+    if unlisted_writes:
+        graph.unlisted_writes = _UnlistedReach(program, graph).narrow(unlisted_writes)
     graph.tag_roles = classify_tags(graph)
     for tag in observed_tags:
         # Read from outside and written by no rung: an input.
@@ -2196,10 +2283,10 @@ def _collect_indirect_writes(
     rung_nodes: list[RungNode],
     tag_refs: dict[str, Tag],
     writer_instrs: dict[str, list[Any]],
-) -> tuple[tuple[IndirectWriteRef, ...], dict[int, frozenset[str]]]:
+) -> tuple[tuple[IndirectWriteRef, ...], dict[int, frozenset[str]], list[_UnlistedWrite]]:
     """Collect descriptors for over-cap indirect writes, plus static attribution.
 
-    Returns ``(descriptors, attribution)`` where *descriptors* preserve the
+    Returns ``(descriptors, attribution, unlisted)`` where *descriptors* preserve the
     runtime-resolution metadata (unchanged — ``cause()`` reads it) and
     *attribution* maps a writer node index to the concrete destination slots the
     indirect write can *statically* reach, via the indirect-destination region
@@ -2210,21 +2297,35 @@ def _collect_indirect_writes(
     region is bounded by the pointer's derivable domain (a sound over-approximation
     — a superset of write targets only ever *removes* a tag from the operator-lever
     set); a non-derivable pointer contributes no attribution (today's behavior).
+
+    *unlisted* lists the writes into a block of more than ``_INDIRECT_BLOCK_CAP``
+    elements that the facts' writer lists cannot follow
+    (``ProgramGraph.unlisted_writers_of``).  Those lists name no element of such a
+    block, unless the pointer's declared bounds give 1000 addresses or fewer.  So
+    *unlisted* holds every write a descriptor holds, attributed or not, and also a window
+    (``block.select(Ptr, Ptr + 1)``) and an index expression (``block[Ptr + 1]``).
+    ``_UnlistedReach`` narrows each to the addresses its pointer can hold, once the
+    graph is built.
     """
     from pyrung.core.analysis.crossings.indirect_dest import writable_slots
 
     refs: list[IndirectWriteRef] = []
     attribution: dict[int, set[str]] = {}
+    unlisted: list[_UnlistedWrite] = []
 
     def _check_instruction(instr: Any, node_index: int) -> None:
         cls = type(instr)
         for dest in instruction_write_targets(instr):
             if isinstance(dest, ImmediateRef):
                 dest = dest.value
-            if not isinstance(dest, (IndirectRef, IndirectExprRef)):
+            if not isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
                 continue
             block = dest.block
             if block.end - block.start + 1 <= _INDIRECT_BLOCK_CAP:
+                continue
+            if not _listed_by_declared_bounds(dest):
+                unlisted.append((node_index, instr, dest))
+            if isinstance(dest, IndirectBlockRange):
                 continue
             if isinstance(dest, IndirectRef):
                 if _indirect_ref_tags(block, dest.pointer) is not None:
@@ -2263,7 +2364,147 @@ def _collect_indirect_writes(
             if isinstance(instr, ForLoopInstruction):
                 pending[:0] = instr.instructions
 
-    return tuple(refs), {ni: frozenset(slots) for ni, slots in attribution.items()}
+    return (
+        tuple(refs),
+        {ni: frozenset(slots) for ni, slots in attribution.items()},
+        unlisted,
+    )
+
+
+#: A write that lists no targets, as its node, its instruction and its destination.
+_UnlistedWrite = tuple[int, Any, Any]
+
+
+class _UnlistedReach:
+    """The addresses a write through a pointer can reach, from what the program stores in it.
+
+    A pointer holds its power-on value and what its writers store.  A writer stores under
+    its own rung's comparisons, so ``math(Cmd * 10 + 2999, Idx)`` under ``Cmd >= 1, Cmd <=
+    100`` gives 3009..3999 (``value_sets.rung_guards``).  The write's own rung narrows the
+    pointer too.  A pointer the outside or a ``receive()`` sets is not narrowed.  An input
+    with declared ``choices`` or ``min``/``max`` holds those, unless the ladder writes it
+    too.  A ladder write past a declared bound stores, as on a CLICK.  A tag written
+    before every read of it in the scan (``unconditional_write_before_read``) never shows
+    its power-on value.  An address outside the block writes nothing, as the runtime
+    drops it.
+    """
+
+    def __init__(self, program: Program, graph: ProgramGraph) -> None:
+        self._program = program
+        self._graph = graph
+        self._sets: Any = None
+        self._outside: frozenset[str] = frozenset()
+
+    def narrow(
+        self, writes: list[_UnlistedWrite]
+    ) -> dict[Block, tuple[tuple[int, frozenset[int] | None], ...]]:
+        """*writes* by block, each with the addresses it can reach (None: all of them)."""
+        by_block: dict[Block, dict[int, set[int] | None]] = {}
+        for node, instr, dest in writes:
+            addresses = self.addresses(instr, dest)
+            if addresses is not None and not addresses:
+                continue
+            by_node = by_block.setdefault(dest.block, {})
+            known = by_node.get(node, set())
+            by_node[node] = None if addresses is None or known is None else known | addresses
+        return {
+            block: tuple(
+                (node, None if addrs is None else frozenset(addrs))
+                for node, addrs in sorted(by_node.items())
+            )
+            for block, by_node in by_block.items()
+        }
+
+    def _build(self) -> Any:
+        from pyrung.core.instruction.send_receive._core import ModbusReceiveInstruction
+        from pyrung.core.validation._common import walk_instructions
+
+        from .value_sets import _ValueSets, rung_guards
+
+        instructions = list(walk_instructions(self._program))
+        received: set[str] = set()
+        for instr in instructions:
+            if isinstance(instr, ModbusReceiveInstruction):
+                dest = instr.dest
+                if isinstance(dest, Tag):
+                    received.add(dest.name)
+                elif hasattr(dest, "tags"):
+                    received.update(tag.name for tag in dest.tags())
+        graph = self._graph
+        self._outside = frozenset(
+            received | {name for name, tag in graph.tags.items() if tag_written_from_outside(tag)}
+        )
+        return _ValueSets(
+            instructions,
+            graph.tags,
+            frozenset(received),
+            None,
+            declared_inputs=True,
+            written_first=frozenset(
+                name for name in graph.writers_of if graph.unconditional_write_before_read(name)
+            ),
+            guards=rung_guards(self._program),
+            declared_if_unwritten=True,
+            listed_reach={
+                id(ref): _declared_reach(ref)
+                for instr in instructions
+                for ref in instruction_write_targets(instr)
+                if _listed_by_declared_bounds(ref)
+            },
+        )
+
+    def addresses(self, instr: Any, dest: Any) -> frozenset[int] | None:
+        """The in-block addresses *instr* can write through *dest*, or None for all of them."""
+        if self._sets is None:
+            self._sets = self._build()
+        if isinstance(dest, IndirectRef) and dest.pointer.name in self._outside:
+            return None
+        found = self._sets.write_addresses(instr, dest)
+        if found is None:
+            return None
+        block = dest.block
+        return frozenset(
+            addr
+            for addr in found
+            if block.start <= addr <= block.end and block._is_sparse_address_valid(addr)
+        )
+
+
+def _declared_reach(dest: IndirectRef) -> frozenset[int]:
+    """The addresses of ``block[Ptr]`` that the pointer's declared bounds allow.
+
+    These are the elements ``_indirect_ref_tags`` lists.  A ladder write past the bounds
+    would reach others (roadmap 1b).
+    """
+    block, pointer = dest.block, dest.pointer
+    if pointer.choices is not None:
+        found = {int(float(k)) for k in pointer.choices}
+    else:
+        lo, hi = pointer.min, pointer.max
+        assert lo is not None and hi is not None  # _listed_by_declared_bounds holds
+        found = set(range(int(lo), int(hi) + 1))
+    return frozenset(
+        addr
+        for addr in found
+        if block.start <= addr <= block.end and block._is_sparse_address_valid(addr)
+    )
+
+
+def _listed_by_declared_bounds(dest: Any) -> bool:
+    """Whether the facts' writer lists name what *dest* writes in a block past the cap.
+
+    They follow a plain pointer's ``choices=``, or a ``min=``/``max=`` span of 1000
+    addresses or fewer (``prove.classify._expand_bounded_indirect_tag_names``), and
+    nothing else past the cap.
+    """
+    if not isinstance(dest, IndirectRef):
+        return False
+    pointer = dest.pointer
+    if pointer.choices is not None:
+        return True
+    if pointer.min is None or pointer.max is None:
+        return False
+    return int(pointer.max) - int(pointer.min) + 1 <= _INDIRECT_BLOCK_CAP
 
 
 __all__ = [

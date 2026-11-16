@@ -137,7 +137,7 @@ def site_evidence(
                 g
                 for g in chain.conditions
                 if not any(
-                    graph.writers_of.get(name) for name in _extract_reads_from_condition(g, {})
+                    graph.may_be_written(name) for name in _extract_reads_from_condition(g, {})
                 )
             )
             for chain in reach

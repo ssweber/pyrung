@@ -349,7 +349,7 @@ def _writer_availability(
             produced is not UNKNOWN
             and not _values_match(produced, value)
             and wv.source not in steerable
-            and not pdg.writers_of.get(wv.source)
+            and not pdg.may_be_written(wv.source)
         ):
             # A frozen reference source cannot be steered to make this writer
             # produce a different value. Keep the writer as an honest fallback,
