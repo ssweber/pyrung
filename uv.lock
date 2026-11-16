@@ -558,6 +558,7 @@ source = { editable = "." }
 dependencies = [
     { name = "executing" },
     { name = "pyclickplc" },
+    { name = "pymodbus" },
     { name = "pyrsistent" },
     { name = "tomlkit" },
 ]
@@ -581,6 +582,7 @@ docs = [
 requires-dist = [
     { name = "executing", specifier = ">=2.2.0" },
     { name = "pyclickplc", specifier = ">=0.8.0" },
+    { name = "pymodbus", specifier = ">=3.12,<4" },
     { name = "pyrsistent", specifier = ">=0.20.0" },
     { name = "tomlkit", specifier = ">=0.13.3" },
 ]
