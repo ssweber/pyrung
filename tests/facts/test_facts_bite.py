@@ -2,7 +2,7 @@
 
 Each test plants one wrong fact in a small program's facts, runs the check and expects it
 to report that fact.  The same program with its real facts passes, so the planted fact is
-what fails.
+what fails.  One more test checks that the report lists a stepping tag no run moves.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, Timer, copy, math, on_delay, out
+from pyrung import Bool, Int, Program, Rung, Timer, copy, math, on_delay, out, rise
 from pyrung.core.analysis.pilot import static_proofs
 from tests.facts import check
 from tests.facts.check import Facts, Report, check_program
@@ -52,6 +52,44 @@ def delayed() -> Any:
     return prog
 
 
+def gauge() -> Any:
+    """A level input from 0 to 100 and an alarm above 50."""
+    level = Int("Level", external=True, min=0, max=100)
+    with Program() as prog:
+        with Rung(level > 50):
+            out(Bool("LevelHigh"))
+    return prog
+
+
+def kept_count() -> Any:
+    """A count of Go's edges from 0 to 5, and a copy of it taken when Store is on.
+
+    A rung reads the copy, so the copy is part of the state the facts describe.
+    """
+    go = Bool("Go", external=True)
+    count = Int("Count")
+    kept = Int("Kept")
+    with Program() as prog:
+        with Rung(rise(go), count < 5):
+            math(count + 1, count)
+        with Rung(count >= 5):
+            copy(0, count)
+        with Rung(Bool("Store", external=True)):
+            copy(count, kept)
+        with Rung(kept == 3):
+            out(Bool("KeptThree"))
+    return prog
+
+
+def never_counts() -> Any:
+    """A count whose rung reads a bit nothing writes, so the count never moves."""
+    count = Int("NeverCount")
+    with Program() as prog:
+        with Rung(Bool("NeverOn")):
+            math(count + 1, count)
+    return prog
+
+
 def _run(monkeypatch: pytest.MonkeyPatch, build: Callable[[], Any], plant: Any) -> Report:
     real = check.compute_facts
 
@@ -73,7 +111,7 @@ def _failed(report: Report) -> set[tuple[str, str]]:
     return {(v.fact, v.key) for v in report.violations}
 
 
-@pytest.mark.parametrize("build", [stepper, delayed])
+@pytest.mark.parametrize("build", [stepper, delayed, gauge, kept_count])
 def test_the_real_facts_pass(build: Callable[[], Any]) -> None:
     report = check_program(build.__name__, build, seeds=SEEDS, scans=SCANS)
     assert report.violations == []
@@ -172,3 +210,63 @@ def test_a_wrong_timer_preset(monkeypatch: pytest.MonkeyPatch) -> None:
         facts.done_presets = {DONE: 80}
 
     assert any(fact == "done spec" for fact, _key in _failed(_run(monkeypatch, delayed, plant)))
+
+
+def test_an_input_domain_without_a_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    def plant(facts: Facts) -> None:
+        dims = dict(facts.prior.nondeterministic_dims)
+        assert 51 in dims["Level"]
+        # Every level above 50 turns the alarm on, and 50 does not.
+        dims["Level"] = tuple(v for v in dims["Level"] if v <= 50)
+        _prior(facts, nondeterministic_dims=dims)
+
+    assert ("input domain", "Level") in _failed(_run(monkeypatch, gauge, plant))
+
+
+def test_a_count_called_absorbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pyrung.core.analysis.prove.absorb import _ThresholdAtomSpec, _ThresholdVectorSpec
+
+    def plant(facts: Facts) -> None:
+        # Kept copies Count itself, so a move of Count that keeps its sides shows.
+        atom = _ThresholdAtomSpec(acc_name="Count", threshold=0, form="ge", mode="exact")
+        spec = _ThresholdVectorSpec(acc_name="Count", kind="int_up", atoms=(atom,))
+        _prior(facts, threshold_vector_specs=(*facts.prior.threshold_vector_specs, spec))
+
+    assert ("absorbed value", "Count") in _failed(_run(monkeypatch, kept_count, plant))
+
+
+def test_a_value_the_harness_reaches_called_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.facts.corpus import CORPUS, PREPARE
+
+    name = "valve_with_limit_switch_watchdog"
+    real = static_proofs.linked_feedback_block
+
+    def block(tag: str, value: Any, proofs: Any) -> Any:
+        if (tag, value) == ("Valve", True):
+            return "a planted block"
+        return real(tag, value, proofs)
+
+    monkeypatch.setattr(static_proofs, "linked_feedback_block", block)
+    report = check_program(name, CORPUS[name], seeds=SEEDS, scans=SCANS, prepare=PREPARE[name])
+    assert ("linked block", repr(("Valve", True))) in _failed(report)
+
+
+def test_a_stepping_tag_no_run_moves_is_listed() -> None:
+    report = check_program("never_counts", never_counts, seeds=SEEDS, scans=SCANS)
+    assert report.unmoved == ["NeverCount"]
+
+
+def test_a_wrong_counter_preset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.facts.corpus import CORPUS
+
+    real = check.compute_facts
+
+    def planted(program: Any, plc: Any) -> Any:
+        facts = real(program, plc)
+        assert facts.done_presets == {"Batch_Done": 5}
+        facts.done_presets = {"Batch_Done": 9}
+        return facts
+
+    monkeypatch.setattr(check, "compute_facts", planted)
+    report = check_program("gated_counter", CORPUS["gated_counter"], seeds=SEEDS, scans=SCANS)
+    assert ("done spec", "Batch_Done") in _failed(report)

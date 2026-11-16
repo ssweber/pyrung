@@ -1970,23 +1970,25 @@ def _stored_domain(
     is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the source.  With
     a *calc_mode* the store is a ``math()`` result's, which wraps (40000 stores -25536).
     """
-    from pyrung.core.instruction.conversions import (
-        _store_copy_value_to_tag_type,
-        _truncate_to_tag_type,
-    )
+    from pyrung.core.instruction.conversions import calc_store_transform, copy_store_transform
+    from pyrung.core.storage import store_value
 
-    stored: list[Any] = []
-    for value in domain:
-        if not isinstance(value, (bool, int, float)):
-            keep = calc_mode is None and target.type is TagType.CHAR and isinstance(value, str)
-            return domain if keep else None
-        if calc_mode is None:
-            each = _store_copy_value_to_tag_type(value, target, source)
-        else:
-            each = _truncate_to_tag_type(value, target, calc_mode)
-        if each not in stored:
-            stored.append(each)
-    return tuple(stored)
+    if any(not isinstance(value, (bool, int, float)) for value in domain):
+        keep = calc_mode is None and target.type is TagType.CHAR
+        return domain if keep and all(isinstance(v, str) for v in domain) else None
+    if calc_mode is None:
+        storage = copy_store_transform(target.type, source)
+    else:
+        storage = calc_store_transform(target.type, calc_mode)
+    # A dict keeps the first of equal values in order, and a domain can hold thousands.
+    if storage is None:
+        return tuple(dict.fromkeys(domain))
+    low, high = storage.lower, storage.upper
+    if storage.kind in ("clamp", "wrap", "word") and low is not None and high is not None:
+        # Each of these stores a whole number already in its range as it is.
+        if all(type(v) is int and low <= v <= high for v in domain):
+            return tuple(dict.fromkeys(domain))
+    return tuple(dict.fromkeys(store_value(value, storage) for value in domain))
 
 
 def _interval_bounds(
