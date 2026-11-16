@@ -43,13 +43,6 @@ ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `ca
 
 tests/facts checks the facts against real runs, over the idiom corpus and the conformance programs.
 
-- **The next branch for the check.**
-  - `_unjudged` in tests/facts/check.py matches tally keys by prefix. So "absorbed value crossed a threshold, not
-    judged" counts as judged. Match exact keys. Then lower the valve idiom's stall preset below its 200 ms feedback
-    delay, so the check reaches a linked program's Done.
-  - Three places still treat an unwritten tag that is not an input as a constant. They are `physical=` delay tags
-    without `link=`, `_domain_for_source_tag` and the constant seeding. `CMP_OPERAND_NO_WRITER` also fires on a
-    linked `Int` feedback.
 - **Facts the runs refute.** The check in tests/facts holds each one as a strict xfail, `test_known_failure_is_fixed[...]` in the file named.
   - The how() prior holds system tags at their defaults, so a copy of a clock or the RTC gets 0 only. `test_facts_conformance.py`, `[system/scan_counter_steps_by_one-stateful domain-System_Result2]` and `[rtc_set/date_and_time_apply-stateful domain-DD74]` (DD75, DD84 and DD85 too).
   - A Real domain has no value that stands for NaN or Inf. `test_facts_conformance.py`, `[word_floor/below_int_and_nan-stateful domain-DF32]` and `[modbus_raw/raw_values-stateful domain-DF114]` (DF115 too).
@@ -58,13 +51,14 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - Slice elision drops a tag that a time drum reads as a step preset. `test_facts_conformance.py`, `[drum_ds/ds_preset_ends-scan-local-DS4016]`.
   - A functional dependency is claimed before the rung first writes the tag. `test_facts_idioms.py`, `[funcdep_follows_its_source-functional dep-PosOffset]`.
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
+  - `write_sites` lists only the first character that a `to_text()` copy of a tag writes. How many follow depends on the value, up to 48 for a `Real` without `exponential`. So the program graph and the facts miss the others. `test_facts_conformance.py`, `[text/to_text_fixed-declared writes-CopyInstruction]` and the 19 other cases in `_TO_TEXT_OF_A_TAG`. A fix needs a static bound for each source type, and a bound that covers a whole `Real` may clash with the lints.
   - A copy of an input takes only the values the ladder writes or the input's split points, not values the outside sets. `test_facts_idioms.py`, `[hmi_value_copied_after_ladder_default-stateful domain-WorkingSetpoint]` and `[compared_input_copied_and_compared-stateful domain-HeldLevel]`. The fixpoint adds an input's split points after it computes the copy, so the fix is not a one-liner.
-- **One writer list.** `pilot/static_proofs.py` already uses `analysis/write_sites.py`. The separate list is
-  `absorb._all_write_targets` (absorb.py:244-382), an isinstance chain. Move it onto write_sites.
-  - It changes meaning in two places. absorb leaves out the receive payload on purpose (classify.py ~2590), and
-    classify handles timer and counter status bits on their own (classify.py:210).
-  - The check above covers it. Each instruction's `_writes` is compared with the writes a run records. This is what
-    "derived from the engine" means.
+- **Tags set from outside.** `tag_written_from_outside` covers `external`, physical inputs and `link=` feedbacks. These places still check `external` (and `InputTag`) only.
+  - absorb.py: the external-preset guard, `_is_stable_threshold`, `_stable_int_tag_value`, and the `external` skips in `_find_comparison_absorptions` and four more absorptions.
+  - `pilot/static_proofs.py` `facts_for`, the free set. A harness coupling adds its feedback already. A linked tag with no harness is not free in that run.
+  - `value_sets.py` reads an unwritten linked pointer as its default. The CLICK pointer-range lint reads those value sets.
+  - Probes with a bounded linked tag refute nothing, and an unbounded one gets no domain, so the facts make no claim. Change them when an idiom fails.
+- **The facts change with the hash seed.** On main, `for_more/clock_edges_in_a_body` gets one of three classifications by `PYTHONHASHSEED`. With some seeds DD82 is stateful, and with others it has no domain. So how()'s key for it changes from run to run. No seed gives a wrong fact.
 - **Left over from the search deletion.**
   - `Tag(band=...)` was read only by lock files, so nothing reads it now. `lock=` stays, because TagMap stamps it on
     output banks and codegen and the nickname CSV keep it. Decide whether either goes. [Sam]

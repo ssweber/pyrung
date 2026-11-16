@@ -15,9 +15,9 @@ PILOT runs the PLC to check every plan it returns. So a domain that is too wide 
 ### Where a tag's values come from
 
 - A tag the program writes holds its power-on value and what its writers store. A copy's or a `math()`'s store conversion applies (`_stored_domain`).
-- An `external` tag the program writes also holds a free input's values, because the outside can write it any value (`_extract_value_domain`).
+- An `external` tag or a field feedback (`link=`) that the program writes also holds a free input's values, because the outside can write it any value (`_extract_value_domain`).
 - The validators' produced domains (`collect_produced_value_domains`) treat a tag with no writer as an input when it is `external`, a physical input or a `link=` feedback.
-  - An input holds its declared `choices=` or integer `min=`/`max=`. A `Real` input gets no domain from whole-number bounds, because it can hold any value between them.
+  - An input holds its declared `choices=` or integer `min=`/`max=`. A `Real` input gets no domain, because it can hold any value between its bounds.
   - Any other tag with no writer holds its default.
   - The runtime writes the system tags, so these domains leave them out.
 

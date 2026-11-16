@@ -242,141 +242,30 @@ def _prior_key_done_specs(
 def _all_write_targets(
     instr: Any, reach: Mapping[int, tuple[str, ...]] | None = None
 ) -> list[tuple[str, str]]:
-    """Extract (tag_name, instruction_type) for every write target.
+    """``(tag_name, instruction_type)`` for each tag *instr* writes.
 
-    *reach* (``ProgramGraph.indirect_reach``) names the elements an over-cap
-    write through an unbounded index reaches; without it that write has none.
+    The destinations are the ones ``write_sites`` reads from the instruction's
+    declarations, with the receive payload and timer and counter status bits.
+    A write through a pointer becomes the elements it can reach.  *reach*
+    (``ProgramGraph.indirect_reach``) names those of an over-cap write through
+    an unbounded index.  Without it that write has none.
+
+    A receive payload counts as written here, but a peer can store any value in
+    it.  The callers that need that say so with ``receive_dest_names``.  They are
+    ``_find_comparison_absorptions`` below, and ``collect_produced_value_domains``
+    and ``_classify_dimensions_from_graph`` in classify.py.
     """
-    from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
-    from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.coils import (
-        LatchInstruction,
-        OutInstruction,
-        ResetInstruction,
-    )
-    from pyrung.core.instruction.control import (
-        EnabledFunctionCallInstruction,
-        ForLoopInstruction,
-        FunctionCallInstruction,
-    )
-    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.data_transfer import (
-        BlockCopyInstruction,
-        CopyInstruction,
-        FillInstruction,
-    )
-    from pyrung.core.instruction.drums import (
-        EventDrumInstruction,
-        TimeDrumInstruction,
-        TimeEventDrumInstruction,
-    )
-    from pyrung.core.instruction.out_variants import (
-        DebounceInstruction,
-        FlasherInstruction,
-        TimedInstruction,
-        ToggleInstruction,
-    )
-    from pyrung.core.instruction.packing import (
-        PackBitsInstruction,
-        PackTextInstruction,
-        PackWordsInstruction,
-        UnpackToBitsInstruction,
-        UnpackToWordsInstruction,
-    )
-    from pyrung.core.instruction.send_receive import (
-        ModbusReceiveInstruction,
-        ModbusSendInstruction,
-    )
-    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
-    from pyrung.core.tag import Tag
+    from pyrung.core.analysis.write_sites import instruction_write_targets
     from pyrung.core.validation._common import _resolve_tag_names
 
     from .classify import _expand_indirect_tag_names
 
     itype = type(instr).__name__
-    targets: list[str] = []
-
-    if isinstance(instr, OutInstruction):
-        targets = _resolve_tag_names(instr.target)
-    elif isinstance(instr, (LatchInstruction, ResetInstruction)):
-        targets = _resolve_tag_names(instr.target)
-    elif isinstance(instr, (OnDelayInstruction, OffDelayInstruction)):
-        targets = [instr.done_bit.name, instr.accumulator.name]
-    elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):
-        targets = [instr.done_bit.name, instr.accumulator.name]
-    elif isinstance(instr, CopyInstruction):
-        dest = instr.target
-        if isinstance(dest, Tag):
-            targets = [dest.name]
-        else:
-            targets = _resolve_tag_names(dest)
-            if not targets:
-                targets = _expand_indirect_tag_names(dest, reach)
-    elif isinstance(instr, CalcInstruction):
-        dest = instr.dest
-        if isinstance(dest, Tag):
-            targets = [dest.name]
-        else:
-            targets = _resolve_tag_names(dest)
-            if not targets:
-                targets = _expand_indirect_tag_names(dest, reach)
-    elif isinstance(instr, ShiftInstruction):
-        targets = _resolve_tag_names(instr.bit_range)
-    elif isinstance(instr, (TimeDrumInstruction, TimeEventDrumInstruction)):
-        targets = [t.name for t in instr.outputs]
-        targets.append(instr.current_step.name)
-        targets.append(instr.completion_flag.name)
-        targets.append(instr.accumulator.name)
-    elif isinstance(instr, EventDrumInstruction):
-        targets = [t.name for t in instr.outputs]
-        targets.append(instr.current_step.name)
-        targets.append(instr.completion_flag.name)
-    elif isinstance(instr, (FunctionCallInstruction, EnabledFunctionCallInstruction)):
-        for target in instr._outs.values():
-            targets.extend(_resolve_tag_names(target) or _expand_indirect_tag_names(target, reach))
-    elif isinstance(instr, (BlockCopyInstruction, FillInstruction)):
-        targets = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest, reach)
-    elif isinstance(
-        instr,
-        (
-            PackBitsInstruction,
-            PackWordsInstruction,
-            PackTextInstruction,
-            UnpackToBitsInstruction,
-            UnpackToWordsInstruction,
-        ),
-    ):
-        targets = _resolve_tag_names(instr.dest)
-    elif isinstance(instr, ModbusSendInstruction):
-        targets = [
-            instr.sending.name,
-            instr.success.name,
-            instr.error.name,
-            instr.exception_response.name,
-        ]
-    elif isinstance(instr, ModbusReceiveInstruction):
-        targets = [
-            instr.receiving.name,
-            instr.success.name,
-            instr.error.name,
-            instr.exception_response.name,
-        ]
-    elif isinstance(instr, SearchInstruction):
-        targets = [instr.result.name, instr.found.name]
-    elif isinstance(instr, ForLoopInstruction):
-        targets = [instr.idx_tag.name]
-    elif isinstance(
-        instr, (ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction)
-    ):
-        from pyrung.core.analysis.write_sites import (
-            instruction_write_targets,
-            static_write_target_names,
-        )
-
-        for target in instruction_write_targets(instr):
-            targets.extend(sorted(static_write_target_names(target)))
-
-    return [(name, itype) for name in targets]
+    names: dict[str, None] = {}
+    for target in instruction_write_targets(instr):
+        static = _resolve_tag_names(target)
+        names.update(dict.fromkeys(static or _expand_indirect_tag_names(target, reach)))
+    return [(name, itype) for name in names]
 
 
 def _has_forbidden_data_read(

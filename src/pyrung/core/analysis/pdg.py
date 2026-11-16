@@ -24,7 +24,7 @@ from pyrung.core.memory_block import (
     IndirectRef,
     InputBlock,
 )
-from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
+from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag, tag_written_from_outside
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
 from .affine import extract_affine_expression
@@ -344,6 +344,14 @@ class ProgramGraph:
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
         return isinstance(self.tags.get(tag_name), InputTag)
+
+    def written_from_outside(self, tag_name: str) -> bool:
+        """Return whether something outside the ladder can write ``tag_name``.
+
+        See :func:`tag_written_from_outside`.
+        """
+        tag = self.tags.get(tag_name)
+        return tag is not None and tag_written_from_outside(tag)
 
     def is_physical_output(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical output tag."""

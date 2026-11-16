@@ -608,8 +608,8 @@ def _tag_stays_zero(tag: Tag, graph: Any) -> bool:
     Pyrung gives every numeric tag a real zero initialization value.  The defect
     this rule targets is narrower than ordinary "use before initialization": the
     tag has no ladder writer at all, so that zero never changes.  A configured
-    default, declared external source, physical input, or read-only zero constant
-    carries explicit intent and is left alone.
+    default, a tag the outside writes (see ``ProgramGraph.written_from_outside``) or a
+    read-only zero constant carries explicit intent and is left alone.
     """
     if (
         tag.type not in _NUMERIC_TAG_TYPES
@@ -617,7 +617,7 @@ def _tag_stays_zero(tag: Tag, graph: Any) -> bool:
         or getattr(tag, "has_explicit_default", False)
     ):
         return False
-    if tag.external or tag.readonly or graph.is_physical_input(tag.name):
+    if tag.readonly or graph.written_from_outside(tag.name):
         return False
     return not graph.writers_of.get(tag.name)
 
@@ -626,7 +626,7 @@ def _tag_has_no_writer(tag: Tag, graph: Any) -> bool:
     """Whether *tag* is an undeclared numeric source with no ladder writer."""
     if tag.type not in _NUMERIC_TAG_TYPES or getattr(tag, "has_explicit_default", False):
         return False
-    if tag.external or tag.readonly or graph.is_physical_input(tag.name):
+    if tag.readonly or graph.written_from_outside(tag.name):
         return False
     return not graph.writers_of.get(tag.name)
 

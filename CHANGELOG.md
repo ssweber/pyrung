@@ -31,6 +31,11 @@
 - `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
 - `program.check()` no longer calls a comparison always false when the `math()` that writes the tag wraps past the end of its type.
 - `program.check()` no longer calls a comparison always false when a copy clamps the value it stores, or when a `Real` input has whole-number `min`/`max`.
+- `program.check()` no longer reports these findings on a field feedback (a tag with `link=`):
+  - It has no writer.
+  - A preset stays 0.
+  - A comparison is always false.
+  - A latch is never reset.
 
 ## v0.16.0 (2026-11-14)
 

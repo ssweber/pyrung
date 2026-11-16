@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, Timer, copy, math, on_delay, out, rise
+from pyrung import Bool, Int, Program, Rung, Timer, copy, forloop, math, on_delay, out, rise
 from pyrung.core.analysis.pilot import static_proofs
 from tests.facts import check
 from tests.facts.check import Facts, Report, check_program
@@ -249,6 +249,72 @@ def test_a_value_the_harness_reaches_called_blocked(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(static_proofs, "linked_feedback_block", block)
     report = check_program(name, CORPUS[name], seeds=SEEDS, scans=SCANS, prepare=PREPARE[name])
     assert ("linked block", repr(("Valve", True))) in _failed(report)
+
+
+def _drop_writes(monkeypatch: pytest.MonkeyPatch, kind: type, keep: Callable[[Any], bool]) -> None:
+    """Drop the targets of each *kind* instruction that *keep* rejects, in the facts' list too."""
+    from pyrung.core.analysis import write_sites
+
+    real = write_sites.instruction_write_targets
+
+    def targets(instr: Any) -> Any:
+        found = real(instr)
+        return tuple(t for t in found if keep(t)) if isinstance(instr, kind) else found
+
+    monkeypatch.setattr(write_sites, "instruction_write_targets", targets)
+    monkeypatch.setattr(check, "instruction_write_targets", targets)
+
+
+def test_a_write_the_instruction_does_not_declare(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pyrung.core.instruction.timers import OnDelayInstruction
+
+    acc = Timer.clone("Delay").Acc.name
+    _drop_writes(monkeypatch, OnDelayInstruction, lambda t: getattr(t, "name", None) != acc)
+    report = check_program("delayed", delayed, seeds=SEEDS, scans=SCANS)
+    assert ("declared writes", f"OnDelayInstruction {acc}") in _failed(report)
+
+
+def counted_loop() -> Any:
+    """A forloop that adds 1 to a total three times on each scan Go is on."""
+    total = Int("LoopTotal")
+    with Program() as prog:
+        with Rung(Bool("Go", external=True)):
+            with forloop(3):
+                math(total + 1, total)
+        with Rung(total > 5):
+            copy(0, total)
+    return prog
+
+
+def test_a_loop_index_the_loop_does_not_declare(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The executor runs the loop without calling its execute(), so this shows the recorder
+    # still sees the index the loop writes.
+    from pyrung.core.instruction.control import ForLoopInstruction
+
+    real = check_program("counted_loop", counted_loop, seeds=SEEDS, scans=SCANS)
+    assert real.violations == [] and real.silent_writers == []
+    _drop_writes(monkeypatch, ForLoopInstruction, lambda _target: False)
+    report = check_program("counted_loop", counted_loop, seeds=SEEDS, scans=SCANS)
+    assert any(
+        f == "declared writes" and k.startswith("ForLoopInstruction ") for f, k in _failed(report)
+    )
+
+
+def test_a_writer_the_recorder_never_sees_is_listed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without the loop runners wrapped, the recorder sees none of the loop's own writes.
+    monkeypatch.setattr(check.WriteRecorder, "_LOOP_RUNNERS", ())
+    report = check_program("counted_loop", counted_loop, seeds=SEEDS, scans=SCANS)
+    assert report.silent_writers == ["ForLoopInstruction"]
+
+
+def test_absorbed_values_whose_moves_all_cross_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = check_program("delayed", delayed, seeds=SEEDS, scans=SCANS)
+    assert "absorbed value" not in real.unjudged
+    # Each move now crosses a threshold by the scan's end, so no move judges anything.
+    monkeypatch.setattr(check.Prober, "_same_sides", lambda self, a, b: False)
+    report = check_program("delayed", delayed, seeds=SEEDS, scans=SCANS)
+    assert report.tally.judged.get("absorbed value crossed a threshold, not judged")
+    assert "absorbed value" in report.unjudged
 
 
 def test_a_stepping_tag_no_run_moves_is_listed() -> None:

@@ -1,8 +1,8 @@
 """Check the static facts how() reads against real runs of the program.
 
-This module checks the facts against plain stepping.  It computes a program's facts, drives the program with
-chosen inputs, and judges every fact at every scan of every run.  A fact that a scan
-contradicts is a soundness bug in the fact, not in the run.
+This module checks the facts against plain stepping.  It computes a program's facts,
+drives the program with chosen inputs, and judges every fact at every scan of every run.
+A fact that a scan contradicts is a soundness bug in the fact, not in the run.
 
 The facts come from two entry points, and neither runs the search:
 
@@ -52,15 +52,26 @@ power-on defaults that no scan produced, so the checks start at the end of scan 
   hold together.  A value that ``linked_feedback_block`` says is blocked never appears.
 - **Program facts** (``program_facts``).  A reference constant never changes.  A tag that
   ``scan_transient_rest`` says rests at one value holds it at the end of every scan.
+- **Declared writes** (``write_sites``).  The facts learn what each instruction writes
+  from ``write_sites``.  The check records the tags each instruction writes while it runs.
+  Each must be in the list the facts use, or a fault flag the instruction can set.  The
+  report also names each instruction class that has writes and that no run saw write
+  (``Report.silent_writers``).
 
 How the inputs are chosen.  The run drives each nondeterministic or steerable tag that the
-outside can write.  That is a tag marked ``external``, a physical input, or a tag the
-program writes too.  A tag the program never writes and that is not external is a
-constant, so the run leaves it alone.  Each driven tag draws from its declared ``choices``
-or ``min``/``max``, every value of its input domain and those values plus and minus one.
-It also draws every literal the program compares it with, plus and minus one.  An integer
-without declared bounds also gets 0 and its type's extremes.  A ``Real`` also draws the
-midpoint of each pair of neighbouring values.
+outside can write.  These are:
+
+- a tag marked ``external``
+- a physical input
+- a field feedback (``link=``) that no harness drives
+- a tag the program writes too
+
+Any other tag the program never writes is a constant, so the run leaves it alone.  Each
+driven tag draws from its declared ``choices`` or ``min``/``max``, so a pointer never points
+past its bounds.  It also draws every value of its input domain and every literal the
+program compares it with, each plus and minus one too.  An integer without declared bounds
+also gets 0 and its type's extremes.  A ``Real`` also draws the midpoint of each pair of
+neighbouring values.
 
 A seeded random walk picks a mode, runs it for some scans, then picks again:
 
@@ -98,6 +109,11 @@ from pyrung.core.analysis.pilot import drive_setup, program_facts, static_proofs
 from pyrung.core.analysis.prove import passes as prove_passes
 from pyrung.core.analysis.prove.results import PENDING, Intractable
 from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
+from pyrung.core.analysis.write_sites import (
+    instruction_fault_writes,
+    instruction_write_targets,
+    static_write_target_names,
+)
 from pyrung.core.expression import randint_sites
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
@@ -360,8 +376,7 @@ def driven_tags(facts: Facts, plc: PLC) -> list[str]:
             continue
         if name in facts.reference_constants:
             continue
-        outside = tag.external or facts.pdg.is_physical_input(name)
-        if not outside and not facts.pdg.writers_of.get(name):
+        if not facts.pdg.written_from_outside(name) and not facts.pdg.writers_of.get(name):
             continue
         out.append(name)
     return out
@@ -1343,6 +1358,146 @@ def _short(change: Mapping[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Declared writes: what each instruction writes in a run
+# ---------------------------------------------------------------------------
+
+
+class WriteRecorder:
+    """Records the tags each instruction writes while it runs.
+
+    Each tag goes to the innermost instruction running when it is written.  So a write in a
+    forloop body counts for the body's instruction, and the loop's index for the loop.
+    """
+
+    #: The executor runs a For box's loop itself and never calls its ``execute()``.  So the
+    #: recorder wraps these executor functions as well, or it would miss the loop's writes.
+    _LOOP_RUNNERS = ("_execute_for_loop_natural", "_execute_for_loop_instruction")
+
+    def __init__(self) -> None:
+        #: Each instruction that wrote, by ``id``, with the tags it wrote and the first scan.
+        self.writes: dict[int, tuple[Any, dict[str, int]]] = {}
+        self.scan = 0
+        self._inner: list[set[str]] = []
+
+    @contextmanager
+    def watching(self, program: Any) -> Any:
+        """Record every instruction of *program* until the block ends."""
+        from pyrung.core import executor
+        from pyrung.core.validation._common import walk_instructions
+
+        wrapped = []
+        for instr in walk_instructions(program):
+            if "execute" not in vars(instr):
+                run = instr.execute
+                instr.execute = self._wrap(instr, run)
+                wrapped.append(instr)
+        loops = {name: getattr(executor, name) for name in self._LOOP_RUNNERS}
+        for name, real in loops.items():
+            setattr(executor, name, self._wrap_loop(real))
+        try:
+            yield self
+        finally:
+            for name, real in loops.items():
+                setattr(executor, name, real)
+            for instr in wrapped:
+                del instr.execute
+
+    def _wrap(self, instr: Any, run: Callable[..., None]) -> Callable[..., None]:
+        def execute(ctx: Any, enabled: bool) -> None:
+            self._record(instr, ctx, lambda: run(ctx, enabled))
+
+        return execute
+
+    def _wrap_loop(self, run: Callable[..., None]) -> Callable[..., None]:
+        def loop(program: Any, ctx: Any, index: int, rung: Any, instr: Any, *rest: Any, **kw: Any):
+            self._record(instr, ctx, lambda: run(program, ctx, index, rung, instr, *rest, **kw))
+
+        return loop
+
+    def _record(self, instr: Any, ctx: Any, run: Callable[[], None]) -> None:
+        journal = ctx._begin_capture()
+        self._inner.append(set())
+        try:
+            run()
+        finally:
+            assert ctx._capture_stack.pop() is journal
+            inner = self._inner.pop()
+            if self._inner:
+                self._inner[-1].update(journal)
+            own = set(journal) - inner
+            if own:
+                seen = self.writes.setdefault(id(instr), (instr, {}))[1]
+                for name in own:
+                    seen.setdefault(name, self.scan)
+
+
+def declared_writes(
+    instr: Any, tags: Mapping[str, Any], reach: Mapping[int, tuple[str, ...]]
+) -> Callable[[str], bool]:
+    """Whether the facts list a tag as one *instr* writes.
+
+    The list holds the tags ``absorb._all_write_targets`` gives the facts, the names
+    ``write_sites`` resolves and the fault flags *instr* can set.  The facts expand a pointer
+    write into the tags its pointer's bounds reach.  A pointer write they can't expand (a
+    block past 1000 elements) covers every tag of its block.
+    """
+    from pyrung.core.analysis.prove.absorb import _all_write_targets
+    from pyrung.core.analysis.prove.classify import _expand_indirect_tag_names
+    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
+    from pyrung.core.tag import ImmediateRef
+
+    names = set(instruction_fault_writes(instr))
+    names.update(name for name, _kind in _all_write_targets(instr, reach))
+    blocks: set[str] = set()
+    for target in instruction_write_targets(instr):
+        names |= static_write_target_names(target)
+        if isinstance(target, ImmediateRef):
+            target = target.value
+        indirect = (IndirectRef, IndirectExprRef, IndirectBlockRange)
+        if isinstance(target, indirect) and not _expand_indirect_tag_names(target, reach):
+            blocks.add(target.block.name)
+
+    def covers(name: str) -> bool:
+        block = getattr(tags.get(name), "_pyrung_block", None)
+        return name in names or getattr(block, "name", None) in blocks
+
+    return covers
+
+
+def writer_classes(program: Any) -> set[str]:
+    """The instruction classes of *program* that have writes in ``write_sites``."""
+    from pyrung.core.validation._common import walk_instructions
+
+    return {
+        type(instr).__name__
+        for instr in walk_instructions(program)
+        if instruction_write_targets(instr) or instruction_fault_writes(instr)
+    }
+
+
+def _judge_declared_writes(
+    judge: Judge, recorder: WriteRecorder, tags: Mapping[str, Any], program: Any
+) -> list[str]:
+    """Fail each instruction that wrote a tag the facts do not list for it.
+
+    Returns each instruction class that has writes in ``write_sites`` and that no run saw
+    write.  A class the recorder can't see shows up there, not as a pass.
+    """
+    reach = judge.facts.pdg.indirect_reach
+    for instr, written in recorder.writes.values():
+        covers = declared_writes(instr, tags, reach)
+        judge.tally.note("declared writes")
+        missing = sorted((scan, name) for name, scan in written.items() if not covers(name))
+        if missing:
+            kind = type(instr).__name__
+            names = ", ".join(name for _scan, name in missing[:6])
+            detail = f"a {kind} wrote {names}, and the facts do not list them"
+            judge.fail("declared writes", missing[0][0], detail, f"{kind} {missing[0][1]}")
+    seen = {type(instr).__name__ for instr, _written in recorder.writes.values()}
+    return sorted(writer_classes(program) - seen)
+
+
+# ---------------------------------------------------------------------------
 # Running a program
 # ---------------------------------------------------------------------------
 
@@ -1359,9 +1514,19 @@ class Report:
     #: Kinds of fact the program has that no scan judged, and Dones that never turned
     #: on (``"<Done> on"``) or off.  A fact the runs never reach passes unchecked.
     unjudged: list[str] = field(default_factory=list)
+    #: Instruction classes with writes in ``write_sites`` that no run saw write.
+    silent_writers: list[str] = field(default_factory=list)
 
     def problems(self) -> list[str]:
         return [str(v) for v in self.violations]
+
+
+#: The tally keys that judge each kind of fact whose own name is no tally key.  A key that
+#: says "not judged" never counts, though it starts with the kind's name.
+_JUDGED_BY = {
+    "input domain": ("input domain, swapped", "input domain, value in it"),
+    "stateful domain": ("stateful domain, swapped", "stateful domain, value in it"),
+}
 
 
 def _unjudged(judge: Judge, prober: Prober | None) -> list[str]:
@@ -1377,6 +1542,7 @@ def _unjudged(judge: Judge, prober: Prober | None) -> list[str]:
         "done spec": bool(judge.done),
         "exclusion": len(judge.bools) > 1,
         "linked block": bool(facts.proofs.couplings),
+        "declared writes": bool(facts.pdg.writers_of),
     }
     if prober is not None:
         kinds = {kind for kind, _members in prober.domains.values()}
@@ -1388,7 +1554,7 @@ def _unjudged(judge: Judge, prober: Prober | None) -> list[str]:
     out = [
         kind
         for kind, present in has.items()
-        if present and not any(n for key, n in judged.items() if key.startswith(kind))
+        if present and not any(judged.get(key) for key in _JUDGED_BY.get(kind, (kind,)))
     ]
     for done in sorted(judge.done):
         out += [
@@ -1433,37 +1599,43 @@ def check_program(
     aimed = aims(program, values)
     every = max(1, scans // PROBES_PER_RUN)
     prober: Prober | None = None
-    for seed in seeds:
-        run = _plc(program)
-        if prepare is not None:
-            prepare(run)
-        judge.tally.runs += 1
-        judge.power_on(run.current_state.tags)
-        prober = Prober(facts, driven, seed)
-        walk = RandomInputs(values, seed, hold, aimed)
-        count = 0
+    recorder = WriteRecorder()
+    with recorder.watching(program):
+        for seed in seeds:
+            run = _plc(program)
+            if prepare is not None:
+                prepare(run)
+            judge.tally.runs += 1
+            judge.power_on(run.current_state.tags)
+            prober = Prober(facts, driven, seed)
+            walk = RandomInputs(values, seed, hold, aimed)
+            count = 0
 
-        def one_scan(patch: Mapping[str, Any], run: PLC = run, prober: Prober = prober) -> None:
-            nonlocal count
-            count += 1
-            before = run.current_state.tags
-            # The power-on state is no scan's result, so the domains start at scan 2's start.
-            forks = prober.forks(run, patch, count % every == 0) if probing and count > 1 else []
-            if patch:
-                run.patch(dict(patch))
-            run.step()
-            judge.tally.scans += 1
-            judge.see(count, run.current_state.tags, before)
-            if forks:
-                prober.judge(run, forks, judge, count)
+            def one_scan(patch: Mapping[str, Any], run: PLC = run, prober: Prober = prober) -> None:
+                nonlocal count
+                count += 1
+                recorder.scan = count
+                before = run.current_state.tags
+                # The power-on state is no scan's result, so the domains start at scan 2's start.
+                forks = (
+                    prober.forks(run, patch, count % every == 0) if probing and count > 1 else []
+                )
+                if patch:
+                    run.patch(dict(patch))
+                run.step()
+                judge.tally.scans += 1
+                judge.see(count, run.current_state.tags, before)
+                if forks:
+                    prober.judge(run, forks, judge, count)
 
-        if driver is not None:
-            driver(run, one_scan, walk)
-        else:
-            for _ in range(scans):
-                one_scan(walk.next())
-        for kind, members in prober.tally_members.items():
-            judge.tally.note(kind, members)
+            if driver is not None:
+                driver(run, one_scan, walk)
+            else:
+                for _ in range(scans):
+                    one_scan(walk.next())
+            for kind, members in prober.tally_members.items():
+                judge.tally.note(kind, members)
+    silent = _judge_declared_writes(judge, recorder, plc.tags, program)
     judge.finish()
     unjudged = _unjudged(judge, prober if probing else None)
-    return Report(label, judge.violations, judge.tally, None, judge.unmoved, unjudged)
+    return Report(label, judge.violations, judge.tally, None, judge.unmoved, unjudged, silent)

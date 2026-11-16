@@ -75,7 +75,7 @@ from pyrung.core.instruction.conversions import (
 )
 from pyrung.core.storage import BLANK_CHAR
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME, system
-from pyrung.core.tag import TagType
+from pyrung.core.tag import TagType, tag_written_from_outside
 
 from .absorb import (
     _DONE_KIND_COUNT_DOWN,
@@ -864,11 +864,7 @@ def _domain_for_source_tag(
     # tags with comparison atoms), but that's fine: this only affects how
     # copy/fill/calc source values propagate through the fixpoint, not what
     # enters known_domains directly.
-    if (
-        not tag.external
-        and tag_name not in graph.writers_of
-        and not graph.is_physical_input(tag_name)
-    ):
+    if tag_name not in graph.writers_of and not graph.written_from_outside(tag_name):
         return (tag.default,)
 
     domain = _extract_value_domain(
@@ -1477,9 +1473,8 @@ def _collect_structural_domain_info(
         if tag.readonly:
             known_domains[tag_name] = (tag.default,)
         elif (
-            not tag.external
-            and tag_name not in graph.writers_of
-            and not graph.is_physical_input(tag_name)
+            tag_name not in graph.writers_of
+            and not graph.written_from_outside(tag_name)
             and tag_name not in influences_comparison
         ):
             known_domains[tag_name] = (tag.default,)
@@ -1672,17 +1667,15 @@ def collect_produced_value_domains(
         for name, tag in graph.tags.items()
         if getattr(tag, "_pyrung_block", None) in opaque_dest_blocks
     }
-    # Receive payloads are external producers even without an explicit external
-    # annotation. The facts' write-target helper lists their status outputs,
-    # not their payloads; a ladder reset must not become the only known writer.
+    # The remote device decides what a receive() stores in its payload, so a
+    # payload has no complete set of writers, even without ``external``.
     incomplete_targets = (
         opaque_targets
         | _collect_receive_dest_names(program)
         | {
             name
             for name, tag in graph.tags.items()
-            if graph.writers_of.get(name)
-            and (tag.external or tag.readonly or graph.is_physical_input(name))
+            if graph.writers_of.get(name) and (tag.readonly or graph.written_from_outside(name))
         }
     )
 
@@ -1696,9 +1689,7 @@ def collect_produced_value_domains(
             known[name] = (tag.default,)
         elif not writers:
             declared = _declared_domain(tag)
-            # A linked feedback tag answers its command in the field, and the harness
-            # writes it in a test.
-            if tag.external or graph.is_physical_input(name) or tag.link is not None:
+            if graph.written_from_outside(name):
                 # A Real between whole-number bounds can hold any value between them, so
                 # the whole numbers alone would leave values out.
                 if declared is not None and tag.type is not TagType.REAL:
@@ -2295,8 +2286,8 @@ def _extract_value_domain(
     elif literal_write_domains and tag_name in literal_write_domains:
         base_domain = literal_write_domains[tag_name]
 
-    if base_domain is not None and tag.external:
-        # The outside can write an external tag any value, so its domain is a free
+    if base_domain is not None and tag_written_from_outside(tag):
+        # The outside can write such a tag any value, so its domain is a free
         # input's as well as what the program writes.
         others = None
         if known_domains is not None:
@@ -3042,8 +3033,8 @@ def _classify_dimensions_from_graph(
 
     # Unwritten internal tags that never influence a comparison are constant
     # storage (Block slots, unused tags).  Everything else -- external inputs,
-    # HMI tags used in conditions, receive destinations, and free inputs that
-    # feed a comparison through arithmetic/copy data flow -- is genuinely
+    # field feedbacks, HMI tags used in conditions, receive destinations, and
+    # free inputs that feed a comparison through arithmetic/copy data flow -- is genuinely
     # under-specified and must surface as Intractable (or heuristic seeding)
     # so the user adds bounds.  ``atom_idx`` only records *direct* comparison
     # participation, so the transitive data-flow closure is used.
@@ -3051,8 +3042,7 @@ def _classify_dimensions_from_graph(
         name
         for name, tag in graph.tags.items()
         if name not in graph.writers_of
-        and not tag.external
-        and not graph.is_physical_input(name)
+        and not graph.written_from_outside(name)
         and name not in receive_dest_names
         and name not in influences_comparison
     )

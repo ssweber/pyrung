@@ -4,6 +4,7 @@ from pyrung.core import (
     Block,
     Bool,
     Int,
+    Physical,
     Program,
     Rung,
     TagType,
@@ -71,6 +72,24 @@ class TestStuckHigh:
         assert f.kind == "high"
         assert f.missing_side == "reset"
         assert "never reset" in f.message
+
+    def test_field_feedback_latch_is_clean(self):
+        # The field sets a link= feedback, so the field can turn it off.
+        closed = Bool("GateClosed", link="Motor")
+        with Program() as prog:
+            with Rung(ButtonA):
+                latch(closed)
+
+        assert not validate_stuck_bits(prog).findings
+
+    def test_unlinked_physical_latch_is_stuck(self):
+        # A physical= without link= is only metadata, so nothing outside resets the latch.
+        closed = Bool("DoorShut", physical=Physical("DoorShut", on_delay="100ms"))
+        with Program() as prog:
+            with Rung(ButtonA):
+                latch(closed)
+
+        assert [f.code for f in validate_stuck_bits(prog).findings] == [COIL_STUCK_HIGH]
 
 
 # ---------------------------------------------------------------------------

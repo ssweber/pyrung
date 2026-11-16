@@ -49,6 +49,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.tag import tag_written_from_outside
 from pyrung.core.validation._common import (
     DomainMap,
     WriteSite,
@@ -639,8 +640,9 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
         tag = tag_map.get(tag_name)
         if tag is not None and tag.readonly:
             continue
-        # Skip external tags — missing side is handled outside the ladder
-        if tag is not None and tag.external:
+        # Skip a tag the outside writes (external, or a field feedback with link=).  The
+        # field or the HMI handles the missing side.
+        if tag is not None and tag_written_from_outside(tag):
             continue
 
         latches = latch_sites.get(tag_name, [])
