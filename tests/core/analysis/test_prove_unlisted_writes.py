@@ -387,3 +387,73 @@ def test_a_plain_tag_named_like_a_slot_is_reached() -> None:
             out(Bool("High"))
     _listed, unlisted = _writer_nodes(prog, "Bank100")
     assert unlisted
+
+
+def test_a_huge_block_finds_a_tag_by_its_slot_name_without_a_walk() -> None:
+    huge = Block("Huge", TagType.INT, 1, 5_000_000)
+    huge.slot(9, name="Renamed")
+    plain = Int("Huge5")
+    renamed = Int("Renamed")
+    with Program(strict=False) as prog:
+        with Rung(WRITE):
+            copy(SOURCE, huge[AT])
+            copy(1, plain)
+            copy(1, renamed)
+            copy(1, Int("Huge9"))
+            copy(1, Int("Elsewhere"))
+    graph = build_program_graph(prog)
+    assert graph.tag_positions("Huge5", (huge,)) == {(huge, 5)}
+    assert graph.tag_positions("Renamed", (huge,)) == {(huge, 9)}
+    assert not graph.tag_positions("Huge9", (huge,))
+    assert not graph.tag_positions("Elsewhere", (huge,))
+    assert graph.unlisted_writers_of("Huge5")
+    assert not graph.unlisted_writers_of("Elsewhere")
+
+
+def test_a_huge_block_with_a_formatter_counts_every_tag_as_reached() -> None:
+    from pyrung.core.analysis.value_sets import _MAX_BLOCK_SCAN
+
+    huge = Block(
+        "Huge", TagType.INT, 1, _MAX_BLOCK_SCAN + 1, address_formatter=lambda b, a: f"{b}_{a}"
+    )
+    graph = build_program_graph(_program(huge[AT], huge[5]))
+    assert graph.unlisted_writers_of("Huge_5")
+    assert graph.unlisted_writers_of("Source")
+    edge = Block("Edge", TagType.INT, 1, _MAX_BLOCK_SCAN, address_formatter=lambda b, a: f"{b}_{a}")
+    exact = build_program_graph(_program(edge[AT], edge[5]))
+    assert exact.unlisted_writers_of("Edge_5")
+    assert not exact.unlisted_writers_of("Source")
+
+
+def _unbounded(prog: Program) -> Any:
+    return build_program_graph(prog, unbounded_index_reads=True)
+
+
+def test_an_unbounded_read_sees_a_plain_tag_named_like_a_slot() -> None:
+    for pointer_bounded in (False, True):
+        big = Block("Big", TagType.INT, 1, 2000)
+        plain = Int("Big5")
+        ptr = Int("Ptr") if pointer_bounded else Int("Ptr", external=True)
+        with Program(strict=False) as prog:
+            if pointer_bounded:
+                with Rung():
+                    copy(5, ptr)
+            with Rung(WRITE):
+                copy(42, plain)
+            with Rung():
+                copy(big[ptr], Int("Dest"))
+        graph = _unbounded(prog)
+        assert ("Big5",) in graph.indirect_read_reach.values()
+
+
+def test_a_rename_after_the_first_lookup_gives_the_new_answer() -> None:
+    big = Block("Big", TagType.INT, 1, 5000)
+    big.slot(9, name="First")
+    graph = build_program_graph(_program(big[AT], big[5]))
+    assert graph.tag_positions("First", (big,)) == {(big, 9)}
+    assert graph.tag_positions("Big9", (big,)) == frozenset()
+    big.slot(9).reset()
+    big.slot(9, name="Second")
+    big.slot(12, name="First")
+    assert graph.tag_positions("First", (big,)) == {(big, 12)}
+    assert graph.tag_positions("Second", (big,)) == {(big, 9)}
