@@ -1,4 +1,4 @@
-"""how() and never() try only what a tag can hold.
+"""how() tries only what a tag can hold.
 
 A literal comes off a rung as written.  ``C == "AB"`` compares a CHAR to two characters, so
 no scan can see it true, and a patch refuses "AB".  A candidate value is what the tag's store
@@ -13,16 +13,8 @@ from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, copy, fill, l
 from pyrung.core import PLC, Block, TagType
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot.skiff import _declared_domain
-from pyrung.core.analysis.prove import (
-    Counterexample,
-    Intractable,
-    Proven,
-    always,
-    never,
-    reachable_states,
-)
+from pyrung.core.analysis.prove import _build_prior_facts
 from pyrung.core.analysis.prove.classify import _condition_to_expr, _extract_value_domain
-from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.crossing import Affine, invert_affine_candidate
 from pyrung.core.input_overrides import held_candidates, refuses_value
 from pyrung.core.storage import StoreTransform
@@ -48,6 +40,18 @@ def _how(program: Program):
     return PLC(program, dt=0.01).how(Y)
 
 
+def _held_at_the_goal(program: Program, name: str, default=None):
+    """What *name* holds on the scan how() reaches Y."""
+    plan = _how(program)
+    assert plan.reachable is True
+    assert plan.fork.current_state.tags["Y"] is True
+    return plan.fork.current_state.tags.get(name, default)
+
+
+def _domain(program: Program, name: str) -> tuple:
+    return _build_prior_facts(program).nondeterministic_dims[name]
+
+
 @pytest.mark.parametrize(
     "condition",
     [
@@ -63,62 +67,40 @@ def _how(program: Program):
         pytest.param(lambda: R == 1e39, id="past a real, equal"),
     ],
 )
-def test_a_condition_no_held_value_meets_is_proven_and_unreachable(condition) -> None:
-    program = _program(condition())
-
-    assert isinstance(never(program, Y), Proven)
-    assert _how(program).reachable is False
-
-
-@pytest.mark.parametrize(
-    ("condition", "tag", "true_values"),
-    [
-        # Dropping the literal would leave only the default here: a false Proven.
-        pytest.param(lambda: In > 3.5, "In", range(4, 32768), id="above a fraction"),
-        pytest.param(lambda: In >= 3.5, "In", range(4, 32768), id="at or above a fraction"),
-        pytest.param(lambda: In < 3.5, "In", range(-32768, 4), id="below a fraction"),
-        pytest.param(lambda: In > -3.5, "In", range(-3, 32768), id="above a negative fraction"),
-        pytest.param(lambda: In < -3.5, "In", range(-32768, -3), id="below a negative fraction"),
-        pytest.param(lambda: In > 0.5, "In", range(1, 32768), id="above a half"),
-        pytest.param(lambda: In < -0.5, "In", range(-32768, 0), id="below a negative half"),
-        pytest.param(lambda: In < 99999, "In", range(-32768, 32768), id="below past an int"),
-        pytest.param(lambda: In > -99999, "In", range(-32768, 32768), id="above below an int"),
-        pytest.param(lambda: W < 70000, "W", range(0, 65536), id="below past a word"),
-        pytest.param(lambda: Bounded > 3.5, "Bounded", range(4, 11), id="bounded, above"),
-        pytest.param(lambda: Or(In == "x", In == 7), "In", [7], id="a string or a number"),
-    ],
-)
-def test_a_condition_a_held_value_meets_stays_reachable(condition, tag, true_values) -> None:
-    program = _program(condition())
-
-    result = never(program, Y)
-    assert isinstance(result, Counterexample)
-    assert result.trace[-1].inputs[tag] in true_values
-    assert _how(program).reachable is True
-
-
-def test_a_real_past_its_range_is_met_by_the_inf_a_real_holds() -> None:
-    """A store past float32 range holds Inf, and Inf is past the literal: Proven would be false."""
-    plc = PLC(program := _program(R >= 1e39), dt=0.01)
-    plc.patch({R: float("inf")})
-    plc.step()
-    assert plc.state.tags["Y"] is True
-
-    result = never(program, Y)
-    assert isinstance(result, Counterexample)
-    assert result.trace[-1].inputs["R"] == float("inf")
-    assert _how(program).reachable is True
+def test_a_condition_no_held_value_meets_is_unreachable(condition) -> None:
+    assert _how(_program(condition())).reachable is False
 
 
 @pytest.mark.parametrize(
     "condition",
     [
-        pytest.param(lambda: R <= -1e39, id="below"),
-        pytest.param(lambda: R < 1e39, id="any finite is below"),
+        # Dropping the literal would leave only the default here.
+        pytest.param(lambda: In > 3.5, id="above a fraction"),
+        pytest.param(lambda: In >= 3.5, id="at or above a fraction"),
+        pytest.param(lambda: In < 3.5, id="below a fraction"),
+        pytest.param(lambda: In > -3.5, id="above a negative fraction"),
+        pytest.param(lambda: In < -3.5, id="below a negative fraction"),
+        pytest.param(lambda: In > 0.5, id="above a half"),
+        pytest.param(lambda: In < -0.5, id="below a negative half"),
+        pytest.param(lambda: In < 99999, id="below past an int"),
+        pytest.param(lambda: In > -99999, id="above below an int"),
+        pytest.param(lambda: W < 70000, id="below past a word"),
+        pytest.param(lambda: Bounded > 3.5, id="bounded, above"),
+        pytest.param(lambda: Or(In == "x", In == 7), id="a string or a number"),
     ],
 )
-def test_a_real_range_literal_keeps_both_sides(condition) -> None:
-    assert isinstance(never(_program(condition()), Y), Counterexample)
+def test_a_condition_a_held_value_meets_stays_reachable(condition) -> None:
+    assert _how(_program(condition())).reachable is True
+
+
+def test_a_real_past_its_range_is_met_by_the_inf_a_real_holds() -> None:
+    """A store past float32 range holds Inf, and Inf is past the literal."""
+    plc = PLC(program := _program(R >= 1e39), dt=0.01)
+    plc.patch({R: float("inf")})
+    plc.step()
+    assert plc.state.tags["Y"] is True
+
+    assert _how(program).reachable is True
 
 
 @pytest.mark.parametrize(
@@ -135,13 +117,12 @@ def test_a_real_range_literal_keeps_both_sides(condition) -> None:
 def test_a_char_compared_by_order_has_neighbours(condition, true_values) -> None:
     program = _program(condition())
 
-    result = never(program, Y)
-    assert isinstance(result, Counterexample)
-    assert result.trace[-1].inputs.get("C", "\x00") in true_values
+    assert true_values & set(_domain(program, "C"))
+    assert _held_at_the_goal(program, "C", "\x00") in true_values
 
 
-def test_a_char_past_every_char_is_proven() -> None:
-    assert isinstance(never(_program(C < "\x00"), Y), Proven)
+def test_a_char_past_every_char_is_unreachable() -> None:
+    assert _how(_program(C < "\x00")).reachable is False
 
 
 def test_how_takes_the_other_branch_of_an_or() -> None:
@@ -156,61 +137,7 @@ def test_a_literal_no_tag_holds_blocks_its_rung_not_the_run() -> None:
         with Rung(M, Go):
             out(Y)
 
-    assert isinstance(never(program, Y), Proven)
     assert _how(program).reachable is False
-
-
-def _splits_a_tag_holding_none_of_its_choices() -> tuple[Program, Bool]:
-    switch = Char("Sw", choices={"AB": "two"}, default="AB")
-    hit = Bool("SwHit")
-    with Program(strict=False) as program:
-        with Rung(Go):
-            copy("AB", switch)
-        with Rung(switch == "AB"):
-            out(hit)
-    return program, hit
-
-
-def test_a_split_with_no_case_to_try_declines_and_names_the_tag() -> None:
-    program, hit = _splits_a_tag_holding_none_of_its_choices()
-    for engine in (PLC, CompiledPLC):
-        plc = engine(program, dt=0.01)
-        plc.step()
-        assert plc.current_state.tags["SwHit"] is True
-
-    for result in (
-        never(program, hit, split_at=["Sw"]),
-        always(program, ~hit, split_at=["Sw"]),
-        reachable_states(program, project=["SwHit"], split_at=["Sw"]),
-    ):
-        assert isinstance(result, Intractable)
-        assert "Sw" in result.reason
-        assert result.tags == ["Sw"]
-    assert isinstance(never(program, hit), Counterexample)
-
-
-@pytest.mark.parametrize("kwargs", [{}, {"split_at": ["Held"]}], ids=["plain", "split_at"])
-@pytest.mark.parametrize("engine", [PLC, CompiledPLC])
-def test_a_witness_leaves_out_a_default_the_tag_could_not_be_patched_to(engine, kwargs) -> None:
-    """Held starts at "AB", which a patch refuses; a rung is what moves it to "B"."""
-    Held = Char("Held", choices={"AB": "two", "B": "one"}, default="AB")
-    with Program(strict=False) as program:
-        with Rung(Go):
-            copy("B", Held)
-        with Rung(Held == "AB"):
-            out(Y)
-
-    result = never(program, Y, **kwargs)
-
-    assert isinstance(result, Counterexample)
-    assert all("Held" not in step.inputs for step in result.trace)
-    plc = engine(program, dt=0.01)
-    for step in result.trace:
-        if step.inputs:
-            plc.patch(step.inputs)
-        for _ in range(step.scans):
-            plc.step()
-    assert plc.current_state.tags["Y"] is True
 
 
 def _copy_into(words) -> None:
@@ -261,7 +188,7 @@ def test_a_wrap_candidate_prefers_one_the_source_can_hold(storage, source, needs
 
 
 def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
-    """The back-propagated 3.5 lands on an INT source as 3: a replay holds that too."""
+    """The back-propagated 3.5 lands on an INT source as 3, and a replay holds that too."""
     D = Real("D")
     with Program() as program:
         with Rung():
@@ -269,9 +196,8 @@ def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
         with Rung(D > 3.5):
             out(Y)
 
-    result = never(program, Y)
-    assert isinstance(result, Counterexample)
-    assert result.trace[-1].inputs["In"] >= 4
+    assert all(type(v) is int for v in _domain(program, "In"))
+    assert _held_at_the_goal(program, "In") >= 4
 
 
 @pytest.mark.parametrize(
@@ -317,24 +243,10 @@ def test_a_candidate_the_store_would_change_is_mapped(tag, given, stored) -> Non
 def test_a_whole_float_on_an_int_is_the_int(condition, true_at) -> None:
     program = _program(condition())
 
-    result = never(program, Y)
-    assert isinstance(result, Counterexample)
-    witness = result.trace[-1].inputs["In"]
+    assert all(type(v) is int for v in _domain(program, "In"))
+    witness = _held_at_the_goal(program, "In")
     assert type(witness) is int
     assert true_at(witness)
-    assert _how(program).reachable is True
-
-
-def test_a_witness_on_a_real_keeps_the_form_of_its_literal() -> None:
-    temp = Real("FormTemp", choices={-1: "open", 5: "fine"})
-    hit = Bool("FormHit")
-    with Program(strict=False) as program:
-        with Rung(temp == -1):
-            out(hit)
-    result = never(program, hit)
-    assert isinstance(result, Counterexample)
-    witness = [step.inputs["FormTemp"] for step in result.trace if "FormTemp" in step.inputs]
-    assert [repr(v) for v in witness] == ["-1"]
 
 
 def test_a_declared_domain_on_a_real_keeps_the_form_of_its_choices() -> None:

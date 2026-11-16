@@ -36,10 +36,10 @@ from pyrung.core import (
     to_text,
     to_value,
 )
-from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.storage import BLANK_CHAR
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
+from tests.core.kernel_step import step_compiled_kernel
 from tests.core.test_out_of_range_index import _StubBase
 
 _ENGINES = ["interpreted", "compiled", "kernel_legacy", "kernel_blockless", "circuitpy"]
@@ -65,7 +65,7 @@ def _scan(
     if engine in ("kernel_legacy", "kernel_blockless"):
         compiled = compile_kernel(prog, blockless=engine == "kernel_blockless")
         kernel = compiled.create_kernel()
-        _step_compiled_kernel(compiled, kernel, dt=0.010)
+        step_compiled_kernel(compiled, kernel, dt=0.010)
         # A blockless kernel holds only the tags the program names or writes.
         tags = kernel.tags
         return {tag.name: tags.get(tag.name, tag.default) for tag in watch}, set(tags)

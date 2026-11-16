@@ -288,7 +288,7 @@ metadata supplies a matching choice label.
 
 ## Tag flags
 
-Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by [ladder lints](ladder-lints.md). Two metadata flags control presentation and verification.
+Tags carry flags that control validation and presentation. Three semantic flags are enforced by [ladder lints](ladder-lints.md). Two metadata flags mark the tags that matter to the operator and to the machine.
 
 ### Semantic flags
 
@@ -311,14 +311,14 @@ FilteredVal   = Int(final=True)      # exactly one writer
 ```python
 Running = Bool(public=True)          # operator-facing status
 State   = Int(choices=SortState, public=True)
-MotorOut = Bool(lock=True)           # tracked in lock file
+MotorOut = Bool(lock=True)           # a physical output
 ```
 
 **`public`** — part of the intended API surface. Examples are setpoints, mode commands, alarms and key status bits. The VS Code Data View shows a **P** badge and provides a **Public** filter checkbox to hide plumbing tags. It has no validator consequence.
 
 The absence of `public` means plumbing. A plumbing tag is not hidden and not forbidden, just not the featured interface. This is the same convention as Python's `foo` vs `_foo`.
 
-**`lock`** — included in the default `pyrung lock` projection. Tags with `lock=True` define the behavioral contract tracked by the lock file. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity. It can combine freely with any other flag. Programs using CLICK `TagMap` get this automatically. Output-mapped tags are stamped `lock=True` at construction.
+**`lock`** — marks a tag as part of the program's behavioural contract, such as a physical output. The nickname CSV and generated code keep it. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity. It can combine freely with any other flag. Programs using CLICK `TagMap` get this automatically. Output-mapped tags are stamped `lock=True` at construction.
 
 ### Flags on structures
 

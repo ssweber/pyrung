@@ -859,7 +859,7 @@ class RandIntExpr(Expression):
     The draw is an input, not a computation.  Each site owns a hidden external
     tag (``_rand.<n>``) that the scan's input drain writes after patches, so a
     ``patch()`` of that tag overrides the draw for one scan and a ``force()``
-    pins it.  Logic reads the tag; the prover sees an external input over
+    pins it.  Logic reads the tag, and the static facts see an external input over
     ``lo..hi`` (inclusive), or over the hull of a bound tag's declared
     ``min``/``max``/``choices``.  Bounds that are tags are read at the start of
     the scan.

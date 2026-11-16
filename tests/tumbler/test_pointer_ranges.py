@@ -28,7 +28,7 @@ HAND_WRITTEN = {
 
 
 def test_every_declared_index_may_rest_at_its_default(tumbler_logic: Any) -> None:
-    """``never()`` refuses a program whose tag rests outside its declared bounds."""
+    """Every declared index starts inside its declared bounds."""
     pdg = build_program_graph(tumbler_logic)
     constraints = build_constraint_index(pdg.tags)
     pointers = {use.pointer for use in pdg.pointer_uses}

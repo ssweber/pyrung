@@ -1,7 +1,6 @@
 """Check the static facts how() reads against real runs of the program.
 
-The prover's search used to be the only check of these facts.  This module checks them
-against plain stepping instead.  It computes a program's facts, drives the program with
+This module checks the facts against plain stepping.  It computes a program's facts, drives the program with
 chosen inputs, and judges every fact at every scan of every run.  A fact that a scan
 contradicts is a soundness bug in the fact, not in the run.
 
@@ -86,6 +85,7 @@ import random
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -104,6 +104,19 @@ from pyrung.core.tag import TagType
 
 #: The scan time ``_build_prior_facts`` assumes, and every run uses.
 DT = 0.010
+
+#: The RTC every run starts at.  A PLC starts its RTC at the wall clock, so a fact about a
+#: copy of ``rtc.hour`` would hold between midnight and 1 am only.  No field of this time
+#: is 0.
+RTC_START = datetime(2026, 6, 15, 13, 30, 20)
+
+
+def _plc(program: Any) -> PLC:
+    """A PLC of *program* with its RTC at :data:`RTC_START`."""
+    plc = PLC(program, dt=DT)
+    plc.set_rtc(RTC_START)
+    return plc
+
 
 _INT_RANGES = {
     TagType.INT: (-32768, 32767),
@@ -158,15 +171,7 @@ class Facts:
 def compute_facts(program: Any, plc: PLC) -> Facts | Intractable:
     """The facts of *program*, from the entry points the module docstring names."""
     compiled = compile_kernel(program, blockless=True, proof_metadata=True)
-    ctx = prove_passes._PassContext(
-        program=program,
-        scope=None,
-        project=None,
-        extra_exprs=None,
-        dt=DT,
-        compiled=compiled,
-        domains_only=True,
-    )
+    ctx = prove_passes._PassContext(program=program, dt=DT, compiled=compiled)
     prior = prove_passes._run_prior_pipeline(ctx)
     if isinstance(prior, Intractable):
         return prior
@@ -1413,7 +1418,7 @@ def check_program(
     patch, and the random walk.
     """
     program = build()
-    plc = PLC(program, dt=DT)
+    plc = _plc(program)
     if prepare is not None:
         prepare(plc)
     facts = compute_facts(program, plc)
@@ -1429,7 +1434,7 @@ def check_program(
     every = max(1, scans // PROBES_PER_RUN)
     prober: Prober | None = None
     for seed in seeds:
-        run = PLC(program, dt=DT)
+        run = _plc(program)
         if prepare is not None:
             prepare(run)
         judge.tally.runs += 1

@@ -45,7 +45,7 @@ report = logic.check()
 assert not report.errors(), report.summary()
 ```
 
-A clean report is not a proof that the program is correct or that every path is reachable. Use [Test Coverage](analysis-coverage.md) for behavior observed across tests and [Verification](verification.md) for exhaustive state-space properties.
+A clean report is not a proof that the program is correct or that every path is reachable. Use [Test Coverage](analysis-coverage.md) for behavior observed across tests.
 
 ## Reading a report
 

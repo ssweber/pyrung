@@ -1,167 +1,18 @@
-"""Result types for the prove subsystem.
-
-Journal framework
------------------
-``always(logic, condition, journal=True)`` attaches a ``Journal`` to the
-result — a ``MappingProxyType[str, TagEntry]`` keyed by tag name,
-recording every decision the pipeline made about each tag.
-
-- ``Decision(pass_name, kind, outcome, reason, detail)`` — one decision
-  from one pass.
-- ``TagEntry(name, outcome, domain, domain_source, decisions)`` — final
-  state of one tag.
-- ``Journal`` supports ``[]``, ``in``, ``iter()``, ``len()``,
-  ``str()``.  Also carries ``notes`` for skip_optimizations flags and
-  depth truncation.
-
-When ``journal=False`` (default), no ``Decision`` objects are created
-and ``result.journal`` is ``None``.  Zero overhead on the default path.
-"""
+"""Result types of the static facts."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
-
-
-@dataclass(frozen=True)
-class Decision:
-    """One decision made by the prover about a tag during the pass pipeline.
-
-    kind vocabulary: classification, exclusion, domain, elision, absorption,
-        absorption_skipped, absorption_blocked, input_partition,
-        exclusive_group, pairing, recovery.
-    outcome vocabulary: stateful, nondeterministic, combinational, infeasible,
-        excluded, elided:provenance, elided:concrete, absorbed, recovered,
-        edge_bearing, free, skipped, blocked.
-    """
-
-    pass_name: str
-    kind: str
-    outcome: str
-    reason: str
-    detail: tuple[tuple[str, Any], ...] = ()
-
-
-@dataclass(frozen=True)
-class TagEntry:
-    """Per-tag journal of prover decisions."""
-
-    name: str
-    outcome: str
-    domain: tuple[Any, ...] | None
-    domain_source: str | None
-    decisions: tuple[Decision, ...]
-
-
-@dataclass(frozen=True)
-class Journal:
-    """Structured log of all prover decisions for a verification run."""
-
-    tags: MappingProxyType[str, TagEntry]
-    notes: tuple[str, ...] = ()
-
-    def __iter__(self) -> Iterator[TagEntry]:
-        return iter(self.tags.values())
-
-    def __getitem__(self, name: str) -> TagEntry:
-        return self.tags[name]
-
-    def __contains__(self, name: object) -> bool:
-        return name in self.tags
-
-    def __len__(self) -> int:
-        return len(self.tags)
-
-    def __str__(self) -> str:
-        lines: list[str] = []
-        if self.notes:
-            lines.append("Notes:")
-            for note in self.notes:
-                lines.append(f"  - {note}")
-            lines.append("")
-        for entry in self:
-            lines.append(f"{entry.name}: {entry.outcome}")
-            if entry.domain is not None:
-                lines.append(f"  domain: {entry.domain} (source: {entry.domain_source})")
-            for d in entry.decisions:
-                lines.append(f"  [{d.pass_name}] {d.kind} -> {d.outcome}: {d.reason}")
-                if d.detail:
-                    for k, v in d.detail:
-                        lines.append(f"    {k}: {v}")
-        return "\n".join(lines)
-
-    if TYPE_CHECKING:
-
-        def __hash__(self) -> int: ...
-
-
-@dataclass(frozen=True)
-class Proven:
-    """Invariant holds across all reachable states."""
-
-    states_explored: int
-    caveats: tuple[str, ...] = ()
-    journal: Journal | None = None
-    aggressive_counterexample: Counterexample | None = None
-    _debug_context: Any = None
-
-
-@dataclass(frozen=True)
-class Counterexample:
-    """Invariant violated — trace reaches the failure, subject to caveats."""
-
-    trace: list[TraceStep]
-    caveats: tuple[str, ...] = ()
-    journal: Journal | None = None
-    _debug_context: Any = None
-
-
-@dataclass(frozen=True)
-class TraceStep:
-    inputs: dict[str, Any]
-    scans: int = 1
-    prev: dict[str, Any] = field(default_factory=dict)
-    # Black-box timers (blackbox.py): the ticks this step moved, as
-    # ``(accumulator, value)``.  Empty in a trace that replays as recorded.
-    timers: tuple[tuple[str, Any], ...] = ()
-    # The search's tick choices for this step, to re-run it exactly.
-    _choices: tuple[int, ...] = field(default=(), repr=False, compare=False)
-
-
-@dataclass(frozen=True)
-class _ParentLink:
-    parent_key: tuple[Any, ...] | None
-    inputs: dict[str, Any]
-    scans: int
-    caveats: tuple[str, ...] = ()
-    prev: dict[str, Any] = field(default_factory=dict)
-    # Black-box timer choices of this link (see TraceStep).
-    timers: tuple[tuple[str, Any], ...] = ()
-    choices: tuple[int, ...] = ()
+from typing import Any
 
 
 @dataclass(frozen=True)
 class Intractable:
-    """Verification cannot complete within resource bounds.
+    """The facts could not be built.
 
-    ``kind`` says which: ``"search"`` (the state space is too big or
-    unbounded: narrow it with ``choices=``/``min=``/``max=``), ``"timing"``
-    (unconfirmed: the search found a violation, but replaying it on the
-    concrete PLC diverged because it needs a timer to finish on a scan the
-    PLC's timing does not give; check the timing with a ``run_for()`` test),
-    ``"timers"`` (so many timers run at once that the ways they can finish
-    on one scan pass the verifier's cap: prove a property whose scope reaches
-    fewer of them, or test the timing with ``run_for()``), ``"property"``
-    (the property's ``rise()``/``fall()``, which the search leaves undecided,
-    gave a counterexample the concrete PLC did not reproduce) or ``"function"``
-    (a ``run_function`` whose answer may not follow from its inputs, which the
-    search does not call: ``hints`` names each one and why).
-    A timing result carries the search's ``trace`` (each step's ``timers``
-    names the ticks it moved; empty for the search kind) and
-    ``diverged_at``, the index of the step where replay left it.
+    ``tags`` names the tags at fault and ``hints`` says what to change.
+    ``_debug_context`` holds the partial classification, which the pass pipeline
+    keeps building on.
     """
 
     reason: str
@@ -169,56 +20,9 @@ class Intractable:
     estimated_space: int
     tags: list[str] = field(default_factory=list)
     hints: list[str] = field(default_factory=list)
-    journal: Journal | None = None
     _debug_context: Any = None
-    kind: str = "search"
-    trace: list[TraceStep] = field(default_factory=list)
-    diverged_at: int | None = None
-
-
-class ReachableStates(frozenset):
-    """The states ``reachable_states()`` found, as a frozenset of projected states.
-
-    ``truncated`` is True when ``depth_budget`` stopped the search before it
-    ran out of new states.  The set then holds only the states found within
-    the budget, so a state past it may be missing.  A ``ReachableStates(states)``
-    built directly carries no mark, so its ``truncated`` is False.
-    """
-
-    _truncated: bool = False
-    _depth_budget: int = 0
-    _debug_context: Any = None
-
-    @property
-    def truncated(self) -> bool:
-        return self._truncated
-
-    @property
-    def depth_budget(self) -> int:
-        return self._depth_budget
-
-    @classmethod
-    def _mark(
-        cls,
-        states: frozenset[frozenset[tuple[str, Any]]],
-        *,
-        truncated: bool,
-        depth_budget: int,
-    ) -> ReachableStates:
-        marked = cls(states)
-        marked._truncated = truncated
-        marked._depth_budget = depth_budget
-        return marked
-
-
-@dataclass(frozen=True)
-class StateDiff:
-    """Difference between two reachable state sets."""
-
-    added: frozenset[frozenset[tuple[str, Any]]]
-    removed: frozenset[frozenset[tuple[str, Any]]]
 
 
 # A timer's Done between off and done in how()'s domain prior and PILOT's
-# world key (``absorb._done_acc_state``).  The search keys Done as a Bool.
+# world key (``absorb._done_acc_state``).
 PENDING = "Pending"

@@ -16,10 +16,42 @@ from pyrung.core.analysis.pilot.physical import upstream_through_plant
 from pyrung.core.analysis.pilot.skiff import _declared_domain, _skiff_expectation, run_pinned_scan
 from pyrung.core.analysis.pilot.steer import StaleBearingError
 from pyrung.core.analysis.pilot.world_key import ReadIdentity
-from pyrung.core.analysis.prove.kernel import _restore_kernel, _snapshot_kernel
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.compiled_plc import CompiledPLC
+from pyrung.core.kernel import ReplayKernel
 from pyrung.core.tag import TagType
+
+
+@dataclass(frozen=True, slots=True)
+class _KernelSnapshot:
+    """A kernel's tags, memory and edge bits (blocks reload from the tags)."""
+
+    tags: dict[str, Any]
+    memory: dict[str, Any]
+    prev: dict[str, Any]
+    scan_id: int
+    timestamp: float
+
+
+def _snapshot_kernel(kernel: ReplayKernel) -> _KernelSnapshot:
+    return _KernelSnapshot(
+        tags=dict(kernel.tags),
+        memory=dict(kernel.memory),
+        prev=dict(kernel.prev),
+        scan_id=kernel.scan_id,
+        timestamp=kernel.timestamp,
+    )
+
+
+def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
+    kernel.tags.clear()
+    kernel.tags.update(snap.tags)
+    kernel.memory.clear()
+    kernel.memory.update(snap.memory)
+    kernel.prev.clear()
+    kernel.prev.update(snap.prev)
+    kernel.scan_id = snap.scan_id
+    kernel.timestamp = snap.timestamp
 
 
 @dataclass(frozen=True)

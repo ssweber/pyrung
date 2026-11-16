@@ -1,10 +1,10 @@
-"""Dimension classification and domain discovery for prove.
+"""Dimension classification and domain discovery for the static facts.
 
 Tags partition into three roles:
 
-- **Stateful** — latch/reset, timer/counter, copy, calc; tracked in the
-  BFS visited set.
-- **Nondeterministic** — external inputs; enumerated at each BFS state.
+- **Stateful** — latch/reset, timer/counter, copy, calc; values that carry
+  from scan to scan, which PILOT's world key tracks.
+- **Nondeterministic** — external inputs, which PILOT may set.
 - **Combinational** — OTE-only writes with no cross-scan readers; ignored.
   A read above the first write (the scan-entry version in the def-use
   chain) is a cross-scan reader.
@@ -29,14 +29,6 @@ Domain inference stack (most to least specific):
 7. eq/ne enum closure → ``{literals..., OTHER}`` for tags only tested for
    equality
 
-A nondeterministic input compared with another changing value (an
-accumulator, a ``calc`` result, another input, an expression, an indirect
-element, a ``search()``), directly or through data flow, skips 4-7: no
-partition covers it, so it gets every value (``_tag_compared_names``,
-``_every_value_domain``), or is refused.  Compared with a tag whose every
-value is known (``_exact_value_sets``), it keeps the partition with those
-values among its split points.
-
 No domain → ``Intractable`` with hints.
 """
 
@@ -48,7 +40,6 @@ import operator
 import os
 import sys
 import time
-from collections import ChainMap
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from pyrung.core.analysis.affine import (
@@ -82,9 +73,8 @@ from pyrung.core.instruction.conversions import (
     calc_store_transform,
     copy_store_transform,
 )
-from pyrung.core.kernel import CompiledKernel
 from pyrung.core.storage import BLANK_CHAR
-from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME, system
 from pyrung.core.tag import TagType
 
 from .absorb import (
@@ -107,34 +97,32 @@ from .absorb import (
     _has_forbidden_data_read,
     _merge_threshold_absorptions,
     _owner_reset_condition_refs,
-    _RedundantAccAbsorptions,
     _threshold_atom_for_progress,
     _ThresholdAbsorptions,
     _ThresholdBlocker,
 )
-from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
-from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
+from .expr import _build_atom_index, _collect_atoms_for_tag
 from .results import PENDING, Intractable
-from .system_points import (
-    FAULT_FLAGS,
-    FIRST_SCAN,
-    FIRST_SCAN_DEPENDENTS,
-    SCAN_START_RESETS,
-    bounded_system_tag,
-    clip_to_range,
-    free_system_domain,
-    free_system_tags,
-)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Iterable, Mapping
 
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.simplified import Atom
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
 
-    from . import _ExploreContext
+
+# Fault flags instructions set implicitly (``Instruction._fault_writes``).  No
+# write site lists them, so the facts leave them out.
+FAULT_FLAGS: frozenset[str] = frozenset(
+    {
+        system.fault.division_error.name,
+        system.fault.out_of_range.name,
+        system.fault.address_error.name,
+        system.fault.math_operation_error.name,
+    }
+)
 
 
 def _classify_profile_enabled() -> bool:
@@ -175,130 +163,6 @@ def _classify_profile_emit(
             f"[pyrung classify]   {timing_label:<34s} {elapsed:8.3f}s",
             file=sys.stderr,
         )
-
-
-def _unread_timer_done_tags(
-    program: Program,
-    graph: ProgramGraph,
-    done_acc: dict[str, str],
-    *,
-    scope: list[str] | None,
-    project: tuple[str, ...] | None,
-) -> frozenset[str]:
-    """Done tags of timers and counters whose every output is read by nothing.
-
-    The Done bit, the accumulator and any status bits are read by no rung,
-    branch, instruction condition or data read (an owner's exclusive read of
-    its own accumulator aside), and none is in *scope* or *project*.  Such a
-    timer runs, but no other tag depends on it, so its state never decides
-    what else is reachable.
-    """
-    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    observed = set(scope or ()) | set(project or ())
-    outputs: dict[str, set[str]] = {}
-    for instr in walk_instructions(program):
-        if not isinstance(
-            instr,
-            (OnDelayInstruction, OffDelayInstruction, CountUpInstruction, CountDownInstruction),
-        ):
-            continue
-        done_name = instr.done_bit.name
-        names = outputs.setdefault(done_name, {done_name, instr.accumulator.name})
-        for status in ("en_bit", "tt_bit"):
-            tag = getattr(instr, status, None)
-            if tag is not None:
-                names.add(tag.name)
-    unread: set[str] = set()
-    for done_name, acc_name in done_acc.items():
-        names = outputs.get(done_name)
-        if names is None or acc_name not in names:
-            continue
-        if any(name in observed or graph.readers_of.get(name) for name in names):
-            continue
-        unread.add(done_name)
-    return frozenset(unread)
-
-
-def _tag_is_observable(
-    tag_name: str,
-    *,
-    scope: list[str] | None,
-    project: tuple[str, ...] | None,
-) -> bool:
-    return tag_name in set(scope or ()) or tag_name in set(project or ())
-
-
-def _has_inert_writer(
-    program: Program, tag_name: str, reach: Mapping[int, tuple[str, ...]] | None = None
-) -> bool:
-    from pyrung.core.validation._common import walk_instructions
-
-    for instr in walk_instructions(program):
-        if tag_name not in {name for name, _itype in _all_write_targets(instr, reach)}:
-            continue
-        if getattr(instr, "is_inert_when_disabled", lambda: True)():
-            return True
-    return False
-
-
-def _has_out_oneshot_writer(program: Program, tag_name: str) -> bool:
-    from pyrung.core.instruction.coils import OutInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    for instr in walk_instructions(program):
-        if not isinstance(instr, OutInstruction):
-            continue
-        if not getattr(instr, "_oneshot", False):
-            continue
-        if tag_name in {name for name, _itype in _all_write_targets(instr)}:
-            return True
-    return False
-
-
-def _has_skippable_coil_writer(program: Program, tag_name: str, graph: ProgramGraph) -> bool:
-    """Whether an ``out()`` coil of *tag_name* sits where some scans skip it.
-
-    An ``out()`` writes False when its rung is off, but only on a scan that
-    runs it.  One behind a ``return_early()``, in a subroutine not called on
-    every scan, or in a forloop body (a false For rung skips the body) holds
-    its value on the scans that skip it, so the tag carries state even when
-    nothing in the program reads it.
-    """
-    from pyrung.core.instruction.coils import OutInstruction
-    from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    writes_coil = False
-    for instr in walk_instructions(program):
-        if isinstance(instr, ForLoopInstruction):
-            for body_instr in instr.instructions:
-                if isinstance(body_instr, OutInstruction) and tag_name in {
-                    name for name, _itype in _all_write_targets(body_instr, graph.indirect_reach)
-                }:
-                    return True
-        elif isinstance(instr, OutInstruction) and tag_name in {
-            name for name, _itype in _all_write_targets(instr, graph.indirect_reach)
-        }:
-            writes_coil = True
-    return writes_coil and not _is_ote_unconditionally_reachable(tag_name, graph)
-
-
-def _written_every_scan_by_out(program: Program, tag_name: str, graph: ProgramGraph) -> bool:
-    """Whether every writer of *tag_name* is a plain ``out()`` that every scan runs.
-
-    Such a tag ends each scan with what its rungs gave it that scan, so its value
-    is a function of the state the scan started from.  Any other writer may hold
-    it: a latch or a copy when disabled, a drum's row, a function's out, a
-    one-shot, an ``out()`` a scan skips (see :func:`_has_skippable_coil_writer`).
-    """
-    return (
-        _is_ote_only(tag_name, graph)
-        and not _has_out_oneshot_writer(program, tag_name)
-        and not _has_skippable_coil_writer(program, tag_name, graph)
-    )
 
 
 def _collect_all_exprs(
@@ -689,568 +553,6 @@ def _compared_value_names(
     return found
 
 
-def _iter_program_conditions(program: Program) -> Iterable[Any]:
-    """Every condition the program evaluates: rung contacts and instruction conditions."""
-    from pyrung.core.condition import Condition
-    from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.rung import Rung as RungClass
-
-    def from_rung(rung: Any) -> Iterable[Any]:
-        yield from rung._conditions
-        for instr in rung._instructions:
-            yield from from_instruction(instr)
-        for branch in rung._branches:
-            yield from from_rung(branch)
-
-    def from_instruction(instr: Any) -> Iterable[Any]:
-        for field_name in getattr(type(instr), "_conditions", ()):
-            value = getattr(instr, field_name, None)
-            items = value if isinstance(value, (list, tuple)) else (value,)
-            for item in items:
-                if isinstance(item, Condition):
-                    yield item
-        if isinstance(instr, ForLoopInstruction):
-            for item in instr.body:
-                if isinstance(item, RungClass):
-                    yield from from_rung(item)
-                else:
-                    yield from from_instruction(item)
-
-    for rung in program.rungs:
-        yield from from_rung(rung)
-    for sub_rungs in program.subroutines.values():
-        for rung in sub_rungs:
-            yield from from_rung(rung)
-
-
-def _exact_value_sets(
-    program: Program,
-    graph: ProgramGraph,
-    receive_dest_names: frozenset[str],
-    constant_storage: frozenset[str] = frozenset(),
-) -> dict[str, frozenset[Any]]:
-    """Tags with a known finite set that holds every value they can take.
-
-    A constant (readonly, or *constant_storage*: unwritten internal tags the
-    search holds at their default) holds its default, a Bool both values, and a free
-    input (external, physical, a receive destination or unwritten) what its
-    ``choices=`` or integer ``min=``/``max=`` allow.  A tag the program writes
-    holds its power-on value and what its writers store.  That is literals, and
-    the values of exact tags copied in (``copy``/``fill``/``blockcopy``, with
-    the copy's store conversion).  A tag with any other writer (``calc``, a
-    timer, a function, ...) is not exact.  Sets are capped at
-    ``_TAG_COMPARED_DOMAIN_CAP`` values.
-
-    Only the search uses these sets.  It changes an ``external`` tag the program
-    writes through the writers alone, so the set leaves out what the outside can
-    write.  The outside can write such a tag any value, so its value domain
-    (``_extract_value_domain``) holds a free input's values as well.
-    """
-    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
-    from pyrung.core.instruction.data_transfer import (
-        BlockCopyInstruction,
-        CopyInstruction,
-        FillInstruction,
-    )
-    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
-
-    def is_free(name: str, tag: Tag) -> bool:
-        return (
-            tag.external
-            or name not in graph.writers_of
-            or graph.is_physical_input(name)
-            or name in receive_dest_names
-            or graph.tag_roles.get(name) is TagRole.INPUT
-        )
-
-    def program_driven(name: str) -> bool:
-        return (
-            name in graph.writers_of
-            and not graph.is_physical_input(name)
-            and name not in receive_dest_names
-            and graph.tag_roles.get(name) is not TagRole.INPUT
-        )
-
-    exact: dict[str, frozenset[Any]] = {}
-    for name, tag in graph.tags.items():
-        if tag.readonly or name in constant_storage:
-            exact[name] = frozenset({tag.default})
-        elif tag.type == TagType.BOOL:
-            exact[name] = frozenset({False, True})
-        elif is_free(name, tag) and not program_driven(name):
-            values = _every_value_domain(tag)
-            if values is not None:
-                exact[name] = frozenset(values)
-
-    # target -> ("literal", stored value) | ("copy", source name)
-    feeds: dict[str, list[tuple[str, Any]]] = {}
-    opaque: set[str] = set()
-    for instr in walk_instructions(program):
-        targets = [name for name, _itype in _all_write_targets(instr, graph.indirect_reach)]
-        if not targets:
-            continue
-        literal = _literal_write_values(instr, graph.tags, graph.indirect_reach)
-        source_of: dict[str, str] = {}
-        if literal is None:
-            if isinstance(instr, CopyInstruction) and instr.convert is None:
-                source = _tag_name_from_value(instr.source)
-                if source is not None:
-                    source_of = dict.fromkeys(targets, source)
-            elif isinstance(instr, FillInstruction):
-                source = _tag_name_from_value(instr.value)
-                if source is not None:
-                    source_of = dict.fromkeys(targets, source)
-            elif isinstance(instr, BlockCopyInstruction) and instr.convert is None:
-                sources = _resolve_tag_names(instr.source)
-                dests = _resolve_tag_names(instr.dest)
-                if sources and len(sources) == len(dests):
-                    source_of = dict(zip(dests, sources, strict=True))
-        for target in targets:
-            if literal is not None and target in literal:
-                feeds.setdefault(target, []).append(("literal", literal[target]))
-            elif target in source_of:
-                feeds.setdefault(target, []).append(("copy", source_of[target]))
-            else:
-                opaque.add(target)
-
-    written = {
-        name: graph.tags[name]
-        for name in feeds
-        if name not in opaque and name in graph.tags and name not in exact and program_driven(name)
-    }
-    values: dict[str, set[Any]] = {name: {tag.default} for name, tag in written.items()}
-    changed = True
-    while changed:
-        changed = False
-        for name, tag in written.items():
-            if name not in values:
-                continue
-            grown = set(values[name])
-            for kind, item in feeds[name]:
-                if kind == "literal":
-                    grown.add(item)
-                    continue
-                source_values = exact.get(item)
-                if source_values is None:
-                    source_values = values.get(item)
-                if source_values is None:
-                    grown = None
-                    break
-                source_tag = graph.tags.get(item)
-                kind = None if source_tag is None else source_tag.type
-                grown.update(_store_copy_value_to_tag_type(v, tag, kind) for v in source_values)
-            if grown is None or len(grown) > _TAG_COMPARED_DOMAIN_CAP:
-                del values[name]
-                changed = True
-            elif grown != values[name]:
-                values[name] = grown
-                changed = True
-    for name, found in values.items():
-        exact[name] = frozenset(found)
-    return exact
-
-
-#: Why ``_tag_compared_names`` gives a forloop count every value it can hold.
-_FOR_COUNT_REASON = "a forloop count"
-
-
-class _ComparedInputs(NamedTuple):
-    """What ``_tag_compared_names`` found; see there."""
-
-    compared: dict[str, str]
-    exact_partners: dict[str, frozenset[str]]
-    groups: tuple[frozenset[str], ...]
-    index_only: frozenset[str]
-
-
-def _tag_compared_names(
-    program: Program,
-    graph: ProgramGraph,
-    exact_values: Mapping[str, frozenset[Any]],
-    *,
-    exprs: Iterable[Any] = (),
-    free_inputs: frozenset[str] = frozenset(),
-) -> _ComparedInputs:
-    """Tags compared with a changing value, with exact tags, or with each other.
-
-    The expression partition (``_extract_value_domain``) gives a tag one
-    representative per class its comparisons distinguish, splitting its values
-    at the literals it is compared with.  A comparison with another changing
-    value (``T.Acc == In``, ``In + 5 > 100``, ``DS[Ptr] == In``,
-    ``search(DS > In)``) splits them at points no literal names, and ``==``
-    against a value that steps past the literals (an accumulator moving 10 ms a
-    scan) needs that exact value.  No partition covers such a tag: the search
-    needs every value it can hold.  These are ``compared``,
-    ``{name: what it is compared with}``.
-
-    A tag compared directly with a tag whose every value is known
-    (``_exact_value_sets``: ``In < Limit`` with ``Limit`` in ``0..5``) is
-    compared with those values as literals: its partition stays sound once the
-    partner's values are among its split points (``exact_partners``).
-
-    Free inputs (*free_inputs*: chosen afresh each scan) compared directly
-    with each other (``PV > SP``) form ``groups``: each member's partition is
-    taken over the split points of every member, with a representative per
-    member in each gap (see ``_group_domains``).
-
-    The value reaches a comparison through data flow as well: a tag copied or
-    calculated into a tag compared with a changing or an exact value needs
-    every value (the partner's values are not carried back through the
-    arithmetic).  So does the index of an indirect access whose element is
-    compared with a changing value, and what that index is computed from; an
-    index that is itself a free input keeps its pointer domain
-    (``index_only``).  A forloop count needs every value too: how many times
-    the body runs is its value, which no comparison partitions.
-
-    *exprs* are the lowered expressions of the search (the property and the
-    program): their comparisons count like the program's.
-    """
-    from pyrung.core.analysis.simplified import And as ExprAnd
-    from pyrung.core.analysis.simplified import ArithAtom, Atom
-    from pyrung.core.analysis.simplified import Or as ExprOr
-    from pyrung.core.condition import (
-        AllCondition,
-        AnyCondition,
-        BitCondition,
-        CompareEq,
-        CompareGe,
-        CompareGt,
-        CompareLe,
-        CompareLt,
-        CompareNe,
-        Condition,
-        FallingEdgeCondition,
-        IntTruthyCondition,
-        NormallyClosedCondition,
-        RisingEdgeCondition,
-    )
-    from pyrung.core.instruction.advanced import SearchInstruction
-    from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.tag import ImmediateRef, Tag
-    from pyrung.core.validation._common import walk_instructions
-    from pyrung.core.validation.walker import _condition_children
-
-    compared: dict[str, str] = {}
-    index_marks: dict[str, str] = {}
-    partners: dict[str, set[str]] = {}
-    group_of: dict[str, str] = {}
-
-    def find(name: str) -> str:
-        while group_of.get(name, name) != name:
-            name = group_of[name]
-        return name
-
-    def mark(names: Iterable[str], partner: str) -> None:
-        for name in names:
-            compared.setdefault(name, partner)
-
-    def mark_index(names: Iterable[str], what: str) -> None:
-        for name in names:
-            index_marks.setdefault(name, f"an index of {what}")
-
-    def label(names: set[str]) -> str:
-        return ", ".join(sorted(names)) if names else "a computed value"
-
-    def plain_tag(value: Any) -> bool:
-        if isinstance(value, ImmediateRef):
-            value = value.value
-        return isinstance(value, Tag)
-
-    def seen_by_partition(value: Any) -> bool:
-        # A literal, or a readonly tag (lowered to its value): the expression
-        # partition splits at it.  An expression is not, even a constant one.
-        if isinstance(value, ImmediateRef):
-            value = value.value
-        if isinstance(value, Tag):
-            return value.readonly
-        return isinstance(value, (bool, int, float, str))
-
-    def compare(left_value: Any, right_value: Any) -> None:
-        left_index: set[str] = set()
-        right_index: set[str] = set()
-        left = _compared_value_names(left_value, graph, left_index)
-        right = _compared_value_names(right_value, graph, right_index)
-        left_seen, right_seen = seen_by_partition(left_value), seen_by_partition(right_value)
-        if (left_seen or plain_tag(left_value)) and (right_seen or plain_tag(right_value)):
-            if left_seen or right_seen or left == right:
-                # A literal or a constant against a tag: the partition splits
-                # at it.
-                return
-            (left_name,), (right_name,) = left, right
-            if left_name in free_inputs and right_name in free_inputs:
-                left_root, right_root = find(left_name), find(right_name)
-                if left_root != right_root:
-                    group_of[left_root] = right_root
-                group_of.setdefault(left_name, left_name)
-                group_of.setdefault(right_name, right_name)
-                return
-            if right_name in exact_values:
-                partners.setdefault(left_name, set()).add(right_name)
-            else:
-                mark(left, right_name)
-            if left_name in exact_values:
-                partners.setdefault(right_name, set()).add(left_name)
-            else:
-                mark(right, left_name)
-            return
-        mark(left, label(right))
-        mark(right, label(left))
-        everything = left | right
-        mark_index(left_index | right_index, label(everything))
-
-    def mark_all(values: Iterable[Any]) -> None:
-        index: set[str] = set()
-        names: set[str] = set()
-        for value in values:
-            names |= _compared_value_names(value, graph, index)
-        for name in names:
-            mark((name,), label(names - {name}))
-        mark_index(index, label(names))
-
-    leaf_skip = (
-        BitCondition,
-        NormallyClosedCondition,
-        IntTruthyCondition,
-        RisingEdgeCondition,
-        FallingEdgeCondition,
-    )
-    direct_compare = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
-    compare_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
-
-    stack: list[Any] = list(_iter_program_conditions(program))
-    # The property's (and the program's) lowered atoms: a property names no
-    # rung, so its comparisons are only found here.
-    expr_stack: list[Any] = list(exprs)
-    while expr_stack:
-        expr = expr_stack.pop()
-        if isinstance(expr, (ExprAnd, ExprOr)):
-            expr_stack.extend(expr.terms)
-        elif isinstance(expr, ArithAtom):
-            names = {
-                name
-                for name in (expr.left, expr.right)
-                if name in graph.tags and not graph.tags[name].readonly
-            }
-            for name in names:
-                mark((name,), label(names - {name}))
-        elif isinstance(expr, Atom):
-            if expr.unsupported is not None:
-                stack.append(expr.unsupported)
-            elif expr.form in compare_forms and expr.tag in graph.tags:
-                operand = expr.operand
-                if expr.operand_is_tag:
-                    operand = graph.tags.get(operand, operand)
-                compare(graph.tags[expr.tag], operand)
-
-    seen: set[int] = set()
-    while stack:
-        cond = stack.pop()
-        if id(cond) in seen or not isinstance(cond, Condition):
-            continue
-        seen.add(id(cond))
-        if isinstance(cond, (AllCondition, AnyCondition)):
-            stack.extend(cond.conditions)
-            continue
-        if isinstance(cond, leaf_skip):
-            continue
-        if isinstance(cond, direct_compare):
-            compare(cond.tag, cond.value)
-            continue
-        # Indirect, expression and unknown comparisons: every value they read
-        # is compared with something the partition does not see.
-        mark_all(child for _child_name, child in _condition_children(cond))
-
-    for instr in walk_instructions(program):
-        if isinstance(instr, SearchInstruction):
-            mark_all((instr.value, instr.search_range))
-        elif isinstance(instr, ForLoopInstruction):
-            # How many times the body runs is the count's value, not a class of
-            # it: a call guard's ``count != 0`` splits at 0 alone, a body that
-            # accumulates tells 1 from 2, and the loop's index ends at count - 1
-            # even with no body.  An index keeps its pointer domain.
-            count_index: set[str] = set()
-            mark(_compared_value_names(instr.count, graph, count_index), _FOR_COUNT_REASON)
-            mark_index(count_index, _FOR_COUNT_REASON)
-
-    # Back through data flow: whatever such a tag is computed from.  The
-    # index of an indirect read or write is a source too: it picks the
-    # element read, or the element written.
-    sources_of: dict[str, set[str]] = {}
-    for instr in walk_instructions(program):
-        reads: set[str] = set()
-        for field_name in getattr(type(instr), "_reads", ()):
-            reads |= _compared_value_names(getattr(instr, field_name, None), graph)
-        for field_name in getattr(type(instr), "_writes", ()):
-            write_index: set[str] = set()
-            _compared_value_names(getattr(instr, field_name, None), graph, write_index)
-            reads |= write_index
-        if not reads:
-            continue
-        for target_name, _itype in _all_write_targets(instr, graph.indirect_reach):
-            sources_of.setdefault(target_name, set()).update(reads)
-    why = dict(compared)
-    for name, reason in index_marks.items():
-        why.setdefault(name, reason)
-    for name, exact_partners in partners.items():
-        why.setdefault(name, label(exact_partners))
-    queue = list(why)
-    while queue:
-        target_name = queue.pop()
-        for source in sources_of.get(target_name, ()):
-            if source not in compared:
-                compared[source] = f"{why[target_name]}, through {target_name}"
-                why.setdefault(source, compared[source])
-                queue.append(source)
-    index_only = frozenset(name for name in index_marks if name not in compared)
-    for name in index_only:
-        compared[name] = index_marks[name]
-    groups: dict[str, set[str]] = {}
-    for name in group_of:
-        groups.setdefault(find(name), set()).add(name)
-    return _ComparedInputs(
-        compared,
-        {name: frozenset(found) for name, found in partners.items() if name not in compared},
-        tuple(frozenset(members) for members in groups.values()),
-        index_only,
-    )
-
-
-def _reached_past_literal_compares(
-    program: Program,
-    graph: ProgramGraph,
-    names: frozenset[str],
-    *,
-    exprs: Iterable[Any] = (),
-    paired: Mapping[str, frozenset[str]] | None = None,
-    hop_only: frozenset[str] = frozenset(),
-    stored: bool = False,
-) -> dict[str, str]:
-    """Of *names*, the tags whose value reaches more than their own ``X op literal``.
-
-    ``{name: what it reaches}``.  A tag read only by contacts on it and by comparisons
-    of it with a literal or a constant (``In > 5``, ``Mode == 2``, ``C > "A"``) is told
-    apart by the search's partition of it, which splits at exactly those literals.
-    Anything else its value reaches (an instruction that reads it, an index, a
-    comparison with another tag or inside an expression, an indirect access) can tell
-    apart values the partition does not try.  *exprs* are the search's lowered
-    expressions (the property's among them).  *paired* names, for a tag, the tags a
-    direct comparison with it is answered by its partition anyway: inputs compared
-    with each other (:func:`_group_domains`), and a tag written only with literals
-    whose every value is a split point.
-
-    The instructions that read a tag of *hop_only* are all store hops
-    (:func:`_store_hops`), which the caller judges: they are not counted here.
-    *stored* asks of a tag a store hop writes, which answers only for the
-    comparisons the backward pass carries back from it: a direct one with a
-    literal.  A contact on it, or a comparison with a readonly tag, counts too.
-    """
-    from pyrung.core.analysis.simplified import And as ExprAnd
-    from pyrung.core.analysis.simplified import ArithAtom, Atom
-    from pyrung.core.analysis.simplified import Or as ExprOr
-    from pyrung.core.condition import (
-        AllCondition,
-        AnyCondition,
-        BitCondition,
-        CompareEq,
-        CompareGe,
-        CompareGt,
-        CompareLe,
-        CompareLt,
-        CompareNe,
-        Condition,
-        FallingEdgeCondition,
-        IntTruthyCondition,
-        NormallyClosedCondition,
-        RisingEdgeCondition,
-    )
-    from pyrung.core.expression import Expression
-    from pyrung.core.tag import ImmediateRef, Tag
-    from pyrung.core.validation.walker import _condition_children
-
-    reached: dict[str, str] = {}
-    pairs = paired or {}
-
-    def answered(left: str, right: str) -> bool:
-        return right in pairs.get(left, ()) and left in pairs.get(right, ())
-
-    def mark(found: Iterable[str], what: str) -> None:
-        for name in found:
-            if name in names:
-                reached.setdefault(name, what)
-
-    def plain(value: Any) -> Any:
-        return value.value if isinstance(value, ImmediateRef) else value
-
-    def constant(value: Any) -> bool:
-        value = plain(value)
-        if isinstance(value, Tag):
-            return value.readonly and not stored
-        return isinstance(value, (bool, int, float, str))
-
-    for node in graph.rung_nodes:
-        if node.data_reads & names:
-            written = sorted(graph.node_writes(node))
-            mark(node.data_reads - hop_only, written[0] if written else "an instruction")
-    mark(graph.index_tags, "an index")
-    mark(graph.pointer_tags, "an index")
-
-    contacts = (
-        BitCondition,
-        NormallyClosedCondition,
-        IntTruthyCondition,
-        RisingEdgeCondition,
-        FallingEdgeCondition,
-    )
-    direct = (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)
-    stack: list[Any] = list(_iter_program_conditions(program))
-    expr_stack: list[Any] = list(exprs)
-    while expr_stack:
-        expr = expr_stack.pop()
-        if isinstance(expr, (ExprAnd, ExprOr)):
-            expr_stack.extend(expr.terms)
-        elif isinstance(expr, ArithAtom):
-            mark((expr.left, expr.right), "an expression")
-        elif isinstance(expr, Atom):
-            if expr.unsupported is not None:
-                stack.append(expr.unsupported)
-            elif expr.operand_is_tag:
-                if not answered(expr.tag, expr.operand):
-                    mark((expr.tag,), f"a comparison with {expr.operand}")
-                    mark((expr.operand,), f"a comparison with {expr.tag}")
-            elif isinstance(expr.operand, Expression):
-                mark((expr.tag, *_compared_value_names(expr.operand, graph)), "an expression")
-            elif stored and expr.form in {"truthy", "xic", "xio"}:
-                mark((expr.tag,), "a contact")
-
-    seen: set[int] = set()
-    while stack:
-        cond = stack.pop()
-        if id(cond) in seen or not isinstance(cond, Condition):
-            continue
-        seen.add(id(cond))
-        if isinstance(cond, (AllCondition, AnyCondition)):
-            stack.extend(cond.conditions)
-            continue
-        if isinstance(cond, contacts) and isinstance(plain(cond.tag), Tag):
-            if stored:
-                mark((plain(cond.tag).name,), "a contact")
-            continue
-        if isinstance(cond, direct) and isinstance(plain(cond.tag), Tag):
-            other = plain(cond.value)
-            if constant(other) or (
-                isinstance(other, Tag) and answered(plain(cond.tag).name, other.name)
-            ):
-                continue
-        children = [child for _child_name, child in _condition_children(cond)]
-        found: set[str] = set()
-        for child in children:
-            found |= _compared_value_names(child, graph)
-        for name in found:
-            others = ", ".join(sorted(found - {name})) or "a computed value"
-            mark((name,), f"a comparison with {others}")
-    return reached
-
-
 def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
     """Return the concrete value stored by a literal copy/fill write."""
     from pyrung.core.expression import Expression
@@ -1519,274 +821,8 @@ def _compute_stepping_tags(
     return frozenset(stepping)
 
 
-_TAG_COMPARED_DOMAIN_CAP = 1000
-
-
-def _every_value_domain(tag: Tag) -> tuple[Any, ...] | None:
-    """Every value *tag* can hold, when that is a small finite set.
-
-    Bool, ``choices=``, or an integer ``min=``/``max=`` range of at most
-    ``_TAG_COMPARED_DOMAIN_CAP`` values.  A REAL has values between any two,
-    so a range does not list them.
-    """
-    if tag.type == TagType.BOOL:
-        return (False, True)
-    if tag.choices is not None:
-        return tuple(sorted(tag.choices.keys()))
-    if tag.type in (TagType.REAL, TagType.CHAR):
-        return None
-    if tag.min is None or tag.max is None:
-        return None
-    if int(tag.min) != tag.min or int(tag.max) != tag.max:
-        return None
-    if tag.max - tag.min + 1 > _TAG_COMPARED_DOMAIN_CAP:
-        return None
-    return tuple(range(int(tag.min), int(tag.max) + 1))
-
-
-def _store_hops(
-    program: Program, graph: ProgramGraph, carry: _CarryBack
-) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
-    """Each tag's reads by an instruction: the store hops it is the source of, and the rest.
-
-    ``(hops, others)``: *hops* maps a tag to the tags an instruction stores it into
-    through a hop the backward pass has an inverse for (``copy``, ``fill`` and
-    ``blockcopy`` without a convert, a ``calc`` of one tag it can invert:
-    :class:`_CarryBack`'s *covered_pairs*).  *others* holds every tag some other
-    instruction reads, or a hop reads in another place (a second tag in the
-    expression, an index).
-    """
-    from pyrung.core.analysis.pdg import _extract_instruction_event
-    from pyrung.core.instruction.calc import CalcInstruction
-    from pyrung.core.instruction.data_transfer import (
-        BlockCopyInstruction,
-        CopyInstruction,
-        FillInstruction,
-    )
-    from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
-
-    hops: dict[str, set[str]] = {}
-    others: set[str] = set()
-    for instr in walk_instructions(program):
-        event = _extract_instruction_event(instr, 0, graph.tags)
-        sources: set[str] = set()
-        single: str | None = None
-        if isinstance(instr, CopyInstruction) and instr.convert is None:
-            single = _tag_name_from_value(instr.source)
-        elif isinstance(instr, FillInstruction):
-            single = _tag_name_from_value(instr.value)
-        elif isinstance(instr, BlockCopyInstruction) and instr.convert is None:
-            sources = set(_resolve_tag_names(instr.source))
-        elif isinstance(instr, CalcInstruction):
-            edge = _calc_reverse_edge(instr.expression)
-            if edge is not None:
-                sources = {edge[0]}
-        if single is not None:
-            sources = {single}
-        for name in event.data_reads:
-            targets = (
-                {target for target in event.writes if (name, target) in carry.covered_pairs}
-                if name in sources
-                else set()
-            )
-            if targets:
-                hops.setdefault(name, set()).update(targets)
-            else:
-                others.add(name)
-    return {name: frozenset(found) for name, found in hops.items()}, frozenset(others)
-
-
-def _answer_for_inputs(
-    program: Program,
-    graph: ProgramGraph,
-    all_exprs: list[Expr],
-    nondeterministic: dict[str, tuple[Any, ...]],
-    free_system: frozenset[str],
-    atom_index: dict[str, list[Atom]],
-    *,
-    real_gap_points: bool,
-    paired: Mapping[str, frozenset[str]],
-    constant_storage: frozenset[str],
-    carry: _CarryBack,
-) -> dict[str, str]:
-    """Make each free input's values all the program tells apart, or say it can't.
-
-    An input is answered when (a) it takes every value it can hold
-    (:func:`_every_value_domain`), or (b) its value reaches nothing but contacts on it
-    and its own ``X op literal`` comparisons, which its partition splits at exactly,
-    and comparisons with the tags *paired* with it (see
-    :func:`_reached_past_literal_compares`), or (c) besides those, it is stored only
-    through hops the backward pass answered for whole (*carry*), into tags that
-    reach nothing but their own comparisons with a literal and such hops.
-    A (b) input gets its partition added to the values it already has (a literal
-    write's values miss the neighbours of a literal it is compared with), and an input
-    with a small declared range takes all of it.  Every other input is returned,
-    ``{name: what its value reaches}``: a search that finds no scan answers nothing
-    for it.  *constant_storage* keeps its one value: no input, it has nothing to
-    answer for.  Mutates *nondeterministic*.
-    """
-    names = frozenset(
-        name
-        for name in nondeterministic
-        if name in graph.tags
-        and graph.tags[name].type != TagType.BOOL
-        and name not in constant_storage
-    )
-    if not names:
-        return {}
-    hops, others = _store_hops(program, graph, carry)
-    # A tag whose every read by an instruction is a hop: the hops are judged below.
-    hop_only = frozenset(hops) - others
-    reach = _reached_past_literal_compares(
-        program, graph, names, exprs=all_exprs, paired=paired, hop_only=hop_only
-    )
-    stored_reach = _reached_past_literal_compares(
-        program,
-        graph,
-        frozenset(target for found in hops.values() for target in found),
-        exprs=all_exprs,
-        hop_only=hop_only,
-        stored=True,
-    )
-
-    def through_hops(name: str, seen: frozenset[str]) -> str | None:
-        # What keeps the hops from *name* from answering for it; None when nothing does.
-        if name in carry.incomplete:
-            return min(hops.get(name, ()), default="a store")
-        for target in sorted(hops.get(name, ())):
-            if target in seen:
-                return target
-            if target in stored_reach:
-                return f"{target}, then {stored_reach[target]}"
-            past = through_hops(target, seen | {target})
-            if past is not None:
-                return past
-        return None
-
-    unanswered: dict[str, str] = {}
-    for name in sorted(names):
-        tag = graph.tags[name]
-        if name in free_system:
-            tag = bounded_system_tag(tag)
-        domain = set(nondeterministic[name])
-        where = reach.get(name)
-        if where is None and name in hops:
-            where = through_hops(name, frozenset((name,)))
-        if where is None:
-            if name not in free_system:
-                partition = _extract_value_domain(
-                    name,
-                    tag,
-                    all_exprs,
-                    graph.tags,
-                    None,
-                    None,
-                    graph,
-                    atom_index,
-                    real_gap_points=real_gap_points,
-                )
-                domain |= set(partition or ())
-        else:
-            every = _every_value_domain(tag)
-            if every is None:
-                unanswered[name] = where
-                continue
-            domain |= set(every)
-        widened = tuple(sorted(held_candidates(tag, domain)))
-        if widened:
-            nondeterministic[name] = widened
-    return unanswered
-
-
-_INTEGRAL_TYPE_RANGE: dict[TagType, tuple[int, int]] = {
-    TagType.INT: (-32768, 32767),
-    TagType.DINT: (-(2**31), 2**31 - 1),
-    TagType.WORD: (0, 65535),
-}
-
-
-def _group_domains(
-    members: Sequence[str],
-    domains: dict[str, tuple[Any, ...]],
-    tags: Mapping[str, Tag],
-) -> None:
-    """Widen the domains of free inputs compared with each other (``PV > SP``).
-
-    Each member's own partition splits only at its own literals; the
-    comparison between members needs their relative order too.  Over the
-    union *S* of every member's split points (and declared min/max), any
-    assignment of the members is order-equivalent, against *S* and against
-    each other, to one that puts in each gap of *S* at most one value per
-    member: k members need k representatives per gap (the integers nearest
-    each end of the gap for an integral member; for a REAL, k points between
-    any two neighbouring candidates, so it can sit between or beside the
-    integers).  Every member's domain becomes *S* plus those representatives,
-    filtered to what the member can hold.  Mutates *domains*.
-    """
-    k = len(members)
-    points: set[float] = set()
-    for name in members:
-        tag = tags[name]
-        for value in domains[name]:
-            if isinstance(value, int | float) and not isinstance(value, bool):
-                points.add(value)
-        for bound in (tag.min, tag.max):
-            if isinstance(bound, int | float) and not isinstance(bound, bool):
-                points.add(bound)
-    if not points:
-        return
-    ordered = sorted(points)
-    any_integral = any(tags[name].type in _INTEGRAL_TYPE_RANGE for name in members)
-    any_real = any(tags[name].type == TagType.REAL for name in members)
-    gaps = list(zip(ordered, ordered[1:], strict=False))
-    lowest, highest = ordered[0] - k - 1, ordered[-1] + k + 1
-    if any_real:
-        # Past 2**53 the step of k + 1 rounds back onto the point: go k + 1 floats out.
-        below, above = float(ordered[0]), float(ordered[-1])
-        for _ in range(k + 1):
-            below = math.nextafter(below, -math.inf)
-            above = math.nextafter(above, math.inf)
-        lowest, highest = min(lowest, below), max(highest, above)
-    gaps.insert(0, (lowest, ordered[0]))
-    gaps.append((ordered[-1], highest))
-    candidates: set[Any] = set(ordered)
-    for low, high in gaps:
-        ints: list[int] = []
-        if any_integral or not any_real:
-            first, last = math.floor(low) + 1, math.ceil(high) - 1
-            if first <= last:
-                ints = sorted(
-                    set(range(first, min(first + k, last + 1)))
-                    | set(range(max(last - k + 1, first), last + 1))
-                )
-                candidates.update(ints)
-        if any_real:
-            anchors = [low, *ints, high]
-            for left, right in zip(anchors, anchors[1:], strict=False):
-                candidates.update(_floats_between(float(left), float(right), k))
-    for name in members:
-        tag = tags[name]
-        allowed = set(domains[name])
-        for value in candidates:
-            if tag.type in _INTEGRAL_TYPE_RANGE:
-                if value != int(value):
-                    continue
-                value = int(value)
-                type_low, type_high = _INTEGRAL_TYPE_RANGE[tag.type]
-                if not type_low <= value <= type_high:
-                    continue
-            elif tag.type == TagType.REAL:
-                value = float(value)
-            else:
-                continue
-            if tag.min is not None and value < tag.min:
-                continue
-            if tag.max is not None and value > tag.max:
-                continue
-            if tag.choices is not None and value not in tag.choices:
-                continue
-            allowed.add(value)
-        domains[name] = tuple(sorted(allowed))
+#: The most values an interval domain lists (a wider one has no domain).
+_INTERVAL_DOMAIN_CAP = 1000
 
 
 def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
@@ -2131,7 +1167,7 @@ def _domain_from_calc_expression(
     if isinstance(lo_t, int) and isinstance(hi_t, int):
         # Listing a wide interval runs out of memory.  A store that wraps part
         # of the interval leaves lo above hi, and that range would be empty.
-        if hi - lo + 1 > _TAG_COMPARED_DOMAIN_CAP or lo_t > hi_t:
+        if hi - lo + 1 > _INTERVAL_DOMAIN_CAP or lo_t > hi_t:
             return None
         return tuple(range(lo_t, hi_t + 1))
     return None
@@ -2381,19 +1417,13 @@ def _collect_structural_domain_info(
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
     discovered_domains: dict[str, tuple[Any, ...]] | None = None,
     *,
-    model_system_points: bool = False,
     real_gap_points: bool = True,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack]:
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
     """Discover finite domains and reverse soundness blockers.
 
-    Returns ``(domains, blockers, carry)`` where *domains* maps tag names to
-    their inferred finite value tuples, *blockers* lists source tags with
-    unsupported reverse dependencies that could not be safely bounded, and
-    *carry* is what the backward pass carried back (:class:`_CarryBack`).
-
-    *model_system_points* (BFS only) treats scan-, clock- and time-derived
-    system tags as free inputs: never constant storage, and seeded with their
-    calendar range when it is small (``rtc.hour``, ``rtc.minute``, ...).
+    Returns ``(domains, blockers)`` where *domains* maps tag names to their
+    inferred finite value tuples and *blockers* lists source tags with
+    unsupported reverse dependencies that could not be safely bounded.
 
     *real_gap_points* is :func:`_extract_value_domain`'s.
     """
@@ -2441,16 +1471,6 @@ def _collect_structural_domain_info(
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
     if profile:
         profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
-    # Under the BFS system-point model, scan-, clock- and time-derived system
-    # tags are free inputs, not constant storage.
-    free_system = (
-        free_system_tags(graph.tags, graph.writers_of) if model_system_points else frozenset()
-    )
-    for tag_name in sorted(free_system):
-        if tag_name not in known_domains:
-            full_range = free_system_domain(tag_name)
-            if full_range is not None:
-                known_domains[tag_name] = full_range
     for tag_name, tag in graph.tags.items():
         if tag_name in known_domains:
             continue
@@ -2461,7 +1481,6 @@ def _collect_structural_domain_info(
             and tag_name not in graph.writers_of
             and not graph.is_physical_input(tag_name)
             and tag_name not in influences_comparison
-            and tag_name not in free_system
         ):
             known_domains[tag_name] = (tag.default,)
     if profile:
@@ -2565,7 +1584,7 @@ def _collect_structural_domain_info(
     if profile:
         profile_last = _classify_profile_mark(timings, "discovered_domain_merge", profile_last)
 
-    blockers, carry = _backward_propagate_comparison_boundaries(
+    blockers = _backward_propagate_comparison_boundaries(
         program,
         graph,
         all_exprs,
@@ -2592,7 +1611,7 @@ def _collect_structural_domain_info(
             blockers=len(blockers),
         )
 
-    return known_domains, blockers, carry
+    return known_domains, blockers
 
 
 def _collect_structural_domains(
@@ -2602,7 +1621,7 @@ def _collect_structural_domains(
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Discover finite domains from structural writes via fixed-point propagation."""
-    domains, _blockers, _carry = _collect_structural_domain_info(
+    domains, _blockers = _collect_structural_domain_info(
         program, graph, all_exprs, literal_write_domains
     )
     return domains
@@ -2623,7 +1642,7 @@ def collect_produced_value_domains(
     A domain is returned only when every writer of the tag is understood.  The
     fixed point covers literal and named copies, bounded calculations, and
     constant/finite indirect-table reads through the same write-domain helpers
-    used by prover classification.  Unknown sources, self-fed calculations, and
+    used by fact classification.  Unknown sources, self-fed calculations, and
     over-cap indirect destinations cause a conservative punt.
     """
     from pyrung.core.analysis.sp_values import _expr_tag_names
@@ -2654,7 +1673,7 @@ def collect_produced_value_domains(
         if getattr(tag, "_pyrung_block", None) in opaque_dest_blocks
     }
     # Receive payloads are external producers even without an explicit external
-    # annotation. The prover write-target helper lists their status outputs,
+    # annotation. The facts' write-target helper lists their status outputs,
     # not their payloads; a ladder reset must not become the only known writer.
     incomplete_targets = (
         opaque_targets
@@ -2901,17 +1920,6 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 
-class _CarryBack(NamedTuple):
-    """What :func:`_backward_propagate_comparison_boundaries` carried back, and how well.
-
-    *covered_pairs*: the ``(source, target)`` store hops it has an inverse for.
-    *incomplete*: the sources it gave no complete answer, and whatever feeds them.
-    """
-
-    covered_pairs: frozenset[tuple[str, str]] = frozenset()
-    incomplete: frozenset[str] = frozenset()
-
-
 class _Hop(NamedTuple):
     values: tuple[Any, ...]  # What the source has to try, before the ones next door.
     complete: bool  # Those are all the places a comparison on the target can change.
@@ -2998,22 +2006,20 @@ def _backward_propagate_comparison_boundaries(
     atom_idx: dict[str, list[Atom]],
     *,
     real_gap_points: bool = True,
-) -> tuple[frozenset[str], _CarryBack]:
+) -> frozenset[str]:
     """Propagate comparison boundary values from write targets back to sources.
 
     Covers ``copy``, ``fill``, ``blockcopy`` (identity), and invertible
     ``math(expr, target)`` expressions.  When a target has downstream
     comparisons (e.g. ``target == 75``), the boundary values are transformed
-    through the inverse and added to the source's domain so the BFS
-    enumerates them.  *real_gap_points* is :func:`_extract_value_domain`'s.
+    through the inverse and added to the source's domain.  *real_gap_points*
+    is :func:`_extract_value_domain`'s.
 
-    Returns the set of *reverse soundness blockers* — source tags with
-    unsupported reverse dependencies whose domains could not be safely
-    bounded by structural or declared fallbacks — and the :class:`_CarryBack`
-    the search judges a carried source by (:func:`_answer_for_inputs`).  A
-    source whose domain holds what the inverse gave but maybe not every value
-    that reaches the target takes its declared domain when it has one and is
-    no REAL.
+    Returns the set of *reverse soundness blockers*: source tags with
+    unsupported reverse dependencies whose domains could not be bounded by
+    structural or declared fallbacks.  A source whose domain holds what the
+    inverse gave but maybe not every value that reaches the target takes its
+    declared domain when it has one and is no REAL.
     """
     from pyrung.core.analysis.pdg import _extract_tag_names
     from pyrung.core.instruction.calc import CalcInstruction
@@ -3256,9 +2262,7 @@ def _backward_propagate_comparison_boundaries(
         if declared is not None and source_tag.type != TagType.REAL:
             known_domains[source_name] = declared
 
-    return frozenset(reverse_soundness_blockers), _CarryBack(
-        frozenset(covered_pairs), frozenset(store_cannot_invert)
-    )
+    return frozenset(reverse_soundness_blockers)
 
 
 def _extract_value_domain(
@@ -3272,20 +2276,15 @@ def _extract_value_domain(
     atom_index: dict[str, list[Atom]] | None = None,
     *,
     real_gap_points: bool = True,
-    split_neighbours: bool = False,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded.
 
     *real_gap_points* gives a REAL the midpoints of its split points at most
-    1 apart (:func:`_real_gap_points`), so the search covers every value.
-    The ``how()`` prior turns it off: its domains steer, they prove nothing,
+    1 apart (:func:`_real_gap_points`), so the domain holds a value between
+    every two split points.  The ``how()`` prior turns it off: its domains steer,
     and it keeps its whole-number picks (131, not 130.5).  A midpoint copied
     into an INT truncates (-0.5 lands at 0), so the prior would steer with a
     value the copy never stores.
-
-    *split_neighbours* (the search) gives a domain merged into written or carried
-    values the neighbours of each split point too, as a partition has: the values
-    of an exact partner (``copy(4000, Y)``, ``X > Y``) need 4001 as much as 4000.
     """
     if tag.type == TagType.BOOL:
         return (False, True)
@@ -3311,7 +2310,6 @@ def _extract_value_domain(
             graph=graph,
             atom_index=atom_index,
             real_gap_points=real_gap_points,
-            split_neighbours=split_neighbours,
         )
         if free is None:
             return None
@@ -3384,10 +2382,6 @@ def _extract_value_domain(
         # Merge comparison literals into the write domain — if the program
         # tests for a value, it belongs in the domain even if never written.
         merged = set(literals)
-        if split_neighbours:
-            for lit in literals:
-                if isinstance(lit, (int, float)) and not isinstance(lit, bool):
-                    merged.update(_neighbours(lit, tag.type))
         if real_gap_points and tag.type == TagType.REAL:
             merged |= _real_gap_points(literals)
         return tuple(sorted(set(base_domain) | held_candidates(tag, merged)))
@@ -3433,41 +2427,6 @@ def _extract_value_domain(
     return tuple(sorted(partitioned))
 
 
-def _abstract_acc_domains(program: Program, graph: ProgramGraph) -> dict[str, tuple[Any, ...]]:
-    """Value domains of every accumulator under black-box timers.
-
-    The domain only sizes the search (hints, estimates): the kernel holds the
-    values.  A timer's untracked accumulator takes the values its tick
-    chooses (``blackbox._TimerOracle``): its default, its presets, and 1
-    for progress below a preset already reached.  A counter counts
-    concretely, up to its preset.
-    """
-    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    from .blackbox import timed_sites
-
-    values: dict[str, set[int]] = {}
-    for site in timed_sites(program).values():
-        values.setdefault(site.acc_name, {0, 1}).update(site.literal_presets)
-    for instr in walk_instructions(program):
-        if not isinstance(instr, (CountUpInstruction, CountDownInstruction)):
-            continue
-        preset = instr.preset if isinstance(instr.preset, int) else None
-        if preset is not None and abs(preset) <= 1000:
-            span = set(range(min(0, preset), max(0, preset) + 1))
-        else:
-            span = {0, 1} if preset is None else {0, preset}
-        values.setdefault(instr.accumulator.name, set()).update(span)
-    result: dict[str, tuple[Any, ...]] = {}
-    for name, vals in values.items():
-        tag = graph.tags.get(name)
-        if tag is not None:
-            vals = vals | {int(tag.default or 0)}
-        result[name] = tuple(sorted(vals))
-    return result
-
-
 def _char_cuts(literal: str) -> set[str]:
     """The characters that stand for every other around *literal*, for a CHAR.
 
@@ -3499,20 +2458,6 @@ def _neighbours(value: Any, tag_type: TagType | None) -> tuple[Any, ...]:
     if above == number:
         above = math.nextafter(number, math.inf)
     return (below, above)
-
-
-def _floats_between(low: float, high: float, count: int) -> set[float]:
-    """Up to *count* REAL values strictly between *low* and *high*, spread evenly.
-
-    Where the gap is a few floats wide, even steps round onto its ends, so the
-    floats next to *low* fill in.
-    """
-    step = (high - low) / (count + 1)
-    found = {value for j in range(1, count + 1) if low < (value := low + step * j) < high}
-    value = low
-    while len(found) < count and (value := math.nextafter(value, high)) < high:
-        found.add(value)
-    return found
 
 
 def _real_gap_points(points: Iterable[Any]) -> set[float]:
@@ -3828,7 +2773,7 @@ _KIND_LABELS: dict[str, str] = {
 
 
 def _unmodeled_accumulators(program: Program) -> dict[str, str]:
-    """Accumulators of instructions the prover has no exact model for, by verb."""
+    """Accumulators of instructions the facts have no exact model for, by verb."""
     from pyrung.core.instruction.drums import TimeDrumInstruction, TimeEventDrumInstruction
     from pyrung.core.instruction.out_variants import (
         DebounceInstruction,
@@ -3860,91 +2805,61 @@ def _build_infeasible_hints(
     graph: ProgramGraph,
     threshold_blockers: dict[str, _ThresholdBlocker] | None = None,
     unmodeled_accs: dict[str, str] | None = None,
-    tag_compared: Mapping[str, str] | None = None,
 ) -> list[str]:
-    """Generate actionable hints for each infeasible tag.
-
-    *tag_compared* names the inputs refused because they are compared with a
-    changing value (``_tag_compared_names``), with what they are compared to.
-    """
+    """Generate actionable hints for each infeasible tag."""
     blockers = threshold_blockers or {}
     unmodeled = unmodeled_accs or {}
-    compared = tag_compared or {}
     hints: list[str] = []
     for name in infeasible_tags:
         blocker = blockers.get(name)
         if name in unmodeled:
             hints.append(
-                f"  {name}: {unmodeled[name]} accumulator; how()'s domain prior does"
-                f" not model its timing"
+                f"  {name}: {unmodeled[name]} accumulator. how() does not model its timing."
             )
             continue
         if blocker is not None:
             label = _KIND_LABELS.get(blocker.kind, "accumulator")
-            hints.append(f"  {name}: {label}; threshold abstraction blocked:")
+            hints.append(f"  {name}: {label}. These keep how() from tracking only its thresholds:")
             for reason in blocker.reasons:
                 hints.append(f"    {reason}")
             continue
         tag = graph.tags.get(name)
-        if name in compared:
-            if compared[name].startswith(_FOR_COUNT_REASON):
-                why = f"read as {compared[name]}, so every value it can hold is explored"
-            else:
-                why = (
-                    f"compared with a changing value ({compared[name]}), so every value it"
-                    f" can hold is explored"
-                )
-            cap = _TAG_COMPARED_DOMAIN_CAP
-            if tag is not None and tag.type == TagType.REAL:
-                hints.append(f"  {name}: REAL {why}, and a REAL's values cannot be listed")
-            elif tag is not None and tag.min is not None and tag.max is not None:
-                hints.append(
-                    f"  {name}: range {tag.min}..{tag.max} ({int(tag.max - tag.min + 1)}"
-                    f" values); too wide: it is {why}; narrow min=/max= to {cap} values"
-                    f" at most, or add choices="
-                )
-            else:
-                hints.append(
-                    f"  {name}: no domain constraint; it is {why}; add choices=, or"
-                    f" min=/max= spanning {cap} values at most"
-                )
-            continue
         ptr_info = graph.pointer_tags.get(name)
         if is_randint_tag(name):
             site = randint_sites((name,))
             spelled = repr(site[0]) if site else "randint()"
             if site and site[0].equal_bounds:
                 hints.append(
-                    f"  {name}: {spelled} has equal constants, a math error with no draw"
-                    f" to explore; give it two different bounds"
+                    f"  {name}: {spelled} has equal constants, a math error with no draw."
+                    f" Give it two different bounds."
                 )
             else:
                 hints.append(
-                    f"  {name}: draw of {spelled} with tag bounds; give it literal bounds"
-                    f", or declare min=/max= on the bound tags and narrow scope="
+                    f"  {name}: {spelled} draws between tag bounds. Give it literal bounds,"
+                    f" or declare min=/max= on the bound tags."
                 )
         elif name in SYSTEM_TAGS_BY_NAME:
             hints.append(
-                f"  {name}: system tag explored as a free input with no finite range"
-                f"; compare it with literals where it is read (e.g. {name} >= 2030)"
-                f" instead of copying it into arithmetic, or narrow scope="
+                f"  {name}: system tag with no finite range. Compare it with literals"
+                f" where it is read (e.g. {name} >= 2030) instead of copying it into"
+                f" arithmetic."
             )
         elif ptr_info is not None:
             block_name, start, end = ptr_info
             lo, hi = _pointer_span(graph, name, start, end)
             hints.append(
-                f"  {name}: pointer into {block_name}[{start}..{end}]"
-                f"; add choices=, min={lo}/max={hi}, or readonly=True"
+                f"  {name}: pointer into {block_name}[{start}..{end}]."
+                f" Add choices=, min={lo}/max={hi}, or readonly=True."
             )
         elif tag is not None and tag.min is not None and tag.max is not None:
             hints.append(
                 f"  {name}: range {tag.min}..{tag.max} ({int(tag.max - tag.min + 1)} values)"
-                f"; too wide; add choices=, narrow min=/max=, or readonly=True"
+                f" is too wide. Add choices=, narrow min=/max=, or readonly=True."
             )
         else:
             hints.append(
-                f"  {name}: no domain constraint"
-                f"; add choices= for discrete values, or cover with dt= testing"
+                f"  {name}: no domain constraint. Add choices= for discrete values,"
+                f" or cover with dt= testing."
             )
     return hints
 
@@ -3957,98 +2872,29 @@ def _pointer_span(graph: ProgramGraph, name: str, start: int, end: int) -> tuple
     return start, end
 
 
-def _build_dimension_hints(context: _ExploreContext) -> list[str]:
-    """Summarise the largest dimensions when max_states is exceeded."""
-    dims: list[tuple[str, int]] = []
-    for name, domain in context.stateful_dims.items():
-        dims.append((name, len(domain)))
-    for name, domain in context.nondeterministic_dims.items():
-        dims.append((name, len(domain)))
-    dims.sort(key=lambda x: x[1], reverse=True)
-    product = 1
-    for _, size in dims:
-        product *= size
-    hints = [f"  state space: {product:,} combinations across {len(dims)} dimensions"]
-    for name, size in dims[:10]:
-        ptr_info = context.graph.pointer_tags.get(name)
-        suffix = ""
-        if ptr_info is not None:
-            block_name, start, end = ptr_info
-            suffix = f" (pointer into {block_name}[{start}..{end}])"
-        hints.append(f"  {name}: {size} values{suffix}")
-    if len(dims) > 10:
-        hints.append(f"  ... and {len(dims) - 10} more")
-    hints.append("Constrain the largest dimensions with choices=, min=/max=, or readonly=True")
-    return hints
-
-
 def _classify_dimensions_from_graph(
     program: Program,
     graph: ProgramGraph,
     all_exprs: list[Expr],
     *,
-    scope: list[str] | None = None,
-    project: tuple[str, ...] | None = None,
-    discovered_domains: dict[str, tuple[Any, ...]] | None = None,
-    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack]
-    | None = None,
+    structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None,
     receive_dest_names: frozenset[str] = frozenset(),
-    exclusions: dict[str, str] | None = None,
     unclassified: set[str] | None = None,
     stepping_tags_out: set[str] | None = None,
     threshold_absorptions_out: list[_ThresholdAbsorptions] | None = None,
-    model_system_points: bool = False,
-    observe_everything: bool = False,
-    abstract_timers: bool,
-    _skip_absorptions: bool,
-    exhaust_tag_compared_inputs: bool = True,
-    real_gap_points: bool = True,
-    unanswered_out: dict[str, str] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context.
 
-    *abstract_timers* classifies for the black-box timer kernel
-    (``blackbox.py``): a Done bit is a plain Bool, and every accumulator
-    (timer, counter, drum, Out timing) is state the search tracks itself.
-    *_skip_absorptions* skips the accumulator absorptions.  The search
-    passes True for both; only how()'s domain prior (``domains_only``)
-    passes False, for the absorbing classification its world key reads
-    (``absorb.py``).  Both are required so no caller gets the prior's
-    classification by default.
+    A timer's Done reads ``False``/``PENDING``/``True``, and the accumulators
+    its comparisons let PILOT's world key leave out are absorbed (``absorb.py``).
+    Unwritten system tags and the fault flags are left out, because PILOT
+    drives the real runner and must not treat a clock as a lever.  A REAL keeps
+    whole-number split points.  Each domain steers and proves nothing.
 
-    *model_system_points* applies the BFS system-point model
-    (:mod:`.system_points`): ``sys.first_scan`` becomes a stateful bit and
-    scan-, time- and clock-derived system tags become nondeterministic
-    inputs.  Without it, unwritten system tags are left out (the ``how()``
-    domain prior).
+    *structural_domain_info* is the ``(domains, blockers)`` from
+    :func:`_collect_structural_domain_info` (with ``real_gap_points=False``).
+    Pass it to reuse a fixpoint another pass already computed.
 
-    *structural_domain_info* is the ``(domains, blockers, carry)`` from
-    :func:`_collect_structural_domain_info`; pass it to reuse a fixpoint already
-    computed by another pass (only valid when *discovered_domains* is None, since
-    that input feeds the fixpoint).
-
-    *project* holds every tag read from outside the program: the projection
-    and what callable properties read (``passes._observed_project``).  Their
-    accumulators are tracked exactly, and one that accumulates from its own
-    value but has no domain is infeasible.  *observe_everything* marks a
-    callable without ``scope=`` (every tag is in *project*): it keeps
-    accumulators exact but leaves domainless tags unclassified rather than
-    refusing every such program.
-
-    *exhaust_tag_compared_inputs* gives an input compared with a changing
-    value (``_tag_compared_names``) every value it can hold, or refuses it,
-    instead of the expression partition, which does not cover it.  The
-    ``how()`` prior turns it off: its domains steer, they prove nothing.
-
-    *real_gap_points* gives a REAL input the midpoints of its split points at
-    most 1 apart (:func:`_extract_value_domain`).  The ``how()`` prior turns
-    it off too, keeping its whole-number REAL partition.  It must match the
-    flag *structural_domain_info* was collected with.
-
-    *unanswered_out* gets the inputs whose values tried may not be all the
-    program tells apart, with what each one's value reaches (see
-    :func:`_answer_for_inputs`): a search that finds no scan answers nothing
-    for them.  Only with *exhaust_tag_compared_inputs*.
     """
     profile = _classify_profile_enabled()
     timings: list[tuple[str, float]] = []
@@ -4078,22 +2924,20 @@ def _classify_dimensions_from_graph(
     )
     if profile:
         profile_last = _classify_profile_mark(timings, "literal_write_domains", profile_last)
-    if structural_domain_info is not None and discovered_domains is None:
+    if structural_domain_info is not None:
         # Reuse the fixpoint another pass already ran — it's the dominant cost.
-        structural_domains, reverse_blockers, carry_back = structural_domain_info
+        structural_domains, reverse_blockers = structural_domain_info
         if profile:
             profile_last = _classify_profile_mark(
                 timings, "structural_domain_info_reuse", profile_last
             )
     else:
-        structural_domains, reverse_blockers, carry_back = _collect_structural_domain_info(
+        structural_domains, reverse_blockers = _collect_structural_domain_info(
             program,
             graph,
             all_exprs,
             literal_write_domains,
-            discovered_domains,
-            model_system_points=model_system_points,
-            real_gap_points=real_gap_points,
+            real_gap_points=False,
         )
         if profile:
             profile_last = _classify_profile_mark(
@@ -4136,84 +2980,51 @@ def _classify_dimensions_from_graph(
         profile_last = _classify_profile_mark(timings, "comparison_influence_index", profile_last)
 
     consumed_accs: set[str] = set()
-    observed = frozenset(project or ())
     for acc_name in done_acc_info.pairs.values():
-        # Projected, or read by a callable property: tracked exactly.
-        if (
-            acc_name in observed
-            or atom_idx.get(acc_name)
-            or _has_forbidden_data_read(
-                program,
-                graph,
-                acc_name,
-            )
-        ):
+        if atom_idx.get(acc_name) or _has_forbidden_data_read(program, graph, acc_name):
             consumed_accs.add(acc_name)
     if profile:
         profile_last = _classify_profile_mark(timings, "consumed_acc_scan", profile_last)
 
-    if _skip_absorptions:
-        absorptions = _RedundantAccAbsorptions(
-            acc_names=frozenset(),
-            preset_tags=frozenset(),
-            synthetic_presets={},
-        )
-        threshold_absorptions = _ThresholdAbsorptions(
-            progress_names=frozenset(),
-            threshold_tags=frozenset(),
-            comparison_tags=frozenset(),
-            vector_specs=(),
-        )
-        if profile:
-            profile_last = _classify_profile_mark(timings, "absorptions_skipped", profile_last)
-    else:
-        absorptions = _find_redundant_acc_absorptions(
-            program,
-            graph,
-            all_exprs,
-            done_acc_info,
-            consumed_accs,
-            atom_idx,
-        )
-        consumed_accs.difference_update(absorptions.acc_names)
-        if profile:
-            profile_last = _classify_profile_mark(
-                timings, "redundant_acc_absorptions", profile_last
-            )
+    absorptions = _find_redundant_acc_absorptions(
+        program,
+        graph,
+        all_exprs,
+        done_acc_info,
+        consumed_accs,
+        atom_idx,
+    )
+    consumed_accs.difference_update(absorptions.acc_names)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "redundant_acc_absorptions", profile_last)
 
-        threshold_absorptions = _find_threshold_absorptions(
-            program,
-            graph,
-            all_exprs,
-            project=project,
-            atom_index=atom_idx,
-        )
-        if profile:
-            profile_last = _classify_profile_mark(timings, "threshold_absorptions", profile_last)
-        comparison_absorptions = _find_comparison_absorptions(
-            program,
-            graph,
-            all_exprs,
-            structural_domains,
-            project=project,
-            receive_dest_names=receive_dest_names,
-            atom_index=atom_idx,
-            stable_partners_only=model_system_points,
-        )
-        if profile:
-            profile_last = _classify_profile_mark(timings, "comparison_absorptions", profile_last)
-        threshold_absorptions = _merge_threshold_absorptions(
-            threshold_absorptions,
-            comparison_absorptions,
-        )
-        consumed_accs.difference_update(threshold_absorptions.progress_names)
-        if profile:
-            profile_last = _classify_profile_mark(timings, "absorption_merge", profile_last)
+    threshold_absorptions = _find_threshold_absorptions(
+        program,
+        graph,
+        all_exprs,
+        atom_index=atom_idx,
+    )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "threshold_absorptions", profile_last)
+    comparison_absorptions = _find_comparison_absorptions(
+        program,
+        graph,
+        all_exprs,
+        structural_domains,
+        receive_dest_names=receive_dest_names,
+        atom_index=atom_idx,
+    )
+    if profile:
+        profile_last = _classify_profile_mark(timings, "comparison_absorptions", profile_last)
+    threshold_absorptions = _merge_threshold_absorptions(
+        threshold_absorptions,
+        comparison_absorptions,
+    )
+    consumed_accs.difference_update(threshold_absorptions.progress_names)
+    if profile:
+        profile_last = _classify_profile_mark(timings, "absorption_merge", profile_last)
 
-    if not abstract_timers:
-        # Exact-timing only: under black-box timers a reset's timing is a
-        # choice like any other, and the accumulator is tracked anyway.
-        _expand_consumed_accs_for_reset_timing(program, graph, done_acc_info, consumed_accs)
+    _expand_consumed_accs_for_reset_timing(program, graph, done_acc_info, consumed_accs)
     if profile:
         profile_last = _classify_profile_mark(timings, "reset_timing_expansion", profile_last)
     if threshold_absorptions_out is not None:
@@ -4223,51 +3034,12 @@ def _classify_dimensions_from_graph(
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
     unconsumed_accs = frozenset(done_acc.values())
 
-    scope_input_tags: frozenset[str] | None = None
-    if scope is not None:
-        # Under the model an unwritten system tag is an input even when only
-        # the property reads it (no rung, so no graph role).
-        _is_nd_input = lambda tn: (
-            graph.tag_roles.get(tn) is TagRole.INPUT
-            or tn in receive_dest_names
-            or (model_system_points and tn in SYSTEM_TAGS_BY_NAME and tn not in graph.writers_of)
-        )
-        upstream_tags: set[str] = set()
-        for tag_name in scope:
-            if _is_nd_input(tag_name):
-                upstream_tags.add(tag_name)
-            upstream_tags.update(tag for tag in graph.upstream_slice(tag_name) if _is_nd_input(tag))
-        for expr in all_exprs:
-            upstream_tags.update(
-                tag_name for tag_name in _referenced_tags(expr) if _is_nd_input(tag_name)
-            )
-        scope_input_tags = frozenset(upstream_tags)
-    if profile:
-        profile_last = _classify_profile_mark(timings, "scope_input_filter", profile_last)
-
     stateful: dict[str, tuple[Any, ...]] = {}
     nondeterministic: dict[str, tuple[Any, ...]] = {}
     combinational: set[str] = set()
     infeasible_tags: list[str] = []
     unmodeled_accs = frozenset(_unmodeled_accumulators(program))
-    unread_timers = (
-        _unread_timer_done_tags(program, graph, done_acc, scope=scope, project=project)
-        if model_system_points and (scope is not None or project is not None)
-        else frozenset()
-    )
 
-    unread_timer_accs = frozenset(done_acc[name] for name in unread_timers if name in done_acc)
-    abstract_acc_domains = _abstract_acc_domains(program, graph) if abstract_timers else {}
-    if abstract_timers:
-        from .blackbox import timer_held_tags
-
-        timer_held = timer_held_tags(program)
-    else:
-        timer_held = frozenset()
-
-    free_system = (
-        free_system_tags(graph.tags, graph.writers_of) if model_system_points else frozenset()
-    )
     # Unwritten internal tags that never influence a comparison are constant
     # storage (Block slots, unused tags).  Everything else -- external inputs,
     # HMI tags used in conditions, receive destinations, and free inputs that
@@ -4283,126 +3055,42 @@ def _classify_dimensions_from_graph(
         and not graph.is_physical_input(name)
         and name not in receive_dest_names
         and name not in influences_comparison
-        and name not in free_system
     )
-    tag_compared: dict[str, str] = {}
-    exact_partners: dict[str, frozenset[str]] = {}
-    exact_values: dict[str, frozenset[Any]] = {}
-    compared_groups: tuple[frozenset[str], ...] = ()
-    index_only: frozenset[str] = frozenset()
-    if exhaust_tag_compared_inputs:
-        exact_values = _exact_value_sets(program, graph, receive_dest_names, constant_storage)
-        free_inputs = frozenset(
-            name
-            for name, tag in graph.tags.items()
-            if name not in constant_storage
-            and not tag.readonly
-            and tag.type in (TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL)
-            and (
-                graph.tag_roles.get(name) is TagRole.INPUT
-                or name not in graph.writers_of
-                or name in receive_dest_names
-            )
-        )
-        tag_compared, exact_partners, compared_groups, index_only = _tag_compared_names(
-            program, graph, exact_values, exprs=all_exprs, free_inputs=free_inputs
-        )
-        if profile:
-            profile_last = _classify_profile_mark(timings, "tag_compared_index", profile_last)
-    tag_compared_refused: dict[str, str] = {}
-    first_scan_tags = frozenset({FIRST_SCAN}) | FIRST_SCAN_DEPENDENTS
     for tag_name, tag in graph.tags.items():
-        if tag_name in free_system:
-            tag = bounded_system_tag(tag)
-        if not model_system_points and tag_name in FAULT_FLAGS:
-            # The how() prior keeps fault flags out, as before they had writers.
+        if tag_name in FAULT_FLAGS:
+            # Fault flags stay out, as they did before they had writers.
             continue
         if tag.readonly:
-            if exclusions is not None:
-                exclusions[tag_name] = "readonly"
             continue
 
-        if tag_name in unconsumed_accs:
-            if abstract_timers and tag_name not in unread_timer_accs:
-                stateful[tag_name] = abstract_acc_domains.get(tag_name, (0, 1))
-                continue
-            if exclusions is not None:
-                exclusions[tag_name] = "unconsumed_acc"
-            continue
-        if tag_name in absorptions.preset_tags:
-            if exclusions is not None:
-                exclusions[tag_name] = "preset_tag"
-            continue
-        if tag_name in threshold_absorptions.progress_names:
-            if exclusions is not None:
-                exclusions[tag_name] = "progress_acc"
-            continue
-        if tag_name in threshold_absorptions.threshold_tags:
-            if exclusions is not None:
-                exclusions[tag_name] = "threshold_tag"
+        if (
+            tag_name in unconsumed_accs
+            or tag_name in absorptions.preset_tags
+            or tag_name in threshold_absorptions.progress_names
+            or tag_name in threshold_absorptions.threshold_tags
+        ):
             continue
         if tag_name in threshold_absorptions.comparison_tags and tag_name not in receive_dest_names:
-            if exclusions is not None:
-                exclusions[tag_name] = "comparison_only"
             continue
 
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
 
         if tag_name in SYSTEM_TAGS_BY_NAME and not is_written:
-            if model_system_points and tag_name in first_scan_tags:
-                # first_scan, and the scan-time min/max that differ on scan 0
-                # only, ride on one stateful bit (see system_points).
-                if scope_input_tags is None or scope_input_tags & first_scan_tags:
-                    stateful[FIRST_SCAN] = (False, True)
-                continue
-            if tag_name not in free_system:
-                continue
-        elif model_system_points and tag_name in SCAN_START_RESETS and tag_name not in free_system:
-            # Reset before every scan, so no scan reads a previous scan's value.
-            combinational.add(tag_name)
             continue
 
         if role == TagRole.INPUT or not is_written or tag_name in receive_dest_names:
-            if scope_input_tags is not None and tag_name not in scope_input_tags:
-                if exclusions is not None:
-                    exclusions[tag_name] = "out_of_scope_nd"
-                continue
-            if tag_name in tag_compared and tag_name not in constant_storage:
-                # No partition covers it (see _tag_compared_names): every value.
-                domain = _every_value_domain(tag)
-                if domain is None and tag_name in index_only and tag_name in known_domains:
-                    # Only an index: the values that land in its blocks.
-                    domain = known_domains[tag_name]
-                if domain is None:
-                    infeasible_tags.append(tag_name)
-                    tag_compared_refused[tag_name] = tag_compared[tag_name]
-                    continue
-            else:
-                tag_known_domains: Mapping[str, tuple[Any, ...]] = known_domains
-                if tag_name in exact_partners:
-                    # Every value of its exact partners is a split point.
-                    tag_known_domains = ChainMap(
-                        {
-                            partner: tuple(
-                                set(known_domains.get(partner, ())) | exact_values[partner]
-                            )
-                            for partner in exact_partners[tag_name]
-                        },
-                        known_domains,
-                    )
-                domain = _extract_value_domain(
-                    tag_name,
-                    tag,
-                    all_exprs,
-                    graph.tags,
-                    literal_write_domains,
-                    tag_known_domains,
-                    graph,
-                    atom_idx,
-                    real_gap_points=real_gap_points,
-                    split_neighbours=exhaust_tag_compared_inputs,
-                )
+            domain = _extract_value_domain(
+                tag_name,
+                tag,
+                all_exprs,
+                graph.tags,
+                literal_write_domains,
+                known_domains,
+                graph,
+                atom_idx,
+                real_gap_points=False,
+            )
             if not domain:
                 declared = _declared_domain(tag)
                 if declared is not None:
@@ -4411,8 +3099,6 @@ def _classify_dimensions_from_graph(
                 declared = _declared_domain(tag)
                 if declared is not None:
                     domain = declared
-            if not domain and tag_name in free_system:
-                domain = free_system_domain(tag_name) or ()
             if not domain:
                 # Constant storage keeps its default (see constant_storage).
                 if tag_name in constant_storage:
@@ -4420,12 +3106,9 @@ def _classify_dimensions_from_graph(
                 else:
                     infeasible_tags.append(tag_name)
                     continue
-            if tag_name in free_system:
-                domain = clip_to_range(tag_name, tuple(domain))
-            if tag.default not in domain and tag_name not in free_system:
-                # The power-on default is always a reachable initial value that
-                # BFS must cover, but only when it respects declared constraints.
-                # A free system tag has no power-on value of its own.
+            if tag.default not in domain:
+                # The power-on default is always a reachable initial value, but
+                # only when it respects declared constraints.
                 default_valid = True
                 if tag.min is not None and tag.default < tag.min:
                     default_valid = False
@@ -4435,8 +3118,8 @@ def _classify_dimensions_from_graph(
                     default_valid = False
                 if default_valid:
                     domain = tuple(sorted(set(domain) | {tag.default}))
-            # A confirmation replays these through patch(), and a choices= or a value
-            # carried back through a copy may be nothing this tag can hold.
+            # PILOT sets these through patch(), and a choices= or a value carried
+            # back through a copy may be nothing this tag can hold.
             domain = tuple(sorted(held_candidates(tag, domain)))
             if not domain:
                 infeasible_tags.append(tag_name)
@@ -4445,32 +3128,10 @@ def _classify_dimensions_from_graph(
             continue
 
         if not is_written:
-            if exclusions is not None:
-                exclusions[tag_name] = "unwritten_internal"
-            continue
-
-        if abstract_timers and tag_name in timer_held and is_written:
-            # A drum's completion flag, an Out timing coil's target: held by
-            # the instruction from scan to scan.
-            stateful[tag_name] = (False, True)
-            continue
-
-        if abstract_timers and tag_name in done_acc_info.pairs and tag_name not in done_acc:
-            # A Done whose accumulator is compared: still state (a retentive
-            # or off-delay timer reads it back, a timer not run holds it).
-            stateful[tag_name] = (False, True)
             continue
 
         if tag_name in done_acc:
-            if tag_name in unread_timers:
-                # Nothing reads its Done, accumulator or status bits, and
-                # nothing outside the program observes them: like any unread
-                # tag it changes no other state, so it is left out of the key.
-                combinational.add(tag_name)
-                if exclusions is not None:
-                    exclusions[tag_name] = "unread_timer"
-                continue
-            stateful[tag_name] = (False, True) if abstract_timers else (False, PENDING, True)
+            stateful[tag_name] = (False, PENDING, True)
             continue
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
@@ -4484,7 +3145,7 @@ def _classify_dimensions_from_graph(
                     known_domains,
                     graph,
                     atom_idx,
-                    real_gap_points=real_gap_points,
+                    real_gap_points=False,
                 )
                 if domain:
                     stateful[tag_name] = _with_done_boundary(
@@ -4564,14 +3225,10 @@ def _classify_dimensions_from_graph(
                     infeasible_tags.append(tag_name)
             continue
 
-        if tag_name in unmodeled_accs and abstract_timers:
-            # A black-box timer like the others: its tick is a choice.
-            stateful[tag_name] = abstract_acc_domains.get(tag_name, (0, 1))
-            continue
         if tag_name in unmodeled_accs:
             # Its timing is not modeled: the carry (``_frac:``) is in no state
-            # key, so even a declared domain must not let the search track it
-            # as plain state.  It times whether or not anything reads it.
+            # key, so even a declared domain must not let PILOT track it as
+            # plain state.  It times whether or not anything reads it.
             if unclassified is not None:
                 unclassified.add(tag_name)
             else:
@@ -4581,27 +3238,8 @@ def _classify_dimensions_from_graph(
         # An accumulator its own instruction reads back (a time & event drum's)
         # carries across scans; only the paired ones above are absorbed.
         self_read = tag_name in graph.all_readers_of and tag_name not in done_by_acc
-        if (
-            tag_name not in graph.readers_of
-            and not self_read
-            and not (
-                _tag_is_observable(tag_name, scope=scope, project=project)
-                and (
-                    not _written_every_scan_by_out(program, tag_name, graph)
-                    if abstract_timers
-                    else (
-                        _has_inert_writer(program, tag_name, graph.indirect_reach)
-                        or _has_out_oneshot_writer(program, tag_name)
-                        or _has_skippable_coil_writer(program, tag_name, graph)
-                    )
-                )
-            )
-        ):
-            # Read by nothing: no other tag's value depends on it.  In the search
-            # one the property reads leaves the key only when every scan writes
-            # it afresh; any other writer (a drum, a function, a latch, an out()
-            # some scans skip) can hold it from an earlier scan.  How()'s prior
-            # keeps its own rule.
+        if tag_name not in graph.readers_of and not self_read:
+            # Read by nothing: no other tag's value depends on it.
             combinational.add(tag_name)
             continue
 
@@ -4625,7 +3263,7 @@ def _classify_dimensions_from_graph(
             known_domains,
             graph,
             atom_idx,
-            real_gap_points=real_gap_points,
+            real_gap_points=False,
         )
         if domain is None:
             if tag_name in known_domains:
@@ -4647,65 +3285,12 @@ def _classify_dimensions_from_graph(
                 declared = _declared_domain(tag)
                 if declared is not None:
                     stateful[tag_name] = declared
-                elif (
-                    tag_name in observed
-                    and not observe_everything
-                    and graph.writers_of.get(tag_name, frozenset())
-                    & graph.all_readers_of.get(tag_name, frozenset())
-                ):
-                    # Read from outside the program (projected, or by a
-                    # callable) and accumulated from its own value
-                    # (``math(N + 1, N)``): its values are the answer, and
-                    # with no domain the search cannot track them.
-                    infeasible_tags.append(tag_name)
                 elif unclassified is not None:
                     unclassified.add(tag_name)
             continue
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
         stateful[tag_name] = domain
-    for group in compared_groups:
-        # A member that took every value it can hold adds them all as split
-        # points for the others.
-        members = sorted(name for name in group if name in nondeterministic)
-        if len(members) > 1:
-            _group_domains(members, nondeterministic, graph.tags)
-    if exhaust_tag_compared_inputs:
-        # A group's members split at each other's points (_group_domains above), and an
-        # exact partner's every value is a split point of the tag it is compared with.
-        paired: dict[str, set[str]] = {}
-        for group in compared_groups:
-            members = group & nondeterministic.keys()
-            if len(members) > 1:
-                for name in members:
-                    paired.setdefault(name, set()).update(members - {name})
-        for name, partners in exact_partners.items():
-            for partner in partners:
-                paired.setdefault(name, set()).add(partner)
-                paired.setdefault(partner, set()).add(name)
-        before = dict(nondeterministic)
-        unanswered = _answer_for_inputs(
-            program,
-            graph,
-            all_exprs,
-            nondeterministic,
-            free_system,
-            atom_idx,
-            real_gap_points=real_gap_points,
-            paired={name: frozenset(found) for name, found in paired.items()},
-            constant_storage=constant_storage,
-            carry=carry_back,
-        )
-        for group in compared_groups:
-            # A member widened above (every value, or its partition) is new split points
-            # for the rest: the representatives grouping gave them are stale.
-            members = sorted(name for name in group if name in nondeterministic)
-            if len(members) > 1 and any(
-                nondeterministic[name] != before.get(name) for name in members
-            ):
-                _group_domains(members, nondeterministic, graph.tags)
-        if unanswered_out is not None:
-            unanswered_out.update(unanswered)
     if profile:
         profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
@@ -4719,8 +3304,6 @@ def _classify_dimensions_from_graph(
             continue
         tag = graph.tags.get(ptr_name)
         if tag is None or tag.readonly:
-            if exclusions is not None and tag is not None:
-                exclusions[ptr_name] = "readonly"
             continue
         infeasible_tags.append(ptr_name)
     if profile:
@@ -4738,14 +3321,11 @@ def _classify_dimensions_from_graph(
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
         blocker_map = {b.acc_name: b for b in threshold_absorptions.blockers}
-        # Under black-box timers every such accumulator is state (above); only
-        # how()'s domain prior leaves one infeasible.
         hints = _build_infeasible_hints(
             sorted(infeasible_tags),
             graph,
             blocker_map,
-            None if abstract_timers else _unmodeled_accumulators(program),
-            tag_compared_refused,
+            _unmodeled_accumulators(program),
         )
         done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
         done_presets_partial.update(
@@ -4838,174 +3418,25 @@ def _classify_dimensions_from_graph(
     return result
 
 
-def _classify_dimensions(
-    program: Program,
-    scope: list[str] | None = None,
-) -> _ClassifyResult | Intractable:
+def _classify_dimensions(program: Program) -> _ClassifyResult | Intractable:
     """Partition tags into stateful, nondeterministic, and combinational.
 
     Returns ``(stateful_dims, nondeterministic_dims, combinational_tags,
     done_acc_pairs, done_presets, done_kinds)`` where each dim dict maps
-    tag name to its value domain.  Timers are classified as the search sees
-    them (black boxes): a Done bit is a plain Bool and an accumulator
-    something reads is state.  Returns ``Intractable`` when a domain cannot be
-    bounded.
+    tag name to its value domain, as :func:`_classify_dimensions_from_graph`
+    classifies them for how().  Returns ``Intractable`` when a domain cannot
+    be bounded.
     """
     from pyrung.core.analysis.prove.passes import _collect_receive_dest_names
 
     graph = build_program_graph(program)
-    all_exprs = _collect_all_exprs(program, graph, scope=scope)
+    all_exprs = _collect_all_exprs(program, graph)
     return _classify_dimensions_from_graph(
         program,
         graph,
         all_exprs,
-        scope=scope,
         receive_dest_names=frozenset(_collect_receive_dest_names(program)),
-        abstract_timers=True,
-        _skip_absorptions=True,
     )
-
-
-def _has_data_feedback(tag_name: str, graph: ProgramGraph) -> bool:
-    """Detect data-flow cycles through *tag_name*.
-
-    Follows ``data_reads`` through writer rungs — condition-only reads do
-    not count as data feedback.  Returns True for direct self-feed
-    (e.g. ``math(Count + 1, Count)``) and transitive cycles
-    (e.g. ``math(A + 1, B)`` plus ``copy(B, A)``).
-    """
-    writer_indices = graph.writers_of.get(tag_name, frozenset())
-    if not writer_indices:
-        return False
-    for wi in writer_indices:
-        node = graph.rung_nodes[wi]
-        if tag_name in node.data_reads:
-            return True
-    visited: set[str] = set()
-    queue: list[str] = []
-    for wi in writer_indices:
-        node = graph.rung_nodes[wi]
-        for src in node.data_reads:
-            if src != tag_name and src not in visited:
-                queue.append(src)
-    while queue:
-        current = queue.pop()
-        if current in visited:
-            continue
-        visited.add(current)
-        for wi in graph.writers_of.get(current, frozenset()):
-            node = graph.rung_nodes[wi]
-            if tag_name in node.writes:
-                return True
-            for src in node.data_reads:
-                if src not in visited:
-                    queue.append(src)
-    return False
-
-
-def _pilot_sweep_domains(
-    compiled: CompiledKernel,
-    infeasible_tags: list[str],
-    nondeterministic_dims: dict[str, tuple[Any, ...]],
-    graph: ProgramGraph,
-    *,
-    dt: float = 0.010,
-    max_combos: int = 100_000,
-    max_domain: int = 1000,
-    max_scans: int = 30,
-) -> dict[str, tuple[Any, ...]]:
-    """Discover finite domains for infeasible tags via kernel pilot sweep."""
-    candidates: list[str] = []
-    for tag_name in infeasible_tags:
-        tag = graph.tags.get(tag_name)
-        if tag is None:
-            continue
-        if tag.readonly:
-            continue
-        if tag_name not in graph.writers_of:
-            if not (tag.external and tag.final):
-                continue
-        if tag.external and not tag.final:
-            continue
-        if _has_data_feedback(tag_name, graph):
-            continue
-        candidates.append(tag_name)
-
-    if not candidates:
-        return {}
-
-    candidate_upstream: dict[str, dict[str, tuple[Any, ...]]] = {}
-    for cname in candidates:
-        upstream: dict[str, tuple[Any, ...]] = {}
-        visited_rungs: set[int] = set()
-        queue: list[str] = [cname]
-        visited_tags: set[str] = set()
-        while queue:
-            cur = queue.pop()
-            if cur in visited_tags:
-                continue
-            visited_tags.add(cur)
-            for wi in graph.writers_of.get(cur, frozenset()):
-                if wi in visited_rungs:
-                    continue
-                visited_rungs.add(wi)
-                node = graph.rung_nodes[wi]
-                for src in node.condition_reads | node.data_reads:
-                    if src not in visited_tags:
-                        queue.append(src)
-        for t in visited_tags:
-            if t in nondeterministic_dims:
-                upstream[t] = nondeterministic_dims[t]
-        candidate_upstream[cname] = upstream
-
-    relevant_nd: dict[str, tuple[Any, ...]] = {}
-    for up in candidate_upstream.values():
-        for t, domain in up.items():
-            if t not in relevant_nd:
-                relevant_nd[t] = domain
-
-    combo_count = 1
-    for domain in relevant_nd.values():
-        combo_count *= len(domain)
-        if combo_count > max_combos:
-            break
-
-    if combo_count > max_combos:
-        return {}
-
-    observed: dict[str, set[Any]] = {c: set() for c in candidates}
-    for c in candidates:
-        tag = graph.tags[c]
-        observed[c].add(tag.default)
-
-    nd_names = sorted(relevant_nd)
-    nd_domains = [relevant_nd[n] for n in nd_names]
-
-    initial_kernel = compiled.create_kernel()
-    initial_snap = _snapshot_kernel(initial_kernel)
-
-    kernel = initial_kernel
-    for combo in itertools.product(*nd_domains) if nd_domains else [()]:
-        _restore_kernel(kernel, initial_snap)
-        for name, val in zip(nd_names, combo, strict=True):
-            kernel.tags[name] = val
-
-        for _scan in range(max_scans):
-            prev_sizes = tuple(len(observed[c]) for c in candidates)
-            _step_compiled_kernel(compiled, kernel, dt=dt)
-            for c in candidates:
-                observed[c].add(kernel.tags.get(c, graph.tags[c].default))
-            new_sizes = tuple(len(observed[c]) for c in candidates)
-            if new_sizes == prev_sizes:
-                break
-
-    result: dict[str, tuple[Any, ...]] = {}
-    for c in candidates:
-        vals = observed[c]
-        if len(vals) > max_domain:
-            continue
-        result[c] = tuple(sorted(vals))
-    return result
 
 
 def _detect_function_escape_hatches(

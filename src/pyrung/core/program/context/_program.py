@@ -53,7 +53,7 @@ class Program:
         self._pending_comment: str | None = None
         self._graph: ProgramGraph | None = None
         self._graph_edits = 0
-        # how()'s prover facts, with the graph they were built from.
+        # how()'s static facts, with the graph they were built from.
         self._cached_prover_context: Any = None
         self._site_table: SiteTable | None = None
 

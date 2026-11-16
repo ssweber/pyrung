@@ -41,7 +41,7 @@ class UnsupportedConstruct(Exception):
 
 @dataclass(frozen=True)
 class DomainPrior:
-    """Prover-derived domain prior for resolving inequality atoms.
+    """The value domains from the static facts, for resolving inequality atoms.
 
     ``nd_domains`` maps a free input to its domain; ``stateful_domains`` maps a
     program-owned tag to values its writers can produce; and ``func_deps`` is

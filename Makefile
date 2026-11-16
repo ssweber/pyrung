@@ -11,7 +11,7 @@ DOCS_ADDR ?= localhost:8000
 PYTEST_WORKERS ?= 6
 PYTEST_PARALLEL = -n $(PYTEST_WORKERS) --dist=loadfile --max-worker-restart=0
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-bytecode test-conformance test-conformance-repeat conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-soundness test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check bench
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-bytecode test-conformance test-conformance-repeat conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check
 
 default: install verify
 
@@ -22,10 +22,10 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both $(PYTEST_PARALLEL)
+	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both $(PYTEST_PARALLEL)
 
 test-fold:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q $(PYTEST_PARALLEL)
+	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q $(PYTEST_PARALLEL)
 
 # The test files this branch adds, under --fold-check: the mergeq `fold-new` stage, so a new file
 # cannot first meet the lockstep in the full `test-fold` run.
@@ -42,13 +42,14 @@ BYTECODE_TESTS = \
   tests/core/test_kernel_calls_the_function.py \
   tests/core/test_reentrant_scan.py \
   tests/core/test_run_function_arguments.py \
-  tests/core/analysis/test_prove_function_gate.py
+  tests/core/test_function_gate.py
 
 test-bytecode:
-	uv run pytest -m "not integration and not hypothesis and not soundness and not fuzz and not tumbler and not conformance" --runner-backend=both -q $(BYTECODE_TESTS)
+	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --runner-backend=both -q $(BYTECODE_TESTS)
 
 test-prove:
-	uv run pytest tests/core/analysis/ -k "prove or elision_agreement or packml_diagnosis" -q
+	uv run pytest tests/core/analysis/ -k "prove or packml_diagnosis" -q
+	uv run pytest tests/facts -q
 
 test-pilot:
 	uv run pytest tests/core/analysis/ -k "pilot" -q $(PYTEST_PARALLEL)
@@ -91,11 +92,8 @@ test-hypothesis:
 test-integration:
 	uv run pytest -m integration
 
-test-soundness:
-	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/core/analysis/ --prove-agreement -q $(PYTEST_PARALLEL)
-
 test-fuzz:
-	$(PROVE_SNAPSHOT_ENV) uv run pytest tests/fuzz/
+	uv run pytest tests/fuzz/
 
 verify: lint test test-conformance test-hypothesis docs-check
 
@@ -105,9 +103,6 @@ upgrade:
 
 build:
 	uv build
-
-bench:
-	uv run pyrung lock examples.packml_bench -o bench/pyrung.lock --profile bench/bench.prof
 
 # Improved Windows detection
 ifeq ($(OS),Windows_NT)
@@ -126,14 +121,12 @@ ifeq ($(WINDOWS),1)
 	RM_SITE = powershell -NoProfile -Command "if (Test-Path 'site') { Remove-Item -Recurse -Force 'site' }"
 	FIND_PYCACHE = powershell -Command "Get-ChildItem -Path . -Filter '__pycache__' -Recurse -Directory | Remove-Item -Recurse -Force"
 	RM_GENERATED_DOCS = powershell -NoProfile -Command "if (Test-Path '.docs-build') { Remove-Item -Recurse -Force '.docs-build' }; if (Test-Path 'generated-docs') { Remove-Item -Recurse -Force 'generated-docs' }; if (Test-Path 'docs/reference') { Remove-Item -Recurse -Force 'docs/reference' }; if (Test-Path 'docs/llms.txt') { Remove-Item -Force 'docs/llms.txt' }; if (Test-Path 'docs/__pycache__') { Remove-Item -Recurse -Force 'docs/__pycache__' }"
-	PROVE_SNAPSHOT_ENV = set PYRUNG_PROVE_VERIFY_SNAPSHOT=1&&
 else
     # Unix commands
     RM = rm -rf
     RM_SITE = rm -rf site/
     FIND_PYCACHE = find . -type d -name "__pycache__" -exec rm -rf {} +
 	RM_GENERATED_DOCS = rm -rf .docs-build/ generated-docs/ docs/reference/ docs/llms.txt docs/__pycache__/
-	PROVE_SNAPSHOT_ENV = PYRUNG_PROVE_VERIFY_SNAPSHOT=1
 endif
 
 docs-generate:

@@ -197,9 +197,7 @@ python_functions = ["test_*"]
 markers = [
     "integration: networked or multi-process integration test",
     "hypothesis: property-based tests (slower, run separately)",
-    "soundness: expensive optimized-vs-unoptimized agreement tests",
     "fuzz: grammar-based fuzzer tests",
-    "known_answer: hand-enumerated reachable-state oracle tests",
     "tumbler: slow full-program tumbler fixture tests (run separately)",
     "conformance: conformance cases over Modbus TCP (local soft PLC or a real CLICK)",
     "suite_repeat: the whole conformance suite again on one PLC (make test-conformance-repeat)",

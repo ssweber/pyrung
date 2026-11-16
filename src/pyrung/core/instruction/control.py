@@ -226,7 +226,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         self.count = count
         self.idx_tag = idx_tag
         # Only a For whose count can be Inf or NaN sets SC43, and only one whose
-        # count reads an indexed element can set SC44: the analyses (PDG, prover)
+        # count reads an indexed element can set SC44: the analyses (PDG, static facts)
         # see a flag written where it can be.
         fault_writes: tuple[str, ...] = ()
         if _count_may_be_non_finite(count):

@@ -26,7 +26,6 @@ from pyrung import (
     rise,
     fall,
 )
-from pyrung.core.analysis import Proven, never
 
 # ---------------------------------------------------------------------------
 # Tags
@@ -78,13 +77,6 @@ def logic():
 
 
 # ---------------------------------------------------------------------------
-# Verify — does every fault reach an alarm?
-# ---------------------------------------------------------------------------
-result = never(logic, FillEnable, ~FlowSensor, AlarmExtent == 0)
-status = "PROVEN" if isinstance(result, Proven) else f"FAIL: {result}"
-print(f"Fault coverage: {status}")
-
-# ---------------------------------------------------------------------------
 # Simulate
 # ---------------------------------------------------------------------------
 runner = PLC(logic, dt=0.010)
@@ -102,7 +94,7 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
         print(f"  {label:<20} valve={valve:<6} flow={flow:<8} alarm={alarm:<5} level={level}")
 
     # Normal fill cycle
-    print("\n=== Normal fill ===")
+    print("=== Normal fill ===")
     runner.patch({StartBtn: True})
     runner.run_for(0.5)
     status_line("start + 0.5s")

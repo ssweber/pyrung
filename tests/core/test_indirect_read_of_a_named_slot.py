@@ -30,9 +30,9 @@ from pyrung.core import (
     math,
     out,
 )
-from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from pyrung.core.kernel import CompiledKernel
 from tests.circuitpy.test_codegen import _run_single_scan_source
+from tests.core.kernel_step import step_compiled_kernel
 from tests.core.test_indirect_expr_compare import _StubBase
 
 SCANS = 12
@@ -155,7 +155,7 @@ def test_every_engine_reads_the_name_through_the_pointer(name_slot: Any, engine:
     compiled = compile_kernel(program, blockless=engine == "kernel_blockless")
     kernel = compiled.create_kernel()
     for _ in range(3):
-        _step_compiled_kernel(compiled, kernel, dt=0.010)
+        step_compiled_kernel(compiled, kernel, dt=0.010)
     assert kernel.tags["Seen"] == 3
 
 

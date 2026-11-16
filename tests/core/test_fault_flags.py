@@ -62,8 +62,8 @@ from pyrung.core import (
     unpack_to_bits,
     unpack_to_words,
 )
-from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
+from tests.core.kernel_step import step_compiled_kernel
 
 SC40 = system.fault.division_error
 SC43 = system.fault.out_of_range
@@ -78,8 +78,8 @@ _ENGINES = [
     "circuitpy",
     "circuitpy_rt",
 ]
-#: Those that run the per-scan system points; a bare kernel step leaves them to
-#: its caller (``system=`` of ``_step_compiled_kernel``).
+#: The engines that run the per-scan system points. A bare kernel step leaves them
+#: to its caller.
 _SCANNING_ENGINES = ["interpreted", "compiled", "circuitpy", "circuitpy_rt"]
 
 
@@ -115,7 +115,7 @@ def _run(prog: Program, engine: str, watch: tuple[Any, ...], monkeypatch, scans:
         compiled = compile_kernel(prog, blockless=engine == "kernel_blockless")
         kernel = compiled.create_kernel()
         for _ in range(scans):
-            _step_compiled_kernel(compiled, kernel, dt=0.010)
+            step_compiled_kernel(compiled, kernel, dt=0.010)
         return tuple(kernel.tags[tag.name] for tag in watch)
     hw = P1AM()
     hw.slot(1, "P1-08SIM")

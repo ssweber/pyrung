@@ -55,7 +55,6 @@ analysis:
   recovers <tag>
   why <tag> [tag2 ...]
   how <expression>[, <expression>...] [avoid <expression>[, <expression>...]]  (runs planner)
-  prove always|never <expression> [--settled] [--paced]  (exhaustive, needs annotations)
 
   simplified [tag]
 
@@ -125,16 +124,14 @@ how Burner avoid ProdMode, MaintFault
 
 `how` takes one or more comma-separated targets that must all hold at the end of the path. The optional `avoid` clause lists conditions the path must never pass through. Each is avoided on its own. The planner prints progress as it works.
 
-`how` and `prove` hold the Console's state lock while they run. Cancel one from another terminal with `pyrung live stop`, since a `stop` typed in the same Console cannot preempt its own request. `cancel` works as well as `stop` from `pyrung live`.
+`how` holds the Console's state lock while it runs. Cancel it from another terminal with `pyrung live stop`, since a `stop` typed in the same Console cannot preempt its own request. `cancel` works as well as `stop` from `pyrung live`.
 
-## Program inspection and verification
+## Program inspection
 
 ```text
 check                      # run every static ladder check
 check COIL TAG             # select rules or categories
 structures                 # list UDTs and named arrays
-prove always ~Fault        # exhaustively verify an invariant
-prove never MotorA, MotorB # verify a bad combination is unreachable
 ```
 
 ## DataView queries

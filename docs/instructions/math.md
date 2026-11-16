@@ -129,7 +129,7 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-A hex-mode draw whose bounds are cut to 16 bits is chosen through `roll.ucut_tag` instead. The verifier explores every value a draw can take. A bound tag with no `min`/`max` or `choices` makes the answer `Intractable`, so declare a range.
+A hex-mode draw whose bounds are cut to 16 bits is chosen through `roll.ucut_tag` instead.
 
 `randint` is not allowed inside a `forloop()`. Every iteration would read the scan's one draw, while CLICK draws again on each execution. On CircuitPython the board calls `random.randint` directly, so its draws are not replayable.
 

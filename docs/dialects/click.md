@@ -225,7 +225,7 @@ with rung(OvenTimer.Done):
 
 ### Input inference
 
-When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells the verifier that the tag's value comes from outside the ladder. `always()` and `pyrung lock` then treat it as a nondeterministic input, so you don't need to declare `external=True` yourself.
+When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells pyrung that the tag's value comes from outside the ladder. The ladder lints and `how()` then treat it as an input, so you don't need to declare `external=True` yourself.
 
 ```python
 StartButton = Bool()                       # external=False initially
@@ -237,7 +237,7 @@ Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not stamped `ex
 
 ### Output inference
 
-When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. This adds the tag to what `pyrung lock` tracks by default, so the lock file tracks physical outputs. You don't need to declare `lock=True` yourself.
+When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. The flag marks the tag as a physical output, and the nickname CSV keeps it. You don't need to declare `lock=True` yourself.
 
 ```python
 MotorOut = Bool()                              # lock=False initially

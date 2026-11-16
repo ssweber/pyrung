@@ -463,7 +463,7 @@ def compile_instruction(
         and not ctx.proof_metadata
     ):
         # pyrung runs both as no-ops, so the runner's kernel skips them.
-        # A code.py and the prover's kernel still refuse them, as before.
+        # A code.py and the static facts' kernel still refuse them.
         return []
 
     loc = _source_location(instr)
@@ -807,9 +807,9 @@ def _compile_for_loop_instruction(
         iterations_lines = _for_count_lines(instr, count_expr, iterations_var, mask, ctx)
         capped = mask > control.FOR_COUNT_MASK_16
     if ctx.proof_metadata and capped:
-        # The verifier's kernel stops a 32-bit count past its cap rather than
+        # The static facts' kernel stops a 32-bit count past its cap rather than
         # run it (a Dint up to 2147483647 runs that many iterations).  The source
-        # names the loop by index: its file and line stay out of the lock's hash.
+        # names the loop by index, not by its file and line.
         site = len(ctx.for_cap_sites)
         ctx.for_cap_sites.append(_for_count_site(instr))
         iterations_lines += [

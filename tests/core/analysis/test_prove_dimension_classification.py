@@ -1,71 +1,19 @@
-"""Tests for the exhaustive verifier and state-space snapshot."""
+"""Tests for the static facts that how() steers with."""
 
 from __future__ import annotations
 
-import importlib
-
-import pytest
-
 from pyrung.core import (
-    PLC,
     Bool,
     Int,
     Program,
     Rung,
-    Timer,
     copy,
     latch,
-    on_delay,
     out,
     reset,
 )
-from pyrung.core.analysis.prove import (
-    Intractable,
-    TraceStep,
-    _classify_dimensions,
-    always,
-)
-
-prove_module = importlib.import_module("pyrung.core.analysis.prove")
-
-
-def _replay_trace(program: Program, trace: list[TraceStep]) -> PLC:
-    """Replay a always() counterexample trace on the concrete PLC."""
-    plc = PLC(program, dt=0.010)
-    for step in trace:
-        plc.patch(step.inputs)
-        for _ in range(step.scans):
-            plc.step()
-    return plc
-
-
-def _assert_soundness(
-    logic: Program,
-    condition,
-    *,
-    max_states: int = 10_000,
-    depth_budget: int = 20,
-) -> None:
-    """Assert that optimized and unoptimized always() agree on the result type."""
-    optimized = always(
-        logic, condition, max_states=max_states, depth_budget=depth_budget, journal=True
-    )
-    unoptimized = always(
-        logic,
-        condition,
-        max_states=max_states,
-        depth_budget=depth_budget,
-        _skip_optimizations=True,
-        journal=True,
-    )
-    if isinstance(optimized, Intractable) or isinstance(unoptimized, Intractable):
-        pytest.skip("one side intractable")
-    assert type(optimized) is type(unoptimized), (
-        f"optimized={type(optimized).__name__}, unoptimized={type(unoptimized).__name__}\n"
-        f"--- optimized journal ---\n{optimized.journal}\n"
-        f"--- unoptimized journal ---\n{unoptimized.journal}"
-    )
-
+from pyrung.core.analysis.prove import Intractable
+from pyrung.core.analysis.prove.classify import _classify_dimensions
 
 # ===================================================================
 # Group 1: Dimension classification
@@ -127,21 +75,6 @@ class TestDimensionClassification:
         assert "Flag" not in stateful
         assert "Flag" in combinational
 
-    def test_scoped_write_only_inert_bool_is_stateful(self):
-        """Observable inert writers preserve prior scan state when disabled."""
-        button = Bool("Button", external=True)
-        flag = Bool("Flag")
-
-        with Program(strict=False) as logic:
-            with Rung(button):
-                reset(flag)
-
-        result = _classify_dimensions(logic, scope=["Flag"])
-        assert not isinstance(result, Intractable)
-        stateful, _nd, combinational, _done_acc, _done_presets, _done_kinds = result
-        assert stateful["Flag"] == (False, True)
-        assert "Flag" not in combinational
-
     def test_write_only_terminal_is_combinational(self):
         """Tag written by copy but never read is combinational (dead output)."""
         sensor = Bool("Sensor", external=True)
@@ -186,20 +119,3 @@ class TestDimensionClassification:
         stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "Config" not in nd
         assert "Config" not in stateful
-
-    def test_timer_done_is_bool_state_dim(self):
-        """Timer.Done is a Bool state dimension."""
-        enable = Bool("Enable", external=True)
-        t = Timer.clone("T1")
-
-        with Program(strict=False) as logic:
-            with Rung(enable):
-                on_delay(t, preset=100)
-            with Rung(t.Done):
-                out(Bool("Output"))
-
-        result = _classify_dimensions(logic)
-        assert not isinstance(result, Intractable)
-        stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
-        assert "T1_Done" in stateful
-        assert stateful["T1_Done"] == (False, True)

@@ -44,15 +44,11 @@ moved after the submit, GitHub asks for an update first, and that is a new tree.
 - Match real CLICK behaviour; hardware-recorded expectations in `tests/conformance/` are
   authoritative. `pending="<STEP>"` cases are strict xfails; the fixer removes the marker in
   the commit that makes the case pass (`tests/conformance/AGENTS.md`).
-- Fold must equal stepping or decline. The prover aims for exact on common idioms or a named
-  Intractable; any prover change needs a standalone justification. Correctness before
-  features, with perf measured and kept.
-- Prover bugs never block a branch or train (user, 2026-10-30). A false Proven or other
-  prover hole found in review or while building: fix it in the branch only if the fix is
-  straightforward; otherwise add a strict xfail test reproducing it, log it in the ledger
-  as a follow-up, and let the branch proceed. Reviewers report them as NON-BLOCKING unless
-  the branch itself introduced the hole. Arc priority (user, 2026-10-30): ship the
-  conformance arc (match CLICK) first; prover side-issues get a second sweep afterwards.
+- Fold must equal stepping or decline. Correctness before features, with perf measured and
+  kept.
+- The prover's exhaustive search is gone (user, 2026-11-15). Its static facts stay, because
+  how() and validation read them. A change to them must leave what pilot and validation see
+  the same, or say why it differs.
 - Core runtime, compiled kernel and CircuitPython codegen must agree.
 - pyrung-authored terminal/log/exception text is ASCII only; "pyrung" is always lowercase.
 - CHANGELOG (Unreleased) moves with behaviour changes, in the changelog shape the root AGENTS.md
@@ -154,7 +150,7 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
   `fold_check.deliberate()` when fold-check is installed.
 - One heavy job machine-wide (the queue's lock); up to ~5 builders iterating on targeted tests in
   parallel. `test` and `fold` take 6 of the 8 cores (`PYTEST_WORKERS`, peak 2.9 GB). Pilot-heavy suites
-  (`tumbler`, `prove`, `pilot`, `soundness`) stay in one process: user, 2026-11-03, pilot is intensive.
+  (`tumbler`, `prove`, `pilot`) stay in one process: user, 2026-11-03, pilot is intensive.
 - Stage commands, timeouts and presets are in `.claude/bob/config.toml`; measured
   durations are in each job's `done/<id>.json` (a full train should now take ~39 min, was 96).
 - Only a jit change runs the `fold` stage (user, 2026-11-07, for iteration speed). A jit change
@@ -169,7 +165,7 @@ branch is `lint,tumbler` at least, plus `fold` if it is a jit change (below). Bo
 - A branch landing outside a train still gates on the `test` stage if it changes anything under
   `src/`: a codegen fix gated on lint, prove, pilot, tumbler and conf-cp turned two `tests/core`
   tests red on dev once, and it stayed red until the next `test` run (2026-11-02).
-- Never run `make test-fuzz` or `make bench` in an orchestration session.
+- Never run `make test-fuzz` in an orchestration session.
 - Reviewers run scratch scripts and `node --test` only as
   `R --timeout N -- <command>` (the plugin's `run.py`); the hook refuses the bare form
   (no memory bound) and allows ruff/ty read-only forms. For an investigation that must not run

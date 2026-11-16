@@ -2,7 +2,7 @@
 
 A CLICK keeps one memory cell per *place* in the program: a one-shot coil, a
 drum's jump leg, an edge contact.  pyrung names those places here, once per
-program, so every consumer (interpreter, compiled kernel, prover, hot reload)
+program, so every consumer (interpreter, compiled kernel, static facts, hot reload)
 uses the same names.
 
 :func:`bind_sites` walks a program in solve order and returns a

@@ -39,7 +39,6 @@ from pyrung.core import (
     unpack_to_bits,
     unpack_to_words,
 )
-from pyrung.core.analysis.prove import never
 from pyrung.core.copy_converters import to_ascii, to_text, to_value
 from pyrung.core.system_points import system
 from pyrung.core.tag import immediate
@@ -414,26 +413,6 @@ def test_immediate_operand_reads_as_the_plain_one(case):
     assert _interpreted(prog, inputs, watch) == _interpreted(plain, plain_inputs, plain_watch)
 
 
-def _verdict(program: Program, prop: Any) -> str:
-    return type(never(program, prop, max_states=20_000)).__name__
-
-
-def _holds(tag: Tag, value: Any) -> Any:
-    """The condition *tag* reads *value*."""
-    if tag.type == TagType.BOOL:
-        return tag if value else ~tag
-    return tag == value
-
-
-@pytest.mark.parametrize("case", list(_CASES), ids=list(_CASES))
-def test_prove_reads_an_immediate_as_the_plain_one(case):
-    """The verifier's verdict on the stepped value is the unwrapped program's."""
-    _hw, prog, inputs, watch = _CASES[case]()
-    _hw, plain, plain_inputs, plain_watch = _CASES[case](wrap=lambda value: value)
-    value = _interpreted(plain, plain_inputs, plain_watch)[0]
-    assert _verdict(prog, _holds(watch[0], value)) == _verdict(plain, _holds(plain_watch[0], value))
-
-
 def _plus_one(a):
     return {"o": a + 1}
 
@@ -447,16 +426,10 @@ def _function_out_from_an_input(wrap: Callable[[Any], Any]):
     return prog, dest
 
 
-def test_prove_finds_a_value_written_through_an_immediate_function_out():
-    """An immediate() out is a write: the input that feeds it stays live.
-
-    It was not counted, so the input was pruned and ``never(Dest == 7)`` came back
-    Proven while stepping ``Sel = 6`` writes 7.
-    """
-    prog, dest = _function_out_from_an_input(immediate)
+def test_a_value_written_through_an_immediate_function_out_lands():
+    """An immediate() out is a write, so stepping ``Sel = 6`` writes 7."""
+    prog, _dest = _function_out_from_an_input(immediate)
     plc = PLC(prog)
     plc.patch({"Sel": 6})
     plc.step()
     assert plc.current_state.tags["Dest"] == 7
-    plain, plain_dest = _function_out_from_an_input(lambda value: value)
-    assert _verdict(prog, dest == 7) == _verdict(plain, plain_dest == 7) == "Counterexample"

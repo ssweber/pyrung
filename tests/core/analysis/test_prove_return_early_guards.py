@@ -7,26 +7,18 @@ the later rungs and the rest of its own rung, branches included, and an
 program dependence graph used to see only a return in a rung's own items and
 guard only top-level nodes of later rungs, so a return in a branch, or a
 writer in a branch, dropped the guard's input from the writer's upstream
-slice and ``never()`` came back Proven although a concrete PLC reaches the
-state.  A coil no rung reads, observed only by the property, was taken for a
-function of its contacts however often its rung was skipped (behind a
-return, in a subroutine not called every scan, in a forloop body).
-
-Each shape is checked against an exhaustive concrete search over its inputs
-under the default, all-off and sound-baseline configurations, and every
-Counterexample replays on a concrete PLC.
+slice.  A coil no rung reads was taken for a function of its contacts however
+often its rung was skipped (behind a return, in a subroutine not called every
+scan, in a forloop body).
 """
 
 from __future__ import annotations
 
-import itertools
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from pyrung.core import (
-    PLC,
     And,
     Bool,
     Int,
@@ -42,20 +34,8 @@ from pyrung.core import (
     return_early,
     subroutine,
 )
-from pyrung.core.analysis.prove import (
-    Counterexample,
-    Intractable,
-    Proven,
-    _classify_dimensions,
-    never,
-)
-from pyrung.core.analysis.prove.passes import _OptConfig
-
-_CONFIGS = {
-    "default": _OptConfig(),
-    "all_off": _OptConfig.all_off(),
-    "sound_baseline": _OptConfig.sound_baseline(),
-}
+from pyrung.core.analysis.prove import Intractable
+from pyrung.core.analysis.prove.classify import _classify_dimensions
 
 Btn = Bool("Btn", external=True)
 G = Bool("G", external=True)
@@ -67,56 +47,6 @@ Z = Bool("Z")
 DQ = Int("DQ", external=True)
 
 _BOOL = (False, True)
-
-
-def _concrete_reaches(
-    program: Program,
-    space: dict[str, tuple[Any, ...]],
-    predicate: Callable[[Any], bool],
-    depth: int = 6,
-) -> bool:
-    """Exhaustive concrete search: every input combination on every scan."""
-
-    def key(runner: PLC) -> tuple[frozenset, frozenset]:
-        state = runner.current_state
-        return (
-            frozenset((k, v) for k, v in state.tags.items() if not k.startswith("sys.")),
-            frozenset(
-                (k, v) for k, v in state.memory.items() if not k.startswith("_sys") and k != "_dt"
-            ),
-        )
-
-    names = list(space)
-    combos = [
-        dict(zip(names, values, strict=True)) for values in itertools.product(*space.values())
-    ]
-    plc = PLC(program, dt=0.010)
-    frontier = [plc]
-    seen = {key(plc)}
-    for _ in range(depth):
-        following = []
-        for runner in frontier:
-            for combo in combos:
-                child = runner.fork()
-                child.patch(combo)
-                child.step()
-                if predicate(child.current_state.tags):
-                    return True
-                child_key = key(child)
-                if child_key not in seen:
-                    seen.add(child_key)
-                    following.append(child)
-        frontier = following
-    return False
-
-
-def _replays(program: Program, result: Counterexample, predicate: Callable[[Any], bool]) -> bool:
-    plc = PLC(program, dt=0.010)
-    for step in result.trace:
-        plc.patch(step.inputs)
-        for _ in range(step.scans):
-            plc.step()
-    return predicate(plc.current_state.tags)
 
 
 def _y3_without_btn(tags: Any) -> bool:
@@ -445,41 +375,6 @@ _SHAPES = {
     "guard_shares_writer_contact": _guard_shares_writer_contact,
     "guarded_write_read_after_call": _guarded_write_read_after_call,
 }
-
-
-@pytest.mark.parametrize("config", sorted(_CONFIGS))
-@pytest.mark.parametrize("shape", sorted(_SHAPES))
-def test_prover_finds_state_a_skipping_return_reaches(shape: str, config: str) -> None:
-    logic, space, prop, predicate = _SHAPES[shape]()
-    assert _concrete_reaches(logic, space, predicate)
-    result = never(logic, prop, _opt_config=_CONFIGS[config])
-    assert isinstance(result, Counterexample), result
-    assert _replays(logic, result, predicate)
-
-
-@pytest.mark.parametrize("config", sorted(_CONFIGS))
-def test_unread_coil_reached_every_scan_stays_proven(config: str) -> None:
-    # The same unread coil with nothing to skip it follows Btn on every scan.
-    with Program(strict=False) as logic:
-        with Rung():
-            call("work")
-        with subroutine("work"):
-            with Rung(Btn):
-                out(Y2)
-    assert not _concrete_reaches(logic, {"Btn": _BOOL}, _y2_without_btn)
-    result = never(logic, And(Y2, ~Btn), _opt_config=_CONFIGS[config])
-    assert isinstance(result, Proven), result
-
-
-@pytest.mark.parametrize("config", sorted(_CONFIGS))
-def test_unreachable_state_behind_branch_return_stays_proven(config: str) -> None:
-    # A return in a branch of Rung(Btn) fires only with Btn on, so with Btn
-    # off the rung runs and its out() follows Btn: Y2, and Y3 after it,
-    # never outlive Btn.
-    logic, space, _prop, _predicate = _return_before_writer_same_rung()
-    assert not _concrete_reaches(logic, space, _y3_without_btn)
-    result = never(logic, And(Y3, ~Btn), _opt_config=_CONFIGS[config])
-    assert isinstance(result, Proven), result
 
 
 # --- graph -----------------------------------------------------------------

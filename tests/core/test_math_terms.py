@@ -40,10 +40,9 @@ from pyrung.core import (
     rsh,
     system,
 )
-from pyrung.core.analysis.prove import Counterexample, Proven, never
-from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 from pyrung.core.expression import sqrt
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
+from tests.core.kernel_step import step_compiled_kernel
 
 ENGINES = [
     "interpreted",
@@ -188,7 +187,7 @@ def _first_scan(prog: Program, engine: str, tags: dict[str, Any], monkeypatch) -
     if engine in ("kernel_legacy", "kernel_blockless"):
         compiled = compile_kernel(prog, blockless=engine == "kernel_blockless")
         kernel = compiled.create_kernel()
-        _step_compiled_kernel(compiled, kernel, dt=0.010)
+        step_compiled_kernel(compiled, kernel, dt=0.010)
         return {name: kernel.tags[name] for name in tags}
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
@@ -279,7 +278,7 @@ def test_a_raw_mod_by_zero_in_a_pointer_is_its_term_with_sc40(engine: str, monke
     assert {code for code in FLAGS if actual[f"Saw{code}"]} == {40}
 
 
-def _prove_program(threshold: int) -> tuple[Program, Bool]:
+def _threshold_program(threshold: int) -> tuple[Program, Bool]:
     numerator = Int("PN", external=True, min=0, max=7, default=0)
     divisor = Int("PZ", external=True, min=0, max=1, default=0)
     dest, bad = Int("PD"), Bool("PBad")
@@ -291,10 +290,18 @@ def _prove_program(threshold: int) -> tuple[Program, Bool]:
     return logic, bad
 
 
-def test_the_prover_sees_the_rest_of_a_formula_live() -> None:
+def _latches_on_some_input(logic: Program) -> bool:
+    """Step every PN and PZ the tags allow, and say whether PBad latched."""
+    plc = PLC(logic, dt=0.010)
+    for numerator in range(8):
+        for divisor in range(2):
+            plc.patch({"PN": numerator, "PZ": divisor})
+            plc.step()
+    return plc.current_state.tags["PBad"]
+
+
+def test_the_rest_of_a_formula_runs_past_a_division_by_zero() -> None:
     # PN / PZ + 5 is 5 when PZ is 0 (the division alone is 0), so never below 5 ...
-    logic, bad = _prove_program(5)
-    assert isinstance(never(logic, bad), Proven)
+    assert _latches_on_some_input(_threshold_program(5)[0]) is False
     # ... and 5 itself is reached.
-    logic, bad = _prove_program(6)
-    assert isinstance(never(logic, bad), Counterexample)
+    assert _latches_on_some_input(_threshold_program(6)[0]) is True

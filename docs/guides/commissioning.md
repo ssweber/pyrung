@@ -1,6 +1,6 @@
 # The Commissioning Workflow
 
-You wrote logic and tested it. Now close the loop. Declare what your program talks to, prove it's correct, and commission it.
+You wrote logic and tested it. Now close the loop. Declare what your program talks to, test every fault path, and commission it.
 
 pyrung's commissioning workflow has four stages. Each builds on the last.
 
@@ -45,31 +45,21 @@ with PLC(logic) as plc:
 
 See [Analysis](analysis.md) for the full guide — program structure, diagnosis, cause/effect, and test coverage.
 
-## Verify: prove it holds
-
-Analysis answers questions about recorded history. Verification answers a different question: does a property hold across **every** reachable state?
+## Test: check every fault path
 
 ```python
-from pyrung.core.analysis import never, Proven
-
-result = never(logic, Running, ~EstopOK)
-assert isinstance(result, Proven)
+for coupling in harness.couplings():
+    plc2 = PLC(logic, dt=0.001)
+    Harness(plc2).install()
+    plc2.force(coupling.en_name, True)
+    plc2.run_for(1.5)
+    plc2.force(coupling.fb_name, False)
+    plc2.run_for(6.0)
+    with plc2:
+        assert AlarmExtent.value != 0, f"{coupling.fb_name}: no alarm in time"
 ```
 
-`never()` exhaustively explores every reachable state via BFS. Pair it with `harness.couplings()` for automated fault coverage. Batch all conditions into a single `never()` call to share work across properties:
-
-```python
-couplings = list(harness.couplings())
-conditions = [
-    (plc.tags[c.en_name], ~plc.tags[c.fb_name], AlarmExtent == 0)
-    for c in couplings
-]
-results = never(logic, conditions)
-```
-
-A lock file captures reachable behavior as a committed artifact. `pyrung lock` writes it. `pyrung lock --check` diffs against it in CI. Behavioral changes show up in PRs.
-
-See [Verification](verification.md) for the full guide: condition syntax, result types, fault coverage workflows, lock file configuration, and CLI reference.
+`harness.couplings()` lists every device the harness drives. The loop holds each device's feedback off and checks that an alarm trips in time. See [Fault coverage](physical-harness.md#fault-coverage) and the [Testing Guide](testing.md).
 
 ## Commission: run against hardware
 
@@ -85,6 +75,5 @@ For hardware deployment, see [CLICK PLC](../dialects/click.md) (TagMap, validati
 
 - [Physical Annotations](physical-harness.md) — declare device behavior, autoharness
 - [Analysis](analysis.md) — program structure, diagnosis, cause/effect, test coverage
-- [Verification](verification.md) — always(), never(), fault coverage, lock files
 - [Testing](testing.md) — pytest patterns, forces, bounds checking
 - [VS Code Debugger](dap-vscode.md) — step through scans live

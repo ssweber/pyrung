@@ -1,38 +1,20 @@
-"""Configurable pre-BFS pass pipeline for prove."""
+"""The pass pipeline that builds how()'s static facts (``_PriorFacts``)."""
 
 from __future__ import annotations
 
 import logging
 import time
-
-logger = logging.getLogger(__name__)
-
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from dataclasses import replace as _dc_replace
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pdg import TagRole, build_program_graph
+from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import (
-    PROVE_EFFECTIVE_PRESET_PREFIX,
-    PROVE_FOR_ITERATION_CAP,
-    CompiledKernel,
-    ForIterationsBeyondCap,
-)
-from pyrung.core.site_memory import program_memory_defaults
-from pyrung.core.structure import _DoneAccRuntime
-from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP, CompiledKernel, ForIterationsBeyondCap
 
-from . import _ExploreContext
-from .absorb import (
-    _collect_done_acc_pairs,
-    _prior_key_done_specs,
-    _ThresholdAbsorptions,
-)
+from .absorb import _prior_key_done_specs, _ThresholdAbsorptions
 from .classify import (
-    _CarryBack,
+    FAULT_FLAGS,
     _classify_dimensions_from_graph,
     _classify_profile_emit,
     _classify_profile_enabled,
@@ -40,28 +22,9 @@ from .classify import (
     _collect_all_exprs,
     _collect_literal_write_domains,
     _collect_structural_domain_info,
-    _declared_domain,
-    _pilot_sweep_domains,
 )
 from .elision import _elide_scan_local_stateful_dims
-from .expr import _partition_edge_bearing_inputs, _referenced_tags
-from .inputs import (
-    _detect_auto_joint_inputs,
-    _detect_exclusive_input_groups,
-    _exclusive_input_group_membership,
-    _ExclusiveInputGroup,
-    _observed_tags,
-)
-from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
-from .results import Decision, Intractable, Journal, TagEntry
-from .system_points import (
-    FAULT_FLAGS,
-    FIRST_SCAN,
-    FIRST_SCAN_DEPENDENTS,
-    SystemPointModel,
-    build_system_point_model,
-    free_system_tags,
-)
+from .results import Intractable
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -69,131 +32,12 @@ if TYPE_CHECKING:
 
     from .absorb import _StateKeyDoneSpec, _ThresholdVectorSpec
 
-_BUILTIN_STATUS_FIELDS = frozenset({"EN", "TT", "CU", "CD"})
-
-
-def _collect_builtin_status_tag_names(program: Program) -> frozenset[str]:
-    """Built-in Timer/Counter status bits are observable, not proof state."""
-    from pyrung.core.validation._common import walk_instructions
-
-    names: set[str] = set()
-    for instr in walk_instructions(program):
-        for field_name in getattr(type(instr), "_status_fields", ()):
-            tag = getattr(instr, field_name, None)
-            if not isinstance(tag, Tag):
-                continue
-            if not isinstance(getattr(tag, "_pyrung_structure_runtime", None), _DoneAccRuntime):
-                continue
-            if getattr(tag, "_pyrung_structure_field", None) not in _BUILTIN_STATUS_FIELDS:
-                continue
-            names.add(tag.name)
-    return frozenset(names)
-
-
-def _infer_domain_source(
-    tag_name: str,
-    domain: tuple[Any, ...],
-    graph: ProgramGraph,
-) -> str:
-    tag = graph.tags.get(tag_name)
-    if tag is None:
-        return "unknown"
-
-    if tag.type is TagType.BOOL and domain == (False, True):
-        return "bool"
-    if tag.choices is not None and set(domain) <= set(tag.choices.keys()):
-        return "choices"
-    if tag.min is not None and tag.max is not None:
-        expected = tuple(range(int(tag.min), int(tag.max) + 1))
-        if domain == expected:
-            return "min_max"
-    from .results import PENDING
-
-    if domain == (False, PENDING, True):
-        return "done_acc_tri_state"
-    if len(domain) == 1 and domain[0] == tag.default:
-        return "default_only"
-    return "expression_partition"
-
-
-class _JournalBuilder:
-    """Accumulates per-tag decisions during the pass pipeline."""
-
-    def __init__(self) -> None:
-        self._decisions: dict[str, list[Decision]] = {}
-        self._notes: list[str] = []
-
-    def record(self, tag_name: str, decision: Decision) -> None:
-        self._decisions.setdefault(tag_name, []).append(decision)
-
-    def add_note(self, text: str) -> None:
-        self._notes.append(text)
-
-    def freeze(
-        self,
-        graph_tags: dict[str, Any],
-        exclusions: dict[str, str],
-        stateful_dims: dict[str, tuple[Any, ...]],
-        nondeterministic_dims: dict[str, tuple[Any, ...]],
-        combinational_tags: frozenset[str],
-        elided_tags: dict[str, str] | None,
-        edge_bearing: frozenset[str],
-        free: frozenset[str],
-    ) -> Journal:
-        from types import MappingProxyType
-
-        entries: dict[str, TagEntry] = {}
-        for tag_name in graph_tags:
-            decisions = tuple(self._decisions.get(tag_name, ()))
-            domain: tuple[Any, ...] | None = None
-            domain_source: str | None = None
-
-            if tag_name in stateful_dims:
-                outcome = "stateful"
-                domain = stateful_dims[tag_name]
-            elif tag_name in nondeterministic_dims:
-                if tag_name in edge_bearing:
-                    outcome = "nondeterministic:edge_bearing"
-                elif tag_name in free:
-                    outcome = "nondeterministic:free"
-                else:
-                    outcome = "nondeterministic"
-                domain = nondeterministic_dims[tag_name]
-            elif tag_name in combinational_tags:
-                outcome = "combinational"
-            elif elided_tags is not None and tag_name in elided_tags:
-                outcome = f"elided:{elided_tags[tag_name]}"
-            elif tag_name in exclusions:
-                outcome = f"excluded:{exclusions[tag_name]}"
-            else:
-                outcome = "unclassified"
-
-            for d in decisions:
-                if d.kind == "domain":
-                    domain_source = d.reason
-
-            entries[tag_name] = TagEntry(
-                name=tag_name,
-                outcome=outcome,
-                domain=domain,
-                domain_source=domain_source,
-                decisions=decisions,
-            )
-
-        return Journal(
-            tags=MappingProxyType(entries),
-            notes=tuple(self._notes),
-        )
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class _PriorFacts:
-    """What how()'s domain prior reads, and all the pipeline builds for it.
-
-    how() asks for these fields by name, so it runs only the passes that decide
-    them and none of freeze()'s work for the search.  A pass added later for the
-    search costs how() nothing until a field here needs it.
-    """
+    """What how()'s domain prior reads."""
 
     nondeterministic_dims: dict[str, tuple[Any, ...]]
     stateful_dims: dict[str, tuple[Any, ...]]
@@ -205,75 +49,14 @@ class _PriorFacts:
     threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
 
 
-_PRIOR_FIELDS = frozenset(_PriorFacts.__dataclass_fields__)
-
-
-@dataclass(frozen=True)
-class _PipelineCache:
-    """Reusable classification/absorption results from a prior pipeline run.
-
-    The cached results come from a broader analysis scope. Narrowed rebuilds
-    filter them to the current upstream cone, skipping expensive kernel scans
-    and fixed-point domain propagation.
-    """
-
-    stateful_dims: dict[str, tuple[Any, ...]]
-    nondeterministic_dims: dict[str, tuple[Any, ...]]
-    combinational_tags: frozenset[str]
-    done_acc: dict[str, str]
-    done_presets: dict[str, int]
-    done_kinds: dict[str, str]
-    consumed_accs: frozenset[str]
-    unclassified_written: frozenset[str]
-    threshold_absorptions: _ThresholdAbsorptions | None
-    stepping_tags: frozenset[str]
-    # Inputs a search that finds no scan answers nothing for (see
-    # classify._answer_for_inputs).
-    unanswered_inputs: dict[str, str] = field(default_factory=dict)
-
-
 @dataclass
 class _PassContext:
-    """Mutable accumulator built up by pre-BFS passes."""
+    """Mutable accumulator the passes build the facts in."""
 
     program: Program
-    scope: list[str] | None
-    project: tuple[str, ...] | None
-    extra_exprs: list[Expr] | None
-    dt: float
-    compiled: CompiledKernel | None
-    joint_inputs: tuple[tuple[str, ...], ...] = ()
-    exclusive_inputs: tuple[tuple[str, ...], ...] = ()
-    progress_info: Callable[[str], None] | None = None
-    progress_prefix: Callable[[], str] | None = None
-    journal_builder: _JournalBuilder | None = None
-    split_at_tags: dict[str, tuple[Any, ...]] | None = None
-    scope_snapshot: bool = True
-    initial_state: dict[str, Any] | None = None
-    pipeline_cache: _PipelineCache | None = None
-    # how()-only: restrict the varied nondeterministic inputs to those in *scope*
-    # (the narrowed local cone), holding all others at their initial value.
-    # Avoids varying inputs that only reach the scope via a shared derived tag's
-    # other writers (e.g. a sub-state's level inputs reached through fill_subStatus)
-    # — don't-cares for this local transition that otherwise blow up branching.
-    # Unsound for always()/never() (would skip reachable states); safe for how()
-    # where each path is replay-verified.
-    restrict_inputs_to_scope: bool = False
-    # how()-only (set by _build_prior_facts): passes may record
-    # advice-grade results the BFS could not soundly act on — e.g.
-    # functional-dep projections for slice-elided or ordering-violating
-    # scratch, which PILOT's index chase validates by interpretation.
-    domains_only: bool = False
-    # Tags a callable property reads (its ``scope=``).  It names no
-    # expression, so input liveness cannot see what it depends on; see
-    # ``_opaque_observer_nd_names``.  ``opaque_reads_all`` marks a callable
-    # with no scope, which may read any tag.
-    opaque_reads: tuple[str, ...] = ()
-    opaque_reads_all: bool = False
-    # Tags the property reads (see ``_property_tags``).  Those no rung reads
-    # or writes join the graph, so classification treats them like any
-    # unwritten tag instead of leaving them out of the kernel's state.
-    observed_tags: tuple[Tag, ...] = ()
+    dt: float = 0.010
+    # The kernel the elision pass probes with, compiled there when None.
+    compiled: CompiledKernel | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -285,110 +68,26 @@ class _PassContext:
     done_presets: dict[str, int] | None = None
     done_kinds: dict[str, str] | None = None
 
-    # how()'s domain prior only (domains_only): the absorptions its
-    # classification made, and the PILOT world-key specs built from them
-    # (absorb.py).  The search absorbs nothing: its timers are black boxes.
+    # The absorptions classification made, and the PILOT world-key specs built
+    # from them (absorb.py).
     threshold_absorptions: _ThresholdAbsorptions | None = None
     state_key_done_specs: tuple[Any, ...] | None = None
 
     stateful_names: tuple[str, ...] | None = None
-    edge_tag_names: tuple[str, ...] | None = None
-    edge_tag_exprs: dict[str, list[Expr]] | None = None
-    memory_key_names: tuple[str, ...] | None = None
-    memory_key_defaults: tuple[Any, ...] | None = None
     receive_dest_names: frozenset[str] = frozenset()
-    demotable_edge_tag_names: tuple[str, ...] | None = None
-    _combinational_tags: frozenset[str] | None = None
     _stepping_tags: frozenset[str] | None = None
-    _consumed_accs: frozenset[str] = frozenset()
     _elided_tags: dict[str, str] | None = None
     _functional_dep_projections: dict[str, tuple[str, int, int | float]] | None = None
+    # Each init constant with its representative value and method.
     _init_constant_projections: dict[str, tuple[str, Any]] | None = None
-    _exclusions: dict[str, str] | None = None
+    # Written tags the classification found no finite domain for, and the tags an
+    # Intractable classification named.  how() leaves them out of its key, and the
+    # facts check in tests/facts makes no claim about them.
     _unclassified_written: frozenset[str] = frozenset()
-    # Inputs whose values tried may not be all the program tells apart, with what
-    # each one's value reaches (classify._answer_for_inputs).
-    _unanswered_inputs: dict[str, str] = field(default_factory=dict)
-    # (domains, blockers) fixpoint shared by find_threshold_absorptions and
-    # classify_dimensions — computed once per pipeline run (see
-    # _get_structural_domain_info).
-    _structural_domain_info: (
-        tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack] | None
-    ) = None
     _pending_infeasible_tags: list[str] = field(default_factory=list)
-    _pending_infeasible_hints: list[str] = field(default_factory=list)
-    system_points: SystemPointModel | None = None
-    # Black-box timers (blackbox.py): the search kernel ticks by choice.
-    timer_model: Any = None
-    count_clamps: tuple[tuple[int, bool, int], ...] = ()
-
-    def extract_cache(self) -> _PipelineCache | None:
-        if self.stateful_dims is None or self.nondeterministic_dims is None:
-            return None
-        return _PipelineCache(
-            stateful_dims=dict(self.stateful_dims),
-            nondeterministic_dims=dict(self.nondeterministic_dims),
-            combinational_tags=self._combinational_tags or frozenset(),
-            done_acc=dict(self.done_acc or {}),
-            done_presets=dict(self.done_presets or {}),
-            done_kinds=dict(self.done_kinds or {}),
-            consumed_accs=self._consumed_accs,
-            unclassified_written=self._unclassified_written,
-            threshold_absorptions=self.threshold_absorptions,
-            stepping_tags=self._stepping_tags or frozenset(),
-            unanswered_inputs=dict(self._unanswered_inputs),
-        )
-
-    def _inputs_a_callable_may_read(self) -> tuple[str, ...]:
-        """The inputs a callable may read whose domain is not every value they can hold.
-
-        A condition names its comparisons and they are carried back to the inputs, so what
-        the search tries answers for it.  A callable names none: ``s["I"] != 7`` is decided at
-        7 whether or not anything else in the program compares I there.  Only a domain
-        holding every value can answer for that, and a REAL's whole numbers are not every
-        value.
-        """
-        assert self.nondeterministic_dims is not None and self.graph is not None
-        read = self.nondeterministic_dims if self.opaque_reads_all else self._inputs_in_scope()
-        unbounded = []
-        for name in read:
-            tag = self.graph.tags.get(name)
-            declared = None if tag is None else _declared_domain(tag)
-            if (
-                tag is None
-                or declared is None
-                or (tag.type == TagType.REAL and tag.choices is None)
-                or not set(declared) <= set(self.nondeterministic_dims[name])
-            ):
-                unbounded.append(name)
-        return tuple(sorted(unbounded))
-
-    def _inputs_in_scope(self) -> set[str]:
-        """The inputs in a callable's scope, and those a tag in scope takes its value from.
-
-        ``s["D"] != 7`` tells apart the values of what ``copy(I, D)`` wrote D from.  A rung's
-        conditions don't count: their comparisons are carried back, which is why a Bool in
-        scope has nothing to answer for here.
-        """
-        assert self.nondeterministic_dims is not None and self.graph is not None
-        inputs = self.nondeterministic_dims
-        graph = self.graph
-        read = {name for name in self.opaque_reads if name in inputs}
-        following = []
-        for name in self.opaque_reads:
-            tag = graph.tags.get(name)
-            if name not in inputs and tag is not None and tag.type != TagType.BOOL:
-                following.append(name)
-        seen = set(following)
-        while following:
-            for rung in graph.writers_of.get(following.pop(), ()):
-                for source in graph.rung_nodes[rung].data_reads:
-                    if source in inputs:
-                        read.add(source)
-                    elif source not in seen:
-                        seen.add(source)
-                        following.append(source)
-        return read
+    # The (domains, blockers) fixpoint, computed once per pipeline run (see
+    # _get_structural_domain_info).
+    _structural_domain_info: tuple[dict[str, tuple[Any, ...]], frozenset[str]] | None = None
 
     def prior_facts(self) -> _PriorFacts:
         assert self.stateful_dims is not None
@@ -409,557 +108,26 @@ class _PassContext:
             ),
         )
 
-    def freeze(self) -> _ExploreContext:
-        assert self.compiled is not None
-        assert self.graph is not None
-        assert self.all_exprs is not None
-        assert self.stateful_dims is not None
-        assert self.nondeterministic_dims is not None
-        assert self.stateful_names is not None
-        assert self.edge_tag_names is not None
-        assert self.timer_model is not None
-        exclusive_input_groups = _detect_exclusive_input_groups(
-            self.program,
-            self.graph,
-            self.nondeterministic_dims,
-            project=self.project,
-            extra_exprs=self.extra_exprs,
-        )
-        auto_joint_inputs = _detect_auto_joint_inputs(self.program, self.nondeterministic_dims)
-        if self.exclusive_inputs:
-            from .inputs import _canonical_assignments_for_members
-
-            auto_members: set[str] = set()
-            for g in exclusive_input_groups:
-                auto_members.update(g.members)
-            user_groups: list[_ExclusiveInputGroup] = []
-            for members_tuple in self.exclusive_inputs:
-                if any(m in auto_members for m in members_tuple):
-                    continue
-                user_groups.append(
-                    _ExclusiveInputGroup(
-                        target_name="",
-                        members=tuple(sorted(members_tuple)),
-                        canonical_assignments=_canonical_assignments_for_members(
-                            tuple(sorted(members_tuple))
-                        ),
-                    )
-                )
-            if user_groups:
-                exclusive_input_groups = exclusive_input_groups + tuple(user_groups)
-        edge_bearing = _partition_edge_bearing_inputs(
-            self.all_exprs, self.nondeterministic_dims, self.program
-        )
-        projected_nd = frozenset(self.project or ()) & frozenset(self.nondeterministic_dims)
-        nd_in_key = edge_bearing | projected_nd
-        free = frozenset(self.nondeterministic_dims) - nd_in_key
-        combined_joint_inputs = tuple(
-            sorted({tuple(sorted(g)) for g in auto_joint_inputs + self.joint_inputs})
-        )
-        grouped: set[str] = set()
-        for g in combined_joint_inputs:
-            grouped.update(g)
-        uncovered = sorted(edge_bearing - grouped)
-        if uncovered:
-            names = ", ".join(uncovered)
-            caveats: tuple[str, ...] = (
-                f"Simultaneous edge combinations on external inputs [{names}] "
-                f"were not explored. These inputs use rise()/fall() but are not "
-                f"covered by a joint input declaration.",
-            )
-        else:
-            caveats = ()
-
-        journal: Journal | None = None
-        if self.journal_builder is not None:
-            for tag_name in nd_in_key:
-                self.journal_builder.record(
-                    tag_name,
-                    Decision(
-                        "freeze",
-                        "input_partition",
-                        "edge_bearing",
-                        "previous-scan value affects behavior",
-                    ),
-                )
-            for tag_name in free:
-                self.journal_builder.record(
-                    tag_name,
-                    Decision(
-                        "freeze",
-                        "input_partition",
-                        "free",
-                        "current value doesn't constrain future behavior",
-                    ),
-                )
-            for group in exclusive_input_groups:
-                for member in group.members:
-                    self.journal_builder.record(
-                        member,
-                        Decision(
-                            "freeze",
-                            "exclusive_group",
-                            "grouped",
-                            f"exclusive input group targeting {group.target_name}",
-                            detail=(("members", group.members),),
-                        ),
-                    )
-            journal = self.journal_builder.freeze(
-                graph_tags=self.graph.tags,
-                exclusions=self._exclusions or {},
-                stateful_dims=self.stateful_dims,
-                nondeterministic_dims=self.nondeterministic_dims,
-                combinational_tags=self._combinational_tags or frozenset(),
-                elided_tags=self._elided_tags,
-                edge_bearing=edge_bearing,
-                free=free,
-            )
-
-        from .independence import _build_independence_relation, _partition_free_inputs
-
-        # Inputs the *property*/projection reads directly (not via the program's
-        # data flow).  Free-input factoring composes only WRITE deltas, so a
-        # factored input's own value never reaches the merged state — a property
-        # like ``Or(~A, ~B)`` would only ever be evaluated at the base (default)
-        # input values, silently missing the coupled (A, B) corner.  Excluding
-        # observed ND inputs from the partition routes them through the normal
-        # cross-product enumeration, which sets kernel.tags before stepping.
-        observed_nd_inputs = (
-            _observed_tags(project=self.project, extra_exprs=self.extra_exprs)
-            | set(self.opaque_reads)
-        ) & set(self.nondeterministic_dims)
-        if self.opaque_reads_all:
-            observed_nd_inputs = set(self.nondeterministic_dims)
-        opaque_live = _opaque_observer_nd_names(
-            self.graph,
-            self.nondeterministic_dims,
-            (*(self.project or ()), *self.opaque_reads),
-            everything=self.opaque_reads_all,
-        )
-
-        _split_names = frozenset(self.split_at_tags) if self.split_at_tags else frozenset()
-        independence_relation = _build_independence_relation(
-            self.graph,
-            self.nondeterministic_dims,
-            exclusive_input_groups,
-            tuple(sorted(nd_in_key)),
-            free,
-            split_tags=_split_names,
-        )
-
-        free_input_factoring = _partition_free_inputs(
-            independence_relation,
-            free - observed_nd_inputs,
-            split_tags=_split_names,
-        )
-
-        # Mutable write-set: every tag that can differ between two reachable
-        # snapshots. Any tag outside it is a write-once constant identical in
-        # every reachable state (e.g. read-only indirect lookup tables), so
-        # kernel snapshots need not capture it. Sources:
-        #   - graph.writers_of — step_fn writes (conservatively covers indirect/
-        #     full-block and implicit fault writes)
-        #   - nondeterministic_dims — inputs BFS assigns directly
-        #   - stateful_dims, edge_tag_names
-        #   - system tags (fault.*, rtc.*, ...) the kernel runtime sets each
-        #     scan, also outside writers_of
-        mutable_tag_names: frozenset[str] | None = None
-        if self.scope_snapshot:
-            mutable: set[str] = set(self.graph.writers_of)
-            mutable.update(SYSTEM_TAGS_BY_NAME)
-            mutable.update(self.nondeterministic_dims)
-            mutable.update(self.stateful_dims)
-            mutable.update(self.edge_tag_names)
-            # Text fan-out: copy/copy_convert to a Char tag can create new
-            # tag keys at runtime (e.g. dest=Ch0 writes Ch1, Ch2, …) that
-            # don't exist in any static tag set.  Snapshot scoping must
-            # capture/restore these dynamic keys — see _snapshot_kernel.
-            mutable_tag_names = frozenset(mutable)
-
-        outside_defaults = tuple(
-            (tag.name, tag.default)
-            for tag in self.observed_tags
-            if tag.name in self.graph.tags and tag.name not in self.compiled._tag_template
-        )
-
-        return _ExploreContext(
-            compiled=self.compiled,
-            graph=self.graph,
-            all_exprs=self.all_exprs,
-            stateful_dims=self.stateful_dims,
-            nondeterministic_dims=self.nondeterministic_dims,
-            unanswered_inputs={
-                name: target
-                for name, target in self._unanswered_inputs.items()
-                if name in self.nondeterministic_dims
-            },
-            inputs_a_callable_may_read=self._inputs_a_callable_may_read(),
-            stateful_names=self.stateful_names,
-            edge_tag_names=self.edge_tag_names,
-            memory_key_names=self.memory_key_names or (),
-            memory_key_defaults=self.memory_key_defaults or (),
-            state_key_done_specs=self.state_key_done_specs or (),
-            threshold_vector_specs=(
-                self.threshold_absorptions.vector_specs
-                if self.threshold_absorptions is not None
-                else ()
-            ),
-            dt=self.dt,
-            edge_tag_exprs=self.edge_tag_exprs or {},
-            demoted_edge_names=tuple(sorted(self.demotable_edge_tag_names or ())),
-            nondeterministic_names=tuple(sorted(nd_in_key)),
-            free_input_names=free,
-            always_live_input_names=tuple(
-                sorted(
-                    observed_nd_inputs
-                    | opaque_live
-                    | _collect_stateful_upstream_nd_names(
-                        self.graph, self.stateful_dims, self.nondeterministic_dims
-                    )
-                )
-            ),
-            opaque_atom_deps=_opaque_atom_deps(
-                self.program, self.graph, self.stateful_dims, self.nondeterministic_dims
-            ),
-            exclusive_input_groups=exclusive_input_groups,
-            exclusive_input_group_by_member=_exclusive_input_group_membership(
-                exclusive_input_groups
-            ),
-            joint_inputs=combined_joint_inputs,
-            caveats=caveats,
-            journal=journal,
-            independence_relation=independence_relation,
-            free_input_factoring=free_input_factoring,
-            mutable_tag_names=mutable_tag_names,
-            base_tag_keys=(
-                frozenset(self.compiled._tag_template)
-                | _system_tag_keys(self.system_points, self.nondeterministic_dims)
-                | {name for name, _ in outside_defaults}
-            )
-            if mutable_tag_names is not None
-            else None,
-            simulation_status_tag_names=_collect_builtin_status_tag_names(self.program),
-            combinational_tags=self._combinational_tags or frozenset(),
-            elided_tags=dict(self._elided_tags or {}),
-            functional_dep_projections=dict(self._functional_dep_projections or {}),
-            init_constant_projections=dict(self._init_constant_projections or {}),
-            stepping_tags=self._stepping_tags or frozenset(),
-            system_points=self.system_points,
-            outside_tag_defaults=outside_defaults,
-            free_system_inputs=free_system_tags(self.nondeterministic_dims, self.graph.writers_of),
-            timer_model=self.timer_model,
-            count_clamps=self.count_clamps,
-        )
-
-
-@dataclass(frozen=True)
-class _PreBFSPass:
-    name: str
-    description: str
-    run: Callable[[_PassContext], None]
-    enabled: bool = True
-    requires: frozenset[str] = frozenset()
-    provides: frozenset[str] = frozenset()
-    # The _PriorFacts fields this pass decides or changes (see _passes_answering).
-    answers: frozenset[str] = frozenset()
-
-
-def _validate_pass_dag(passes: tuple[_PreBFSPass, ...]) -> None:
-    available: set[str] = set()
-    for p in passes:
-        if not p.enabled:
-            continue
-        missing = p.requires - available
-        if missing:
-            raise ValueError(
-                f"Pass {p.name!r} requires {sorted(missing)} but only {sorted(available)} available"
-            )
-        available |= p.provides
-
-
-@dataclass(frozen=True)
-class _BFSConfig:
-    """Enable/disable flags for BFS-interleaved optimizations."""
-
-    live_input_pruning: bool = True
-    exclusive_input_grouping: bool = True
-    edge_compression: bool = True
-    free_input_factoring: bool = True
-
-    @property
-    def active_optimizations(self) -> tuple[str, ...]:
-        names: list[str] = []
-        if self.live_input_pruning:
-            names.append("live_input_pruning")
-        if self.exclusive_input_grouping:
-            names.append("exclusive_input_grouping")
-        if self.edge_compression:
-            names.append("edge_compression")
-        if self.free_input_factoring:
-            names.append("free_input_factoring")
-        return tuple(names)
-
-
-_DEFAULT_BFS_CONFIG = _BFSConfig()
-
-
-# Optimizations whose effect is a sound search-space *reduction*: disabling
-# any of them makes BFS explore an equal or larger set.  Every toggle but the
-# declared-bounds check is one.  With black-box timers nothing extends reach
-# per unit of depth_budget (there are no hidden-event jumps or settlement to
-# keep on), so ``all_off()`` is a sound ground truth.
-#
-# scope_snapshot is representation-level: disabling it explores the *same* set
-# (just with full snapshots), so it satisfies "equal or larger". Listing it here
-# means sound_baseline() — and thus the --prove-agreement re-run — uses full
-# snapshots, keeping the agreement oracle a genuine scoped-vs-full check.
-_REDUCTION_OPTIMIZATIONS: frozenset[str] = frozenset(
-    {
-        "traced_elision",
-        "functional_dependency_projection",
-        "init_constant_projection",
-        "live_input_pruning",
-        "exclusive_input_grouping",
-        "edge_compression",
-        "free_input_factoring",
-        "scope_snapshot",
-    }
-)
-
-
-@dataclass(frozen=True)
-class _OptConfig:
-    """Per-optimization enable flags spanning pre-BFS passes and BFS-interleaved opts.
-
-    ``_OptConfig()`` is the all-on default.  ``_OptConfig.all_off()`` disables
-    everything and is a sound ground truth: timers are black boxes
-    (``blackbox.py``), so no optimization extends reach per unit of
-    ``depth_budget`` and each one left is a reduction the soundness fuzzer
-    checks against plain BFS.  ``_OptConfig.sound_baseline()`` is ``all_off()``
-    with the declared-bounds check kept (a check, not a reduction).
-
-    Each field is one independently-toggleable optimization. This lets the
-    soundness fuzzer test arbitrary *subsets* against the baseline —
-    interaction bugs between two optimizations are missed by an all-on-only
-    check but caught by a subset that isolates the interacting pair.
-    """
-
-    # pre-BFS passes
-    traced_elision: bool = True
-    functional_dependency_projection: bool = True
-    init_constant_projection: bool = True
-    validate_declared_bounds: bool = True
-    # BFS-interleaved (mirror _BFSConfig)
-    live_input_pruning: bool = True
-    exclusive_input_grouping: bool = True
-    edge_compression: bool = True
-    free_input_factoring: bool = True
-    # representation-level (does not change the explored state set)
-    scope_snapshot: bool = True
-
-    @classmethod
-    def all_off(cls) -> _OptConfig:
-        return cls(**dict.fromkeys(_OPT_TOGGLE_FIELDS, False))
-
-    @classmethod
-    def sound_baseline(cls) -> _OptConfig:
-        """Every reduction off: ``all_off()`` with the declared-bounds check kept."""
-        return cls(**{f: f not in _REDUCTION_OPTIMIZATIONS for f in _OPT_TOGGLE_FIELDS})
-
-    def subset(self, names: Iterable[str]) -> _OptConfig:
-        """Return a config with exactly *names* enabled, all others off."""
-        names = set(names)
-        return _OptConfig(**{f: f in names for f in _OPT_TOGGLE_FIELDS})
-
-    @property
-    def bfs_config(self) -> _BFSConfig:
-        """Project the BFS-interleaved flags into a _BFSConfig for _bfs_explore."""
-        return _BFSConfig(
-            live_input_pruning=self.live_input_pruning,
-            exclusive_input_grouping=self.exclusive_input_grouping,
-            edge_compression=self.edge_compression,
-            free_input_factoring=self.free_input_factoring,
-        )
-
-    @property
-    def active_optimizations(self) -> tuple[str, ...]:
-        return tuple(f for f in _OPT_TOGGLE_FIELDS if getattr(self, f))
-
-
-_OPT_TOGGLE_FIELDS = tuple(_OptConfig.__dataclass_fields__)
-_DEFAULT_OPT_CONFIG = _OptConfig()
-
-
-def _system_tag_keys(
-    system_points: SystemPointModel | None,
-    nondeterministic_dims: dict[str, tuple[Any, ...]] | None,
-) -> frozenset[str]:
-    """System tag keys the kernel holds beyond its compiled template.
-
-    A system tag only the property reads is seeded at power-on or assigned
-    as an input; restoring a snapshot must not drop it as a dynamic key.
-    """
-    keys = {name for name in nondeterministic_dims or () if name in SYSTEM_TAGS_BY_NAME}
-    if system_points is not None:
-        keys.update(name for name, _ in system_points.power_on)
-        keys.update(name for name, _ in system_points.after_scan)
-    return frozenset(keys)
-
-
-def _observed_system_tags(ctx: _PassContext) -> frozenset[str]:
-    """System tags the property, scope or projection reads.
-
-    The system-point model must cover them even when no rung reads them.  A
-    callable property (no scope, no projection) may read any fault flag, so
-    every fault writer counts; its other reads go through the guarded state
-    view (``system_points.guarded_state``).  The ``how()`` domain prior keeps
-    the program's own graph.
-    """
-    if ctx.domains_only:
-        return frozenset()
-    observed = set(ctx.scope or ()) | set(ctx.project or ())
-    for expr in ctx.extra_exprs or ():
-        observed.update(_referenced_tags(expr))
-    if ctx.scope is None and ctx.project is None:
-        observed.update(FAULT_FLAGS)
-    return frozenset(name for name in observed if name in SYSTEM_TAGS_BY_NAME)
-
-
-def _conditioned_loop_body_rung(program: Program) -> Any:
-    """The first forloop body rung with contacts of its own, if any."""
-    from pyrung.core.validation._common import walk_instructions
-
-    for instr in walk_instructions(program):
-        for body_rung in getattr(instr, "body_rungs", ()):
-            if len(body_rung._conditions) > body_rung._branch_condition_start:
-                return body_rung
-    return None
-
 
 def _pass_build_graph(ctx: _PassContext) -> None:
-    if not ctx.domains_only:
-        body_rung = _conditioned_loop_body_rung(ctx.program)
-        if body_rung is not None:
-            # The expression layer (simplified forms, write-site guards,
-            # don't-care pruning) reads a rung's contacts from the rung that
-            # holds the loop; a body rung's contacts and its break_loop() /
-            # continue_loop() are evaluated per iteration, which it does not
-            # model.  how()'s domain prior (domains_only) still runs.
-            where = (
-                f" at {body_rung.source_file}:{body_rung.source_line}"
-                if body_rung.source_file and body_rung.source_line
-                else ""
-            )
-            ctx.intractable = Intractable(
-                reason=f"forloop body rung with contacts{where}",
-                dimensions=0,
-                estimated_space=0,
-                hints=[
-                    "  the prover does not model forloop body rungs (with Rung(...) inside "
-                    "forloop), break_loop() or continue_loop() yet; cover them with tests"
-                ],
-            )
-            return
-    observed = _observed_system_tags(ctx)
-    outside = () if ctx.domains_only else ctx.observed_tags
-    # BFS needs every element an unbounded index may read; the how() prior
-    # (domains_only) keeps PILOT's graph.
-    unbounded = not ctx.domains_only
     ctx.graph = build_program_graph(
         ctx.program,
-        observed_system=observed,
-        observed_tags=outside,
-        unbounded_index_reads=unbounded,
+        observed_system=frozenset(),
+        observed_tags=(),
+        unbounded_index_reads=False,
     )
-    if (
-        not ctx.domains_only
-        and FIRST_SCAN not in ctx.graph.tags
-        and FIRST_SCAN_DEPENDENTS & ctx.graph.tags.keys()
-    ):
-        # The scan-time min/max ride on the first_scan bit, which then needs
-        # a tag of its own.
-        ctx.graph = build_program_graph(
-            ctx.program,
-            observed_system=observed | {FIRST_SCAN},
-            observed_tags=outside,
-            unbounded_index_reads=unbounded,
-        )
-    ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph, scope=ctx.scope)
-    if ctx.extra_exprs:
-        ctx.all_exprs = ctx.all_exprs + ctx.extra_exprs
+    ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph)
     ctx.receive_dest_names = frozenset(_collect_receive_dest_names(ctx.program))
 
 
-def _observed_project(ctx: _PassContext) -> tuple[str, ...] | None:
-    """Tags read from outside the program: the projection and what callables read.
-
-    A callable property reads concrete tag values, so an accumulator it may
-    read (its ``scope=``, or any tag without one) must be tracked exactly,
-    like a projected one, not hidden behind a threshold vector or a Done
-    state: the search keeps one representative value per abstract state.
-    """
-    if ctx.opaque_reads_all and ctx.graph is not None:
-        return tuple(sorted(ctx.graph.tags))
-    if not ctx.opaque_reads:
-        return ctx.project
-    return tuple(dict.fromkeys((*(ctx.project or ()), *ctx.opaque_reads)))
-
-
-def _scope_upstream(ctx: _PassContext) -> frozenset[str] | None:
-    """Compute the upstream tag cone for the current scope."""
-    if ctx.scope is None or ctx.graph is None:
-        return None
-    upstream: set[str] = set(ctx.scope)
-    for tag_name in ctx.scope:
-        upstream.update(ctx.graph.upstream_slice(tag_name, follow_calls=False))
-    return frozenset(upstream)
-
-
-def _apply_classification_cache(ctx: _PassContext) -> None:
-    """Apply cached classification results, filtered to the current scope."""
-    cache = ctx.pipeline_cache
-    assert cache is not None
-    upstream = _scope_upstream(ctx)
-    if upstream is not None:
-        ctx.stateful_dims = {k: v for k, v in cache.stateful_dims.items() if k in upstream}
-        nd = {k: v for k, v in cache.nondeterministic_dims.items() if k in upstream}
-        # how()-only: drop inputs that reach the scope only through a shared
-        # derived tag's out-of-cone writers — keep only inputs in the cone itself.
-        if ctx.restrict_inputs_to_scope and ctx.scope is not None:
-            scope_set = set(ctx.scope)
-            nd = {k: v for k, v in nd.items() if k in scope_set}
-        ctx.nondeterministic_dims = nd
-    else:
-        ctx.stateful_dims = dict(cache.stateful_dims)
-        ctx.nondeterministic_dims = dict(cache.nondeterministic_dims)
-    ctx._combinational_tags = cache.combinational_tags
-    ctx.done_acc = dict(cache.done_acc)
-    ctx.done_presets = dict(cache.done_presets)
-    ctx.done_kinds = dict(cache.done_kinds)
-    ctx._consumed_accs = cache.consumed_accs
-    ctx._stepping_tags = cache.stepping_tags
-    ctx._unclassified_written = cache.unclassified_written
-    ctx._unanswered_inputs = dict(cache.unanswered_inputs)
-    logger.info(
-        "classify_dimensions: using cached results (%d stateful, %d ND)",
-        len(ctx.stateful_dims),
-        len(ctx.nondeterministic_dims),
-    )
-
-
 def _pass_classify_dimensions(ctx: _PassContext) -> None:
-    if ctx.pipeline_cache is not None:
-        _apply_classification_cache(ctx)
-        return
     assert ctx.graph is not None and ctx.all_exprs is not None
     profile = _classify_profile_enabled()
     timings: list[tuple[str, float]] = []
     profile_start = profile_last = time.perf_counter() if profile else 0.0
-    exclusions: dict[str, str] | None = {} if ctx.journal_builder is not None else None
     unclassified: set[str] = set()
     stepping: set[str] = set()
     threshold_absorptions: list[_ThresholdAbsorptions] = []
-    unanswered: dict[str, str] = {}
     structural_domain_info = _get_structural_domain_info(ctx)
     if profile:
         profile_last = _classify_profile_mark(timings, "structural_domain_info", profile_last)
@@ -967,63 +135,34 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
         ctx.program,
         ctx.graph,
         ctx.all_exprs,
-        scope=ctx.scope,
-        project=_observed_project(ctx),
         structural_domain_info=structural_domain_info,
         receive_dest_names=ctx.receive_dest_names,
-        exclusions=exclusions,
         unclassified=unclassified,
         stepping_tags_out=stepping,
         threshold_absorptions_out=threshold_absorptions,
-        unanswered_out=unanswered,
-        model_system_points=not ctx.domains_only,
-        exhaust_tag_compared_inputs=not ctx.domains_only,
-        # REAL gap points cover the search; how()'s prior keeps whole-number
-        # picks.
-        real_gap_points=not ctx.domains_only,
-        observe_everything=ctx.opaque_reads_all,
-        # The search's timers are black boxes and it absorbs nothing; how()'s
-        # domain prior keeps the absorbing classification PILOT's world key
-        # is built from (absorb.py).
-        abstract_timers=not ctx.domains_only,
-        _skip_absorptions=not ctx.domains_only,
     )
     if profile:
         profile_last = _classify_profile_mark(timings, "classify_from_graph", profile_last)
     if threshold_absorptions:
         ctx.threshold_absorptions = threshold_absorptions[-1]
     ctx._stepping_tags = frozenset(stepping)
-    ctx._unanswered_inputs = unanswered
+    ctx._unclassified_written = frozenset(unclassified)
     if isinstance(result, Intractable):
         ctx._pending_infeasible_tags.extend(result.tags)
-        ctx._pending_infeasible_hints.extend(result.hints)
-        ctx._unclassified_written = frozenset(unclassified)
+        # The facts still build on the partial classification.
         if result._debug_context is not None:
             sd, nd, _comb, da, dp, dk = result._debug_context
             ctx.stateful_dims = sd
             ctx.nondeterministic_dims = nd
-            ctx._combinational_tags = _comb
             ctx.done_acc = da
             ctx.done_presets = dp
             ctx.done_kinds = dk
-            all_done_accs = set(_collect_done_acc_pairs(ctx.program).pairs.values())
-            non_consumed = set(da.values())
-            ctx._consumed_accs = frozenset((all_done_accs - non_consumed) & set(sd))
-        if ctx.journal_builder is not None:
-            for tag_name in result.tags:
-                ctx.journal_builder.record(
-                    tag_name,
-                    Decision("classify_dimensions", "classification", "infeasible", result.reason),
-                )
-            if exclusions:
-                ctx._exclusions = exclusions
         if profile:
             _classify_profile_emit(
                 "_pass_classify_dimensions",
                 timings,
                 time.perf_counter() - profile_start,
                 result="intractable",
-                pending=len(ctx._pending_infeasible_tags),
                 unclassified=len(unclassified),
                 stepping=len(stepping),
             )
@@ -1031,56 +170,11 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
     sd, nd, _comb, da, dp, dk = result
     ctx.stateful_dims = sd
     ctx.nondeterministic_dims = nd
-    ctx._combinational_tags = _comb
     ctx.done_acc = da
     ctx.done_presets = dp
     ctx.done_kinds = dk
-    ctx._unclassified_written = frozenset(unclassified)
-    all_done_accs = set(_collect_done_acc_pairs(ctx.program).pairs.values())
-    non_consumed = set(da.values())
-    ctx._consumed_accs = frozenset((all_done_accs - non_consumed) & set(sd))
-    if ctx.journal_builder is not None:
-        assert exclusions is not None
-        ctx._exclusions = exclusions
-        for tag_name, domain in sd.items():
-            source = _infer_domain_source(tag_name, domain, ctx.graph)
-            ctx.journal_builder.record(
-                tag_name,
-                Decision("classify_dimensions", "classification", "stateful", "cross-scan state"),
-            )
-            ctx.journal_builder.record(
-                tag_name,
-                Decision("classify_dimensions", "domain", source, source),
-            )
-        for tag_name, domain in nd.items():
-            source = _infer_domain_source(tag_name, domain, ctx.graph)
-            ctx.journal_builder.record(
-                tag_name,
-                Decision(
-                    "classify_dimensions", "classification", "nondeterministic", "external input"
-                ),
-            )
-            ctx.journal_builder.record(
-                tag_name,
-                Decision("classify_dimensions", "domain", source, source),
-            )
-        for tag_name in _comb:
-            ctx.journal_builder.record(
-                tag_name,
-                Decision(
-                    "classify_dimensions",
-                    "classification",
-                    "combinational",
-                    "no cross-scan readers",
-                ),
-            )
-        for tag_name, reason in exclusions.items():
-            ctx.journal_builder.record(
-                tag_name,
-                Decision("classify_dimensions", "exclusion", "excluded", reason),
-            )
     if profile:
-        _classify_profile_mark(timings, "ctx_store_and_journal", profile_last)
+        _classify_profile_mark(timings, "ctx_store", profile_last)
         _classify_profile_emit(
             "_pass_classify_dimensions",
             timings,
@@ -1093,271 +187,6 @@ def _pass_classify_dimensions(ctx: _PassContext) -> None:
             stepping=len(stepping),
             unclassified=len(unclassified),
         )
-
-
-def _pass_validate_declared_bounds(ctx: _PassContext) -> None:
-    """Validate that the kernel respects user-declared min/max/choices.
-
-    Does NOT contribute to domain inference.  Tags without static domains
-    stay infeasible → Intractable.
-    """
-    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
-    from pyrung.core.bounds import build_constraint_index, check_bounds
-
-    assert ctx.graph is not None and ctx.all_exprs is not None
-
-    constraints = build_constraint_index(ctx.graph.tags)
-    written_constrained = [name for name in constraints if name in ctx.graph.writers_of]
-    if not written_constrained:
-        return
-
-    if ctx.compiled is None:
-        ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
-
-    first_pass_nd: dict[str, tuple[Any, ...]] = {}
-    for tag_name, tag in ctx.graph.tags.items():
-        role = ctx.graph.tag_roles.get(tag_name)
-        is_written = tag_name in ctx.graph.writers_of
-        is_nd = role == TagRole.INPUT or not is_written or tag_name in ctx.receive_dest_names
-        if not is_nd:
-            continue
-        # Use declared bounds (full range) rather than expression partition,
-        # so the kernel is exercised across the entire declared input space.
-        domain: tuple[Any, ...] | None = None
-        if tag.choices is not None:
-            domain = tuple(sorted(tag.choices.keys()))
-        elif tag.min is not None and tag.max is not None:
-            if int(tag.min) != tag.min or int(tag.max) != tag.max:
-                domain = (tag.min, tag.max)
-            else:
-                range_size = int(tag.max - tag.min + 1)
-                if range_size <= 1000:
-                    domain = tuple(range(int(tag.min), int(tag.max) + 1))
-        if not domain and tag.type is TagType.BOOL:
-            domain = (False, True)
-        if domain:
-            first_pass_nd[tag_name] = domain
-
-    observed = _pilot_sweep_domains(
-        ctx.compiled,
-        written_constrained,
-        first_pass_nd,
-        ctx.graph,
-        dt=ctx.dt,
-    )
-    if not observed:
-        return
-
-    all_violations: list[str] = []
-    for name, vals in observed.items():
-        constraint = constraints.get(name)
-        if constraint is None:
-            continue
-        for v in vals:
-            violations = check_bounds({name: v}, constraints)
-            if violations:
-                viol = violations[name]
-                all_violations.append(str(viol))
-
-    if all_violations:
-        msg = "Kernel produces values that violate declared bounds:\n" + "\n".join(
-            f"  - {v}" for v in all_violations
-        )
-        raise ValueError(msg)
-
-
-def _opaque_observer_nd_names(
-    graph: ProgramGraph | None,
-    nd_dims: dict[str, tuple[Any, ...]] | None,
-    observed: tuple[str, ...],
-    *,
-    everything: bool,
-) -> set[str]:
-    """ND inputs a projection or a callable property can observe.
-
-    Live-input pruning keeps an input only while a residual expression names
-    it (or a hidden tag one names depends on it).  A projection or a callable
-    names no expression, so an input that reaches an observed tag through
-    data flow alone (``math(100 / D, Q)`` with ``Q`` projected) would be held
-    at its current value and its other values never explored.  Every input in
-    the upstream cone of an observed tag stays live instead.  A callable with
-    no ``scope=`` may read any tag, so every input stays live.
-    """
-    if graph is None or not nd_dims:
-        return set()
-    if everything:
-        return set(nd_dims)
-    live: set[str] = set()
-    for name in observed:
-        if name in nd_dims:
-            live.add(name)
-        live.update(graph.upstream_slice(name) & nd_dims.keys())
-    return live
-
-
-def _opaque_atom_deps(
-    program: Program,
-    graph: ProgramGraph | None,
-    stateful_dims: dict[str, tuple[Any, ...]] | None,
-    nd_dims: dict[str, tuple[Any, ...]] | None,
-) -> dict[str, frozenset[str]]:
-    """Nondeterministic inputs behind each opaque condition atom.
-
-    ``DS[P] != 0`` lowers to ``Atom("indirect(IndirectCompareNe)")``, and a
-    condition the lowering does not understand (``(DQ + 0) != 0``, an
-    ``ExprCompare``) to ``Atom("ExprCompare", unsupported=...)``.  Neither
-    names the tags the condition reads (the pointer and the elements it can
-    pick, the operands of the expression), so live-input pruning would drop
-    them.  Such an atom never folds to a constant, and while one stands in a
-    residual expression every input a condition of that kind (in any rung,
-    branch, loop body, count or instruction condition: the name does not say
-    which one) may read stays live: the tags it reads, and for a read that is
-    no tracked dimension the inputs upstream of it.  A forloop's indirect
-    count reaches liveness as an ``IndirectCompareNe`` (caller map).
-    """
-    from collections import defaultdict
-
-    from pyrung.core.analysis.pdg import _extract_tag_names
-    from pyrung.core.analysis.simplified import (
-        _INDIRECT_COMPARE_FORMS,
-        Atom,
-        _condition_to_expr,
-    )
-    from pyrung.core.condition import AllCondition, AnyCondition, Condition
-    from pyrung.core.instruction.control import ForLoopInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-    if graph is None or not nd_dims:
-        return {}
-    tag_refs = dict(graph.tags)
-    reads: dict[str, set[str]] = defaultdict(set)
-
-    def visit_condition(condition: Any) -> None:
-        if isinstance(condition, (AllCondition, AnyCondition)):
-            for child in condition.conditions:
-                visit_condition(child)
-            return
-        name = type(condition).__name__
-        if name in _INDIRECT_COMPARE_FORMS:
-            reads[f"indirect({name})"].update(_extract_tag_names(condition, tag_refs))
-            return
-        atom = _condition_to_expr(condition)
-        if isinstance(atom, Atom) and atom.unsupported is not None:
-            reads[atom.tag].update(_extract_tag_names(condition, tag_refs))
-
-    def visit_instructions(instructions: Any) -> None:
-        for instr in instructions:
-            for field_name in getattr(type(instr), "_conditions", ()):
-                value = getattr(instr, field_name, None)
-                values = value if isinstance(value, (list, tuple)) else (value,)
-                for item in values:
-                    if isinstance(item, Condition):
-                        visit_condition(item)
-            if isinstance(instr, ForLoopInstruction):
-                if isinstance(instr.count, (IndirectRef, IndirectExprRef)):
-                    reads["indirect(IndirectCompareNe)"].update(
-                        _extract_tag_names(instr.count, tag_refs)
-                    )
-                for item in instr.body:
-                    if isinstance(item, ForLoopInstruction) or not hasattr(item, "_branches"):
-                        visit_instructions((item,))
-                    else:
-                        visit_rung(item)
-
-    def visit_rung(rung: Any) -> None:
-        for condition in rung._conditions:
-            visit_condition(condition)
-        visit_instructions(rung._instructions)
-        for branch in rung._branches:
-            visit_rung(branch)
-
-    for rung in program.rungs:
-        visit_rung(rung)
-    for sub_rungs in program.subroutines.values():
-        for rung in sub_rungs:
-            visit_rung(rung)
-
-    stateful = stateful_dims or {}
-    deps: dict[str, frozenset[str]] = {}
-    for atom_name, names in reads.items():
-        live: set[str] = set()
-        for name in names:
-            if name in nd_dims:
-                live.add(name)
-            elif name not in stateful:
-                live.update(graph.upstream_slice(name, follow_calls=False) & nd_dims.keys())
-        deps[atom_name] = frozenset(live)
-    return deps
-
-
-def _collect_stateful_upstream_nd_names(
-    graph: ProgramGraph | None,
-    stateful_dims: dict[str, tuple[Any, ...]] | None,
-    nd_dims: dict[str, tuple[Any, ...]] | None,
-) -> set[str]:
-    """ND names upstream of at least one stateful dim.
-
-    Single multi-source BFS instead of one ``graph.upstream_slice`` walk
-    per stateful dim — the union of per-seed reachable sets equals the
-    reachable set from the seed union.  ``reached`` only collects tags
-    that appear as a writer's read (≥1 edge from some seed), matching
-    ``upstream_slice``'s exclusion of each seed from its own slice.
-
-    A writer in a subroutine runs only when the subroutine is called, so the
-    reads of every call rung on a path into it count too, as in
-    ``upstream_slice(follow_calls=True)``: their conditions, a forloop's count
-    and body-rung contacts, a return guard ahead of the call, and the pointer
-    and elements of an indirect contact.  No expression names some of these
-    (a body rung's contacts, an indirect contact's pointer), so liveness
-    would not see them otherwise.
-    """
-    if graph is None or not stateful_dims or not nd_dims:
-        return set()
-    reached: set[str] = set()
-    visited_rungs: set[int] = set()
-    visited_subs: set[str] = set()
-    expanded: set[str] = set()
-    queue: list[str] = list(stateful_dims)
-    callers = graph._subroutine_caller_indices()
-
-    def _visit(rung_idx: int) -> None:
-        if rung_idx in visited_rungs:
-            return
-        visited_rungs.add(rung_idx)
-        node = graph.rung_nodes[rung_idx]
-        for read_tag in node.condition_reads | node.data_reads:
-            reached.add(read_tag)
-            if read_tag not in expanded:
-                queue.append(read_tag)
-
-    def _visit_callers(sub_name: str | None) -> None:
-        pending = [sub_name] if sub_name is not None else []
-        while pending:
-            name = pending.pop()
-            if name in visited_subs:
-                continue
-            visited_subs.add(name)
-            for caller_idx in callers.get(name, ()):
-                caller = graph.rung_nodes[caller_idx]
-                for read_tag in caller.condition_reads:
-                    reached.add(read_tag)
-                    if read_tag not in expanded:
-                        queue.append(read_tag)
-                if caller.subroutine is not None:
-                    pending.append(caller.subroutine)
-
-    while queue:
-        current = queue.pop()
-        if current in expanded:
-            continue
-        expanded.add(current)
-        for rung_idx in graph.writers_of.get(current, frozenset()):
-            if rung_idx in visited_rungs:
-                continue
-            _visit(rung_idx)
-            _visit_callers(graph.rung_nodes[rung_idx].subroutine)
-
-    return reached & nd_dims.keys()
 
 
 def _collect_receive_dest_names(program: Program) -> set[str]:
@@ -1377,177 +206,32 @@ def _collect_receive_dest_names(program: Program) -> set[str]:
     return names
 
 
-def _pass_apply_split_at(ctx: _PassContext) -> None:
-    """Promote split_at tags from stateful to nondeterministic dimensions."""
-    if ctx.split_at_tags is None:
-        return
-    if ctx.stateful_dims is None or ctx.nondeterministic_dims is None:
-        return
-    for tag_name, domain in ctx.split_at_tags.items():
-        if tag_name in ctx.stateful_dims:
-            del ctx.stateful_dims[tag_name]
-            ctx.nondeterministic_dims[tag_name] = domain
-            if ctx.journal_builder is not None:
-                ctx.journal_builder.record(
-                    tag_name,
-                    Decision(
-                        "apply_split_at",
-                        "classification",
-                        "nondeterministic",
-                        "promoted by split_at directive",
-                        detail=(("domain", domain),),
-                    ),
-                )
-
-
-def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
-    assert ctx.graph is not None
-    if ctx.stateful_dims is None or ctx.nondeterministic_dims is None:
-        return
-
-    never_written: list[str] = []
-    for tag_name, tag in sorted(ctx.graph.tags.items()):
-        if tag_name in ctx.graph.writers_of:
-            continue
-        if tag.external or tag.readonly:
-            continue
-        if tag_name.startswith("fault."):
-            continue
-        never_written.append(tag_name)
-
-    if never_written and ctx.progress_info is not None:
-        names = ", ".join(never_written)
-        ctx.progress_info(
-            f"info | diagnose_unwritten_tags | "
-            f"{len(never_written)} tag(s) are never written and will be "
-            f"treated as nondeterministic inputs: [{names}]. "
-            f"Consider adding external=True (input) or readonly=True "
-            f"(constant) to make intent explicit."
-        )
-
-    missing_external = sorted(
-        name
-        for name in ctx.receive_dest_names
-        if name in ctx.graph.tags and not ctx.graph.tags[name].external
-    )
-
-    if missing_external and ctx.progress_info is not None:
-        names = ", ".join(missing_external)
-        ctx.progress_info(
-            f"info | diagnose_unwritten_tags | "
-            f"{len(missing_external)} receive() destination tag(s) "
-            f"missing external=True: [{names}]. "
-            f"Receive destinations hold data from outside the program; "
-            f"consider adding external=True to their declarations."
-        )
-
-
 def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+    from .expr import _edge_source_tags
 
     assert ctx.graph is not None
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     original_stateful_dims = dict(ctx.stateful_dims)
-    projected_stateful = frozenset(ctx.project or ()) & frozenset(original_stateful_dims)
-    observer_tag_names = (
-        frozenset(ctx.graph.writers_of) - frozenset(original_stateful_dims)
-    ) | projected_stateful
-    infeasible_unclassified: set[str] = set()
-    elidable_dims, elided_dict, proof_details, substitutions = _elide_scan_local_stateful_dims(
+    # Every written tag that is not state may be read after the scan.
+    observed = frozenset(ctx.graph.writers_of) - frozenset(original_stateful_dims)
+    elidable_dims, elided_dict = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
         original_stateful_dims,
         ctx.nondeterministic_dims,
-        observer_exprs=tuple(ctx.extra_exprs or ()),
-        observer_tag_names=observer_tag_names,
-        projected_observers=projected_stateful,
-        observed_tags=frozenset(_observed_project(ctx) or ()),
-        progress=ctx.progress_info,
-        progress_prefix=ctx.progress_prefix,
-        unclassified_tags=ctx._unclassified_written,
-        infeasible_out=infeasible_unclassified,
-        black_box_timers=not ctx.domains_only,
+        observed=observed,
     )
-
-    if infeasible_unclassified:
-        from .classify import _unmodeled_accumulators
-
-        tags = sorted(infeasible_unclassified)
-        # Under black-box timers such an accumulator is state, never
-        # unclassified; only how()'s domain prior leaves one here.
-        unmodeled = _unmodeled_accumulators(ctx.program) if ctx.domains_only else {}
-        hints = [
-            f"  {name}: {unmodeled[name]} accumulator; how()'s domain prior does"
-            f" not model its timing"
-            if name in unmodeled
-            else f"  {name}: unclassified tag with no inferrable domain; "
-            f"add choices=, min=/max=, or readonly=True"
-            for name in tags
-        ]
-        ctx._pending_infeasible_tags.extend(tags)
-        ctx._pending_infeasible_hints.extend(hints)
-        if ctx.journal_builder is not None:
-            for tag_name in tags:
-                ctx.journal_builder.record(
-                    tag_name,
-                    Decision(
-                        "elide_scan_local_state",
-                        "classification",
-                        "infeasible",
-                        "unclassified tag in observer influence cone; unbounded domain",
-                    ),
-                )
-
-    if substitutions and ctx.extra_exprs:
-        from .expr import _substitute_elided_atoms
-
-        rewritten_exprs: list[Expr] = []
-        for expr in ctx.extra_exprs:
-            rewritten = _substitute_elided_atoms(expr, substitutions)
-            rewritten_exprs.append(rewritten if rewritten is not None else expr)
-        ctx.extra_exprs = rewritten_exprs
-        if ctx.all_exprs:
-            new_all: list[Expr] = []
-            for expr in ctx.all_exprs:
-                rewritten = _substitute_elided_atoms(expr, substitutions)
-                new_all.append(rewritten if rewritten is not None else expr)
-            ctx.all_exprs = new_all
-
-    from .expr import _edge_source_tags
-
+    # An edge source keeps its previous value from scan to scan, so it is not
+    # listed as elided.
     edge_sources = _edge_source_tags(ctx.program)
-    demoted = {name: method for name, method in elided_dict.items() if name in edge_sources}
-    truly_elided = {
+    ctx.stateful_dims = elidable_dims
+    ctx._elided_tags = {
         name: method for name, method in elided_dict.items() if name not in edge_sources
     }
-    ctx.demotable_edge_tag_names = tuple(sorted(demoted))
-    ctx.stateful_dims = elidable_dims
-    ctx._elided_tags = truly_elided
-    if ctx.journal_builder is not None:
-        for tag_name, method in truly_elided.items():
-            ctx.journal_builder.record(
-                tag_name,
-                Decision(
-                    "elide_scan_local_state",
-                    "elision",
-                    f"elided:{method}",
-                    f"scan-local by {method} proof",
-                    detail=proof_details.get(tag_name, ()),
-                ),
-            )
-        for tag_name, method in demoted.items():
-            ctx.journal_builder.record(
-                tag_name,
-                Decision(
-                    "elide_scan_local_state",
-                    "demotion",
-                    f"demoted:{method}",
-                    f"edge-source with scan-local exit by {method} proof -- B_prev forwarded by BFS",
-                    detail=proof_details.get(tag_name, ()),
-                ),
-            )
 
 
 def _writers_all_unconditional(
@@ -1725,15 +409,14 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
     source_offsets: dict[str, set[tuple[str, int, int | float]]] = {}
     disqualified: set[str] = set()
 
-    # Walk-only: slice elision has already claimed write-before-read
-    # scratch (the jump-table pointer idiom: ``math(S_StateRequested +
-    # 150, sm__jump_target_ds_idx)``), but the walker still wants the
-    # ``y = x + offset`` relation as idx-chase advice.  Admit elided tags
-    # as candidates; their projections are recorded as advice only — no
-    # dims/elision bookkeeping — and every walker use is validated by the
-    # interpreted trial.  BFS never sees these (domains_only runs no BFS).
+    # Slice elision has already claimed write-before-read scratch (the
+    # jump-table pointer idiom: ``math(S_StateRequested + 150,
+    # sm__jump_target_ds_idx)``), but the walker still wants the
+    # ``y = x + offset`` relation as idx-chase advice.  Elided tags are
+    # candidates whose projections are advice only, with no dims or elision
+    # bookkeeping.  The interpreted trial checks every walker use.
     admissible = set(ctx.stateful_dims)
-    if ctx.domains_only and ctx._elided_tags:
+    if ctx._elided_tags:
         admissible.update(ctx._elided_tags)
 
     for instr in walk_instructions(ctx.program):
@@ -1766,16 +449,13 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         if x_name in FAULT_FLAGS or y_name in FAULT_FLAGS:
             continue
         # Walk-grade widenings: a negated form (``lit - x``) or an
-        # ND-input source is useless to BFS state-key elision but exactly
-        # what the walker's chase needs (``pv = 100 - analog_input``).
-        # Admit them under domains_only as advice only — prove behavior
-        # stays bit-identical.
+        # ND-input source cannot drop a tag from the world key, but it is
+        # what the walker's chase needs (``pv = 100 - analog_input``).  They
+        # are advice only.
         walk_grade = scale != 1 or x_name not in ctx.stateful_dims
         x_writers = ctx.graph.writers_of.get(x_name, frozenset())
         y_writers = ctx.graph.writers_of.get(y_name, frozenset())
         if walk_grade:
-            if not ctx.domains_only:
-                continue
             if x_name not in ctx.stateful_dims:
                 if ctx.nondeterministic_dims is None or x_name not in ctx.nondeterministic_dims:
                     continue
@@ -1801,8 +481,6 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         )
         if not contained:
             if not _is_sequential_unconditional_same_scope(x_name, y_name, ctx.graph, ctx.program):
-                if not ctx.domains_only:
-                    continue
                 # Ordering violations (the CopyOrJump loop rewrites x
                 # after y's writer) make the projection unsound as a
                 # state-key elision but fine as chase advice.
@@ -1822,20 +500,6 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
             continue
         del ctx.stateful_dims[y_name]
         ctx._elided_tags[y_name] = "functional_dep"
-
-    if ctx.journal_builder is not None:
-        for y_name, (x_name, scale, offset) in projected.items():
-            form = f"{x_name} + {offset}" if scale == 1 else f"{offset} - {x_name}"
-            ctx.journal_builder.record(
-                y_name,
-                Decision(
-                    "detect_functional_dependencies",
-                    "projection",
-                    "advice" if y_name in advice_only else "projected",
-                    f"affine {y_name} = {form}, representative: {x_name}",
-                    detail=(("source", x_name), ("scale", scale), ("offset", offset)),
-                ),
-            )
 
 
 def _pass_detect_init_constants(ctx: _PassContext) -> None:
@@ -1878,114 +542,19 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
             del ctx.stateful_dims[x_name]
             ctx._elided_tags[x_name] = projected[x_name][1]
 
-    if ctx.journal_builder is not None:
-        for x_name, (rep, method) in projected.items():
-            ctx.journal_builder.record(
-                x_name,
-                Decision(
-                    "detect_init_constants",
-                    "projection",
-                    "projected",
-                    f"{method}: representative {rep}",
-                    detail=(("representative", rep), ("method", method)),
-                ),
-            )
-
 
 def _pass_compile_kernel(ctx: _PassContext) -> None:
-    """Compile the search's kernel and derive the stateful and edge tag names.
-
-    The search's kernel ticks timers by choice (``abstract_timers``,
-    blackbox.py).  Earlier passes (declared bounds, elision) and the caller may
-    have compiled the runtime's kernel for their own probes; the search always
-    gets the abstract one.  How()'s domain prior (domains_only) keeps the
-    runtime's.
-    """
+    """Compile the kernel if no pass has, and name the stateful tags."""
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
-    if not ctx.domains_only:
-        ctx.compiled = _compile_kernel(
-            ctx.program, blockless=True, proof_metadata=True, abstract_timers=True
-        )
-    elif ctx.compiled is None:
+    if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program, blockless=True, proof_metadata=True)
     assert ctx.stateful_dims is not None
     ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
-    if not ctx.domains_only:
-        referenced = (
-            frozenset(ctx.compiled.referenced_tags)
-            | frozenset(ctx.graph.tags if ctx.graph is not None else ())
-        ) & SYSTEM_TAGS_BY_NAME.keys()
-        nd = ctx.nondeterministic_dims or {}
-        ctx.system_points = build_system_point_model(
-            referenced,
-            ctx.graph.writers_of if ctx.graph is not None else {},
-            {name: nd[name] for name in referenced if name in nd},
-            ctx.dt,
-        )
-    combinational_edge = set(ctx.compiled.edge_tags) & (ctx._combinational_tags or set())
-    demoted = set(ctx.demotable_edge_tag_names or ()) | combinational_edge
-    ctx.demotable_edge_tag_names = tuple(sorted(demoted))
-    ctx.edge_tag_names = tuple(n for n in sorted(ctx.compiled.edge_tags) if n not in demoted)
-
-
-def _pass_build_timer_model(ctx: _PassContext) -> None:
-    """The black-box timer model: which ticks branch, and onto what (blackbox.py)."""
-    from .blackbox import (
-        accumulator_reads,
-        build_timer_model,
-        count_clamps,
-        counter_accumulators,
-        timed_sites,
-    )
-
-    assert ctx.graph is not None and ctx.all_exprs is not None
-    assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
-    # Who reads each accumulator, by tag reference (not the atom index: an
-    # accumulator inside arithmetic is an opaque atom there).
-    reads = accumulator_reads(
-        ctx.program,
-        ctx.graph,
-        ctx.all_exprs,
-        frozenset(timed_sites(ctx.program)) | counter_accumulators(ctx.program),
-        observed=frozenset({*(ctx.project or ()), *ctx.opaque_reads}),
-        observe_all=ctx.opaque_reads_all,
-        # A compared tag's values, only where they are every value it takes:
-        # one written only by literal copies (and not from outside) takes
-        # those; an input nothing writes takes the values the search
-        # enumerates; any other tag nothing writes keeps its default.  A
-        # stateful domain is classify's sizing partition, not the tag's values
-        # (the kernel holds the real ones), and a split_at tag's writers still
-        # write real values, so a tag compared with an accumulator and
-        # computed any other way sweeps it.
-        domains={
-            **{
-                name: values
-                for name, values in _collect_literal_write_domains(
-                    ctx.program, ctx.graph.tags, ctx.graph.indirect_reach
-                ).items()
-                if name not in ctx.nondeterministic_dims
-                and not getattr(ctx.graph.tags.get(name), "external", False)
-            },
-            **{
-                name: ctx.nondeterministic_dims.get(name, (tag.default,))
-                for name, tag in ctx.graph.tags.items()
-                if not ctx.graph.writers_of.get(name)
-            },
-        },
-    )
-    ctx.timer_model = build_timer_model(
-        ctx.program,
-        stateful_dims=ctx.stateful_dims,
-        combinational=ctx._combinational_tags or frozenset(),
-        reads=reads,
-    )
-    assert ctx.stateful_names is not None
-    ctx.count_clamps = count_clamps(ctx.program, ctx.graph, ctx.stateful_names, reads=reads)
 
 
 def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
-    """How()'s domain prior only: the PILOT world key's Done specs (absorb.py)."""
+    """The PILOT world key's Done specs (absorb.py)."""
     assert ctx.stateful_names is not None
     ctx.state_key_done_specs = _prior_key_done_specs(
         ctx.stateful_names, ctx.done_acc or {}, ctx.done_kinds or {}
@@ -1994,11 +563,12 @@ def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
 
 def _get_structural_domain_info(
     ctx: _PassContext,
-) -> tuple[dict[str, tuple[Any, ...]], frozenset[str], _CarryBack]:
-    """Structural domains + reverse blockers, computed once per pipeline run.
+) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
+    """Structural domains and reverse blockers, computed once per pipeline run.
 
-    The fixpoint over ``(program, graph, all_exprs)`` dominates context-build
-    time; it is memoized on *ctx*.
+    The fixpoint over ``(program, graph, all_exprs)`` takes most of the build
+    time, so *ctx* keeps it.  REAL gap points stay off so how() keeps its
+    whole-number picks.
     """
     if ctx._structural_domain_info is None:
         assert ctx.graph is not None and ctx.all_exprs is not None
@@ -2010,309 +580,17 @@ def _get_structural_domain_info(
             ctx.graph,
             ctx.all_exprs,
             literal_write_domains,
-            model_system_points=not ctx.domains_only,
-            real_gap_points=not ctx.domains_only,
+            real_gap_points=False,
         )
     return ctx._structural_domain_info
 
 
-def _pass_collect_edge_exprs(ctx: _PassContext) -> None:
-    assert ctx.edge_tag_names is not None
-    ctx.edge_tag_exprs = _collect_edge_tag_exprs(ctx.program, ctx.edge_tag_names)
-
-
-def _pass_discover_memory_keys(ctx: _PassContext) -> None:
-    """Instruction memory that belongs in the state key, with each key's default.
-
-    The keys come from the program's site table: every one-shot, toggle, shift
-    clock and drum edge/event cell, whether or not it runs on the first scan
-    (a one-shot in a subroutine called later, or in a For body).  A trial scan
-    used to be the only source, so a site the first scan did not reach was
-    missing from the key and states that differ only in its memory merged.
-
-    Each key reads ``get(key, default)``: every reader in the kernel reads an
-    unwritten key as that default, so "never written" and "holds its default"
-    are one state.  The trial scan still runs as a floor: a key it writes that
-    the table does not name is kept, with no default (``None`` stays apart).
-    """
-    assert ctx.compiled is not None
-    defaults: dict[str, Any] = dict(program_memory_defaults(ctx.program))
-    defaults.update(dict.fromkeys(_tof_armed_keys(ctx.program), False))
-    pilot = ctx.compiled.create_kernel()
-    if ctx.system_points is not None:
-        ctx.system_points.seed(pilot.tags)
-    _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt, system=ctx.system_points)
-    excluded_prefixes = ("_dt", "_frac:", PROVE_EFFECTIVE_PRESET_PREFIX)
-    for k in pilot.memory:
-        if k not in defaults and not any(k.startswith(p) for p in excluded_prefixes):
-            defaults[k] = None
-    names = tuple(sorted(defaults))
-    ctx.memory_key_names = names
-    ctx.memory_key_defaults = tuple(defaults[k] for k in names)
-
-
-def _tof_armed_keys(program: Program) -> set[str]:
-    """Each off-delay timer's ``tof_armed_key``.
-
-    The key decides whether ``Done False, Acc 0`` rests (never enabled) or
-    keeps timing.  Two states that differ only in it go on differently, so it
-    belongs in the state key.
-    """
-    from pyrung.core.instruction.timers import OffDelayInstruction, tof_armed_key
-    from pyrung.core.validation._common import walk_instructions
-
-    return {
-        tof_armed_key(instr.accumulator.name)
-        for instr in walk_instructions(program)
-        if isinstance(instr, OffDelayInstruction)
-    }
-
-
-def _pass_skip_elision(ctx: _PassContext) -> None:
-    if ctx.journal_builder is not None:
-        ctx.journal_builder.add_note(
-            "Pass 'elide_scan_local_state' disabled (_skip_optimizations=True)"
-        )
-
-
-def _pass_skip_functional_dependencies(ctx: _PassContext) -> None:
-    if ctx.journal_builder is not None:
-        ctx.journal_builder.add_note("Pass 'detect_functional_dependencies' disabled")
-
-
-def _pass_skip_init_constants(ctx: _PassContext) -> None:
-    if ctx.journal_builder is not None:
-        ctx.journal_builder.add_note("Pass 'detect_init_constants' disabled")
-
-
-def _pass_skip_declared_bounds(ctx: _PassContext) -> None:
-    pass
-
-
-def _passes_for_opt_config(opt: _OptConfig) -> tuple[_PreBFSPass, ...]:
-    """Select the pre-BFS pass tuple for *opt*, stubbing disabled optimizations.
-
-    Each disabled pre-BFS optimization swaps its pass for a stub. With all
-    pre-BFS flags enabled this returns
-    ``_DEFAULT_PRE_BFS_PASSES`` unchanged.  The BFS-interleaved flags are not
-    handled here — see ``_OptConfig.bfs_config``.
-    """
-    overrides: dict[str, Callable[[_PassContext], None]] = {}
-    if not opt.traced_elision:
-        overrides["elide_scan_local_state"] = _pass_skip_elision
-    if not opt.functional_dependency_projection:
-        overrides["detect_functional_dependencies"] = _pass_skip_functional_dependencies
-    if not opt.init_constant_projection:
-        overrides["detect_init_constants"] = _pass_skip_init_constants
-    if not opt.validate_declared_bounds:
-        overrides["validate_declared_bounds"] = _pass_skip_declared_bounds
-    if not overrides:
-        return _DEFAULT_PRE_BFS_PASSES
-    return tuple(_dc_replace(p, run=overrides.get(p.name, p.run)) for p in _DEFAULT_PRE_BFS_PASSES)
-
-
-def _passes_answering(fields: frozenset[str]) -> tuple[_PreBFSPass, ...]:
-    """The passes that decide *fields*, with the passes they need, in pipeline order.
-
-    A pass joins only by naming a field in ``answers`` or by providing what a joined
-    pass requires, so a pass added for the search alone never runs for how().
-    """
-    needed: set[str] = set()
-    chosen: list[_PreBFSPass] = []
-    for p in reversed(_DEFAULT_PRE_BFS_PASSES):
-        if p.answers & fields or p.provides & needed:
-            chosen.append(_dc_replace(p, enabled=True))
-            needed |= p.requires
-    return tuple(reversed(chosen))
-
-
-_DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
-    _PreBFSPass(
-        "build_graph",
-        "Build program dependency graph and collect expressions",
-        _pass_build_graph,
-        provides=frozenset({"graph", "all_exprs"}),
-    ),
-    _PreBFSPass(
-        "classify_dimensions",
-        "Partition tags into stateful/nondeterministic/combinational",
-        _pass_classify_dimensions,
-        requires=frozenset({"graph", "all_exprs"}),
-        provides=frozenset({"classification"}),
-        answers=frozenset(
-            {"nondeterministic_dims", "stateful_dims", "stepping_tags", "threshold_vector_specs"}
-        ),
-    ),
-    _PreBFSPass(
-        "validate_declared_bounds",
-        "Validate user-declared bounds against kernel behavior",
-        _pass_validate_declared_bounds,
-        requires=frozenset({"graph", "classification"}),
-    ),
-    _PreBFSPass(
-        "apply_split_at",
-        "Promote split_at tags from stateful to nondeterministic (user directive)",
-        _pass_apply_split_at,
-        requires=frozenset({"classification"}),
-        answers=frozenset({"nondeterministic_dims", "stateful_dims"}),
-    ),
-    _PreBFSPass(
-        "diagnose_unwritten_tags",
-        "Surface never-written tags as user diagnostics",
-        _pass_diagnose_unwritten_tags,
-        requires=frozenset({"graph", "classification"}),
-    ),
-    _PreBFSPass(
-        "elide_scan_local_state",
-        "Elide scan-local state that is provably irrelevant across scans",
-        _pass_elide_scan_local_state,
-        requires=frozenset({"graph", "all_exprs", "classification"}),
-        answers=frozenset({"stateful_dims", "elided_tags"}),
-    ),
-    _PreBFSPass(
-        "detect_functional_dependencies",
-        "Project tags that are constant-offset functions of a surviving state dimension",
-        _pass_detect_functional_dependencies,
-        requires=frozenset({"graph", "all_exprs", "classification"}),
-        provides=frozenset({"functional_deps"}),
-        answers=frozenset({"stateful_dims", "elided_tags", "functional_dep_projections"}),
-    ),
-    _PreBFSPass(
-        "detect_init_constants",
-        "Project tags whose values are fixed by a monotonic latch init guard",
-        _pass_detect_init_constants,
-        requires=frozenset({"graph", "all_exprs", "classification"}),
-        provides=frozenset({"init_constants"}),
-        answers=frozenset({"stateful_dims", "elided_tags"}),
-    ),
-    _PreBFSPass(
-        "compile_kernel",
-        "Compile the search kernel and derive stateful/edge tag names",
-        _pass_compile_kernel,
-        requires=frozenset({"classification"}),
-        provides=frozenset({"compiled_names"}),
-        answers=frozenset({"stateful_names"}),
-    ),
-    _PreBFSPass(
-        "build_timer_model",
-        "Build the black-box timer model (which ticks branch, and onto what)",
-        _pass_build_timer_model,
-        requires=frozenset({"compiled_names", "classification"}),
-        provides=frozenset({"timer_model"}),
-    ),
-    _PreBFSPass(
-        "build_prior_key_specs",
-        "Build the how() prior's PILOT world-key Done specs",
-        _pass_build_prior_key_specs,
-        enabled=False,
-        requires=frozenset({"compiled_names", "classification"}),
-        answers=frozenset({"state_key_done_specs"}),
-    ),
-    _PreBFSPass(
-        "collect_edge_exprs",
-        "Build expression map for edge tag compression",
-        _pass_collect_edge_exprs,
-        requires=frozenset({"compiled_names"}),
-        provides=frozenset({"edge_tag_exprs"}),
-    ),
-    _PreBFSPass(
-        "discover_memory_keys",
-        "Discover kernel memory keys via pilot scan",
-        _pass_discover_memory_keys,
-        requires=frozenset({"compiled_names"}),
-        provides=frozenset({"memory_key_names", "memory_key_defaults"}),
-    ),
-)
-
-
-def _attach_partial_journal(ctx: _PassContext) -> Intractable:
-    """Attach a partial journal to an Intractable from the pipeline."""
-    from dataclasses import replace as _replace
-    from types import MappingProxyType
-
-    assert ctx.intractable is not None
-    if ctx.journal_builder is None:
-        return ctx.intractable
-    partial = Journal(
-        tags=MappingProxyType({}),
-        notes=tuple(ctx.journal_builder._notes),
-    )
-    if ctx.graph is not None:
-        partial = ctx.journal_builder.freeze(
-            graph_tags=ctx.graph.tags,
-            exclusions=ctx._exclusions or {},
-            stateful_dims=ctx.stateful_dims or {},
-            nondeterministic_dims=ctx.nondeterministic_dims or {},
-            combinational_tags=ctx._combinational_tags or frozenset(),
-            elided_tags=ctx._elided_tags,
-            edge_bearing=frozenset(),
-            free=frozenset(),
-        )
-    return _replace(ctx.intractable, journal=partial)
-
-
-def _build_merged_intractable(ctx: _PassContext) -> Intractable:
-    """Build a single Intractable from all accumulated infeasible tags/hints."""
-    from dataclasses import replace as _replace
-
-    tags = sorted(set(ctx._pending_infeasible_tags))
-    hints = list(ctx._pending_infeasible_hints)
-
-    sd = ctx.stateful_dims or {}
-    nd = ctx.nondeterministic_dims or {}
-    total_dims = len(sd) + len(nd) + len(tags)
-
-    product = 1
-    for domain in sd.values():
-        product *= len(domain)
-    for domain in nd.values():
-        product *= len(domain)
-    if product > 1:
-        hints.append(
-            f"  (surviving dimensions: {len(sd) + len(nd)}, "
-            f"estimated {product:,} states before these blockers)"
-        )
-
-    intractable = Intractable(
-        reason=f"unbounded domain on {', '.join(tags)}",
-        dimensions=total_dims,
-        estimated_space=product,
-        tags=tags,
-        hints=hints,
-    )
-
-    if ctx.journal_builder is not None and ctx.graph is not None:
-        journal = ctx.journal_builder.freeze(
-            graph_tags=ctx.graph.tags,
-            exclusions=ctx._exclusions or {},
-            stateful_dims=sd,
-            nondeterministic_dims=nd,
-            combinational_tags=ctx._combinational_tags or frozenset(),
-            elided_tags=ctx._elided_tags,
-            edge_bearing=frozenset(),
-            free=frozenset(),
-        )
-        intractable = _replace(intractable, journal=journal)
-    elif ctx.journal_builder is not None:
-        from types import MappingProxyType
-
-        partial = Journal(
-            tags=MappingProxyType({}),
-            notes=tuple(ctx.journal_builder._notes),
-        )
-        intractable = _replace(intractable, journal=partial)
-
-    return intractable
-
-
-def _for_iterations_intractable(
-    exc: ForIterationsBeyondCap, dimensions: int, journal: Journal | None = None
-) -> Intractable:
+def _for_iterations_intractable(exc: ForIterationsBeyondCap, dimensions: int) -> Intractable:
     """The refusal of a For the kernel stopped past ``PROVE_FOR_ITERATION_CAP``."""
     return Intractable(
         reason=(
             f"forloop({exc.count}) at {exc.where} can run {exc.iterations} times in one"
-            f" scan, more than the verifier runs ({PROVE_FOR_ITERATION_CAP})"
+            f" scan, more than the facts run ({PROVE_FOR_ITERATION_CAP})"
         ),
         dimensions=dimensions,
         estimated_space=0,
@@ -2322,45 +600,33 @@ def _for_iterations_intractable(
             " 2147483647 times; narrow it with min=/max=/choices=, or test the loop"
             " with run_for()",
         ],
-        journal=journal,
     )
 
 
-def _run_passes(ctx: _PassContext, passes: tuple[_PreBFSPass, ...]) -> Intractable | None:
-    _validate_pass_dag(passes)
-    for p in passes:
-        if not p.enabled:
-            continue
+#: The passes in the order they run.
+_PRIOR_PASSES: tuple[Callable[[_PassContext], None], ...] = (
+    _pass_build_graph,
+    _pass_classify_dimensions,
+    _pass_elide_scan_local_state,
+    _pass_detect_functional_dependencies,
+    _pass_detect_init_constants,
+    _pass_compile_kernel,
+    _pass_build_prior_key_specs,
+)
+
+
+def _run_prior_pipeline(ctx: _PassContext) -> _PriorFacts | Intractable:
+    """Run the passes that build how()'s facts, then read them."""
+    for run in _PRIOR_PASSES:
         t0 = time.monotonic()
         try:
-            p.run(ctx)
+            run(ctx)
         except ForIterationsBeyondCap as exc:
             ctx.intractable = _for_iterations_intractable(
                 exc, len(ctx.stateful_dims or {}) + len(ctx.nondeterministic_dims or {})
             )
-        logger.info("pass %s completed in %.2fs", p.name, time.monotonic() - t0)
+        name = getattr(run, "__name__", repr(run))
+        logger.info("pass %s completed in %.2fs", name, time.monotonic() - t0)
         if ctx.intractable is not None:
-            return _attach_partial_journal(ctx)
-    return None
-
-
-def _run_prior_pipeline(ctx: _PassContext) -> _PriorFacts | Intractable:
-    """Run the passes that decide how()'s prior fields, then read those fields."""
-    stopped = _run_passes(ctx, _passes_answering(_PRIOR_FIELDS))
-    return ctx.prior_facts() if stopped is None else stopped
-
-
-def _run_pre_bfs_pipeline(
-    ctx: _PassContext,
-    passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
-) -> _ExploreContext | Intractable:
-    stopped = _run_passes(ctx, passes)
-    if stopped is not None:
-        return stopped
-    if ctx._pending_infeasible_tags:
-        return _build_merged_intractable(ctx)
-    result = ctx.freeze()
-    cache = ctx.extract_cache()
-    if cache is not None:
-        result = _dc_replace(result, pipeline_cache=cache)
-    return result
+            return ctx.intractable
+    return ctx.prior_facts()

@@ -109,63 +109,6 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
     return lambda state: _eval(expr, state)
 
 
-def compile_for_dict(
-    expr: Expr,
-    tags: Mapping[str, Any] | None = None,
-) -> Callable[[dict[str, Any]], bool]:
-    """Compile a parsed expression into a predicate over a plain tag dict.
-
-    Unlike :func:`compile` (which targets :class:`SystemState`), this variant
-    evaluates against ``dict[str, Any]`` — the form used by ``runner.how()``
-    and the prover.
-
-    If *tags* is provided (mapping tag name → Tag object), string literal
-    comparison values are resolved through each tag's ``choices`` map so that
-    ``StateCurrent == HELD`` matches the underlying integer key.
-    """
-
-    def _eval(node: Expr, state: dict[str, Any]) -> bool:
-        if isinstance(node, Compare):
-            left = state.get(node.tag.name)
-            if node.op is None:
-                return bool(left)
-            assert node.right is not None
-            right: Any = node.right.value
-            if right == "":
-                right = "\x00"
-            if isinstance(right, str) and tags is not None:
-                resolved = _resolve_choice_label(tags, node.tag.name, right)
-                if resolved is not None:
-                    right = resolved
-            try:
-                if node.op == "==":
-                    return left == right
-                if node.op == "!=":
-                    return left != right
-                if left is None:
-                    return False
-                if node.op == "<":
-                    return left < right
-                if node.op == "<=":
-                    return left <= right
-                if node.op == ">":
-                    return left > right
-                if node.op == ">=":
-                    return left >= right
-            except TypeError:
-                return False
-            return False
-        if isinstance(node, Not):
-            return not bool(state.get(node.child.name))
-        if isinstance(node, And):
-            return all(_eval(child, state) for child in node.children)
-        if isinstance(node, Or):
-            return any(_eval(child, state) for child in node.children)
-        return False
-
-    return lambda state: _eval(expr, state)
-
-
 def to_conditions(
     expr: Expr,
     tags_by_name: Mapping[str, Any],
@@ -210,23 +153,6 @@ def to_conditions(
     if isinstance(result, tuple):
         return result
     return (result,)
-
-
-def referenced_tags(expr: Expr) -> frozenset[str]:
-    """Collect all tag names referenced in a parsed expression."""
-    tags: set[str] = set()
-    _walk_expr_tags(expr, tags)
-    return frozenset(tags)
-
-
-def _walk_expr_tags(node: Expr, out: set[str]) -> None:
-    if isinstance(node, Compare):
-        out.add(node.tag.name)
-    elif isinstance(node, Not):
-        out.add(node.child.name)
-    elif isinstance(node, (And, Or)):
-        for child in node.children:
-            _walk_expr_tags(child, out)
 
 
 def _resolve_choice_label(

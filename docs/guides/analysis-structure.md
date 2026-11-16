@@ -196,4 +196,3 @@ Feedback loops like seal-in latches are left as they are, so the seal-in tag app
 - [Diagnosis](analysis-diagnosis.md) — snapshot-based debugging with `why()` and `how()`
 - [Cause & Effect](analysis-causal.md) — causal chains over scan history
 - [Test Coverage](analysis-coverage.md) — cold rungs, stranded bits, pytest plugin
-- [Verification](verification.md) — prove properties hold, fault coverage, lock files

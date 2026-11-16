@@ -48,9 +48,9 @@ def produced_value_domains(
 ) -> dict[str, tuple[Any, ...]]:
     """Return finite domains justified solely by understood program producers.
 
-    The producer fixed point remains part of prover classification for now, but
+    The producer fixed point remains part of fact classification for now, but
     this stable analysis facade prevents consumers from depending on that private
-    module boundary. The local import avoids an analysis/prover import cycle.
+    module boundary. The local import avoids an analysis/prove import cycle.
     """
     from pyrung.core.analysis.prove.classify import collect_produced_value_domains
 

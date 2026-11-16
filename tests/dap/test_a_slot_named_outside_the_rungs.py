@@ -64,21 +64,19 @@ def _say(adapter: DAPAdapter, out: io.BytesIO, text: str) -> dict[str, Any]:
     return next(msg for msg in _drain(out) if msg.get("type") == "response")
 
 
-def test_prove_resolves_a_label_of_such_a_slot(tmp_path: Path) -> None:
+def test_how_resolves_a_label_of_such_a_slot(tmp_path: Path) -> None:
     adapter, out = _launched(tmp_path)
-    answer = _say(adapter, out, "prove always Rq2 != seven")
+    answer = _say(adapter, out, "how Rq2 == seven")
     assert answer["success"] is True, answer
-    assert "Counterexample" in answer["body"]["result"]
 
 
-def test_prove_resolves_a_label_of_such_a_slot_by_its_own_name(tmp_path: Path) -> None:
+def test_how_resolves_a_label_of_such_a_slot_by_its_own_name(tmp_path: Path) -> None:
     adapter, out = _launched(
         tmp_path,
         _NAMED_OUTSIDE_THE_RUNGS.replace("recipe.slot(2, ", 'recipe.slot(2, name="Recipe", '),
     )
-    answer = _say(adapter, out, "prove always Recipe != seven")
+    answer = _say(adapter, out, "how Recipe == seven")
     assert answer["success"] is True, answer
-    assert "Counterexample" in answer["body"]["result"]
 
 
 def test_how_knows_such_a_slot(tmp_path: Path) -> None:
@@ -88,13 +86,6 @@ def test_how_knows_such_a_slot(tmp_path: Path) -> None:
 
 
 _NOT_NAMED = _NAMED_OUTSIDE_THE_RUNGS.replace("alias = recipe[2]\n", "")
-
-
-def test_prove_resolves_a_label_of_a_slot_no_code_names(tmp_path: Path) -> None:
-    adapter, out = _launched(tmp_path, _NOT_NAMED)
-    answer = _say(adapter, out, "prove always Rq2 != seven")
-    assert answer["success"] is True, answer
-    assert "Counterexample" in answer["body"]["result"]
 
 
 def test_how_knows_a_slot_no_code_names(tmp_path: Path) -> None:

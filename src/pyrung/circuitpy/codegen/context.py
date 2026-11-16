@@ -7,9 +7,6 @@ import hashlib
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from decimal import Decimal
-from enum import Enum
-from fractions import Fraction
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import (
@@ -82,49 +79,6 @@ class StaticRangeLayout:
     tags: tuple[Tag, ...]
     addresses: tuple[int, ...]
     uses_backing_storage: bool
-
-
-def _name_for_the_lock(fn: Any) -> str:
-    """What a lock sees of a callable with no source: its names, and no address."""
-    kind = type(fn)
-    return f"{kind.__module__}.{kind.__qualname__} {getattr(fn, '__qualname__', '')}".rstrip()
-
-
-def _text_for_the_lock(value: Any, seen: dict[int, int] | None = None) -> str:
-    """What a lock sees of a constant: its value wherever text says it, the same in any process.
-
-    A kernel holds the constant itself, so this is read and never run, and it can say what
-    ``repr`` alone wouldn't: a set's items in order, a list held twice.  What has no text
-    gets its names.
-    """
-    kind = type(value)
-    if value is None or kind in (bool, int, float, complex, str, bytes, bytearray, range):
-        return repr(value)
-    if kind in (Decimal, Fraction):
-        return repr(value)
-    if isinstance(value, Enum):
-        return f"{kind.__qualname__}.{value.name}"
-    if isinstance(value, Tag):
-        return f"{kind.__qualname__}({value.name!r})"
-    if kind in (set, frozenset):
-        # Their items are hashable, so nothing in one can be seen elsewhere as a list.
-        items = ", ".join(sorted(_text_for_the_lock(item) for item in value))
-        return f"{kind.__name__}({{{items}}})"
-    if kind not in (list, tuple, dict):
-        return _name_for_the_lock(value)
-    seen = {} if seen is None else seen
-    if kind is tuple:
-        return "(" + "".join(f"{_text_for_the_lock(item, seen)}, " for item in value) + ")"
-    if id(value) in seen:
-        return f"<as {seen[id(value)]}>"
-    seen[id(value)] = len(seen)
-    if kind is list:
-        return "[" + ", ".join(_text_for_the_lock(item, seen) for item in value) + "]"
-    pairs = (
-        f"{_text_for_the_lock(key, seen)}: {_text_for_the_lock(item, seen)}"
-        for key, item in value.items()
-    )
-    return "{" + ", ".join(pairs) + "}"
 
 
 def _is_plain_literal(value: Any) -> bool:
@@ -215,9 +169,6 @@ class CodegenContext:
     blockless: bool = False
     kernel_runtime: bool = False
     proof_metadata: bool = False
-    # Prover-only: every timed tick becomes a choice (see render_kernel
-    # ``_BB_TICK_HELPER``) instead of advancing by the scan's dt.
-    abstract_timers: bool = False
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
@@ -230,7 +181,6 @@ class CodegenContext:
         force_rung_enable: bool = False,
         blockless: bool = False,
         proof_metadata: bool = False,
-        abstract_timers: bool = False,
     ) -> CodegenContext:
         """Create a hardware-free context for kernel compilation."""
         ctx = cls(
@@ -242,7 +192,6 @@ class CodegenContext:
             blockless=blockless,
             kernel_runtime=True,
             proof_metadata=proof_metadata,
-            abstract_timers=abstract_timers,
         )
         ctx.collect_program_references()
         ctx.resolve_block_aliases()
@@ -826,27 +775,18 @@ class CodegenContext:
         return symbol
 
     def function_constant_lines(self) -> list[str]:
-        """Each constant's binding: a code.py runs these, a kernel's lock reads them."""
-        return [
-            f"{symbol} = {repr(value) if _renders_faithfully(value) else _text_for_the_lock(value)}"
-            for symbol, value in self.function_constants.items()
-        ]
+        """Each constant's binding, which a code.py runs."""
+        return [f"{symbol} = {value!r}" for symbol, value in self.function_constants.items()]
 
     def _call_by_reference(self, fn: Any) -> str:
         """Bind *fn* itself to a symbol: a kernel lives in this process and calls the function.
 
-        Its text is kept for the lock only, so a lock sees an edit to the function, and one
-        with no text is known by name.  Whether that text is what *fn* runs doesn't matter
-        here: a kernel takes any callable.  Whether it may be called is for the kernel's
-        gate and the verifier's, ``calls_that_depend_on_more_than_their_inputs``.
+        A kernel takes any callable, so it needs no text of the function.  Whether it may be
+        called is for the kernel's gate, ``calls_that_depend_on_more_than_their_inputs``.
         """
         fn_name = getattr(fn, "__name__", type(fn).__name__)
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
-        try:
-            text = embedded_source(fn)
-        except (OSError, SyntaxError, TypeError):
-            text = ""
-        self.function_sources[symbol] = text or f"# {_name_for_the_lock(fn)}"
+        self.function_sources[symbol] = ""
         self.function_objects[symbol] = fn
         self.function_symbols_by_obj[id(fn)] = symbol
         return symbol

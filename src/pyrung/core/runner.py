@@ -679,8 +679,8 @@ def _hands_over_nothing_it_could_keep(value: Any) -> bool:
 def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any, str]]:
     """Each ``run_function`` whose answer may not follow from its inputs, and why.
 
-    The one gate on calling a function anywhere but its own scan: a kernel's undo calls it
-    again, and the verifier calls it to explore, for inputs no scan may ever give it.
+    This is the one gate on calling a function outside its own scan. A kernel's undo calls
+    it again, with inputs no scan may ever give it.
     """
     from pyrung.core.instruction.control import (
         EnabledFunctionCallInstruction,
@@ -897,6 +897,43 @@ def _avoid_condition(spec: Any, expr: Any) -> Any | None:
     )
 
 
+def _compile_avoid_member(
+    spec: Any,
+) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None, Any | None]:
+    """Compile one avoid member into ``(predicate, tag names, expression)``.
+
+    A plain callable has no expression and names no tags, so both are ``None``.
+    A condition lowers to an expression, and the predicate reads an undecided
+    expression as violated.
+    """
+    from pyrung.core.condition import Condition, _as_condition, _normalize_and_condition
+    from pyrung.core.tag import Tag
+
+    if callable(spec) and not isinstance(spec, (Tag, Condition)):
+        user_predicate = spec
+
+        def _call(state: dict[str, Any]) -> bool:
+            return bool(user_predicate(dict(state)))
+
+        return _call, None, None
+
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state, _referenced_tags
+    from pyrung.core.analysis.simplified import _condition_to_expr
+
+    normalized = _normalize_and_condition(
+        spec,
+        coerce=_as_condition,
+        empty_error="avoid condition cannot be empty",
+        group_empty_error="avoid condition group cannot be empty",
+    )
+    expr = _condition_to_expr(normalized)
+
+    def _predicate(state: dict[str, Any]) -> bool:
+        return _eval_expr_from_state(expr, state) is not False
+
+    return _predicate, sorted(_referenced_tags(expr)), expr
+
+
 def _compile_avoid(spec: Any) -> Any:
     """Compile ``avoid=`` into a :class:`_AvoidPredicate` (a **union**).
 
@@ -911,12 +948,11 @@ def _compile_avoid(spec: Any) -> Any:
     if spec is None:
         return None
     from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
-    from pyrung.core.analysis.prove import _compile_property
 
     conds = list(spec) if isinstance(spec, (tuple, list)) else [spec]
     members: list[Any] = []
     for cond in conds:
-        pred, tags, expr = _compile_property(cond)
+        pred, tags, expr = _compile_avoid_member(cond)
         if _avoid_expr_has_edge(expr):
             raise ValueError(
                 "avoid= does not support rise()/fall() transition conditions; "

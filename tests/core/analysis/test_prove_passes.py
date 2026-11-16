@@ -1,9 +1,6 @@
-"""Regression coverage for prove pass manifests and toggles."""
+"""Regression coverage for the passes that build how()'s static facts."""
 
 from __future__ import annotations
-
-from collections.abc import Callable
-from dataclasses import replace
 
 import pytest
 
@@ -11,72 +8,29 @@ from pyrung.core import (
     Block,
     Bool,
     Int,
-    Or,
     Program,
     Rung,
     TagType,
-    Timer,
     call,
     copy,
-    fill,
-    latch,
     math,
-    on_delay,
     out,
-    reset,
     return_early,
-    rise,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import (
-    Counterexample,
     Intractable,
-    Proven,
-    _bfs_explore,
-    _build_explore_context,
     _build_prior_facts,
-    always,
-    never,
 )
-from pyrung.core.analysis.prove import passes as passes_module
 from pyrung.core.analysis.prove.elision import (
     _elide_scan_local_stateful_dims,
 )
-from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.passes import (
-    _DEFAULT_PRE_BFS_PASSES,
-    _PRIOR_FIELDS,
-    _BFSConfig,
     _pass_build_graph,
     _pass_classify_dimensions,
-    _pass_diagnose_unwritten_tags,
     _PassContext,
-    _passes_answering,
-    _PreBFSPass,
-    _run_pre_bfs_pipeline,
-    _validate_pass_dag,
 )
-
-
-def _make_pass_context(
-    program: Program,
-    *,
-    scope: list[str] | None = None,
-    project: tuple[str, ...] | None = None,
-    progress_info: Callable[[str], None] | None = None,
-    domains_only: bool = False,
-) -> _PassContext:
-    return _PassContext(
-        program=program,
-        scope=scope,
-        project=project,
-        extra_exprs=None,
-        dt=0.010,
-        compiled=None,
-        progress_info=progress_info,
-        domains_only=domains_only,
-    )
 
 
 def _discovery_program() -> Program:
@@ -97,228 +51,12 @@ def _discovery_program() -> Program:
     return logic
 
 
-def _settle_pending_program() -> Program:
-    cmd = Bool("Cmd", external=True)
-    fb = Bool("Fb", external=True)
-    fault_done = Timer.clone("Fault")
-    alarm = Bool("Alarm")
-
-    with Program(strict=False) as logic:
-        with Rung(cmd, ~fb):
-            on_delay(fault_done, 3000)
-        with Rung(fault_done.Done):
-            latch(alarm)
-
-    return logic
-
-
-def _literal_copy_program() -> Program:
-    trig_a = Bool("TrigA", external=True)
-    trig_b = Bool("TrigB", external=True)
-    dest = Int("Dest")
-    flag = Bool("Flag")
-
-    with Program(strict=False) as logic:
-        with Rung(trig_a):
-            copy(5, dest)
-        with Rung(trig_b):
-            copy(10, dest)
-        with Rung(dest == 5):
-            out(flag)
-
-    return logic
-
-
-def _literal_fill_program() -> Program:
-    enable = Bool("Enable", external=True)
-    ds = Block("DS", TagType.INT, 1, 3)
-    flag = Bool("Flag")
-
-    with Program(strict=False) as logic:
-        with Rung(enable):
-            fill(7, ds.select(1, 3))
-        with Rung(ds[1] == 7):
-            out(flag)
-
-    return logic
-
-
-def _edge_masked_rise_program() -> Program:
-    trigger = Bool("Trigger", external=True)
-    armed = Bool("Armed")
-    alarm = Bool("Alarm")
-
-    with Program(strict=False) as logic:
-        with Rung(~armed, rise(trigger)):
-            latch(armed)
-        with Rung(armed):
-            out(alarm)
-
-    return logic
-
-
-def _exclusive_input_encoder_program() -> Program:
-    cmd_a = Bool("CmdA", external=True)
-    cmd_b = Bool("CmdB", external=True)
-    cmd_c = Bool("CmdC", external=True)
-    cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B", 3: "C"})
-    flag = Bool("Flag")
-
-    with Program(strict=False) as logic:
-        with Rung():
-            copy(0, cmd)
-        with Rung(cmd_a):
-            copy(1, cmd)
-        with Rung(cmd_b):
-            copy(2, cmd)
-        with Rung(cmd_c):
-            copy(3, cmd)
-        with Rung(cmd == 1):
-            out(flag)
-
-    return logic
-
-
-def _nonexclusive_input_program() -> Program:
-    cmd_a = Bool("CmdA", external=True)
-    cmd_b = Bool("CmdB", external=True)
-    cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B"})
-    mirror = Bool("Mirror")
-    flag = Bool("Flag")
-
-    with Program(strict=False) as logic:
-        with Rung():
-            copy(0, cmd)
-        with Rung(cmd_a):
-            copy(1, cmd)
-        with Rung(cmd_b):
-            copy(2, cmd)
-        with Rung(cmd_a):
-            out(mirror)
-        with Rung(cmd == 1):
-            out(flag)
-
-    return logic
-
-
-class TestPassManifest:
-    def test_default_pre_bfs_passes_manifest(self) -> None:
-        assert [p.name for p in _DEFAULT_PRE_BFS_PASSES] == [
-            "build_graph",
-            "classify_dimensions",
-            "validate_declared_bounds",
-            "apply_split_at",
-            "diagnose_unwritten_tags",
-            "elide_scan_local_state",
-            "detect_functional_dependencies",
-            "detect_init_constants",
-            "compile_kernel",
-            "build_timer_model",
-            "build_prior_key_specs",
-            "collect_edge_exprs",
-            "discover_memory_keys",
-        ]
-
-    def test_bfs_config_manifest(self) -> None:
-        assert _BFSConfig().active_optimizations == (
-            "live_input_pruning",
-            "exclusive_input_grouping",
-            "edge_compression",
-            "free_input_factoring",
-        )
-
-    def test_default_passes_have_valid_dag(self) -> None:
-        _validate_pass_dag(_DEFAULT_PRE_BFS_PASSES)
-
-    def test_reordered_passes_fail_dag_validation(self) -> None:
-        swapped = (
-            (
-                _DEFAULT_PRE_BFS_PASSES[1],  # classify_dimensions (requires graph)
-                _DEFAULT_PRE_BFS_PASSES[0],  # build_graph (provides graph)
-            )
-            + _DEFAULT_PRE_BFS_PASSES[2:]
-        )
-        with pytest.raises(ValueError, match="requires.*graph"):
-            _validate_pass_dag(swapped)
-
-    def test_disabled_provider_detected(self) -> None:
-        passes = tuple(
-            replace(p, enabled=False) if p.name == "build_graph" else p
-            for p in _DEFAULT_PRE_BFS_PASSES
-        )
-        with pytest.raises(ValueError, match="requires.*graph"):
-            _validate_pass_dag(passes)
-
-
-class TestHowPrior:
-    """how() runs only the passes that decide the fields it reads."""
-
-    def test_prior_fields_are_what_how_reads(self) -> None:
-        assert _PRIOR_FIELDS == {
-            "nondeterministic_dims",
-            "stateful_dims",
-            "stateful_names",
-            "elided_tags",
-            "functional_dep_projections",
-            "stepping_tags",
-            "state_key_done_specs",
-            "threshold_vector_specs",
-        }
-
-    def test_prior_runs_only_the_passes_that_decide_its_fields(self) -> None:
-        assert [p.name for p in _passes_answering(_PRIOR_FIELDS)] == [
-            "build_graph",
-            "classify_dimensions",
-            "apply_split_at",
-            "elide_scan_local_state",
-            "detect_functional_dependencies",
-            "detect_init_constants",
-            "compile_kernel",
-            "build_prior_key_specs",
-        ]
-
-    def test_a_pass_added_for_the_search_costs_the_prior_nothing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def fail(_ctx: _PassContext) -> None:
-            raise AssertionError("a search-only pass ran for how()'s prior")
-
-        search_only = _PreBFSPass(
-            "search_only", "", fail, requires=frozenset({"graph", "classification"})
-        )
-        monkeypatch.setattr(
-            passes_module, "_DEFAULT_PRE_BFS_PASSES", (*_DEFAULT_PRE_BFS_PASSES, search_only)
-        )
-        monkeypatch.setattr(_PassContext, "freeze", fail)
-        prior = _build_prior_facts(_discovery_program())
-        assert not isinstance(prior, Intractable)
-        assert prior.nondeterministic_dims == {"Step": (0, 1, 2), "ThresholdIn": (0, 1)}
-
-
-class TestDiagnoseUnwrittenTagsProgressInfo:
-    def test_unwritten_tags_emitted_via_progress_info(self) -> None:
-        threshold = Int("Threshold")
-        alarm = Bool("Alarm")
-        value = Bool("Value", external=True)
-        with Program(strict=False) as logic:
-            with Rung(value, threshold > 0):
-                out(alarm)
-        messages: list[str] = []
-        ctx = _make_pass_context(logic, progress_info=messages.append)
-        _pass_build_graph(ctx)
-        ctx.stateful_dims = {}
-        ctx.nondeterministic_dims = {"Value": (False, True)}
-        _pass_diagnose_unwritten_tags(ctx)
-        assert any("Threshold" in m for m in messages)
-
-
 class TestPassReuse:
     def test_classification_threads_atom_index_through_absorption_helpers(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # How()'s domain prior absorbs; the search does not.
-        ctx = _make_pass_context(_discovery_program(), domains_only=True)
+        ctx = _PassContext(program=_discovery_program())
         _pass_build_graph(ctx)
 
         def fail(*_args: object, **_kwargs: object) -> None:
@@ -331,82 +69,6 @@ class TestPassReuse:
         assert ctx.stateful_dims is not None
 
 
-class TestPassDisabling:
-    def test_disable_pilot_sweep_still_allows_structural_discovery(self) -> None:
-        logic = _discovery_program()
-
-        default_result = _run_pre_bfs_pipeline(_make_pass_context(logic))
-        assert not isinstance(default_result, Intractable)
-
-        disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
-            for p in _DEFAULT_PRE_BFS_PASSES
-        )
-        disabled_result = _run_pre_bfs_pipeline(
-            _make_pass_context(logic),
-            passes=disabled_passes,
-        )
-
-        assert not isinstance(disabled_result, Intractable)
-
-    def test_disable_pilot_sweep_still_allows_literal_copy_domain_mining(self) -> None:
-        disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
-            for p in _DEFAULT_PRE_BFS_PASSES
-        )
-
-        result = _run_pre_bfs_pipeline(
-            _make_pass_context(_literal_copy_program()),
-            passes=disabled_passes,
-        )
-
-        assert not isinstance(result, Intractable)
-
-    def test_disable_pilot_sweep_still_allows_literal_fill_domain_mining(self) -> None:
-        disabled_passes = tuple(
-            replace(p, enabled=False) if p.name == "validate_declared_bounds" else p
-            for p in _DEFAULT_PRE_BFS_PASSES
-        )
-
-        result = _run_pre_bfs_pipeline(
-            _make_pass_context(_literal_fill_program()),
-            passes=disabled_passes,
-        )
-
-        assert not isinstance(result, Intractable)
-
-    def test_settled_judges_only_states_with_no_open_timer(self) -> None:
-        # While the fault timer runs, Cmd and ~Fb hold without the alarm; a
-        # timer whose Done may still flip is no settled state.
-        context = _build_explore_context(_settle_pending_program())
-        assert not isinstance(context, Intractable)
-        predicate = lambda s: (not s["Cmd"]) or bool(s["Fb"]) or bool(s["Alarm"])  # noqa: E731
-
-        unsettled = _bfs_explore(context, predicates=[predicate])[0]
-        assert isinstance(unsettled, Counterexample)
-
-        result = _bfs_explore(context, predicates=[predicate], settled=True)[0]
-        assert isinstance(result, Proven)
-
-    def test_disable_edge_compression_still_proves_and_explores_more(self) -> None:
-        context = _build_explore_context(_edge_masked_rise_program())
-        assert not isinstance(context, Intractable)
-
-        default_result = _bfs_explore(
-            context,
-            predicates=[lambda _s: True],
-        )[0]
-        no_compression_result = _bfs_explore(
-            context,
-            predicates=[lambda _s: True],
-            bfs_config=_BFSConfig(edge_compression=False),
-        )[0]
-
-        assert isinstance(default_result, Proven)
-        assert isinstance(no_compression_result, Proven)
-        assert no_compression_result.states_explored >= default_result.states_explored
-
-
 class TestIndividualPasses:
     def test_pass_build_graph_populates_context(self) -> None:
         sensor = Bool("Sensor", external=True)
@@ -416,55 +78,12 @@ class TestIndividualPasses:
             with Rung(sensor):
                 out(alarm)
 
-        ctx = _make_pass_context(logic)
+        ctx = _PassContext(program=logic)
         _pass_build_graph(ctx)
 
         assert ctx.graph is not None
         assert ctx.all_exprs is not None
         assert ctx.all_exprs
-
-    def test_detects_exclusive_input_encoder_groups(self) -> None:
-        context = _build_explore_context(
-            _exclusive_input_encoder_program(),
-            project=("Flag",),
-        )
-        assert not isinstance(context, Intractable)
-        assert len(context.exclusive_input_groups) == 1
-        group = context.exclusive_input_groups[0]
-        assert group.target_name == "Cmd"
-        assert set(group.members) == {"CmdA", "CmdB", "CmdC"}
-
-    def test_skips_encoder_group_when_raw_input_is_observed_elsewhere(self) -> None:
-        context = _build_explore_context(
-            _nonexclusive_input_program(),
-            project=("Flag",),
-        )
-        assert not isinstance(context, Intractable)
-        assert context.exclusive_input_groups == ()
-
-    def test_specialized_assignments_collapse_one_hot_encoder_family(self) -> None:
-        context = _build_explore_context(
-            _exclusive_input_encoder_program(),
-            project=("Flag",),
-        )
-        assert not isinstance(context, Intractable)
-
-        assignments = list(
-            _iter_input_assignments(
-                frozenset({"CmdA", "CmdB", "CmdC"}),
-                context.nondeterministic_dims,
-                context.exclusive_input_groups,
-                context.exclusive_input_group_by_member,
-            )
-        )
-
-        assert len(assignments) == 4
-        assert {tuple(sorted(a)) for a in assignments} == {
-            (("CmdA", False), ("CmdB", False), ("CmdC", False)),
-            (("CmdA", True), ("CmdB", False), ("CmdC", False)),
-            (("CmdA", False), ("CmdB", True), ("CmdC", False)),
-            (("CmdA", False), ("CmdB", False), ("CmdC", True)),
-        }
 
 
 def _elide_stateful_dims(
@@ -472,7 +91,7 @@ def _elide_stateful_dims(
     stateful_dims: dict[str, tuple[object, ...]],
     nondeterministic_dims: dict[str, tuple[object, ...]],
 ) -> dict[str, tuple[object, ...]]:
-    reduced, _, _, _ = _elide_scan_local_stateful_dims(
+    reduced, _ = _elide_scan_local_stateful_dims(
         program,
         build_program_graph(program),
         stateful_dims,
@@ -482,28 +101,6 @@ def _elide_stateful_dims(
 
 
 class TestScanLocalStateElision:
-    def test_elision_progress_reports_candidate_checks(self) -> None:
-        tmp = Bool("Tmp")
-        seen = Bool("Seen")
-        messages: list[str] = []
-
-        with Program(strict=False) as logic:
-            with Rung():
-                reset(tmp)
-            with Rung(tmp):
-                out(seen)
-
-        reduced, _, _, _ = _elide_scan_local_stateful_dims(
-            logic,
-            build_program_graph(logic),
-            {"Tmp": (False, True), "Seen": (False, True)},
-            {},
-            progress=messages.append,
-        )
-
-        assert reduced == {}
-        assert len(messages) > 0
-
     def test_elides_indirect_pointer_scratch_from_init_backed_table(self) -> None:
         init_done = Bool("InitDone")
         selector = Int("Selector", external=True, choices={1: "A", 2: "B"})
@@ -640,56 +237,11 @@ class TestScanLocalStateElision:
 
         assert reduced == {"Tmp": (0, 1), "Stored": (0, 1)}
 
-    def test_packml_bench_drops_pointer_scratch_tags_from_state_key(self) -> None:
-        from examples.packml_bench import logic as packml_logic
 
-        context = _build_explore_context(packml_logic, project=("StateCurrent",))
-        assert not isinstance(context, Intractable)
-
-        for name in (
-            "CmdValidIdx",
-            "LastHistorianId",
-            "ModeConfigIdx",
-            "StateMaskIdx",
-            "StateJumpIdx",
-            "StateJumpTarget",
-            "StateEnableYes",
-        ):
-            assert name not in context.stateful_dims
-
-        for name in ("StateCurrent", "StateRequested"):
-            assert name in context.stateful_dims
-
-    def test_projected_scratch_observer_retained_for_lock(self) -> None:
-        """Subroutine-scratch observer elided for always, retained when projected."""
-        dest = Int("Dest", lock=True)
-        src = Int("Src", external=True, choices={0: "A", 1: "B"})
-        flag = Bool("Flag")
-
-        @subroutine("work", strict=False)
-        def work():
-            with Rung():
-                copy(src, dest)
-
-        with Program(strict=False) as logic:
-            with Rung(src == 1):
-                call(work)
-                out(flag)
-
-        prove_ctx = _build_explore_context(logic, project=("Flag",))
-        assert not isinstance(prove_ctx, Intractable)
-        assert "Dest" not in prove_ctx.stateful_dims
-
-        lock_ctx = _build_explore_context(logic, project=("Dest", "Flag"))
-        assert not isinstance(lock_ctx, Intractable)
-        assert "Dest" in lock_ctx.stateful_dims
-
-
-class TestDomainsOnlyFunctionalDepAdvice:
-    """``domains_only`` admits slice-elided / ordering-violating scratch as
-    advice-grade functional-dep projections (the jump-table pointer idiom:
-    ``math(Req + 2, Scratch); copy(table[Scratch], Dest)``) without
-    touching dims; default-opt behavior is unchanged."""
+class TestFunctionalDepAdvice:
+    """Slice-elided or ordering-violating scratch is an advice-grade
+    functional-dep projection that leaves the dims alone.  The jump-table
+    pointer idiom is ``math(Req + 2, Scratch); copy(table[Scratch], Dest)``."""
 
     @staticmethod
     def _jump_pointer_program() -> Program:
@@ -711,12 +263,7 @@ class TestDomainsOnlyFunctionalDepAdvice:
 
         return logic
 
-    def test_default_context_has_no_advice_projection(self) -> None:
-        context = _build_explore_context(self._jump_pointer_program())
-        assert not isinstance(context, Intractable)
-        assert "Scratch" not in context.functional_dep_projections
-
-    def test_domains_only_records_advice_without_touching_dims(self) -> None:
+    def test_records_advice_without_touching_dims(self) -> None:
         context = _build_prior_facts(self._jump_pointer_program())
         assert not isinstance(context, Intractable)
         assert context.functional_dep_projections.get("Scratch") == ("Req", 1, 2)
@@ -724,259 +271,3 @@ class TestDomainsOnlyFunctionalDepAdvice:
         # and never enters (or re-enters) the state dims.
         assert "Scratch" not in context.stateful_dims
         assert context.elided_tags.get("Scratch") != "functional_dep"
-
-
-class TestDiagnoseUnwrittenTags:
-    def test_fires_for_unwritten_tag(self) -> None:
-        threshold = Int("Threshold")
-        value = Int("Value", external=True, choices={0: "Lo", 1: "Hi"})
-        alarm = Bool("Alarm")
-
-        with Program(strict=False) as logic:
-            with Rung(value > threshold):
-                out(alarm)
-
-        messages: list[str] = []
-        ctx = _make_pass_context(logic, progress_info=messages.append)
-        _pass_build_graph(ctx)
-        ctx.stateful_dims = {}
-        ctx.nondeterministic_dims = {"Value": (0, 1)}
-
-        _pass_diagnose_unwritten_tags(ctx)
-
-        assert any("never written" in m and "Threshold" in m for m in messages)
-        assert any("external=True" in m for m in messages)
-        assert any("readonly=True" in m for m in messages)
-
-    def test_silent_when_all_tags_written(self) -> None:
-        sensor = Bool("Sensor", external=True)
-        alarm = Bool("Alarm")
-
-        with Program(strict=False) as logic:
-            with Rung(sensor):
-                out(alarm)
-
-        messages: list[str] = []
-        ctx = _make_pass_context(logic, progress_info=messages.append)
-        _pass_build_graph(ctx)
-        ctx.stateful_dims = {"Alarm": (False, True)}
-        ctx.nondeterministic_dims = {"Sensor": (False, True)}
-
-        _pass_diagnose_unwritten_tags(ctx)
-
-        assert not any("never written" in m for m in messages)
-
-    def test_excludes_external_and_readonly_tags(self) -> None:
-        ext_input = Int("ExtInput", external=True, choices={0: "Off", 1: "On"})
-        config = Int("Config", readonly=True)
-        alarm = Bool("Alarm")
-
-        with Program(strict=False) as logic:
-            with Rung(ext_input > config):
-                out(alarm)
-
-        messages: list[str] = []
-        ctx = _make_pass_context(logic, progress_info=messages.append)
-        _pass_build_graph(ctx)
-        ctx.stateful_dims = {}
-        ctx.nondeterministic_dims = {"ExtInput": (0, 1)}
-
-        _pass_diagnose_unwritten_tags(ctx)
-
-        assert not any("never written" in m for m in messages)
-
-    def test_diagnostic_appears_in_full_pipeline(self) -> None:
-        threshold = Int("Threshold")
-        value = Bool("Value", external=True)
-        alarm = Bool("Alarm")
-
-        with Program(strict=False) as logic:
-            with Rung(value, threshold > 0):
-                out(alarm)
-
-        messages: list[str] = []
-        ctx = _make_pass_context(logic)
-        ctx.progress_info = messages.append
-
-        _run_pre_bfs_pipeline(ctx)
-
-        assert any("never written" in m and "Threshold" in m for m in messages)
-
-
-class TestJournal:
-    def test_explain_false_returns_none(self):
-        button = Bool("Button", external=True)
-        light = Bool("Light")
-        with Program() as logic:
-            with Rung(button):
-                out(light)
-
-        result = never(logic, ~light, button)
-        assert isinstance(result, Proven)
-        assert result.journal is None
-
-    def test_explain_classifications(self):
-        button = Bool("Button", external=True)
-        light = Bool("Light")
-        with Program() as logic:
-            with Rung(button):
-                out(light)
-
-        result = never(logic, ~light, button, journal=True)
-        assert isinstance(result, Proven)
-        expl = result.journal
-        assert expl is not None
-        button_entry = expl["Button"]
-        assert button_entry.outcome.startswith("nondeterministic")
-        assert any(
-            d.kind == "classification" and d.outcome == "nondeterministic"
-            for d in button_entry.decisions
-        )
-
-    def test_explain_domain_sources_bool(self):
-        button = Bool("Button", external=True)
-        light = Bool("Light")
-        with Program() as logic:
-            with Rung(button):
-                out(light)
-
-        result = never(logic, ~light, button, journal=True)
-        assert isinstance(result, Proven)
-        expl = result.journal
-        assert expl is not None
-        assert expl["Button"].domain == (False, True)
-        assert expl["Button"].domain_source == "bool"
-
-    def test_explain_domain_sources_choices(self):
-        mode = Int("Mode", external=True, choices={0: "Off", 1: "Auto", 2: "Manual"})
-        out_tag = Bool("Out")
-        with Program() as logic:
-            with Rung(mode == 1):
-                out(out_tag)
-
-        result = never(logic, out_tag, mode != 1, journal=True)
-        assert isinstance(result, Proven)
-        expl = result.journal
-        assert expl is not None
-        assert expl["Mode"].domain_source == "choices"
-
-    def test_explain_exclusion_readonly(self):
-        Int("Version", readonly=True, default=1)
-        out_tag = Bool("Out")
-        button = Bool("Button", external=True)
-        with Program() as logic:
-            with Rung(button):
-                out(out_tag)
-
-        result = never(logic, ~out_tag, button, journal=True)
-        assert isinstance(result, Proven)
-        expl = result.journal
-        assert expl is not None
-        if "Version" in expl:
-            assert expl["Version"].outcome == "excluded:readonly"
-
-    def test_explain_elision(self):
-        Bool("Inp", external=True)
-        tmp = Bool("Tmp")
-        seen = Bool("Seen")
-        with Program() as logic:
-            with Rung():
-                reset(tmp)
-            with Rung(tmp):
-                out(seen)
-
-        context = _build_explore_context(logic, journal=True)
-        assert not isinstance(context, Intractable)
-        expl = context.journal
-        assert expl is not None
-        if "Tmp" in expl:
-            entry = expl["Tmp"]
-            has_elision = any(d.kind == "elision" for d in entry.decisions)
-            if has_elision:
-                assert entry.outcome.startswith("elided:")
-
-    def test_explain_redundant_absorption(self):
-        inp = Bool("Inp", external=True)
-        t = Timer.clone("T")
-        out_tag = Bool("Out")
-        with Program() as logic:
-            with Rung(inp):
-                on_delay(t, 100)
-            with Rung(t.Done):
-                out(out_tag)
-
-        result = never(logic, out_tag, ~t.Done, journal=True)
-        assert isinstance(result, Proven)
-        expl = result.journal
-        assert expl is not None
-        acc_entry = expl.tags.get("T.Acc")
-        if acc_entry is not None:
-            has_absorption = any(d.kind in ("absorption", "exclusion") for d in acc_entry.decisions)
-            assert has_absorption
-
-    def test_explain_threshold_absorption_blocked(self):
-        inp = Bool("Inp", external=True)
-        t = Timer.clone("T")
-        out_tag = Bool("Out")
-        with Program() as logic:
-            with Rung(inp):
-                on_delay(t, 100)
-            with Rung(t.Done):
-                out(out_tag)
-
-        context = _build_explore_context(logic, journal=True)
-        if isinstance(context, Intractable):
-            return
-        expl = context.journal
-        assert expl is not None
-        for entry in expl:
-            blocked = [d for d in entry.decisions if d.kind == "absorption_blocked"]
-            for d in blocked:
-                assert d.outcome == "blocked"
-                assert d.reason
-
-    def test_explain_input_partition(self):
-        a = Bool("A", external=True)
-        b = Bool("B", external=True)
-        out_tag = Bool("Out")
-        with Program() as logic:
-            with Rung(rise(a)):
-                out(out_tag)
-            with Rung(b):
-                pass
-
-        result = always(logic, Or(out_tag, ~out_tag), journal=True)
-        assert isinstance(result, Proven)
-        expl = result.journal
-        assert expl is not None
-        a_entry = expl["A"]
-        has_partition = any(d.kind == "input_partition" for d in a_entry.decisions)
-        assert has_partition
-
-    def test_explain_skip_optimizations(self):
-        inp = Bool("Inp", external=True)
-        out_tag = Bool("Out")
-        with Program() as logic:
-            with Rung(inp):
-                out(out_tag)
-
-        result = never(logic, ~out_tag, inp, journal=True, _skip_optimizations=True)
-        assert isinstance(result, Proven)
-        expl = result.journal
-        assert expl is not None
-        assert any("disabled" in note for note in expl.notes)
-
-    def test_explain_notes_depth_truncation(self):
-        inp = Bool("Inp", external=True)
-        out_tag = Bool("Out")
-        t = Timer.clone("T")
-        with Program() as logic:
-            with Rung(inp):
-                on_delay(t, 1000)
-            with Rung(t.Done):
-                out(out_tag)
-
-        result = never(logic, out_tag, ~t.Done, depth_budget=2, journal=True)
-        if isinstance(result, Proven) and result.journal is not None:
-            if result.journal.notes:
-                assert any("depth_budget" in note for note in result.journal.notes)

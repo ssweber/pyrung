@@ -338,7 +338,7 @@ def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, v
 
 
 def test_only_a_real_forloop_count_declares_sc43():
-    """The PDG and prover see SC43 written only by a For that can set it."""
+    """The PDG sees SC43 written only by a For that can set it."""
     from pyrung.core.instruction.control import ForLoopInstruction, for_loop_iterations
 
     assert for_loop_iterations(INF) == 0
@@ -486,7 +486,7 @@ def test_a_real_that_overflows_in_the_loop_matches_stepping(start):
     assert folded.tags[SC43.name] is stepped.tags[SC43.name] is True
 
 
-def _prover_programs():
+def _inf_programs():
     go = Bool("Go", external=True)
     x = Real("X")
     n = Real("N")
@@ -515,15 +515,11 @@ def _prover_programs():
 
 
 @pytest.mark.parametrize("case", range(3), ids=["overflow", "nan", "into_int"])
-def test_prover_does_not_prove_away_an_inf_result(case):
-    """The prover runs on a program whose REAL overflows to Inf (or NaN), and
-    never calls Proven a coil the concrete scan turns on."""
-    from pyrung.core.analysis.prove import Proven, never
-
-    program, coil = _prover_programs()[case]
+def test_a_coil_on_an_inf_result_turns_on(case):
+    """A REAL that overflows to Inf (or NaN) still drives the coil that reads it."""
+    program, coil = _inf_programs()[case]
     plc = PLC(program)
     plc.patch({"Go": True})
     plc.step()
     plc.step()
     assert plc.current_state.tags[coil.name] is True
-    assert not isinstance(never(program, coil), Proven)

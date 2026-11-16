@@ -31,7 +31,6 @@ from pyrung.core import (
 from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.theory_orientation import _counterfactual_boundary
-from pyrung.core.analysis.prove import Counterexample, Intractable, Proven, always
 from pyrung.core.analysis.return_guards import return_early_guard_exprs
 from pyrung.core.context import RungId
 from pyrung.core.intrascan_counterfactual import (
@@ -121,7 +120,7 @@ def test_loop_count_tag_gates_the_body():
     assert not graph.unconditional_write_before_read("Y")
 
 
-def test_prover_sees_a_loop_coil_hold_while_the_loop_rung_is_false():
+def test_a_loop_coil_holds_while_the_loop_rung_is_false():
     lamp = Bool("Lamp")
     with Program(strict=False) as logic:
         with Rung(Enable):
@@ -130,10 +129,15 @@ def test_prover_sees_a_loop_coil_hold_while_the_loop_rung_is_false():
         with Rung(~Enable, Y):
             out(lamp)
 
-    assert isinstance(always(logic, ~lamp), Counterexample)
+    plc = PLC(logic, dt=0.01)
+    plc.patch({"Enable": True})
+    plc.step()
+    plc.patch({"Enable": False})
+    plc.step()
+    assert plc.current_state.tags["Lamp"] is True
 
 
-def test_prover_sees_a_zero_count_skip_the_write():
+def test_a_zero_count_skips_the_write():
     count = Int("Count", external=True, min=0, max=1)
     value = Bool("Value", external=True)
     kept = Bool("Kept")
@@ -145,7 +149,12 @@ def test_prover_sees_a_zero_count_skip_the_write():
         with Rung(kept, ~value):
             out(stale)
 
-    assert isinstance(always(logic, ~stale), Counterexample)
+    plc = PLC(logic, dt=0.01)
+    plc.patch({"Count": 1, "Value": True})
+    plc.step()
+    plc.patch({"Count": 0, "Value": False})
+    plc.step()
+    assert plc.current_state.tags["Stale"] is True
 
 
 def test_stuck_bits_reports_a_loop_coil_whose_loop_rung_can_be_false():
@@ -206,20 +215,6 @@ def test_return_inside_body_rung_guards_later_rungs():
     assert {"Enable", "Gate"} <= node.guard_reads
 
 
-def test_prover_names_body_rungs_as_intractable():
-    with Program() as logic:
-        with Rung(Enable):
-            with forloop(3):
-                with Rung(Gate):
-                    math(A + 1, A)
-        with Rung(A > 5):
-            out(Y)
-
-    result = always(logic, ~Y)
-    assert isinstance(result, Intractable)
-    assert "forloop body rung" in result.reason
-
-
 def _bare_loop_counter(preset: int) -> Program:
     with Program() as logic:
         with Rung(Enable):
@@ -228,13 +223,15 @@ def _bare_loop_counter(preset: int) -> Program:
     return logic
 
 
-def test_prover_still_models_a_bare_loop():
+@pytest.mark.parametrize(("preset", "done"), [(1, True), (2, False)])
+def test_a_bare_loop_counter_counts_once_ever(preset: int, done: bool):
     # A bare body counter's input is always on, and a false loop rung skips
-    # the body: the counter never sees its input fall, so it counts once ever.
-    result = always(_bare_loop_counter(1), ~Ctr.Done, max_states=1000)
-    assert isinstance(result, Counterexample)
-    assert sum(step.scans for step in result.trace) == 1
-    assert isinstance(always(_bare_loop_counter(2), ~Ctr.Done, max_states=1000), Proven)
+    # the body.  The counter never sees its input fall, so it counts once.
+    plc = PLC(_bare_loop_counter(preset), dt=0.01)
+    for enable in (True, False, True, False, True):
+        plc.patch({"Enable": enable})
+        plc.step()
+    assert plc.current_state.tags["Ctr_Done"] is done
 
 
 def test_how_keeps_its_prover_context_with_body_rungs():

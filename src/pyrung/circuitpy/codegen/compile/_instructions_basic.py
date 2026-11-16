@@ -209,20 +209,12 @@ def _compile_on_delay_instruction(
     else:
         inner = indent
     isp = " " * inner
-    if ctx.abstract_timers:
-        tick = [
-            f"{' ' * (inner + 4)}_preset = int({preset})",
-            f"{' ' * (inner + 4)}_acc = _bb_tick(_mem, {instr.accumulator.name!r},"
-            f" int({acc_read}), _preset)",
-            f"{' ' * (inner + 4)}_new_frac = 0",
-        ]
-    else:
-        tick = [
-            f"{' ' * (inner + 4)}_acc = int({acc_read})",
-            *_timer_carry_lines(instr.accumulator, instr.unit, ctx, " " * (inner + 4)),
-            f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
-            f"{' ' * (inner + 4)}_preset = int({preset})",
-        ]
+    tick = [
+        f"{' ' * (inner + 4)}_acc = int({acc_read})",
+        *_timer_carry_lines(instr.accumulator, instr.unit, ctx, " " * (inner + 4)),
+        f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
+        f"{' ' * (inner + 4)}_preset = int({preset})",
+    ]
     lines.extend(
         [
             f"{isp}if {enabled_expr}:",
@@ -291,19 +283,9 @@ def _compile_off_delay_instruction(
         f"{sp4}if _tof_armed or {done_read} or _acc != 0:",
         f"{sp8}if not _tof_armed:",
         f'{sp12}_mem["{armed_key}"] = True',
-        *(
-            [
-                f"{sp8}_preset = int({preset})",
-                f"{sp8}_acc = _bb_tick(_mem, {instr.accumulator.name!r}, _acc, _preset)",
-                f"{sp8}_new_frac = 0",
-            ]
-            if ctx.abstract_timers
-            else [
-                *_timer_carry_lines(instr.accumulator, instr.unit, ctx, sp8),
-                f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
-                f"{sp8}_preset = int({preset})",
-            ]
-        ),
+        *_timer_carry_lines(instr.accumulator, instr.unit, ctx, sp8),
+        f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
+        f"{sp8}_preset = int({preset})",
         f'{sp8}_mem["{frac_key}"] = _new_frac',
         f"{sp8}{done_write} = _acc < _preset",
         f"{sp8}{acc_write} = _acc",

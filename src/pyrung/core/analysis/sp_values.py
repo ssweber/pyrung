@@ -5,7 +5,7 @@ program's structure: what values a condition expression requires
 (`_extract_required_values`, `_extract_condition_values`) and what value a
 rung writes to a tag (`_written_value_for_tag`).
 
-Consumed by PILOT's static readers, the prover's heuristic seeding, and causal
+Consumed by PILOT's static readers, the static facts' heuristic seeding, and causal
 analysis for projected-relation moves. Everything here is static evidence used
 as a prior; it is never correctness-bearing on its own.
 """

@@ -155,5 +155,4 @@ With one test, cold rungs and stranded bits are mostly noise. After hundreds of 
 - [Ladder Lints](ladder-lints.md) — static checks for ladder logic
 - [Diagnosis](analysis-diagnosis.md) — snapshot-only debugging with `why()` and `how()`
 - [Cause & Effect](analysis-causal.md) — causal chains over scan history
-- [Verification](verification.md) — prove properties hold, fault coverage, lock files
 - [Testing Guide](testing.md) — forces as fixtures, forking, monitors, breakpoints

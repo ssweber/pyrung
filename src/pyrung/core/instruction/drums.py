@@ -744,8 +744,8 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
     Each step has an optional preset and an optional **level** event; at least one
     is required.  A step with a preset times, and keeps counting (clamped) while it
     waits for its event; an event-only step does not time.  It is its own class,
-    not a ``TimeDrumInstruction``: the prover models a time drum as one whose
-    every step ends on its preset.
+    not a ``TimeDrumInstruction``, because every step of a time drum ends on its
+    preset.
     """
 
     _reads = ("presets", "jump_step", "current_step", "completion_flag")

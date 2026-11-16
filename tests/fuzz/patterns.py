@@ -362,8 +362,8 @@ def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
 def range_aggregate_into_compare(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #29b: math(block.select(start, end).max(), Out) + Rung(Out > 0).
 
-    The non-additive siblings of range_sum_into_compare: the prover must keep
-    every member as a read of the calc (no element-wise sum decomposition).
+    The non-additive siblings of range_sum_into_compare.  Every member stays
+    a read of the calc, with no element-wise sum decomposition.
     """
     if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
         return None
@@ -975,8 +975,8 @@ TIER1_PATTERNS = [
     drum_near_self_resetting_timer,
 ]
 
-# Patterns that deliberately place two program features adjacent to each other —
-# the interaction corners where prover soundness bugs live.  program_specs()
+# Patterns that deliberately place two program features adjacent to each other.
+# Bugs tend to live in those corners.  program_specs()
 # weights selection toward these (see _ADJACENCY_PATTERN_WEIGHT in strategies.py).
 ADJACENCY_PATTERNS = [
     copy_chain_into_compare,
