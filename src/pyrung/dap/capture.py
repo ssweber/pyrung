@@ -194,7 +194,7 @@ def _cmd_assert(adapter: Any, expression: str) -> ConsoleResult:
             expected = label_value
     actual = adapter._state_value_for_reference(state, name)
 
-    if isinstance(actual, float) and _is_number(expected):
+    if isinstance(actual, float) and isinstance(expected, int | float):
         matched = math.isclose(actual, expected, rel_tol=REAL_TOLERANCE, abs_tol=REAL_TOLERANCE)
     else:
         check = Compare(tag=parsed.tag, op="==", right=Literal(value=expected))
@@ -202,10 +202,6 @@ def _cmd_assert(adapter: Any, expression: str) -> ConsoleResult:
     if not matched:
         raise adapter.DAPAdapterError(f"assert failed: {name} = {actual!r}, expected {typed!r}")
     return ConsoleResult(f"assert ok: {name} = {actual!r}")
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 # ---------------------------------------------------------------------------
