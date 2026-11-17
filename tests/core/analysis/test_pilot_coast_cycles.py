@@ -1028,10 +1028,10 @@ class TestWrittenInputs:
 
     @pytest.mark.parametrize("first", [(200, 5000), (5000, 200)], ids=["low", "high"])
     def test_an_operand_that_alternates_through_the_period(self, first: tuple[int, int]) -> None:
-        """Check two writers of the preset, one for each phase of the cycle.
+        """Check two writers of an operand, one for each phase of the cycle.
 
-        The preset that a scan boundary shows is not the preset that the timer reads on the
-        next scan.
+        The value of P that a scan boundary shows is not the value that the rung
+        ``T.Acc >= P`` reads on the next scan.
         """
 
         def build() -> Program:

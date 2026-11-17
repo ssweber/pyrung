@@ -892,9 +892,10 @@ def _evaluate_text_past_bank(
     pyrung writes the elements that its block holds and drops the rest. A constant into
     TXT that runs past the bank as written is refused, because CLICK's Copy refuses it
     (OBJ-003). Any other store past the bank warns. CLICK's Copy accepts a register
-    source, which saves no end address. A store past a block that is mapped inside a bank
-    warns that CLICK writes on into the bank, where pyrung stops. Only a store whose
-    shortest text runs past the end is reported.
+    source, which saves no end address. A store past the end of a block that is mapped
+    inside a bank warns. CLICK writes the rest of the text into the bank past the block,
+    and pyrung stops at the end of the block. Only a store whose shortest text runs past
+    the end is reported.
     """
     if type(instruction).__name__ != "CopyInstruction":
         return []

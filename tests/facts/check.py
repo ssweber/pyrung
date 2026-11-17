@@ -1482,8 +1482,9 @@ def declared_writes(instr: Any, tags: Mapping[str, Any]) -> Callable[[str], bool
 
     The list holds the tags from ``absorb._all_write_targets``, the names that ``write_sites``
     resolves and the fault flags *instr* can set.  The facts expand a pointer write into the
-    tags that its pointer's bounds reach.  They cannot expand a pointer write to a block
-    past 1000 elements, so that write covers every tag of its block.
+    tags that its pointer's bounds reach.  A pointer write that they cannot expand covers
+    every tag of its block.  For example, they do not expand a write whose pointer can
+    reach more than 1000 elements.
     """
     from pyrung.core.analysis.prove.absorb import _all_write_targets
     from pyrung.core.analysis.prove.classify import _expand_indirect_tag_names

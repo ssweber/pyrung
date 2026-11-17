@@ -104,8 +104,8 @@ def _is_plain_literal(value: Any) -> bool:
 def _renders_faithfully(value: Any, seen: set[int] | None = None) -> bool:
     """Return whether ``repr(value)`` rebuilds *value* as one object.
 
-    Return False if *value* holds the same list, tuple or dict at two places. ``repr`` would
-    rebuild those as separate objects.
+    Return False if the same list or dict appears at two places in *value*. ``repr``
+    would rebuild those as separate objects.
     """
     if _is_plain_literal(value):
         return True

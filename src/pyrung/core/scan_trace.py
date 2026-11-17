@@ -2448,10 +2448,11 @@ def _copy_tracked(array: Any) -> _TrackedList:
 
 
 def _record_block_writes(trace: ScanTrace, blocks: Mapping[str, Any]) -> None:
-    """Mark a cell written when a scan rewrites it with its own value.
+    """Mark as written every block cell that the trace writes.
 
-    From then on the cell is live in the committed state. The loop skips the rewrite, so
-    this function marks the cell instead.
+    A scan that rewrites a cell with its own value still marks it written, and from then on
+    the cell is live in the committed state. The loop skips the rewrite, so this function
+    marks the cell instead.
     """
     for symbol, cells in trace.block_writes:
         blocks[symbol].written_indices.update(cells)

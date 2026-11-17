@@ -116,7 +116,10 @@ def case_alone(group: Group, case: Case) -> Subject:
 
 
 def on_hardware(group: Group, case: Case) -> bool:
-    """Return True when a part as built holds the case, so the corpus runs its program."""
+    """Return True when a part as built holds the case.
+
+    A built part leaves out every case marked ``in_process_only``.
+    """
     return not case.in_process_only
 
 

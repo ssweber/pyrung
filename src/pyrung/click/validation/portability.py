@@ -1195,8 +1195,8 @@ def _evaluate_compare_hex_mix(
 ) -> list[ClickFinding]:
     """Report a compare that pairs a hex operand (XD, YD, DH) with a decimal one.
 
-    CLICK's Compare dialog pairs a hex operand only with another hex one. CLICK's editor
-    refuses a hex operand paired with a decimal one. A pasted rung skips the check.
+    CLICK's editor refuses a hex operand paired with a decimal one. A pasted rung skips
+    the check.
     """
     from pyrung.core.condition import Condition
     from pyrung.core.validation.render import render_condition

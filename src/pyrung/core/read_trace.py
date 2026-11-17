@@ -127,7 +127,7 @@ _FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
 
 
 def _whole_map_read(name: str) -> Any:
-    """Return a property that records a read of the whole map whenever the map is read."""
+    """Return a property that records a read of the whole map on each read of *name*."""
 
     def get(self: Any) -> Any:
         if traces := _TRACES.stack:
@@ -221,7 +221,7 @@ class _TracedState(SystemState):
 
     def scanned(self, scan_id: int, timestamp: float, tags: PMap, memory: PMap) -> SystemState:
         # Make the same check as the base class, then return a plain state.  These comparisons
-        # record the fields, so a read of the result reads values that are already recorded.
+        # record the fields, and a read of the result reads values that are already recorded.
         if (
             scan_id is self.scan_id
             and timestamp is self.timestamp

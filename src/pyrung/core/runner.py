@@ -2623,7 +2623,10 @@ class PLC:
         return None if self._coast_memo is None else self._coast_memo.check_limits
 
     def _stepped_again(self, first: int, last: int, check_limits: Callable[[], None] | None) -> PLC:
-        """Return a replay of scans up to *last* from the checkpoint before *first*."""
+        """Return a replay of scans up to *last* from the checkpoint before *first*.
+
+        The replay records those scans in its own timelines. These timelines have no cap.
+        """
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         for name in _RECORDS:

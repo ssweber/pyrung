@@ -370,8 +370,8 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     verifier refuses the loop past the cap.  A REAL count is inexact because 0.5
     truncates to 0.  An expression count is inexact for its own reasons.
 
-    While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero, every count runs the body.  A
-    constant count that runs no iteration returns None.
+    While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero, every count runs the body.  For a
+    constant count that runs no iteration, this returns None.
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import (

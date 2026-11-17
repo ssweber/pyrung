@@ -289,7 +289,8 @@ def test_randint_stays_in_range_inclusive_and_is_the_same_on_every_runner(bounds
     assert all(low <= v <= high for v in stepped)
     assert _draws(CompiledPLC(logic), 60) == stepped
     if high - low <= 3:
-        # The stream is deterministic, so 150 more draws reach every value of a tiny span.
+        # A fresh PLC repeats the same 60 draws, then draws 140 more. Together they reach
+        # every value of a tiny span.
         more = _draws(PLC(logic), 200)
         assert set(more) == set(range(low, high + 1))
 

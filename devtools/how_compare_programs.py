@@ -1374,9 +1374,13 @@ def _pulse_other_contact(*, held):
 
 
 def _enable_moved_mid_scan():
-    """Move the enable mid-scan: the rung reads it off and the plant reads it on.
+    """Turn En off and back on within each scan.
 
-    This is the dwell that the link was said to end.
+    The rung ``~En, Fb`` reads En off, and the plant reads it on.
+
+    An earlier how() answered CANNOT_REACH here, and that answer was wrong. Fb follows En
+    through its link, and the plant never sees En off. So Fb stays on, the rung
+    ``~En, Fb`` stays true, and the timer W reaches 3 s.
     """
     go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")

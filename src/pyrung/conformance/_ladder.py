@@ -59,7 +59,10 @@ def _conditions(value: Any) -> tuple[Any, ...]:
 
 
 def footprint(c: Case) -> tuple[frozenset[str], frozenset[str]]:
-    """Return the tags case *c* reads or writes outside its slot, and the ones it writes.
+    """Return the tags that case *c* uses outside its slot, as two sets.
+
+    The first set holds every tag that the case reads or writes.  The second holds the tags
+    that it writes.
 
     System tags and pyrung's internal tags (a leading ``_``) are left out.  So are the
     characters a ``to_text()`` copy of a tag may write past its first.  The analyses

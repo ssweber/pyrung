@@ -132,8 +132,8 @@ class ConformanceProgram:
     def export(self, directory: str | Path, *, drawn: bool = True) -> Path:
         """Write the whole CLICK project and return the directory.
 
-        The project is ``main.csv``, one CSV per group subroutine under ``subroutines/``,
-        and ``nicknames.csv``. Cases with a ``tee`` are drawn with their pins teeing off
+        The project is ``main.csv``, one CSV per subroutine under ``subroutines/``, and
+        ``nicknames.csv``. Cases with a ``tee`` are drawn with their pins teeing off
         the box's input wire. With ``drawn=False``, the exporter's rail drawing is
         written for them instead.
 

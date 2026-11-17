@@ -2251,9 +2251,12 @@ def _backward_propagate_comparison_boundaries(
                 for next_src, next_inv, next_mode in target_to_sources.get(source_name, []):
                     queue.append((next_src, next_inv, next_mode, source_name, hop.values))
 
-        # A step puts a whole cell on one side of a comparison.  For example, 5.7 copied to
-        # an INT is 5.  Only that cell tells ``R > 5.5, D == 5`` apart, and it has no value
-        # of its own.
+        # A copy from a REAL into an integer tag is a step.  It copies a whole range of REAL
+        # values to one integer.  For example, it copies both 5.0 and 5.7 to an INT as 5.  A
+        # comparison on the REAL, or on another tag that the REAL feeds, can split that
+        # range.  ``R > 5.5, D == 5`` holds only for the part of the range above 5.5, and the
+        # domain need not hold a value there.  So a stepped REAL with comparisons of its own,
+        # or with more than one hop, gets no complete answer.
         for source_name, target_name in stepped_reals.items():
             if comp_boundaries.get(source_name) or len(hops_to[source_name]) > 1:
                 no_complete_answer(source_name, target_name)

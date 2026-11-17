@@ -114,9 +114,10 @@ def _avoid_violations(
 
     The state it asks about is weighed.  The baseline has the steerable inputs and nothing
     else, so a callable can raise on it for a tag that every real state has.  A hold laid over
-    a state is not a scan either.  In both cases the search goes on, and the gates judge the
-    scans that the hold leads to.  A check that answers keeps its answer, so a check that reads only
-    what the baseline has can still refuse the hold.
+    a state is not a scan either.  In both cases, a check that raises counts as not violated,
+    and the candidate or hold goes on.  The gates judge the scans that it leads to.  A check
+    that answers keeps its answer, so a check that reads only what the baseline has can still
+    refuse the hold.
     """
     avoid = getattr(ctx, "avoid_pred", None)
     if avoid is None:
