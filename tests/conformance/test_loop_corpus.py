@@ -1,10 +1,10 @@
-"""Long runs over the suite's programs: each case alone, loop against stepping against ``expect``.
+"""Check long runs of the suite's programs, each case alone: loop against stepping and ``expect``.
 
-Here each case runs alone, so a neighbour that declines (a RAND, a read of the scan counter) keeps
-no other case out of the loop.  ``loop_corpus.py`` says why any of this is needed.  ``make test``
-keeps a file on one xdist worker, which is why the corpus is four files: this one has the first
-parts, ``test_loop_corpus_later_parts.py`` the rest, and ``test_loop_corpus_parts.py`` and
-``test_loop_corpus_less.py`` run parts whole.
+Each case runs alone here. A neighbour that declines (a RAND, a read of the scan counter) then
+keeps no other case out of the loop. ``loop_corpus.py`` says why any of this is needed.
+``make test`` keeps a file on one xdist worker, which is why the corpus is four files. This
+file has the first parts and ``test_loop_corpus_later_parts.py`` has the rest.
+``test_loop_corpus_parts.py`` and ``test_loop_corpus_less.py`` run parts whole.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from pyrung.core import PLC, Program, Rung, Word, math, randint
 from tests.conformance import loop_corpus, suite
 from tests.conformance.loop_corpus import FIRST_PARTS, Tally
 
-#: Set it to run every drill of ``loop_corpus.Driver`` on every case: a matter of many minutes,
-#: too long for ``make test``, for a change to the loop or to the suite.
+#: Set it to run every drill of ``loop_corpus.Driver`` on every case. That takes many minutes,
+#: too long for ``make test``. Use it after a change to the loop or to the suite.
 DEEP = "PYRUNG_LOOP_CORPUS_DEEP"
 
 
@@ -38,9 +38,10 @@ def test_every_drill_on_each_case(part: str) -> None:
 
 
 def test_a_long_run_of_a_wide_rand_equals_stepping() -> None:
-    # A run as a user gets it: nothing lowered, 3000 scans.  A wide RAND in a hex Math has two
-    # sites, _rand.N and _rand.N.ucut.  Only the cut one runs, and stepping draws only it too.  The
-    # bounds leave a draw 20001 values, so a tag standing still would not land on a draw by chance.
+    # This is a run as a user gets it: nothing lowered, 3000 scans. A wide RAND in a hex Math has
+    # two sites, _rand.N and _rand.N.ucut. Only the cut one runs, and stepping draws only it too.
+    # The bounds give a draw 20001 values, so a tag that stood still would not land on a draw
+    # by chance.
     r = Word("R")
     with Program(strict=False) as program:
         with Rung():
@@ -54,9 +55,11 @@ def test_a_long_run_of_a_wide_rand_equals_stepping() -> None:
     ["faults/rand_unequal_bounds", "store_probe/rand_int_cuts", "store_probe/rand_other_stores"],
 )
 def test_a_wide_rand_case_equals_stepping_at_every_landing(label: str) -> None:
-    """The suite's RANDs past 16 bits, over 30 landings, since one landing on a draw of 3
-    values can match by chance.  None of them cuts its bounds, because the export refuses a
-    hex Math constant past 16 bits.  The test below keeps a cut RAND."""
+    """Check the RANDs in the suite that go past 16 bits, over 30 landings.
+
+    One landing on a draw of 3 values can match by chance. None of these RANDs cuts its bounds,
+    because the export rejects a hex Math constant past 16 bits. The test below covers a cut RAND.
+    """
     group_name, _, case_id = label.partition("/")
     group = next(g for g in [*suite.ALL_GROUPS, *suite.APART_GROUPS] if g.name == group_name)
     case = next(c for c in group.cases if c.id == case_id)
@@ -67,8 +70,10 @@ def test_a_wide_rand_case_equals_stepping_at_every_landing(label: str) -> None:
 
 
 def test_a_narrow_cut_rand_equals_stepping_at_every_landing() -> None:
-    """A hex Math cuts the bounds of RAND ( 70000 , 70002 ) to 4464..4466.  The suite no
-    longer exports one, so a plain program checks it at 30 landings."""
+    """A hex Math cuts the bounds of RAND ( 70000 , 70002 ) to 4464..4466.
+
+    The suite no longer exports one, so a plain program checks it at 30 landings.
+    """
     word = Word("W")
     with Program(strict=False) as program:
         with Rung():

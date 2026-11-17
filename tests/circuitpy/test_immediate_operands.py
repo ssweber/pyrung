@@ -1,8 +1,8 @@
-"""An ``immediate()`` operand reads and writes its plain tag on every backend.
+"""Check that an ``immediate()`` operand reads and writes its plain tag on every backend.
 
-``immediate()`` is a transcription hint for the CLICK export; in simulation it does
-nothing.  Wherever the interpreter takes the wrapped tag's value or type, the
-compiled kernel and the generated CircuitPython must take the same one.
+``immediate()`` is a hint for the CLICK export. In simulation it does nothing. Wherever the
+interpreter uses the value or type of the wrapped tag, the compiled kernel and the generated
+CircuitPython must use the same one.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_
 
 
 class _InputsHighBase:
-    """A P1AM base whose slot-1 inputs 1 and 2 read on, and whose writes go nowhere."""
+    """A P1AM base that reads inputs 1 and 2 of slot 1 as on and discards every write."""
 
     def rollCall(self, modules):
         return None
@@ -77,7 +77,7 @@ def _hardware():
 def _on_every_backend(
     program: Program, hw: P1AM, inputs: tuple[Tag, ...], watch: tuple[Tag, ...], monkeypatch
 ) -> dict[str, tuple]:
-    """*watch*'s values after two scans with *inputs* on, keyed by backend."""
+    """Return the values of *watch* after two scans with *inputs* on, keyed by backend."""
     results: dict[str, tuple] = {}
     for name, cls in (("interpreted", PLC), ("compiled", CompiledPLC)):
         plc = cls(program)
@@ -407,7 +407,7 @@ def _interpreted(program: Program, inputs: tuple[Tag, ...], watch: tuple[Tag, ..
 
 @pytest.mark.parametrize("case", list(_CASES), ids=list(_CASES))
 def test_immediate_operand_reads_as_the_plain_one(case):
-    """The interpreter's answer the other backends are held to is the unwrapped program's."""
+    """The interpreter gives the same answer for the wrapped program as for the plain one."""
     _hw, prog, inputs, watch = _CASES[case]()
     _hw, plain, plain_inputs, plain_watch = _CASES[case](wrap=lambda value: value)
     assert _interpreted(prog, inputs, watch) == _interpreted(plain, plain_inputs, plain_watch)
@@ -427,7 +427,7 @@ def _function_out_from_an_input(wrap: Callable[[Any], Any]):
 
 
 def test_a_value_written_through_an_immediate_function_out_lands():
-    """An immediate() out is a write, so stepping ``Sel = 6`` writes 7."""
+    """An immediate() out is still a write: with ``Sel = 6``, one scan writes 7 to Dest."""
     prog, _dest = _function_out_from_an_input(immediate)
     plc = PLC(prog)
     plc.patch({"Sel": 6})

@@ -1,17 +1,17 @@
-"""A box with pins ends its rung, in pyrung as on a CLICK (C000A).
+"""Test that a box with pins ends its rung in pyrung, as it does on a CLICK (C000A).
 
-CLICK takes all inputs (pins) of a box instruction from the same branch, the
+CLICK requires all inputs (pins) of a box instruction to come from the same branch, the
 rail: "All inputs of the box instruction must originate from the same branch."
-A counter, retentive timer, shift register or drum whose input splits off a
-node another output also hangs from can be drawn but does not compile.  So the
-program build refuses a box with pins beside any other output or branch of its
-rung.  What comes before the box goes in a rung above, and what follows it goes
-in a rung of its own.
+A counter, retentive timer, shift register or drum can be drawn with its input split off a
+node that another output also hangs from. That drawing does not compile.
+So the program build rejects a box with pins that sits beside any other output or branch
+in its rung. Put what comes before the box in a rung above it, and what follows the box in
+a rung of its own.
 
-The export draws each rung as it stands, and each ``.continued()`` rung as a
-CLICK rung of its own, as CLICK's syntax check does.  A CLICK rung of several
-wires (saved before a syntax check) imports as a rung and one continued rung
-per other wire.  A box with no pins (a TON) may share the wire.
+The export draws each rung as it stands. It draws each ``.continued()`` rung as a CLICK
+rung of its own, as CLICK's syntax check does. A CLICK rung of several wires (saved before
+a syntax check) imports as one rung plus one continued rung for each other wire.
+A box with no pins (a TON) may share the wire.
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ def _box_on_a_continued_wire() -> None:
 
 
 def _box_reads_the_wire_above() -> None:
-    # The box's wire reads C5 where it stands, after the reset above.
+    # The wire of the box reads C5 as it is at this point, after the reset above.
     with Rung(c[5]):
         reset(c[5])
     with Rung(c[5], x[2]).continued():
@@ -243,9 +243,9 @@ WRITTEN: dict[str, Callable[[], None]] = {
 
 
 def _box_in_its_only_branch() -> None:
-    # Draws as X1 then X2 in series on one row, the cells of Rung(x[1], x[2]):
-    # the rows cannot say where the rung ends and the branch begins, so it
-    # reads back as that rung (same drawing, same readings).
+    # This draws as X1 then X2 in series on one row, the same cells as Rung(x[1], x[2]).
+    # The rows cannot say where the rung ends and the branch begins. So it reads back as
+    # that rung, with the same drawing and the same readings.
     with Rung(x[1]):
         with branch(x[2]):
             count_up(Counter[1], preset=10).reset(x[4])
@@ -270,7 +270,7 @@ def _build(shape: Callable[[], None]) -> Program:
 
 
 def _rungs(rows: tuple[tuple[str, ...], ...]) -> list[list[tuple[str, ...]]]:
-    """Rows grouped into CLICK rungs (a marker starts one), header and end() dropped."""
+    """Group *rows* into CLICK rungs, dropping the header and end(). A marker starts a rung."""
     rungs: list[list[tuple[str, ...]]] = []
     for row in rows[1:]:
         if row[0].startswith("R"):
@@ -291,7 +291,7 @@ _BOXES = ("count_up(", "on_delay(", "shift(", "event_drum(")
 
 
 def _readings(program: Program, tag_map: TagMap, seed: int) -> list[dict[str, object]]:
-    """Each scan's tags, by CLICK address, under a random input schedule."""
+    """Return the tags of each scan, by CLICK address, under a random input schedule."""
     names = {slot.logical_name: slot.hardware_address for slot in tag_map.mapped_slots()}
     rng = random.Random(seed)
     plc = PLC(program, dt=0.01)
@@ -318,7 +318,7 @@ def test_build_refuses_a_box_that_shares_its_rung(name: str):
 
 @pytest.mark.parametrize("name", [n for n in WRITTEN if n != "ton_beside_coil"])
 def test_box_starts_its_own_click_wire(name: str):
-    """The box is the first output of its wire; the next row with an output starts a wire."""
+    """The box is the first output of its wire. The next row with an output starts a new wire."""
     bundle = pyrung_to_ladder(_build(WRITTEN[name]), _tag_map())
     scopes = [bundle.main_rows, *(rows for _name, rows in bundle.subroutine_rows)]
     rows = [row for scope in scopes for row in scope[1:]]
@@ -329,9 +329,9 @@ def test_box_starts_its_own_click_wire(name: str):
         while after < len(rows) and rows[after][-1].startswith("."):
             after += 1
         if after < len(rows) and not rows[after][0]:
-            # A continued wire starts from the rail, not from the box's wire.
+            # A continued wire starts from the rail. It does not start from the wire of the box.
             assert rows[after][1], rows[after]
-    # Column A is the power rail: nothing branches there.
+    # Column A is the power rail. Nothing branches there.
     assert all(row[1] not in {"T", "|"} and not row[1].startswith("T:") for row in rows)
 
 
@@ -352,8 +352,10 @@ def test_round_trip_keeps_the_readings(name: str):
 
 @pytest.mark.parametrize("name", list(WRITTEN))
 def test_round_trip_gives_back_the_rungs_written(name: str):
-    """pyrung -> CLICK -> pyrung gives back each rung as the export draws it, and the rows
-    it exports to are the rows it came from."""
+    """pyrung -> CLICK -> pyrung returns each rung as the export draws it.
+
+    The rows that the export produces are the rows it started from.
+    """
     program = _build(WRITTEN[name])
     tag_map = _tag_map()
     bundle = pyrung_to_ladder(program, tag_map)
@@ -427,8 +429,10 @@ def test_box_in_forloop_body_is_a_body_rung_of_its_own():
 
 
 def test_bare_box_then_a_bare_row_in_a_forloop_body_round_trips():
-    """CLICK draws a bare body box and the bare row after it as two body rungs;
-    the import builds and gives back the same rows."""
+    """CLICK draws a bare body box and the bare row after it as two body rungs.
+
+    The import builds those rungs and the export returns the same rows.
+    """
 
     def shape() -> None:
         with Rung(x[1]):
@@ -451,8 +455,11 @@ def test_bare_box_then_a_bare_row_in_a_forloop_body_round_trips():
 
 
 def test_import_gives_each_wire_of_a_box_rung_a_rung_of_its_own():
-    """CLICK -> pyrung -> CLICK: a box rung whose wires share their first contact
-    comes back as the box's rung and one continued() rung per other wire."""
+    """CLICK -> pyrung -> CLICK: import gives each wire of a box rung a rung of its own.
+
+    When the wires share their first contact, they come back as the rung of the box plus
+    one continued() rung for each other wire.
+    """
     header = ("marker", *[f"col{i}" for i in range(31)], "AF")
 
     def row(marker: str, *cells: str, af: str) -> tuple[str, ...]:
