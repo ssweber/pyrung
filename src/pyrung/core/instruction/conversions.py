@@ -29,10 +29,11 @@ _NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL
 
 
 def copy_source_kind(source: Any) -> Any:
-    """What a Copy, Block copy or Fill store depends on of its *source* operand.
+    """Return what a Copy, Block copy or Fill store depends on in its *source* operand.
 
-    The source's ``TagType`` for a tag or a pointer, :data:`LITERAL` for a constant,
-    and ``None`` for anything else (an expression), which stores as a register does.
+    The result is the source's ``TagType`` for a tag or a pointer, and :data:`LITERAL` for
+    a constant.  It is ``None`` for anything else, such as an expression.  An expression
+    stores as a register does.
     """
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.tag import ImmediateRef
@@ -49,11 +50,11 @@ def copy_source_kind(source: Any) -> Any:
 
 
 def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | None:
-    """Destination conversion used by copy, blockcopy, and fill.
+    """Return the destination conversion that copy, blockcopy and fill use.
 
-    *source* is :func:`copy_source_kind` of the source.  ``None`` (not known, or not a
-    Copy: a patch, a receive) keeps the plain store: a Word wraps.  From a known
-    source, CLICK's rules:
+    *source* is :func:`copy_source_kind` of the source.  ``None`` means the source is
+    not known, or the store is not a Copy, such as a patch or a receive.  ``None`` keeps
+    the plain store, where a Word wraps.  From a known source, CLICK's rules apply:
 
     - Into a Word, a constant keeps its low 16 bits (70000 is 4464).  From a DINT or
       a REAL, past 65535 it clamps and below 0 keeps the low 16 bits (``"word"``).
@@ -116,7 +117,7 @@ def _int_to_float_bits(n: int) -> float:
 def _float_to_int_bits(f: float) -> int:
     """Reinterpret an IEEE 754 float bit pattern as 32-bit unsigned integer.
 
-    A NaN is 0xFFFFFFFF, whichever NaN it is: what a CLICK's DF holds for one.
+    A NaN becomes 0xFFFFFFFF, whichever NaN it is.  That is what a CLICK's DF holds for one.
     """
     f = float(f)
     if f != f:
@@ -131,9 +132,9 @@ def _ascii_char_from_code(code: int) -> str:
 
 
 def _as_single_ascii_char(value: Any) -> str:
-    """The CHAR *value* stores as: one 8-bit character, a blank stored as NUL.
+    """Return the CHAR that *value* stores as.  It is one 8-bit character, and a blank is NUL.
 
-    A CLICK TXT is one byte: codes 128..255 are stored as they are.
+    A CLICK TXT is one byte.  Codes 128..255 are stored as they are.
     """
     if not isinstance(value, str):
         raise ValueError("CHAR value must be a string")
@@ -145,17 +146,17 @@ def _as_single_ascii_char(value: Any) -> str:
 
 
 def _text_from_source_value(value: Any) -> str:
-    """Source text for a text->numeric copy; a blank reads as one NUL."""
+    """Return the source text for a text->numeric copy.  A blank reads as one NUL."""
     if isinstance(value, str):
         return store_char(value)
     raise ValueError("text conversion source must resolve to str")
 
 
 def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> dict[str, Any]:
-    """Each character of *text* as a number, into *targets* in turn.
+    """Convert each character of *text* to a number and write it into *targets* in turn.
 
-    *targets* may be shorter, where the block ends first: every character is still
-    checked, and the ones past the last target are dropped.
+    *targets* may be shorter, because the block can end first.  The function still checks
+    every character.  It drops the ones past the last target.
     """
     updates: dict[str, Any] = {}
     if len(targets) > len(text):
@@ -182,7 +183,11 @@ def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> d
 
 
 def _format_int_text(value: int, width: int, suppress_zero: bool, *, signed: bool = True) -> str:
-    """A number's text; *signed* False for a Word, which is hex (0xAB is "AB" or "00AB")."""
+    """Return a number's text.
+
+    With *signed* False, for a Word, the text is hex.  0xAB is "AB" with *suppress_zero*.
+    Without it, zeros pad the text to *width*, as in "00AB".
+    """
     if suppress_zero:
         return str(value) if signed else f"{value:X}"
     if not signed:
@@ -275,11 +280,11 @@ def _store_copy_value_to_tag_type(value: Any, tag: Tag, source: Any = None) -> A
 
 
 def _copy_clamps(value: Any, tag: Tag, source: Any = None) -> bool:
-    """True when a Copy of the number *value* into *tag* stops at a limit, raising SC43.
+    """Return True when a Copy of the number *value* into *tag* stops at a limit, raising SC43.
 
-    Only an INT or DINT clamps with the flag; a Word's clamp raises none, and nor
-    does a REAL register's into a DINT (CLICK: DF 1.0E+10 into a DD,
-    ``flag_probe/bulk_ops_clear_flags``).  +/-Inf clamps; NaN stores 0 and does not.
+    Only an INT or DINT clamps with the flag.  A Word's clamp raises none.  Nor does a
+    REAL register's clamp into a DINT (CLICK: DF 1.0E+10 into a DD,
+    ``flag_probe/bulk_ops_clear_flags``).  +/-Inf clamps.  NaN stores 0 and does not.
     """
     storage = copy_store_transform(tag.type, source)
     if storage is None or storage.kind != "clamp" or not isinstance(value, (int, float)):
@@ -320,9 +325,9 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
 def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
     """Return True if math result exceeds destination storage range.
 
-    A REAL result past +/-3.4028235E+38 (stored as +/-Inf) or already +/-Inf
-    is out of range; so is +/-Inf headed for an integer register (stored as
-    0).  NaN is in range everywhere: a REAL holds it, an integer stores 0.
+    A REAL result past +/-3.4028235E+38 (stored as +/-Inf), or already +/-Inf,
+    is out of range.  So is +/-Inf headed for an integer register, which stores
+    0.  NaN is in range everywhere.  A REAL holds it, and an integer stores 0.
     """
     from pyrung.core.tag import TagType
 

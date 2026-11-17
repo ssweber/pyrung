@@ -92,7 +92,7 @@ def test_a_program_alone_generates_what_it_does_with_its_block_held(
         result.code == generate_circuitpy(twin, _hardware(), target_scan_ms=10.0, runstop=None).code
     )
 
-    # What it does, not just what it says: the slot reads as stepping reads it.
+    # Check what the code does, not only what it says. The slot reads the way stepping reads it.
     namespace = _run_single_scan_source(
         result.code, monkeypatch, _StubBase(), runtime_source=result.runtime
     )
@@ -110,8 +110,8 @@ def test_a_program_alone_generates_what_it_does_with_its_block_held(
 def test_a_name_mapped_onto_a_block_only_the_map_held() -> None:
     """A tag's ``map_to`` target is no part of what the program reads or writes.
 
-    The block goes once the mapping is dropped, and the name is a register of its own
-    either way: what generates does not depend on the block having stayed.
+    The block goes away once the mapping is dropped. The name is a register of its own
+    either way, so what generates does not depend on the block having stayed.
     """
 
     def build(held: list[Block] | None = None) -> tuple[Program, weakref.ref[Block]]:

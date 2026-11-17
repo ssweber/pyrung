@@ -1,4 +1,4 @@
-"""The Real tags a run may set to NaN or +/-Inf.
+"""Find the Real tags a run may set to NaN or +/-Inf.
 
 A REAL register holds NaN and +/-Inf (``storage.store_real``).  A value domain lists one
 value for each way the program's comparisons can answer, and a finite value compares like
@@ -73,7 +73,10 @@ _FUNCTION_SPANS: dict[str, Bounds] = {
 def non_finite_reals(
     program: Program, graph: ProgramGraph, receive_dests: frozenset[str] = frozenset()
 ) -> frozenset[str]:
-    """The Real tags of *graph* a run may set to NaN or +/-Inf (see the module docstring)."""
+    """Return the Real tags of *graph* that a run may set to NaN or +/-Inf.
+
+    The module docstring lists the ways.
+    """
     from pyrung.core.validation._common import walk_instructions
 
     from .absorb import _all_write_targets
@@ -81,8 +84,9 @@ def non_finite_reals(
     reals = [name for name, tag in graph.tags.items() if tag.type is TagType.REAL]
     if not reals:
         return frozenset()
-    # A write through a pointer may store into a tag unlisted, so that tag may hold what
-    # the write stores (``ProgramGraph.unlisted_writers_of``).
+    # A write through a pointer may store into a tag without being listed as one of the
+    # tag's writers. That tag may then hold what the write stores
+    # (``ProgramGraph.unlisted_writers_of``).
     unlisted = graph.unlisted_written()
     bounds: dict[str, Bounds | None] = {}
     moving: set[str] = set()
@@ -170,7 +174,7 @@ class _Bounds:
         self.reals = reals
 
     def stored(self, instr: Any, target: Any) -> Bounds | None:
-        """The values *instr* can store into the Real *target*."""
+        """Return the values *instr* can store into the Real *target*."""
         from pyrung.core.instruction.calc import CalcInstruction
         from pyrung.core.instruction.coils import ResetInstruction
         from pyrung.core.instruction.data_transfer import (
@@ -227,7 +231,7 @@ class _Bounds:
         return _INTEGER_SPANS.get(tag.type)
 
     def indirect(self, ref: Any) -> Bounds | None:
-        """A read through a pointer, of any element of its block."""
+        """Return the values of a read through a pointer, of any element of its block."""
         block = getattr(ref, "block", None)
         kind = getattr(block, "type", None)
         if block is None or kind is None:
@@ -240,7 +244,7 @@ class _Bounds:
         return _FINITE
 
     def value(self, node: Any) -> Bounds | None:
-        """The values the operand or formula *node* can give."""
+        """Return the values the operand or formula *node* can give."""
         from pyrung.core.expression import (
             BinaryExpr,
             MathFuncExpr,
@@ -341,14 +345,14 @@ class _Bounds:
 
 
 def _whole(node: Any) -> bool:
-    """Whether *node* is always a whole number, so a nonzero value of it is at least 1."""
+    """Return True when *node* is always a whole number, so a nonzero value of it is at least 1."""
     from .classify import _integer_dividend
 
     return _integer_dividend(node)
 
 
 def _converted(convert: Any) -> Bounds | None:
-    """What a copy of text into a number stores: a digit's value or a character's code."""
+    """Return what a copy of text into a number stores: a digit's value or a character's code."""
     mode = getattr(convert, "mode", None)
     if mode in ("value", "ascii"):
         return (0, 255)

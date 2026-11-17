@@ -49,11 +49,11 @@ _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
     "LRO": "lro",
     "RRO": "rro",
     "RAND": "randint",
-    # ABS maps to the Python builtin; it is never imported (see _EXPR_FUNC_IMPORT_NAMES).
+    # ABS maps to the Python builtin, which is never imported (see _EXPR_FUNC_IMPORT_NAMES).
     "ABS": "abs",
 }
 
-# Python builtins in the table above: callable without an import.
+# Python builtins in the table above.  They need no import.
 _BUILTIN_EXPR_FUNCS = frozenset({"abs"})
 
 # Regex matching Click function calls like SQRT(, LSH ( , etc.
@@ -78,7 +78,7 @@ def _hex_math_bare_numbers(formula: str) -> str:
 
     CLICK's Math dialog in hex mode treats typed digits as hex and appends
     ``h`` (``DH1 + 255`` is stored as ``255h`` = 0x255).  Its own exports
-    always carry the ``h``; this covers hand-written or legacy CSV.
+    always carry the ``h``.  This function covers hand-written or legacy CSV.
     """
     if '"' in formula:
         return formula
@@ -96,7 +96,7 @@ _TEXT_CODE_RE = re.compile(r"\$([0-9A-Fa-f]{1,2})")
 
 
 def _text_code_value(text: str) -> str | None:
-    """The character a CLICK ``$hh`` text constant stands for, or None."""
+    """Return the character that a CLICK ``$hh`` text constant stands for, or None."""
     match = _TEXT_CODE_RE.fullmatch(text.strip())
     if match is None:
         return None
@@ -130,10 +130,10 @@ _RANGE_AGG_PLACEHOLDERS: dict[str, str] = {
     name: f"_range_{name.lower()}" for name in _RANGE_AGG_TO_METHOD
 }
 
-# CLICK's formula spelling NAME ( a , b ) and ( a + b ): spaces inside each paren and
-# before each separator. Compacted on import so CLICK's spelling and the bare
-# ABS(x) one generate the same code. A space before a call's paren goes only after
-# a function name, and before a group's paren only after a unary sign, since
+# CLICK spells formulas NAME ( a , b ) and ( a + b ), with spaces inside each paren and
+# before each separator. Import compacts them, so CLICK's spelling and the bare ABS(x)
+# spelling generate the same code. A space before a call's paren is removed only after a
+# function name. A space before a group's paren is removed only after a unary sign. So
 # DS1 MOD ( DS2 + 1 ) and DS1 - ( DS2 ) keep theirs.
 _SPACED_CALL_RE = re.compile(
     r"\b(" + "|".join([*_CLICK_FUNC_TO_PYTHON, *_RANGE_AGG_TO_METHOD]) + r")\s+\("
@@ -201,9 +201,9 @@ def _strip_quoted_strings(text: str) -> str:
 
 
 def _out_variant_timer_pairs(kwargs: list[tuple[str, str]]) -> list[tuple[str, str, str]]:
-    """``(side, done, acc)`` for each phase Timer of a debounce/flasher/timed token.
+    """Return ``(side, done, acc)`` for each phase Timer of a debounce/flasher/timed token.
 
-    The token names only the phase's TD, as CLICK's coil does; its Done is the T
+    The token names only the phase's TD, as CLICK's coil does.  Its Done is the T
     of the same number.
     """
     values = dict(kwargs)
@@ -281,7 +281,7 @@ def _classify_arg(
 
 
 def _render_to_text(args_str: str) -> str:
-    """CSV ``to_text(suppress_zero=1,exponential=0,termination_code=$0D)`` -> Python.
+    """Render CSV ``to_text(suppress_zero=1,exponential=0,termination_code=$0D)`` as Python.
 
     CLICK writes ``termination_code=none`` when the option is off.
     """
@@ -307,7 +307,7 @@ def _check_to_text_source(source: str, convert: str) -> None:
     """Refuse ``to_text(exponential=1)`` from an integer source, as export does.
 
     CLICK offers Exponential Numbering only for a Real source.  A DF pointer and a Real
-    constant count as one.
+    constant count as a Real source.
     """
     to_text = _TO_TEXT_RE.fullmatch(convert)
     if to_text is None or dict(_parse_af_args(to_text.group(1))[1]).get("exponential") != "1":
@@ -354,11 +354,11 @@ def _sub_operand_kwarg(
 
 
 def _parse_modbus_address(args_str: str) -> tuple[str, str | None]:
-    """CSV ``ModbusAddress(...)`` args -> (Python address, ``RegisterType`` member or None).
+    """Parse CSV ``ModbusAddress(...)`` args into (Python address, ``RegisterType`` or None).
 
-    CLICK shows a remote address either as MODBUS 984 (``400001``; coils are
-    ``1``..``65536``) or as hex with its register type
-    (``address=50Eh,register_type=holding``).
+    CLICK shows a remote address either as MODBUS 984 or as hex with its register type.
+    MODBUS 984 looks like ``400001``, and coils are ``1``..``65536``.  The hex form looks
+    like ``address=50Eh,register_type=holding``.
     """
     args, kwargs = _parse_af_args(args_str)
     fields = dict(kwargs)
@@ -385,7 +385,7 @@ def _render_modbus_address(args_str: str) -> str:
 
 
 def _compact_click_formula(text: str) -> str:
-    """``ABS ( DS1 - 5 ) * 2`` -> ``ABS(DS1 - 5) * 2``; quoted text is left alone."""
+    """Compact ``ABS ( DS1 - 5 ) * 2`` to ``ABS(DS1 - 5) * 2``.  Leave quoted text alone."""
     if '"' in text or "'" in text:
         return text
     text = _SPACED_CALL_RE.sub(r"\1(", text)

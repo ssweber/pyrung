@@ -40,9 +40,9 @@ class PlanStep:
     # summary; the renderer prefers this lossless representation.
     rungs: tuple[Any, ...] = ()
     source: str = ""
-    # The temporary logic this step put in (or took out), printed from the rung that ran, so the
-    # text cannot drift from it.  A step built by hand leaves it empty, and the text builds its
-    # rules alone.
+    # The temporary logic this step put in (or took out), printed from the rung that ran,
+    # so the text cannot drift from it.  A step built by hand leaves this empty, and the
+    # text then builds its rules alone.
     logic: tuple[str, ...] = ()
     # The logic that runs after a removal that leaves some of a tag's rules in.
     kept_logic: tuple[str, ...] = ()
@@ -133,7 +133,7 @@ def _format_plan_note(note: str) -> str:
 
 
 def rules_logic(rungs: tuple[Any, ...]) -> tuple[str, ...]:
-    """*rungs* built into a rung on their own and printed, for logic no recording ran."""
+    """Build *rungs* into a rung of their own and print it, for logic that no recording ran."""
     from pyrung.core.analysis.pilot.overlay import pilot_rules_rung
     from pyrung.core.synthesis import bracket_lines
 
@@ -459,8 +459,8 @@ class Plan:
     restart: Any = None
     # The forces this plan releases, when nothing worked with them on.  Its first step.
     released: Any = None
-    # The move this plan rests on, which nothing in the trace pointed to.  how() tried it because
-    # it was about to stop, and a plan that has one says so.
+    # The move this plan rests on, which nothing in the trace pointed to.  how() tried it
+    # because it was about to stop, and a plan that has one says so.
     last_resort: Any = None
     # The session's own forces and pending patches.  They run in the plan but are not its steps.
     session_inputs: dict[str, Any] = field(default_factory=dict)
@@ -707,7 +707,7 @@ class Plan:
         return "\n".join(lines)
 
     def _leading_steps(self) -> list[str]:
-        """What a plan has to do before PILOT's own steps, each numbered in order."""
+        """Return what a plan has to do before PILOT's own steps, each numbered in order."""
         steps: list[str] = []
         if self.restart is not None:
             steps.append(self.restart.step_line(len(steps) + 1))

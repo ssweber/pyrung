@@ -152,11 +152,11 @@ _SLICE_COMBO_CAP = 1024
 # Fixed scan timestep, mirroring the traced elision scans.
 _SLICE_DT = 0.010
 
-# The fields each instruction reads only on some of the scans it runs, as its own
-# memory, its own step or the values it reads decide.  The scans here start that
-# state at its default, so they may never see the read.  A class listed with no
-# fields reads its fields as its rung and its index tags pick.  The check's scans
-# try each value of those.  A class not listed counts all of its fields.
+# The fields that an instruction reads only on some of the scans it runs.  Its own memory,
+# its own step or the values it reads decide whether it reads them.  The scans here start
+# that state at its default, so they may never see the read.  A class listed with no fields
+# reads its fields according to its rung and its index tags.  The check's scans try each
+# value of those.  A class that is not listed counts all of its fields.
 _STATE_DECIDED_READS: dict[type, tuple[str, ...]] = {
     # A drum reads its current step's preset and event, and its jump step on a jump edge.
     TimeDrumInstruction: ("presets", "jump_step"),
@@ -238,9 +238,9 @@ class _WriteBeforeReadContext(ScanContext):
 class _EntryRead:
     """Stands in for one instruction's ``execute`` while the check's scans run.
 
-    The instruction counts as reading each tag its state-decided fields name
-    before it runs.  So the check sees a read that the instruction's own memory
-    would pick on another scan.  Any other context runs the instruction as is.
+    Before the instruction runs, this counts it as reading each tag that its state-decided
+    fields name.  So the check sees a read that the instruction's own memory would cause on
+    another scan.  In any other context, it runs the instruction as it is.
     """
 
     __slots__ = ("_instr", "_names")
@@ -270,8 +270,8 @@ _ENTRY_READS_LOCK = threading.RLock()
 def _entry_reads(instrs: tuple[Any, ...], names: Mapping[int, frozenset[str]]) -> Iterator[bool]:
     """Install :class:`_EntryRead` on each of *instrs* for the scans of one check.
 
-    Yields False when an instruction already has an ``execute`` of its own, or
-    cannot take one.  The check then keeps the tag.
+    Yield False when an instruction already has an ``execute`` of its own, or cannot take
+    one.  The check then keeps the tag.
     """
     if not instrs:
         yield True
@@ -374,12 +374,12 @@ def _collect_hidden_memory_info(
 ) -> tuple[frozenset[str], tuple[tuple[str, frozenset[str]], ...]]:
     """Survey instructions for unmodelled cross-scan memory and oneshot keys.
 
-    Returns ``(drum_shift_writes, oneshot_key_writes)`` where *drum_shift_writes*
-    is the set of tags written by drum, shift and Out coil variant instructions (whose hidden memory
-    slice elision does not model) and *oneshot_key_writes* pairs each
-    oneshot instruction's ``_oneshot`` memory key with the tags it writes.  A
-    oneshot forloop runs its whole body only on its rung's rising edge, so its
-    key pairs with every tag written in the body, not just the loop index.
+    Return ``(drum_shift_writes, oneshot_key_writes)``.  *drum_shift_writes* is the set of
+    tags written by drum, shift and Out coil variant instructions.  Slice elision does not
+    model their hidden memory.  *oneshot_key_writes* pairs each oneshot instruction's
+    ``_oneshot`` memory key with the tags it writes.  A oneshot forloop runs its whole body
+    only on its rung's rising edge.  So its key pairs with every tag written in the body,
+    not just the loop index.
     """
     drum_shift_writes: set[str] = set()
     oneshot_key_writes: list[tuple[str, frozenset[str]]] = []
@@ -410,7 +410,7 @@ def _collect_hidden_memory_info(
 
 
 def _state_decided_read_fields(instr: Any) -> tuple[str, ...]:
-    """The fields of *instr* that :data:`_STATE_DECIDED_READS` names, by its class."""
+    """Return the fields of *instr* that :data:`_STATE_DECIDED_READS` lists for its class."""
     cls = type(instr)
     fields = _STATE_DECIDED_READS.get(cls)
     if fields is None:
@@ -421,10 +421,11 @@ def _state_decided_read_fields(instr: Any) -> tuple[str, ...]:
 def _collect_state_decided_reads(
     program: Program,
 ) -> tuple[dict[str, tuple[Any, ...]], dict[int, frozenset[str]]]:
-    """The tags each instruction may read on a scan the slice checks never show.
+    """Return the tags each instruction may read on a scan that the slice checks never show.
 
-    Returns ``(readers, names)``.  *readers* maps a tag to the instructions that
-    may read it so, and *names* maps ``id(instr)`` to the tags it may read so.
+    The result is ``(readers, names)``.  *readers* maps a tag to the instructions that may
+    read it that way.  *names* maps ``id(instr)`` to the tags that the instruction may read
+    that way.
     """
     readers: dict[str, list[Any]] = defaultdict(list)
     names: dict[int, frozenset[str]] = {}
@@ -534,9 +535,9 @@ class _SliceElision:
         self.drum_shift_writes, self.oneshot_key_writes = _collect_hidden_memory_info(
             program, tag_refs
         )
-        # Tags written by a oneshot instruction.  A oneshot write does not fire
-        # every scan, so def-use chains (sequential SSA, which assumes every
-        # write fires) cannot be trusted for the fast path.
+        # Tags written by a oneshot instruction.  A oneshot write does not fire every scan.
+        # Def-use chains (sequential SSA) assume that every write fires, so the fast path
+        # cannot trust them for these tags.
         self.oneshot_written_tags: frozenset[str] = frozenset(
             tag for _key, targets in self.oneshot_key_writes for tag in targets
         )
@@ -552,11 +553,10 @@ class _SliceElision:
         self.state_decided_readers, self.state_decided_names = _collect_state_decided_reads(program)
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
-        # The checks run scans on the interpreter, which has no iteration cap:
-        # a 32-bit For count can run up to 2147483647 times (a positive
-        # Dint), so a program with one gets no enumerated check.  A constant
-        # count is read whole too, but a constant of 65535 or less runs no more
-        # iterations than a 16-bit count.
+        # The checks run scans on the interpreter, which has no iteration cap.  A 32-bit For
+        # count can run up to 2147483647 times (a positive Dint), so a program with one gets
+        # no enumerated check.  A constant count is read whole too, but a constant of 65535
+        # or less runs no more iterations than a 16-bit count.
         self.runs_a_wide_for = any(
             isinstance(instr, ForLoopInstruction)
             and for_count_mask(instr.count) > FOR_COUNT_MASK_16
@@ -577,16 +577,14 @@ class _SliceElision:
     # -- fast path ---------------------------------------------------------
 
     def _fast_path_elidable(self, candidate: str) -> bool:
-        """True when def-use chains prove unconditional write-before-read.
+        """Return True when def-use chains prove an unconditional write before any read.
 
-        Delegates to ``ProgramGraph.unconditional_write_before_read`` with an
-        additional oneshot guard: a tag written by a oneshot instruction is
-        never eligible because the oneshot write fires only on first
-        activation, but def-use chains optimistically record it as a normal
-        write, so a later read could observe the entry value on subsequent
-        scans.  Nor is a tag an instruction reads back before writing it
-        (``self_read_tags``), which def-use chains do not record as a read.
-        Such tags fall through to the full slice check.
+        This calls ``ProgramGraph.unconditional_write_before_read`` and adds two guards.  A
+        tag written by a oneshot instruction is never eligible.  The oneshot write fires only
+        on first activation, but def-use chains record it as a normal write.  So a later read
+        could observe the entry value on later scans.  A tag that an instruction reads back
+        before writing it (``self_read_tags``) is not eligible either, because def-use chains
+        do not record that as a read.  Such tags fall through to the full slice check.
         """
         if candidate in self.oneshot_written_tags or candidate in self.self_read_tags:
             return False
@@ -595,7 +593,7 @@ class _SliceElision:
     # -- scan-locality determination --------------------------------------
 
     def _is_scan_local(self, name: str) -> bool:
-        """Memoized, cycle-safe test of whether *name* is always written before read.
+        """Return whether *name* is always written before it is read.  The result is memoized.
 
         A scan-local tag's entry value is never observed, so it can be dropped
         from the world key.  Used both for top-level candidates and,
@@ -757,7 +755,10 @@ class _SliceElision:
             )
 
     def _entry_reads(self, candidate: str) -> Any:
-        """:func:`_entry_reads` for the instructions that may read *candidate* on another scan."""
+        """Return :func:`_entry_reads` for the readers of *candidate*.
+
+        The readers are the instructions that may read *candidate* on another scan.
+        """
         return _entry_reads(self.state_decided_readers.get(candidate, ()), self.state_decided_names)
 
     def _each_scan_writes_first(
@@ -768,7 +769,7 @@ class _SliceElision:
         var_names: list[str],
         domains: list[tuple[Any, ...]],
     ) -> bool:
-        """One natural scan from each combination writes *candidate* before any read of it."""
+        """Return whether one natural scan from each combination writes *candidate* first."""
         x_default = tag.default
         for combo in itertools.product(*domains):
             tag_values: dict[str, Any] = {}
@@ -795,19 +796,17 @@ class _SliceElision:
         return True
 
     def _local_slice_check(self, candidate: str, x_touching: frozenset[int]) -> bool:
-        """Write-before-read within each call of the one subroutine touching X.
+        """Check write-before-read within each call of the one subroutine that touches X.
 
-        The free variables are the tags the subroutine's own rungs decide X's
-        accesses by: the conditions and indexes of the touching rungs, closed
-        over the subroutine's writers only, each taking any value of its
-        domain at the call.  A tag the subroutine writes unconditionally
-        above every rung of it that reads the tag (``HistIdIdx`` from
-        ``HistorianId``) holds a value from that write wherever it matters,
-        so it stays at its default.  A call that never reaches X leaves X
-        alone, and a later call writes before it reads too, so no read sees
-        what X held before.  Bails on a projected or property-read X (its
-        exit value would show), on a subroutine that calls another, and on
-        anything the global check bails on.
+        The free variables are the tags that the subroutine's own rungs use to decide X's
+        accesses.  These are the conditions and indexes of the touching rungs, closed over
+        the subroutine's writers only.  Each takes any value of its domain at the call.  A
+        tag that the subroutine writes unconditionally, above every rung of it that reads
+        the tag (``HistIdIdx`` from ``HistorianId``), holds a value from that write wherever
+        it matters.  So it stays at its default.  A call that never reaches X leaves X
+        alone.  A later call writes before it reads too, so no read sees what X held before.
+        The check bails on a projected or property-read X (its exit value would show), on a
+        subroutine that calls another, and on anything the global check bails on.
         """
         graph = self.graph
         nodes = [graph.rung_nodes[i] for i in x_touching]
@@ -821,7 +820,7 @@ class _SliceElision:
             return False
 
         def writes_first(name: str) -> bool:
-            """Written by an unconditional rung of *sub* above its first reader there."""
+            """Return whether an unconditional rung of *sub* writes the tag before its readers."""
             if name in self.oneshot_written_tags:
                 return False
             reads = [
@@ -899,11 +898,11 @@ class _SliceElision:
         return True
 
     def _edge_memory_keys(self, tags: set[str]) -> tuple[str, ...] | None:
-        """``_edge:e{N}`` of every edge contact reading one of *tags*, or None to bail.
+        """Return ``_edge:e{N}`` for every edge contact that reads one of *tags*, or None to bail.
 
-        Each contact keeps its own bit (``site_memory``), so a tag read by two
-        contacts gives two free variables.  A program with edge contacts on
-        *tags* but no site table (assembled by hand) bails.
+        Each contact keeps its own bit (``site_memory``).  So a tag read by two contacts gives
+        two free variables.  If a program has edge contacts on *tags* but no site table
+        (assembled by hand), this returns None.
         """
         if not tags & self.edge_tags:
             return ()

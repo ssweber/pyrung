@@ -16,7 +16,7 @@ from pyrung.core.analysis.pilot.restart import _restarted, _survivors
 
 
 def _before_and_after(prog: Program, target: Any, session: Any = None) -> tuple[PLC, PLC]:
-    """A PLC built before a how() on another PLC of *prog*, and one built after it."""
+    """Return two PLCs of *prog*: one built before a how() on another PLC, and one after."""
 
     def built() -> PLC:
         plc = PLC(prog)

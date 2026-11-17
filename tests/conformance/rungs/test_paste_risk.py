@@ -1,10 +1,10 @@
-"""Probes a CLICK may refuse at paste: the ``paste_risk`` group (subroutine ``Conf_PasteRisk``).
+"""Probe what a CLICK may refuse at paste: the ``paste_risk`` group (subroutine ``Conf_PasteRisk``).
 
-Part ``control`` (``suite.PARTS``).  Each
-case here writes an operand CLICK may not take where it stands (a register
-the editor or the project check could refuse), so a refusal at paste,
-transfer or project check costs only this small project, and no confirmed
-group shares it.  A case CLICK refuses never fires: that is its answer.
+This is part ``control`` (``suite.PARTS``). Each case here writes an operand that CLICK may
+not accept where it stands, such as a register that the editor or the project check could
+refuse. A refusal at paste, transfer or project check therefore costs only this small
+project, and no confirmed group shares it. A case that CLICK refuses never fires, and that
+is its answer.
 
 The raw registers are the group's own (``memory.OWNED``): C751..C770, CT196..CT200
 and DF411..DF420.
@@ -81,8 +81,8 @@ _RAND_BITS = [c[n] for n in range(761, 767)]
 
 
 def prove_jump_to_own_step_register(slot):
-    # The event (C752) of every step is on scans 2 and 4, the jump (C753) on
-    # scan 4.  The jump's step register is the drum's current-step register.
+    # The event (C752) of every step is on scans 2 and 4, and the jump (C753) is on
+    # scan 4. The jump's step register is the drum's current-step register.
     count_scans(slot)
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4)):
         out(c[752])
@@ -138,8 +138,8 @@ def _fire(slot):
 
 def prove_loop_body_split(slot):
     # The count input (the counter's body rung's Scratch != 3) is on in
-    # iterations 1, 2 and 4 of 4; the calc above the counter is a body rung of
-    # its own with the same contacts (a box with pins ends its rung).
+    # iterations 1, 2 and 4 of 4. The calc above the counter is a body rung of
+    # its own with the same contacts, because a box with pins ends its rung.
     counter = ClickCounter(196)
     with Rung():
         with forloop(4):

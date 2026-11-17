@@ -80,8 +80,8 @@ class Rung:
                     condition.source_line = source_line
 
         if self._loop is not None:
-            # Like a branch: the loop rung's contacts come first, so builders
-            # that capture the enable condition see the whole chain; only the
+            # Like a branch, the loop rung's contacts come first, so builders
+            # that capture the enable condition see the whole chain.  Only the
             # local contacts are evaluated on each iteration.
             assert self._loop._capture_rung is not None
             inherited = list(self._loop._capture_rung._conditions)

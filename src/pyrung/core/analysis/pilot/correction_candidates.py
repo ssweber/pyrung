@@ -130,7 +130,7 @@ def _last_transition_scan(plc: Any, tag: str, start_scan: int, end_scan: int) ->
 
 
 def _set_between_scans(plc: Any, tag: str, first: int, last: int) -> bool:
-    """Whether an edit between scans may move *tag* on a scan in *first*..*last*.
+    """Return whether an edit between scans may move *tag* on a scan in *first*..*last*.
 
     An edit leaves a checkpoint at its scan.  The checkpoint does not say which tags the edit
     set.  A fork runs on from its own copy of the state it forked from, which an edit or a

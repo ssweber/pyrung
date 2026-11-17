@@ -102,8 +102,8 @@ def test_or_topology_via_an_or_contact() -> None:
 
 
 def test_last_out_in_a_rung_wins() -> None:
-    """An ``out`` writes its power whether on or off, so of two ``out(T)`` in
-    one rung the last decides T, as stepping the program does."""
+    """An ``out`` writes its power whether on or off.  Of two ``out(T)`` in one rung, the last
+    decides T, as stepping the program does."""
     A = Bool("A")
     B = Bool("B")
     T = Bool("T")
@@ -124,8 +124,10 @@ def test_last_out_in_a_rung_wins() -> None:
 
 
 def test_branches_preserve_factored_form() -> None:
-    """Sibling branches that both drive T (an ``out``, then a ``latch`` after
-    it) factor as And(parent, Or(local₁, local₂))."""
+    """Sibling branches that both drive T factor as And(parent, Or(local₁, local₂)).
+
+    The first branch has an ``out`` and the second has a ``latch``.
+    """
     P = Bool("P")
     X = Bool("X")
     Y = Bool("Y")
@@ -143,8 +145,8 @@ def test_branches_preserve_factored_form() -> None:
 
 
 def test_pivot_resolution_preserves_branch_topology() -> None:
-    """A resolved pivot keeps its rung's trunk; of its two ``out``s in that
-    rung, the last decides it."""
+    """A resolved pivot keeps its rung's trunk.  Of its two ``out``s in that rung, the last
+    decides it."""
     A = Bool("A")
     B = Bool("B")
     P = Bool("P")
@@ -166,8 +168,8 @@ def test_pivot_resolution_preserves_branch_topology() -> None:
 
 
 def test_pivot_written_below_a_branch_is_not_seen_by_it() -> None:
-    """A branch reads its contacts when the solve reaches it: a write of the
-    pivot by an instruction below that branch has not happened yet."""
+    """A branch reads its contacts when the solve reaches it.  A write of the pivot by an
+    instruction below that branch has not happened yet."""
     A = Bool("A")
     B = Bool("B")
     P = Bool("P")
@@ -185,9 +187,9 @@ def test_pivot_written_below_a_branch_is_not_seen_by_it() -> None:
 
 
 def test_trunk_contact_keeps_its_first_solved_value() -> None:
-    """A branch's inherited trunk contact keeps the value it was solved with
-    when the scan entered the rung, even after an earlier branch rewrote it;
-    only the branch's own contacts see that write."""
+    """A branch's inherited trunk contact keeps the value it was solved with when the scan
+    entered the rung, even after an earlier branch rewrote it.  Only the branch's own
+    contacts see that write."""
     A = Bool("A")
     C = Bool("C")
     D = Bool("D")
@@ -212,8 +214,8 @@ def test_trunk_contact_keeps_its_first_solved_value() -> None:
 
 
 def test_branches_of_different_parents_do_not_factor() -> None:
-    """Writers at the same depth under different parent branches inherit
-    different contacts, so they OR whole paths instead of sharing one parent."""
+    """Writers at the same depth under different parent branches inherit different contacts.
+    So they OR whole paths instead of sharing one parent."""
     G = Bool("G")
     X = Bool("X")
     Y = Bool("Y")
@@ -234,7 +236,7 @@ def test_branches_of_different_parents_do_not_factor() -> None:
 
 
 def test_and_or_combined() -> None:
-    """A, Or(B, C) topology via a rung condition and an Or contact."""
+    """A rung condition and an Or contact together give the topology A, Or(B, C)."""
     A = Bool("A")
     B = Bool("B")
     C = Bool("C")
@@ -614,8 +616,8 @@ def test_realistic_motor_circuit() -> None:
             out(Running)
         with Rung(Running):
             out(SealIn)
-        # Both paths into one coil (an Or contact; two out(MotorOut) would be
-        # two coils, the last one deciding)
+        # Both paths go into one coil through an Or contact.  Two out(MotorOut) would be
+        # two coils, and the last one would decide.
         with Rung(AnyOf(AllOf(Running, ~Fault), MaintOverride)):
             out(MotorOut)
 

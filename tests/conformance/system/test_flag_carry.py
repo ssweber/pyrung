@@ -1,28 +1,31 @@
-"""SC40 and SC46 across a scan boundary, with nothing between: the ``flag_carry`` group.
+"""Check whether SC40 and SC46 stay on across a scan boundary: the ``flag_carry`` group.
 
-Part ``follow2_carry``, the group alone, so that nothing but its own rungs and main's two runs
-between its op and its reads.
+Part ``follow2_carry`` holds the group alone, so that nothing but its own rungs and main's two
+runs sit between its op and its reads.
 
 ``flag_scan/math_flags_over_a_scan`` (part ``boot``) read SC40 and SC46 off on the scan after
-their op, but the op was not the last Math of its scan and the reads were not the first rungs of
-the next.  A false-rung Math sat below the division, and main called ``boot_read``, ``rtc_set``
-and ``for_wide`` before the reads.  Their rungs hold Maths true and false, and a false-rung Math
-clears the flags (``flag_steps``).  A true Math ran right after the root too.  So that case cannot
-tell a flag cleared at the scan's start from one cleared by a later Math.
+their op. But the op was not the last Math of its scan, and the reads were not the first rungs
+of the next scan. A false-rung Math sat below the division, and main called ``boot_read``,
+``rtc_set`` and ``for_wide`` before the reads. Their rungs hold Maths that are true and Maths
+that are false, and a false-rung Math clears the flags (``flag_steps``). A true Math also ran
+right after the root. So that case cannot tell a flag cleared at the scan's start from one
+cleared by a later Math.
 
-``math_flags_carry``: one Math, ``SQRT(DF) + 1 / DS`` into a DF, on scans 3 and 5 only, the last
-Math rung of the program; below it only Copies.  On scan 3 the DF holds 1.0 and the DS 0, so it
-raises SC40 alone; on scan 5 the DF holds -1.0 and the DS 1, so it raises SC46 alone.  The reads
-are the case's first rungs, Copies above its scan count, so on the next scan only main's Copy of
-the layout hash, the call and the reset rung's Fill and Copies (on a false rung) run before them.
+``math_flags_carry`` runs one Math, ``SQRT(DF) + 1 / DS`` into a DF, on scans 3 and 5 only. It is
+the last Math rung of the program, and only Copies sit below it. On scan 3 the DF holds 1.0 and
+the DS holds 0, so the Math raises SC40 alone. On scan 5 the DF holds -1.0 and the DS holds 1, so
+it raises SC46 alone. The reads are the case's first rungs, Copies above its scan count. So on
+the next scan only main's Copy of the layout hash, the call, and the Fill and Copies of the
+reset rung (on a false rung) run before them.
 
 - Result1 = 1: SC40 is still on at the top of the scan after.  0 would be a flag cleared at the
   scan's start, or by a false Copy or Fill.
 - Result2 = 1: SC46 is still on at the top of the scan after.
-- Result3 and Result4 are the controls, SC40 and SC46 read by Copies right after the op on its own
-  scan: 1, 1.  A 0 there is an op that did not raise its flag, and the reads above it say nothing.
+- Result3 and Result4 are the controls: Copies read SC40 and SC46 right after the op, on its own
+  scan, and both read 1.  A 0 there means the op did not raise its flag, and then the reads
+  above it say nothing.
 
-A CLICK reads 1, 1, 1, 1.  A flag carries into the next scan, and nothing clears it
+A CLICK reads 1, 1, 1, 1.  A flag carries into the next scan. Nothing clears it
 as the scan starts.  The case owns what ``memory.OWNED_APART`` lists under this group.
 """
 

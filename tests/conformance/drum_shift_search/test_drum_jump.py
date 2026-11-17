@@ -40,8 +40,8 @@ A case marked as a probe expects what pyrung reads until a CLICK says otherwise.
   4..8 (Result3 = 0).  A second drum is given step 5 and a
   jog (the hold scan) on scan 3 with Acc 9000 staged above it: the hold scan does not
   tick the accumulator, so Acc - 9000 = 0 (Result4), and the next scan's correction
-  keeps it, Acc / 1000 = 9 (ErrorCode).  ErrorCode reads thousands, so the time the drum adds after the correction
-  leaves it at 9.
+  keeps it, Acc / 1000 = 9 (ErrorCode).  ErrorCode reads thousands, so the time that the
+  drum adds after the correction leaves it at 9.
 
 The cases own C1110..C1200 and C1401..C1470, T251..T270, DD661..DD680 and the DS
 the group's rigs name (``memory.OWNED``).

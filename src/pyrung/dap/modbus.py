@@ -1,12 +1,11 @@
-"""Modbus TCP soft-PLC server embedded in a DAP session.
+"""Run a Modbus TCP soft-PLC server inside a DAP session.
 
 A ``pyclickplc.ClickServer`` serves the session's runner through a
-``ClickDataProvider``, so ordinary Modbus clients read and write the
-simulated PLC as they would a real CLICK; X inputs stay read-only.  The
-server's asyncio loop runs on a background thread owned by this module.
-Every provider call takes the adapter's ``_state_lock`` and goes to
-whichever runner the session holds at that moment, so the server keeps
-working across reloads.
+``ClickDataProvider``.  Ordinary Modbus clients read and write the simulated
+PLC as they would a real CLICK.  X inputs stay read-only.  The server's asyncio
+loop runs on a background thread that this module owns.  Every provider call
+takes the adapter's ``_state_lock`` and goes to whichever runner the session
+holds at that moment.  The server therefore keeps working across reloads.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ class ModbusConfig:
 
 
 def parse_modbus_config(adapter: Any, raw: Any) -> ModbusConfig | None:
-    """Parse the ``modbus`` launch argument; ``None`` when absent."""
+    """Parse the ``modbus`` launch argument, and return ``None`` when it is absent."""
     if raw is None or raw is False:
         return None
     if raw is True:
@@ -69,8 +68,8 @@ class SessionDataProvider:
         adapter = self._adapter
         with adapter._state_lock:
             self._provider_locked().write(address, value)
-            # Paused mid-scan, the patch would otherwise miss the scan already
-            # prepared.  While continue runs, the next scan picks it up.
+            # When paused mid-scan, the patch would otherwise miss the scan that is
+            # already prepared.  While continue runs, the next scan picks it up.
             if not adapter._executor_running_locked():
                 execution_flow.invalidate_mid_scan(adapter)
         self._adapter._request_state_frame({"origin": "modbus", "command": f"write {address}"})
@@ -89,7 +88,7 @@ class ModbusSimServer:
         self._thread: threading.Thread | None = None
 
     def start(self) -> bool:
-        """Start serving; on failure record ``error`` and return False."""
+        """Start serving and return True.  On failure, record ``error`` and return False."""
         from pyclickplc.server import ClickServer
 
         config = self.config
@@ -158,7 +157,7 @@ class ModbusSimServer:
 
 
 def _bind_error(config: ModbusConfig, exc: Exception) -> str:
-    """Describe a start failure, preferring the OS reason over the server's own error."""
+    """Return the message for a start failure.  Prefer the OS reason over the server's own error."""
     reason = str(exc) or type(exc).__name__
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -173,7 +172,7 @@ def _bind_error(config: ModbusConfig, exc: Exception) -> str:
 
 
 def start_modbus(adapter: Any, config: ModbusConfig) -> None:
-    """Start the session's Modbus server, reporting failure without raising."""
+    """Start the session's Modbus server.  Report a failure in the console instead of raising."""
     stop_modbus(adapter)
     server = ModbusSimServer(adapter, config)
     adapter._modbus = server
@@ -192,7 +191,7 @@ def stop_modbus(adapter: Any) -> None:
 
 
 def modbus_info(server: ModbusSimServer | None) -> dict[str, Any]:
-    """Body of the ``pyrungModbusInfo`` response."""
+    """Return the body of the ``pyrungModbusInfo`` response."""
     if server is None:
         return {
             "running": False,

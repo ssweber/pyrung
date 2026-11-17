@@ -123,11 +123,11 @@ def _read_trace_disposition(
             ("trace", "satisfied"),
         )
 
-    # Writer found, all conditions satisfied (no children, or only satisfied ones)
-    # — the output instruction just hasn't fired yet. This readiness has the same
-    # meaning at every trace depth: a timer result can make a nested Step writer
-    # ready one scan before the outer target writer observes Step, and a coil above
-    # the timer whose Done it reads sees that Done on the next scan. Let the loop coast.
+    # A writer was found and all its conditions are satisfied, meaning it has no children or
+    # only satisfied ones.  The output instruction just has not fired yet.  This readiness
+    # means the same at every trace depth.  A timer result can make a nested Step writer ready
+    # one scan before the outer target writer observes Step.  A coil above the timer that
+    # reads the timer's Done sees that Done on the next scan.  So let the loop coast.
     if any(
         node.writer_rung is not None
         and all(child.satisfied for child in node.children)
@@ -156,10 +156,10 @@ def _read_trace_disposition(
     if not opaque:
         return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_EMPTY)
 
-    # The trace stopped at a program-written value it cannot read further, but the program
-    # may be moving that value itself: a calc fed its own result, or any motion no advance
-    # profile describes.  An unchanged projection in which it closes on the wanted value is
-    # the positive reading; without one this stays a stop.
+    # The trace stopped at a program-written value that it cannot read further.  The program
+    # may be moving that value itself, for example a calc fed its own result, or any motion
+    # that no advance profile describes.  If an unchanged projection closes on the wanted
+    # value, that is the positive reading.  Without one, the trace stays a stop.
     if state is not None:
         motion = read_frontier_motion(
             state.work,

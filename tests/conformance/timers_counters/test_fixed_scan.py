@@ -47,19 +47,22 @@ READING: dict[str, range] = {
 
 
 def count_scans(slot: Any) -> None:
-    """``Scratch`` = the scan in progress, holding at the top of its Int: the first rung."""
+    """Count the scan in progress in ``Scratch`` on the first rung.
+
+    The count holds at the top of its Int.
+    """
     with Rung(slot.Cmd != 0, slot.Scratch < 32767):
         math(slot.Scratch + 1, slot.Scratch)
 
 
 def latch_count(slot: Any, done: Any, into: Any) -> None:
-    """*into* = the scan *done* first holds on."""
+    """Copy into *into* the scan on which *done* first holds."""
     with Rung(slot.Cmd != 0, done, into == 0):
         copy(slot.Scratch, into)
 
 
 def fire_with_the_scan_setting(slot: Any) -> None:
-    """``Fired`` once both counts are in, and on that scan what the scan was set to."""
+    """Set ``Fired`` once both counts are in, and record what the scan was set to on that scan."""
     answered = [slot.Cmd != 0, slot.Fired == 0, slot.Result1 != 0, slot.Result2 != 0]
     with Rung(*answered, system.sys.fixed_scan_mode):
         copy(1, slot.ErrorCode)
@@ -98,7 +101,7 @@ _RUNG_ON = 2
 
 
 def _prove_off_delay_and_drum(slot: Any) -> None:
-    """The off-delay counted from the scan the rung falls, the drum's step from its first."""
+    """Count the off-delay from the scan the rung falls and the drum's step from its first scan."""
     timer = ClickTimer(31)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch <= _RUNG_ON):

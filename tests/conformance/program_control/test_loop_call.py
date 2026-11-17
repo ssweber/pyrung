@@ -1,25 +1,25 @@
-"""A call inside a For body: the ``loop_call`` group (main-level, no ``Conf_LoopCall``).
+"""Test a call inside a For body: the ``loop_call`` group (main-level, no ``Conf_LoopCall``).
 
-CLICK has no nested subroutine calls, so a call has to start in the main
-program.  This group runs its case rungs in main (``Group(in_main=True)``) and
-each case defines the helper subroutine it calls (``Conf_LoopCall...``).  It is
-part ``control``.  The cases own no raw memory.
+CLICK has no nested subroutine calls, so a call has to start in the main program. This group
+runs its case rungs in main (``Group(in_main=True)``). Each case defines the helper subroutine
+that it calls (``Conf_LoopCall...``). The group is part ``control``. The cases own no raw
+memory.
 
-CLICK takes a Call between For and Next.  Its error C010D counts the loops of
-called subroutines toward the nesting limit of 3.
+CLICK accepts a Call between For and Next. Its error C010D counts the loops of called
+subroutines toward the nesting limit of 3.
 
 - ``call_inside_loop``: ``forloop(3)`` whose body calls a helper that adds 1
-  to Result1.  The helper runs once per iteration, so Result1 = 3.  A call
-  run once per scan, or ignored, would read 1 or 0.
+  to Result1. The helper runs once per iteration, so Result1 = 3. A call
+  that ran once per scan, or was ignored, would read 1 or 0.
 - ``body_contact_after_call``: the body rung is ``Scratch == 0`` and its Call
   runs a helper that adds 1 to Result1 and sets Scratch.  The body-rung
   contact is evaluated on every iteration, so iterations 2 and 3 skip the
-  call and Result1 = 1.  A contact evaluated once when the loop starts would
-  call on all three and read 3.
+  call and Result1 = 1. A contact that was evaluated once when the loop starts
+  would call on all three and read 3.
 - ``loop_in_called_subroutine``: two nested loops of 2 in main, the Call in
-  the inner one, and a helper with a loop of 2 that adds 1 to Result1.  That
-  is depth 3 counting the helper's loop, and CLICK reads 2 * 2 * 2 = 8.  A
-  fourth level is not probed here, because pyrung's exporter refuses it
+  the inner one, and a helper with a loop of 2 that adds 1 to Result1. That
+  is depth 3 counting the helper's loop, and CLICK reads 2 * 2 * 2 = 8. A
+  fourth level is not probed here, because pyrung's exporter rejects it
   (``CLK_FORLOOP_NESTING_DEPTH``).
 """
 

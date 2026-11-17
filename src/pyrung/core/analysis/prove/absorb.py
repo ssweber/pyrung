@@ -1,9 +1,9 @@
 """Done/Acc pairing, and the accumulator absorption of how()'s domain prior.
 
-What lives here is structural (Done/Acc pairs, write targets, the data-read
-exclusivity check ``_has_forbidden_data_read``, which classify shares) plus
-the absorptions PILOT's ``how()`` prior is built from (``_build_prior_facts``).
-Its world key projects a timer's Done and Acc onto
+This module holds the structural parts: Done/Acc pairs, write targets, and the
+data-read exclusivity check ``_has_forbidden_data_read``, which classify shares.  It
+also holds the absorptions that PILOT's ``how()`` prior is built from
+(``_build_prior_facts``).  The prior's world key projects a timer's Done and Acc onto
 ``False``/``PENDING``/``True`` (``_done_acc_state``).  It projects a progress
 accumulator onto threshold-crossing bits (``_ThresholdVectorSpec``), and its
 earned-work ordinal sources come from the same vectors.  PILOT replays every
@@ -29,7 +29,8 @@ comparison outcomes.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import weakref
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -40,8 +41,6 @@ from .expr import _build_atom_index, _collect_atoms_for_tag
 from .results import PENDING
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
 
@@ -87,17 +86,17 @@ class _DoneAccInfo:
 
 
 def _drum_flag_without_its_time(drum: Any, program: Program) -> str | None:
-    """Why *drum*'s completion flag can be on without its last step's time up, or None.
+    """Return why *drum*'s completion flag can be on without its last step's time up, or None.
 
     The Done/Acc tri-state reads a flag that is on as settled, whatever the
     accumulator holds.  That holds for a time drum only while the flag comes
-    on at the last step and stays there until a reset.  A jump keeps the flag
-    on but moves the step and clears the accumulator; a jog on the last step
-    turns the flag on with that step's time not yet up; a flag that starts on
-    has no time behind it; and another writer of its step register can move
-    it, or of the flag can free it with its accumulator as it stands.  Then
-    the drum's time is a real dimension, not absorbed.  The reason reads as a
-    hint.
+    on at the last step and stays there until a reset.  Five things break that.
+    A jump keeps the flag on but moves the step and clears the accumulator.  A jog
+    on the last step turns the flag on with that step's time not yet up.  A flag that
+    starts on has no time behind it.  Another writer of the step register can move
+    the step.  Another writer of the flag can free it with its accumulator as it
+    stands.  Then the drum's time is a real dimension, not absorbed.  The reason
+    reads as a hint.
     """
     from pyrung.core.validation._common import walk_instructions
 
@@ -221,7 +220,7 @@ def _prior_key_done_specs(
     done_acc: Mapping[str, str],
     done_kinds: Mapping[str, str],
 ) -> tuple[_StateKeyDoneSpec, ...]:
-    """The Done bits of the how() prior's world key: each with an absorbed accumulator."""
+    """Return the Done bits of the how() prior's world key that have an absorbed accumulator."""
     specs: list[_StateKeyDoneSpec] = []
     for index, done_name in enumerate(stateful_names):
         acc_name = done_acc.get(done_name)
@@ -240,7 +239,7 @@ def _prior_key_done_specs(
 
 
 def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
-    """``(tag_name, instruction_type)`` for each tag *instr* writes.
+    """Return ``(tag_name, instruction_type)`` for each tag that *instr* writes.
 
     The destinations are the ones ``write_sites`` reads from the instruction's
     declarations, with the receive payload and timer and counter status bits.
@@ -288,35 +287,66 @@ def _has_forbidden_data_read(
     return False
 
 
-def _owner_reset_condition_refs(
-    program: Program,
-    acc_name: str,
-    kind: str,
-) -> frozenset[str]:
-    """Return tags read by reset conditions on the owner of *acc_name*."""
+@dataclass(frozen=True)
+class _LegReads:
+    """The tags the timer and counter legs of one program read."""
+
+    # The program's rungs when they were read, to tell when rungs have been added.
+    rungs: tuple[Any, ...]
+    # Every tag an instruction's own legs read, besides the rung's power.
+    snapshot: frozenset[str]
+    # Acc name -> the tags read by the legs that zero that Acc.
+    resets: Mapping[str, frozenset[str]]
+
+
+# The readers below run once per tag or Acc.  This cache reads the legs once per program,
+# and checks only the program's rungs on each call.  An instruction edited in place after
+# that is not seen, as in PILOT's own cache of profiles.
+_LEG_READS: weakref.WeakKeyDictionary[Program, _LegReads] = weakref.WeakKeyDictionary()
+
+
+def _program_rungs(program: Program) -> tuple[Any, ...]:
+    subroutines = tuple((name, tuple(rungs)) for name, rungs in program.subroutines.items())
+    return (tuple(program.rungs), subroutines)
+
+
+def _leg_reads(program: Program) -> _LegReads:
     from pyrung.core.analysis.pdg import _extract_tag_names
-    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.timers import OnDelayInstruction
+    from pyrung.core.relations import relations_for
     from pyrung.core.validation._common import walk_instructions
 
-    refs: set[str] = set()
+    rungs = _program_rungs(program)
+    found = _LEG_READS.get(program)
+    # Tuples compare their items by identity first, and a rung has no __eq__ of its own.
+    if found is not None and found.rungs == rungs:
+        return found
+    snapshot: set[str] = set()
+    resets: dict[str, set[str]] = {}
     for instr in walk_instructions(program):
-        is_owner = False
-        if kind == _DONE_KIND_ON_DELAY:
-            is_owner = isinstance(instr, OnDelayInstruction) and instr.accumulator.name == acc_name
-        elif kind == _DONE_KIND_COUNT_UP:
-            is_owner = isinstance(instr, CountUpInstruction) and instr.accumulator.name == acc_name
-        elif kind == _DONE_KIND_COUNT_DOWN:
-            is_owner = (
-                isinstance(instr, CountDownInstruction) and instr.accumulator.name == acc_name
-            )
-        if not is_owner:
+        relations = relations_for(instr)
+        if relations is None:
             continue
-        reset_condition = getattr(instr, "reset_condition", None)
-        if reset_condition is None:
-            continue
-        refs.update(_extract_tag_names(reset_condition, {}))
-    return frozenset(refs)
+        for leg in relations.snapshot_fields:
+            snapshot.update(_extract_tag_names(getattr(instr, leg), {}))
+        refs = resets.setdefault(instr.accumulator.name, set())
+        for leg in relations.zeroing_fields:
+            refs.update(_extract_tag_names(getattr(instr, leg), {}))
+    found = _LegReads(
+        rungs,
+        frozenset(snapshot),
+        {acc: frozenset(refs) for acc, refs in resets.items()},
+    )
+    _LEG_READS[program] = found
+    return found
+
+
+def _owner_reset_condition_refs(program: Program, acc_name: str) -> frozenset[str]:
+    """Return tags read by the conditions that zero *acc_name* in its owner's code.
+
+    The rung's own power is left out, so an off delay (which zeroes Acc while enabled)
+    has none.
+    """
+    return _leg_reads(program).resets.get(acc_name, frozenset())
 
 
 def _condition_dependency_reaches_targets(
@@ -407,9 +437,8 @@ def _owner_reset_depends_on_progress(
     graph: ProgramGraph,
     acc_name: str,
     done_name: str | None,
-    kind: str,
 ) -> bool:
-    reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+    reset_refs = _owner_reset_condition_refs(program, acc_name)
     if not reset_refs:
         return False
     targets = {acc_name}
@@ -1551,8 +1580,8 @@ def _find_threshold_absorptions(
                 )
                 continue
             done_name = done_by_acc.get(acc_name)
-            if _owner_reset_depends_on_progress(program, graph, acc_name, done_name, kind):
-                reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+            if _owner_reset_depends_on_progress(program, graph, acc_name, done_name):
+                reset_refs = _owner_reset_condition_refs(program, acc_name)
                 targets = frozenset({acc_name} | ({done_name} if done_name is not None else set()))
                 if not _reset_feedback_is_threshold_mediated(graph, reset_refs, targets):
                     blockers.append(
@@ -1603,7 +1632,7 @@ def _find_threshold_absorptions(
                     if preset_atom not in unique_atoms:
                         unique_atoms = unique_atoms + (preset_atom,)
                     preset_injected = True
-            reset_refs = _owner_reset_condition_refs(program, acc_name, kind)
+            reset_refs = _owner_reset_condition_refs(program, acc_name)
             if not preset_injected and done_name in reset_refs:
                 blockers.append(
                     _ThresholdBlocker(

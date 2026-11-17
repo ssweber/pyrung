@@ -14,13 +14,13 @@ from typing import Any
 
 from pyrung import PLC
 
-# A runner starts its clock at the wall-clock time.  The program copies the clock into tags
+# A runner starts its clock at the wall-clock time. The program copies the clock into tags
 # every scan, so a fixed start makes each run spend the same scans.
 RTC_AT_START = datetime(2026, 1, 2, 3, 4, 5)
 
 
 def tumbler_plc(logic: Any, **kwargs: Any) -> PLC:
-    """Build a runner on *logic* whose clock starts at ``RTC_AT_START``."""
+    """Build a runner on *logic* with its clock starting at ``RTC_AT_START``."""
     plc = PLC(logic, **kwargs)
     plc.set_rtc(RTC_AT_START)
     return plc

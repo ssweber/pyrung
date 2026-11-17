@@ -1,76 +1,79 @@
 """A guarded scan loop over the generated kernel.
 
-A long run spends most of its scans repeating the scan before it, with only a
-timer's accumulator and a clock moving.  This module traces one real scan over
-the kernel's *generated source*, and emits a tiny loop that repeats that scan:
-arithmetic on the values that move, and a guard on every decision that depends
-on one.  Nothing is jumped: every scan in the loop runs.  A guard that fails
-exits the loop before that scan commits, and an ordinary compiled scan runs it.
+A long run spends most of its scans repeating the scan before it. In those scans, only a
+timer's accumulator and a clock move. This module traces one real scan over the kernel's
+*generated source* and emits a tiny loop that repeats that scan. The loop does
+arithmetic on the values that move, and it guards every decision that depends on one
+of them. Nothing is jumped: every scan in the loop runs. If a guard fails, the loop
+exits before that scan commits, and an ordinary compiled scan runs it.
 
 Why one loop iteration equals one kernel scan
 ---------------------------------------------
 
-The kernel is a deterministic function of what it reads: ``tags``, ``blocks``
-and ``memory`` (``prev`` is declined, and ``dt`` is fixed for a run).  The tracer
-interprets its source statement by statement on the state at trace time, and
-every value it reads is one of two things:
+The kernel is a deterministic function of what it reads: ``tags``, ``blocks`` and
+``memory``. The tracer declines a scan that reads ``prev``, and ``dt`` is fixed for a
+run. The tracer interprets the kernel's source statement by statement on the state at
+trace time.
+Every value it reads is one of two things:
 
-* A **constant**: a recorded (key, value) pair.  A trace only runs from a state
-  in which every recorded pair still holds, compared by type and value.  Here and
-  below any NaN is the same value as any other.  From any NaN the kernel takes the
-  same decisions and stores a NaN in the same cells, though its sign may differ
-  (``math(-R, R)``).  No pyrung reader tells two NaNs apart.  History, the DAP
-  and ``cause()`` ask :func:`~pyrung.core.state.value_changed` whether a tag
-  changed.  Text shows every NaN as ``nan``.
-  An Unpack Copy and the Modbus servers give CLICK's 0xFFFF:0xFFFF for any NaN.
-* A **moving** value: read from the loop's locals on every iteration.  These are
-  the time-derived system tags (:data:`MOVING_SYSTEM_TAGS`), plus every cell the
-  scan changes, found by a fixed point: trace, and any cell whose end-of-scan
-  value is not exactly the value it read becomes moving; repeat until none is.
+* A **constant** is a recorded (key, value) pair. A trace only runs from a state in
+  which every recorded pair still holds, compared by type and value. Here and below,
+  any NaN is the same value as any other. From any NaN the kernel takes the same
+  decisions and stores a NaN in the same cells, though the sign may differ
+  (``math(-R, R)``). No pyrung reader tells two NaNs apart. History, the DAP and
+  ``cause()`` ask :func:`~pyrung.core.state.value_changed` whether a tag changed.
+  Text shows every NaN as ``nan``. An Unpack Copy and the Modbus servers give CLICK's
+  0xFFFF:0xFFFF for any NaN.
+* A **moving** value is read from the loop's locals on every iteration. The moving
+  values are the time-derived system tags (:data:`MOVING_SYSTEM_TAGS`) and every cell
+  that the scan changes. The tracer finds those cells with a fixed point. It traces,
+  and any cell whose end-of-scan value is not exactly the value it read becomes
+  moving. It repeats until no cell changes status.
 
-So at the fixed point the scan leaves every constant as it found it.  Each value
-derived from a moving one is computed in the loop by the same Python operation
-the kernel performs, on the same operands.  Each decision taken on one (a branch,
-a short circuit, a subscript) becomes a guard requiring the traced outcome.
-Therefore, by induction over iterations: if the constants hold on entry and the
-guards pass, the kernel would have taken exactly the traced path, so it computes
-the loop's values and writes them, and the constants hold again for the next
-iteration.  Nothing commits until every guard of the iteration has passed, and any
-exception raised by a loop operation exits the loop the same way, so the real
-scan decides what happens on that iteration.
+So at the fixed point the scan leaves every constant as it found it. The loop
+computes each value derived from a moving one with the same Python operation that the
+kernel performs, on the same operands. Each decision taken on a moving value (a
+branch, a short circuit, a subscript) becomes a guard that requires the traced
+outcome. By induction over iterations, the following holds. If the constants hold on
+entry and the guards pass, the kernel would have taken exactly the traced path. It
+would compute the loop's values and write them, and the constants would hold again for
+the next iteration. Nothing commits until every guard of the iteration has passed. An
+exception raised by a loop operation also exits the loop, so the real scan decides
+what happens on that iteration.
 
-The rest of a scan around the kernel functions is shown idle on entry and kept
-idle by the loop.  ``step_replay`` also runs the scan hooks, input overrides and
-system tag refresh.  Pending patches, forces and ``randint`` draws decline
-(:meth:`ScanLoop._blocked` and :meth:`ScanLoop._whole_run_blocker`).  The hooks
-must be quiet on entry, and a scan that would change anything they read
-(:data:`~pyrung.core.system_points.HOOK_TAG_NAMES`) declines.  Clock and RTC values
-are computed in the loop by the functions the real scan uses.
+The loop checks that the rest of a scan around the kernel functions is idle on entry,
+and the loop keeps that part idle. ``step_replay`` also runs the scan hooks, input
+overrides and system tag refresh. Pending patches, forces and ``randint`` draws make
+the loop decline (:meth:`ScanLoop._blocked` and :meth:`ScanLoop._whole_run_blocker`).
+The hooks must be quiet on entry. A scan that would change anything the hooks read
+(:data:`~pyrung.core.system_points.HOOK_TAG_NAMES`) declines. The loop computes clock
+and RTC values with the functions that the real scan uses.
 
 What makes it decline
 ---------------------
 
-Everything the tracer does not positively know.  Unknown statements, expressions
-and calls raise :class:`Decline`; they never guess.  A decline, a failed guard and
-an exception all end in the same place: a real compiled scan, which remains the
-floor.  In particular:
+The tracer declines on everything it does not positively know. It raises
+:class:`Decline` for an unknown statement, expression or call, and it never guesses.
+A decline, a failed guard and an exception all end in the same place: a real compiled
+scan, which remains the floor. In particular, these cases decline:
 
-* a system tag outside the closed classification below, a scan-derived one, or a
-  program with forces or ``randint``: plain compiled stepping for the whole run;
-* a moving operation that raised while tracing, a moving iterable, a value that
-  is not a scalar, a call that is not a generated helper or an allow-listed pure
-  builtin (``run_function`` bodies among them);
-* a stop predicate form outside :func:`_guardable`.
+* A system tag outside the closed classification below, a scan-derived system tag, or
+  a program with forces or ``randint``. The whole run uses plain compiled stepping.
+* A moving operation that raised while tracing, a moving iterable, a value that is
+  not a scalar, or a call that is neither a generated helper nor an allow-listed pure
+  builtin (``run_function`` bodies are among the calls that decline).
+* A stop predicate form outside :func:`_guardable`.
 
 Self check
 ----------
 
-The argument above leans on the tracer agreeing with Python about the generated
-source.  So the first iteration of each new trace runs on a copy of the state,
-and its result is compared with the real compiled scan run from the same state:
-every tag, block cell, memory entry, block write record, the scan id and the
-timestamp, types included.  A mismatch stops the loop for the rest of the run, and
-under ``--fold-check`` (:data:`STRICT_SELF_CHECK`) raises :class:`SelfCheckMismatch`.
+The argument above relies on the tracer agreeing with Python about the generated
+source. So the first iteration of each new trace runs on a copy of the state. After
+the real compiled scan runs from the same state, the loop compares the two results. The
+comparison covers every tag, block cell, memory entry, block write record, the scan
+id and the timestamp, types included. A mismatch stops the loop for the rest of the
+run. Under ``--fold-check`` (:data:`STRICT_SELF_CHECK`) it raises
+:class:`SelfCheckMismatch`.
 """
 
 from __future__ import annotations
@@ -129,15 +132,15 @@ logger = logging.getLogger(__name__)
 
 # --- The closed classification of system tags ---------------------------------
 #
-# Every system tag is in exactly one of these three (a test enforces it, and a
-# program referencing an unclassified one declines).  Calling a moving tag
-# constant would land wrong, so nothing is constant by default: a new tag is
+# Every system tag is in exactly one of these three. A test enforces it, and a
+# program that references an unclassified tag declines. Treating a moving tag as
+# constant would give wrong results, so no tag is constant by default. A new tag stays
 # unclassified until someone decides.
 
-# Derived from the timestamp.  The loop recomputes them on every iteration.
+# Derived from the timestamp. The loop recomputes them on every iteration.
 MOVING_SYSTEM_TAGS = frozenset(_CLOCK_HALF_PERIODS) | RTC_FIELD_TAG_NAMES
 
-# Derived from the scan id on every scan.  A program reading one steps.
+# Derived from the scan id on every scan. A program that reads one steps.
 DECLINING_SYSTEM_TAGS = frozenset(
     {
         system.sys.scan_counter.name,
@@ -145,8 +148,8 @@ DECLINING_SYSTEM_TAGS = frozenset(
     }
 )
 
-# Held in tags and rewritten only by a kernel write (which the tracer sees), by a
-# scan hook (which must be quiet), or derived from memory the hooks own.
+# Held in tags. Only a kernel write (which the tracer sees) or a scan hook (which must be
+# quiet) rewrites them, or they derive from memory that the hooks own.
 # ``first_scan`` is False from scan 1 on, and the loop refuses scan 0.
 CONSTANT_SYSTEM_TAGS = frozenset(
     tag.name
@@ -198,41 +201,45 @@ _CLASSIFIED_SYSTEM_TAGS = MOVING_SYSTEM_TAGS | DECLINING_SYSTEM_TAGS | CONSTANT_
 
 # --- Tuning -------------------------------------------------------------------
 
-# Most traces a run may build, however long.  A trace costs far more than a scan.
+# The most traces a run may build, however long it is. A trace costs far more than a scan.
 MAX_TRACES_PER_RUN: int = 64
 # Passes of the moving-set fixed point before giving up.
 MAX_FIXED_POINT_PASSES = 12
-# A firing shorter than this did not pay for its attempt, and the next attempt waits,
-# twice as long each time in a row.  Measured on small programs, where a real scan is
+# A firing shorter than this did not pay for its attempt. The next attempt then waits,
+# twice as long each time in a row. Measured on small programs, where a real scan is
 # cheapest: firing for 2 scans at a time costs a third more than plain stepping, and
-# for 4 at a time saves a quarter.
+# firing for 4 at a time saves a quarter.
 UNPRODUCTIVE_BELOW = 3
 MAX_ATTEMPT_WAIT = 4096
-# A run shorter than this cannot pay back a trace, and a run earns one more trace for
-# each time it is this long.  Measured on the tumbler, a trace costs 15-25 ms, the work
-# of some 400 real scans, and each scan the loop runs saves about 50 us.
+# A run shorter than this cannot pay back a trace. A run earns one more trace for each
+# time it is this long. Measured on the tumbler, a trace costs 15-25 ms, which is the work
+# of some 400 real scans, and each scan that the loop runs saves about 50 us.
 MIN_RUN_SCANS = 1000
 
 # --- Test modes (tests/fold_check.py and tests/core/test_scan_trace.py) --------
 
-# True: a self check mismatch raises rather than quietly declining.
+# If True, a self check mismatch raises instead of quietly declining.
 STRICT_SELF_CHECK = False
-# Scans each firing of the loop may run, cycled, so that the states between its
-# exits can be compared with stepping.  None: as many as the run allows.
+# The number of scans each firing of the loop may run, cycling through these sizes. The
+# cycling lets a test compare the states between exits with stepping. None means as many
+# scans as the run allows.
 BURST_SIZES: tuple[int, ...] | None = None
 
-# Accumulated over all runs in this process: loop and real scans, traces, reasons.
+# Counts accumulated over all runs in this process: loop scans, real scans, traces and
+# the reasons for declining.
 TOTALS: Counter[str] = Counter()
-# Told of each self check mismatch, kept or not: a count cannot say which it was.
+# The loop calls each observer with the message of every self check mismatch, before it
+# raises or logs a warning. The observers exist because a count cannot say which mismatch
+# happened.
 SELF_CHECK_OBSERVERS: list[Callable[[str], None]] = []
 
 
 class Decline(Exception):
-    """The tracer met something it does not positively understand."""
+    """Raised when the tracer meets something it does not positively understand."""
 
 
 class SelfCheckMismatch(AssertionError):
-    """A trace's first iteration disagreed with the real scan it stands for."""
+    """Raised when a trace's first iteration disagrees with the real scan it stands for."""
 
 
 class _Missing:
@@ -247,10 +254,11 @@ _SCALAR_TYPES = (bool, int, float, str, type(None))
 
 
 def same(a: Any, b: Any) -> bool:
-    """Whether two state values are the same value of the same type.
+    """Return True if two state values are the same value of the same type.
 
-    ``==`` says ``1 == True == 1.0`` and ``0.0 == -0.0``, and that NaN differs from
-    itself.  A stored value keeps its type, and -0.0 divides differently from 0.0.
+    ``==`` treats ``1 == True == 1.0`` and ``0.0 == -0.0`` as equal, and it treats NaN as
+    different from itself. A stored value keeps its type, and -0.0 divides differently
+    from 0.0.
     """
     if a is b:
         return True
@@ -274,8 +282,8 @@ class _Function:
     local_names: frozenset[str]
 
 
-# Generated helpers the kernel may call.  ``run_function`` bodies are the user's code,
-# called by reference as ``_fn_*``: they are not on this list and so decline.
+# Generated helpers that the kernel may call. ``run_function`` bodies are the user's code.
+# The kernel calls them by reference as ``_fn_*``. They are not on this list, so they decline.
 _HELPER_PREFIXES = (
     "_sub_",
     "_resolve_index_",
@@ -292,8 +300,8 @@ def _traceable_helper(name: str) -> bool:
 class KernelSource:
     """A kernel's generated source, parsed once per compiled kernel.
 
-    What the tracer may rely on and nothing more: the functions it may step into,
-    and the module-level constants nothing ever rebinds.
+    The tracer may rely on this and nothing more: the functions it may step into, and the
+    module-level constants that nothing rebinds.
     """
 
     def __init__(self, kernel: CompiledKernel) -> None:
@@ -324,7 +332,7 @@ class KernelSource:
         self._kernel_source = kernel.source
         self._snippets: dict[tuple[int, int], str] = {}
         self.scalar_writes, self.opaque_tag_writes = _scalar_writes(tree)
-        # A kernel global loaded from a tag at the top of a scan is its working copy.
+        # A kernel global that a scan loads from a tag at its top is the tag's working copy.
         self.working_copies: dict[str, str] = {
             statement.targets[0].id: cast("str", statement.value.slice.value)
             for function in self.step_functions
@@ -339,7 +347,7 @@ class KernelSource:
         }
 
     def snippet(self, guard: _Guard) -> str:
-        """The function, line number and source text of the statement that made *guard*."""
+        """Return the function, line number and source text of the statement for *guard*."""
         if guard.why:
             return guard.why
         key = (guard.line, guard.inner)
@@ -372,10 +380,11 @@ _NOT_LITERAL = object()
 
 
 def _scalar_writes(tree: ast.Module) -> tuple[dict[str, list[Any]], bool]:
-    """Each scalar's writes in the source: the value stored, where it is a literal.
+    """Return each scalar's writes in the source, and whether any write is opaque.
 
-    Also whether something writes ``tags`` other than through a scalar's own local, which
-    says nothing about which tag it writes.
+    For each scalar tag the result lists the value stored, where it is a literal. The
+    second item is True if something writes ``tags`` other than through a scalar's own
+    local. Such a write does not say which tag it writes.
     """
     bodies = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
     assigned: dict[int, ast.expr] = {}
@@ -435,7 +444,7 @@ def _literal_stored(value: ast.expr | None) -> Any:
         and len(value.args) == 1
         and isinstance(value.args[0], ast.Constant)
         and type(value.args[0].value) is int
-        # Clamped or wrapped alike by every integer type: it stores itself.
+        # Every integer type clamps or wraps this range alike, so the value stores as itself.
         and 0 <= value.args[0].value <= 32767
     ):
         return value.args[0].value
@@ -443,11 +452,11 @@ def _literal_stored(value: ast.expr | None) -> Any:
 
 
 def may_store_a_default(kernel: CompiledKernel, absent: Mapping[str, Any]) -> bool:
-    """Whether a scan can store its default into one of the *absent* tags.
+    """Return True if a scan can store its default into one of the *absent* tags.
 
-    Stepping adds a tag to the state on its first write.  A kernel scan does not say what
-    it wrote, and holds an absent tag at its default, so the first write can be noticed
-    only by the value leaving the default.  A write that stores the default cannot.
+    Stepping adds a tag to the state on its first write. A kernel scan does not report what
+    it wrote, and it holds an absent tag at its default. So the first write shows only when
+    the value leaves the default. A write that stores the default cannot be noticed.
     """
     if not absent:
         return False
@@ -468,7 +477,7 @@ def _describe_function(node: ast.FunctionDef) -> _Function:
     )
     params = tuple(arg.arg for arg in arguments.args) if simple else ()
     if not simple or arguments.defaults:
-        # The call site raises Decline: its argument count cannot match.
+        # The call site raises Decline, because its argument count cannot match.
         params = (*params, "<not traceable>")
     declared: set[str] = set()
     assigned: set[str] = set(params)
@@ -484,11 +493,12 @@ def _describe_function(node: ast.FunctionDef) -> _Function:
 
 
 class _Value:
-    """What a kernel expression holds: its concrete value on the traced scan, and
-    the loop local computing it when it depends on a moving value (else ``None``).
+    """The result of a kernel expression.
 
-    ``is_bool`` marks a local known to hold exactly True or False on every
-    iteration.  Once a guard pins its truth its value is known, so it stops moving.
+    ``concrete`` is the value on the traced scan. ``local`` names the loop local that
+    computes it when it depends on a moving value, and is ``None`` otherwise. ``is_bool``
+    marks a local that holds exactly True or False on every iteration. Once a guard pins
+    the truth of a local, its value is known and it stops moving.
     """
 
     __slots__ = ("concrete", "local", "is_bool")
@@ -508,7 +518,7 @@ class _Ref:
 
 
 class _KernelRaised(Exception):
-    """The kernel, run on constants, would raise this here."""
+    """Raised when the kernel, run on constants, would raise this exception here."""
 
     def __init__(self, original: BaseException) -> None:
         super().__init__(repr(original))
@@ -620,9 +630,9 @@ class _Op:
 class _Guard:
     leave_if: str
     uses: tuple[str, ...]
-    # Where the jit counters say it came from.  The lines are the kernel source lines of the
-    # step function's statement and of the innermost one, 0 if none.  A guard a coast adds has
-    # no line, so it says in *why* what it watches.
+    # Where the jit counters say the guard came from. ``line`` and ``inner`` are the kernel
+    # source lines of the step function's statement and of the innermost statement, or 0 if
+    # there is none. A guard that a coast adds has no line, so *why* says what it watches.
     line: int = 0
     inner: int = 0
     why: str = ""
@@ -641,10 +651,11 @@ _STOP_COMPARES: dict[type, type] = {
 
 
 def _guardable(condition: Any) -> bool:
-    """Whether a stop condition has a form the tracer can judge.
+    """Return True if a stop condition has a form the tracer can judge.
 
-    Exact types: a subclass may evaluate differently.  A derived system tag has
-    no stored value in the state a predicate reads, so it is not one of them.
+    The check uses exact types, because a subclass may evaluate differently. A derived
+    system tag has no stored value in the state that a predicate reads, so such a tag
+    does not qualify.
     """
     kind = type(condition)
     if kind in (AllCondition, AnyCondition):
@@ -678,7 +689,7 @@ class StopForm:
 
 
 def stop_form_of(predicate: Any) -> StopForm | None:
-    """The guardable form of a compiled stop predicate, or None."""
+    """Return the guardable form of a compiled stop predicate, or None."""
     condition = getattr(predicate, "guard_condition", None)
     if condition is None or not _guardable(condition):
         return None
@@ -704,9 +715,9 @@ def _count_store(
 
 
 class _Tracer:
-    """One concolic pass over a scan: the real path, with the moving values marked.
+    """Runs one concolic pass over a scan, following the real path and marking moving values.
 
-    Interprets the generated source only as far as it recognizes it.
+    It interprets the generated source only as far as it recognizes it.
     """
 
     def __init__(
@@ -728,15 +739,16 @@ class _Tracer:
         self.loop_constants: list[Any] = []
         self.not_live: list[tuple[str, str, int]] = []
         self.edge_bits: dict[str, bool] = {}
-        # Attempted stores this scan, by cell: how many, and how many of a moving value.
-        # What a rung's column says over a stretch depends on it, and nothing else knows.
+        # Attempted stores this scan, by cell. Each entry counts the stores, and how many of
+        # them store a moving value. What a rung's column says over a stretch depends on
+        # these counts, and nothing else records them.
         self.stores: dict[tuple[Any, ...], list[int]] = {}
         self.working_copy_stores: dict[tuple[Any, ...], list[int]] = {}
         self._globals: dict[str, _Value] = {}
         self._known_truth: dict[str, bool] = {}
         self._own_lists: dict[int, list[Any]] = {}
         self._temp_count = 0
-        # The statement being traced, in the step function and innermost, for _Guard.
+        # The statement being traced, in the step function and innermost, recorded for _Guard.
         self._line = 0
         self._inner = 0
         self._statements: dict[type, Callable[[Any, _Frame], None]] = {
@@ -795,7 +807,7 @@ class _Tracer:
         if len(arguments) != len(function.params):
             raise Decline(f"call of {function.node.name} with other arguments")
         frame = _Frame(function, dict(zip(function.params, arguments, strict=True)))
-        # A guard after the call names the caller's statement, not the helper's last one.
+        # A guard after the call must name the caller's statement, not the helper's last one.
         inner = self._inner
         try:
             self._block(function.node.body, frame)
@@ -828,7 +840,10 @@ class _Tracer:
         return _current_value(self._kernel, key)
 
     def release(self) -> None:
-        """Keep only what writing another loop needs.  A coast keeps many traces."""
+        """Drop everything except what a coast needs to write another loop from this trace.
+
+        A coast keeps many traces, so each one must stay small.
+        """
         self.cells = {key: self.cells[key] for key in self.entries}
         self.constants = {}
         self.seeds = set()
@@ -852,7 +867,7 @@ class _Tracer:
         if cell is not None:
             return cell
         if key[0] == "tags" and key[1] in SYSTEM_TAGS_BY_NAME:
-            # The run already declined these; this covers a read the list missed.
+            # The run already declined these tags. This check covers a read the list missed.
             if key[1] in DECLINING_SYSTEM_TAGS or key[1] not in _CLASSIFIED_SYSTEM_TAGS:
                 raise Decline(f"scan reads {key[1]}")
         current = self._current(key)
@@ -878,8 +893,8 @@ class _Tracer:
         if key in self.seeds:
             self.read(key)
             if key not in self.entries:
-                # A cell that moved once and this state lacks reads as a constant absence,
-                # and the scan adding it repeats nothing.
+                # A cell that moved once, but that this state lacks, reads as a constant
+                # absence. A scan that adds the cell repeats nothing.
                 raise Decline("scan adds a moving cell")
         else:
             self.constants.setdefault(key, self._current(key))
@@ -890,7 +905,7 @@ class _Tracer:
     # -- Loop operations --------------------------------------------------------
 
     def _atom(self, value: _Value) -> str:
-        """Spell a value in the loop: its local, a literal, or a bound constant."""
+        """Return a value as the loop spells it: its local, a literal, or a bound constant."""
         if value.local is not None:
             return value.local
         concrete = value.concrete
@@ -929,7 +944,7 @@ class _Tracer:
         self.ops.append(_Guard(leave_if, uses, self._line, self._inner))
 
     def _truth(self, value: _Value) -> bool:
-        """Decide on *value*: its truth now, and a guard to keep it."""
+        """Return the truth of *value* on the traced scan, and add a guard that keeps it."""
         local = value.local
         truth = bool(value.concrete)
         if local is None:
@@ -943,7 +958,7 @@ class _Tracer:
         return truth
 
     def _pinned(self, value: _Value) -> Any:
-        """A value a container access needs concretely, with a guard that it stays."""
+        """Return a value that a container access needs concretely, and guard that it stays."""
         if value.local is None:
             return value.concrete
         concrete = value.concrete
@@ -999,7 +1014,7 @@ class _Tracer:
             if target.id in frame.function.global_names:
                 self._globals[target.id] = value
                 tag = self._source.working_copies.get(target.id)
-                # The load at the top of the scan is the cell itself, not an attempt.
+                # The load at the top of the scan is the cell itself, so it is not an attempt.
                 if tag is not None and value is not self.cells.get(("tags", tag)):
                     _count_store(self.working_copy_stores, ("tags", tag), value)
             else:
@@ -1024,7 +1039,7 @@ class _Tracer:
         index = self._pinned(self._eval(target.slice, frame))
         reference = container.concrete
         if isinstance(reference, list) and id(reference) in self._own_lists:
-            # A list this scan built, so nothing outside the scan can see it.
+            # This scan built the list, so nothing outside the scan can see it.
             try:
                 reference[index] = value
             except (IndexError, TypeError) as exc:
@@ -1096,8 +1111,8 @@ class _Tracer:
             exception = exception.func
         if not isinstance(exception, ast.Name) or exception.id not in _KERNEL_EXCEPTIONS:
             raise Decline("raise of an unknown exception")
-        # The message is not evaluated: nothing reads it, and the kernel's raise
-        # reaches a handler or ends the trace before any later statement.
+        # The tracer does not evaluate the message, because nothing reads it. The kernel's
+        # raise reaches a handler, or ends the trace, before any later statement runs.
         raise _KernelRaised(_KERNEL_EXCEPTIONS[exception.id]("kernel"))
 
     def _break(self, _statement: ast.Break, _frame: _Frame) -> None:
@@ -1160,7 +1175,7 @@ class _Tracer:
             result = self._apply_compare(left, type(comparison), right)
             if position == last:
                 return result
-            # A chain stops at its first false link, without evaluating the rest.
+            # A chain stops at its first false link and does not evaluate the rest.
             if not self._truth(result):
                 return result
             left = right
@@ -1279,8 +1294,8 @@ class _Tracer:
         iterable = self._eval(generator.iter, frame)
         if iterable.local is not None or not isinstance(iterable.concrete, _ITERABLE_TYPES):
             raise Decline("comprehension over an unknown value")
-        # A comprehension's target has a scope of its own: it must not outlive the
-        # comprehension or disturb a local, or a global, of the same name.
+        # A comprehension's target has its own scope. It must not outlive the comprehension,
+        # and it must not disturb a local or a global of the same name.
         names = {
             child.id
             for child in ast.walk(generator.target)
@@ -1324,7 +1339,7 @@ class _Tracer:
         if name == "len" and len(arguments) == 1:
             reference = arguments[0].concrete
             if isinstance(reference, _Ref) and reference.kind == "block":
-                # A kernel's block keeps the size its spec gives it, as _cell_key assumes.
+                # A kernel's block keeps the size that its spec gives it. _cell_key assumes this.
                 return _Value(len(self._kernel.blocks[reference.name]))
         pure = _PURE_BUILTINS.get(name)
         if pure is None:
@@ -1332,10 +1347,11 @@ class _Tracer:
         return self._pure(pure, arguments)
 
     def _lambda_call(self, callee: ast.Lambda, node: ast.Call, frame: _Frame) -> _Value:
-        """A lambda called where it is written, as a median of an even count is generated.
+        """Trace a lambda that is called where it is written.
 
-        Its body is one expression and nothing in an expression the tracer follows assigns,
-        so the frame it sees is the caller's with the parameters bound.
+        The generated code for the median of an even count has this form. The lambda's body
+        is one expression, and nothing in an expression that the tracer follows assigns. So
+        the lambda sees the caller's frame with its parameters bound.
         """
         signature = callee.args
         if (
@@ -1400,14 +1416,15 @@ class _Tracer:
     # -- End of the scan: what the run asks of it --------------------------------
 
     def judge_stop(self, form: StopForm) -> None:
-        """Guard the stop predicate false on the state this scan leaves.
+        """Guard that the stop predicate is false on the state this scan leaves.
 
-        A predicate judges the committed state: a tag from the state, and a block
-        cell only once a scan has written it, else the tag's default.  True here
-        declines: the real scan runs, and the real predicate decides.
+        A predicate judges the committed state. It reads a tag from the state. It reads a
+        block cell only after a scan has written the cell, and otherwise it reads the tag's
+        default. If the predicate is true here, the tracer declines. The real scan then
+        runs, and the real predicate decides.
 
-        The edge memory holds still.  Each edge's bit stays as last seen, so no
-        edge fires, and the bits the predicate would record are the ones it has.
+        The edge memory holds still. Each edge's bit stays as last seen, so no edge fires.
+        The bits that the predicate would record are the bits it already has.
         """
         last_seen = dict(form.last_seen())
         for edge in form.edges:
@@ -1472,11 +1489,11 @@ class _Tracer:
         return _Value(default)
 
     def judge_bounds(self, constrained: Mapping[str, TagConstraint]) -> None:
-        """Guard each moving constrained tag inside its bounds.
+        """Guard each moving constrained tag so that it stays inside its bounds.
 
-        The guard passes only for a value certainly in bounds; anything else
-        leaves, and the real scan decides, watched as a real scan is.  A constant
-        one holds a value the run's watch has already seen in bounds.
+        The guard passes only for a value that is certainly in bounds. For any other value
+        the loop leaves, and the real scan decides under the usual watch. A constant
+        constrained tag holds a value that the run's watch has already seen in bounds.
         """
         for name, constraint in constrained.items():
             position = self._replay._block_pos.get(name)
@@ -1507,8 +1524,8 @@ def _as_load(target: ast.expr) -> ast.expr:
     raise Decline(f"augmented assignment to {type(target).__name__}")
 
 
-# What the tracer iterates.  A constant one gives the same items on every scan, and a constant
-# str the same characters.  An item of a list may still be moving.
+# The types that the tracer iterates. A constant one gives the same items on every scan, and
+# a constant str gives the same characters. An item of a list may still be moving.
 _ITERABLE_TYPES = (list, tuple, range, str)
 
 
@@ -1517,8 +1534,11 @@ def _wrapped(item: Any) -> _Value:
 
 
 def _plain(value: _Value) -> Any:
-    """The concrete value of an argument.  A container holding a moving value
-    cannot be spelled as one concrete operand of the loop, so it declines."""
+    """Return the concrete value of an argument.
+
+    A container that holds a moving value cannot be spelled as one concrete operand of the
+    loop, so this function declines for it.
+    """
     concrete = value.concrete
     if isinstance(concrete, _Ref):
         raise Decline("state container as an argument")
@@ -1567,11 +1587,11 @@ class ScanTrace:
     source: str
     op_count: int
     guard_count: int
-    # The finished tracer, released, for a coast to write its own loops from.
+    # The finished tracer, released, so that a coast can write its own loops from it.
     plan: _Tracer | None = None
 
     def holds(self, replay: CompiledPLC, form: StopForm | None) -> bool:
-        """Whether every constant of this trace is as it was when it was traced."""
+        """Return True if every constant of this trace is as it was when it was traced."""
         kernel = replay._kernel
         for key, expected in self.constants:
             if not same(_current_value(kernel, key), expected):
@@ -1596,8 +1616,8 @@ class ScanTrace:
 class LoopShape:
     """One iteration of a loop, as data, for :mod:`~pyrung.core.cycle_jump` to reason about.
 
-    An iteration loads ``loads`` and the clock and RTC values, runs ``body`` in order, and
-    then assigns each of ``commits`` at once.
+    An iteration loads ``loads`` and the clock and RTC values. It runs ``body`` in order.
+    Then it assigns each of ``commits`` at once.
     """
 
     loads: tuple[tuple[tuple[Any, ...], str], ...]  # (cell, local)
@@ -1610,7 +1630,7 @@ class LoopShape:
 
 
 def _render_loop(tracer: _Tracer) -> ScanTrace:
-    """The trace a finished tracer describes, with its plain loop."""
+    """Build the trace that a finished tracer describes, with its plain loop."""
     loop, source, shape = _loop_function(tracer)
     body = shape.body
     block_writes: dict[str, set[int]] = {}
@@ -1636,17 +1656,18 @@ def _loop_function(
     guards: tuple[_Guard, ...] = (),
     seen: tuple[tuple[str, tuple[Any, ...], bool], ...] = (),
 ) -> tuple[Callable[..., tuple[int, float]], str, LoopShape]:
-    """Write the loop a finished tracer describes.
+    """Write the loop that a finished tracer describes.
 
-    An iteration computes into temporaries and assigns the moving locals last, in
-    one statement, so a guard or an exception leaves them at the last whole scan.
+    An iteration computes into temporaries and assigns the moving locals last, in one
+    statement. A guard or an exception therefore leaves the locals at the last whole scan.
     Only what changed goes back to the kernel, and only if a scan ran.
 
-    *guards* are extra, checked after the scan's own and before its commit.  *seen*
-    lists (name, cell, whether every scan changes it).  After a commit that changed
-    one of those values, the loop copies them into its ``seen`` argument and asks its
-    ``stop`` argument whether to leave.  A stop predicate reads only what ``seen``
-    holds, so after a scan that changed none of it the answer is the one it gave last.
+    *guards* are extra guards. The loop checks them after the scan's own guards and before
+    its commit. *seen* lists (name, cell, whether every scan changes it). After a commit
+    that changed one of those values, the loop copies them into its ``seen`` argument and
+    asks its ``stop`` argument whether to leave. A stop predicate reads only what ``seen``
+    holds. So after a scan that changed none of it, the answer is the one the predicate
+    gave last.
     """
     arrays: dict[str, str] = {}
     loads: list[str] = []
@@ -1695,7 +1716,8 @@ def _loop_function(
     if needs_rtc:
         lines += ["    rtc_from = math.inf", "    rtc_until = -math.inf"]
     lines.append("    try:")
-    # In the try: a state that lost a key since the trace is a scan for the kernel.
+    # These loads sit in the try. If the state lost a key since the trace, the kernel runs
+    # that scan.
     lines += [f"        {array} = blocks[{symbol!r}]" for symbol, array in arrays.items()]
     lines += [f"        {load}" for load in loads]
     lines.append("        while used < limit:")
@@ -1708,15 +1730,15 @@ def _loop_function(
     guard_list: list[_Guard] = []
     for op in body:
         if isinstance(op, _Guard):
-            # Only a guard that fails writes EXIT, so the scans that pass pay nothing for it.
+            # Only a guard that fails writes EXIT, so scans that pass pay nothing for it.
             lines.append(f"            if {op.leave_if}: EXIT[0] = {len(guard_list)}; break")
             guard_list.append(op)
         else:
             lines.append(f"            {op.target} = {op.expression}")
-    # Whether this scan changes what the stop predicate reads, if not every scan does.
+    # Whether this scan changes what the stop predicate reads, when not every scan does.
     ask_when_changed = bool(seen) and not any(always for _name, _key, always in seen)
     if ask_when_changed:
-        # same() tests identity first.  An "is" here would compare a stored literal, which warns.
+        # same() tests identity first. An "is" here would compare a stored literal, which warns.
         changes = " or ".join(
             f"not same({new_values[key]}, {tracer.entry_locals[key]})"
             for _name, key, _always in seen
@@ -1737,7 +1759,7 @@ def _loop_function(
         lines.append(f"{indent}if stop(): EXIT[0] = {_LEFT_ON_STOP}; break")
     lines += [
         "    except Exception:",
-        # As a failed guard: the real scan runs this iteration.
+        # Treat this like a failed guard: the real scan runs this iteration.
         f"        EXIT[0] = {_LEFT_ON_RAISE}",
     ]
     if stores:
@@ -1767,7 +1789,7 @@ def _loop_function(
     return namespace["_scan_loop"], source, shape
 
 
-# What a loop function writes in its EXIT when no guard failed.
+# The value that a loop function writes in its EXIT when no guard failed.
 _LEFT_AT_LIMIT = -1
 _LEFT_ON_RAISE = -2
 _LEFT_ON_STOP = -3
@@ -1778,14 +1800,15 @@ def _loop_globals(function: Callable[..., Any]) -> dict[str, Any]:
 
 
 def start_counting_exit(function: Callable[..., Any]) -> None:
-    """Clear what *function* says ended its last call.  The jit counters call this."""
+    """Clear what *function* recorded about its last call. The jit counters call this."""
     _loop_globals(function)["EXIT"][0] = _LEFT_AT_LIMIT
 
 
 def exit_of(function: Callable[..., Any], source: KernelSource) -> tuple[str, bool]:
-    """What ended *function*'s last call, and whether it was a guard or a raise.
+    """Return what ended *function*'s last call, and whether it was a guard or a raise.
 
-    Ask only after :func:`start_counting_exit` and a call that ran fewer scans than its limit.
+    Call this only after :func:`start_counting_exit` and a call that ran fewer scans than
+    its limit.
     """
     names = _loop_globals(function)
     left = names["EXIT"][0]
@@ -1799,10 +1822,10 @@ def exit_of(function: Callable[..., Any], source: KernelSource) -> tuple[str, bo
 
 
 def _live_operations(ops: list[_Op | _Guard], live: set[str]) -> list[_Op | _Guard]:
-    """The operations an iteration has to run, in order.
+    """Return the operations that an iteration has to run, in order.
 
-    An unused operation goes only if it cannot raise: a raise is how the loop
-    learns that the kernel would have left the traced path.
+    This function drops an unused operation only if the operation cannot raise. A raise is
+    how the loop learns that the kernel would have left the traced path.
     """
     kept: list[_Op | _Guard] = []
     for op in reversed(ops):
@@ -1830,11 +1853,15 @@ def build_trace(
     *,
     keep_plan: bool = False,
 ) -> ScanTrace:
-    """Trace the scan about to run, to the fixed point of what moves.
+    """Trace the scan about to run, repeating until the set of moving cells stops changing.
 
-    Raises :class:`Decline`.  Grows *seeds*: what moved once may well move again,
-    and the next trace should know.  *keep_plan* lets a coast write its own loops
-    of this scan (:func:`coast_loop`).
+    Raises :class:`Decline` when the loop cannot stand for this scan. The reasons include
+    something the tracer does not understand, moving cells that do not settle within
+    ``MAX_FIXED_POINT_PASSES`` passes, a scan that changes what the scan hooks read, a stop
+    predicate that holds, and a scan that leaves a value out of bounds. This function adds
+    to *seeds*, because a cell that moved once may well move again and the next trace
+    should know. If *keep_plan* is set, a coast can write its own loops of this scan
+    (:func:`coast_loop`).
     """
     for _pass in range(MAX_FIXED_POINT_PASSES):
         tracer = _Tracer(source, replay, seeds)
@@ -1867,9 +1894,9 @@ def build_trace(
 class CoastMoves:
     """What the scans of a coast loop do to the tags, by name.
 
-    In a coast loop a tag changes only by a checked constant integer delta, by an
-    exact flip the path itself makes, or as a float ramp.  So a tag's values over
-    a stretch can be told from where it ended.
+    In a coast loop a tag changes in one of three ways. It changes by a checked constant
+    integer delta, by an exact flip that the path itself makes, or as a float ramp. So you
+    can work out a tag's values over a stretch from where the stretch ended.
     """
 
     moved: tuple[tuple[str, int], ...]  # (name, delta each scan)
@@ -1889,7 +1916,7 @@ def _tag_of_cell(key: tuple[Any, ...], block_names: Mapping[str, Mapping[int, st
 def moving_tags(
     plan: _Tracer, block_names: Mapping[str, Mapping[int, str]]
 ) -> dict[tuple[Any, ...], str]:
-    """The tags a trace's scans may change, by cell.  Memory is not state a reader sees."""
+    """Return the tags that a trace's scans may change, by cell. Memory is not visible state."""
     named = {}
     for key, entry in plan.entries.items():
         name = _tag_of_cell(key, block_names)
@@ -1901,9 +1928,10 @@ def moving_tags(
 def attempted_stores(
     plan: _Tracer, block_names: Mapping[str, Mapping[int, str]]
 ) -> dict[str, tuple[int, int]]:
-    """Per tag: the stores a trace's scan attempts, and how many are of a moving value.
+    """Return, for each tag, the stores that a trace's scan attempts.
 
-    A tag with a working copy counts attempts on the copy, not the flush at scan end.
+    Each entry also gives how many of those stores are of a moving value. For a tag with a
+    working copy, the count covers attempts on the copy and not the flush at scan end.
     """
     stores: dict[str, tuple[int, int]] = {}
     for key, counts in plan.stores.items():
@@ -1916,11 +1944,11 @@ def attempted_stores(
 
 
 def coast_moves(plan: _Tracer, block_names: Mapping[str, Mapping[int, str]]) -> CoastMoves:
-    """What each scan of this trace does to the tags.
+    """Return what each scan of this trace does to the tags.
 
-    The same source moves a tag differently from different values: a saturating
-    timer adds 10 up to its limit and then nothing, so two traces are the same path
-    only if this is the same too.
+    The same source can move a tag differently from different values. A saturating timer
+    adds 10 up to its limit and then adds nothing. So two traces are the same path only if
+    this result is the same too.
     """
     return _coast_guards(plan, block_names, frozenset(), frozenset())[1]
 
@@ -1931,14 +1959,14 @@ def coast_loop(
     watched: frozenset[str],
     seen: frozenset[str],
 ) -> tuple[Callable[..., tuple[int, float]], CoastMoves, str, LoopShape]:
-    """This trace's loop, kept to :class:`CoastMoves`.
+    """Return this trace's loop, limited to the moves in :class:`CoastMoves`.
 
-    It leaves before the scan that would change a *watched* tag, which is the only
-    thing it asks of that tag: where this trace moved it, the scans the loop runs are
-    not the trace's own, and the moves it returns and :func:`coast_moves` differ on the
-    tag.  A coast does not fire such a loop.  After a scan that changes a moving tag in
-    *seen*, the loop puts those tags in its ``seen`` argument and asks ``stop``.  A stop is
-    one more reason to leave.
+    The loop leaves before the scan that would change a *watched* tag. That is the only
+    thing it asks of that tag. Suppose this trace moved the watched tag. Then the scans
+    that the loop runs are not the trace's own, and the moves it returns differ from
+    :func:`coast_moves` on that tag. A coast does not fire such a loop. After a scan that
+    changes a moving tag in *seen*, the loop puts those tags in its ``seen`` argument and
+    asks ``stop``. A stop is one more reason to leave.
     """
     guards, moves, seen_cells = _coast_guards(plan, block_names, watched, seen)
     loop, source, shape = _loop_function(plan, guards=tuple(guards), seen=tuple(seen_cells))
@@ -1980,8 +2008,8 @@ def _coast_guards(
             else:
                 held.append(name)
         elif free_to_move and type(after) is float and type(before) is float:
-            # Nothing says how far a Real moves, only whether it does, and a scan that holds
-            # it is another path: a record of it says "moved" on every scan it runs.
+            # Nothing says how far a Real moves, only whether it does. A scan that holds the
+            # Real is another path, and a record of it says "moved" on every scan it runs.
             # A NaN that stays NaN does not move, though it differs from itself.
             if not value_changed(before, after):
                 guards.append(_Guard(_changed(new, old), uses, why=f"{name} starts moving"))
@@ -1993,7 +2021,8 @@ def _coast_guards(
                 free.append(name)
                 always = True
         elif name in watched or same(after, before) or after == before:
-            # Equal across types too: 0 to False on an Int driven by out() is no transition.
+            # Equal across types too. On an Int driven by out(), a change from 0 to False is
+            # not a transition.
             why = f"watched {name} changes" if name in watched else f"{name} changes"
             guards.append(_Guard(_changed(old, new), uses, why=why))
             if cell.local is not None and same(after, before):
@@ -2013,9 +2042,10 @@ def _coast_guards(
 
 
 def _changed(old: str, new: str) -> str:
-    """:func:`~pyrung.core.state.value_changed` spelled in the loop, on two atoms.
+    """Spell :func:`~pyrung.core.state.value_changed` in the loop, on two atoms.
 
-    It leaves out the identity test, since ``is`` on a literal is a syntax warning.
+    The spelling leaves out the identity test, because ``is`` on a literal is a syntax
+    warning.
     """
     return f"{old} != {new} and ({old} == {old} or {new} == {new})"
 
@@ -2023,17 +2053,17 @@ def _changed(old: str, new: str) -> str:
 # --- Driving the loop through a run --------------------------------------------
 
 
-# Parsed kernel sources by source text, least recently used first.  A parse depends on the
-# text alone, so kernels compiled from one source share it.  Only ``snippet()`` writes to a
-# parse later, and it stores lines of that same text.  Each parse is several megabytes on a
-# large program.
+# Parsed kernel sources by source text, least recently used first. A parse depends on the
+# text alone, so kernels compiled from one source share it. Only ``snippet()`` writes to a
+# parse later, and it stores lines of that same text. On a large program each parse takes
+# several megabytes.
 MAX_PARSED_SOURCES = 2
 _PARSED_BY_SOURCE: dict[str, KernelSource] = {}
 _PARSED_LOCK = threading.Lock()
 
 
 def _source_of(kernel: CompiledKernel) -> KernelSource:
-    """The parsed source, kept on the kernel: a kernel serves many runs."""
+    """Return the parsed source, which the kernel keeps because a kernel serves many runs."""
     cached = kernel.__dict__.get("_scan_trace_source")
     if cached is not None:
         return cached
@@ -2072,11 +2102,11 @@ class ScanLoop:
     """One run's guarded loop.  Ask :meth:`advance` before every real scan."""
 
     _keep_plans = False
-    # The jit counters' record of this run's stretches.  The run sets it while they count.
+    # The jit counters' record of this run's stretches. The run sets it while they count.
     jit: jit_stats.Run | None = None
-    # What the jit counters call this loop's real scans.
+    # The name that the jit counters give this loop's real scans.
     _real_scans_are = "compiled"
-    # While the counters count, this holds the stretch the last firing left open, as
+    # While the counters count, this holds the stretch that the last firing left open, as
     # [first scan, scans run].
     _open: list[int] | None = None
 
@@ -2135,7 +2165,7 @@ class ScanLoop:
     # -- The driver's calls -----------------------------------------------------
 
     def advance(self, limit: int) -> int:
-        """Run up to *limit* scans in the loop; 0 means the next scan must be real."""
+        """Run up to *limit* scans in the loop. Return 0 if the next scan must be real."""
         if self._off is not None:
             return 0
         if self._attempt_wait:
@@ -2153,7 +2183,7 @@ class ScanLoop:
             if trace.holds(replay, self._stop_form):
                 used = self._fire(trace, limit)
                 if used:
-                    # Most recently fired last, so it is asked first next time.
+                    # Most recently fired last, so the loop asks it first next time.
                     self._traces.append(self._traces.pop(len(self._traces) - 1 - position))
                     self._after_firing(used, limit)
                     return used
@@ -2162,8 +2192,11 @@ class ScanLoop:
         return 0
 
     def real_scan_ran(self) -> None:
-        """Note a real scan, and answer a pending self check.  Call it straight after
-        the scan: materializing the state moves written block cells to the tags."""
+        """Record a real scan and answer a pending self check.
+
+        Call this straight after the scan, because materializing the state moves written
+        block cells to the tags.
+        """
         self.counts["real scans"] += 1
         pending = self._pending
         self._pending = None
@@ -2177,13 +2210,13 @@ class ScanLoop:
         self._traces.append(pending.trace)
 
     def stop_held(self) -> None:
-        """The real stop predicate held on the real scan just run."""
+        """Record that the real stop predicate held on the real scan just run."""
         checked = self._just_checked
         if checked is not None:
             self._mismatch("the stop predicate holds, but its guards passed", checked)
 
     def real_scan_failed(self, reason: str) -> None:
-        """The real scan raised or left bounds.  A pending trace had run past that."""
+        """Record that the real scan raised or left bounds. A pending trace had run past that."""
         pending = self._pending
         self._pending = None
         if pending is not None:
@@ -2205,9 +2238,10 @@ class ScanLoop:
     # -- Entry ------------------------------------------------------------------
 
     def _blocked(self) -> str | None:
-        """What stops the next scan being loop material, or None.
+        """Return the reason the next scan cannot run in the loop, or None.
 
-        Leaves the system tags refreshed for the next scan, as the scan would.
+        If it returns None, it has also refreshed the system tags for the next scan, as the
+        scan would.
         """
         replay = self._replay
         kernel = replay._kernel
@@ -2279,12 +2313,12 @@ class ScanLoop:
         return used
 
     def _count_firing(self, trace: ScanTrace, first: int, used: int, limit: int) -> None:
-        """Firings in a row make one stretch, which a failed guard ends."""
+        """Group firings in a row into one stretch. A failed guard ends the stretch."""
         stretch = self._open
         if stretch is not None and stretch[0] + stretch[1] == first:
             stretch[1] += used
         else:
-            # The scan after the open stretch ran outside the loop, a real change.
+            # The scan after the open stretch ran outside the loop, which is a real change.
             self._close_open("its scan limit, and no loop took the next scan", guard_failed=True)
             stretch = self._open = [first, used]
         if used < limit:
@@ -2306,7 +2340,7 @@ class ScanLoop:
         else:
             self._back_off()
         if used < limit:
-            # A guard failed: this very state needs a real scan, whatever else.
+            # A guard failed, so this very state needs a real scan, whatever else is true.
             self.counts["exits"] += 1
             self._attempt_wait = max(self._attempt_wait, 1)
 
@@ -2368,8 +2402,8 @@ class ScanLoop:
             self._rtc_fields,
         )
         if not used:
-            # The trace's own state fails a guard, or one of its operations raises
-            # in the loop though not in the tracer: nothing to check, nothing to keep.
+            # The trace's own state fails a guard, or one of its operations raises in the loop
+            # but not in the tracer. There is nothing to check and nothing to keep.
             self._note_decline("trace left on its own scan")
             return
         _record_block_writes(trace, blocks)
@@ -2414,8 +2448,11 @@ def _copy_tracked(array: Any) -> _TrackedList:
 
 
 def _record_block_writes(trace: ScanTrace, blocks: Mapping[str, Any]) -> None:
-    """A scan rewriting a cell with its own value still marks it written: from then
-    on the cell is live in the committed state.  The loop skips the rewrite."""
+    """Mark a cell written when a scan rewrites it with its own value.
+
+    From then on the cell is live in the committed state. The loop skips the rewrite, so
+    this function marks the cell instead.
+    """
     for symbol, cells in trace.block_writes:
         blocks[symbol].written_indices.update(cells)
 

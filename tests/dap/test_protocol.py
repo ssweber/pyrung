@@ -35,7 +35,10 @@ def test_read_write_message_multiple_frames():
 
 
 def test_write_message_spells_inf_and_nan_as_strings():
-    """A REAL can hold Inf or NaN, which JSON cannot; the frame stays valid JSON."""
+    """Write Inf and NaN as strings.
+
+    A REAL can hold them, but JSON cannot. The frame stays valid JSON.
+    """
     import json
 
     stream = io.BytesIO()

@@ -1,9 +1,9 @@
-"""Pin rows with OR branches and padding rows between them (A5).
+"""Test pin rows with OR branches and padding rows between them (A5).
 
 CLICK allows OR branches and padding rows between the pin rows of any
-multi-pin instruction.  What a pin reads comes from the wiring into its row;
-the label belongs to the nearest instruction row above it, and labels must
-follow the instruction's fixed pin order.
+multi-pin instruction. A pin reads the wiring into its row. Its label belongs
+to the nearest instruction row above it. Labels must follow the instruction's
+fixed pin order.
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ def test_or_pin_rows_round_trip(name: str):
         SHAPES[name]()
     code, before, after = round_trip_logic(logic, _tag_map())
     assert after == before, code
-    # Every pin keeps its OR (two-branch condition) through the round trip.
+    # Every pin must keep its OR (two-branch condition) through the round trip.
     pins = [pin for _af, _tree, instr_pins in before["main"] for pin in instr_pins]
     assert pins and any(isinstance(tree, tuple) and tree[0] == "OR" for _n, _a, tree in pins)
 
@@ -176,7 +176,7 @@ def test_logic_check_covers_pins():
 
     rungs = _analyze_rungs(_parse_rows(rows))
     assert emitted_logic_mismatch(rungs) is None
-    # Drop the jog pin's OR branch from what would be emitted: caught.
+    # Drop the jog pin's OR branch from what would be emitted. The check catches it.
     drum = next(i for r in rungs for i in r.instructions if i.pins)
     drum.pins[-1].condition_tree = drum.pins[-1].condition_tree.children[0]
     mismatch = emitted_logic_mismatch(rungs)
@@ -189,7 +189,7 @@ def test_logic_check_covers_pins():
 
 
 def _row(marker: str, contact: str | None, af: str = "", *, tee: bool = False) -> list[str]:
-    """A row with *contact* in column A, wired across to the AF column."""
+    """Return a row with *contact* in column A, wired across to the AF column."""
     row = [""] * _WIDTH
     row[0] = marker
     if contact is not None:
@@ -202,7 +202,7 @@ def _row(marker: str, contact: str | None, af: str = "", *, tee: bool = False) -
 
 
 def _or_branch(contact: str) -> list[str]:
-    """The lower row of an OR: *contact* in column A, joining the tee above."""
+    """Return the lower row of an OR, with *contact* in column A, joining the tee above."""
     row = [""] * _WIDTH
     row[1] = contact
     return row
@@ -293,7 +293,7 @@ def test_foreign_pin_rejected():
 
 
 def test_unclaimed_row_after_last_pin_rejected():
-    """A row after the last pin that wires into nothing is a dropped contact."""
+    """A row after the last pin that wires into nothing counts as a dropped contact."""
     stray = [""] * _WIDTH
     stray[1] = "C9"
     rung = _RawRung(

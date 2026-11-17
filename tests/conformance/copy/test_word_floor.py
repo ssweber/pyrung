@@ -1,33 +1,37 @@
-"""A Copy into a Word from below an Int and from NaN: the ``word_floor`` group (part
-``follow_timing``, where there is room).
+"""Test a Copy into a Word from a value below an Int and from NaN: the ``word_floor`` group.
 
-On a CLICK, DD -1 copied into a DH writes 65535, the wrap (``word_store/word_below_zero``).
-This case asks what a value below -32768 writes, where a store could wrap all 16 bits or
-first floor the value at the least Int, and what a NaN writes.
+The group is part of ``follow_timing``, where there is room.
 
-``below_int_and_nan``: the values are staged on scan 1 (making the NaN raises SC43, which scan 2
-starts without) and stored on scan 2, each into a DH preset to 0x1234 (4660), so a store that is
-refused reads apart from one that writes:
+On a CLICK, DD -1 copied into a DH writes 65535, which is the wrap (``word_store/word_below_zero``).
+This case asks what a value below -32768 writes. A store could wrap all 16 bits, or it could
+first floor the value at the least Int. The case also asks what a NaN writes.
 
-- Result1, DD -40000: 1 for 25536 (all 16 bits wrap), 2 for 32768 (floored at -32768, then
-  wrapped), 3 for 0 (clamped at 0), 4 for 4660 (no store), 0 for any other.
-- Result2, DD -70000: 1 for 61072 (all 16 bits wrap), 2 for 32768 (floored), 3 for 0, 4 for
-  4660, 0 for any other.
-- Result3, a DF holding NaN (+Inf - +Inf, as ``store_probe/inf_and_nan_to_text`` made one): 1
-  for 0, 2 for 4660 (no store), 3 for 65535, 4 for 32768, 5 for 32767, 0 for any other.
-- Result4: bit 1 where the DF is a NaN (neither >= 0 nor < 0), so Result3 asks about one.  It
-  assumes a compare with a NaN is false, as IEEE's unordered compares are: 1 shows a NaN, 0 does
-  not rule one out.  Bit 16 is SC43 on just before the first store, the control that no raise
-  carried over from the stage scan; bits 2, 4 and 8 are SC43 on the rung after each store, as
-  ``word_store`` reads it (a raise carried from an earlier store reads in a later bit too, if a
-  Copy does not settle SC43).  The compares ``DF32>=0`` and ``DF32<0`` take forms pasted before
-  (``DF21<0`` in ``real_bits``, ``DF14>=3.0E+38``).
-- ErrorCode: the size of a Result1 of 0, else of a Result2 of 0: that DH copied into a DD and
-  halved, 0 where both are classed.  The DH into a DD may read unsigned or signed
-  (``word_store/word_into_signed`` asks), so a DH past 32767 reads 16384..32767 or -16384..-1.
+``below_int_and_nan`` stages the values on scan 1. Making the NaN raises SC43, and scan 2 starts
+without it. The case stores the values on scan 2, each into a DH preset to 0x1234 (4660). A store
+that is refused then reads differently from one that writes. The results are:
 
-A CLICK reads 2, 2, 1, 1 and 0.  It floors each value at -32768, which a Word holds
-as 32768, and a NaN writes 0.  No store raises SC43.
+- Result1 is for DD -40000. It is 1 for 25536 (all 16 bits wrap), 2 for 32768 (floored at -32768,
+  then wrapped), 3 for 0 (clamped at 0), 4 for 4660 (no store), and 0 for any other value.
+- Result2 is for DD -70000. It is 1 for 61072 (all 16 bits wrap), 2 for 32768 (floored), 3 for 0,
+  4 for 4660, and 0 for any other value.
+- Result3 is for a DF that holds NaN. The DF is +Inf - +Inf, as ``store_probe/inf_and_nan_to_text``
+  made one. Result3 is 1 for 0, 2 for 4660 (no store), 3 for 65535, 4 for 32768, 5 for 32767, and
+  0 for any other value.
+- Result4 is a set of bits. Bit 1 is set where the DF is a NaN, meaning it is neither >= 0 nor
+  < 0, so Result3 does ask about a NaN. This assumes that a compare with a NaN is false, as IEEE's
+  unordered compares are. A 1 shows a NaN, and a 0 does not rule one out. Bit 16 is SC43 on just
+  before the first store. It is the control that shows no raise carried over from the stage scan.
+  Bits 2, 4 and 8 are SC43 on the rung after each store, as ``word_store`` reads it. If a Copy
+  does not settle SC43, a raise from an earlier store also reads in a later bit. The compares
+  ``DF32>=0`` and ``DF32<0`` use forms that were pasted before (``DF21<0`` in ``real_bits``,
+  ``DF14>=3.0E+38``).
+- ErrorCode is the size of a Result1 of 0, or else of a Result2 of 0. The case copies that DH
+  into a DD and halves it. ErrorCode is 0 when both are classed. The DH into a DD may read
+  unsigned or signed (``word_store/word_into_signed`` asks). A DH past 32767 therefore reads
+  16384..32767 or -16384..-1.
+
+A CLICK reads 2, 2, 1, 1 and 0. It floors each value at -32768, which a Word holds as 32768. A
+NaN writes 0. No store raises SC43.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
@@ -48,7 +52,10 @@ STAGE_SCAN, STORE_SCAN = 1, 2
 
 
 def _class_of(slot: Any, value: Any, readings: list[int], into: Any) -> None:
-    """``into`` = 1 when *value* equals ``readings[0]``, 2 for the next, after the stores."""
+    """Set ``into`` to 1 if *value* equals ``readings[0]``, 2 if it equals the next, and so on.
+
+    The rungs run after the stores.
+    """
     for number, reading in enumerate(readings, start=1):
         with Rung(slot.Scratch > WINDOW, value == reading):
             copy(number, into)

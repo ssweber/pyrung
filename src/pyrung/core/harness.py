@@ -96,7 +96,7 @@ def _parse_link_spec(link: str) -> tuple[str, str | None]:
 
 
 def format_link_spec(en_name: str, trigger_value: int | str | None, *, bit: bool) -> str:
-    """The canonical ``link=`` value: ``~Name`` for a bit enable that drives while off."""
+    """Return the canonical ``link=`` value: ``~Name`` for a bit enable that drives while off."""
     if trigger_value is None:
         return en_name
     if bit and trigger_value == 0:
@@ -135,7 +135,7 @@ def _resolve_trigger_value(trigger_raw: str, en_tag: Any) -> int | str:
 
 
 def link_problem(plc: PLC, coupling: Coupling) -> str | None:
-    """Why *coupling* cannot run as an override on *plc*, or ``None`` if it can.
+    """Return why *coupling* cannot run as an override on *plc*, or ``None`` if it can.
 
     Both ends must be known tags, the feedback must suit the response (bool
     for on/off delay and flasher, numeric for ramp and approach), and nothing
@@ -178,14 +178,17 @@ def _wiring(c: _BoolCoupling | _ProfileCoupling) -> CoilWiring:
 
 
 def coil_feedback(wiring: CoilWiring) -> str:
-    """The feedback a coil drives, read from its memory key."""
+    """Return the feedback that a coil drives, read from its memory key."""
     from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
 
     return wiring[0].partition(PLANT_FEEDBACK_SITE)[2]
 
 
 def rename_coil_wiring(wiring: CoilWiring, new_fb: str, new_en: str) -> CoilWiring:
-    """The *wiring* of a coil moved to *new_fb* and reading *new_en*, its trigger kept."""
+    """Return the *wiring* of a coil renamed to feedback *new_fb* and enable *new_en*.
+
+    The trigger stays the same.
+    """
     from pyrung.core.site_memory import PLANT_FEEDBACK_SITE
 
     head, site, _old_fb = wiring[0].partition(PLANT_FEEDBACK_SITE)
@@ -210,7 +213,7 @@ def _plant_bit_name(stem: str, fb_name: str) -> str:
 
 
 def plant_state_tags(fb_name: str) -> tuple[str, ...]:
-    """Every tag a plant coil on *fb_name* can keep its state in, in a fixed order.
+    """Return every tag that a plant coil on *fb_name* can keep its state in, in a fixed order.
 
     The names are built, never matched, so the timer of a feedback named ``_A`` or
     ``X__A`` is never taken for one of ``A``.
@@ -270,13 +273,13 @@ def rename_coil_state(
 
 
 def _carry_ns(state: Any, acc_name: str, unit_ns: int) -> Any:
-    """A plant timer's carry, in ns as the timer keeps it.  A saved float is of its unit."""
+    """Return a plant timer's carry in ns, as the timer keeps it.  A saved float counts units."""
     carry = state.memory.get(f"_frac:{acc_name}", 0) or 0
     return round(carry * unit_ns) if carry.__class__ is float else carry
 
 
 def _program_writer(plc: PLC, tag_name: str) -> str | None:
-    """Location of the first program instruction that writes *tag_name*, if any."""
+    """Return the location of the first program instruction that writes *tag_name*, if any."""
     from pyrung.core.validation._common import _collect_write_sites, compact_site_location
     from pyrung.core.validation.readonly_write import _any_write_targets
 
@@ -334,12 +337,15 @@ class Harness:
         self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
 
     def install(self) -> None:
-        """Put the plant on the runner, a feedback whose enable is on as long since settled."""
+        """Put the plant on the runner.
+
+        Each feedback whose enable is on starts as if the enable had been on for a long time.
+        """
         self._install()
         self._settle()
 
     def _install(self) -> None:
-        """Install without settling, so a feedback stays as the state has it.
+        """Install without settling, so each feedback keeps the value that the state gives it.
 
         The feedback's timers keep counting from there. A caller that puts overrides in afterwards
         settles once they are in, with :meth:`_settle`.
@@ -395,7 +401,7 @@ class Harness:
         return clone
 
     def _detach(self) -> None:
-        """Off the runner, leaving its plant rungs: they no longer belong to this harness."""
+        """Take this harness off the runner.  The plant rungs stay, but no longer belong to it."""
         self._installed = False
         for handle in self._monitors:
             handle.remove()
@@ -435,7 +441,7 @@ class Harness:
             self._plc._edit_tip_tags({}, drop_memory=drop)
 
     def _coil_wiring(self) -> frozenset[CoilWiring]:
-        """Each coil this harness runs, for a reload to carry on.
+        """Return each coil this harness runs, so that a reload can carry it on.
 
         A coil is its memory key with the enable it reads.  A reload that links a
         feedback to another enable, or to another value of it, settles the coil afresh.
@@ -463,12 +469,15 @@ class Harness:
         self.set_overrides({**self._overrides, **dict.fromkeys(tags)})
 
     def declared(self) -> tuple[Coupling, ...]:
-        """The couplings the program declares (``physical=`` + ``link=``), before overrides."""
+        """Return the couplings that the program declares with ``physical=`` and ``link=``.
+
+        Overrides do not change this list.
+        """
         return tuple(self._declared)
 
     @property
     def overrides(self) -> Mapping[str, Coupling | None]:
-        """Overrides by feedback tag: a coupling to run instead, or ``None`` to cut."""
+        """Return the overrides by feedback tag: a coupling to run, or ``None`` to cut."""
         return dict(self._overrides)
 
     def set_overrides(self, overrides: Mapping[str, Coupling | None]) -> None:
@@ -522,7 +531,7 @@ class Harness:
             )
 
     def _plant_timers(self) -> Iterator[tuple[str, str, str]]:
-        """``(stem, feedback, unit)`` of each plant timer the couplings run."""
+        """Yield ``(stem, feedback, unit)`` for each plant timer that the couplings run."""
         for c in self._bool_couplings:
             unit = coil_timer(c.on_delay_ms, c.off_delay_ms)[2]
             yield "__cpl_on", c.fb_name, unit
@@ -579,14 +588,14 @@ class Harness:
             self._plc._edit_tip_tags(tags, memory=memory)
 
     def pending(self, fb_name: str) -> bool:
-        """True while a bool coupling on *fb_name* is still counting toward a flip."""
+        """Return True while a bool coupling on *fb_name* is still counting toward a flip."""
         snap = self._plc.current_state.tags
         return any(
             self._bool_mid_transition(c, snap) for c in self._bool_couplings if c.fb_name == fb_name
         )
 
     def pending_ms(self) -> dict[str, int]:
-        """Simulated ms left before each mid-transition bool feedback flips.
+        """Return the simulated ms left before each mid-transition bool feedback flips.
 
         Keyed by feedback name.  A feedback that agrees with its enable is absent.
         On a rise the on side counts.  On a fall the off side counts, and the
@@ -688,7 +697,7 @@ class Harness:
     def _analog_rate_per_scan(
         self, c: _ProfileCoupling
     ) -> tuple[Callable[[float], float], int] | None:
-        """The ``(rate_per_scan, direction)`` an analog coupling advances at while enabled.
+        """Return the ``(rate_per_scan, direction)`` of an analog coupling while it is enabled.
 
         A ramp gives the exact declared ``ramp_on`` rate (analytic).  An approach is
         first-order — its slope depends on the current value — so ``rate_per_scan``
@@ -724,11 +733,12 @@ class Harness:
         return rate_per_scan, direction
 
     def _pulse_profile(self, c: _ProfileCoupling) -> Any | None:
-        """The next edge of a bool pulse train: keep the enable on and it comes.
+        """Return the profile for the next edge of a bool pulse train.
 
-        Its flasher coil is the plant's and the program has no writer for ``Fb``, so without
-        this a trace reads the feedback as a dead end.  No scalar is exposed: the dwells are
-        the plant's business.  A dwell of 0 keeps ``Fb`` off, so there is no plan to turn it on.
+        The edge comes if you keep the enable on.  The flasher coil belongs to the plant, and
+        the program has no writer for ``Fb``.  Without this profile, a trace reads the
+        feedback as a dead end.  No scalar is exposed, because the dwells are the plant's
+        business.  A dwell of 0 keeps ``Fb`` off, so there is no plan to turn it on.
         """
         from pyrung.core.condition import BitCondition, CompareEq
         from pyrung.core.crossing import Eq
@@ -760,13 +770,14 @@ class Harness:
         return AdvanceProfile(channels=(fb_tag,), plan=plan)
 
     def _edge_profile(self, c: _ProfileCoupling) -> Any | None:
-        """A timed or toggle feedback changes when its enable rises.
+        """Return the profile for a timed or toggle feedback, which changes when its enable rises.
 
-        The coil's own profile always asks for a pulse, so a rung that needs the
-        enable on beside the feedback found no plan in it.  Here an enable that is off
-        is held on, which gives the rise, as a flasher's enable is held.  An enable
-        that is on is pulsed, which takes a fall first.  A timed pulse ends by itself,
-        and a maintained one once the enable is held off.  An on time of a scan or
+        The coil's own profile always asks for a pulse.  So a rung that needs the
+        enable on beside the feedback found no plan in it.  If the enable is off, this
+        profile holds it on, which gives the rise.  The pulse-train profile holds a
+        flasher's enable on in the same way.  If the enable is on, this profile pulses
+        it, which takes a fall first.  A timed pulse ends by itself.  A
+        maintained pulse ends once the enable is held off.  An on time of a scan or
         less gives no pulse, so there is no plan to turn it on.
         """
         from pyrung.core.condition import BitCondition, CompareEq
@@ -819,7 +830,7 @@ class Harness:
 
         ``accumulator`` is the Fb register itself (the consumer reads
         ``Fb <cmp> threshold``, matched via the accumulator).  A ramp yields an
-        exact analytic ``rate_per_scan``; an approach yields a raising rate, so
+        exact analytic ``rate_per_scan``.  An approach yields a raising rate, so
         ``scans_until`` returns ``None`` and the resolver measures empirically.
         """
         from pyrung.core.condition import BitCondition, CompareEq
@@ -1118,7 +1129,7 @@ class Harness:
         self._plc._causal_lineage.invalidate_current_epoch()
 
     def _tag_rungs_know(self, name: str) -> Any | None:
-        """The program's tag for *name*, a slot only a pointer reaches included.
+        """Return the program's tag for *name*, including a slot that only a pointer reaches.
 
         A stand-in in its place would seed the slot with the wrong default, and the
         program's own read of the slot would change with it.

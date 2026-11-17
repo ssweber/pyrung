@@ -1,27 +1,26 @@
-"""Drum probes, the rule: the ``drum_rule`` group (subroutine ``Conf_DrumRule``).
+"""Probe the drum rule: the ``drum_rule`` group (subroutine ``Conf_DrumRule``).
 
-Part ``drum1`` (``suite.PARTS``).  ``drum_trace`` reads the drum rule on event
-drums, and these cases ask the same of ``time_drum`` and
-``time_event_drum``.  Each scenario runs one of each on the same inputs
-(``drum_rig.Pair``) and records them together: a drum's state at the end of a
-scan is two digits, ``S`` the step then ``X = 4 * flag + 2 * B + A`` (22 is
-step 2 with B on, 24 step 2 complete with every output off, 10 step 1 with
-both off), and a snapshot packs the time drum's state above the time & event
-drum's, so 2222 is both on step 2 with B on and 2224 the time drum on step 2
-with B on and the other complete.  Result2.. are the snapshots a case names,
-scan by scan, so an answer names what each scan did.
+Part ``drum1`` (``suite.PARTS``). ``drum_trace`` reads the drum rule on event drums. These
+cases ask the same of ``time_drum`` and ``time_event_drum``. Each scenario runs one of each on
+the same inputs (``drum_rig.Pair``) and records them together.
 
-The time drum's presets are 30 s (the cases that need a step to time out
-stage its accumulator past a preset of 2 s instead, since over the wire a
-preset cannot be timed in scans), and it moves by a jog; the time & event
-drum's steps are event-only and move on their events.  The expectations are
-what pyrung reads, which is the drum rule all three drums follow:
-a drum writes its outputs when its step moves or its rung comes back, not
-on every scan, and a write to its step register is not a move.
+The state of a drum at the end of a scan is two digits, ``S`` the step then
+``X = 4 * flag + 2 * B + A``. So 22 is step 2 with B on, 24 is step 2 complete with every
+output off, and 10 is step 1 with both off. A snapshot packs the state of the time drum above
+the state of the time & event drum. So 2222 is both drums on step 2 with B on, and 2224 is the
+time drum on step 2 with B on and the other complete. Result2.. are the snapshots that a case
+names, scan by scan, so an answer shows what each scan did.
 
-The time & event drum is moved on scan 2 and the time drum on scan 1: a one-scan
-event on scan 1 does not move it on a CLICK, which ``drum_settle`` asks
-of its own, and every scenario here starts from step 2.
+The presets of the time drum are 30 s. The cases that need a step to time out stage its
+accumulator past a preset of 2 s instead, since over the wire a preset cannot be timed in
+scans. The time drum moves by a jog. The steps of the time & event drum are event-only and
+move on their events. The expectations are what pyrung reads, which is the drum rule all three
+drums follow. A drum writes its outputs when its step moves or its rung comes back, not on
+every scan. A write to its step register is not a move.
+
+The time & event drum is moved on scan 2 and the time drum on scan 1. On a CLICK, a one-scan
+event on scan 1 does not move the time & event drum. The ``drum_settle`` group has its own
+case for this. Every scenario here starts from step 2.
 
 - ``writes_on_move_only`` (probe): both drums on step 2 with B on from scan 2.
   Scenario A: B reset above the drums on scan 3 stays off, 2020 on scans 3 and
@@ -85,8 +84,8 @@ from tests.conformance.scans import count_scans, done, scans_for
 
 SCANS = scans_for()
 
-#: The group's raw memory (memory.OWNED): C bits 26 a case, DS step registers
-#: 3 a case, TD 4 a case, DD states 4 a case.
+#: The raw memory of the group (memory.OWNED): 26 C bits a case, 3 DS step registers
+#: a case, 4 TD a case and 4 DD states a case.
 RES = Resources(
     bits=pool_of(range(101, 201), range(771, 801)),
     raw=list(range(4191, 4202)),
@@ -97,8 +96,11 @@ RES = Resources(
 
 
 def _up_to_step_2(slot: Any, p: Pair, *more: int) -> None:
-    """Both drums are on step 2 by scan 2 (and move again on *more*): the time drum
-    by its jog on scan 1, the time & event drum by its step 1 event on scan 2."""
+    """Put both drums on step 2 by scan 2, and move them again on the scans in *more*.
+
+    The time drum moves by its jog on scan 1. The time & event drum moves by its step 1
+    event on scan 2.
+    """
     on_scans(slot, p.jog, 1, *more)
     on_scans(slot, p.events[0], 2, *more)
 
@@ -176,8 +178,8 @@ def prove_bad_step_and_first_scan_jog(slot):
         on_scans(slot, p.jog, 1, 2, 3, 4)
 
     b = r.pair(1, jog=True, te_jog=True, above=b_above)
-    # The step registers are 0 when the first scan comes (the drums' reset
-    # writes step 1 on every idle scan, so this rung is after them).
+    # The step registers are 0 when the first scan comes. The reset of the drums writes
+    # step 1 on every idle scan, so this rung comes after them.
     with Rung(slot.Cmd == 0):
         copy(0, b.time.step)
         copy(0, b.event.step)
@@ -198,7 +200,7 @@ def prove_correction_moves(slot):
 
     p = r.pair(0, presets=[2000, 30000], above=above)
     track_both(slot, p)
-    # Written below the drums, so scan 4 is the drums' first with step 9.
+    # This write is below the drums, so scan 4 is the first scan of the drums with step 9.
     put(slot, 3, 9, p.time.step)
     put(slot, 3, 9, p.event.step)
     put(slot, 3, 2500, p.time.acc)

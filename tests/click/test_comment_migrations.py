@@ -1,4 +1,7 @@
-"""Comment migrations: each rewrites one old annotation form and keeps the rest of the comment."""
+"""Check the comment migrations.
+
+Each migration rewrites one old annotation form and keeps the rest of the comment.
+"""
 
 from __future__ import annotations
 
@@ -41,7 +44,7 @@ OLD_AND_NEW = [
         "[approach_to=180, approach_rate=0.3, link=Burner]",
         3,
     ),
-    # Older pyrung read these too: spaces around the kind and values, and extra parameters.
+    # Older pyrung also accepted spaces around the kind and values, and extra parameters.
     ("[link=Heat, profile= ramp :up = 1.0 ]", "[link=Heat, ramp_on=1.0 ]", 2),
     (
         "[link=Pump, profile=approach:toward=1|rate=0.3|gain=2]",
@@ -98,9 +101,9 @@ def test_the_upgraded_comment_gives_the_old_physical():
         ("[link=Run, profile=ramp:rise=1]", "profile=ramp:rise=1"),
         ("[link=Run, profile=ramp]", "profile=ramp"),
         ("[link=Run, profile=bogus:x=1]", "profile=bogus:x=1"),
-        # A renamed parameter given empty, which older pyrung refused.
+        # An empty value for a renamed parameter, which older pyrung refused.
         ("[link=Heat, profile=ramp:up=1|down=]", "profile=ramp:up=1|down="),
-        # Values the new keys can't hold.
+        # Values that the new keys cannot hold.
         (
             "[link=Pump, profile=approach:toward=X:1|rate=0.3]",
             "profile=approach:toward=X:1|rate=0.3",

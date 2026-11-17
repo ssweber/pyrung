@@ -220,6 +220,7 @@ def monotone_profile(
     restore: ConditionDemand | None = None,
     restore_is_pulse: bool = False,
     completion_controls: tuple[ConditionDemand, ...] | None = None,
+    prepare: Callable[[Snapshot], AdvanceStep | None] | None = None,
 ) -> AdvanceProfile:
     """Build the common timer/counter/analog next-operation contract.
 
@@ -227,8 +228,11 @@ def monotone_profile(
     returned profile exposes none of those implementation details as fields;
     callers ask ``plan`` for the operation appropriate to the current target.
 
-    An ascending owner completes at ``acc >= preset`` and a descending one at
-    ``acc <= preset``, with the preset's own sign, as the instruction computes Done.
+    An ascending owner completes at ``acc >= preset``.  A descending owner completes at
+    ``acc <= preset``.  Both use the preset's own sign, as the instruction computes Done.
+
+    *prepare* gives the operation that must come first when *advance* alone would not
+    move the owner, such as enabling an off delay that was never enabled.
     """
 
     sign = 1 if direction >= 0 else -1
@@ -264,7 +268,15 @@ def monotone_profile(
             progress=progress_receipt,
         )
 
+    def _advance(until: Eq | Cmp | AffineCmp, snapshot: Snapshot, prepared: bool) -> AdvanceStep:
+        if prepared and prepare is not None and (first := prepare(snapshot)) is not None:
+            return first
+        return _operation(until, advance, advance_is_pulse, progress_receipt=progress)
+
     def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
+        return _plan(constraint, snapshot, prepared=True)
+
+    def _plan(constraint: Constraint, snapshot: Snapshot, *, prepared: bool) -> AdvanceStep | None:
         if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
             return None
         held = constraint_holds(constraint, snapshot)
@@ -281,12 +293,7 @@ def monotone_profile(
             except (TypeError, ValueError):
                 return None
             if ahead:
-                return _operation(
-                    constraint,
-                    advance,
-                    advance_is_pulse,
-                    progress_receipt=progress,
-                )
+                return _advance(constraint, snapshot, prepared)
             if restore is not None and boundary == 0:
                 return _operation(constraint, restore, restore_is_pulse)
             return None
@@ -307,12 +314,7 @@ def monotone_profile(
             # same operation in place until the requested Done value itself is
             # observable.
             until = constraint if constraint_holds(boundary, snapshot) is True else boundary
-            return _operation(
-                until,
-                advance,
-                advance_is_pulse,
-                progress_receipt=progress,
-            )
+            return _advance(until, snapshot, prepared)
         if restore is not None:
             return _operation(eq(done, desired), restore, restore_is_pulse)
         return None
@@ -331,7 +333,8 @@ def monotone_profile(
             return None
         if constraint.tag == accumulator.name:
             return constraint
-        step = plan(constraint, snapshot)
+        # The distance is Acc's own, so a first operation that moves no Acc is left out.
+        step = _plan(constraint, snapshot, prepared=False)
         if step is not None and step.until.tag == accumulator.name:
             return step.until
         if constraint_holds(constraint, snapshot) is True:
@@ -367,3 +370,51 @@ def monotone_profile(
         completion_boundary=_done_boundary,
         completion_controls=completion_controls,
     )
+
+
+def recorded_completion_controls(instr: Any) -> tuple[ConditionDemand, ...] | None:
+    """The conditions that select the branch where *instr*'s generated code computes Done.
+
+    They come from the tests around that compare.  None when the code has no single such
+    compare, or a test around it reads anything but a condition of *instr*.
+    """
+    from pyrung.core.relations import relations_for
+
+    relations = relations_for(instr)
+    levels = None if relations is None else relations.completion_levels
+    if levels is None:
+        return None
+    return tuple(ConditionDemand(getattr(instr, field), value) for field, value in levels)
+
+
+def recorded_prepare(instr: Any) -> Callable[[Snapshot], AdvanceStep | None] | None:
+    """The first operation *instr* needs when a memory cell may stop its Acc from moving.
+
+    The off delay times only once it has been enabled, and its memory records that.  A
+    snapshot holds no memory.  While Done and Acc cannot show that the timer was enabled,
+    the first operation holds the conditions that set Done until Done is on.
+    """
+    from pyrung.core.relations import relations_for, term_value
+
+    relations = relations_for(instr)
+    gates = () if relations is None else relations.motion_gates
+    if relations is None or not gates:
+        return None
+    tags = {
+        field: getattr(instr, field)
+        for field in relations.fields.values()
+        if not field.endswith("_condition")
+    }
+
+    def prepare(snapshot: Snapshot) -> AdvanceStep | None:
+        values = {field: snapshot.get(tag.name, tag.default) for field, tag in tags.items()}
+        for gate in gates:
+            if term_value(gate.test, values, relations) is gate.value:
+                continue
+            return AdvanceStep(
+                until=eq(tags[gate.setter], gate.setter_value),
+                holds=tuple(ConditionDemand(getattr(instr, f), v) for f, v in gate.holds),
+            )
+        return None
+
+    return prepare

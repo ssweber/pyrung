@@ -997,12 +997,12 @@ def _contacts_read_after_write(
     consumer_path: tuple[int, ...],
     tag: str,
 ) -> list[bool] | None:
-    """For each condition of the branch at *consumer_path* in *top*, whether
+    """Return, for each condition of the branch at *consumer_path* in *top*, whether
     the scan reads it after *producer* last writes *tag*.
 
-    The rung's own contacts are read when the scan reaches the rung, and each
-    branch's own contacts when the scan reaches that branch.  ``None`` when
-    the rung is not shaped as expected.
+    The scan reads the rung's own contacts when it reaches the rung. It reads each
+    branch's own contacts when it reaches that branch. Return ``None`` if the rung is not
+    shaped as expected.
     """
     from pyrung.core.rung import Rung as _Rung
     from pyrung.core.validation._common import _resolve_tag_names
@@ -1107,8 +1107,8 @@ def expectation_from_selected_path(
             consumer_state = dict(selected_state)
             consumer_state[producer.tag] = producer.value
             # A consumer in the producer's own rung reads each contact when
-            # the scan reaches the rung or branch it belongs to, so only the
-            # contacts read after the producer wrote see the write.  A
+            # the scan reaches the rung or branch that the contact belongs to. So only the
+            # contacts read after the producer wrote see the write. A
             # consumer in a later rung sees the write in every contact.
             after_write = None
             if (

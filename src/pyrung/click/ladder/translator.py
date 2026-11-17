@@ -106,10 +106,11 @@ _RANGE_AGGREGATE_CLICK_NAME: dict[str, str] = {
 
 
 def _formula_call(name: str, *args: str) -> str:
-    """CLICK's formula spelling ``NAME ( a , b )``: spaces around each paren and separator.
+    """Return CLICK's formula spelling ``NAME ( a , b )``.
 
-    CLICK splits a formula's internal form on these spaces (``ABS( x )`` is a Math
-    instruction error in CLICK v4), and a copy-back decodes to this spelling.
+    There are spaces around each paren and separator.  CLICK splits a formula's
+    internal form on these spaces (``ABS( x )`` is a Math instruction error in
+    CLICK v4).  A copy-back decodes to this spelling.
     """
     return f"{name} ( {' , '.join(args)} )"
 
@@ -146,12 +147,12 @@ class _TranslatorMixin:
 
     @contextmanager
     def _hex_constants(self, mode: Literal["word", "exact"] | None) -> Iterator[None]:
-        """Spell integer constants rendered inside the block in CLICK hex.
+        """Spell the integer constants rendered inside the block in CLICK hex.
 
-        CLICK reads digits typed into a hex context as hex and appends ``h``
-        (``255`` becomes ``255h`` = 0x255); a pasted rung gets no such fix-up,
-        so a bare decimal there is an error.  pyrung literals stay decimal, so
-        pyrung ``255`` exports as ``FFh``.
+        CLICK reads digits typed into a hex context as hex and appends ``h``.
+        Typing ``255`` gives ``255h``, which is 0x255.  A pasted rung gets no
+        such fix-up, so a bare decimal there is an error.  pyrung literals stay
+        decimal, so pyrung ``255`` exports as ``FFh``.
         """
         previous = self._hex_constant_mode
         self._hex_constant_mode = mode
@@ -162,7 +163,10 @@ class _TranslatorMixin:
 
     @staticmethod
     def _is_hex_bank_operand(rendered: str) -> bool:
-        """True when a rendered operand (``DH1``, ``DH1..DH4``, ``DH[DS1]``) is a hex bank."""
+        """Return True when a rendered operand is in a hex bank.
+
+        ``DH1``, ``DH1..DH4`` and ``DH[DS1]`` are such operands.
+        """
         match = re.match(r"[A-Za-z]+", rendered)
         return match is not None and match.group(0).upper() in HEX_CONSTANT_BANKS
 
@@ -199,7 +203,7 @@ class _TranslatorMixin:
                     ),
                     source=source,
                 )
-            # Unpadded, as CLICK's Math normalizes it (000Ah -> Ah); Copy and
+            # Write it unpadded, as CLICK's Math normalizes it (000Ah -> Ah).  Copy and
             # Compare keep either spelling.
             return f"{value & 0xFFFF:X}h"
         if isinstance(value, float):
@@ -394,10 +398,10 @@ class _TranslatorMixin:
         )
 
     def _render_text(self, value: str, *, path: str, source: Any) -> str:
-        """A text constant as CLICK spells it; the blank character is ``$00``.
+        """Return a text constant as CLICK spells it.  The blank character is ``$00``.
 
         A TXT blank is NUL.  A quoted CLICK text constant writes one TXT per
-        character, so ``""`` writes nothing (and compares equal to anything);
+        character, so ``""`` writes nothing (and compares equal to anything).
         ``$00``, CLICK's ASCII-code constant, is the one-character NUL.  A raw
         NUL inside quotes would end the constant early.  pyrung's ``""`` is the
         blank too (a CHAR stores it as NUL), so it exports the same way.
@@ -536,10 +540,10 @@ class _TranslatorMixin:
         return f"to_{converter.mode}"
 
     def _render_zero_minus(self, negation: UnaryExpr, *, path: str, source: Any) -> str:
-        """``-DS2`` inside a formula as ``( 0 - DS2 )``.
+        """Return ``-DS2`` inside a formula as ``( 0 - DS2 )``.
 
-        CLICK takes a leading ``- DS1`` but refuses a minus on an operand anywhere
-        later, even typed (``DS1 * ( - DS2 )``); ``DS1 * ( 0 - DS2 )`` passes.
+        CLICK accepts a leading ``- DS1``.  It refuses a minus on an operand anywhere
+        later, even when typed (``DS1 * ( - DS2 )``).  ``DS1 * ( 0 - DS2 )`` passes.
         """
         operand = negation.operand
         inner = self._render_expression(operand, path=f"{path}.operand", source=source)
@@ -622,7 +626,7 @@ class _TranslatorMixin:
         )
 
     def _render_range_aggregate(self, kind: str, br: Any, path: str, source: Any) -> str:
-        """``SUM ( DS1 : DS10 )`` and its MAX/MIN/MDN/AVG siblings; bit banks pass as-is."""
+        """Return ``SUM ( DS1 : DS10 )`` or its MAX, MIN, MDN or AVG form.  Bit banks pass as-is."""
         tags = br.tags()
         first = self._resolve_tag(tags[0], path=f"{path}.block_range[0]", source=source)
         last = self._resolve_tag(tags[-1], path=f"{path}.block_range[-1]", source=source)
@@ -682,11 +686,11 @@ class _TranslatorMixin:
         return f"[{','.join(rendered)}]"
 
     def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str:
-        """A shift range; a reversed one is ``C1018..C1011`` (end below start).
+        """Return a shift range.  A reversed one is ``C1018..C1011`` (end below start).
 
         CLICK stores the shift register's start and end as separate fields and
-        shifts from start toward end, so an ending address lower than the
-        starting one shifts downward.  pyrung spells that ``.reverse()``.
+        shifts from start toward end.  An ending address lower than the
+        starting one therefore shifts downward.  pyrung spells that ``.reverse()``.
         """
         if isinstance(bit_range, BlockRange):
             addresses = [
@@ -817,7 +821,10 @@ class _TranslatorMixin:
 
 # ---- String/render utilities ----
 def _is_negation(expression: Expression) -> TypeGuard[UnaryExpr]:
-    """A unary minus on an operand (``-DS1``, ``-(DS1 + 1)``); a negative literal is not one."""
+    """Return True for a unary minus on an operand (``-DS1``, ``-(DS1 + 1)``).
+
+    A negative literal is not one.
+    """
     return isinstance(expression, UnaryExpr) and expression.symbol == "-"
 
 
@@ -826,7 +833,7 @@ _CLICK_REAL_DIGITS = 7
 
 
 def _float32(value: float) -> float | None:
-    """*value* rounded to float32, or None when it overflows float32."""
+    """Return *value* rounded to float32, or None when it overflows float32."""
     try:
         return struct.unpack("<f", struct.pack("<f", value))[0]
     except OverflowError:
@@ -834,22 +841,22 @@ def _float32(value: float) -> float | None:
 
 
 def click_real_literal(value: float) -> str | None:
-    """CLICK's spelling of a REAL constant, or None when CLICK cannot hold it.
+    """Return CLICK's spelling of a REAL constant, or None when CLICK cannot hold it.
 
     CLICK stores REALs as float32 but keeps at most 7 significant digits of a
-    constant: a pasted ``3.40282347E+38`` comes back ``3.402823e+38``.  So the
+    constant.  A pasted ``3.40282347E+38`` comes back ``3.402823e+38``.  So the
     digits are the shortest that read back to the same float32, capped at 7.
-    The cap also keeps the REAL maximum in range: its shortest spelling,
+    The cap also keeps the REAL maximum in range.  Its shortest spelling,
     ``3.4028235E+38``, is past float32's largest value as written, and CLICK
-    v4's syntax check rejects it.  A value needing 8 or 9 digits (``1 / 3``)
-    is written as the 7-digit constant CLICK will hold.
+    v4's syntax check rejects it.  A value that needs 8 or 9 digits (``1 / 3``)
+    is written as the 7-digit constant that CLICK will hold.
 
-    Magnitudes Python writes positionally stay positional (``3.14``,
-    ``100.0``); the rest use CLICK's exponent form with a decimal point and
+    Magnitudes that Python writes positionally stay positional (``3.14``,
+    ``100.0``).  The rest use CLICK's exponent form with a decimal point and an
     uppercase ``E`` (``3.402823E+38``, ``1.0E-10``).
 
-    From 1e7 up CLICK saves the E form (12345678.0 saves as 1.234568E+07), which
-    this does not write yet. The roadmap holds that change.
+    From 1e7 up, CLICK saves the E form (12345678.0 saves as 1.234568E+07).
+    This function does not write that yet.  The roadmap holds that change.
     """
     if not math.isfinite(value):
         return None
@@ -878,9 +885,9 @@ def _quote(value: str) -> str:
 
 
 def _operand_type(operand: Any) -> TagType | None:
-    """The tag type of a copy operand.
+    """Return the tag type of a copy operand.
 
-    A pointer has its block's type, and a float constant counts as a Real.
+    A pointer has its block's type.  A float constant counts as a Real.
     """
     if isinstance(operand, ImmediateRef):
         operand = operand.value

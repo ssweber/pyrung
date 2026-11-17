@@ -32,6 +32,7 @@ from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.timers import tof_armed_key
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.memory_block import block_room, element_names_after
+from pyrung.core.relations.records import Const, TagValue
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -40,12 +41,12 @@ from ._emit import (
     emit_cmp,
     emit_count,
     emit_done,
-    emit_frac,
     emit_if_enabled,
     emit_mem_get,
     emit_mem_set,
     emit_oneshot,
     emit_rise,
+    emit_store,
     emit_tick,
     emit_truth,
 )
@@ -79,7 +80,7 @@ def _compile_status_bit_lines(
         tag = getattr(instr, attr, None)
         if tag is not None:
             lvalue = _compile_lvalue(tag, ctx)
-            lines.append(f"{sp}{lvalue} = {val_expr}")
+            lines.append(f"{sp}{emit_store(lvalue, val_expr, ctx=ctx, dst=tag.name, term=None)}")
     return lines
 
 
@@ -111,8 +112,8 @@ def _compile_out_instruction(
     indent: int,
 ) -> list[str]:
     sp = " " * indent
-    # Each range write takes the next local name, so this builds the writes in output order.
-    # A literal True enable never runs the off side, so this does not build it.
+    # Each range write takes the next local name, so build the writes in output order.
+    # A literal True enable never runs the off side, so do not build it.
     always = _bool_literal(enabled_expr) is True
     if instr.oneshot:
         key = f"_oneshot:{ctx.state_key_for(instr)}"
@@ -162,7 +163,7 @@ def _reset_expr(
 
 
 def _rest_or_run(reset_expr: str | None, rest: list[str], run: list[str]) -> list[str]:
-    """Lines that run *rest* on a scan the reset is on, and *run* on any other scan."""
+    """Return lines that run *rest* on a scan where the reset is on, and *run* on any other."""
     if reset_expr is None:
         return run
     return emit_if_enabled(reset_expr, rest, otherwise=run, fold=False)
@@ -183,11 +184,18 @@ def _compile_on_delay_instruction(
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
     reset_expr = _reset_expr(instr, ctx)
-    rest = emit_acc_rest(done_write, acc_write, frac=acc)
+    rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx, frac=True)
     run = [
         *emit_tick(acc, instr.unit, ctx, acc_read=acc_read),
         *emit_done(
-            done_write, acc_write, ">=", preset, preset_key=_preset_key(instr, ctx), frac=acc
+            done_write,
+            acc_write,
+            ">=",
+            preset,
+            owner=instr,
+            ctx=ctx,
+            preset_key=_preset_key(instr, ctx),
+            frac=True,
         ),
     ]
     otherwise = rest if reset_expr is None else []
@@ -226,31 +234,32 @@ def _compile_off_delay_instruction(
     sp4 = " " * (indent + 4)
     sp8 = " " * (indent + 8)
     sp12 = " " * (indent + 12)
-    arm = emit_mem_set(armed_key, "True", quote="double")
     tick = emit_tick(acc, instr.unit, ctx, acc_read=None)
     done = emit_done(
         done_write,
         acc_write,
         "<",
         preset,
+        owner=instr,
+        ctx=ctx,
         preset_key=_preset_key(instr, ctx),
-        frac=acc,
+        frac=True,
         paren=False,
     )
+    on = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx, frac=True, done_value=True)
+    moved = emit_cmp("_acc", "!=", "0", paren=False, ctx=ctx, terms=(TagValue(acc.name), Const(0)))
     # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
     lines = [
-        f"{sp}_tof_armed = {emit_mem_get(armed_key, 'False')}",
+        f"{sp}_tof_armed = {emit_mem_get(armed_key, 'False', ctx=ctx)}",
         f"{sp}if {enabled_expr}:",
         f"{sp4}if not _tof_armed:",
-        f"{sp8}{arm}",
-        f"{sp4}{emit_frac(acc, '0')}",
-        f"{sp4}{done_write} = True",
-        f"{sp4}{acc_write} = 0",
+        f"{sp8}{emit_mem_set(armed_key, 'True', quote='double', ctx=ctx)}",
+        *(f"{sp4}{line}" for line in on),
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
-        f"{sp4}if _tof_armed or {done_read} or {emit_cmp('_acc', '!=', '0', paren=False)}:",
+        f"{sp4}if _tof_armed or {done_read} or {moved}:",
         f"{sp8}if not _tof_armed:",
-        f"{sp12}{arm}",
+        f"{sp12}{emit_mem_set(armed_key, 'True', quote='double', ctx=ctx)}",
         *(f"{sp8}{line}" for line in (*tick, *done)),
     ]
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
@@ -267,26 +276,28 @@ def _preset_key(
     instr: OnDelayInstruction | OffDelayInstruction | CountUpInstruction | CountDownInstruction,
     ctx: CodegenContext,
 ) -> str | None:
-    """The memory key that holds a timer's or counter's preset for the prover.
+    """Return the memory key that holds a timer's or counter's preset for the prover.
 
-    It is None unless the kernel is built with ``proof_metadata``.
+    Return None unless the kernel is built with ``proof_metadata``.
     """
     return prove_effective_preset_key(instr.done_bit.name) if ctx.proof_metadata else None
 
 
-def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list[str]:
+def _count_edge_lines(
+    name: str, key: str, input_expr: str, indent: int, ctx: CodegenContext
+) -> list[str]:
     """Bind *name* to a counter input's rising edge and update its memory.
 
-    The memory is the input as the counter last scanned it, written on every
-    scan the counter runs (reset scans included); it starts off, so an input
+    The memory is the input as the counter last scanned it.  It is written on every scan
+    that the counter runs, reset scans included.  It starts off, so an input that is
     already on at the first scan counts (see ``counters.count_edge``).
     """
     sp = " " * indent
     now = f"{name}_now"
     return [
         f"{sp}{now} = bool({input_expr})",
-        f"{sp}{name} = {emit_rise(now, key, cast=False)}",
-        f"{sp}{emit_mem_set(key, now)}",
+        f"{sp}{name} = {emit_rise(now, key, cast=False, ctx=ctx)}",
+        f"{sp}{emit_mem_set(key, now, ctx=ctx)}",
     ]
 
 
@@ -304,19 +315,28 @@ def _compile_count_up_instruction(
         ctx.mark_function_global(ctx._current_function, "_mem")
     site = ctx.state_key_for(instr)
     up_key = f"{COUNT_UP_MEMORY}:{site}"
-    lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent)
+    lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent, ctx)
     down_expr: str | None = None
     if instr.down_condition is not None:
         down_expr = _get_condition_snapshot(instr, "down_condition", ctx) or compile_condition(
             instr.down_condition, ctx
         )
         lines.extend(
-            _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent)
+            _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent, ctx)
         )
-    rest = emit_acc_rest(done_write, acc_write)
+    rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx)
+    down_edge = None if down_expr is None else "_cd_edge"
     run = [
-        *emit_count(acc_read, up="_cu_edge", down=None if down_expr is None else "_cd_edge"),
-        *emit_done(done_write, acc_write, ">=", preset, preset_key=_preset_key(instr, ctx)),
+        *emit_count(instr.accumulator, acc_read, up="_cu_edge", down=down_edge, ctx=ctx),
+        *emit_done(
+            done_write,
+            acc_write,
+            ">=",
+            preset,
+            owner=instr,
+            ctx=ctx,
+            preset_key=_preset_key(instr, ctx),
+        ),
     ]
     sp = " " * indent
     lines.extend(f"{sp}{line}" for line in _rest_or_run(_reset_expr(instr, ctx), rest, run))
@@ -343,11 +363,19 @@ def _compile_count_down_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     down_key = f"{COUNT_DOWN_MEMORY}:{ctx.state_key_for(instr)}"
-    lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent)
-    rest = emit_acc_rest(done_write, acc_write)
+    lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent, ctx)
+    rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx)
     run = [
-        *emit_count(acc_read, up=None, down="_cd_edge"),
-        *emit_done(done_write, acc_write, "<=", preset, preset_key=_preset_key(instr, ctx)),
+        *emit_count(instr.accumulator, acc_read, up=None, down="_cd_edge", ctx=ctx),
+        *emit_done(
+            done_write,
+            acc_write,
+            "<=",
+            preset,
+            owner=instr,
+            ctx=ctx,
+            preset_key=_preset_key(instr, ctx),
+        ),
     ]
     sp = " " * indent
     lines.extend(f"{sp}{line}" for line in _rest_or_run(_reset_expr(instr, ctx), rest, run))
@@ -394,7 +422,7 @@ def _compile_copy_instruction(
 
 
 def _copy_source_fits(source: object, target_type: str) -> bool:
-    """True for a literal the store leaves alone, which needs no clamp test."""
+    """Return True for a literal that the store leaves alone, so it needs no clamp test."""
     if type(source) is not int:
         return False
     if target_type == "INT":
@@ -409,8 +437,10 @@ def _compile_copy_converter_instruction(
     indent: int,
     converter: CopyConverter | None = None,
 ) -> list[str]:
-    """A Copy with *converter* (``instr.convert``, or the plain one across text), or a
-    text literal's fan-out when it is ``None``."""
+    """Compile a Copy with *converter* (``instr.convert``, or the plain one across text).
+
+    When *converter* is ``None``, compile a text literal's fan-out instead.
+    """
     if converter is not None and not isinstance(converter, CopyConverter):
         raise TypeError("copy converter compiler requires CopyConverter")
 
@@ -421,8 +451,8 @@ def _compile_copy_converter_instruction(
     source_expr = _compile_copy_source(instr.source, ctx)
     source_read: list[str] = []
     if _past_end_keeps(instr.source):
-        # Read where a pointer past the end drops the copy (the guard's IndexError),
-        # not inside the conversion's own handler, which would flag it.
+        # Read the source where a pointer past the end drops the copy (the guard's IndexError).
+        # Reading it inside the conversion's own handler would flag it.
         source_read = [f"_{stem}_source = {source_expr}"]
         source_expr = f"_{stem}_source"
 

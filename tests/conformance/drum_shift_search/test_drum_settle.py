@@ -1,4 +1,6 @@
-"""Drum probes, what the others leave open: the ``drum_settle`` group (``Conf_DrumSettle``).
+"""Probe the drum questions that the other drum groups leave open: ``drum_settle``.
+
+The subroutine is ``Conf_DrumSettle``.
 
 Part ``drum2`` (``suite.PARTS``).  ``drum_rule``, ``drum_jump`` and ``drum_idle`` leave two
 kinds of question.  A time & event drum does not move on a one-scan event on the
@@ -83,7 +85,7 @@ _DDS = range(718, 754)
 
 @dataclass(frozen=True)
 class Rig:
-    """The tags of a case: two drums (:meth:`side`) with their step, Acc and state."""
+    """Holds the tags of a case: two drums (:meth:`side`) with their step, Acc and state."""
 
     slot: Any
     index: int
@@ -96,7 +98,7 @@ class Rig:
 
     @property
     def spare_dd(self) -> Any:
-        """A DD of the case's own, for :func:`moves`."""
+        """Return a DD of the case's own, for :func:`moves`."""
         return dd[_DDS[4 * self.index + 2]]
 
     @property
@@ -207,14 +209,19 @@ def snap_two(slot: Any, top: Side, under: Side, scan: int, into: Any) -> None:
 
 
 def acc_thousands(slot: Any, s: Side, scan: int, into: Any) -> None:
-    """*into* = Acc in whole seconds (Math truncates).  An Acc staged at 9000 reads 9 up to
-    9999, so a few scans of up to 50 ms leave it alone."""
+    """Write Acc in whole seconds into *into*.  Math truncates.
+
+    An Acc staged at 9000 reads 9 up to 9999, so a few scans of up to 50 ms leave it alone.
+    """
     with Rung(slot.Scratch == scan):
         math(s.acc / 1000, into)
 
 
 def moves(slot: Any, acc: Any, prev: Any, first: int, last: int, into: Any) -> None:
-    """*into* = the scans of *first*..*last* on which *acc* moved up.  Below the drum."""
+    """Count into *into* the scans of *first*..*last* on which *acc* moved up.
+
+    Call this below the drum's rung.
+    """
     with Rung(slot.Scratch >= first, slot.Scratch <= last, acc > prev):
         math(into + 1, into)
     with Rung():

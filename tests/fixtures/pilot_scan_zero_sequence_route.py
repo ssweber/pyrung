@@ -2,7 +2,7 @@
 
 This preserves the rung topology and ordering of the field sequence that
 motivated the adjacent-scan lifecycle work.  The names are deliberately
-domain-neutral; the important features are the same-scan cascade, two
+domain-neutral. The important features are the same-scan cascade, two
 watchdogs, the terminal settling timer, the active-low interruption rung,
 the late error writers, the reconnect repair followed by its adjacent-scan
 status overwrite, and the unconditional reporting copy which observes the
@@ -87,7 +87,7 @@ RecoveryCounter = Counter.clone("RouteRecoveryCounter")
 
 
 def _build(*, field_order: bool) -> Program:
-    """The route program, in the field order or as ``adjacent_logic``."""
+    """Build the route program, in the field order or as ``adjacent_logic``."""
 
     def base_branch() -> None:
         with branch(BaseSensor):
@@ -114,9 +114,9 @@ def _build(*, field_order: bool) -> Program:
         ):
             copy(40, SequenceStep, oneshot=True)
 
-        # R17-R23: same order and branch structure as the field program
-        # (adjacent_logic: each Done branch above its timer, so it sees the
-        # timer's Done of the scan before).
+        # R17-R23: same order and branch structure as the field program.
+        # In adjacent_logic each Done branch sits above its timer, so it sees the
+        # timer's Done from the scan before.
         with rung(
             Or(
                 And(SequenceStep >= 40, SequenceStep < 50),
@@ -190,10 +190,10 @@ def _build(*, field_order: bool) -> Program:
         ):
             copy(10, SequenceStep, oneshot=True)
 
-        # R29: active-low interruption.  With BaseSensor true this is the exact
-        # late writer that destroys the terminal value and timer enable after the
-        # input has gone true long enough to re-arm its one-shot.  The cold-start
-        # scan executes it once while false; preserving that spent state is part of
+        # R29: active-low interruption. With BaseSensor true, this is the exact
+        # late writer that destroys the terminal value and timer enable once the
+        # input has been true long enough to re-arm its one-shot. The cold-start
+        # scan executes it once while false. Preserving that spent state is part of
         # the adjacent-scan route receipt.
         with rung(~InterruptionInput):
             if field_order:
@@ -223,12 +223,12 @@ def _build(*, field_order: bool) -> Program:
         with rung(~NetworkAvailable, SequenceStep <= 20):
             copy(98, SequenceStep, oneshot=True)
 
-        # A durable reconnect first repairs the disconnected state, and the
-        # sibling status branch can replace the productive 10 unless the program
+        # A durable reconnect first repairs the disconnected state. The sibling
+        # status branch can then replace the productive 10, unless the program
         # has advanced beyond the local handoff or one of the program-owned status
-        # alternatives changed.  This is the neutral 98 -> 10 -> 94 mechanism: in
-        # the field order the status branch, below the repair, sees its 10 on the
-        # same scan; in adjacent_logic it sits above the repair and sees the 10 on
+        # alternatives changed. This is the neutral 98 -> 10 -> 94 mechanism. In the
+        # field order the status branch sits below the repair and sees its 10 on the
+        # same scan. In adjacent_logic it sits above the repair and sees the 10 on
         # the following scan.
         with rung(NetworkAvailable):
             if field_order:
@@ -249,7 +249,7 @@ def _build(*, field_order: bool) -> Program:
 
         # The field communication transaction shares NetworkAvailable with a
         # peer-ready contact. This relationship is intentionally included even
-        # though CommunicationPulse does not directly drive SequenceStep: it is
+        # though CommunicationPulse does not directly drive SequenceStep. It is
         # what lets ProgramStep attach communication context to the reconnect act.
         with rung(system.sys.clock_500ms, NetworkPeerReady, NetworkAvailable):
             out(CommunicationPulse)
@@ -283,9 +283,9 @@ def _build(*, field_order: bool) -> Program:
 
         # The field program copies its live sequence register unconditionally to
         # a later reporting register. This is a one-way observation handoff, not a
-        # second navigated channel. Keeping it here ensures Compass preserves that
-        # distinction while still seeing the same receipt topology as the field
-        # program.
+        # second navigated channel. Keeping it here lets the tests check that Compass
+        # preserves that distinction while it still sees the same receipt topology as
+        # the field program.
         with rung():
             copy(SequenceStep, ReportedSequenceStep)
     return logic

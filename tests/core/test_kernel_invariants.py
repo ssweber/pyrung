@@ -64,8 +64,8 @@ _ALL_TAG_TYPES = (*_INT_TAG_TYPES, TagType.REAL)
 def _in_range(value: object, tag_type: TagType) -> bool:
     """Return True if ``value`` is within ``tag_type``'s storage range.
 
-    REAL destinations accept any numeric scalar (a REAL holds +/-Inf and NaN:
-    a value past CLICK's range stores as +/-Inf).
+    REAL destinations accept any numeric scalar.  A REAL holds +/-Inf and NaN, and a value
+    past CLICK's range is stored as +/-Inf.
     """
     if tag_type == TagType.REAL:
         return isinstance(value, (int, float)) and not isinstance(value, bool)

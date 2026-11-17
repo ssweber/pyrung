@@ -113,7 +113,7 @@ def _compile_pack_words_instruction(
 
 
 def _clamp_fault(dest_type: str, fault_body: list[str], spaces: int) -> list[str]:
-    """Lines raising the out-of-range fault when an INT or DINT pack clamped."""
+    """Return the lines that raise the out-of-range fault when an INT or DINT pack clamped."""
     if dest_type not in {"INT", "DINT"}:
         return []
     return [

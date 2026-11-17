@@ -1,19 +1,20 @@
-"""What sets and clears a fault flag, on every engine.
+"""Test which instructions set and clear a fault flag, on every engine.
 
 SC40 (``fault.division_error``) and SC46 (``fault.math_operation_error``) follow
-the last Math.  SC43 (``fault.out_of_range``) and SC44 (``fault.address_error``)
-follow the last Copy or Math.  Nothing else touches them, and a flag carries from
-one scan into the next.  An instruction clears the flags it follows as it starts,
-before it reads its operands.
+the last Math. SC43 (``fault.out_of_range``) and SC44 (``fault.address_error``)
+follow the last Copy or Math. No other instruction touches them. A flag stays set
+from one scan into the next until an instruction that follows it clears it. An
+instruction clears the flags it follows when it starts, before it reads its operands.
 
-Every Math the scan reaches clears its flags.  That includes a Math on a false
-rung and a one-shot Math that does not fire.  A Copy clears its flags only when it
+Every Math that the scan reaches clears its flags. That includes a Math on a false
+rung and a one-shot Math that does not fire. A Copy clears its flags only when it
 runs.
 
-A pointer below its block is SC44 with the destination left alone.  Past it there
-is no flag, a read gets the type's zero and a write is dropped.  A dynamic window
-out of its block is SC44 on either side, with nothing written.  The conformance
-groups in ``tests/conformance/system/`` hold what a CLICK read.
+If a pointer is below its block, the instruction sets SC44 and leaves the
+destination alone. If a pointer is past its block, no flag is set, a read returns
+the type's zero and a write is dropped. If a dynamic window falls outside its
+block, below it or past it, the instruction sets SC44 and writes nothing. The
+conformance groups in ``tests/conformance/system/`` hold what a real CLICK did.
 """
 
 from __future__ import annotations
@@ -104,7 +105,7 @@ class _StubBase:
 
 
 def _run(prog: Program, engine: str, watch: tuple[Any, ...], monkeypatch, scans: int = 1) -> tuple:
-    """*watch*'s values after *scans* scans of *prog* on *engine*."""
+    """Return the values of *watch* after *scans* scans of *prog* on *engine*."""
     if engine in ("interpreted", "compiled"):
         runner = (PLC if engine == "interpreted" else CompiledPLC)(prog, dt=0.010)
         for _ in range(scans):
@@ -127,9 +128,9 @@ def _run(prog: Program, engine: str, watch: tuple[Any, ...], monkeypatch, scans:
     ctx = _context_for_program(prog, hw)
 
     def read(tag: Any) -> Any:
-        # A slot only a dynamic window reaches is in its block's array, but no rung
-        # names it, so the context has to be told to look for it (the way a Modbus
-        # server's registers are).  A tag in no array still raises here.
+        # A slot that only a dynamic window reaches is in its block's array, but no rung
+        # names it. The context must be told to look for it, as it is for a Modbus
+        # server's registers. A tag that is in no array still raises here.
         ctx.ensure_tag_referenced(tag)
         name, bracket, index = ctx.symbol_for_tag(tag).partition("[")
         return namespace[name][int(index[:-1])] if bracket else namespace[name]
@@ -257,7 +258,7 @@ _ON_A_FALSE_RUNG: dict[str, tuple[Callable[[], object], bool]] = {
 def test_on_a_false_rung_a_math_clears_and_a_copy_does_not(
     engine, fault_name, step_name, monkeypatch
 ) -> None:
-    """CLICK: ``flag_steps`` (bits 2 and 4) and ``flag_reads/unpowered_division``."""
+    """Match CLICK: ``flag_steps`` (bits 2 and 4) and ``flag_reads/unpowered_division``."""
     flag, fault = _FAULTS[fault_name]
     step, stays = _ON_A_FALSE_RUNG[step_name]
     never = Bool("Never")
@@ -290,8 +291,8 @@ _ONESHOTS: dict[str, Callable[[], object]] = {
 def test_a_oneshot_that_does_not_fire(engine, fault_name, oneshot, kept, monkeypatch) -> None:
     """The oneshot clears the flag on scan 1, when it fires.
 
-    On scan 2 it does not fire, and only a Math clears the flag then.  CLICK:
-    ``flag_reads/oneshot_held``.
+    On scan 2 it does not fire. A Copy one-shot then leaves the flag set, and a Math
+    one-shot still clears it. This matches CLICK: ``flag_reads/oneshot_held``.
     """
     flag, fault = _FAULTS[fault_name]
     cleared, left = Bool("Cleared"), Bool("Kept")
@@ -309,7 +310,7 @@ def test_a_oneshot_that_does_not_fire(engine, fault_name, oneshot, kept, monkeyp
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_each_flag_follows_on_its_own(engine, monkeypatch) -> None:
-    """A Math clears what it does not raise and raises what it does."""
+    """A Math clears each flag it does not raise and sets each flag it does raise."""
     at_div, at_range = Bool("AtDiv"), Bool("AtRange")
     with Program(strict=False) as prog:
         with Rung():
@@ -326,9 +327,9 @@ def test_each_flag_follows_on_its_own(engine, monkeypatch) -> None:
 @pytest.mark.parametrize("engine", _SCANNING_ENGINES)
 @pytest.mark.parametrize("fault_name", list(_FAULTS))
 def test_a_flag_carries_into_the_next_scan(engine, fault_name, monkeypatch) -> None:
-    """CLICK: ``flag_carry/math_flags_carry``.  The top rung of scan 2 reads the flag on.
+    """Match CLICK: ``flag_carry/math_flags_carry``. The top rung of scan 2 reads the flag on.
 
-    The faulting rung is false on scan 2.  A Math there clears its flag, and a Copy leaves it.
+    The faulting rung is false on scan 2. A Math there clears its flag. A Copy leaves it.
     """
     flag, fault = _FAULTS[fault_name]
     armed = Bool("Armed")
@@ -346,7 +347,7 @@ def test_a_flag_carries_into_the_next_scan(engine, fault_name, monkeypatch) -> N
 
 @pytest.mark.parametrize("engine", _SCANNING_ENGINES)
 def test_a_carried_flag_waits_for_an_instruction_that_follows_it(engine, monkeypatch) -> None:
-    """A coil and a timer on the next scan leave SC44, and the Copy after them clears it."""
+    """On the next scan, a coil and a timer leave SC44 set, and the Copy after them clears it."""
     armed = Bool("Armed")
     before, after = Bool("Before"), Bool("After")
     with Program(strict=False) as prog:
@@ -378,7 +379,7 @@ def test_a_carried_flag_waits_for_an_instruction_that_follows_it(engine, monkeyp
     ids=["SC43", "SC44"],
 )
 def test_a_copy_clears_the_flag_before_it_reads_it(engine, flag, fault, monkeypatch) -> None:
-    """CLICK: ``flag_probe/source_flag_is_read_before_the_copy_settles``."""
+    """Match CLICK: ``flag_probe/source_flag_is_read_before_the_copy_settles``."""
     seen = Bool("SeenFlag", default=True)
     with Program(strict=False) as prog:
         with Rung():
@@ -389,7 +390,7 @@ def test_a_copy_clears_the_flag_before_it_reads_it(engine, flag, fault, monkeypa
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_calc_clears_the_flag_before_it_reads_it(engine, monkeypatch) -> None:
-    """CLICK: ``flag_probe/source_flag_in_a_math``."""
+    """Match CLICK: ``flag_probe/source_flag_in_a_math``."""
     number = Int("Number")
     with Program(strict=False) as prog:
         with Rung():
@@ -527,7 +528,7 @@ def test_a_write_below_the_block_is_an_address_error(engine, monkeypatch) -> Non
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_store_past_the_block_clears_the_flag_it_follows(engine, monkeypatch) -> None:
-    """A dropped write still ran: the Copy clears what a fault before it raised."""
+    """A dropped write still counts as a run. The Copy clears the flag that an earlier fault set."""
     past, _, _ = _pointers()
     table = Block("Dest", TagType.INT, 1, 2)
     with Program(strict=False) as prog:
@@ -602,7 +603,7 @@ def test_pack_text_refuses_text_before_it_looks_at_a_pointer(engine, monkeypatch
     ],
 )
 def test_a_flag_nothing_reads_settles_the_same(runner, steps, up) -> None:
-    """The compiled backend settles a flag no rung reads, as the state shows it."""
+    """Check that the compiled backend settles a flag that no rung reads, as the state shows it."""
     actions: dict[str, Callable[[], object]] = {
         "copy_clamps": lambda: copy(Dint("Big", default=99_999), Int("Small")),
         "bad_pointer": lambda: copy(_Tbl[Int("Below", default=0)], Int("Plain")),
@@ -624,7 +625,7 @@ def test_a_flag_nothing_reads_settles_the_same(runner, steps, up) -> None:
 
 
 def test_instructions_declare_every_flag_they_follow() -> None:
-    """``_fault_writes`` is what the PDG and the prover see: a clear is a write."""
+    """``_fault_writes`` lists each clear as a write, so the PDG and the prover see it."""
     with Program(strict=False) as prog:
         with Rung():
             for step in (*_MATH.values(), *_COPY.values()):
@@ -723,7 +724,11 @@ def _window_stage() -> None:
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("op_name", list(_WINDOW_OUT))
 def test_a_window_out_of_its_block_is_an_address_error(engine, op_name, monkeypatch) -> None:
-    """Only a single Copy pointer past its bank was measured: a window stays SC44."""
+    """A window outside its block sets SC44, whether it is below the block or past it.
+
+    CLICK was measured only for a single Copy pointer past its bank, and that pointer sets no
+    flag.
+    """
     op, untouched, value = _WINDOW_OUT[op_name]
     with Program(strict=False) as prog:
         with Rung():
@@ -938,7 +943,10 @@ _SPARSE_WINDOWS: dict[str, tuple[Callable[[], object], tuple[Any, ...], tuple[An
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("op_name", list(_SPARSE_WINDOWS))
 def test_a_dynamic_window_skips_a_gap(engine, op_name, monkeypatch) -> None:
-    """As a static ``select()`` does: only a window's outer bounds are checked."""
+    """A dynamic window checks only its outer bounds, so it skips a gap.
+
+    A static ``select()`` does the same.
+    """
     op, watch, values = _SPARSE_WINDOWS[op_name]
     with Program(strict=False) as prog:
         with Rung():
@@ -1105,7 +1113,7 @@ def test_a_for_count_inside_its_block_runs(engine, monkeypatch) -> None:
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_for_count_past_its_block_reads_zero(engine, monkeypatch) -> None:
-    """The count is 0, with no flag: a For reads a 0 count as it reads any other."""
+    """The count reads as 0 and sets no flag. A For treats it like any other 0 count."""
     expected = _run(_count_program(_SrcBelow), "interpreted", (SC44, _SrcBody), monkeypatch)
     prog = _count_program(_SrcTbl[_SrcPast])
     assert _run(prog, engine, (SC44, _SrcBody), monkeypatch) == expected
@@ -1154,7 +1162,7 @@ def test_a_search_value_past_its_block_reads_zero(engine, monkeypatch) -> None:
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_search_that_has_nothing_left_does_not_read_its_value(engine, monkeypatch) -> None:
-    """A continuous search whose last result was a miss stays a miss: no value is read."""
+    """A continuous search whose last result was a miss stays a miss and reads no value."""
     missed = Int("SrcMissed", default=-1)
     with Program(strict=False) as prog:
         with Rung():

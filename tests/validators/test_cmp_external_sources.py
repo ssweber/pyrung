@@ -103,7 +103,7 @@ def test_ladder_only_zero_writer_still_proves_comparison_false():
 
 
 def test_a_wide_math_result_has_no_listed_domain():
-    # One Bool times 100,000,000 spans 0..100,000,000; listing it took gigabytes.
+    # One Bool times 100,000,000 spans 0..100,000,000.  Listing every value took gigabytes.
     flag, big = Bool("Flag", external=True), Dint("Big")
     with Program(strict=False) as program:
         with rung(Bool("Go", external=True)):

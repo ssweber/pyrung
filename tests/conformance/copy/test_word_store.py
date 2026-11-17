@@ -1,12 +1,12 @@
 """What a Word holds after a store, and what comes out of one: the ``word_store`` group.
 
-Part ``copy`` (``suite.PARTS``).  A Copy into a Word from a register wraps from -1 down to -32768 and clamps past 65535, with no
-flag.  A constant
-keeps its low 16 bits, with no flag.  Block copy and Fill behave as Copy.  A Word copied into an
-Int keeps its bits, and into a DD or a DF is its value (``core/instruction/conversions.py``).
-A DH under test is preset to 0x1234, so an instruction that
-refuses reads apart from one that writes.  Results are classes (``probe_kit.class_of``), 0 for any
-other value; SC43 bits are read on the rung after each op.
+Part ``copy`` (``suite.PARTS``). A Copy into a Word from a register wraps from -1 down to
+-32768 and clamps past 65535, with no flag. A constant keeps its low 16 bits, with no
+flag. Block copy and Fill behave as Copy. A Word copied into an Int keeps its bits. A Word
+copied into a DD or a DF keeps its value (``core/instruction/conversions.py``). A DH under
+test is preset to 0x1234, so an instruction that refuses reads apart from one that writes.
+Results are classes (``probe_kit.class_of``), 0 for any other value. SC43 bits are read
+on the rung after each op.
 
 - ``word_below_zero``: DS -1, DD -1, DF -1.6 copied into a Word.  Wrap (CLICK): 1, 1, 1 with no
   flag.  Clamp at 0 with SC43: 2, 2, 2, Result4 = 7.  A refusal that leaves the DH: 4.  A DF that
@@ -28,8 +28,8 @@ other value; SC43 bits are read on the rung after each op.
   in ErrorCode bits 1 and 4.  Wrap with no flag (CLICK): 1, 1, 0.  Clamp: 2, 2.  The export
   refuses a constant past 16 bits into a DH, so 70000 has no case.
 
-A Math into a Word is hex mode, in ``hex_math``.  Each case owns ten of DD810.., a few of DF434..
-and of DH422..; DS4312..DS4315 are the Block copies' Ints.
+A Math into a Word is hex mode, and ``hex_math`` covers it. Each case owns ten of DD810.., a
+few of DF434.. and of DH422..; DS4312..DS4315 are the Block copies' Ints.
 """
 
 from __future__ import annotations

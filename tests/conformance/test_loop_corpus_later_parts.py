@@ -1,4 +1,4 @@
-"""``test_loop_corpus.py``'s check on the later parts, on an xdist worker of its own."""
+"""Run the check of ``test_loop_corpus.py`` on the later parts, on an xdist worker of its own."""
 
 from __future__ import annotations
 

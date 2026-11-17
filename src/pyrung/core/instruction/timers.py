@@ -8,7 +8,13 @@ from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import _parse_time_unit
 
-from .advance import AdvanceProfile, ConditionDemand, monotone_profile
+from .advance import (
+    AdvanceProfile,
+    ConditionDemand,
+    monotone_profile,
+    recorded_completion_controls,
+    recorded_prepare,
+)
 from .base import Instruction
 from .utils import (
     elapsed_units,
@@ -23,12 +29,14 @@ if TYPE_CHECKING:
 
 
 def tof_armed_key(acc_name: str) -> str:
-    """Memory key set on the first scan an off-delay timer runs enabled, or runs
-    with Done on or Acc above 0.
+    """Return the memory key that marks an off-delay timer as armed.
+
+    The key is set on the first scan the timer runs enabled, or runs with Done on or
+    Acc above 0.
 
     A TOF that was never enabled rests at ``Done False, Acc 0`` and does not
     time (``timers/tof_never_enabled``).  Once enabled, it judges ``Acc <
-    preset`` on every scan its rung is false, so a TD the ladder writes to 0
+    preset`` on every scan its rung is false.  So a TD that the ladder writes to 0
     turns Done back on and counts from 0 (``tof_rewrite/done_after_td_zeroed``).
     STOP -> RUN clears the key with the rest of the memory.
     """
@@ -175,14 +183,7 @@ class OnDelayInstruction(Instruction):
             restore_is_pulse=isinstance(
                 self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
             ),
-            completion_controls=(
-                ConditionDemand(self.enable_condition, True),
-                *(
-                    (ConditionDemand(self.reset_condition, False),)
-                    if self.reset_condition is not None
-                    else ()
-                ),
-            ),
+            completion_controls=recorded_completion_controls(self),
         )
 
 
@@ -315,4 +316,5 @@ class OffDelayInstruction(Instruction):
             advance=ConditionDemand(self.enable_condition, False),
             done_at_boundary=False,
             restore=ConditionDemand(self.enable_condition, True),
+            prepare=recorded_prepare(self),
         )

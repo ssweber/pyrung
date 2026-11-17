@@ -2,13 +2,13 @@
 CLK_TEXT_PAST_BLOCK: one whose text runs past the end of a block mapped inside the
 bank, where pyrung stops and a CLICK writes on.
 
-A constant copied past TXT1000 is refused by validation, and by export even when
-allowed. CLICK's Copy refuses it (OBJ-003). CLICK's Copy accepts a register source,
-which saves no end address, so any other store warns.
+Validation refuses a constant copied past TXT1000, and export refuses it even when
+allowed. CLICK's Copy refuses it too (OBJ-003). CLICK's Copy accepts a register source
+and saves no end address for it.  So any other store warns.
 
 CLICK's answers are in clicknick ``buildbot/jobs/copy-encodings/RESULTS.md`` and
 ``buildbot/jobs/lc-diff-click/RESULTS8.md``.  CLICK counts a constant as it saves it,
-not the text the Copy writes, so 1.5 into TXT1 ends at TXT3.
+not the text the Copy writes.  So 1.5 into TXT1 ends at TXT3.
 """
 
 from __future__ import annotations
@@ -257,7 +257,7 @@ def test_export_of_a_text_that_fits_does_not_warn():
 
 
 def _mapped_report(store):
-    """*store* of Msg, a block mapped onto TXT101..110 in the middle of the bank."""
+    """Validate *store* of Msg, a block mapped onto TXT101..110 in the middle of the bank."""
     msg = Block("Msg", TagType.CHAR, 1, 10)
     level = Real("Level")
     with Program(strict=False) as prog:

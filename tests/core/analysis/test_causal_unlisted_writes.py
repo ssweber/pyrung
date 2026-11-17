@@ -56,7 +56,7 @@ def _uncertain(chain: CausalChain) -> list[int]:
 
 
 def _snapshot_why(plc: PLC, tag: Bool, **moved: int) -> CausalChain:
-    """why() over the state alone, with no recording to read.
+    """Run why() over the state alone, with no recording to read.
 
     *moved* sets tags in that state, as when a pointer has since moved on.  The trial
     scan starts from that state too.

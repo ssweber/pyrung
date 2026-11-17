@@ -1,4 +1,4 @@
-"""Caches kept on a program or rung must not answer from a definition edited since."""
+"""A cache kept on a program or rung must not answer from a definition that was edited since."""
 
 from __future__ import annotations
 

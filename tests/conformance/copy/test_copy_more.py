@@ -1,7 +1,8 @@
-"""Copy forms the other copy groups leave out: the ``copy_more`` and ``block_more`` groups.
+"""Test the Copy forms that the other copy groups leave out: ``copy_more`` and ``block_more``.
 
-Part ``copy`` (``suite.PARTS``).  An expectation is what a CLICK does.  Text is read as a pair of characters, 128 * first + second,
-so 6197 is "15" (49, 53); a NUL reads 0.
+These groups belong to part ``copy`` (``suite.PARTS``). An expectation is what a CLICK does.
+A pair of characters of text is read as 128 * first + second, so 6197 is "15" (49, 53).
+A NUL reads 0.
 
 ``copy_more``:
 
@@ -161,7 +162,7 @@ def init_to_text_ints(slot):
 
 
 def _stage(slot, text, first):
-    """Stage *text* into TXT from *first*: one Copy per character."""
+    """Stage *text* into TXT starting at *first*, with one Copy per character."""
     with Rung(*once(slot)):
         for offset, char in enumerate(text):
             copy(char, txt[first + offset])

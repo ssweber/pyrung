@@ -210,8 +210,8 @@ class _LadderExporter(
 
         A contact is factored into a shared node only where that does not read
         it across a write of the rung (see :mod:`._solve_order`).  With *path*
-        (export), the rung is refused when its drawing would read a contact at
-        another point of the solve.
+        (export), the method refuses the rung when its drawing would read a contact
+        at another point of the solve.
         """
         outputs = self._collect_instruction_trees(rung)
         if not outputs:
@@ -280,10 +280,10 @@ class _LadderExporter(
         members: list[tuple[int, int]] | None,
         order: ReadOrder | None,
     ) -> int:
-        """How many leading contacts *trees* share and may read as one node.
+        """Return how many leading contacts *trees* share and may read as one node.
 
-        The node is read at the first member's position, so a contact another
-        member reads later in the source stays out of it when a write in
+        The node is read at the first member's position.  So a contact that another
+        member reads later in the source stays out of the node when a write in
         between reaches it.
         """
         shared = len(factor_outputs(trees).shared)
@@ -303,10 +303,10 @@ class _LadderExporter(
         order: ReadOrder | None = None,
         members: list[tuple[int, int]] | None = None,
     ) -> Rung:
-        """One rung for *outputs* (each with its whole path), prefixes factored.
+        """Build one rung for *outputs* (each with its whole path), with prefixes factored.
 
-        *members* gives each output's ``(position in the source rung, contacts
-        of its path already placed above)``, so *order* can keep a contact
+        *members* holds each output's ``(position in the source rung, contacts
+        of its path already placed above)``.  *order* uses it to keep a contact
         from being read across a write.
         """
         trees = [tree for tree, _instruction in outputs]
@@ -376,13 +376,13 @@ class _LadderExporter(
         return self._condition_leaf_token(condition, path="normalize.condition")
 
     def _export_rung(self, rung: Rung, *, path: str) -> Rung:
-        """*rung* as its CLICK rung: a branching rung's leading contacts factored.
+        """Return *rung* as its CLICK rung, with a branching rung's leading contacts factored.
 
         A contact is factored into a shared node only where that does not read
-        it across a write of the rung; the rung is refused when its drawing
+        it across a write of the rung.  The method refuses the rung when its drawing
         would read a contact at another point of the solve (see
-        :mod:`._solve_order`).  A box with pins is alone on its rung (the
-        program build refuses anything beside it), so nothing here splits.
+        :mod:`._solve_order`).  A box with pins is alone on its rung, because the
+        program build refuses anything beside it.  So nothing here splits.
         """
         if not rung._branches:
             return rung

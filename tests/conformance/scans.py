@@ -31,18 +31,21 @@ WINDOW = 8
 
 
 def scans_for(window: int = WINDOW) -> int:
-    """Scans to run in-process: the window, the scan that raises ``Fired``, one spare."""
+    """Return the scans to run in-process: the window, the scan that raises ``Fired``, one spare."""
     return window + 2
 
 
 def count_scans(slot: Any, window: int = WINDOW) -> None:
-    """``Scratch`` = the scan in progress, holding at ``window + 1``.  The case's first rung."""
+    """Count scans in ``Scratch``, so it is the scan in progress, holding at ``window + 1``.
+
+    This is the case's first rung.
+    """
     with Rung(slot.Cmd != 0, slot.Scratch <= window):
         math(slot.Scratch + 1, slot.Scratch)
 
 
 def trace(slot: Any, bit: Any, window: int = WINDOW) -> None:
-    """Over the window: Result1 = scans *bit* is on, Result2 = the first, Result3 = the last.
+    """Record over the window: Result1 = scans *bit* is on, Result2 = the first, Result3 = the last.
 
     A count with its first and last scan pins a contiguous run exactly.
     """
@@ -54,7 +57,7 @@ def trace(slot: Any, bit: Any, window: int = WINDOW) -> None:
 
 
 def edges(edge: Any, slot: Any, count: Any, at: Any = None, window: int = WINDOW) -> None:
-    """Over the window: *count* = scans *edge* passes power, *at* = the last such scan.
+    """Record over the window: *count* = scans *edge* passes power, *at* = the last such scan.
 
     The edge contact comes first on its rung, so it has power on its left on
     every scan whatever the rest of the rung says.  Whether a CLICK edge contact
@@ -67,11 +70,11 @@ def edges(edge: Any, slot: Any, count: Any, at: Any = None, window: int = WINDOW
 
 
 def firings(edge: Any, slot: Any, dest: Any, *more: Any, window: int = WINDOW) -> None:
-    """*dest* = the scans *edge* passed power, as decimal digits: scans 3 and 4 read 34.
+    """Write the scans *edge* passed power to *dest* as decimal digits.  Scans 3 and 4 read 34.
 
-    The edge contact comes first on its rung, as in :func:`edges`; *more*
+    The edge contact comes first on its rung, as in :func:`edges`.  The *more*
     contacts follow it.  A window of 9 scans or fewer keeps every scan one
-    digit; an Int holds at most four of them (32767).
+    digit.  An Int holds at most four of them (32767).
     """
     with Rung(edge, slot.Cmd != 0, slot.Scratch <= window, *more):
         math(dest * 10 + slot.Scratch, dest)

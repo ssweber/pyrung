@@ -1,9 +1,10 @@
-"""What a Math box does past the recorded forms: the ``math_more`` and ``hex_math`` groups.
+"""Test what a Math box does past the recorded forms: the ``math_more`` and ``hex_math`` groups.
 
-Part ``math`` (``suite.PARTS``).  ``numeric``, ``faults`` and ``store_probe`` read a Math's
-wrap, its wide intermediates and its Inf; none reads the shapes below.  An expectation
-is what a CLICK does where that is known, and pyrung's reading otherwise.  Each case runs once (``probe_kit``), so a flag is read on the rung
-right after its op.
+These groups belong to part ``math`` (``suite.PARTS``). The groups ``numeric``, ``faults``
+and ``store_probe`` read a Math's wrap, its wide intermediates and its Inf. None of them
+reads the shapes below. Where a real CLICK result is known, the expectation is that
+result. Otherwise the expectation is pyrung's reading. Each case runs once (``probe_kit``),
+so a flag is read on the rung right after its op.
 
 ``math_more``:
 

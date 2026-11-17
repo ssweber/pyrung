@@ -41,7 +41,7 @@ WaitB = Timer.clone("WaitB")
 
 
 def build_program() -> tuple[Program, TagMap]:
-    """One rung per topology: plain outputs, Or rows, branches, and a box under an Or."""
+    """Build one rung per topology: plain outputs, Or rows, branches, and a box under an Or."""
     coil = iter(range(1, 400))
 
     def outputs(n: int) -> None:
@@ -152,7 +152,7 @@ def build_program() -> tuple[Program, TagMap]:
             outputs(1)
         with Rung(x[1], rows(2), Or(And(x[4], rows(2, first=5)), x[7])):
             outputs(1)
-        # An Or with an And row, then a branch.  An Or, then a branch on two Ors.
+        # An Or with an And row, then a branch. An Or, then a branch on two Ors.
         with Rung(x[1], Or(And(x[2], x[3]), x[4])):
             outputs(1)
             with branch(x[5]):
@@ -200,7 +200,7 @@ def test_the_export_equals_the_golden(tmp_path: Path) -> None:
 
 
 def test_the_importer_reads_the_golden_as_the_programs_rungs() -> None:
-    """Each rung of the golden reads back with the program's own conditions and outputs."""
+    """Read back each rung of the golden with the program's own conditions and outputs."""
     logic, mapping = build_program()
     exporter = _LadderExporter(tag_map=mapping, program=logic)
     with (GOLDEN / "main.csv").open(encoding="utf-8", newline="") as handle:
@@ -224,7 +224,7 @@ def test_the_golden_follows_the_drawing_rule() -> None:
         check_scope(list(csv.reader(handle)))
 
 
-# The drawings pasted into the CLICK before each save.  Each is the golden as it stood then.
+# The drawings pasted into the CLICK before each save. Each is the golden as it stood then.
 PASTES = [
     pytest.param("pasted-2026-11-12.csv", id="2026-11-12"),
     pytest.param("pasted-2026-11-13.csv", id="2026-11-13"),
@@ -261,7 +261,7 @@ def test_the_drawing_rule_flags_just_the_rungs_the_click_redrew(pasted: str) -> 
 
 
 def _row(cells: list[str], af: str = "", *, marker: str = "") -> tuple[str, ...]:
-    """A rung row.  A row with an output is wired on to AE."""
+    """Return a rung row. A row with an output is wired on to AE."""
     fill = "-" if af else ""
     return (marker, *cells, *[fill] * (31 - len(cells)), af)
 
@@ -286,7 +286,10 @@ def _row(cells: list[str], af: str = "", *, marker: str = "") -> tuple[str, ...]
 def test_the_drawing_rule_refuses_a_vertical_after_a_wire_in_a(
     rung: list[tuple[str, ...]],
 ) -> None:
-    """CLICK draws each item on the rail as a rung of its own, so a wire in A never splits."""
+    """Check that the drawing rule rejects a vertical after a wire in A.
+
+    CLICK draws each item on the rail as a rung of its own, so a wire in A never splits.
+    """
     with pytest.raises(AssertionError):
         check_rung(rung)
 

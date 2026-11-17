@@ -2,18 +2,23 @@
 
 An expectation is what a CLICK does.
 
-``compare``, the last group of its part:
+``compare`` is the last group of its part. It has two cases.
 
-- ``word_and_wide_compare``: a Word is unsigned.  DH 0xFFFF > 7FFFh (Result1) reads 1, and 0 if
-  the Word reads as signed -1.  DH 0xFFFF == FFFFh (Result2) reads 1, and 0 if the constant reads
-  as -1.  A DS against a constant past its width, DS 5000 < 70000 (Result3), reads 1 for the whole
-  constant and 0 for the constant cut to 4464.  CLICK's Compare dialog pairs a hex operand (DH, XD,
-  YD, an h constant) only with another hex one, so no DH is compared with a DS here.  Text order is not asked: CLICK's
-  Compare dialog offers only = and not-equal on text.
-- ``char_two_char_literal``: a TXT compared with a 2-char literal.  R1: TXT "A", next "B" == "AB";
-  R2: "A", next "C"; R3: "B"; control R4: "A" == "A" = 1.  A char that is not two: 0, 0, 0, 1.
-  First-char compare: 1, 1, 0, 1.  A window over two TXT: 1, 0, 0, 1, on a CLICK and in
-  pyrung.
+- ``word_and_wide_compare``: a Word is unsigned.
+  DH 0xFFFF > 7FFFh (Result1) reads 1, and would read 0 if the Word read as signed -1.
+  DH 0xFFFF == FFFFh (Result2) reads 1, and would read 0 if the constant read as -1.
+  A DS against a constant past its width, DS 5000 < 70000 (Result3), reads 1 for the whole
+  constant, and 0 for the constant cut to 4464.
+  CLICK's Compare dialog pairs a hex operand (DH, XD, YD, an h constant) only with another
+  hex one, so this case compares no DH with a DS.
+  It does not ask about text order, because CLICK's Compare dialog offers only = and
+  not-equal on text.
+- ``char_two_char_literal``: a TXT compared with a 2-char literal.
+  R1 compares TXT "A", next "B" with "AB". R2 uses "A", next "C". R3 uses "B".
+  Control R4 compares "A" == "A" and gives 1.
+  A char that is not two gives 0, 0, 0, 1.
+  A first-char compare gives 1, 1, 0, 1.
+  A window over two TXT gives 1, 0, 0, 1, on a CLICK and in pyrung.
 
 The cases own what ``memory.OWNED`` lists under this group.
 """

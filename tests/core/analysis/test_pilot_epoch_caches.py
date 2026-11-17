@@ -91,8 +91,8 @@ def test_history_trim_clears_reconstruction_caches_and_selectively_prunes_recent
 
 
 def test_stop_to_run_drops_the_replay_slabs_of_the_old_recording() -> None:
-    # A restart starts a recording, as a reboot does: scan ids go back to 0, so a slab
-    # built on the old log holds another run's states under the ids to come.
+    # A restart starts a new recording, as a reboot does.  Scan ids go back to 0, so a slab
+    # built on the old log would hold another run's states under the ids to come.
     plc = PLC(logic=[])
     plc.step()
     _warm_all(plc)
@@ -110,7 +110,7 @@ def test_a_seek_after_a_restart_answers_from_the_new_run() -> None:
             math(step + 1, step)
         with Rung():
             copy(mode, seen)
-    # A small recent-state cache and a far checkpoint, so a seek reaches for a slab.
+    # Use a small recent-state cache and a far checkpoint, so that a seek reaches for a slab.
     plc = PLC(program, cache=20, history_budget=1_048_576, checkpoint_interval=5000)
 
     plc.patch({"Mode": 7})

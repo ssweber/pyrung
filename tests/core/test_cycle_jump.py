@@ -1,8 +1,8 @@
-"""A cycle prediction says how many cycles run as the next one does, and stepping agrees.
+"""Test that a cycle prediction counts the cycles that run like the next one, and stepping agrees.
 
-The operations on forms are checked against the same operation on each cycle's value.  In
-shadow mode each long run checks every prediction against the scans the loop then runs.  Each
-run that jumps is checked against a stepped twin, on its state and its records.
+Each operation on forms is checked against the same operation on each cycle's value. In
+shadow mode, each long run checks every prediction against the scans that the loop then runs.
+Each run that jumps is checked against a stepped twin, on its state and its records.
 """
 
 from __future__ import annotations
@@ -238,7 +238,7 @@ def _coast_and_step(
 ) -> PLC:
     """Coast *build* until Count reaches *stop_at*, and check a stepped twin lands alike.
 
-    *reached*, if given, is the stop predicate instead, and reads Count alone.
+    If *reached* is given, it is the stop predicate instead, and it reads Count alone.
     """
     plc = _runner(build, dt)
     twin = plc.fork()
@@ -282,7 +282,7 @@ class TestShadow:
         plc = _coast_and_step(_rtc_flip, 0.5, stop_at=None, budget=6000)
         counts = memo_of(plc).counts
         assert counts["cycle predictions"] >= 1
-        # A minute is 60 cycles, so a prediction never runs past one.
+        # A minute is 60 cycles, so a prediction never runs past a minute.
         assert counts["cycles predicted"] <= 60 * counts["cycle predictions"]
 
     def test_a_real_that_moves_declines(self) -> None:
@@ -371,7 +371,7 @@ class TestJump:
         monkeypatch.setattr(cycle_jump.Iteration, "_variant", counted)
         plc = _coast_and_step(_timer_flip, 0.01, stop_at=6000, budget=20_000)
         assert memo_of(plc).counts["cycles jumped"] > 0
-        # Each prediction runs a path on values and then on forms, so one kept is too few.
+        # Each prediction runs a path on values and then on forms, so keeping one is too few.
         assert len(compiled) > len(set(compiled))
         assert all(len(iteration._variants) <= 1 for iteration in made)
 
@@ -403,7 +403,7 @@ def test_a_wrong_prediction_is_counted_and_the_run_still_steps(
 ) -> None:
     monkeypatch.setattr(coast_run, "CYCLE_PREDICTIONS", "shadow")
     monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", False)
-    # Each prediction after the first misses as well, and --fold-check must count none.
+    # Each prediction after the first misses too. --fold-check must count none of them.
     monkeypatch.setattr(scan_trace, "SELF_CHECK_OBSERVERS", [])
     _wrong_by_one(monkeypatch)
     plc = _coast_and_step(_timer_flip, 0.01, stop_at=None, budget=20_000)
@@ -413,7 +413,7 @@ def test_a_wrong_prediction_is_counted_and_the_run_still_steps(
 def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[int, list[int]]:
     """Run a predicate that reads a tag moving every scan, in *mode*.
 
-    It gives the run's peak memory and the asks of each prediction.
+    Return the run's peak memory and the number of asks that each prediction made.
     """
     monkeypatch.setattr(coast_run, "CYCLE_PREDICTIONS", mode)
     monkeypatch.setattr(coast_run, "STRICT_CYCLE_CHECK", False)
@@ -479,7 +479,7 @@ def test_a_predicate_on_a_tag_that_moves_costs_about_what_stepping_costs(
     off_peak, _ = _counting_run("off", monkeypatch)
     peak, asks = _counting_run("jump", monkeypatch)
     assert asks
-    # Each prediction asks about the moving tag up to the cap, and once per scan of cycle 0.
+    # Each prediction asks about the moving tag up to the cap, and asks once per scan of cycle 0.
     assert max(asks) <= cycle_jump.MAX_ASKS + 2 * coast_run.MAX_PREDICTED_PERIOD
     assert peak <= 4 * off_peak + 8_000_000, (peak, off_peak)
 

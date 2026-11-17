@@ -81,11 +81,11 @@ _TEXT_EXTREMES: dict[TagType, tuple[Any, ...]] = {
 
 
 def _source_text_type(source: Any) -> tuple[TagType, bool] | None:
-    """The type a ``to_text()`` copy formats *source* as, and whether it reads the type.
+    """Return the type a ``to_text()`` copy formats *source* as, and whether it reads the type.
 
     The copy formats a tag or a pointer by its type.  It formats an ``immediate()``
-    tag by its value alone, as it does a literal.  ``None`` for an expression, whose
-    text has no bound.
+    tag by its value alone, as it does a literal.  Return ``None`` for an expression,
+    whose text has no bound.
     """
     if isinstance(source, ImmediateRef):
         value = source.value
@@ -98,12 +98,12 @@ def _source_text_type(source: Any) -> tuple[TagType, bool] | None:
 
 
 def _to_text_length(instr: CopyInstruction) -> int | None:
-    """The most characters a ``to_text()`` copy writes, its termination code included.
+    """Return the most characters that a ``to_text()`` copy writes, with its termination code.
 
     The count comes from the formatter the copy runs, at the values of
     :data:`_TEXT_EXTREMES` for a tag.  A tag's ``min``/``max`` does not narrow it,
-    because a CLICK does not honour them.  ``None`` for an expression source, whose
-    text has no bound.
+    because a CLICK does not honour them.  Return ``None`` for an expression source,
+    whose text has no bound.
     """
     converter = instr.convert
     assert converter is not None and converter.mode == "text"
@@ -134,9 +134,9 @@ def _to_text_length(instr: CopyInstruction) -> int | None:
 
 
 def _fanout_count(instr: CopyInstruction, dest_type: TagType) -> tuple[int | None, bool]:
-    """How many elements *instr* writes from its destination on, and whether always.
+    """Return how many elements *instr* writes from its destination on, and whether always.
 
-    ``None`` when the count runs to the end of the block.
+    The count is ``None`` when it runs to the end of the block.
     """
     source = instr.source
     converter = instr.convert
@@ -153,7 +153,7 @@ def _fanout_count(instr: CopyInstruction, dest_type: TagType) -> tuple[int | Non
 
 
 def _static_fanout(dest: Tag, count: int | None) -> tuple[Tag, ...]:
-    """The elements after *dest* that *count* characters from it reach in its block."""
+    """Return the elements after *dest* that *count* characters from it reach in its block."""
     if count is None:
         count = block_room(dest)
         if count is None:
@@ -168,7 +168,7 @@ def _static_fanout(dest: Tag, count: int | None) -> tuple[Tag, ...]:
 
 
 def _pointer_fanout(dest: IndirectRef | IndirectExprRef, count: int | None) -> tuple[Any, ...]:
-    """The elements after a pointer destination, as the addresses ``pointer + k``.
+    """Return the elements after a pointer destination, as the addresses ``pointer + k``.
 
     Each consumer bounds ``block[pointer + k]`` from the pointer, as it bounds the
     destination itself.  Text of no bound covers the rest of the block.
@@ -200,11 +200,11 @@ def _cached(instr: CopyInstruction) -> tuple[Any, ...] | None:
 
 
 def _copy_fanout(instr: Any) -> _Fanout:
-    """The destinations past the first of a copy that writes several elements.
+    """Return the destinations past the first of a copy that writes several elements.
 
-    Returns the ones it always writes, then the ones it may leave alone.  A pointer
-    destination's targets are the same objects on every call, so a consumer that keys
-    them by ``id`` finds them again.
+    The result holds the ones it always writes, then the ones it may leave alone.  A
+    pointer destination's targets are the same objects on every call, so a consumer
+    that keys them by ``id`` finds them again.
     """
     if not isinstance(instr, CopyInstruction):
         return (), ()
@@ -253,7 +253,7 @@ def instruction_write_targets(instr: Any, *, status: bool = True) -> tuple[Any, 
 
 
 def instruction_partial_write_targets(instr: Any) -> tuple[Any, ...]:
-    """The targets of :func:`instruction_write_targets` that *instr* may leave alone.
+    """Return the targets of :func:`instruction_write_targets` that *instr* may leave alone.
 
     A ``to_text()`` copy of a tag writes only as many characters as its value has.  A
     write-before-read analysis must not count these as writes that always happen.
@@ -262,20 +262,20 @@ def instruction_partial_write_targets(instr: Any) -> tuple[Any, ...]:
 
 
 def instruction_fault_writes(instr: Any) -> tuple[str, ...]:
-    """System fault flags *instr* can set, from its ``_fault_writes`` declaration.
+    """Return the system fault flags that *instr* can set, from its ``_fault_writes`` declaration.
 
-    Kept apart from :func:`instruction_write_targets`: fault flags are
-    read-only system tags the program cannot address, so write-target
+    This is separate from :func:`instruction_write_targets`.  Fault flags are
+    read-only system tags that the program cannot address, so write-target
     consumers (read-only and ownership lints) must not see them.
     """
     return tuple(getattr(instr, "_fault_writes", ()))
 
 
 def static_write_target_tags(target: Any) -> tuple[Tag, ...]:
-    """The tags one statically resolved target names, in address order.
+    """Return the tags that one statically resolved target names, in address order.
 
     Dynamic destinations deliberately return no tags.  They need a runtime
-    address or a PDG-specific conservative region, neither of which is an exact
+    address or a PDG-specific conservative region, and neither is an exact
     instruction occurrence for a named-tag writer lookup.
     """
     if isinstance(target, ImmediateRef):
@@ -288,12 +288,12 @@ def static_write_target_tags(target: Any) -> tuple[Tag, ...]:
 
 
 def static_write_target_names(target: Any) -> frozenset[str]:
-    """Concrete names represented by one safe, statically resolved target."""
+    """Return the concrete names that one safe, statically resolved target represents."""
     return frozenset(tag.name for tag in static_write_target_tags(target))
 
 
 def instruction_written_tags(instr: Any, *, status: bool = True) -> tuple[Tag, ...]:
-    """Each tag *instr* may write at a static address, once, in declaration order."""
+    """Return each tag that *instr* may write at a static address, once, in declaration order."""
     tags: dict[str, Tag] = {}
     for target in instruction_write_targets(instr, status=status):
         for tag in static_write_target_tags(target):

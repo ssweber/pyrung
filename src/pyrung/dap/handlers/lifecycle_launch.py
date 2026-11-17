@@ -95,10 +95,9 @@ def discover_click_project(
 ) -> tuple[TagMap | None, Iterable[Any] | None]:
     """Return the launched program's ``(TagMap, blocks)``; either may be ``None``.
 
-    A ``mapping`` TagMap in the program's own namespace wins (single-file
-    programs).  Otherwise the project's tags module is used: generated CLICK
-    projects define ``mapping`` and ``blocks`` (the ``ClickBlocks()`` set) in
-    ``plc/tags.py``.
+    A ``mapping`` TagMap in the program's own namespace wins (single-file programs).
+    Otherwise this function reads the project's tags module.  Generated CLICK projects
+    define ``mapping`` and ``blocks`` (the ``ClickBlocks()`` set) in ``plc/tags.py``.
     """
     from pyrung.click.tag_map import TagMap
 
@@ -127,8 +126,8 @@ class ClickBinding:
 def stage_click_project(adapter: Any, namespace: dict[str, Any], project_dir: Path) -> ClickBinding:
     """Find the program's TagMap and build its Modbus provider, leaving the adapter as it is.
 
-    The provider reads the adapter's runner when a client asks, so it serves the
-    new program once :func:`commit_click_project` puts it in place.
+    The provider reads the adapter's runner when a client asks.  It serves the new program
+    once :func:`commit_click_project` puts the binding in place.
     """
     from pyclickplc.server import MemoryDataProvider
 
@@ -198,6 +197,65 @@ def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
     return PLC(logic, initial_state=state)
 
 
+def load_program(
+    adapter: Any,
+    program_path: Path,
+    *,
+    snapshot_path: str | None = None,
+    speed: float = 0.0,
+    keep_forces_on_run: bool | None = None,
+    start_mode: str | None = None,
+) -> None:
+    """Run the program file and make its PLC the session's runner.
+
+    A launch and a headless replay both load a program here, so a recording replays
+    on the PLC a launch would build.
+    """
+    if not program_path.is_file():
+        raise adapter.DAPAdapterError(f"launch.program file not found: {program_path}")
+
+    previous_dap_flag = os.environ.get("PYRUNG_DAP_ACTIVE")
+    os.environ["PYRUNG_DAP_ACTIVE"] = "1"
+    try:
+        namespace = runpy.run_path(str(program_path), run_name="__main__")
+    finally:
+        if previous_dap_flag is None:
+            os.environ.pop("PYRUNG_DAP_ACTIVE", None)
+        else:
+            os.environ["PYRUNG_DAP_ACTIVE"] = previous_dap_flag
+    runner = adapter._discover_runner(namespace)
+
+    if snapshot_path:
+        runner = _apply_snapshot(runner, snapshot_path, program_path.parent)
+
+    with adapter._state_lock:
+        if adapter._thread_running_locked():
+            raise adapter.DAPAdapterError("Cannot launch while continue is running")
+        adapter._clear_debug_registrations_locked()
+        adapter._runner = runner
+        adapter._scan_gen = None
+        adapter._current_scan_id = None
+        adapter._current_step = None
+        adapter._current_rung_index = None
+        adapter._current_rung = None
+        adapter._current_ctx = None
+        adapter._configuration_done = False
+        adapter._program_path = str(program_path)
+        adapter._breakpoints.clear()
+        adapter._pending_predicate_pause = False
+        adapter._rebuild_breakpoint_index_locked()
+        adapter._speed = speed
+        adapter._pending_stop = False
+        adapter._keep_forces_on_run = keep_forces_on_run
+        if keep_forces_on_run is not None:
+            runner.keep_forces_on_run = keep_forces_on_run
+        bind_click_project_locked(adapter, namespace, program_path.parent)
+        if start_mode == "stop":
+            runner.stop()
+        elif start_mode == "run":
+            runner.start()
+
+
 def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     parsed = adapter._parse_request_args(_LaunchRequestArgs, args)
     from pyrung.dap.handlers.simulation import parse_speed
@@ -218,49 +276,14 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         raise adapter.DAPAdapterError("launch.program must be a Python file path")
 
     program_path = Path(program_arg).expanduser().resolve()
-    if not program_path.is_file():
-        raise adapter.DAPAdapterError(f"launch.program file not found: {program_path}")
-
-    previous_dap_flag = os.environ.get("PYRUNG_DAP_ACTIVE")
-    os.environ["PYRUNG_DAP_ACTIVE"] = "1"
-    try:
-        namespace = runpy.run_path(str(program_path), run_name="__main__")
-    finally:
-        if previous_dap_flag is None:
-            os.environ.pop("PYRUNG_DAP_ACTIVE", None)
-        else:
-            os.environ["PYRUNG_DAP_ACTIVE"] = previous_dap_flag
-    runner = adapter._discover_runner(namespace)
-
-    if parsed.snapshotPath:
-        runner = _apply_snapshot(runner, parsed.snapshotPath, program_path.parent)
-
-    with adapter._state_lock:
-        if adapter._thread_running_locked():
-            raise adapter.DAPAdapterError("Cannot launch while continue is running")
-        adapter._clear_debug_registrations_locked()
-        adapter._runner = runner
-        adapter._scan_gen = None
-        adapter._current_scan_id = None
-        adapter._current_step = None
-        adapter._current_rung_index = None
-        adapter._current_rung = None
-        adapter._current_ctx = None
-        adapter._configuration_done = False
-        adapter._program_path = str(program_path)
-        adapter._breakpoints.clear()
-        adapter._pending_predicate_pause = False
-        adapter._rebuild_breakpoint_index_locked()
-        adapter._speed = speed
-        adapter._pending_stop = False
-        adapter._keep_forces_on_run = parsed.keepForcesOnRun
-        if parsed.keepForcesOnRun is not None:
-            runner.keep_forces_on_run = parsed.keepForcesOnRun
-        bind_click_project_locked(adapter, namespace, program_path.parent)
-        if parsed.startMode == "stop":
-            runner.stop()
-        elif parsed.startMode == "run":
-            runner.start()
+    load_program(
+        adapter,
+        program_path,
+        snapshot_path=parsed.snapshotPath,
+        speed=speed,
+        keep_forces_on_run=parsed.keepForcesOnRun,
+        start_mode=parsed.startMode,
+    )
 
     session_name = parsed.session or program_path.stem
     adapter._session.session_name = session_name

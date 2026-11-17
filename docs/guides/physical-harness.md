@@ -204,9 +204,9 @@ The test never toggles the feedback by hand.
 
 ### How bool feedback works
 
-Each bool coupling runs as a CLICK `debounce` coil on its link, scanned as a **plant** (the harness's model of the device) at the top of each scan (the input-read phase). `Fb` turns on once the command has been on for `on_delay`. It turns off once the command has been off for `off_delay`. A command pulse shorter than `on_delay` never turns `Fb` on. A dip shorter than `off_delay` never turns `Fb` off. Both delays are rounded up to whole scans of the PLC's `dt`.
+The harness models each device as a **plant**. Each bool coupling runs in the plant as a CLICK `debounce` coil on its link. The plant is scanned at the top of each scan, in the input-read phase. `Fb` turns on once the command has been on for `on_delay`. It turns off once the command has been off for `off_delay`. A command pulse shorter than `on_delay` never turns `Fb` on. A dip shorter than `off_delay` never turns `Fb` off. Both delays are rounded up to whole scans of the PLC's `dt`.
 
-Feedback is an **input**. The plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan. With `on_delay == 0`, the program sees `Fb` the very next scan. (This is the physical model. A sensor can't respond to an output before it's written.) A dropped command clears `Fb` one scan later than the same delay would set it, as `debounce` does on a CLICK.
+Feedback is an **input**. The plant reads the *previous* scan's committed command, so `Fb` lags the command by one scan. A held command's feedback therefore arrives after `ceil(on_delay / dt)` sustained scans plus one input-read scan. With `on_delay == 0`, the program sees `Fb` the very next scan. This is the physical model, because a sensor can't respond to an output before it's written. A dropped command clears `Fb` one scan later than the same delay would set it. `debounce` does the same on a CLICK.
 
 A delay longer than 32.767 s counts in whole seconds, rounded up. A delay longer than about 9 hours counts in whole minutes. The same goes for `flasher_on` and `flasher_off`. Both delays of one `Physical` count in the same unit, so `on_delay="100ms", off_delay="40s"` turns `Fb` on after 1 s.
 
@@ -258,7 +258,11 @@ RELAY = Physical("Relay", toggle=True)                     # push on, push off
 
 Both answer a rise of `En`. `timed` runs as a CLICK `timed` coil. `Fb` turns on for the time given, even if `En` drops sooner. A second rise during that time does not restart it. With `maintained=True`, `Fb` also stays on while `En` stays on. `toggle` runs as a CLICK `toggle` coil, and each rise of `En` flips `Fb`.
 
-The rise's scan counts toward the time, as on a CLICK, so a `timed` of one scan or less never turns `Fb` on. A harness installed while `En` is already on doesn't count that as a rise. That holds for the links the program declares, and for the [bench links](console.md#bench-links) the debugger puts back at install. A link you add after the install does count it, so a `timed` or `toggle` link added while `En` is on fires on the next scan.
+The scan of the rise counts toward the time, as it does on a CLICK. A `timed` of one scan or less therefore never turns `Fb` on.
+
+If `En` is already on when you install the harness, the harness does not count that as a rise. This holds for the links the program declares. It also holds for the [bench links](console.md#bench-links) that the debugger puts back at install.
+
+If you add a link after the install, the harness does count it. A `timed` or `toggle` link that you add while `En` is on fires on the next scan.
 
 In a comment, `maintained` and `toggle` are bare words, as in `[link=Bell, timed=500ms, maintained]` and `[link=Btn, toggle]`.
 

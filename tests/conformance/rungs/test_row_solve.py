@@ -1,8 +1,8 @@
-"""Row solve: the ``row_solve`` group (subroutine ``Conf_RowSolve``).
+"""Check how CLICK solves the rows of one rung, in the ``row_solve`` group.
 
-How CLICK solves the rows of one rung, in drawings pyrung's exporter writes
-and CLICK takes (branches off the trunk, a box with a continued wire below
-it).  Part ``control``, beside ``rungs`` and ``solve_order``.
+The group runs in the subroutine ``Conf_RowSolve`` and belongs to the part ``control``,
+beside ``rungs`` and ``solve_order``.  Its drawings are ones that pyrung's exporter writes
+and CLICK accepts: branches off the trunk, and a box with a continued wire below it.
 
 The models, as in ``test_solve_order.py``:
 
@@ -92,8 +92,8 @@ The cases own C401..C450 and C1..C50 and counters CT191..CT195
 (``memory.OWNED``): cases 1 to 3 take ten C bits each (case N takes
 C<391+10N>..), cases 4 to 6 take C1.., C11.. and C21...
 
-Open: whether a NOP or a blank row splits the
-solve has no case.  Under L nothing is held from one wire to the next (each
+Open question: no case tests whether a NOP or a blank row splits the
+solve.  Under L nothing is held from one wire to the next (each
 continued wire starts at the rail, read live), so a split at a NOP or a blank
 row reads the same as no split.  Only S or a fixpoint over a CLICK rung would
 tell, and ``rungs/continued_shares_snapshot`` and

@@ -79,7 +79,7 @@ x, y, c, ds, dd, df, dh, td = b.x, b.y, b.c, b.ds, b.dd, b.df, b.dh, b.td
 
 @dataclass(frozen=True)
 class ClickTimer:
-    """Timer ``n`` as CLICK addresses it: T<n> and TD<n>."""
+    """Timer ``n`` as CLICK addresses it: Done is T<n> and Acc is TD<n>."""
 
     n: int
 
@@ -94,7 +94,7 @@ class ClickTimer:
 
 @dataclass(frozen=True)
 class ClickCounter:
-    """Counter ``n`` as CLICK addresses it: CT<n> and CTD<n>."""
+    """Counter ``n`` as CLICK addresses it: Done is CT<n> and Acc is CTD<n>."""
 
     n: int
 
@@ -554,7 +554,7 @@ SHEET_HEAD = """# Step probe sheet
 
 
 def _probe_rungs(bundle: LadderBundle) -> list[list[int]]:
-    """Each probe's 1-based main rung numbers, matched by source line."""
+    """Return each probe's 1-based main rung numbers, matched by source line."""
     found = []
     for _label, fn in PROBES:
         lines, start = inspect.getsourcelines(fn)
@@ -597,7 +597,7 @@ def write(out_dir: Path) -> None:
 
 
 def check() -> int:
-    """Compare the estimator with every reading; return the number of misses."""
+    """Compare the estimator with every reading and return the number of misses."""
     program, tag_map = build()
     bundle = pyrung_to_ladder(program, tag_map, index=True)
     main_rungs = list(_rungs(bundle.main_rows[1:]))

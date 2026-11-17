@@ -1,4 +1,4 @@
-"""Stage 3 tests for click portability validation."""
+"""Test stage 3 of the CLICK portability validation."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ _TARGET = ModbusTcpTarget("plc2", "127.0.0.1", port=502, device_id=1)
 
 
 def _modbus_codes(verb: str, *, dest="ds", flag="c", exception="ds", **instruction_kwargs) -> list:
-    """Findings for a send or receive with its operands in the named banks."""
+    """Return the findings for a send or receive with its operands in the named banks."""
     x, y, c, _t, _ct, sc, ds, dd, _dh, _df, _xd, _yd, _xd0u, _yd0u, td, _ctd, sd, txt = (
         ClickBlocks()
     )
@@ -514,7 +514,10 @@ def test_drum_stage3_wrong_role_failures_are_reported():
 
 
 def test_time_drum_register_preset_validates_and_exports():
-    """CLICK v4 takes register durations; version checks belong to whoever pastes into CLICK."""
+    """Check that a time drum with a register preset validates and exports.
+
+    CLICK v4 accepts register durations.  Whoever pastes into CLICK checks the version.
+    """
     enable = Bool("Enable")
     reset = Bool("Reset")
     step = Int("Step")
@@ -847,8 +850,11 @@ class TestConverterBankCompatibility:
 
 
 class TestOutVariants:
-    """Each phase of a debounce/flasher/timed coil claims a whole Timer (T + TD),
-    a register preset must be DS, and the units follow CLICK v4's Out dialog."""
+    """Tests the Out variants: debounce, flasher and timed coils.
+
+    Each phase claims a whole Timer (T + TD).  A register preset must be DS.  The units
+    follow CLICK v4's Out dialog.
+    """
 
     Timers = Timer.clone("OutTimers", count=4)
 
@@ -956,7 +962,10 @@ class TestOutVariants:
 
 
 def test_timer_done_and_acc_must_share_one_number():
-    """CLICK names one timer (or counter) number; T5 with TD7 cannot be stored."""
+    """Check that validation reports a timer whose T and TD numbers differ.
+
+    CLICK names one timer (or counter) number for both.  So CLICK cannot store T5 with TD7.
+    """
     from pyrung import debounce
     from pyrung.click.validation import CLK_TIMER_PAIR_MISMATCH
 

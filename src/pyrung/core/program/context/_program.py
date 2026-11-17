@@ -41,8 +41,8 @@ class Program:
     """
 
     _dialect_validators: ClassVar[dict[str, DialectValidator]] = {}
-    # A runner's soft program (``PLC._soft_exec_program``) keeps here the user's
-    # program that its plant and hold rungs run ahead of.
+    # A runner's soft program (``PLC._soft_exec_program``) stores the user's program here.
+    # Its plant and hold rungs run ahead of that program.
     _bare_program: Program | None = None
 
     def __init__(self, *, strict: bool = True) -> None:
@@ -53,7 +53,7 @@ class Program:
         self._pending_comment: str | None = None
         self._graph: ProgramGraph | None = None
         self._graph_edits = 0
-        # how()'s static facts, with the graph they were built from.
+        # how()'s static facts, cached with the graph that they were built from.
         self._cached_prover_context: Any = None
         self._site_table: SiteTable | None = None
 
@@ -70,7 +70,7 @@ class Program:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        # The program this one was built inside is current again.
+        # The program that this one was built inside becomes the current program again.
         programs = _state._building.programs
         if programs and programs[-1] is self:
             programs.pop()
@@ -83,9 +83,9 @@ class Program:
 
     @property
     def _cached_graph(self) -> ProgramGraph | None:
-        """The built graph, or None once a tag's settings changed since it was built.
+        """Return the built graph, or None once a tag's settings changed since it was built.
 
-        The graph reads tags' settings, so an edit to one makes it stale.
+        The graph reads the settings of tags, so an edit to one makes the graph stale.
         """
         from pyrung.core.tag import metadata_edits
 
@@ -105,7 +105,7 @@ class Program:
         self._cached_prover_context = None
 
     def _assign_state_keys(self) -> None:
-        """Bind every memory-keeping site (see :mod:`pyrung.core.site_memory`)."""
+        """Bind a key to every memory-keeping site (see :mod:`pyrung.core.site_memory`)."""
         from pyrung.core.site_memory import bind_sites
 
         self._site_table = bind_sites(self.rungs, self.subroutines, program_owned=True, owner=self)

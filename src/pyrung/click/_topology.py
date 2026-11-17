@@ -82,11 +82,11 @@ def make_compound(
 
 
 def trees_equal(a: SPNode | None, b: SPNode | None, *, cells: bool = False) -> bool:
-    """Structural equality of two SP trees: by labels, or with *cells* by grid cell.
+    """Return whether two SP trees are structurally equal, by labels or by grid cells.
 
-    By label, two cells with the same label are equal (row/col ignored).  With
-    *cells*, a leaf equals only the same cell (label, row and col): one
-    contact the drawing tees off, not two that read the same tag.
+    By default, two cells with the same label are equal, and row and col are ignored.  With
+    *cells*, a leaf equals only the same cell, meaning the same label, row and col.  That
+    matches one contact that the drawing tees off, and not two contacts that read the same tag.
     """
     if a is None and b is None:
         return True
@@ -139,9 +139,9 @@ def factor_outputs(trees: list[SPNode | None], *, cells: bool = False) -> Factor
     """One-level shared-prefix factoring of SP trees.
 
     Normalizes each tree to series children, finds the longest common
-    prefix (by structural equality of labels, or with *cells* of grid cells,
-    see :func:`trees_equal`), and returns the shared prefix and per-tree
-    remainders.
+    prefix, and returns the shared prefix and the remainder of each tree.  The prefix
+    is found by structural equality of labels, or with *cells* of grid cells (see
+    :func:`trees_equal`).
     """
     if not trees:
         return FactorResult(shared=[], branches=[])

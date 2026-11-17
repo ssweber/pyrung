@@ -12,9 +12,9 @@ An edge contact is the first contact of its rung, so it is scanned with power
 on its left on every scan, whatever the rest of the rung says -- except in the
 two probes that ask what an edge contact without power on its left does.
 
-The reset needs little: every ``out`` rung is gated on ``Cmd != 0``, so its
-coil drops and its one-shot rearms while ``Cmd == 0``, and edge history follows
-the bits.  Latched bits are reset in ``init``.
+The reset needs little. Every ``out`` rung is gated on ``Cmd != 0``, so its
+coil drops and its one-shot rearms while ``Cmd == 0``. Edge history follows
+the bits. Latched bits are reset in ``init``.
 
 The expectations are what a CLICK does.  A CLICK edge contact keeps a memory of
 its own: the bit as that contact saw it when it last ran.  The two cases
@@ -138,7 +138,7 @@ def prove_latch_reset_sticky(slot):
 
 
 def _gated_bit(slot, bit, gate):
-    """*bit* on for scans 3..6; *gate* on for scans 5 and 8 only, from one rung."""
+    """Turn *bit* on for scans 3..6 and *gate* on for scans 5 and 8 only, from one rung."""
     with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
         out(bit)
     with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):

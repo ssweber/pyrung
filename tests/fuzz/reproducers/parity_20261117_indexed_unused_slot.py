@@ -1,4 +1,7 @@
-"""Reproducer: PLC state holds a slot the program writes as block[n] but no rung uses. CompiledPLC state does not."""
+"""Reproducer: PLC state holds a slot that the program writes as block[n] but no rung uses.
+
+CompiledPLC state does not hold that slot.
+"""
 
 from pyrung.core import PLC, Block, CompiledPLC, Dint, Program, Rung, TagType, search, Bool
 

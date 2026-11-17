@@ -1,4 +1,4 @@
-"""RUNG_ORDER_DEPENDENT: rows that read a tag an earlier row of their rung wrote.
+"""Test RUNG_ORDER_DEPENDENT, which flags a row that reads what an earlier row of its rung wrote.
 
 The solve-order table (``tests/conformance/rungs/test_solve_order.py``,
 ``ORDER_DEPENDENT``) is the check's ground truth: it records, for every
@@ -212,7 +212,8 @@ def test_continued_rung_reads_its_chain():
 
 
 def test_box_leg_below_a_write_is_flagged():
-    # A box with pins ends its rung, so the write sits in the rung its rung continues.
+    # A box with pins ends its rung. So the latch sits in the rung above, and the box's rung
+    # continues that rung.
     with Program() as program:
         with Rung(Go):
             latch(P)
@@ -287,8 +288,8 @@ def test_for_body_rungs_read_their_own_contacts_live():
 
 
 def test_box_leg_in_a_for_body_rung_reads_the_body_rung_above_live():
-    # A box with pins ends its body rung, so a write before it is a body rung of
-    # its own, read live in both models.
+    # A box with pins ends its body rung, so a write before it sits in a body rung of
+    # its own.  Both models read that write live.
     with Program() as program:
         with Rung():
             with forloop(1):
@@ -313,8 +314,8 @@ def test_branch_below_a_for_loop_sees_its_body_writes():
 
 # -- indexed rows -----------------------------------------------------------------
 #
-# A CLICK-sized bank is too large for the program graph to list, so an index no
-# declared range bounds stands for any element of its bank.
+# A CLICK-sized bank is too large for the program graph to list.  An index that no
+# declared range bounds therefore stands for any element of its bank.
 
 
 def _bank() -> Block:

@@ -515,13 +515,13 @@ class TestOffDelayTOF:
 
 
 class TestOffDelayPresetReachedUnderOneUnit:
-    """A TOF once enabled keeps timing at Done False, Acc 0.
+    """A TOF that was enabled once keeps timing at Done False, Acc 0.
 
-    With preset 0 the first off scan drops Done; when that scan is shorter
-    than one unit, Acc is still 0, the never-enabled resting pair.  The timer
-    keeps timing from there (memory key ``_tof_armed:<Acc>``), and so does a
-    timed-out TOF whose Acc is written to 0, as on a CLICK
-    (``tof_rewrite/done_after_td_zeroed``).  A TOF never enabled still rests.
+    With preset 0, the first off scan sets Done to False. If that scan is shorter than one
+    unit, Acc is still 0. That is the resting pair of a TOF that was never enabled. The timer
+    keeps timing from there (memory key ``_tof_armed:<Acc>``). A timed-out TOF whose Acc is
+    written to 0 also keeps timing, as on a CLICK (``tof_rewrite/done_after_td_zeroed``).
+    A TOF that was never enabled still rests.
     """
 
     @staticmethod
@@ -1431,8 +1431,11 @@ class TestTimerStatusBits:
 
 
 class TestRetentiveDefaults:
-    """Built-in Timer/Counter fields follow CLICK's bank defaults: T and TD are
-    non-retentive, CT and CTD retentive.  ``clone(retentive=...)`` overrides."""
+    """Built-in Timer/Counter fields follow CLICK's bank defaults.
+
+    T and TD are non-retentive, and CT and CTD are retentive. ``clone(retentive=...)`` overrides
+    the default.
+    """
 
     def test_defaults_match_click_banks(self):
         from pyrung.core import Counter

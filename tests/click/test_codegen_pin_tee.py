@@ -72,7 +72,7 @@ _PINS = {
 
 
 def _rail_program(kind: str) -> Program:
-    """The box with every pin wired from the rail: the shared contacts copied in."""
+    """Return the box with every pin wired from the rail and the shared contacts copied in."""
     with Program(strict=False) as logic:
         with Rung(*_SHARED, _ENABLE_TAIL):
             box = _box(kind)
@@ -95,8 +95,8 @@ def _dash(row: list[str], start: int) -> list[str]:
 def _tee_rows(rail: LadderBundle, own_contacts: list[str]) -> list[tuple[str, ...]]:
     """Redraw the rail bundle with the pins teeing off after the shared contacts.
 
-    The enable row keeps ``C1 C2`` then a tee; each pin row holds only its own
-    contact in the tee's column, with the vertical wire continuing down.
+    The enable row keeps ``C1 C2`` and then a tee. Each pin row holds only its own
+    contact in the tee's column, and the vertical wire continues down.
     """
     body = [r for r in rail.main_rows[1:] if r[-1] != "end()"]
     box_token = body[0][-1]

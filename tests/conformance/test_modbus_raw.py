@@ -1,4 +1,4 @@
-"""Raw Modbus requests, and what the ladder saw of each write: part ``modbus_raw``.
+"""Send raw Modbus requests and record what the ladder saw of each write: part ``modbus_raw``.
 
 **It writes into a real CLICK outside the part's memory.**  Do not run it on a CLICK whose
 memory matters.  These are the writes outside the part's memory:
@@ -29,9 +29,9 @@ it then holds, so a reading tells "the write was stored" apart from "the server 
 answer is the registers or bits, an exception code, or ``timeout``.  It reads each value twice,
 raw and through pyclickplc's ``ClickClient``, which decodes it or raises.  The entry
 ``modbus_raw/disagree`` lists each read where pyclickplc's value is not the raw bits read with
-CLICK's documented word and byte order (``_as_click_stores``).  Nothing here is asserted against an answer.  On a
-CLICK each probe goes into ``readings.toml``.  On a local target it goes into
-``build/modbus_raw-readings/<target>.toml``, for setting the two side by side.
+CLICK's documented word and byte order (``_as_click_stores``).  Nothing here is asserted against
+an answer.  On a CLICK, each probe goes into ``readings.toml``.  On a local target, it goes into
+``build/modbus_raw-readings/<target>.toml``, so that you can set the two side by side.
 
 The ladder (case ``raw_values``), on the scan ``Cmd`` arrives:
 
@@ -40,7 +40,8 @@ The ladder (case ``raw_values``), on the scan ``Cmd`` arrives:
 - The write targets: DF111..DF113 = 2.5, DF114 and DF115 = NaN, DD203 and DD205 = 0x00010002,
   DD206 = 0x00030004, TXT405 = 'Y' and TXT406 = 'Z'.
 
-The ladder echoes three things on the staging scan, and on every scan while ``Cmd`` is above 1.
+The ladder echoes three things. It does so on the staging scan and on every scan while ``Cmd``
+is above 1.
 
 - It unpacks each DF and DD above into two DH, low word first (an Unpack Copy).
 - It copies each TXT into a DS (a Copy to ASCII).
@@ -179,7 +180,7 @@ def _word_source(name: str) -> Any:
 
 
 def _past_bank_steps(slot: Any) -> None:
-    """The ladder's half of ``past_bank_alias``, one step for each value of DS4068.
+    """Build the ladder's half of ``past_bank_alias``, one step for each value of DS4068.
 
     Each step does the same on every scan it is held, so the harness waits for one scan and
     reads.  Step 1 reads DD1531 as found, and DD1064 after the DH pattern.  Step 2 writes 1234
@@ -357,7 +358,7 @@ def _hex(words: list[int]) -> list[str]:
 
 
 def _plain(value: Any) -> Any:
-    """A decoded value in a form TOML holds.
+    """Return a decoded value in a form that TOML can store.
 
     Text goes through ``ascii()`` and a float through ``repr()``.
     """
@@ -381,7 +382,7 @@ def _signed(word: int, bits: int = 16) -> int:
 
 
 def _as_click_stores(bank: str, raw: list[Any]) -> list[Any]:
-    """Raw registers or bits read as CLICK stores *bank*, in the form of :func:`_plain`.
+    """Return raw registers or bits as CLICK stores *bank*, in the form of :func:`_plain`.
 
     DD and DF take two registers, low word first.  A TXT register holds the odd TXT in its low
     byte.  XD and YD name every other register (XD1 is register 2).
@@ -410,9 +411,9 @@ def _failed(answer: Any) -> bool:
 
 
 def _disagreement(bank: str, raw: Any, decoded: Any) -> str | None:
-    """What sets pyclickplc's value apart from the raw bits read as CLICK stores them, if anything.
+    """Return how pyclickplc's value differs from the raw bits as CLICK stores them.
 
-    A read both refuse agrees.  A read only one refuses does not.
+    Return None if the two agree.  A read both refuse agrees.  A read only one refuses does not.
     """
     if _failed(raw) and _failed(decoded):
         return None
@@ -426,7 +427,7 @@ def _disagreement(bank: str, raw: Any, decoded: Any) -> str | None:
 
 
 def _disagreements(readings: Mapping[str, Any]) -> list[str]:
-    """One line for each raw read whose decoded column differs from its bits."""
+    """Return one line for each raw read whose decoded column differs from its bits."""
     lines: list[str] = []
 
     def walk(path: str, node: Any) -> None:
@@ -447,12 +448,12 @@ def _disagreements(readings: Mapping[str, Any]) -> list[str]:
 
 
 def _word(read: Any) -> int | None:
-    """The first register of a raw read, or ``None`` if the read failed."""
+    """Return the first register of a raw read, or ``None`` if the read failed."""
     return int(read[0], 16) if isinstance(read, list) and read else None
 
 
 def _count(read: Any) -> Any:
-    """A long read as its length and first value, not every one."""
+    """Return a long read as its length and first value, not every value."""
     if isinstance(read, dict):
         read = list(read.values())
     if isinstance(read, list):
@@ -461,7 +462,7 @@ def _count(read: Any) -> Any:
 
 
 class _Wire:
-    """A raw pymodbus connection and a pyclickplc one to the same endpoint."""
+    """Holds a raw pymodbus connection and a pyclickplc connection to the same endpoint."""
 
     def __init__(self, endpoint: Endpoint) -> None:
         self.endpoint = endpoint
@@ -491,16 +492,16 @@ class _Wire:
         await self.raw.connect()
 
     async def _send(self, make: Callable[[], Awaitable[Any]]) -> Any:
-        """The response, or what stood in for one.
+        """Return the response, or a stand-in for it.
 
-        That is ``timeout``, an exception code or an error.
+        The stand-in is ``timeout``, an exception code or an error.
         """
         from pymodbus.exceptions import ModbusIOException
 
         try:
             response = await asyncio.wait_for(make(), PROBE_TIMEOUT_S)
         except (TimeoutError, ModbusIOException):
-            # A late answer must not be taken for the next request's.
+            # Drop a late answer so that it is not read as the answer to the next request.
             await self._connect_raw()
             return "timeout"
         except Exception as exc:
@@ -550,7 +551,7 @@ class _Wire:
         return response if isinstance(response, str) else "ok"
 
     async def decoded(self, make: Callable[[Any], Awaitable[Any]]) -> Any:
-        """What pyclickplc's client reads, or the error it raised (an ``OSError`` too)."""
+        """Return what pyclickplc's client reads, or the error it raised (an ``OSError`` too)."""
         try:
             return _plain(await asyncio.wait_for(make(self.click), PROBE_TIMEOUT_S))
         except TimeoutError:
@@ -560,9 +561,9 @@ class _Wire:
 
 
 class _Session:
-    """One run of the probes on one PLC.
+    """Runs the probes once on one PLC.
 
-    It holds the wire, the slot, what was read and what broke.
+    It keeps the wire, the slot, what was read and what broke.
     """
 
     def __init__(self, slot: Mapping[str, int], *, local: bool) -> None:
@@ -576,7 +577,7 @@ class _Session:
         self.disagree: list[str] = []
 
     def entry(self, name: str) -> dict[str, Any]:
-        """The reading of probe *name*, kept from the start so a failed probe keeps its part."""
+        """Return the reading of probe *name*, created up front so that a failed probe keeps it."""
         reading: dict[str, Any] = {}
         self.readings[name] = reading
         return reading
@@ -606,7 +607,7 @@ class _Session:
         return True
 
     async def settle(self, probe: str) -> bool:
-        """A new ``Cmd``, then wait for the ladder to copy it into ``Scratch``.
+        """Write a new ``Cmd``, then wait for the ladder to copy it into ``Scratch``.
 
         A scan has then run since the raw write, so the echo shows it.  The sim applies a write
         at the start of the next scan, so a read with no scan between would miss it.
@@ -627,7 +628,7 @@ class _Session:
     async def pair(
         self, bank: str, raw: Awaitable[Any], decoded: Callable[[Any], Awaitable[Any]]
     ) -> dict[str, Any]:
-        """A raw read and pyclickplc's read of the same thing."""
+        """Return a raw read and pyclickplc's read of the same thing."""
         return {"bank": bank, "raw": await raw, "decoded": await self.w.decoded(decoded)}
 
     async def long_pair(
@@ -638,7 +639,7 @@ class _Session:
         return self.keep_long(name, bank, both["raw"], both["decoded"])
 
     def keep_long(self, name: str, bank: str, raw: Any, decoded: Any) -> dict[str, Any]:
-        """A long read compared in full, then kept as a count and its first value."""
+        """Compare a long read in full, then keep only a count and its first value."""
         kept = {"raw": _count(raw), "decoded": _count(decoded)}
         if _disagreement(bank, raw, decoded):
             self.disagree.append(f"{name}: raw {kept['raw']}, pyclickplc {kept['decoded']}")
@@ -661,7 +662,7 @@ class _Session:
         )
 
     async def words(self, name: str) -> dict[str, Any]:
-        """The two DH the ladder unpacked *name* into."""
+        """Read the two DH that the ladder unpacked *name* into."""
         first = ECHO_WORDS[name]
         return await self.dh(first, first + 1)
 
@@ -740,7 +741,7 @@ async def _df_write(
 
 
 async def _value_writes(s: _Session) -> None:
-    """Writes into the part's own DF, DD and TXT, which the closing reset clears."""
+    """Write into the part's own DF, DD and TXT.  The closing reset clears them."""
     w = s.w
     for probe, n, words in (
         ("df_all_ones", 111, [0xFFFF, 0xFFFF]),
@@ -839,7 +840,7 @@ async def _sc53_sc54(s: _Session) -> None:
 
 
 async def _read_only_writes(s: _Session) -> None:
-    """A lone write to a read-only SC and to a read-only SD, each put back if it changed.
+    """Send a lone write to a read-only SC and to a read-only SD, and put each back if it changed.
 
     SD5 holds the low word of the firmware version.  It does not move, so a read back shows
     whether the write was stored.  No ladder or harness reads it, so a stored value does no
@@ -896,7 +897,7 @@ async def _past_banks(s: _Session) -> None:
 
 
 async def _function_codes(s: _Session) -> None:
-    """Each bank read with the other function code, beside pyclickplc's read of it."""
+    """Read each bank with the other function code, beside pyclickplc's read of it."""
     w = s.w
     s.readings["fc03_at_xd"] = await s.pair("XD", w.registers(3, XD0, 1), lambda cl: cl.xd[0])
     s.readings["fc04_at_ds1"] = await s.pair("DS", w.registers(4, _ds(1), 1), lambda cl: cl.ds[1])
@@ -989,7 +990,7 @@ async def _past_step(s: _Session, step: int) -> bool:
 
 
 async def _past_bank_alias(s: _Session) -> None:
-    """Whether the memory a pointer reaches past the DD bank is the memory Modbus finds there.
+    """Probe whether a pointer past the DD bank reaches the memory that Modbus finds there.
 
     If the Modbus map runs on past DD1000 at two registers each, DD1001 is 18384 and DD1531 is
     19444, in the gap before DH.  Step 2 rewrites DD1531 on every scan it is held, so the FC16
@@ -1048,7 +1049,7 @@ async def _limits(s: _Session) -> None:
         values, r["values"] = [], "not sent: the read of C1..C1969 failed"
     r["answer"] = await w.write_coils(_c(1), values) if values else "not sent"
     await s.settle("fc15_x1969")
-    # Last before the reset, since a server may never answer it.
+    # Send this one last before the reset, because a server may never answer it.
     s.readings["fc03_x200"] = await s.long_pair(
         "fc03_x200", "DS", w.registers(3, _ds(1), 200), lambda cl: cl.ds.read(1, 200)
     )
@@ -1089,7 +1090,7 @@ _PROBES = (
 
 
 async def _probe_all(s: _Session) -> None:
-    """Every probe in order, then the reset, then the probes that stop the PLC.
+    """Run every probe in order, then the reset, then the probes that stop the PLC.
 
     A probe that raises ends the run, and the reset still clears the part's memory.
     """
@@ -1132,13 +1133,16 @@ _LOCAL_HEADER = """\
 def test_raw_requests(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
+    conformance_cases: str | None,
     conformance_sim: type,
 ) -> None:
-    # Imported here, since suite imports this module for its group.
+    # Import it here because suite imports this module for its group.
     from tests.conformance import suite
 
     if conformance_groups is not None and GROUP not in conformance_groups:
         pytest.skip(f"GROUP= leaves out {GROUP}")
+    if conformance_cases is not None:
+        pytest.skip(f"CASES= leaves out {GROUP}, which no pick can hold")
     build = suite.build(GROUP)
     g = build.group(GROUP)
     ((index, _),) = g.cases

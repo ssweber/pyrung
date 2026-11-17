@@ -322,7 +322,7 @@ def test_shadowed_harmful_rung_does_not_prove_self_defeat():
 # is assembled from ``ordered_actions()`` — steerable leaves only.  The
 # register that matters (``Step = 3``, the ``Heat_CurStep = 3`` analog) is a
 # non-steerable interior node, so ``ordered_actions()`` never surfaces it and
-# the saboteur hold would install on that feed alone.  The filter also gets the
+# the saboteur hold would install on that feed alone. The filter also gets the
 # checkpoint frame's still_need-style frontier.
 #
 # Only the investigation *result* is stubbed (the burner establishes that the

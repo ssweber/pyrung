@@ -16,13 +16,15 @@ from pyrung.dap.internal_tags import visible_tag_names
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
-# What one panel request may spend stepping unrecorded scans again.  The scans it reads stay
-# read, so the next request goes on from there.
+# The most time that one panel request may spend stepping unrecorded scans again.  The scans
+# it has read stay read, so the next request goes on from there.
 _SETTLE_CLOCK_S = 3.0
-# And reading the changes: a tag whose record gave up costs state reads per change.
+# The most time for reading the changes.  A tag whose record gave up costs state reads for
+# each change.
 _READ_CLOCK_S = 3.0
-# Scans to step at a time, so the clock is looked at often: the first stretch, then what a
-# quarter of a second buys at the speed measured.
+# Scans to step at a time, so that the code checks the clock often.  The first stretch is
+# _SETTLE_FIRST_STRETCH.  After that, a stretch is the number of scans that a quarter of a
+# second buys at the measured speed.
 _SETTLE_FIRST_STRETCH = 500
 _SETTLE_MIN_STRETCH = 200
 _SETTLE_MAX_STRETCH = 16_000
@@ -168,19 +170,20 @@ def _read_changes(
     before: int | None,
     after: int | None,
 ) -> list[dict[str, Any]]:
-    """The newest *count* scans that changed *names*, read from what each scan committed.
+    """Return the newest *count* scans that changed *names*, read from what each scan committed.
 
-    Scans that ran with no records are stepped again first, a stretch at a time from the newest,
-    and keep the records that gives them.  When a request may step no more, what it has not read
-    comes back as one window entry, which says how the tags stand at its two ends and claims
-    no scan for any change inside.
+    Some scans ran with no records.  This function steps those scans again first, a stretch at
+    a time from the newest, and they keep the records that the stepping gives them.  When a
+    request may step no more, whatever it has not read comes back as one window entry.  The
+    window entry says how the tags stand at its two ends.  It claims no scan for any change
+    inside the window.
 
-    A refresh that ran out of allowance leaves the next refreshes to read only what is recorded,
-    so each stop of a stepping session does not pay for it again: a page asked for by its
-    *before* goes on reading.
+    If a refresh runs out of its allowance, the next refreshes read only what is recorded.
+    That way each stop of a stepping session does not pay for the stepping again.  A page that
+    is asked for with *before* goes on reading.
 
-    Reading has an allowance of its own, the time spent reading and not settling, and what it
-    doesn't reach is the window too.
+    Reading has an allowance of its own, which is the time spent reading rather than settling.
+    What the read does not reach also becomes the window.
     """
     history = runner.history
     newest = history.newest_scan_id
@@ -205,7 +208,8 @@ def _read_changes(
                 if before is None and may_settle:
                     adapter._tag_changes_ran_out_on = runner
                 break
-            # From a checkpoint, so stepping starts there and a window can end there at no cost.
+            # Start at a checkpoint, so that stepping starts there and a window can end there at
+            # no cost.
             interval = runner._checkpoint_interval
             first = max(lower + 1, (cursor - stretch) // interval * interval + 1)
             began = time.monotonic()
@@ -244,15 +248,17 @@ def _read_changes(
 def _changes_within(
     runner: Any, names: list[str], first: int, before: int, most: int, deadline: float
 ) -> tuple[dict[int, dict[str, Any]], int]:
-    """Scans in *first*..*before*-1 and what changed on them, each tag's newest *most* changes.
+    """Return the scans in *first*..*before*-1 and what changed on them.
 
-    A tag cut short has *most* newer scans of its own, so the newest *most* scans here are whole.
+    The read takes each tag's newest *most* changes.  If a tag is cut short, it has *most* newer
+    scans of its own, so the newest *most* scans here are whole.
 
-    A tag whose record gave up costs state reads for each change, so the tags take turns one
-    change at a time and *deadline* can stop them, though not before each has had a first turn,
-    or a page would never get anywhere.  Stopped, or asked for what history can't answer, only
-    the scans down to the highest tag still unread are whole: the second value says how far
-    down this read everything, and *first* means all of it.
+    A tag whose record gave up costs state reads for each change.  So the tags take turns, one
+    change at a time, and *deadline* can stop the read.  Each tag still gets a first turn before
+    *deadline* can stop it, or a page would never get anywhere.  If the read stops, or asks for
+    something that history cannot answer, only the scans down to the highest unread tag are
+    whole.  The second value of the result says how far down this read everything.  It is
+    *first* when the read covered all of it.
     """
     found: dict[int, dict[str, Any]] = {}
     cursors = dict.fromkeys(names, before)
@@ -283,7 +289,10 @@ def _changes_within(
 def _window_entry(
     adapter: Any, history: Any, names: list[str], lower: int, upper: int
 ) -> dict[str, Any]:
-    """Scans *lower*+1..*upper*, not read: how the tags differ across them, and no more."""
+    """Return a window entry for scans *lower*+1..*upper*, which were not read.
+
+    It says how the tags differ across those scans, and nothing else.
+    """
     start = history.at(lower)
     end = history.at(upper)
     changes: dict[str, list[str]] = {}

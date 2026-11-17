@@ -6,25 +6,26 @@ Mode."  A CLICK does not do that for any of the seven
 errors below.  The Math writes 0 over its destination, SC46 is on
 until a later Math clears it, and the PLC stays in RUN.  SC46 and SC50 are off
 when the harness reads them afterwards.  No CLICK setting is known to change
-this.  pyrung matches the
-hardware, so the group runs with every other group, last in
-``suite.ALL_GROUPS``.
+this.  pyrung matches the hardware, so the group runs with every other group,
+last in ``suite.ALL_GROUPS``.
 
-The case counts its own scans (``scans.py``) and runs one Math error every
+The case counts its own scans (``scans.py``).  It runs one Math error every
 other scan, each of the seven on its own scan 2, 4, ..., 14, so a flag left by
-one is never read as the next one's.  Each stages its operand in DF401..DF407
-(``memory.OWNED``), presets ``Result4`` to 99 and runs the Math into it; the
-next rungs record, as bit k of Result2, that SC46 is on right after it, and as
-bit k of Result1, that the Math wrote 0.  ``Fired`` goes up on scan 15, once
-all seven have run.  What tells the models apart:
+one is never read as the next one's.  Each error stages its operand in
+DF401..DF407 (``memory.OWNED``), presets ``Result4`` to 99 and runs the Math
+into it.  The next rungs record two things.  Bit k of Result2 says that SC46 is
+on right after the Math.  Bit k of Result1 says that the Math wrote 0.
+``Fired`` goes up on scan 15, once all seven have run.  These results tell the
+models apart:
 
 - Result1 = 127: every error writes 0.  A bit off: that Math skipped the write
   (99) or stored something else.
 - Result2 = 127: every error raises SC46 right after its Math.  A bit off:
   that one raised no error, or SC46 comes up only after the scan.
 - SC11 = 1, SC50 = 0 (read by the harness at the end): the PLC kept running.
-  A PLC that stops does so after the first error, scan 2: the case never
-  fires, and the harness reads SC11 = 0 (and SC50 = 1 if it follows the help).
+  A PLC that stops does so after the first error, on scan 2.  The case then
+  never fires, and the harness reads SC11 = 0 (and SC50 = 1 if it follows the
+  help).
 - SC46 = 0 at the end: a later Math cleared the last error (``flag_carry``
   reads SC46 carried into the next scan when no Math runs after it).
 """

@@ -1,10 +1,12 @@
-"""Writes a rung makes only for some values, and the analyses that ask what a rung always writes.
+"""Test the analyses that ask what a rung always writes, against conditional writes.
 
-A copy through a pointer writes one of the elements the pointer can reach.  A ``to_text()``
-copy of a tag writes as many characters as its value has.  The program graph records these
-once (``RungNode.may_writes``, and a read of the value before each in the def-use chains).
-Each analysis below must read that record, or it takes a tag the copy left alone for one it
-wrote this scan.
+Some writes happen only for some values.
+
+A copy through a pointer writes one of the elements that the pointer can reach. A ``to_text()``
+copy of a tag writes as many characters as its value has. The program graph records these
+writes once. It stores them in ``RungNode.may_writes``, and it records a read of the old value
+before each one in the def-use chains. Each analysis below must read that record. Otherwise it
+treats a tag that the copy left alone as a tag that the copy wrote this scan.
 """
 
 from __future__ import annotations
@@ -96,7 +98,10 @@ def test_a_write_the_rung_also_makes_for_sure_is_sure() -> None:
 
 
 def test_a_pointer_write_is_not_a_write_before_read() -> None:
-    """``copy(5, ds[Ptr])`` with Ptr 1 or 2 leaves DS1 alone half the time."""
+    """Check that ``copy(5, ds[Ptr])`` with Ptr 1 or 2 is not a write before a read.
+
+    It leaves DS1 alone half the time.
+    """
     regs = Block("WbrReg", TagType.INT, 1, 4)
     with Program(strict=False) as logic:
         with Rung():
@@ -105,7 +110,7 @@ def test_a_pointer_write_is_not_a_write_before_read() -> None:
             copy(1, Int("WbrSeen"))
     graph = build_program_graph(logic)
     assert not graph.unconditional_write_before_read("WbrReg1")
-    # The write may leave the value DS1 came into the scan with, so the write reads it.
+    # The write may leave DS1 at the value it had when the scan began, so the write reads DS1.
     assert graph.def_use_chains["WbrReg1"][0].read_by == {0}
 
 
@@ -126,8 +131,11 @@ def test_a_text_through_a_pointer_is_not_a_write_before_read() -> None:
 
 
 def _subroutine_reads_a_kept_element(write: Callable[[], object], kept: Any, mark: Any) -> Program:
-    """A rung above the call writes *kept*.  The subroutine's first rung may overwrite it,
-    and X follows whether it still holds that value."""
+    """Build a program where a rung above the call writes *kept*.
+
+    The subroutine's first rung may overwrite it. X then follows whether *kept* still holds
+    the value.
+    """
     with Program() as logic:
         with Rung(Bool("SliceCmd", external=True)):
             copy(mark, kept)
@@ -169,7 +177,7 @@ def test_slice_keeps_a_tag_decided_by_an_element_a_pointer_leaves() -> None:
 
 
 def test_a_copy_through_a_pointer_is_no_functional_dependency() -> None:
-    """DS1 follows the source only while the pointer points at it."""
+    """Check that DS1 follows the source only while the pointer points at it."""
     regs = Block("DepReg", TagType.INT, 1, 4)
     source = Int("DepSource")
     with Program() as logic:
@@ -190,7 +198,10 @@ def test_a_copy_through_a_pointer_is_no_functional_dependency() -> None:
 
 
 def test_a_text_whose_first_character_is_overwritten_is_not_a_dead_write() -> None:
-    """The copy's other characters last, and a later rung reads one of them."""
+    """Check that a to_text() copy is not a dead write after its first character is overwritten.
+
+    Its other characters outlast the second copy into TXT1, and a later rung reads one of them.
+    """
     txt = ClickBlocks().txt
     with Program(strict=False) as logic:
         with Rung():

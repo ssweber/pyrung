@@ -1,10 +1,10 @@
-"""Each way scans go into the records leaves what stepping leaves.
+"""Each way of adding scans to the records must leave the records that stepping leaves.
 
 A model keeps every value the rung wrote, the gaps left open, the trim's floor and the scans
-the loop wrote Unknown into.  Stepping's records follow from it.  Its ranges are the scans
-appended from the floor, and the values' changes give the scan a column turns Unknown on.  A
-state machine drives one record through each kind of change and checks it against the model
-after each one.
+the loop wrote Unknown into.  Stepping's records follow from the model.  Its ranges are the
+scans appended from the floor.  The changes in the values give the scan that a column turns
+Unknown on.  A state machine drives one record through each kind of change.  After each
+change, it checks the record against the model.
 
 * Every value the record knows is the value written.
 * With no gap open, a column the loop wrote no Unknown into holds stepping's ranges and count.
@@ -39,14 +39,14 @@ ONE = frozenset((0,))
 U, M = _UNKNOWN_VALUE, _MISSING_WRITE
 _ABSENT = object()
 
-# A scan's writes, or None when the rung does not fire.
+# A scan's writes, or None if the rung does not fire.
 _writes = st.fixed_dictionaries({}, optional={"a": st.integers(0, 3), "b": st.booleans()})
 _event = st.one_of(st.none(), _writes)
 
 
 @st.composite
 def _run(draw: Any, most: int = 12) -> list[dict[str, Any] | None]:
-    """Scans that hold, count, flip or do anything."""
+    """Draw scans that hold, count, flip or do anything."""
     count = draw(st.integers(1, most))
     kind = draw(st.sampled_from(("any", "held", "ramp", "flip")))
     if kind == "any":
@@ -77,14 +77,14 @@ def _kind(value: Any, one: Any, two: Any) -> str | None:
 
 
 def _changes(column: dict[int, Any], scan: int) -> int:
-    """1 unless a scan holds the value before it, or flips or counts as the scan before it did."""
+    """Return 1 unless the scan holds the last value, or flips or counts as the scan before did."""
     one, two, three = (column.get(scan - k, _ABSENT) for k in (1, 2, 3))
     kind = _kind(column[scan], one, two)
     return int(kind != "held" and (kind is None or _kind(one, two, three) != kind))
 
 
 class Model:
-    """What stepping saw, and what it left in its records."""
+    """Holds what stepping saw and what it left in its records."""
 
     def __init__(self, limit: int | None) -> None:
         self.limit = limit
@@ -103,7 +103,7 @@ class Model:
         return any(first <= scan <= last for first, last in self.gaps)
 
     def column(self, tag: str) -> dict[int, Any]:
-        """Each scan stepping's column holds, to its value or no write.
+        """Return each scan that stepping's column holds, with its value or no write.
 
         A column begins on the rung's first write from the floor on, and holds each firing
         after it.
@@ -116,7 +116,7 @@ class Model:
         return out
 
     def crossing(self, tag: str) -> tuple[int | None, int]:
-        """The scan the column turns Unknown on, and its count up to then."""
+        """Return the scan that the column turns Unknown on, and its count up to then."""
         if self.limit is None:
             return None, 0
         column = self.column(tag)
@@ -190,7 +190,7 @@ class Records(RuleBasedStateMachine):
         whole=st.booleans(),
     )
     def bulk(self, length: int, base: int, delta: int, b: bool | None, whole: bool) -> None:
-        """A run of scans the loop recorded at once, as a long run does."""
+        """Record a run of scans at once in the loop, as a long run does."""
         first = self.model.tip + 1
         writes: dict[str, Any] = {"a": base} if b is None else {"a": base, "b": b}
         for k in range(length):
@@ -214,7 +214,7 @@ class Records(RuleBasedStateMachine):
         cycles=st.integers(1, 40),
     )
     def jump(self, period: int, template: list[Any], step: int, cycles: int) -> None:
-        """Three cycles stepped, then a plan records the rest at once, as a jump does."""
+        """Step three cycles, then record the rest at once from a plan, as a jump does."""
 
         def scan_of(cycle: int, index: int) -> dict[str, Any] | None:
             writes = template[index]
@@ -238,7 +238,7 @@ class Records(RuleBasedStateMachine):
 
     @rule(run=_run(30))
     def open_gap(self, run: list[dict[str, Any] | None]) -> None:
-        """Scans that ran with no records, as a compiled run leaves them."""
+        """Add scans that ran with no records, as a compiled run leaves them."""
         first = self.model.tip + 1
         for writes in run:
             self.model.add(writes)
@@ -253,7 +253,7 @@ class Records(RuleBasedStateMachine):
     @precondition(lambda self: self.model.gaps)
     @rule(data=st.data())
     def settle(self, data: Any) -> None:
-        """Some scans of a gap stepped again from a checkpoint before them."""
+        """Step some scans of a gap again from a checkpoint before them."""
         model = self.model
         start, end = data.draw(st.sampled_from(model.gaps))
         first = data.draw(st.integers(start, end))
@@ -310,7 +310,7 @@ class Records(RuleBasedStateMachine):
 
     @rule(length=st.integers(1, 8), values=st.lists(st.integers(0, 3), min_size=8, max_size=8))
     def loop_unknown(self, length: int, values: list[int]) -> None:
-        """A run the loop could not speak for.  It reads Unknown, whatever ran."""
+        """Add a run that the loop could not speak for.  It reads Unknown, whatever ran."""
         first = self.model.tip + 1
         for k in range(length):
             self.model.loop["a"].add(self.model.add({"a": values[k]}))
@@ -355,7 +355,7 @@ class Records(RuleBasedStateMachine):
             return  # The loop's Unknown counts as it reads, so only known values must agree.
         held = ours._counts.get(key, 0)
         if model.gaps:
-            # The count may be low, never high.
+            # The count may be too low but never too high.
             assert theirs is None or (crossing is not None and theirs >= crossing)
             assert theirs is not None or held <= count
             return
@@ -377,7 +377,7 @@ class Records(RuleBasedStateMachine):
 
 
 def _totals_hold(timelines: RungFiringTimelines) -> None:
-    """A record's counts are the model's count of the values it holds.
+    """Check that a record's counts match the model's count of the values it holds.
 
     A scan that looks back into an open gap counts no change, so the count may be lower then.
     """
@@ -428,17 +428,17 @@ def _run_machine(
 
 
 class NoTrims(Records):
-    """No column reaches its limit, and nothing trims from the front."""
+    """Records where no column reaches its limit and nothing trims from the front."""
 
 
 class Capped(Records):
-    """Columns reach a limit of a few changes, and nothing trims from the front."""
+    """Records where columns reach a limit of a few changes and nothing trims from the front."""
 
     limit = 6
 
 
 class Trims(Records):
-    """A history window trims from the front, so the record has no limit."""
+    """Records where a history window trims from the front, so the record has no limit."""
 
     limit = None
     trims = True

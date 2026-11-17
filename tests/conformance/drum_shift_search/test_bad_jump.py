@@ -1,27 +1,31 @@
 """A drum jump toward a step the drum does not have: the ``bad_jump`` group (part ``follow_timing``).
 
-``drum_branch`` has two answers on a CLICK that one rule fits: a jump that fires takes the scan
-even when its target is bad, so a jog on that scan does nothing (``jump_to_bad_step`` Result3)
-and a bad step is not corrected that scan (``jump_on_bad_step`` ErrorCode, 5252).  This group
-asks whether the drum's own time and event are skipped too, and what the next scan does.  A
-CLICK reads 1111, 2222, 5252, 1212, 1212.  The jump takes the whole scan, and the next
-scan runs as if nothing happened, correcting a bad step with the row left as it was.
+``drum_branch`` has two answers on a CLICK, and one rule fits both. A jump that fires takes
+the scan even when its target is bad. So a jog on that scan does nothing (``jump_to_bad_step``
+Result3), and a bad step is not corrected that scan (``jump_on_bad_step`` ErrorCode, 5252).
+This group asks whether the drum's own time and event are skipped too, and what the next scan
+does. A CLICK reads 1111, 2222, 5252, 1212, 1212. The jump takes the whole scan. The next scan
+runs as if nothing happened, and corrects a bad step with the row left as it was.
 
 Snapshots as in ``test_drum_pins``: two digits a drum, the step then ``4 * flag + 2 * B + A``, the
 time drum above the time & event drum; on 3 steps row 1 is 11, row 2 is 22.
 
 ``bad_target_takes_the_scan``:
 
-- On step 1, a jump to 9 on scan 3, with the time drum's Acc staged past its step's preset and
-  the time & event drum's step 1 event (a level) on, on scans 3 and 4.  Result1 is scan 3 and
-  Result2 scan 4.  The jump takes the scan: 1111, then 2222 as the time and the event move the
-  drums on scan 4 (the CLICK's reading).  The jump takes the scan and clears the time drum's
-  Acc: 1111, then 1122, the event alone moving its drum.  The jump is dropped and the drums run:
-  2222, 2222.
-- On step 2 (a jog on scan 2), step 5 staged on scan 4 with a jump to 9 on that scan, as
-  ``jump_on_bad_step``'s ErrorCode, which read 5252 (Result3, scan 4).  Result4 is scan 5 and
-  ErrorCode scan 6: corrected to step 1 with the row left as it was, 1212 (the CLICK's reading);
-  corrected and the row written, 1111; not corrected, 5252.
+- On step 1, a jump to 9 on scan 3. The time drum's Acc is staged past its step's preset,
+  and the time & event drum's step 1 event (a level) is on, on scans 3 and 4. Result1 is
+  scan 3 and Result2 is scan 4. There are three possible readings.
+  The jump takes the scan: 1111, then 2222 as the time and the event move the drums on
+  scan 4 (the CLICK's reading).
+  The jump takes the scan and clears the time drum's Acc: 1111, then 1122, with the event
+  alone moving its drum.
+  The jump is dropped and the drums run: 2222, 2222.
+- On step 2 (a jog on scan 2), step 5 is staged on scan 4 with a jump to 9 on that scan, as in
+  ``jump_on_bad_step``'s ErrorCode, which read 5252 (Result3, scan 4). Result4 is scan 5 and
+  ErrorCode is scan 6. There are three possible readings.
+  The step is corrected to step 1 with the row left as it was: 1212 (the CLICK's reading).
+  The step is corrected and the row written: 1111.
+  The step is not corrected: 5252.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

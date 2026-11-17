@@ -5,8 +5,9 @@ have passed. This is the mergeq `fold-new` stage (`make test-fold-new`): it list
 added (or renamed in) since the merge-base with the base branch, plus untracked ones, and runs
 only those with `--fold-check`. A branch that adds no test file pays for one git call.
 
-It judges mismatches only (`--fold-check-allow-vacuous`): the share of runs that used the loop
-is a verdict on a whole suite, and a few files whose long runs all decline honestly are fine.
+It judges mismatches only (`--fold-check-allow-vacuous`).  It does not judge the share of runs
+that used the loop, because that share is a verdict on a whole suite.  In a few files, it is
+fine for every long run to decline honestly.
 Agents run `pytest --fold-check --fold-check-allow-vacuous <file>` on the file directly.
 """
 
@@ -55,7 +56,8 @@ def new_test_files(base: str) -> list[str]:
 
 
 def main() -> int:
-    # The queue sets BOB_CONFIG to its own config, so a merged tree's older copy can't name the base.
+    # The queue sets BOB_CONFIG to its own config.  Because of that, an older config.toml in
+    # a merged tree cannot decide the base.
     config = os.environ.get("BOB_CONFIG") or ROOT / ".claude" / "bob" / "config.toml"
     with open(config, "rb") as fh:
         base = tomllib.load(fh).get("queue", {}).get("base", "main")

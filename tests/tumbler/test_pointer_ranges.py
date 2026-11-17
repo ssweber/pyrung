@@ -1,6 +1,6 @@
-"""The index ranges declared in the tumbler's tags.
+"""Tests for the index ranges declared in the tumbler's tags.
 
-``tags.py`` is generated and these ranges are written by hand, so a regen drops them.
+``tags.py`` is generated, and these ranges are written by hand.  A regeneration drops them.
 """
 
 from __future__ import annotations

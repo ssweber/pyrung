@@ -1,8 +1,8 @@
-"""Timer, counter and Out-family presets take an int or an INT, DINT or WORD tag.
+"""Timer, counter and Out-family presets accept an int or an INT, DINT or WORD tag.
 
 A REAL preset compared differently per backend (``acc >= 2.5`` interpreted,
-``acc >= int(2.5)`` compiled), and CLICK refuses one, so it is rejected when the
-instruction is built.
+``acc >= int(2.5)`` compiled), and CLICK refuses one. pyrung therefore rejects a REAL preset
+when the instruction is built.
 """
 
 import pytest

@@ -136,7 +136,7 @@ def _no_hold_excursion_program():
 
 
 def _state_repeats(plc: PLC, *, within: int = 200) -> bool:
-    """Stepping on from here returns to a state it has already been in."""
+    """Return True if stepping on from here reaches a state that it has already been in."""
     fork = plc.fork()
     seen = set()
     for _ in range(within):
@@ -180,8 +180,8 @@ def test_no_hold_excursion_not_nogooded(monkeypatch) -> None:
     plc = PLC(prog, dt=0.010)
     path = pilot_how(plc, y_Stage == 1, max_scans=200)
     assert not path.reachable
-    # The sterile proof: a seek ran out its whole budget, nearly all of it in the loop, and
-    # lands in a cycle.  What repeats exactly goes on repeating, so nothing was waiting.
+    # The sterile proof: a seek used its whole budget, nearly all of it in the loop, and ends
+    # in a cycle.  A state that repeats exactly keeps repeating, so nothing was waiting.
     assert sterile_coasts
 
 

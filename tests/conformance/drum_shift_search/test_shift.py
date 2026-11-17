@@ -52,13 +52,13 @@ SCANS = scans_for()
 
 
 def clock_on(slot, bit, *scans):
-    """*bit* is on, driven by the scan number, on exactly the given scans."""
+    """Add a rung that turns *bit* on, driven by the scan number, on exactly the given scans."""
     with Rung(slot.Cmd != 0, Or(*[slot.Scratch == n for n in scans])):
         out(bit)
 
 
 def pack_at_end(slot, first, last, dest):
-    """*dest* = the register (lowest address weighs 1), once the window is over."""
+    """Pack the register into *dest* once the window is over. The lowest address weighs 1."""
     with Rung(slot.Cmd != 0, slot.Scratch > WINDOW):
         pack_bits(c.select(first, last), dest)
 

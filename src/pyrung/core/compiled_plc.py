@@ -45,7 +45,7 @@ _MISSING: Any = object()
 
 
 def absent_scalars(compiled: CompiledKernel, tags: Mapping[str, Any]) -> dict[str, Any]:
-    """The scalars of *compiled* that *tags* lacks, with the default a kernel holds them at."""
+    """Return the scalars of *compiled* that *tags* lacks, each with the default the kernel uses."""
     return {name: default for name, default in compiled._scalar_defaults if name not in tags}
 
 
@@ -209,11 +209,12 @@ class CompiledPLC:
         keep_forces_on_run: bool = False,
         exact_anchor: bool = False,
     ) -> None:
-        """Start from *initial_state*, or a fresh state.
+        """Start from *initial_state*, or from a fresh state.
 
-        *exact_anchor* says *initial_state* comes from a runner, which seeds every tag
-        it knows: a tag it lacks is one stepping has not written yet, and stays absent.
-        Without it, every tag the program knows is seeded with its default.
+        Set *exact_anchor* when *initial_state* comes from a runner.  A runner seeds every
+        tag it knows, so a tag that the state lacks is one that stepping has not written
+        yet, and it stays absent.  Without *exact_anchor*, every tag the program knows is
+        seeded with its default.
         """
         from pyrung.circuitpy.codegen.render_kernel import compile_kernel
         from pyrung.core.program import Program
@@ -226,9 +227,9 @@ class CompiledPLC:
         self._dt = float(dt)
         self._time_mode = TimeMode.FIXED_STEP
         self._running = True
-        # A kernel pass that can call a ``run_function`` body is running, and that body may
-        # not scan, stop or reboot this PLC or set its battery.  Nothing here can pause inside a
-        # scan, so the pass is narrow enough.
+        # True while a kernel pass that can call a ``run_function`` body is running.  That
+        # body may not scan, stop or reboot this PLC or set its battery.  Nothing here can
+        # pause inside a scan, so a flag that covers the whole pass is narrow enough.
         self._kernel_pass_open = False
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
@@ -238,9 +239,10 @@ class CompiledPLC:
         self._rtc_fields_from = math.inf
         self._rtc_fields_until = -math.inf
         self._exact_anchor = exact_anchor
-        # What a scan's RTC apply did: (scan id, base, base sim time), when a runner
-        # owns the record of it (compiled_run, which drains it at each install).  Off
-        # otherwise: a seek has nobody to drain it, and it would grow with the scans.
+        # Records what a scan's RTC apply did, as (scan id, base, base sim time).  It is a
+        # list only when a runner owns the record (compiled_run, which drains it at each
+        # install).  Otherwise it is None, because a seek has nobody to drain it and it
+        # would grow with the scans.
         self.rtc_applied: list[tuple[int, datetime, float]] | None = None
         self._system_runtime = SystemPointRuntime(
             time_mode_getter=lambda: self._time_mode,
@@ -256,8 +258,9 @@ class CompiledPLC:
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
         self._randint_sites = randint_sites(self._compiled.referenced_tags)
-        # Numbered over the user's rungs alone, as stepping numbers them, so both draw
-        # the same.  A runner's soft program puts plant and hold rungs ahead of them.
+        # Number the randint sites over the user's rungs alone, as stepping does, so both
+        # draw the same values.  A runner's soft program puts plant and hold rungs ahead
+        # of the user's rungs.
         self._randint_numbers: dict[int, int] = {}
         if self._randint_sites:
             bare = getattr(program, "_bare_program", None)
@@ -308,8 +311,8 @@ class CompiledPLC:
         # A state saved before edge memory was per contact (``_prev:X``).
         self._state = migrate_legacy_edge_memory(self._state, site_table_of(program))
         self._extra_commit_tag_names: set[str] = set()
-        # An exact anchor's missing tags stay absent, as they do stepping, and the
-        # kernel holds the default meanwhile.
+        # With an exact anchor, missing tags stay absent, as they do in stepping.  The
+        # kernel uses the default for them in the meantime.
         seed = (
             {}
             if exact_anchor
@@ -323,10 +326,10 @@ class CompiledPLC:
             self._state = self._state.with_tags(seed)
         self._initialize_from_state(self._state)
         # A scalar's rung may not have written it yet, though the kernel writes every
-        # scalar back on every scan: it stays out of the state until it leaves the
-        # default.  An unseen plant latch, say, or a stored system point a rung has not
-        # written; stepping leaves those absent until they fire.  A rung that could
-        # store the default keeps the run interpreted (compiled_run.run_scans).
+        # scalar back on every scan.  Such a scalar stays out of the state until it leaves
+        # its default.  Examples are an unseen plant latch and a stored system point that
+        # no rung has written.  Stepping leaves those absent until they fire.  A rung that
+        # could store the default keeps the run interpreted (compiled_run.run_scans).
         self._unseen_scalars: dict[str, Any] = (
             absent_scalars(self._compiled, self._state.tags) if exact_anchor else {}
         )
@@ -383,7 +386,7 @@ class CompiledPLC:
         self._input_overrides.patch(tags)
 
     def patch_as_recorded(self, recorded: Mapping[str, bool | int | float | str]) -> None:
-        """Queue a patch a scan log recorded: see ``InputOverrideManager.restore_patch``."""
+        """Queue a patch that a scan log recorded.  See ``InputOverrideManager.restore_patch``."""
         for key in recorded:
             self._register_override_metadata(key)
         self._input_overrides.restore_patch(recorded)
@@ -431,7 +434,7 @@ class CompiledPLC:
 
     @property
     def battery_present(self) -> bool:
-        """Whether Battery Backup Setup is checked (see ``PLC.battery_present``)."""
+        """Return True when Battery Backup Setup is checked (see ``PLC.battery_present``)."""
         return self._battery_present
 
     @battery_present.setter
@@ -448,13 +451,13 @@ class CompiledPLC:
         return "run" if self._running else "stop"
 
     def start(self) -> None:
-        """Transition STOP -> RUN now, without executing a scan (see ``PLC.start``)."""
+        """Change from STOP to RUN now, without executing a scan (see ``PLC.start``)."""
         if not self._running:
             self._ensure_running()
 
     @property
     def keep_forces_on_run(self) -> bool:
-        """Whether active forces survive a STOP -> RUN transition."""
+        """Return True when active forces survive a STOP -> RUN transition."""
         return self._keep_forces_on_run
 
     @keep_forces_on_run.setter
@@ -463,7 +466,7 @@ class CompiledPLC:
 
     @property
     def pending_patches(self) -> Mapping[str, bool | int | float | str]:
-        """Read-only view of patches queued for the next scan."""
+        """Return a read-only view of the patches queued for the next scan."""
         return MappingProxyType(self._pending_patches)
 
     def stop(self) -> None:
@@ -478,7 +481,8 @@ class CompiledPLC:
     def reboot(self) -> SystemState:
         if self._kernel_pass_open:
             raise refused_inside_its_own_scan()
-        # battery_present True keeps the retentive tags, as STOP -> RUN does (runner.PLC.reboot).
+        # With battery_present True the reboot keeps the retentive tags, as STOP -> RUN does
+        # (runner.PLC.reboot).
         tag_values = self._rebuild_tags_for_reset(preserve_retentive=self._battery_present)
         self._reset_runtime_scope(
             tag_values=tag_values,
@@ -489,10 +493,11 @@ class CompiledPLC:
         return self._state
 
     def _open_block_bracket(self) -> dict[str, _TrackedList]:
-        """Open the scan's block bracket.  Each array is a ``_TrackedList`` with
-        an empty write-set, so writes from the plant pass, the input drain, the
-        main pass, and the post-logic force re-apply are recorded for an
-        incremental flush.  Returns the arrays for :meth:`_flush_blocks_tracked`.
+        """Open the scan's block bracket and return the arrays for :meth:`_flush_blocks_tracked`.
+
+        Each array is a ``_TrackedList`` with an empty write-set.  It records the writes
+        from the plant pass, the input drain, the main pass and the post-logic force
+        re-apply, so the flush can be incremental.
 
         No reload from ``tags`` is needed: the arrays persist across scans and
         every block-element tag-dict write happens *inside* the bracket (drains,
@@ -506,7 +511,7 @@ class CompiledPLC:
         return cast("dict[str, _TrackedList]", self._kernel.blocks)
 
     def _run_kernel_pass(self, step_fn: Any) -> None:
-        """Invoke one compiled function against the already-loaded blocks."""
+        """Call one compiled function against the already-loaded blocks."""
         kernel = self._kernel
         if not self._compiled.calls_functions:
             step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, self._dt)
@@ -518,8 +523,9 @@ class CompiledPLC:
             self._kernel_pass_open = False
 
     def _flush_blocks_tracked(self, tracked_blocks: dict[str, _TrackedList]) -> None:
-        """Close the scan's block bracket: flush **only the cells written this
-        scan** back to ``tags``, recording those tags as live.
+        """Close the scan's block bracket by flushing **only the cells written this scan**.
+
+        The flush writes those cells back to ``tags`` and records the tags as live.
 
         A full ``flush_block_to_tags`` moved all ~N block cells every scan, but a
         scan writes only a handful.  The unwritten cells round-trip their own
@@ -651,7 +657,7 @@ class CompiledPLC:
         self._kernel.timestamp += scan_dt
 
     def _materialize_replay_state(self) -> SystemState:
-        """Build SystemState from current kernel state (replay fast path)."""
+        """Build a SystemState from the current kernel state (replay fast path)."""
         self._flush_blocks_tracked(cast("dict[str, _TrackedList]", self._kernel.blocks))
         state = self._state.scanned(
             self._kernel.scan_id,
@@ -714,7 +720,7 @@ class CompiledPLC:
             self._state = self._state.with_memory(state_memory_defaults)
         for spec in self._compiled.block_specs.values():
             self._kernel.load_block_from_tags(spec)
-        # After the load: it is no write of a scan.
+        # Wrap the arrays after the load, so the load does not count as a write in a scan.
         blocks = self._kernel.blocks
         for symbol, arr in blocks.items():
             blocks[symbol] = _TrackedList(arr)
@@ -732,7 +738,7 @@ class CompiledPLC:
         self._kernel_tag_count = len(self._kernel.tags)
 
     def _discover_new_commit_tags(self) -> None:
-        """Index scalar keys only when the monotonic kernel tag dict grows."""
+        """Index scalar keys, but only when the monotonic kernel tag dict grows."""
         tags = self._kernel.tags
         if len(tags) == self._kernel_tag_count:
             return
@@ -750,8 +756,8 @@ class CompiledPLC:
         tags = self._kernel.tags
         resolve = self._system_runtime.resolve
         if not self._stored_system_tags_bound:
-            # A stored point reads as its own tag: once bound, nothing to do.
-            # The kernel's tag dict only grows.
+            # A stored point reads as its own tag, so once it is bound there is nothing more
+            # to do.  The kernel's tag dict only grows.
             for name in self._other_system_tags - _DERIVED_TAG_NAMES:
                 resolved, value = resolve(name, scan_ctx)
                 if resolved:
@@ -762,7 +768,7 @@ class CompiledPLC:
         for name in self._scan_system_tags:
             tags[name] = resolve(name, scan_ctx)[1]
         if self._steady_system_tags:
-            # The rest depend only on this memory, and the mode and dt it holds.
+            # The rest depend only on the memory, including the mode and dt that it holds.
             memory = self._kernel.memory
             key = (_SCAN_START_MEMORY(memory), memory.get("_dt"))
             if key != self._steady_system_key:
@@ -775,11 +781,11 @@ class CompiledPLC:
             tags.update(self._rtc_fields_at(ctx)[0])
 
     def _rtc_fields_at(self, ctx: _KernelRuntimeContext) -> tuple[dict[str, Any], float, float]:
-        """The RTC fields at ``ctx.timestamp``, and the times they are good from and until."""
+        """Return the RTC fields at ``ctx.timestamp`` and the times they hold from and until."""
         timestamp = ctx.timestamp
         if not self._rtc_fields_from <= timestamp < self._rtc_fields_until:
-            # The fields are whole seconds: they hold until the next tick.
-            # Recompute a little early, so rounding never carries them over.
+            # The fields are whole seconds, so they hold until the next tick.  Recompute a
+            # little early, so rounding never carries them over.
             resolve = self._system_runtime.resolve
             scan_ctx = cast(ScanContext, ctx)
             self._rtc_fields = {n: resolve(n, scan_ctx)[1] for n in self._rtc_field_tags}
@@ -849,9 +855,11 @@ class CompiledPLC:
         return evolver.persistent()
 
     def _commit_memory(self):  # noqa: ANN202
-        """Commit the scan's memory by updating the previous PMap (see
-        :meth:`_commit_tags`).  The plain-dict mirror belongs to one ``PMap``, so
-        a state installed from elsewhere rebuilds it."""
+        """Commit the scan's memory by updating the previous PMap (see :meth:`_commit_tags`).
+
+        The plain-dict mirror belongs to one ``PMap``, so a state installed from elsewhere
+        rebuilds the mirror.
+        """
         prev = self._state.memory
         if self._mirrored_memory is not prev:
             self._memory_mirror = dict(prev)
@@ -872,11 +880,11 @@ class CompiledPLC:
         return self._mirrored_memory
 
     def _ensure_running(self) -> None:
-        # Every way into a scan comes through here first, ahead of anything it would move.
+        # Every way into a scan comes through here first, before it moves anything.
         if self._kernel_pass_open:
             raise refused_inside_its_own_scan()
-        # A runner's states walk one recording, and a restart ends a recording: a stop
-        # inside it scanned on until a later call (runner._reset_recording).
+        # A runner's states walk one recording, and a restart ends a recording.  So a stop
+        # inside the recording scanned on until a later call (runner._reset_recording).
         if not self._running and not self._exact_anchor:
             self._stop_to_run_transition()
 

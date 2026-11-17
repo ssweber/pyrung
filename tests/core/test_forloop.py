@@ -75,12 +75,13 @@ def test_forloop_tag_count_zero_runs_no_iteration():
 @pytest.mark.parametrize(
     ("loops", "count", "iterations"),
     [
-        # CLICK reads an Int count as unsigned 16-bit: -1 runs 65535 iterations.
+        # CLICK reads an Int count as unsigned 16-bit, so -1 runs 65535 iterations.
         (Int("Loops"), -1, 65535),
         (Int("Loops"), -32768, 32768),
         (Int("Loops"), 0, 0),
-        # and a DD count whole: 65537 runs 65537, 65536 runs 65536 (hardware 2026-11-05),
-        # and signed: -1, -65535 and -2 run none (hardware 2026-11-06 and 2026-11-10).
+        # CLICK reads a DD count whole: 65537 runs 65537, and 65536 runs 65536 (hardware
+        # 2026-11-05). It reads a DD count as signed too: -1, -65535 and -2 run none
+        # (hardware 2026-11-06 and 2026-11-10).
         (Dint("Loops"), 65537, 65537),
         (Dint("Loops"), 65536, 65536),
         (Dint("Loops"), 3, 3),
@@ -223,8 +224,8 @@ def test_branch_inside_forloop_is_rejected():
 
 
 def test_forloop_rung_false_skips_body(runner_factory):
-    # CLICK: a false For rung skips its body.  Its coils keep their values and
-    # its one-shots do not re-arm.
+    # In CLICK, a false For rung skips its body. The coils in the body keep their values,
+    # and its one-shots do not re-arm.
     enable = Bool("Enable")
     light = Bool("Light")
     counter = Int("Counter")
@@ -280,9 +281,9 @@ def test_forloop_own_oneshot_rearms_when_rung_false(runner_factory):
 
 
 def test_forloop_rung_false_holds_body_timer_and_counter(runner_factory):
-    # The assumption conformance probe F19 checks on a CLICK: a false For rung
-    # skips its body, so a TON there keeps its Acc (no unpowered scan resets
-    # it) and a counter keeps its Acc with its reset input on (not scanned).
+    # This is the assumption that conformance probe F19 checks on a CLICK. A false For rung
+    # skips its body. So a TON there keeps its Acc, because no unpowered scan resets it. A
+    # counter there keeps its Acc with its reset input on, because the body is not scanned.
     enable = Bool("Enable")
     rst = Bool("Rst")
     timer = Timer.clone("T")

@@ -50,7 +50,7 @@ def test_twin_is_drawn_with_tees_and_nothing_else_moves(twins_build, group, case
     after = _case_rows(drawn, sub, group, case_id)
     changed = [(b, a) for b, a in zip(before, after, strict=True) if b != a]
     assert changed, "the twin is drawn as the rail drawing"
-    # The box row gains a tee; teed pin rows lose their shared contacts.
+    # The box row gains a tee.  Teed pin rows lose their shared contacts.
     assert any(any(c == "T" or c.startswith("T:") for c in a) for _b, a in changed)
     assert any(a[-1].startswith(".") for _b, a in changed)
     # Nothing outside the twin's own rows moved in its subroutine.
@@ -142,7 +142,7 @@ def test_a_tee_in_column_a_is_refused():
 
 @pytest.mark.parametrize("part", sorted(suite.PARTS))
 def test_no_exported_row_has_a_vertical_token_in_column_a(part):
-    """CLICK refuses T, | and T: in column A (the rail); true of the drawn export too."""
+    """CLICK refuses T, | and T: in column A (the rail), and the drawn export has none."""
     from pyrung.click.ladder.layout import assert_no_column_a_vertical
 
     build = suite.build(part)

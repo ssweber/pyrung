@@ -23,11 +23,12 @@ _WHOLE_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
 
 
 def _exported_converter(instruction: Any) -> CopyConverter | None:
-    """The converter a Copy is written with.
+    """Return the converter that the export writes with a Copy.
 
-    CLICK saves a Copy of a number register into TXT with its conversion, and the dialog
-    starts on Copy Value with Suppress zero.  So a plain Copy of an Int, Dint or Word into
-    text writes the ``to_text()`` it runs.  Any other plain Copy exports as written.
+    CLICK saves a Copy of a number register into TXT with its conversion. The dialog
+    starts on Copy Value with Suppress zero. So a plain Copy of an Int, Dint or Word
+    into text exports the ``to_text()`` that it runs. Any other plain Copy exports as
+    written.
     """
     authored = getattr(instruction, "authored_convert", instruction.convert)
     if authored is not None:
@@ -216,10 +217,10 @@ class _InstructionMixin:
         return specs
 
     def _out_variant_token(self, instruction: Any, instruction_type: str, *, path: str) -> str:
-        """Debounce/flasher/timed: each phase as its Timer's TD and preset.
+        """Render a debounce, flasher or timed coil, with each phase as its Timer's TD and preset.
 
-        CLICK's coil names only the phase's TD; the T of the same number comes
-        with it (validation reports a Timer whose Done is not that T).
+        CLICK's coil names only the TD of the phase. The T of the same number comes with
+        it. Validation reports a Timer whose Done is not that T.
         """
         if instruction_type == "TimedInstruction":
             phases = [("on", instruction.timer_acc, instruction.on_preset)]
@@ -255,10 +256,11 @@ class _InstructionMixin:
     def _single_register_fill_token(
         self, instruction: Any, tag: Any, *, path: str, oneshot_kw: dict[str, str]
     ) -> str:
-        """A Fill of one register as the Copy CLICK takes in its place.
+        """Render a Fill of one register as the Copy that CLICK accepts in its place.
 
-        The Copy must store what the Fill stores.  A text value of several characters
-        would fill several TXT, and a Copy across text converts, so both are refused.
+        The Copy must store what the Fill stores. The export refuses a text value of
+        several characters, because it would fill several TXT. It also refuses a value
+        that would need a Copy between text and a number, because that Copy converts.
         """
         value = instruction.value
         if isinstance(value, str) and len(value) > 1 and tag.type == TagType.CHAR:
@@ -286,7 +288,7 @@ class _InstructionMixin:
         return self._fn("copy", source, dest, **oneshot_kw)
 
     def _refuse_constant_text_past_txt(self, instruction: Any, dest: str, *, path: str) -> None:
-        # CLICK's Copy refuses a constant past TXT1000 (OBJ-003). So the export refuses it
+        # CLICK's Copy refuses a constant past TXT1000 (OBJ-003). So the export refuses it,
         # even when CLK_TEXT_PAST_BANK is allowed.
         match = re.fullmatch(r"TXT(\d+)", dest)
         if match is None:
@@ -730,7 +732,11 @@ class _InstructionMixin:
         )
 
     def _render_status_bits(self, instruction: Any, busy_name: str, path: str) -> dict[str, str]:
-        """Send/Receive status kwargs; a bit on a hidden tag was left off and stays off."""
+        """Return the status keyword arguments of a Send or Receive.
+
+        If the caller did not pass a status bit, pyrung gave it a hidden tag.  The export
+        leaves that bit out.
+        """
         rendered: dict[str, str] = {}
         for name in (busy_name, "success", "error", "exception_response"):
             tag = getattr(instruction, name)
@@ -741,7 +747,7 @@ class _InstructionMixin:
         return rendered
 
     def _render_modbus_target(self, instruction: Any, path: str) -> str:
-        """The target constructor, with a DS device ID written as its address."""
+        """Return the target constructor, with a DS device ID written as its address."""
         from pyrung.core.instruction.send_receive import ModbusRtuTarget, ModbusTcpTarget
 
         device_id = instruction.device_id
@@ -792,10 +798,10 @@ _984_BASES = {
 
 
 def _render_remote_start(instruction: object) -> str:
-    """Render remote_start as Click address string or ModbusAddress(...).
+    """Render remote_start as a Click address string or ``ModbusAddress(...)``.
 
-    A hex-written address stays hex; anything else is MODBUS 984, written as
-    CLICK writes it (a coil is ``17``, not ``000017``).
+    A hex-written address stays hex. Any other address is MODBUS 984, written as CLICK
+    writes it (a coil is ``17``, not ``000017``).
     """
     remote_address = getattr(instruction, "remote_address", None)
     if remote_address is not None:

@@ -18,7 +18,7 @@ def _settled_regions(plc: PLC) -> list[tuple[str, int | None, str]]:
 
 
 def test_branches_sharing_a_source_line_keep_their_own_state() -> None:
-    """Two branches built by one helper share a source span; each keeps its
+    """Two branches built by one helper share a source span. Each keeps its
     own solved state, and a branch's own branches are shown too."""
     go, a, b, c = Bool("Go"), Bool("A"), Bool("B"), Bool("C")
     y1, y2, y3 = Bool("Y1"), Bool("Y2"), Bool("Y3")
@@ -90,7 +90,7 @@ def test_a_called_subroutine_adds_no_regions_to_the_caller() -> None:
 
 def test_a_loop_body_adds_no_regions_and_the_branches_after_it_keep_their_state() -> None:
     """A bare body instruction and a body rung run before the rung's
-    branches; neither is a region of the rung, and each branch shows its own
+    branches. Neither is a region of the rung, and each branch shows its own
     solved state."""
     go, a, b, c = Bool("Go"), Bool("A"), Bool("B"), Bool("C")
     x, y, z, w = Bool("X"), Bool("Y"), Bool("Z"), Bool("W")
@@ -118,7 +118,7 @@ def test_a_loop_body_adds_no_regions_and_the_branches_after_it_keep_their_state(
 
 def test_branches_under_an_unpowered_branch_are_shown_off() -> None:
     """An unpowered branch's own branches, at any depth, are off from the
-    start; they have no step of their own, but each is shown."""
+    start. They have no step of their own, but each is shown."""
     go, a, b, c, d = Bool("Go"), Bool("A"), Bool("B"), Bool("C"), Bool("D")
     x, y, z = Bool("X"), Bool("Y"), Bool("Z")
     with Program(strict=False) as prog:

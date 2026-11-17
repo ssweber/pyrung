@@ -810,7 +810,7 @@ class TestProjectedEffect:
             with Rung(rise(Pulse)):
                 latch(Latched)
 
-        # Both contacts' memory on (as a contact left unscanned keeps it).
+        # Set both contacts' memory on, as it stays when a contact goes unscanned.
         state = SystemState().with_memory({"_edge:e1": True, "_edge:e2": True})
         runner = PLC(logic, initial_state=state)
 
@@ -2027,7 +2027,7 @@ class TestProjectedAfterACompiledRun:
                 out(Horn)
         runner = PLC(logic, dt=0.01)
         runner.patch({Start.name: True})
-        # PcWait_Done turns on at scan 1500, inside the part a compiled run leaves unrecorded.
+        # PcWait_Done turns on at scan 1500, inside the scans that a compiled run leaves unrecorded.
         runner.run_for(20.0, jit=jit)
         return runner
 

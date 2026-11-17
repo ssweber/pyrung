@@ -1,18 +1,18 @@
-"""Follow-up flag probes: the ``flag_boxes`` and ``flag_halves`` groups (part ``follow_flags``).
+"""Probe flags further, in the ``flag_boxes`` and ``flag_halves`` groups (part ``follow_flags``).
 
 Two follow-ups to ``flag_probe`` (part ``system``):
 
 - ``flag_probe/boxes_leave_flags`` reads SC44 off after a Search, a Shift, a Drum, a TON and a
-  CTU, where ``system/address_flag_vs_other_instructions`` reads SC44 left on after a TON and a
-  CTU.  The first raises SC44 with a pointer of -1, the second with a pointer of 0.
+  CTU. ``system/address_flag_vs_other_instructions`` reads SC44 left on after a TON and a CTU.
+  The first raises SC44 with a pointer of -1, and the second raises it with a pointer of 0.
 - ``copy(DF 1.0E+10, DD)`` raises no SC43 on a CLICK, so it cannot raise the flag for the SC43
-  half of ``flag_probe``.  Here SC43 comes from a Copy of DD 40000 into a DS, which
-  does (``faults/copy_clamp_out_of_range``).
+  half of ``flag_probe``. Here SC43 comes from a Copy of DD 40000 into a DS, which does raise
+  it (``faults/copy_clamp_out_of_range``).
 
 Each probe raises its flag right before the instruction under test and reads it on the rung
-after, as ``flag_probe`` does, so another group's rungs on the same scan cannot reach it, and
-each case has a control: the raise alone, read the same way, so a raise that does not take shows
-as a control that reads 0.
+after, as ``flag_probe`` does. Rungs of another group on the same scan cannot reach it that
+way. Each case also has a control, which is the raise alone, read the same way. If a raise does
+not take, the control reads 0.
 
 ``flag_boxes``:
 
@@ -27,8 +27,8 @@ as a control that reads 0.
   before it, Maths on false rungs, and each clears SC44 (``flag_steps``).
 - ``ton_ctu_by_pointer``: ``address_flag_vs_other_instructions``'s layout, the TON and the CTU
   enabled on every scan of the window and the raise on the rung above each: pointer 0 on scan 3
-  (bit 1), pointer -1 on scan 4 (bit 2), set when SC44 is still on after it.  Result2 the TON,
-  Result3 the CTU.  Result1 is the control.  A CLICK reads 1, 1 and 1.  In this layout the
+  (bit 1), pointer -1 on scan 4 (bit 2), set when SC44 is still on after it.  Result2 is the TON,
+  and Result3 is the CTU.  Result1 is the control.  A CLICK reads 1, 1 and 1.  In this layout the
   raise by pointer -1 alone reads SC44 off, so bit 2 says nothing about the TON or the CTU.
   Bit 1 says both leave SC44 raised by pointer 0 on, as ``address_flag_vs_other_instructions``
   reads.  In this layout the raise by pointer -1 sits behind the read rung of scan 3, a Math on a
@@ -51,8 +51,8 @@ as a control that reads 0.
   ``source_flag_is_read_before_the_copy_settles``).  Result2 = 1 when SC43 is off after the
   Copy.  Result3 = 1 is the control.  A CLICK reads 0, 1 and 1, so the Copy settles SC43 before
   it reads it.
-- ``df_into_dd``: what a Copy of DF 1.0E+10 into a DD (preset 99) writes, the store that raised
-  no SC43.  Result1: 1 for 2147483647 (a clamp), 2 for 1410065408 (the low 32 bits), 3 for 99
+- ``df_into_dd``: checks what a Copy of DF 1.0E+10 into a DD (preset 99) writes. This is the
+  store that raised no SC43.  Result1: 1 for 2147483647 (a clamp), 2 for 1410065408 (the low 32 bits), 3 for 99
   (left as it was), 4 for 0, 5 for -2147483648, 0 for any other.  Result2 is the DD / 100000, so
   any other reading still shows its size (21474 or 21475 for the clamp, 14100 or 14101 for the
   low bits).  Result3 has SC43 after it (bit 1).  A CLICK reads 1, 21474

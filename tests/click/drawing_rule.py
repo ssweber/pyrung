@@ -46,7 +46,7 @@ MAX_ROWS = 32
 
 
 def _parts(cell: str) -> tuple[bool, str | None]:
-    """(vertical down the left edge, what lies across).  Across is None, "-" or a contact."""
+    """Return (vertical down the left edge, what lies across).  Across is None, "-" or a contact."""
     if cell == "":
         return False, None
     if cell == "-":
@@ -61,7 +61,7 @@ def _parts(cell: str) -> tuple[bool, str | None]:
 
 
 def split_rungs(rows: Sequence[Sequence[str]]) -> list[list[tuple[str, ...]]]:
-    """The rungs of an exported scope.  A rung runs from one ``R`` marker to the next.
+    """Return the rungs of an exported scope.  A rung runs from one ``R`` marker to the next.
 
     The header and ``#`` comment rows are dropped.
     """
@@ -78,7 +78,7 @@ def split_rungs(rows: Sequence[Sequence[str]]) -> list[list[tuple[str, ...]]]:
 
 
 def check_scope(rows: Sequence[Sequence[str]]) -> None:
-    """:func:`check_rung` for every rung of an exported scope."""
+    """Run :func:`check_rung` on every rung of an exported scope."""
     for index, rung in enumerate(split_rungs(rows)):
         try:
             check_rung(rung)
@@ -219,7 +219,8 @@ def check_rung(rows: Sequence[Sequence[str]]) -> None:
 
 
 def contact_size(conditions: Sequence[Condition]) -> tuple[int, int]:
-    """(longest contact path, rows) of plain contacts in series, as the drawing rule lays them out.
+    """Return (longest contact path, rows) of plain contacts in series, as the drawing rule lays
+    them out.
 
     A path of 31 contacts ends past AE when a vertical must follow it.
     """
@@ -268,7 +269,7 @@ def _outputs(rung: Rung, conditions: list[Condition], found: list) -> None:
 
 
 def output_conditions(program: Any, mapping: Any) -> dict[str, tuple[list[Condition], Any]]:
-    """The conditions that feed each output and pin, and a tag resolver.
+    """Return the conditions that feed each output and pin, and a tag resolver.
 
     An ``out()`` is keyed by its target's address.  Any other instruction is keyed by its type and
     its place among the program's instructions, and each pin adds ``.reset`` or ``.down`` to it.
@@ -301,7 +302,8 @@ def output_conditions(program: Any, mapping: Any) -> dict[str, tuple[list[Condit
 
 
 def assert_same_logic(program: Any, mapping: Any, bundle: Any, *, samples: int = 256) -> None:
-    """The export read back with ``ladder_to_pyrung`` gives every output and pin the same truth table.
+    """Assert that the export, read back with ``ladder_to_pyrung``, gives every output and pin the
+    same truth table.
 
     Rungs of plain contacts only.  Up to 10 inputs are checked in every combination, more in
     *samples* random ones.

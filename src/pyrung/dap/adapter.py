@@ -56,19 +56,18 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
 def _settled_rung_event(events: tuple[RungTraceEvent, ...]) -> RungTraceEvent:
-    """The rung's first event (its own step) with every region as the scan left them.
+    """Return the rung's first event (its own step) with every region as the scan left them.
 
-    A rung or branch step's trace holds a region for that rung or branch, then
-    one for each of its direct branches, in order; so does each step of an
-    instruction on it.  A branch reads its conditions when the scan reaches
-    it, so its region is final only from then on: a later event has it.
+    The trace of a rung or branch step holds a region for that rung or branch, then one
+    for each of its direct branches, in order.  So does each step of an instruction on it.
+    A branch reads its conditions when the scan reaches it, so its region is final only
+    from then on.  A later event has the final region.
 
-    Regions are matched by the event's place in the rung's tree
-    (``branch_path``), not by their source span, which two branches built by
-    one helper share.  Nested branches are kept too, including those under an
-    unpowered branch, which have no step of their own but whose instructions
-    do.  Steps of a called subroutine or a loop body are not this rung's and
-    are skipped.
+    This function matches regions by the event's place in the rung's tree
+    (``branch_path``), not by their source span, because two branches built by one helper
+    share a span.  It keeps nested branches too, including those under an unpowered
+    branch.  Such a branch has no step of its own, but its instructions do.  It skips the
+    steps of a called subroutine or a loop body, because they are not this rung's.
     """
     first = events[0]
     if first.trace is None or len(events) == 1:
@@ -385,7 +384,7 @@ class DAPAdapter:
         simulation.pause_executor(self)
 
     def _executor_running_locked(self) -> bool:
-        """True while the continue worker runs and no pause is pending."""
+        """Return True while the continue worker runs and no pause is pending."""
         return self._thread_running_locked() and not self._pause_event.is_set()
 
     def _resolve_target_locked(self, target: str) -> str:
@@ -724,8 +723,8 @@ class DAPAdapter:
     def _live_trace_body_locked(self, *, allow_empty: bool = False) -> dict[str, Any] | None:
         """Build a single merged trace body from the last committed scan.
 
-        Returns ``None`` when no rung has a trace yet, unless *allow_empty*,
-        which returns a body with no regions so values and forces still flow.
+        Return ``None`` when no rung has a trace yet.  With *allow_empty*, return a body
+        with no regions instead, so values and forces still flow.
         """
         runner = self._runner
         if runner is None:
@@ -782,7 +781,7 @@ class DAPAdapter:
         return variables
 
     def _tag_values_body(self, tags: Any) -> dict[str, str]:
-        """Formatted values of the program's tags, without pyrung's internal ones."""
+        """Return the formatted values of the program's tags, without pyrung's internal ones."""
         return {name: self._format_value(value) for name, value in visible_tags(tags).items()}
 
     def _format_value(self, value: Any) -> str:

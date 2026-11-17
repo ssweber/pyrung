@@ -1,47 +1,54 @@
 """Coast until a predicate holds, through the guarded scan loop.
 
-Every scan runs, in order, so a coast cannot land anywhere stepping would not.
-The coast takes an interpreted scan, and asks the loop to repeat what it has seen;
-when no known path covers the next scan, that scan is traced for next time and the
-coast takes it interpreted.  What must watch the scans is kept to the interpreted
-ones, by exits rather than by checks:
+Every scan runs, in order, so a coast cannot land anywhere that stepping would not.
+The coast runs one interpreted scan, then asks the loop to repeat scans it has seen
+before. If no known path covers the next scan, the coast traces that scan so the loop
+can repeat it next time, and then runs it interpreted. Whatever must watch the scans
+watches only the interpreted ones. The loop exits before a scan that needs watching, so
+that scan runs interpreted. Only a declared stop predicate is asked inside the loop:
 
 * A stop predicate that declares its reads is asked after each loop scan, on the
-  values the loop has just committed.  Its answer only ends the stretch: the coast
-  judges the predicate again on the real state it lands on.
-* An undeclared predicate has its reads traced (:func:`~pyrung.core.read_trace._traced_call`),
-  and the loop leaves before the scan that would change one.  So it is asked only on
-  scans a change of what it reads could matter, and it is asked on the real state.
-  An opaque one, that reads the whole state, keeps the coast interpreted.
-* A monitored tag exits before its scan, which runs interpreted and fires the monitor.
-  An enabled breakpoint keeps the coast interpreted.
+  values the loop has just committed. The answer only ends the stretch. The coast asks
+  the predicate again on the real state that it lands on.
+* For an undeclared predicate, the coast traces its reads
+  (:func:`~pyrung.core.read_trace._traced_call`). The loop leaves before a scan that
+  would change one of them. So the predicate is asked only on scans where a change to
+  its reads could matter, and it is asked on the real state. If the predicate is
+  opaque and reads the whole state, the coast stays interpreted.
+* A monitored tag makes the loop exit before its scan. That scan runs interpreted and
+  fires the monitor. An enabled breakpoint keeps the coast interpreted.
 
 Paths
 -----
 
 A loop that follows a timer leaves when something else happens, and most of what
-happens next has happened before: a program under a bang-bang hold spends its life
-moving between a few paths, each a loop of :mod:`~pyrung.core.scan_trace`.  So a
-kernel keeps its traces, and any whose constants hold can run from any state.  A
-path usually hands over to one it handed over to before, and then only the cells the
-last path moved and the cells it did not read can have broken the next one's
-constants, which is cheaper than asking every path.
+happens next has happened before. A program under a bang-bang hold spends its life
+moving between a few paths. Each path is a loop of :mod:`~pyrung.core.scan_trace`.
+So a kernel keeps its traces, and any trace whose constants hold can run from any
+state. A path usually hands over to a path that it handed over to before. Then only
+the cells that the last path moved, and the cells that it did not read, can have broken
+the next path's constants. Checking those cells is cheaper than asking every path.
 
-A coast's memo is bounded (kernels, paths per kernel, loops per path) and scoped to
-what it serves.  A search gets one of its own, so what it costs does not depend on
-what ran before it.
+A coast's memo is bounded (kernels, paths per kernel, loops per path) and belongs to
+what it serves. A search gets a memo of its own, so what the search costs does not
+depend on what ran before it.
 
 Records
 -------
 
-A stretch leaves the same index a stepped run does, so look-back needs no idea it was
-there.  The guards held, so the rungs that fired are the ones that fired on the path's
-own interpreted scan: the scan right after the trace, from the state it was traced on.
-A path fires only once it has that capture.  What a rung attempted comes from there
-too, unless it stored a moving value: a tag stored once moves as the tag does, and
-otherwise that column says ``Unknown`` for that range, which readers treat as "ask a
-replay".  Committed values come from the moves: a tag changes only by a checked delta,
-an exact flip or a float ramp, and a ramp's values say ``Unknown``.
+A stretch leaves the same index that a stepped run does, so look-back code cannot tell
+the difference. The guards held, so the rungs that fired are the rungs that fired on the
+path's own interpreted scan. That scan is the one right after the trace, from the state
+the trace was made on. A path fires only once it has that capture.
+
+What a rung attempted also comes from the capture. The exception is a rung that stored
+a moving value. If the rung stored the tag once and the path moves or holds the tag, the
+rung's column moves as the tag does. Otherwise, for example when the rung stored the tag
+more than once, the column says ``Unknown`` for that range. Readers treat ``Unknown`` as
+"ask a replay".
+
+Committed values come from the moves. A tag changes only by a checked delta, an exact
+flip or a float ramp, and a ramp's values say ``Unknown``.
 """
 
 from __future__ import annotations
@@ -89,74 +96,83 @@ if TYPE_CHECKING:
     from pyrung.core.kernel import CompiledKernel
     from pyrung.core.runner import PLC
 
-# A stretch checkpoints this many intervals apart.  What a checkpoint saves is run-up through
-# the compiled kernel, about 60 us a scan, and what it costs is a state and a force map kept.
+# A stretch checkpoints this many intervals apart.  A checkpoint saves the run-up through the
+# compiled kernel, about 60 us a scan.  It costs one kept state and one kept force map.
 STRETCH_CHECKPOINT_INTERVALS = 10
-# Checkpoints a coasting runner keeps, thinned when it passes this.  The budgets that call a
-# coast bound its scans; this bounds what they leave, however long the seek was allowed to be.
+# Checkpoints a coasting runner keeps.  It thins them when it passes this number.  The budgets
+# that call a coast limit its scans.  This limits the checkpoints those scans leave, however
+# long the seek was allowed to be.
 MAX_CHECKPOINTS = 512
-# Record runs a runner holds before its stretches leave their scans to be settled when asked.
-# A rung that fires every other scan costs a run each time, about 140 bytes.  The longest route
-# in the tumbler reaches 78,000.
+# Record runs a runner holds.  Past this, a stretch leaves its scans unrecorded.  A question
+# that reaches those scans settles them.  A rung that fires every other scan costs one run
+# each time, about 140 bytes.  The longest route in the tumbler reaches 78,000.
 MAX_RECORD_RUNS = 1_000_000
-# Kernels a memo keeps with their paths, least recently asked for out first.  Each is a
-# compiled module and a parsed source, about 23 MB on a large program.  12 peaked at 1,000 MB
-# on the tumbler and 2 at 677 MB, with no more time spent compiling than it saves.
+# Kernels a memo keeps with their paths.  It drops the least recently asked for first.  Each
+# kernel is a compiled module and a parsed source, about 23 MB on a large program.  A limit of
+# 12 peaked at 1,000 MB on the tumbler.  A limit of 2 peaked at 677 MB, and the extra
+# compiling cost no more time than it saved.
 MAX_KERNELS = 2
-# Paths a kernel keeps, least recently fired out first.  A path holds its trace's
+# Paths a kernel keeps.  It drops the least recently fired first.  A path holds its trace's
 # operations and each loop written from them.
 MAX_PATHS = 256
-# Columns kept by content in one kernel, so two paths that record the same are seen to agree.
+# Columns that one kernel keeps by content.  Two paths that record the same column share one
+# object, so they are seen to agree.
 MAX_INTERNED = 4096
 MAX_LOOPS_PER_PATH = 8
 MAX_SUCCESSORS = 4
-# Segments in the longest cycle a stretch's record looks for.  Under a bang-bang hold the paths
-# take turns, and a slow timer can bring the same turns round again every hundred scans.  The
-# first few cycles go in scan by scan, and the rest go in as one repeat.
+# Segments in the longest cycle that a stretch's record looks for.  Under a bang-bang hold the
+# paths take turns, and a slow timer can bring the same turns round again every hundred scans.
+# The first few cycles go in scan by scan.  The rest go in as one repeat.
 MAX_CYCLE_SEGMENTS = 128
-# The cycles that go in scan by scan first, which the timelines check for the same shape.
+# The cycles that go in scan by scan first.  The timelines check these for the same shape.
 WARM_CYCLES = 3
-# The fewest scans a repeat must save.  Each repeat splits the scan by scan record around it,
-# and a split costs about as much as recording seventy scans.
+# The fewest scans a repeat must save.  Each repeat splits the scan by scan record around it.
+# A split costs about as much as recording seventy scans.
 MIN_REPEAT_SCANS = 256
-# Interpreted scans between attempts at a stretch: at entry and after a good stretch,
-# and how far apart they may get when stretches do not come or do not last.
+# Interpreted scans between attempts at a stretch.  ENTRY_WAIT applies at entry and after a
+# good stretch.  The other two limits say how far apart the attempts may get when stretches
+# do not come, or do not last.
 ENTRY_WAIT = 2
 MAX_WAIT_AFTER_SHORT = 64
 MAX_WAIT_AFTER_NONE = 256
 # A stretch this long paid for its entry into the kernel.
 PAYING_STRETCH = 16
-# how()'s ledger prices a wait's scans by where they fall in it, never by which engine ran
-# them, so a change to the loop cannot change what a search may spend.  The first two scans
-# and the landing cost a unit each.  The search reads its answers from them.  The scans
-# between cost a hundredth each.  A wait no loop may ever run costs a unit a scan, because
-# every scan of it is interpreted.  Such a wait has one of these:
-# - a program with no kernel (it writes a read-only system tag, a run_function() in it or in
-#   the overlay keeps state, or it does not compile).  A Modbus send or receive keeps the
-#   kernel here, because how()'s forks never talk to the device.
-# - a runner the loop refuses (not fixed-step, a breakpoint, a force, a watched tag moving
-#   without a write)
+# how()'s ledger prices a wait's scans by where they fall in the wait.  It never prices them
+# by which engine ran them, so a change to the loop cannot change what a search may spend.
+# The first two scans and the landing cost a unit each, because the search reads its answers
+# from them.  The scans between cost a hundredth each.  A wait that no loop may ever run
+# costs a unit a scan, because every scan of it is interpreted.  A wait is like that when it
+# has one of these:
+# - a program with no kernel.  It writes a read-only system tag, or it has a run_function()
+#   in it or in the overlay that keeps state, or it does not compile.  A Modbus send or
+#   receive still has a kernel, because how()'s forks never talk to the device.
+# - a runner that the loop refuses (not fixed-step, a breakpoint, a force, or a watched tag
+#   that moves without a write)
 # - a stop predicate whose reads the loop cannot watch
 # The price is settled after the first scans, before the loop's first try.  The first try
-# comes after ENTRY_WAIT scans, so ENTRY_WAIT must not be less.  A stop predicate may come to
-# read what the loop cannot watch later in the wait.  Each scan from there costs a unit.
+# comes after ENTRY_WAIT scans, so ENTRY_WAIT must not be less than UNIT_SCANS_AT_START.  A
+# stop predicate may start to read something the loop cannot watch later in the wait.  Each
+# scan from then on costs a unit.
 UNIT_SCANS_AT_START = 2
-# What a loop run does with the cycle its paths repeat.  "off" ignores it.  "shadow" predicts
-# how many cycles repeat exactly, and checks each scan the loop then runs against that.
-# "jump" predicts too, and moves the state over the cycles predicted without running them.
+# What a loop run does with the cycle that its paths repeat.  "off" ignores the cycle.
+# "shadow" predicts how many cycles repeat exactly, and checks each scan the loop then runs
+# against that prediction.  "jump" predicts the same way, and then moves the state over the
+# predicted cycles without running them.
 CYCLE_PREDICTIONS = "jump"
-# Whether a prediction the scans disagree with raises.  tests/fold_check.py sets it.
+# Whether a prediction that the scans disagree with raises an error.  tests/fold_check.py
+# sets it.
 STRICT_CYCLE_CHECK = False
-# The most cycles one prediction looks ahead, and the longest cycle in scans it is made for.
-# Each scan of a cycle is run once on forms, and each clock or RTC value once per cycle.
+# The most cycles one prediction looks ahead, and the longest cycle in scans that it is made
+# for.  A prediction runs each scan of a cycle once on forms, and each clock or RTC value once
+# per cycle.
 MAX_PREDICTED_CYCLES = 4096
 MAX_PREDICTED_PERIOD = 1024
-# The most cycles a loop run waits to predict again after a prediction it could not make.
+# The most cycles a loop run waits before it tries again, after a prediction it could not make.
 MAX_PREDICTION_WAIT = 64
-# The most stop predicate answers a prediction keeps, so its memory stays small.
+# The most stop predicate answers that a prediction keeps.  The limit keeps its memory small.
 MAX_KEPT_ANSWERS = 1024
-# A coast traces a new path only with this many loop scans of room left.  A shorter stretch
-# saves less time than a trace costs.
+# A coast traces a new path only when at least this many loop scans of room are left.  A
+# shorter stretch saves less time than the trace costs.
 TRACE_ROOM = PAYING_STRETCH
 
 
@@ -166,7 +182,8 @@ class _Loop:
     moves: CoastMoves
     must_be_present: tuple[str, ...]
     shape: LoopShape
-    # The iteration on forms, written when a prediction first needs it.  None if it cannot be.
+    # The iteration on forms.  It is written when a prediction first needs it, and is None if
+    # it cannot be written.
     on_forms: cycle_jump.Iteration | None | bool = False
 
 
@@ -183,12 +200,14 @@ def _on_forms(loop: _Loop) -> cycle_jump.Iteration | None:
 class _Recording:
     """What a path's scans record in one rung's column."""
 
-    # What every scan of the path says, a tag no one capture can speak for reading Unknown.
+    # What every scan of the path says.  A tag that no single capture can speak for reads
+    # Unknown.
     settled: dict[str, Any]
-    # A segment's end says the rest: (tag, how far it moves a scan or None if held, varied).
+    # The values of the other tags come from the segment's end.  Each entry is (tag, how far it
+    # moves a scan or None if held, varied).
     from_ends: tuple[tuple[str, int | None, bool], ...]
     varied: frozenset[str]
-    # What a rung's column has to change, coming here from another recording of it.
+    # What a rung's column has to change when it comes here from another recording of it.
     changes: dict[_Recording, list[tuple[str, Any, bool]]] = field(default_factory=dict)
 
 
@@ -197,24 +216,29 @@ class _Capture:
     """What one interpreted scan of a path recorded, by rung and by subroutine rung."""
 
     columns: tuple[dict[Any, tuple[dict[str, Any], frozenset[str]]], ...]
-    # Those with nothing moving in them, which every scan of the path repeats.
+    # The columns with nothing moving in them.  Every scan of the path repeats these.
     settled: tuple[dict[Any, tuple[dict[str, Any], frozenset[str]]], ...]
     recordings: tuple[dict[Any, _Recording], ...]
 
 
 @dataclass(eq=False)
 class _Path:
-    """A trace a coast may fire, what it has written of it, and what tends to follow."""
+    """A trace that a coast may fire, with the loops written from that trace.
+
+    A path also lists the paths that tend to follow it.
+    """
 
     trace: ScanTrace
-    # Every tag its scans write, moving or not: a block cell rewritten with its own
-    # value still appears in the state, the first time.
+    # Every tag its scans write, moving or not.  A block cell rewritten with its own value
+    # still appears in the state the first time.
     written: frozenset[str]
     moves: CoastMoves
-    # The moved and held tags with their cells, to read where a stretch left them.
+    # The moved and held tags with their cells.  A stretch reads these to find where it left
+    # them.
     ending: tuple[tuple[str, tuple[Any, ...]], ...]
     stores: dict[str, tuple[int, int]]
-    # rung and node -> (writes, varied), from the path's interpreted scan.  None until it ran.
+    # Maps a rung and node to (writes, varied), taken from the path's interpreted scan.  It is
+    # None until that scan has run.
     capture: _Capture | None = None
     loops: dict[tuple[frozenset[str], frozenset[str]], _Loop] = field(default_factory=dict)
     # Paths that followed this one, most recent first, each with the constants to check.
@@ -229,28 +253,30 @@ class _KernelPaths:
     paths: list[_Path] = field(default_factory=list)  # most recently fired last
     seeds: set[tuple[Any, ...]] = field(default_factory=set)
     off: str | None = None
-    # One object per distinct column, so paths that agree share it and compare by identity.
+    # One object per distinct column.  Paths that agree share it, and compare it by identity.
     interned: dict[Any, tuple[dict[str, Any], frozenset[str]]] = field(default_factory=dict)
-    # Likewise a column as a path records it, so scans in a row that say the same are seen to.
+    # The same for a column as a path records it, so that consecutive scans that say the same
+    # are seen to agree.
     recordings: dict[Any, _Recording] = field(default_factory=dict)
-    # The columns a set of paths have in common, as a stretch moves between them.
+    # The columns that a set of paths have in common, for a stretch that moves between them.
     common: dict[frozenset[_Path], tuple[frozenset[Any], ...]] = field(default_factory=dict)
 
 
 @dataclass(eq=False)
 class CoastMemo:
-    """What coasts keep for the coasts after them.  One a search, inherited by its forks."""
+    """Holds what a coast keeps for later coasts.  A search has one, and its forks inherit it."""
 
-    # Keeps the program and the overlay rungs alive, so an id cannot be reused under it.  None
-    # is a program with no kernel, so that each fork does not try to compile it again.
+    # Each value also holds the program and the overlay rungs, so their ids cannot be reused
+    # while the entry exists.  A kernel of None means the program has no kernel, so that each
+    # fork does not try to compile it again.
     kernels: dict[tuple[Any, ...], tuple[CompiledKernel | None, Any]] = field(default_factory=dict)
     paths: dict[int, _KernelPaths] = field(default_factory=dict)
     compiles: int = 0
     traces: int = 0
     counts: Counter[str] = field(default_factory=Counter)
-    # Raises when the search has to stop.  Asked between scans and between fires.
+    # Raises when the search has to stop.  The coast calls it between scans and between fires.
     check_limits: Callable[[], None] | None = None
-    # What the search's ledger has left, in units (see UNIT_SCANS_AT_START).
+    # The units that the search's ledger has left (see UNIT_SCANS_AT_START).
     work_left: Callable[[], int] | None = None
 
 
@@ -262,7 +288,7 @@ def memo_of(plc: PLC) -> CoastMemo:
 
 
 def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
-    """The kernel of this runner's program and overlay.  A fork need not compile it again."""
+    """Return the kernel of this runner's program and overlay, so a fork need not compile it."""
     cached = plc._compiled_replay_kernel
     if cached is False:
         return None
@@ -271,7 +297,8 @@ def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
     synthesis = plc._synthesis
     plant = () if synthesis is None else tuple(synthesis.plant)
     holds = () if synthesis is None else tuple(synthesis.holds)
-    # A how() fork may run a kernel its session is refused (a live send() or receive()).
+    # A how() fork may run a kernel that its session is refused, because of a live send() or
+    # receive().
     key = (id(plc._program), tuple(map(id, plant)), tuple(map(id, holds)), plc._modbus_stubbed)
     entry = memo.kernels.pop(key, None)
     if entry is not None:
@@ -282,7 +309,7 @@ def _kernel_for(plc: PLC, memo: CoastMemo) -> CompiledKernel | None:
     memo.compiles += 1
     memo.kernels[key] = (kernel, (plc._program, plant, holds))
     if len(memo.kernels) > MAX_KERNELS:
-        # A program with no kernel goes first.  Keeping it saves only a compile that fails.
+        # Drop a program with no kernel first.  Keeping it saves only a compile that fails.
         unused = (k for k, (cached, _keep) in memo.kernels.items() if cached is None)
         memo.kernels.pop(next(unused, next(iter(memo.kernels))))
     return kernel
@@ -355,7 +382,8 @@ class _CoastLoop(ScanLoop):
         assert plan is not None
         moves = coast_moves(plan, names)
         for path in kept:
-            # The state was left out for a reason of this stretch: a read, a watch.
+            # The trace left the state out for a reason that belongs to this stretch, such as a
+            # read or a watch.
             if (
                 path.trace.constants == trace.constants
                 and path.trace.source == trace.source
@@ -373,7 +401,7 @@ class _CoastLoop(ScanLoop):
         wanted = {name for name, _delta in moves.moved} | set(moves.held)
         ending = tuple((name, key) for key, name in moving.items() if name in wanted)
         stores = {
-            # One attempt at a tag that does not move: what it computes is what the tag holds.
+            # A tag that does not move and is stored once holds what that store computes.
             tag: (total, 0 if total == 1 and tag not in written else symbolic)
             for tag, (total, symbolic) in attempted_stores(plan, names).items()
         }
@@ -391,7 +419,7 @@ def _forget(paths: list[_Path], path: _Path, kernel_paths: _KernelPaths) -> None
 
 
 def _capture_of(plc: PLC, path: _Path, kernel_paths: _KernelPaths, scan_id: int) -> _Capture:
-    """Take a path's columns from the interpreted scan just run on it."""
+    """Return a path's columns, taken from the interpreted scan that just ran on it."""
     moving = {tag for tag, (_total, symbolic) in path.stores.items() if symbolic}
     interned = kernel_paths.interned
     columns = []
@@ -404,11 +432,11 @@ def _capture_of(plc: PLC, path: _Path, kernel_paths: _KernelPaths, scan_id: int)
         for key, fired in timelines.at(scan_id).items():
             writes = dict(fired)
             varied = frozenset(tag for tag in writes if timelines.varied_on(key, tag, scan_id))
-            # By repr, or 1 and True would be one column.
+            # Compare by repr, because 1 and True would otherwise make one column.
             identity = (key, repr(sorted(writes.items())), varied)
             if identity not in interned and len(interned) >= MAX_INTERNED:
-                interned.clear()  # Paths held from before no longer agree with new ones: a
-                #                   record run breaks where it need not, and nothing else.
+                interned.clear()  # Paths from before no longer share columns with new ones, so
+                #                   a record run breaks where it need not.  Nothing else changes.
             column = interned.setdefault(identity, (writes, varied))
             these[key] = column
             recorded[key] = _recording_of(path, column, kernel_paths)
@@ -423,7 +451,7 @@ def _capture_of(plc: PLC, path: _Path, kernel_paths: _KernelPaths, scan_id: int)
 def _recording_of(
     path: _Path, column: tuple[dict[str, Any], frozenset[str]], kernel_paths: _KernelPaths
 ) -> _Recording:
-    """How one rung's capture speaks for every scan of its path."""
+    """Return what one rung's capture says about every scan of its path."""
     writes, varied = column
     deltas = dict(path.moves.moved)
     held = set(path.moves.held)
@@ -433,13 +461,14 @@ def _recording_of(
     for tag, value in writes.items():
         total, symbolic = path.stores.get(tag, (0, 0))
         if not symbolic:
-            settled[tag] = value  # every attempt on this path is a constant
+            settled[tag] = value  # every attempt on this path stores a constant
         elif total == 1 and tag in deltas and tag in ending:
             from_ends.append((tag, deltas[tag], tag in varied))
         elif total == 1 and tag in held and tag in ending:
             from_ends.append((tag, None, tag in varied))
         else:
-            # Which attempt a rung made, or its value on a later scan, no one capture says.
+            # No single capture says which attempt a rung made, or what its value is on a later
+            # scan.
             settled[tag] = _UNKNOWN_VALUE
             if total > 1:
                 varied |= {tag}
@@ -447,7 +476,8 @@ def _recording_of(
     found = kernel_paths.recordings.get(identity)
     if found is None:
         if len(kernel_paths.recordings) >= MAX_INTERNED:
-            kernel_paths.recordings.clear()  # A run breaks where it need not, and nothing else.
+            # A run breaks where it need not.  Nothing else changes.
+            kernel_paths.recordings.clear()
         found = _Recording(settled, tuple(from_ends), varied)
         kernel_paths.recordings[identity] = found
     return found
@@ -456,7 +486,7 @@ def _recording_of(
 def _common_columns(
     segments: list[_Segment], kernel_paths: _KernelPaths
 ) -> tuple[frozenset[Any], ...]:
-    """The columns every path of these segments repeats unchanged, by rung and node."""
+    """Return the columns that every path of these segments repeats, by rung and node."""
     paths = frozenset(segment.path for segment in segments)
     if len(paths) == 1:
         capture = segments[0].path.capture
@@ -485,9 +515,9 @@ def _common_columns(
 def _record_segments(
     plc: PLC, segments: list[_Segment], kernel_paths: _KernelPaths
 ) -> list[tuple[int, int, int]]:
-    """Write what a stretch's scans did into the three timelines a stepped run writes.
+    """Write what a stretch's scans did into the three timelines that a stepped run writes.
 
-    Returns the runs of repeating cycles found, as :func:`_cycles_in` does.
+    Return the runs of repeating cycles found, as :func:`_cycles_in` does.
     """
     if not segments:
         return []
@@ -508,14 +538,14 @@ def _record_segments(
         end = lead + cycles * length
         at = lead + WARM_CYCLES * length
         misses = 0
-        # A column may not repeat yet, or a plan may stop short of a column's last entry.
-        # One cycle more goes in scan by scan before the next plan.
+        # A column may not repeat yet, or a plan may stop short of a column's last entry.  So
+        # one more cycle goes in scan by scan before the next plan.
         while at + length <= end and misses < WARM_CYCLES:
             unknown = sum(len(timelines._unknown_keys) for timelines in timelines_held)
             _record_scan_by_scan(plc, segments[cursor:at], kernel_paths)
             cursor = at
-            # A column that just went unknown takes a cycle or two to repeat.  So the misses
-            # start again from none, and this cycle's decline is not one.
+            # A column that just went unknown takes a cycle or two to repeat.  So reset the
+            # misses to none, and do not count this cycle's decline as a miss.
             went_unknown = unknown < sum(
                 len(timelines._unknown_keys) for timelines in timelines_held
             )
@@ -540,24 +570,25 @@ def _record_segments(
 
 
 def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
-    """Runs of segments that repeat a cycle, as (first, segments a cycle, cycles), in order.
+    """Return the runs of segments that repeat a cycle, in order.
 
-    A segment's records follow from three things.  These are its path, its count and the values
-    it left in the tags it moves.  Segments a cycle apart must have the same path and count.
-    Each whole number they left must differ by the same amount on every cycle, and any other
-    value must be the same.  Then the records of each cycle are those of the cycle before,
-    with each whole number moved by that amount.  A run must save ``MIN_REPEAT_SCANS``,
-    since each run splits the scan by scan record that batches the rest.
+    Each run is (first, segments a cycle, cycles).  A segment's records follow from three
+    things: its path, its count and the values it left in the tags it moves.  Segments a cycle
+    apart must have the same path and count.  Each whole number they left must differ by the
+    same amount on every cycle, and any other value must be the same.  Then the records of
+    each cycle are those of the cycle before, with each whole number moved by that amount.
+    A run must save ``MIN_REPEAT_SCANS``, because each run splits the scan by scan record
+    that batches the rest.
     """
     found: list[tuple[int, int, int]] = []
     count = len(segments)
     # Comparing paths and counts as lists is cheap, so it goes first.  The ends are compared
-    # only for a run long enough to use.
+    # only for a run that is long enough to use.
     keys = [(id(segment.path), segment.count) for segment in segments]
     least = WARM_CYCLES + 2
-    # Where the keys stop repeating every so many segments, found from some earlier first.
-    # Keys that repeat from that first repeat from any later one too, up to the same end.
-    # Without this, a long run of repeating keys is walked again from each first.
+    # Maps a cycle length to where the keys stop repeating at that length, found from some
+    # earlier first.  Keys that repeat from that first also repeat from any later first, up to
+    # the same end.  Without this, a long run of repeating keys is walked again from each first.
     known: dict[int, tuple[int, int]] = {}
     first = 0
     while first + least <= count:
@@ -593,7 +624,7 @@ def _cycles_in(segments: list[_Segment]) -> list[tuple[int, int, int]]:
 
 
 def _periodic_end(keys: list[Any], first: int, length: int) -> int:
-    """Where the keys from *first* stop repeating every *length*."""
+    """Return where the keys from *first* stop repeating every *length*."""
     count = len(keys)
     end = first + length
     stride = length
@@ -615,7 +646,7 @@ def _periodic_end(keys: list[Any], first: int, length: int) -> int:
 
 
 def _stepping_end(segments: list[_Segment], first: int, length: int, stop: int) -> int:
-    """Where the segments from *first* stop leaving ends that step the same each cycle."""
+    """Return where the segments from *first* stop leaving ends that step the same each cycle."""
     steps = []
     for position in range(first + length, stop):
         found = _end_steps(segments[position - length], segments[position])
@@ -629,7 +660,11 @@ def _stepping_end(segments: list[_Segment], first: int, length: int, stop: int) 
 
 
 def _end_steps(one: _Segment, other: _Segment) -> tuple[int, ...] | None:
-    """How far each whole number *other* left moved from *one*, or None if another value moved."""
+    """Return how far each whole number moved from *one* to *other*.
+
+    Return None if the paths or counts differ, or if any end value changed other than by a
+    whole-number step.
+    """
     if one.path is not other.path or one.count != other.count:
         return None
     steps = []
@@ -660,8 +695,8 @@ def _record_scan_by_scan(plc: PLC, segments: list[_Segment], kernel_paths: _Kern
         return
     start = segments[0].first
     total = sum(segment.count for segment in segments)
-    # A stretch that ran through several paths without a gap: a rung they all repeat
-    # goes in once, which is most of them under a bang-bang hold.
+    # A stretch can run through several paths without a gap.  A rung that they all repeat goes
+    # in once.  Under a bang-bang hold that is most of the rungs.
     common = _common_columns(segments, kernel_paths)
     first_capture = segments[0].path.capture
     assert first_capture is not None
@@ -683,24 +718,26 @@ class _ColumnRuns:
         self.first = 0
         self.last = 0
         self.recording: _Recording | None = None
-        # tag -> [value on its first scan, delta, its first scan, varied, value on its second
-        # scan if it switches every scan, else _ABSENT].  A run goes on until something says
-        # otherwise, so a tag no path moves is looked at only when it changes.
+        # Maps a tag to [value on its first scan, delta, its first scan, varied, value on its
+        # second scan if it switches every scan, else _ABSENT].  A run goes on until something
+        # says otherwise, so a tag that no path moves is looked at only when it changes.
         self.runs: dict[str, list[Any]] = {}
-        # Each tag whose run switches between two values every scan, and the last scan that
-        # switched it.  A segment that leaves the tag alone holds its value, which ends the run.
+        # Maps each tag whose run switches between two values every scan to the last scan that
+        # switched it.  A segment that leaves the tag alone holds its value, and that ends the
+        # run.
         self.turns: dict[str, int] = {}
 
 
 def _record_columns(
     timelines: Any, segments: list[_Segment], level: int, common: frozenset[Any]
 ) -> None:
-    """The rungs some paths of a stretch fire and others do not, or fire differently.
+    """Write the columns of the rungs that some paths of a stretch fire and others do not.
 
-    Under a bang-bang hold a path changes nearly every scan while nearly every tag does not.
-    Each tag of each column keeps a run, and a segment touches only the tags it moves or its
-    recording changes.  A run is one :meth:`~RungFiringTimelines.append_tag_run`, which lands
-    as appending its scans one by one would, and columns are independent of each other.
+    This also covers rungs that the paths fire differently.  Under a bang-bang hold a path
+    changes nearly every scan, while nearly every tag does not.  Each tag of each column keeps
+    a run.  A segment touches only the tags that it moves or that its recording changes.  A
+    run is one :meth:`~RungFiringTimelines.append_tag_run`, which gives the same result as
+    appending its scans one by one.  The columns are independent of each other.
     """
     columns_of: dict[_Path, list[tuple[Any, _Recording]]] = {}
     columns: dict[Any, _ColumnRuns] = {}
@@ -744,7 +781,7 @@ def _record_columns(
                         (tag, value, tag in recording.varied)
                         for tag, value in recording.settled.items()
                     ]
-                    # Its next firing says a tag this rung once wrote and now does not.
+                    # The rung's next firing records a tag that it once wrote and now does not.
                     written = {tag for tag, _delta, _varied in recording.from_ends}
                     changes += [
                         (tag, _MISSING_WRITE, False)
@@ -794,12 +831,12 @@ def _put_run(
     first: int,
     count: int,
 ) -> None:
-    """Carry the tag's run on to a segment of *count* scans from *first*, or start a new one.
+    """Carry the tag's run on to a segment of *count* scans from *first*, or start a new run.
 
-    A tag that switches between two values every scan keeps one run, since one call records
-    it as appending each scan would.  A run goes on only through values :func:`same` as its
-    own, not just equal ones like 1 and 1.0.  A run's value may start a range on a later
-    scan, and stepping starts it with the value that scan wrote.
+    A tag that switches between two values every scan keeps one run, because one call records
+    it as appending each scan would.  A run goes on only through values that are :func:`same`
+    as its own, not just equal ones like 1 and 1.0.  A run's value may start a range on a
+    later scan, and stepping starts it with the value that scan wrote.
     """
     runs = column.runs
     run = runs.get(tag)
@@ -824,7 +861,7 @@ def _put_run(
 
 
 def _changes_between(before: _Recording, after: _Recording) -> list[tuple[str, Any, bool]]:
-    """What a column's tags go to when it goes from *before* to *after*."""
+    """Return what a column's tags change to when it goes from *before* to *after*."""
     changes: list[tuple[str, Any, bool]] = []
     for tag, value in after.settled.items():
         varied = tag in after.varied
@@ -849,10 +886,10 @@ _FLIPS = object()
 
 
 def _record_committed(committed: Any, segments: list[_Segment]) -> None:
-    """What each tag committed.  A tag moving on one line goes in as one run.
+    """Write what each tag committed.  A tag moving on one line goes in as one run.
 
-    So does a tag that flips between two values every scan, since one call records it as
-    appending each scan would.
+    A tag that flips between two values every scan also goes in as one run, because one call
+    records it as appending each scan would.
     """
     # A run is [delta, base, first, last, odd].  A delta of None marks a run whose values no
     # record can say.  A delta of _FLIPS marks a run of flips.  It commits base on its first
@@ -927,8 +964,8 @@ def _note_successor(first: _Path, then: _Path) -> None:
         if entry[0] is then:
             successors.insert(0, successors.pop(position))
             return
-    # A constant of the first path stays put while it fires, and it held at the value
-    # *then* wants the time this was noted, so only the others need asking.
+    # A constant of the first path stays put while that path fires, and it held the value that
+    # *then* wants at the time this was noted.  So only the other constants need checking.
     constants = {key for key, _value in first.trace.constants}
     check = tuple(
         (key, value)
@@ -949,7 +986,8 @@ class _Segment:
     ends: dict[str, Any]
 
 
-# The cells the scan hooks read between scans.  A jump skips those reads, so none may move.
+# The cells that the scan hooks read between scans.  A jump skips those reads, so none of
+# these cells may move.
 _HOOK_CELLS = frozenset(
     [("tags", name) for name in (*HOOK_BOUND_TAG_NAMES, _SD_EJECT_NAME, _SD_DELETE_ALL_NAME)]
     + [("memory", key) for key in _SCAN_START_MEMORY_KEYS]
@@ -967,29 +1005,29 @@ def _set_cell(kernel: Any, key: tuple[Any, ...], value: Any) -> None:
 
 
 class CycleMismatch(scan_trace.SelfCheckMismatch):
-    """The scans the loop ran disagree with a prediction of their cycle."""
+    """Raised when the scans that the loop ran disagree with a prediction of their cycle."""
 
 
 class _CycleWatch:
-    """Follows the loop's segments through the cycle they repeat, and its prediction."""
+    """Follows the loop's segments through the cycle that they repeat, and its prediction."""
 
     def __init__(self) -> None:
         self.keys: list[tuple[_Path, int]] = []
         self.cycle: list[tuple[_Path, int]] | None = None
-        self.phase = -1  # segments of the cycle since it last began, or -1 when lost
+        self.phase = -1  # segments of the cycle since it last began, or -1 when it is lost
         self.prediction: cycle_jump.Prediction | None = None
         self.start_scan = 0
-        # The timestamp the scans since the prediction reached, and at which scan.
+        # Pairs a scan since the prediction with the timestamp that the scans had reached by then.
         self.time_mark = (0, 0.0)
-        self.ends: dict[int, int] = {}  # scans into a cycle -> the segment that ends there
+        self.ends: dict[int, int] = {}  # maps scans into a cycle to the segment that ends there
         self.wait_until = 0
         self.wait = 1
-        self.names: dict[tuple[Any, ...], str] = {}  # the cells the stop predicate reads
-        self.hooked = False  # whether a moving cell is one a scan hook reads
+        self.names: dict[tuple[Any, ...], str] = {}  # the cells that the stop predicate reads
+        self.hooked = False  # whether a moving cell is one that a scan hook reads
         self.cut = False  # whether something ended the prediction before its horizon
 
     def note(self, segment: _Segment) -> bool:
-        """Follow one more segment.  True if it ends a cycle."""
+        """Follow one more segment.  Return True if it ends a cycle."""
         key = (segment.path, segment.count)
         keys = self.keys
         keys.append(key)
@@ -1010,7 +1048,7 @@ class _CycleWatch:
         return False
 
     def found(self, segments: list[_Segment], runs: list[tuple[int, int, int]]) -> bool:
-        """Take the cycle of the last run if the segments end in it.  True if they end one."""
+        """Take the cycle of the last run if the segments end in it.  Return True if they end it."""
         if self.phase >= 0 or not runs:
             return False
         lead, length, cycles = runs[-1]
@@ -1026,13 +1064,13 @@ class _CycleWatch:
 
 
 class _NotDeclared(Exception):
-    """A declared stop predicate read something it did not declare."""
+    """Raised when a declared stop predicate reads something that it did not declare."""
 
 
 class _Seen(dict[str, Any]):
     """The committed tags a declared predicate reads, as a loop stretch moves them.
 
-    Reading anything else raises, which ends the stretch: the real state answers.
+    Reading anything else raises an error.  That ends the stretch, and the real state answers.
     """
 
     __slots__ = ("_reads",)
@@ -1080,11 +1118,12 @@ class _SeenState:
 
 
 def _moves_a_watched_tag(path: _Path, watched: frozenset[str]) -> bool:
-    """Whether this path's records say a scan moves a tag its watched loop holds still.
+    """Return whether this path's records say that a scan moves one of the *watched* tags.
 
-    A watched tag's loop leaves before the tag changes, so every scan it runs holds the tag,
-    and the path's records (``path.moves``, the capture) are of a scan that moved it.  A path
-    of a scan that holds the tag covers those scans, and records them as they ran.
+    The loop for a watched tag leaves before the tag changes, so every scan that the loop runs
+    keeps the tag unchanged.  The path's records (``path.moves``, the capture) are of a scan
+    that moved the tag.  A path of a scan that keeps the tag unchanged covers those scans, and
+    records them as they ran.
     """
     if not watched:
         return False
@@ -1130,11 +1169,11 @@ def _try_stretch(
     limit: int,
     run: jit_stats.Run | None = None,
 ) -> tuple[int, _Path | None]:
-    """Run loop scans from the tip while a known path covers each.
+    """Run loop scans from the tip for as long as a known path covers each scan.
 
-    Returns how many, and the path of the scan to come if one wants its capture.  A scan
-    no known path covers is traced here, so its next occurrence stays in the loop, and
-    left for the coast to run interpreted.
+    Return how many scans ran, and the path of the next scan if that path wants its capture.
+    If no known path covers a scan, trace it here so that its next occurrence stays in the
+    loop, and leave it for the coast to run interpreted.
     """
     overrides = plc._input_overrides
     if overrides.pending_patches or overrides.forces:
@@ -1191,24 +1230,26 @@ def _try_stretch(
     previous: _Path | None = None
     burst = 0
     segments: list[_Segment] = []
-    # What ended the last firing and whether a guard did, while the jit counters count.
+    # What ended the last firing, and whether a guard did.  Only set while the jit counters
+    # count.
     left_by: tuple[str, bool] | None = None
     watch = _CycleWatch() if CYCLE_PREDICTIONS != "off" else None
     checking = CYCLE_PREDICTIONS == "shadow" or STRICT_CYCLE_CHECK
 
     asked_on: dict[Any, bool] = {}
     # The cycles, by their paths and scans, whose predictions show the predicate a moving value
-    # on most scans.  It holds the paths themselves, so a forgotten path's id is not reused.
+    # on most scans.  The set holds the paths themselves, so a forgotten path's id is not reused.
     asks_too_often: set[tuple[tuple[_Path, int], ...]] = set()
-    # The tags a prediction shows the predicate.  One copy serves every ask, as ``seen`` does.
-    # Each ask sets the same cells, so the tags it does not set stay as ``seen`` holds them.
+    # The tags that a prediction shows the predicate.  One copy serves every ask, as ``seen``
+    # does.  Each ask sets the same cells, so the tags that it does not set stay as ``seen``
+    # holds them.
     shown = _Seen({}, declared)
     shown_state = _SeenState(shown)
 
     def stops_on(values: Any, names: dict[tuple[Any, ...], str]) -> bool:
-        # A prediction asks about the same values on many scans, so each answer is kept until
-        # the next prediction.  The predicate's other tags may change before the next prediction.
-        # Values that move with the cycle are seldom asked twice, so the answers kept are few.
+        # A prediction asks about the same values on many scans, so keep each answer until the
+        # next prediction.  The predicate's other tags may change before the next prediction.
+        # Values that move with the cycle are seldom asked twice, so few answers are kept.
         key = None
         if len(asked_on) < MAX_KEPT_ANSWERS:
             try:
@@ -1229,7 +1270,7 @@ def _try_stretch(
         return answer
 
     def predict_cycle() -> None:
-        """Predict the cycle that ends here, or wait a while before asking again."""
+        """Predict the cycle that ends here, or wait a while before trying again."""
         assert watch is not None and watch.cycle is not None
         steps: list[cycle_jump.Step] = []
         names: dict[tuple[Any, ...], str] = {}
@@ -1280,7 +1321,7 @@ def _try_stretch(
         if isinstance(found, str):
             if found == cycle_jump.ASKS_TOO_OFTEN:
                 # Later tries of the same paths skip the prediction.  Each try runs the cycle
-                # once symbolically, and the same paths almost always decline the same way.
+                # once symbolically, and the same paths almost always decline in the same way.
                 asks_too_often.add(shape)
             memo.counts[f"cycle prediction declined: {found}"] += 1
             if run is not None:
@@ -1306,7 +1347,7 @@ def _try_stretch(
         memo.counts["cycles predicted"] += found.cycles
 
     def check_prediction() -> None:
-        """Compare the state a firing left with what the prediction says it is."""
+        """Compare the state that a firing left with the state that the prediction expects."""
         assert watch is not None and watch.prediction is not None
         prediction = watch.prediction
         scan_id = state_kernel.scan_id
@@ -1351,8 +1392,9 @@ def _try_stretch(
     def used_up() -> None:
         """Drop a prediction whose cycles have all run.
 
-        A change that ended it before its horizon starts on this cycle, so a prediction here
-        would decline.  The next try then waits for the cycle after.
+        If something ended the prediction before its horizon, the change that did so starts on
+        this cycle, so a new prediction here would decline.  The next try then waits for the
+        cycle after.
         """
         assert watch is not None
         if watch.cut:
@@ -1370,10 +1412,10 @@ def _try_stretch(
         watch.prediction = None
 
     def jump() -> None:
-        """Move the state over the predicted cycles left, up to the next checkpoint.
+        """Move the state over the predicted cycles that are left, up to the next checkpoint.
 
-        The records of the cycles skipped go in as a repeat of the last cycle.  That needs
-        the last few cycles in the records to be cycles of this prediction.
+        The records of the skipped cycles go in as a repeat of the last cycle.  That needs the
+        last few cycles in the records to be cycles of this prediction.
         """
         assert watch is not None and watch.prediction is not None
         prediction = watch.prediction
@@ -1400,7 +1442,7 @@ def _try_stretch(
         assert watch is not None
         period = prediction.period
         scan_id = state_kernel.scan_id
-        # Stepping must have reached the state the prediction says, as a check on it.
+        # Check the prediction first.  Stepping must have reached the state that it expects.
         wrong = [
             cell
             for cell in prediction.start
@@ -1423,7 +1465,7 @@ def _try_stretch(
                 plan = timelines.plan_repeat(scan_id, period)
                 if plan is None:
                     memo.counts["cycle jump declined: the records do not repeat"] += 1
-                    # Each try writes the records out first, so the next waits a while.
+                    # Each try writes the records out first, so the next try waits a while.
                     watch.prediction = None
                     watch.wait_until = scan_id + watch.wait * period
                     watch.wait = min(watch.wait * 2, MAX_PREDICTION_WAIT)
@@ -1441,7 +1483,7 @@ def _try_stretch(
             _set_cell(state_kernel, cell, prediction.cell_at(cell, landing))
         for cell, name in watch.names.items():
             dict.__setitem__(seen, name, _cell_value(state_kernel, cell))
-        # The time each scan adds, one scan at a time, as the loop adds it.
+        # Add the time of each scan one scan at a time, as the loop does.
         timestamp = state_kernel.timestamp
         dt = replay._dt
         for _ in range(scans):
@@ -1471,7 +1513,7 @@ def _try_stretch(
             predict_cycle()
 
     def fire(path: _Path) -> int:
-        """Fire *path* for what its loop allows, or not at all."""
+        """Fire *path* for as many scans as its loop allows, or not at all."""
         nonlocal total, burst, left_by
         looped = loops.get(id(path), False)
         if looped is False:
@@ -1566,8 +1608,8 @@ def _try_stretch(
                     break
                 memo.counts["misfires"] += 1
         if fired is None:
-            # What the state does next, no path knows.  Whatever has run is settled now,
-            # since the trace's check steps the kernel past it.
+            # No path knows what the state does next.  Settle whatever has run now, because the
+            # trace's check steps the kernel past it.
             if total:
                 _record_segments(plc, segments, paths)
                 _land(plc, replay)
@@ -1610,7 +1652,7 @@ def _try_stretch(
         _record_segments(plc, segments, paths)
         _land(plc, replay)
     if run is not None:
-        # A scan the loop cannot run is a real change, so no stretch could run past it.
+        # A scan that the loop cannot run is a real change, so no stretch could run past it.
         blocked_here = False
         if total >= limit:
             ended = "the run's end"

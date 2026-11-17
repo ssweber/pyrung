@@ -1,7 +1,8 @@
-"""A one-shot Search against a plain one: the ``search_more`` group (part ``follow_values``).
+"""Test a one-shot Search against a plain one: the ``search_more`` group (part ``follow_values``).
 
-A CLICK's Search takes a DS Result only, so this case asks the one-shot alone, with DS results.
-The id says ``dd_result`` for the case's first form, and it is kept so its readings stay under it.
+A CLICK's Search takes a DS Result only, so this case tests the one-shot alone, with DS results.
+The id says ``dd_result`` because that was the case's first form. It is kept so that its
+readings stay under it.
 
 ``oneshot_against_dd_result``: four Searches into a DS each, every rung true from scan 2 on, as
 in ``coil_range``.  The one-shots search DH11..DH12 for 9, which is at DH11 on scan 2 and moves to

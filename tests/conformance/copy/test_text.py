@@ -1,26 +1,27 @@
 """Text and copy converters: the ``text`` group (subroutine ``Conf_Text``).
 
-The harness reads only slot registers, so every case stages its text in raw TXT
-it owns (``memory.OWNED``: TXT1..TXT200 and TXT301..TXT400, staged
-DS3901..DS3999, DD301..DD400, DH301..DH400) and reads characters back as codes
-into its slot: ``copy(txt[n], Result, convert=to_ascii)``.  (A CLICK does serve
-TXT over Modbus; a slot keeps every target's answer in one place.)  A TXT slot a converter should leave alone is seeded with
-``Z`` first (code 90), so "untouched" reads 90 and "written" reads anything
-else.  A destination a failing instruction should leave alone is seeded with a
-nonzero value, so a write of 0 would show.  ``init`` puts the TXT, the staged
-registers and the seeds back to their power-up value (TXT NUL, numbers 0).
+The harness reads only slot registers. Every case therefore stages its text in raw TXT
+that it owns (``memory.OWNED``: TXT1..TXT200 and TXT301..TXT400, staged
+DS3901..DS3999, DD301..DD400, DH301..DH400). It reads the characters back as codes
+into its slot: ``copy(txt[n], Result, convert=to_ascii)``. A CLICK does serve
+TXT over Modbus, but a slot keeps every target's answer in one place.
+
+A TXT slot that a converter should leave alone is seeded with ``Z`` first (code 90).
+"Untouched" then reads 90, and "written" reads anything else. A destination that a
+failing instruction should leave alone is seeded with a nonzero value, so a write of 0
+would show. ``init`` puts the TXT, the staged registers and the seeds back to their
+power-up value (TXT NUL, numbers 0).
 
 The cases that raise SC43 (``to_value_rejects``, ``pack_text_word_hex``,
-``pack_text_whitespace``) come last in the group: every case fires on the same
+``pack_text_whitespace``) come last in the group. Every case fires on the same
 scan, so an earlier fault would still be on at a later case's flag probe.
 
-The expectations are what a CLICK does: TXT
-is 8-bit (Copy Binary of 200 stores 200), Pack Copy into an INT or DINT clamps
-a value past its range and stops at a decimal point ("12.5" is 12), and
-Character Value of NUL writes 0.  A fault flag is read on the rung right after the
-instruction it asks about: a CLICK flag follows the last Copy-family instruction or Math (see
-``test_system.py``), so anything between would confound it.  What each case
-tells apart:
+The expectations are what a CLICK does. TXT is 8-bit (Copy Binary of 200 stores 200).
+Pack Copy into an INT or DINT clamps a value past its range and stops at a decimal
+point ("12.5" is 12). Character Value of NUL writes 0. Each fault flag is read on the
+rung right after the instruction it asks about. A CLICK flag follows the last
+Copy-family instruction or Math (see ``test_system.py``), so anything between would
+confound it. What each case tells apart:
 
 - ``value_vs_ascii``: Copy Character Value reads '5' as 5, Copy ASCII Code
   Value as 53.  A model with one text->number converter reads 5 or 53 in both.
@@ -30,11 +31,11 @@ tells apart:
   leaves the destination alone (77); of NUL it writes 0 over 66 (Result3) and
   raises no fault (Result4 = 0).  A model that stores the code minus 48
   reads 17 for the letter.
-- ``to_text_suppress``: 123 converts to the three characters "123", the rest
-  of the TXT range is untouched (90).  A model that pads to the Int's five
+- ``to_text_suppress``: 123 converts to the three characters "123", and the rest
+  of the TXT range is untouched (90). A model that pads to the Int's five
   digits reads "00123": 48 where this reads 49, and 50, 51 in the slots this
   leaves at 90.
-- ``to_text_fixed``: Do not Suppress zero renders an Int as five digits "00042".
+- ``to_text_fixed``: Do not Suppress zero renders an Int as five digits, "00042".
 - ``to_text_fixed_negative``: a negative Int is a sign plus five digits
   "-00042", six characters.  A model that fits the sign inside five ("-0042")
   reads 50 in slot 5 and 90 in slot 6 where this reads 52 and 50.
@@ -55,15 +56,15 @@ tells apart:
 - ``pack_text_dint``: into a DINT parses signed decimal over 32 bits, and
   clamps 2147483648 to 2147483647 (Result3 = 1) with the fault (Result4 = 1).
   A refusal would read Result3 = 0, Result4 = 1.
-- ``pack_text_int_fraction``: "12.9" reads 12 if the parse stops at
-  the point, 13 if it rounds, 99 (the preset) if refused (Result1);
-  "12x" reads 12 if the parse stops at the first non-digit, 99 if refused
-  (Result2).  Result3 and Result4 are SC43 after each.  A CLICK reads 12, 99,
-  0, 1: "12.9" stops at the point with no fault, "12x" is refused with SC43.
+- ``pack_text_int_fraction``: "12.9" reads 12 if the parse stops at the point,
+  13 if it rounds, and 99 (the preset) if it is refused (Result1). "12x" reads 12
+  if the parse stops at the first non-digit, and 99 if it is refused (Result2).
+  Result3 and Result4 are SC43 after each. A CLICK reads 12, 99, 0, 1: "12.9"
+  stops at the point with no fault, and "12x" is refused with SC43.
 - ``pack_text_whitespace``: leading or trailing whitespace faults and leaves
   the destination alone unless ``allow_whitespace``, which trims it.  A model
-  that always trims reads 12 in Result1.  The flag is read right after the pack, so a refusal
-  that faults reads 1 and one that does not reads 0.
+  that always trims reads 12 in Result1. The flag is read right after the pack, so a
+  refusal that faults reads 1, and one that does not fault reads 0.
 - ``fill_blank_ascii``: Fill with empty text blanks a TXT to NUL, the one blank
   a TXT byte has, so ASCII Code Value of it writes 0 over the destination's 77
   and 66.  A model where Fill of empty text writes nothing reads the seed's 90;
@@ -73,8 +74,8 @@ tells apart:
   NUL, so its ASCII code is 0 too.  CLICK's Reset coil takes bit memory only
   (X, Y, C, T, CT, SC), so this is pyrung's answer with nothing to compare.
 
-The flag probes read SC43 on the rung right after the instruction: it follows the last
-Copy or Math, so a fault from an earlier case cannot show there.  The
+The flag probes read SC43 on the rung right after the instruction. SC43 follows the last
+Copy or Math, so a fault from an earlier case cannot show there. The
 one-scan-per-scenario unit tests in ``tests/core/test_click_text_semantics.py`` pin the
 clamp fault itself.
 """
@@ -100,17 +101,17 @@ NUL = "\x00"
 
 
 def _go(slot):
-    """The rung condition every case's staging and reading shares."""
+    """Return the rung condition that every case's staging and reading share."""
     return Rung(slot.Cmd != 0, slot.Fired == 0)
 
 
 def _seed(first, text):
-    """Write ``text`` into consecutive TXT from ``first``."""
+    """Write ``text`` into consecutive TXT, starting at ``first``."""
     copy(text, txt[first])
 
 
 def _code(n, dest):
-    """Read TXT n back as its ASCII code."""
+    """Read TXT n back as its ASCII code into ``dest``."""
     copy(txt[n], dest, convert=to_ascii)
 
 
@@ -119,7 +120,7 @@ def _clear(first, last):
 
 
 def _fault_flag(slot, dest):
-    """Result = 1 if CLICK's out-of-range fault (SC43) is on this scan."""
+    """Set ``dest`` to 1 if CLICK's out-of-range fault (SC43) is on this scan."""
     with Rung(slot.Cmd != 0, slot.Fired == 0, system.fault.out_of_range):
         copy(1, dest)
 

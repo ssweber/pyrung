@@ -1,7 +1,7 @@
 """Flag probes: the ``flag_probe`` group (subroutine ``Conf_FlagProbe``).
 
-Part ``system`` (``suite.PARTS``).  Each case here asks a CLICK one thing about the fault-flag model.
-SC40 follows the last Math.  SC43 and SC44 follow the last Copy or Math, and Block
+Part ``system`` (``suite.PARTS``).  Each case here asks a CLICK one thing about the
+fault-flag model.  SC40 follows the last Math.  SC43 and SC44 follow the last Copy or Math, and Block
 copy, Fill, Pack and Unpack count as Copy tabs.  Nothing else touches a flag.
 Such an instruction clears its flags as it starts,
 then reads its operands.  A Copy of DF 1.0E+10 into a DD raises no SC43, so every
@@ -20,8 +20,8 @@ its own (``Scratch`` is the scan), and its read is a Math that adds a bit to a
 result.  The cases leave a flag up at the end of the scan, so the group runs after
 every group that reads one (``suite.ALL_GROUPS``).
 
-A pointer of -1 is staged in a slot field (CLICK takes a pointer in a Single Copy
-or a Pack/Unpack tab only) and a DF of 1.0E+10 for the clamp, on scan 2.
+On scan 2, a pointer of -1 is staged in a slot field, and a DF of 1.0E+10 is staged for the
+clamp.  CLICK accepts a pointer only in a Single Copy or a Pack/Unpack tab.
 
 - ``bulk_ops_clear_flags`` (probe): does a Block copy, Fill, Pack (bits, words, text)
   or Unpack (bits, words) that succeeds clear a flag a Copy raised?  Only a single
@@ -52,14 +52,14 @@ or a Pack/Unpack tab only) and a DF of 1.0E+10 for the clamp, on scan 2.
   SC43 is off after the Copy.  Result3, Result4 the same for SC44.  A CLICK reads
   0, 1, 0, 1: the Copy settles first (the SC43 half raises nothing).
 - ``source_flag_in_a_math`` (probe): the same for SC40 in a Math, ``DD =
-  SUM ( SC40 : SC40 ) + 5`` after a division by zero (a Math takes a bit only in a
-  SUM over a bit range): the DD reads 6 if the Math sees the flag
-  it is about to settle (Result1; 5 if it sees the flag off), and SC40 is off
-  after it (Result2 = 1).  A CLICK reads 5, 1 with the bare ``SC40 + 5``.  The
-  bare form is not pasted, since a Math takes a bit only in a SUM.
+  SUM ( SC40 : SC40 ) + 5`` after a division by zero.  A Math accepts a bit only in a
+  SUM over a bit range.  Result1 is the DD: 6 if the Math sees the flag it is about to
+  settle, 5 if it sees the flag off.  Result2 = 1 when SC40 is off after the Math.  A
+  CLICK reads 5, 1 with the bare ``SC40 + 5``.  The bare form is not pasted, since a
+  Math accepts a bit only in a SUM.
 
 Not probed, pack_text with bad text and a bad destination pointer (which flag): CLICK
-takes a pointer in a Single Copy only (the exporter refuses a Pack text destination
+accepts a pointer in a Single Copy only (the exporter refuses a Pack text destination
 pointer, CLK_PTR_CONTEXT_ONLY_COPY), so it cannot be written.
 
 Not probed here: whether a flag carries over a scan boundary.  The harness's own
@@ -123,13 +123,13 @@ def _stage(slot, *instructions):
 
 
 def _read(slot, scan, flag, field, bit, *, on=True):
-    """Add *bit* to *field* on *scan* if *flag* is on (``on``) or off right now."""
+    """Add *bit* to *field* on *scan* if *flag* is on right now, or off if ``on`` is false."""
     with Rung(slot.Scratch == scan, flag if on else ~flag):
         math(field + bit, field)
 
 
 def _raise(kind, *, big, tmp, zero=dd[689], pointer=None):
-    """Raise a flag with an instruction a CLICK has answered: "40", "43" or "44"."""
+    """Raise flag "40", "43" or "44" with an instruction whose answer a CLICK has given."""
     if kind == "43":
         copy(big, tmp)  # 1.0E+10 clamps into a Dint
     elif kind == "44":
@@ -277,8 +277,8 @@ def prove_source_flag_is_read_before_the_copy_settles(slot):
 class _SC40Window(Block):
     """The SC bank with SC40 as pyrung's runtime flag, so a range over it reads the flag.
 
-    A raw ``sc[40]`` is a plain tag nothing writes.  A CLICK Math takes a bit only in a
-    SUM over a bit range, and pyrung has no range over system points.
+    A raw ``sc[40]`` is a plain tag that nothing writes.  A CLICK Math accepts a bit only in
+    a SUM over a bit range, and pyrung has no range over system points.
     """
 
     def _get_tag(self, addr):

@@ -2388,8 +2388,9 @@ def test_execution_and_recording_retain_only_detached_effect_observations() -> N
 
 
 def test_same_rung_consumer_sees_a_write_only_in_contacts_read_after_it() -> None:
-    """A branch before the producer read its contacts before the write; a
-    branch after it reads the write.  Stepping agrees."""
+    """A branch before the producer reads its contacts before the write.
+
+    A branch after the producer reads the write.  Stepping agrees."""
     from pyrung.core import Rung, branch
     from pyrung.core.analysis.pilot.effects import (
         _contacts_read_after_write,

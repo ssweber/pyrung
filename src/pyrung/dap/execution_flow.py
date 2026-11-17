@@ -104,7 +104,7 @@ def on_pause(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     return {}, []
 
 
-#: Furthest real-time pacing may fall behind before it stops catching up.
+#: Real-time pacing stops catching up once it falls this far behind.
 PACE_MAX_LAG_SECONDS = 0.1
 
 #: Minimum wall time between two continue-mode scan frames.
@@ -114,11 +114,10 @@ FRAME_INTERVAL_SECONDS = 0.033
 class ScanPacer:
     """Keep simulation time ~= wall time x speed while continue runs.
 
-    ``delay()`` is called once per committed scan and returns how long to wait
-    before the next one.  The scan period (dt) is never changed; pacing only
-    inserts waits.  When the simulation falls more than
-    ``PACE_MAX_LAG_SECONDS`` behind, the baseline is reset instead of
-    bursting scans to catch up.
+    The caller calls ``delay()`` once per committed scan.  It returns how long to wait
+    before the next scan.  Pacing never changes the scan period (dt).  It only inserts
+    waits.  When the simulation falls more than ``PACE_MAX_LAG_SECONDS`` behind,
+    ``delay()`` resets the baseline instead of bursting scans to catch up.
     """
 
     def __init__(self, clock: Callable[[], float]) -> None:
@@ -149,9 +148,9 @@ class ScanPacer:
 
 
 class SpeedMeter:
-    """Measured simulation-time / wall-time ratio while continue runs.
+    """Measures the ratio of simulation time to wall time while continue runs.
 
-    Updated at most every ``WINDOW_SECONDS`` of wall time so the reading is
+    The reading updates at most every ``WINDOW_SECONDS`` of wall time.  That keeps it
     steady enough to display ("6.3x" when the PLC cannot keep up).
     """
 
@@ -175,7 +174,7 @@ class SpeedMeter:
         return self.value
 
 
-#: ``source`` of frames emitted by the continue worker.
+#: The ``source`` of the frames that the continue worker emits.
 WORKER_SOURCE: dict[str, Any] = {"origin": "worker", "command": "continue"}
 
 
@@ -333,7 +332,7 @@ def invalidate_mid_scan(adapter: Any) -> None:
     diverges from pure ``PLC.force()`` + ``step()`` behaviour.
 
     The abandoned scan already drained the pending patches into its context
-    (``prepare_scan``), so they are queued again: without that they would
+    (``prepare_scan``).  So they are queued again.  Without that, they would
     vanish without ever being committed.
     """
     if adapter._scan_gen is not None:

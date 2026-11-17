@@ -61,7 +61,7 @@ SCANS = scans_for()
 
 
 def record_states(slot: Any, a: Any, b: Any, flag: Any, scans: Sequence[int]) -> None:
-    """ErrorCode = the state as SFBA through the window; Result2.. = it on *scans*."""
+    """Record the SFBA state in ErrorCode through the window, and in Result2.. on *scans*."""
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         math(slot.Result1 * 1000, slot.ErrorCode)
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, flag):

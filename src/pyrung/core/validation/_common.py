@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from pyrung.core.analysis.write_sites import static_write_target_tags
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -69,81 +70,8 @@ _CallerMap = dict[str, list[_CallerEntry]]
 
 
 def _resolve_tag_names(target: Any) -> list[str]:
-    """Extract statically-known tag names from an output target."""
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-
-    if isinstance(target, ImmediateRef):
-        return _resolve_tag_names(target.value)
-    if isinstance(target, Tag):
-        return [target.name]
-    if isinstance(target, BlockRange):
-        return [t.name for t in target.tags()]
-    if isinstance(target, IndirectBlockRange):
-        return []  # runtime-only, skip
-    return []
-
-
-def _resolve_tag_objects(target: Any) -> list[Tag]:
-    """Extract Tag objects from an output target."""
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-
-    if isinstance(target, ImmediateRef):
-        return _resolve_tag_objects(target.value)
-    if isinstance(target, Tag):
-        return [target]
-    if isinstance(target, BlockRange):
-        return list(target.tags())
-    if isinstance(target, IndirectBlockRange):
-        return []
-    return []
-
-
-def _build_tag_map(program: Program) -> dict[str, Tag]:
-    """Build a name→Tag map from all tag references in a program."""
-    from pyrung.core.instruction.control import ForLoopInstruction
-
-    tag_map: dict[str, Tag] = {}
-
-    def _collect_from_rung(rung: Any) -> None:
-        for cond in rung._conditions:
-            tag_obj = getattr(cond, "tag", None)
-            if tag_obj is not None:
-                raw = tag_obj
-                if isinstance(raw, ImmediateRef):
-                    raw = object.__getattribute__(raw, "value")
-                if isinstance(raw, Tag) and raw.name not in tag_map:
-                    tag_map[raw.name] = raw
-        for instr in rung._instructions:
-            target = getattr(instr, "target", None)
-            if target is not None:
-                for tag_obj in _resolve_tag_objects(target):
-                    if tag_obj.name not in tag_map:
-                        tag_map[tag_obj.name] = tag_obj
-            source = getattr(instr, "source", None)
-            if source is not None:
-                for tag_obj in _resolve_tag_objects(source):
-                    if tag_obj.name not in tag_map:
-                        tag_map[tag_obj.name] = tag_obj
-            _collect_loop_counts(instr)
-        for branch in rung._branches:
-            _collect_from_rung(branch)
-
-    def _collect_loop_counts(instr: Any) -> None:
-        # A loop's count gates the calls in its body (caller-map conditions).
-        if not isinstance(instr, ForLoopInstruction):
-            return
-        if isinstance(instr.count, Tag) and instr.count.name not in tag_map:
-            tag_map[instr.count.name] = instr.count
-        for child in instr.instructions:
-            _collect_loop_counts(child)
-
-    for rung in program.rungs:
-        _collect_from_rung(rung)
-    for sub_name in program.subroutines:
-        for rung in program.subroutines[sub_name]:
-            _collect_from_rung(rung)
-
-    return tag_map
+    """Statically known tag names of an operand, in address order (none for a pointer)."""
+    return [tag.name for tag in static_write_target_tags(target)]
 
 
 def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
@@ -403,18 +331,19 @@ def _collect_write_sites(
     return sites
 
 
-# A count of one of these types is a 16-bit (or narrower) number, so it is 0
-# exactly when ``count & 0xFFFF`` is: ``count != 0`` decides the body.
+# A count of one of these types is a 16-bit (or narrower) number. It is 0 exactly when
+# ``count & 0xFFFF`` is 0, so ``count != 0`` decides whether the body runs.
 _EXACT_COUNT_TYPES = frozenset({"BOOL", "INT", "WORD"})
 
 
 def _dint_count_is_small(tag: Tag) -> bool:
-    """Whether the Dint count *tag* is declared to hold only ``0..PROVE_FOR_ITERATION_CAP``.
+    """Return True when the Dint count *tag* is declared to hold only small values.
 
-    Its declared ``choices`` all lie there, or its declared ``min`` and ``max``
-    both do; a lone ``min`` or ``max`` says nothing.  What the program writes
-    into it is not read.  A negative value is not small: it runs no iteration
-    (a Dint is read signed), though ``count != 0`` holds for it.
+    Small means ``0..PROVE_FOR_ITERATION_CAP``.  That is true when all its declared
+    ``choices`` lie in that range, or when its declared ``min`` and ``max`` both do.
+    A lone ``min`` or ``max`` says nothing.  The function does not read what the program
+    writes into the tag.  A negative value is not small.  A Dint is read signed, so a
+    negative count runs no iteration, though ``count != 0`` holds for it.
     """
     from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
 
@@ -428,19 +357,21 @@ def _dint_count_is_small(tag: Tag) -> bool:
 
 
 def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | None:
-    """What a forloop's count says about its body running, or None if it never does.
+    """Return what a forloop's count says about its body running, or None if the body never runs.
 
     Returns ``(conditions, exact)``.  A count read from a tag or an element runs
     no iteration when its masked count is 0 (:func:`for_loop_iterations`), so a
-    body item needs ``count != 0``.  That is exact for a 16-bit count, and for a
-    Dint tag (read whole and signed) declared to hold only
-    ``0..PROVE_FOR_ITERATION_CAP`` (:func:`_dint_count_is_small`).  Any other
-    Dint, and an indirect Dint element, stays inexact (``exact`` False): a
-    negative count runs none though it is not 0, and past the cap the verifier
-    refuses the loop.  A REAL (0.5 truncates to 0) and an expression are
-    inexact on their own account.  While ``FOR_ZERO_COUNT_ITERATIONS`` is
-    nonzero every count runs the body.  A constant count that runs no
-    iteration never runs it (None).
+    body item needs ``count != 0``.  That is exact for a 16-bit count.  It is also
+    exact for a Dint tag (read whole and signed) that is declared to hold only
+    ``0..PROVE_FOR_ITERATION_CAP`` (:func:`_dint_count_is_small`).
+
+    Any other Dint, and an indirect Dint element, stays inexact (``exact`` is
+    False).  A negative count runs no iteration though it is not 0, and the
+    verifier refuses the loop past the cap.  A REAL count is inexact because 0.5
+    truncates to 0.  An expression count is inexact for its own reasons.
+
+    While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero, every count runs the body.  A
+    constant count that runs no iteration returns None.
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import (
@@ -472,11 +403,11 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
 class _Footprint:
     """The tags a condition reads, or the tags a stretch of a scan can write.
 
-    *names* are tags named outright (a static range counts each element),
-    each with its Tag (None for a fault flag).  *blocks* are the blocks
-    addressed through a dynamic address (an indirect reference or range): any
-    of their elements.  *opaque* is a destination that is neither (it can be
-    anything).
+    *names* maps each tag named outright to its Tag, or to None for a fault flag.
+    A static range adds each of its elements.  *blocks* holds the blocks that a
+    dynamic address (an indirect reference or range) reaches, which means any of
+    their elements.  *opaque* is True for a destination that is neither of those,
+    so it can be anything.
     """
 
     names: dict[str, Any] = field(default_factory=dict)
@@ -490,12 +421,13 @@ class _Footprint:
 
 
 def _block_slot_names(block: Any) -> frozenset[str] | None:
-    """The name every address of *block* resolves to now: a renamed slot's,
-    a tag mapped onto it (``map_to``), or the block's own element name.
+    """Return the names that the addresses of *block* resolve to now.
 
-    Read from the block's slot configuration and mapping registry, not its tag
-    cache, which ``Block.reset()`` clears.  A block whose names cannot be
-    listed gives None.
+    Each address resolves to a renamed slot's name, to the name of a tag mapped onto
+    it (``map_to``), or to the block's own element name.  The function reads the
+    block's slot configuration and mapping registry, not its tag cache, because
+    ``Block.reset()`` clears the cache.  It returns None for a block whose names it
+    cannot list.
     """
     start, end = getattr(block, "start", None), getattr(block, "end", None)
     slot_name = getattr(block, "_effective_slot_name", None)
@@ -510,12 +442,13 @@ def _block_slot_names(block: Any) -> frozenset[str] | None:
 def _tag_in_block(
     name: str, tag: Any, block: Any, slot_names: Callable[[Any], frozenset[str] | None]
 ) -> bool:
-    """Whether a write to some element of *block* can change the tag *name*.
+    """Return True when a write to some element of *block* can change the tag *name*.
 
-    A block element carries its block (``_pyrung_block``); a tag that does not
-    may still name one of its slots (mapped onto it, or a same-named tag), so
-    the block's current slot names (*slot_names*, :func:`_block_slot_names`
-    or a memo of it) are checked too.  Unknown is a meet.
+    A block element carries its block in ``_pyrung_block``.  A tag without it may
+    still name one of the block's slots, because it is mapped onto the slot or has
+    the same name.  So the function also checks the block's current slot names
+    (*slot_names*, which is :func:`_block_slot_names` or a memo of it).  If the slot
+    names are unknown, the function returns True.
     """
     owner = getattr(tag, "_pyrung_block", None)
     if owner is not None and getattr(owner, "name", None) == block.name:
@@ -529,7 +462,7 @@ def _footprints_meet(
     writes: _Footprint,
     slot_names: Callable[[Any], frozenset[str] | None],
 ) -> bool:
-    """Whether a write in *writes* can change a tag *reads* reads."""
+    """Return True when a write in *writes* can change a tag that *reads* reads."""
     if reads.opaque or writes.opaque:
         return True
     if reads.names.keys() & writes.names.keys():
@@ -550,7 +483,7 @@ def _footprints_meet(
 
 
 def _condition_footprint(condition: Any) -> _Footprint:
-    """Every tag *condition* can read, an indirect address as its whole block."""
+    """Return every tag that *condition* can read, with an indirect address as its whole block."""
     from enum import Enum
 
     from pyrung.core.expression import Expression
@@ -608,9 +541,10 @@ def _condition_footprint(condition: Any) -> _Footprint:
 class _ScanWrites:
     """What a stretch of a scan can write, subroutines it calls included.
 
-    A destination is what :func:`instruction_write_targets` declares (a
-    forloop's index too), plus the fault flags an instruction can set; a call
-    adds everything its subroutine, and the ones that calls, can write.
+    The destinations are what :func:`instruction_write_targets` declares (a
+    forloop's index too) and the fault flags that an instruction can set.  A call
+    adds everything that its subroutine can write, and everything that the
+    subroutines it calls can write.
     """
 
     def __init__(self, program: Program) -> None:
@@ -620,7 +554,7 @@ class _ScanWrites:
         self._slot_names: dict[int, tuple[Any, frozenset[str] | None]] = {}
 
     def slot_names(self, block: Any) -> frozenset[str] | None:
-        """:func:`_block_slot_names`, once per block for this build."""
+        """Return :func:`_block_slot_names` for *block*, computed once per block for this build."""
         entry = self._slot_names.get(id(block))
         if entry is None or entry[0] is not block:
             entry = (block, _block_slot_names(block))
@@ -671,7 +605,7 @@ class _ScanWrites:
         return self._subroutines[name]
 
     def of(self, item: Any) -> _Footprint:
-        """Everything running *item* (a rung or an instruction) can write."""
+        """Return everything that running *item* (a rung or an instruction) can write."""
         key = id(item)
         if key not in self._memo:
             writes, callees = _Footprint(), set()
@@ -693,24 +627,29 @@ class _ScanWrites:
 def _iter_rung_calls(
     rung: Rung, scan_writes: _ScanWrites, top: Rung | None = None
 ) -> Iterable[tuple[str, tuple[Condition, ...], bool]]:
-    """Each call in *rung*'s own instructions: ``(callee, extra, exact)``.
+    """Yield each call in *rung*'s own instructions as ``(callee, extra, exact)``.
 
-    *extra* holds the conditions a call in a forloop body (nested loops too)
-    needs beyond the rung's: each enclosing loop's nonzero count, and the
-    contacts of the body rung it sits in that no iteration can change.  A body
-    rung reads its contacts afresh on every iteration, so one that reads a
-    loop's index, or a tag the outermost enclosing loop (subroutines it calls
-    included) can write, is left out: it is no condition on the scan.  The rest
-    hold on every scan that runs the call.
+    *extra* holds the conditions that a call in a forloop body (nested loops too)
+    needs beyond the rung's.  These are each enclosing loop's nonzero count, and the
+    contacts of the body rung that the call sits in, when no iteration can change
+    them.  A body rung reads its contacts afresh on every iteration.  So a contact
+    that reads a loop's index is left out, and so is one that reads a tag that the
+    outermost enclosing loop can write (subroutines it calls included).  Such a
+    contact is no condition on the scan.  The remaining contacts hold on every scan
+    that runs the call.
 
-    *exact* says they (with the rung's) also decide it, which they do not when
-    a body-rung contact is left out, a kept one reads a tag *top* (the whole
-    rung the call is in, branches and calls included; default *rung*) can
-    write (it is read after that write, not with the rung's own contacts), a
-    ``break_loop()`` or ``continue_loop()`` in an enclosing loop can skip it,
-    an enclosing loop is a oneshot (it runs on its rung's rising edge only), or
-    a count's ``count != 0`` does not decide its body
-    (:func:`_loop_count_conditions`).  The rung's branches are not visited.
+    *exact* is True when these conditions, together with the rung's, also decide
+    whether the call runs.  It is False in any of these cases:
+
+    - a body-rung contact is left out
+    - a kept contact reads a tag that *top* can write.  *top* is the whole rung the
+      call is in, with its branches and calls, and it defaults to *rung*.  The
+      contact is read after that write, not with the rung's own contacts.
+    - a ``break_loop()`` or ``continue_loop()`` in an enclosing loop can skip the call
+    - an enclosing loop is a oneshot, which runs on its rung's rising edge only
+    - a count's ``count != 0`` does not decide its body (:func:`_loop_count_conditions`)
+
+    The function does not visit the rung's branches.
     """
     from pyrung.core.instruction.control import (
         BreakInstruction,
@@ -731,7 +670,7 @@ def _iter_rung_calls(
     def _split_local(
         local: tuple[Condition, ...], outermost: ForLoopInstruction
     ) -> tuple[tuple[Condition, ...], bool]:
-        """The *local* contacts no iteration changes, and whether they decide."""
+        """Return the *local* contacts that no iteration changes, and whether they decide."""
         if not local:
             return (), True
         loop_writes = scan_writes.of(outermost)
@@ -780,7 +719,7 @@ _ProgramCall = tuple[
 
 
 def _iter_program_calls(program: Program) -> Iterable[_ProgramCall]:
-    """Every call in *program*: its place and rung, and :func:`_iter_rung_calls`'s data."""
+    """Yield every call in *program* with its place, its rung and :func:`_iter_rung_calls` data."""
 
     scan_writes = _ScanWrites(program)
 
@@ -807,12 +746,13 @@ def _iter_program_calls(program: Program) -> Iterable[_ProgramCall]:
 
 
 def _inexact_entry_subroutines(program: Program) -> frozenset[str]:
-    """Subroutines a call into is not decided by its caller-map conditions.
+    """Return the subroutines whose caller-map conditions do not decide whether they run.
 
-    A subroutine with a call site :func:`_iter_rung_calls` marks inexact, and
-    every subroutine called (at any depth) from one, since its entry goes
-    through that call too.  Its caller-map conditions still hold on every scan
-    that runs it, but it may not run on a scan they hold.
+    These are each subroutine with a call site that :func:`_iter_rung_calls` marks
+    inexact, and every subroutine called from one at any depth, because its entry
+    goes through that call too.  The caller-map conditions of such a subroutine
+    still hold on every scan that runs it.  But it may not run on a scan where they
+    hold.
     """
     calls: dict[str | None, set[str]] = defaultdict(set)
     inexact: set[str] = set()
@@ -833,10 +773,11 @@ def _build_caller_map(program: Program) -> _CallerMap:
     """Map subroutine name -> list of call sites with their conditions.
 
     The conditions hold on every scan that runs the call.  A call in a forloop
-    body is a call site too, with each enclosing loop's nonzero count and the
-    body-rung contacts no iteration can change among them; there they may not
-    decide the call (a body-rung contact an iteration can change, a oneshot
-    loop, a ``break_loop()``): see :func:`_inexact_entry_subroutines`.
+    body is a call site too.  Its conditions include each enclosing loop's nonzero
+    count and the body-rung contacts that no iteration can change.  Those
+    conditions may not decide whether the call runs, for example when a body-rung
+    contact can change in an iteration, the loop is a oneshot, or the body has a
+    ``break_loop()``.  See :func:`_inexact_entry_subroutines`.
     """
     caller_map: _CallerMap = defaultdict(list)
     for (
@@ -858,13 +799,13 @@ def _build_caller_map(program: Program) -> _CallerMap:
 def _transitive_caller_conditions(
     subroutine: str, caller_map: _CallerMap
 ) -> list[tuple[Condition, ...]]:
-    """The conditions of every call site on some path into *subroutine*.
+    """Return the conditions of every call site on some path into *subroutine*.
 
-    Its own call sites' and, transitively, those of the subroutines that call
-    it: a call nested two subroutines deep runs only when the outer call does
-    too.  Unordered and not split into per-path chains (see
-    :func:`_scope_reach_chains` for those): it is for analyses that need every
-    tag a call guard reads, not the guard itself.
+    These are the conditions of its own call sites and, transitively, of the
+    subroutines that call it.  A call nested two subroutines deep runs only when
+    the outer call does too.  The list is unordered and is not split into per-path
+    chains (:func:`_scope_reach_chains` does that).  Use it for analyses that need
+    every tag that a call guard reads, not the guard itself.
     """
     out: list[tuple[Condition, ...]] = []
     seen = {subroutine}

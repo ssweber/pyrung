@@ -1,7 +1,7 @@
-"""The helper functions generated code calls, written once for every renderer.
+"""Define the helper functions that generated code calls, once for every renderer.
 
 ``code.py`` (helpers inline), ``pyrung_rt.py`` (every helper) and the in-process
-kernel all emit these same definitions; each picks the ones it needs.
+kernel all emit these same definitions.  Each one picks the helpers it needs.
 """
 
 from __future__ import annotations
@@ -234,8 +234,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return int(value) & 0xFFFF",
         "",
     ],
-    # A Copy into a Word from a register: past 65535 it clamps, below 0 it keeps the
-    # low 16 bits of the value stopped at -32768 (storage.py's "word").
+    # A Copy into a Word from a register clamps a value past 65535.  A value below 0 is
+    # first stopped at -32768, and the Word keeps its low 16 bits (storage.py's "word").
     "_store_word_clamped": [
         "def _store_word_clamped(value):",
         "    if type(value) is float and not math.isfinite(value):",
@@ -293,10 +293,10 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return value",
         "",
     ],
-    # A failing operation of a calc's formula is 0, and appends its flag's code
-    # (40 SC40, 43 SC43, 46 SC46) to the calc's *flags*, which the calc sets
-    # after the formula: the rest of the formula runs (core CALC_FAULTS).
-    # Outside calc *flags* is None.
+    # A failing operation in a calc's formula is 0.  It appends its flag's code
+    # (40 SC40, 43 SC43, 46 SC46) to the calc's *flags*.  The calc sets those flags
+    # after the formula, so the rest of the formula still runs (core CALC_FAULTS).
+    # Outside a calc, *flags* is None.
     "_term_fail": [
         "def _term_fail(flags, code):",
         "    if flags is not None:",
@@ -304,8 +304,9 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return 0",
         "",
     ],
-    # A calc's pointer address that went through _dbl: +/-Inf or NaN is no
-    # address, -1, below every block (a block starts at 0 or above).
+    # A calc's pointer address that went through _dbl is -1 when it is +/-Inf or NaN.
+    # Such a value is no address, and -1 is below every block (a block starts at 0 or
+    # above).
     "_addr_int": [
         "def _addr_int(addr):",
         "    try:",
@@ -314,8 +315,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "        return -1",
         "",
     ],
-    # A calc's division by a divisor that is not a bare tag: by 0 it is 0, with
-    # SC40 (core _op_div).
+    # A calc's division by a divisor that is not a bare tag gives 0 for a divisor of 0,
+    # and sets SC40 (core _op_div).
     "_calc_div": [
         "def _calc_div(a, b, flags):",
         "    if b:",
@@ -330,9 +331,9 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return _term_fail(flags, 40)",
         "",
     ],
-    # A randint() site whose bounds are read: equal ones (46, SC46) or Inf or NaN
-    # (43, SC43) make the site 0 (RandIntExpr.evaluate).  The kernel reads the
-    # scan's draw; the board draws.
+    # A randint() site whose bounds are read gives 0 when the bounds are equal (46, SC46)
+    # or are Inf or NaN (43, SC43) (RandIntExpr.evaluate).  The kernel reads the scan's
+    # draw.  The board makes its own draw.
     "_rand_term": [
         "def _rand_term(flags, draw, lo, hi):",
         "    try:",
@@ -357,7 +358,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return random.randint(min(lo, hi), max(lo, hi))",
         "",
     ],
-    # A calc's MOD (core _op_mod): truncated, and a MOD by 0 is 0 with no flag
+    # A calc's MOD (core _op_mod) truncates.  A MOD by 0 is 0 and sets no flag
     # (core QuietMathError).
     "_mod": [
         "def _mod(a, b):",
@@ -367,7 +368,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return -r if a < 0 else r",
         "",
     ],
-    # A calc step past 2 ** 53 as the double a CLICK's Math holds (to_double).
+    # A calc step past 2 ** 53 becomes the double that a CLICK's Math holds (to_double).
     "_dbl": [
         "def _dbl(value):",
         f"    if type(value) is int and not -{1 << 53} <= value <= {1 << 53}:",
@@ -378,8 +379,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return value",
         "",
     ],
-    # ABS of an Int or Dint tag at the bottom of its range has no value there:
-    # the ABS is 0, with SC43 in a calc (ABS_OF_TYPE).
+    # ABS of an Int or Dint tag at the bottom of its range has no value there.  The ABS
+    # is 0, and it sets SC43 in a calc (ABS_OF_TYPE).
     "_abs_int": [
         "def _abs_int(value, floor, flags=None):",
         "    if value == floor:",
@@ -387,8 +388,9 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return abs(value)",
         "",
     ],
-    # A math function that can fail, as _math_func: 0 for a domain error, with
-    # SC46 in a calc, and for an integer too large for a float, with SC43.
+    # A math function that can fail, as _math_func, gives 0 for a domain error and sets
+    # SC46 in a calc.  It also gives 0 for an integer too large for a float, and sets SC43
+    # in a calc.
     "_permissive_math": [
         "def _permissive_math(func, value, flags=None):",
         "    try:",
@@ -422,8 +424,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return result",
         "",
     ],
-    # ** in a calc (core _op_pow_calc): 0 ^ 0 is 0 with no flag, 0 to a
-    # negative power is +Inf, and a complex result is 0, with SC46 in a calc.
+    # ** in a calc (core _op_pow_calc): 0 ^ 0 is 0 with no flag.  0 to a negative power
+    # is +Inf.  A complex result is 0, and it sets SC46 in a calc.
     "_pow_calc": [
         "def _pow_calc(base, exp, flags=None):",
         "    if base == 0 and exp <= 0:",
@@ -434,8 +436,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "        return _term_fail(flags, 46)",
         "",
     ],
-    # An operation that can fail: 0, and in a calc (*flags*) its error's flag
-    # (core _permissive).
+    # An operation that can fail gives 0.  In a calc (*flags*) it also sets its error's
+    # flag (core _permissive).
     "_permissive_op": [
         "def _permissive_op(op, a, b, flags=None):",
         "    try:",
@@ -486,9 +488,9 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    raise ValueError(op)",
         "",
     ],
-    # A read with no element there gets the type's zero: ``_cond_index_*`` (a
-    # rung condition) and ``_read_index_*`` (an instruction's source past its
-    # bank) give -1 for such an address.
+    # A read with no element there gets the type's zero.  ``_cond_index_*`` (a rung
+    # condition) and ``_read_index_*`` (an instruction's source past its bank) give -1
+    # for such an address.
     "_cond_elem": [
         "def _cond_elem(seq, i, default):",
         "    if i < 0:",
@@ -514,7 +516,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
 
 
 def _with_helper_deps(used: Iterable[str]) -> set[str]:
-    """*used* plus the helpers they call."""
+    """Return *used* plus the helpers they call."""
     needed = set(used)
     if "_store_numeric_text_digit" in needed:
         needed.add("_as_single_ascii_char")
@@ -542,7 +544,7 @@ def _with_helper_deps(used: Iterable[str]) -> set[str]:
 def _render_index_helpers(
     ctx: Any, binding: Any, fault_symbol: str | None, fault_global: str | None
 ) -> list[str]:
-    """The helpers that turn an address in *binding*'s block into an offset.
+    """Return the helpers that turn an address in *binding*'s block into an offset.
 
     ``_resolve_index_*`` (an instruction's destination): below the block or in a
     gap it sets the address-error flag and raises.  Past the block it raises with
@@ -612,7 +614,7 @@ def _render_index_helpers(
 
 
 def _render_helper_defs(needed: Iterable[str]) -> list[str]:
-    """The definitions of the helpers in *needed*, in ``_HELPER_ORDER``."""
+    """Return the definitions of the helpers in *needed*, in ``_HELPER_ORDER``."""
     needed = set(needed)
     lines: list[str] = []
     for name in _HELPER_ORDER:

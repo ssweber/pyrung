@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 def _program_banks(program: Program) -> list[Block]:
-    """Blocks whose slots the program reads or writes, for their configured slot names."""
+    """Return the blocks whose slots the program reads or writes, for their slot names."""
     banks: dict[int, Block] = {}
     for tag in collect_program_tags(program):
         block = getattr(tag, "_pyrung_block", None)
@@ -41,7 +41,7 @@ def _evaluate_nickname_lengths(
     tag_map: TagMap,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
-    """Find nicknames the export would write that CLICK cannot hold."""
+    """Return findings for nicknames that the export would write and CLICK cannot hold."""
     records = nickname_records(tag_map, blocks=_program_banks(program))
     first_locations = _first_tag_locations(facts)
     findings: list[ClickFinding] = []

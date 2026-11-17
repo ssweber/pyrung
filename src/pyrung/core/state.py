@@ -12,7 +12,8 @@ from typing import Any, cast
 from pyrsistent import PMap, PTypeError, pmap
 
 try:
-    # What a state pickled through when it was a PRecord: keeping it keeps the format.
+    # A state pickled through this function when it was a PRecord.  Keep using it to keep the
+    # pickle format.
     from pyrsistent._checked_types import _restore_pickle
 except ImportError:  # private to pyrsistent, which may move it
 
@@ -21,11 +22,11 @@ except ImportError:  # private to pyrsistent, which may move it
 
 
 def snapshot_dict(mapping: Mapping[str, Any]) -> dict[str, Any]:
-    """Plain-dict copy of ``mapping``, fast for a ``PMap``.
+    """Return a plain-dict copy of ``mapping``, and copy a ``PMap`` quickly.
 
     ``dict(pmap)`` sees a non-dict mapping and calls ``keys()`` plus a Python
-    ``__getitem__`` per key; ``iteritems()`` walks the buckets directly (about
-    6x faster on a few thousand keys).  Any other mapping takes ``dict()``.
+    ``__getitem__`` per key.  ``iteritems()`` walks the buckets directly, about
+    6x faster on a few thousand keys.  Any other mapping goes through ``dict()``.
     """
     if isinstance(mapping, PMap):
         return cast("dict[str, Any]", dict(mapping.iteritems()))
@@ -33,11 +34,11 @@ def snapshot_dict(mapping: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def value_changed(old: Any, new: Any) -> bool:
-    """Whether a tag that held *old* changed when it came to hold *new*.
+    """Return True when a tag that held *old* changed when it came to hold *new*.
 
-    Readers that report whether a tag changed ask this, so stepping, history and the DAP agree.
-    A NaN differs from itself, but a Real that stays NaN has not changed.  ``-0.0`` over
-    ``0.0`` and ``0`` over ``False`` are no change either.
+    Every reader that reports whether a tag changed calls this, so stepping, history and the
+    DAP agree.  A NaN differs from itself, but a Real that stays NaN has not changed.
+    Replacing ``0.0`` with ``-0.0``, or ``False`` with ``0``, is not a change either.
     """
     return old is not new and old != new and (old == old or new == new)
 
@@ -83,7 +84,7 @@ class SystemState(Mapping[str, Any]):
     def create(
         cls, kwargs: Mapping[str, Any], _factory_fields: Any = None, ignore_extra: bool = False
     ) -> SystemState:
-        """Build a state from a mapping of its fields; a state is returned as is."""
+        """Build a state from a mapping of its fields.  A state passed in is returned as is."""
         if isinstance(kwargs, cls):
             return kwargs
         if ignore_extra:
@@ -125,7 +126,8 @@ class SystemState(Mapping[str, Any]):
         return NotImplemented
 
     def __hash__(self) -> int:
-        # The hash of a mapping with these items: a pmap of a state's fields hashes the same.
+        # Hash the way a mapping with these items hashes, so a pmap of a state's fields has the
+        # same hash.
         return hash(frozenset(self.items()))
 
     def __repr__(self) -> str:
@@ -166,7 +168,7 @@ class SystemState(Mapping[str, Any]):
         return self.scanned(self.scan_id + 1, self.timestamp + dt, self.tags, self.memory)
 
     def committed(self, tags: PMap, memory: PMap, dt: float) -> SystemState:
-        """Return the state after a scan: these tags and memory, on the next scan."""
+        """Return the state after a scan, with these tags and memory, on the next scan."""
         return self.scanned(self.scan_id + 1, self.timestamp + dt, tags, memory)
 
     def scanned(self, scan_id: int, timestamp: float, tags: PMap, memory: PMap) -> SystemState:
@@ -181,8 +183,9 @@ class SystemState(Mapping[str, Any]):
         return _build(type(self), scan_id, timestamp, tags, memory)
 
 
-# The slots themselves: they set a field on any state, a subclass that shadows the
-# field with a property too, past the __setattr__ that refuses everyone else.
+# The slot descriptors themselves.  They set a field on any state, including a subclass that
+# shadows the field with a property, and they bypass the __setattr__ that refuses everyone
+# else.
 _slots: Any = SystemState
 _put_scan_id = _slots.scan_id.__set__
 _put_timestamp = _slots.timestamp.__set__
@@ -192,7 +195,7 @@ _new = object.__new__
 
 
 def _build(cls: type, scan_id: int, timestamp: float, tags: PMap, memory: PMap) -> Any:
-    """A new *cls* holding these fields, each checked for its declared type."""
+    """Return a new *cls* with these fields, after checking each against its declared type."""
     if not (
         isinstance(scan_id, int)
         and isinstance(timestamp, float)

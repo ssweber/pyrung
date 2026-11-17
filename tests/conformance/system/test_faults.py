@@ -1,38 +1,39 @@
 """Which stores raise a fault flag: the ``faults`` group (subroutine ``Conf_Faults``).
 
-The fault flags a CLICK raises on a store: SC40 (division error), SC43 (out
-of range), SC44 (address error) and SC46 (Math operation error), for a Math
-whose result does not fit its destination, a Copy that clamps, RAND past an
-Int, a pointer past its bank, and Inf and NaN in a Real.  Part ``system`` (``suite.PARTS``).
+This group covers the fault flags that a CLICK raises on a store. They are SC40 (division
+error), SC43 (out of range), SC44 (address error) and SC46 (Math operation error). The
+stores that raise them are a Math whose result does not fit its destination, a Copy that
+clamps, RAND past an Int, a pointer past its bank, and Inf and NaN in a Real. Part
+``system`` (``suite.PARTS``).
 
-Each probe runs one instruction (its *op*) once and reads one flag on the
-rung right after it.  A flag that is on shows only that some instruction set
-it: SC40 follows the last Math and SC43 and SC44 the last Copy or Math,
-and over the wire the cases start on different scans.  So
-a probe runs its op on the first scan from 3 on which the flag it reads is off
-just before the op (:func:`_probe`): a bit (``now``) comes on on that scan
-only, and another (``taken``) latches so the op runs once.  An op whose flag
-an earlier op of the same scan left on waits for the next scan.  SC40, SC43
-and SC44 are mostly off already (each op starts with a Copy), but SC46 stays on
-to the end of the scan once a Math error raises it: there the gate is what
-makes a probe of SC46 read its own op.  Two flags after one op are two
-probes, each running the op again: on a CLICK the Math that records the
-first would clear the second.
-Inf and NaN are staged on scan 2 (``_stage_inf``), before any probe.
-Every case has a 40-scan window, more than every probe of the group needs
-when each waits for the one before.
+Each probe runs one instruction (its *op*) once and reads one flag on the rung right
+after it. A flag that is on shows only that some instruction set it. SC40 follows the
+last Math, and SC43 and SC44 follow the last Copy or Math. Over the wire the cases also
+start on different scans. So a probe runs its op on the first scan from 3 on which the
+flag it reads is off just before the op (:func:`_probe`). One bit (``now``) comes on on
+that scan only. Another bit (``taken``) latches so the op runs once. An op whose flag an
+earlier op of the same scan left on waits for the next scan.
 
-The registers are the group's own (``memory.OWNED``): sixteen C bits per
-case from C201, staged DD501..DD600, DF451..DF495 and TXT401..TXT500.  A
-flag bit is 1 when the flag is on right after the op; a destination a model
-could leave alone is preset (99, or 1.0 for a Real) on the rung before.
+SC40, SC43 and SC44 are mostly off already, because each op starts with a Copy. SC46
+stays on to the end of the scan once a Math error raises it. There the gate is what
+makes a probe of SC46 read its own op. Two flags after one op are two probes, each
+running the op again, because on a CLICK the Math that records the first would clear the
+second.
 
-The expectations are what a CLICK does where that is known, and the
-likeliest answer of an open probe otherwise.  CLICK's help names the stores
-that raise SC43: a Copy (Single, Block, Pack) that clamps, a text->number
-conversion that fails, a Modbus Send/Receive Slave ID out of range, a Send
-ASCII numeric out of range; it never names SC43 for a Math.  What each case
-tells apart:
+Inf and NaN are staged on scan 2 (``_stage_inf``), before any probe. Every case has a
+40-scan window. That is more than every probe of the group needs when each waits for the
+one before.
+
+The registers are the group's own (``memory.OWNED``). Each case has sixteen C bits from
+C201. The staged values use DD501..DD600, DF451..DF495 and TXT401..TXT500. A flag bit is
+1 when the flag is on right after the op. A destination that a model could leave alone
+is preset (99, or 1.0 for a Real) on the rung before.
+
+The expectations are what a CLICK does where that is known. Where a probe is still open,
+the expectation is the likeliest answer. CLICK's help names the stores that raise SC43: a
+Copy (Single, Block, Pack) that clamps, a text->number conversion that fails, a Modbus
+Send/Receive Slave ID out of range, and a Send ASCII numeric out of range. It never names
+SC43 for a Math. What each case tells apart:
 
 - ``math_store_out_of_range`` (probe): which Math results raise SC43, each
   op on its own.  (a) 2147483647 + 1 into a DD wraps to -2147483648; (b)
@@ -120,13 +121,12 @@ tells apart:
   The case expects NaN for what SIN left, which no CLICK reading names, so 4, 0, 0,
   1, 1.
 
-Not asked here, because the conformance harness cannot: a Modbus Send or
-Receive whose Slave ID is out of range needs a second Modbus device on the
-CLICK's port; how a DF holding +Inf or NaN reads over Modbus (the harness
-reads slot DS only) or on the CLICK's display.  A Math with a pointer is not
-expressible: a CLICK has pointers in a Single Copy only.  FOR with a
-Real count is ``for_count``, in-process only, since it stops a CLICK on its
-watchdog.
+The conformance harness cannot ask the following, so this group does not. A Modbus Send
+or Receive whose Slave ID is out of range needs a second Modbus device on the CLICK's
+port. How a DF holding +Inf or NaN reads over Modbus (the harness reads slot DS only) or
+on the CLICK's display is out of reach too. A Math with a pointer is not expressible,
+because a CLICK has pointers in a Single Copy only. FOR with a Real count is
+``for_count``, in-process only, since it stops a CLICK on its watchdog.
 """
 
 from __future__ import annotations

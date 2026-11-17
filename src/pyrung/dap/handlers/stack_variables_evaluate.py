@@ -148,7 +148,7 @@ def on_variables(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
 
 def _natural_key(name: str) -> list[Any]:
-    """Sort key putting ``_edge:e2`` before ``_edge:e10``."""
+    """Return a sort key that puts ``_edge:e2`` before ``_edge:e10``."""
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
 
 
@@ -184,7 +184,7 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     evaluate_context = context if isinstance(context, str) else "repl"
 
     if evaluate_context != "watch":
-        # The last command wins: step, run and reload pause a running continue first.
+        # The last command wins.  Step, run and reload pause a running continue first.
         from pyrung.dap.handlers.simulation import pause_before_console_command
 
         pause_before_console_command(adapter, expression)
@@ -229,8 +229,8 @@ def parse_known_condition(adapter: Any, state: SystemState, expression: str) -> 
 def condition_predicate(adapter: Any, parsed: Expr) -> Callable[[SystemState], bool]:
     """Compile a condition the way the Watch, ``assert`` and ``run until`` all read it.
 
-    ``Pump.State`` reads the tag ``Pump_State``. A choice label such as ``HELD`` stands for
-    its value, so a word that isn't a label raises on any tag but a Char.
+    ``Pump.State`` reads the tag ``Pump_State``.  A choice label such as ``HELD`` stands for
+    its value.  A word that is not a label raises on any tag except a Char.
     """
     references = adapter._expression_references(parsed)
     runner = adapter._require_runner_locked()

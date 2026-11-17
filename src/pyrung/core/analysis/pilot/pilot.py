@@ -151,7 +151,8 @@ class _DriveOutcome:
     reason: str | None
     knowledge: dict[str, Any]
     root_route: TraceChoice | None
-    # The clock, the ledger or the program ended the search, so it says nothing about the target.
+    # The clock, the ledger or the program ended the search. So the result says nothing about
+    # the target.
     cut_short: bool = False
 
 
@@ -428,16 +429,18 @@ def _finished_event(
             ),
         },
     )
-    # The caller gets this fork to run, with no memo of the search's.
+    # The caller gets this fork to run. The fork has no memo from the search.
     state.work._coast_memo = None
     return event
 
 
 def _no_longer_searching(state: _PilotState) -> None:
-    """What a terminal reads is no search's: a limit there would end the search a second time.
+    """Clear the search's limits from the fork that the caller gets.
 
-    The clock, the memory cap and the refusals to restart or to read end here, on the fork the
-    caller gets.  A checkpoint's world brings another fork, so each terminal step says it again.
+    A terminal reads state that no search owns, so a limit there would end the search a
+    second time. The clock, the memory cap and the refusals to restart or to read end here,
+    on the fork that the caller gets. A checkpoint's world brings another fork, so each
+    terminal step calls this function again.
     """
     if state.work._coast_memo is not None:
         state.work._coast_memo.check_limits = None
@@ -506,7 +509,7 @@ def _stopped_events(
 
 
 def restart_ahead(stopped: str) -> str:
-    """The reason how() stops when *stopped* says why the next scan is a restart."""
+    """Return the reason how() stops, given *stopped*, which says why the next scan is a restart."""
     return f"{stopped}. Its next scan would restart it, and how() does not plan across a restart."
 
 
@@ -516,7 +519,8 @@ def _pilot_loop_events(
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
 
-    # What a search costs must not depend on the searches before it.
+    # A new memo for each search, so that what a search costs does not depend on the
+    # searches before it.
     memo = plc._coast_memo = CoastMemo()
     plc._search_refuses_restart = True
     clock = ctx.wall_clock
@@ -549,7 +553,8 @@ def _pilot_loop_events(
         termination = TheoryTermination.BUDGET
         reason = _out_of_a_limit("memory budget exhausted (about 1 GB held)", at_the_stop, ctx)
     elif isinstance(stop, TheoryInvariantError):
-        # Its record of what it tried stopped adding up, so no plan from it could be verified.
+        # The search's record of what it tried stopped adding up, so nothing could verify a
+        # plan from it.
         termination = TheoryTermination.STUCK
         reason = _out_of_a_limit(f"how() lost track of its own evidence: {stop}", at_the_stop, ctx)
     else:
@@ -582,7 +587,7 @@ def _search_events(
     ctx: _PilotContext,
     at_the_stop: dict[str, Any],
 ) -> Iterator[PilotEvent]:
-    """The search itself, leaving in *at_the_stop* what a terminal for a stop needs."""
+    """Run the search itself. It leaves in *at_the_stop* what a terminal for a stop needs."""
 
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
     # channel registers (opaque-loop tags + each pipeline role's
@@ -1401,9 +1406,9 @@ def _search_events(
             transition = _attempt_transition.adopt_deferred_transition(transition, state, ctx)
         if attempt.trial is None:
             if setup_has_no_execution:
-                # Rejected with no execution to record and no requirement to refine: a
-                # gate refused the setup before it ran (avoid=, or a value its tag cannot
-                # hold).  As when an executed setup is rejected, the theory ends here.
+                # A gate refused the setup before it ran (avoid=, or a value its tag cannot
+                # hold). So there is no execution to record and no requirement to refine.
+                # The theory ends here, as it does when an executed setup is rejected.
                 theory = active_theory(state.theory_state)
                 if theory is None:
                     raise ValueError("rejected temporal attempt lost its theory")

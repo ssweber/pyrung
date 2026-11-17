@@ -1,4 +1,4 @@
-"""Tests for the static facts that how() steers with."""
+"""Test the static facts that how() steers with."""
 
 from __future__ import annotations
 
@@ -55,7 +55,10 @@ class TestKernelDomainDiscovery:
         assert "H2" not in comparison.comparison_tags
 
     def test_self_feeding_calc_is_excluded_from_comparison_only(self):
-        """math(X + N, X) reads X via _reads — _has_forbidden_data_read excludes it."""
+        """Check that a self-feeding math(X + N, X) keeps X out of the comparison tags.
+
+        The math reads X through _reads, so _has_forbidden_data_read excludes X.
+        """
         from pyrung.core.analysis.pdg import build_program_graph
         from pyrung.core.analysis.prove.absorb import (
             _find_comparison_absorptions,

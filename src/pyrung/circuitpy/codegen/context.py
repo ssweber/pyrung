@@ -82,7 +82,7 @@ class StaticRangeLayout:
 
 
 def _is_plain_literal(value: Any) -> bool:
-    """Whether ``repr(value)`` is *value*, and no call can tell one copy from another."""
+    """Return whether ``repr(value)`` is *value*, and no call can tell one copy from another."""
     kind = type(value)
     if kind is float:
         return math.isfinite(value)
@@ -92,7 +92,11 @@ def _is_plain_literal(value: Any) -> bool:
 
 
 def _renders_faithfully(value: Any, seen: set[int] | None = None) -> bool:
-    """Whether ``repr(value)`` rebuilds *value*: one object, sharing nothing inside itself."""
+    """Return whether ``repr(value)`` rebuilds *value* as one object.
+
+    Return False if *value* holds the same list, tuple or dict at two places. ``repr`` would
+    rebuild those as separate objects.
+    """
     if _is_plain_literal(value):
         return True
     kind = type(value)
@@ -107,7 +111,7 @@ def _renders_faithfully(value: Any, seen: set[int] | None = None) -> bool:
 
 
 def _mutables_inside(value: Any) -> Iterator[Any]:
-    """Each list and dict a constant holds, itself included: what a call can change."""
+    """Yield each list and dict that a constant holds, itself included.  A call can change these."""
     kind = type(value)
     if kind not in (list, tuple, dict):
         return
@@ -172,6 +176,10 @@ class CodegenContext:
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
+    # A ``relations.records.Recorder`` makes the emit helpers record what each piece of
+    # code reads, writes and compares.  Only the relations reader sets it, on a render
+    # that nothing runs.
+    recorder: Any = None
 
     @classmethod
     def for_kernel(
@@ -211,21 +219,21 @@ class CodegenContext:
     subroutine_names: list[str] = field(default_factory=list)
     function_sources: dict[str, str] = field(default_factory=dict)
     function_globals: dict[str, set[str]] = field(default_factory=dict)
-    # Names an embedded function reads the math module by (``import math as pymath``).
+    # Names that an embedded function uses to read the math module (``import math as pymath``).
     math_aliases: set[str] = field(default_factory=set)
     used_helpers: set[str] = field(default_factory=set)
-    # Nanoseconds to a unit of each accumulator the compiled timers tick.
+    # Nanoseconds in one unit of each accumulator that the compiled timers tick.
     timer_unit_ns: dict[str, int] = field(default_factory=dict)
     symbol_table: dict[str, str] = field(default_factory=dict)
 
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
-    # Tags a Copy writes several elements from (a text, its digits): their block is
-    # never compacted, outside blockless mode.
+    # Targets of a Copy that writes several elements, starting at the target (a text, its
+    # digits).  Their block is never compacted, except in blockless mode.
     multi_element_store_targets: set[str] = field(default_factory=set)
-    # Blocks a rung condition indexes: their ``_cond_index_*`` helper reads an
-    # address outside the block as 0 rather than raising.
+    # Blocks that a rung condition indexes.  Their ``_cond_index_*`` helper reads an
+    # address outside the block as 0 and does not raise.
     used_condition_index_blocks: set[int] = field(default_factory=set)
     used_read_index_blocks: set[int] = field(default_factory=set)
     used_window_addrs_blocks: set[int] = field(default_factory=set)
@@ -237,7 +245,7 @@ class CodegenContext:
     function_objects: dict[str, Any] = field(default_factory=dict)
     function_constants: dict[str, Any] = field(default_factory=dict)
     function_constant_symbols: dict[int, str] = field(default_factory=dict)
-    #: A code.py's constants: each list and dict one holds -> the symbol that holds it.
+    #: Maps each list and dict that a code.py constant holds to the symbol of that constant.
     function_constant_owners: dict[int, str] = field(default_factory=dict)
     runstop: RunStopConfig | None = None
     board_tag_names: set[str] = field(default_factory=set)
@@ -314,10 +322,10 @@ class CodegenContext:
             )
 
     def _note_multi_element_store(self, instr: Any) -> None:
-        """Note the target of a Copy that writes elements from a fixed one on.
+        """Record the target of a Copy that writes several elements, starting at a fixed one.
 
-        A text and its digits go into the elements after the target, by address, so
-        the block that target lives in keeps every address (``build_compact_block_maps``).
+        A text and its digits go into the elements after the target, by address.  So the
+        block that holds the target keeps every address (``build_compact_block_maps``).
         """
         if not isinstance(instr, CopyInstruction):
             return
@@ -380,7 +388,7 @@ class CodegenContext:
             system.fault.math_operation_error,
         ):
             self.referenced_tags.setdefault(fault_tag.name, fault_tag)
-        # The walk meets a tag before it may meet the block holding it.
+        # The walk may meet a tag before it meets the block that holds it.
         for tag in list(self.referenced_tags.values()):
             self._associate_tag_with_known_block(tag)
         self._refresh_board_usage()
@@ -634,11 +642,11 @@ class CodegenContext:
         return f"{prefix}_{n}"
 
     def state_key_for(self, obj: Any) -> str:
-        """The site key ``bind_sites`` gave *obj*; raises for an unbound object.
+        """Return the site key that ``bind_sites`` gave *obj*, or raise for an unbound object.
 
-        Generated code keys instruction memory by site, so a key handed out
-        here (a counter or ``id()``) could collide with the program's own
-        ``i{N}`` keys or differ from the interpreter's.
+        Generated code keys instruction memory by site.  So a key made here (a counter
+        or ``id()``) could collide with the program's own ``i{N}`` keys, or differ from
+        the interpreter's.
         """
         assigned = getattr(obj, "_state_key", None)
         if assigned is None:
@@ -663,7 +671,10 @@ class CodegenContext:
         return self.index_helper_name(block_id).replace("_resolve_index_", "_cond_index_", 1)
 
     def use_condition_index_block(self, block_id: int) -> str:
-        """The helper a condition indexes *block_id* through: -1 when out of range."""
+        """Return the helper that a condition indexes *block_id* through.
+
+        The helper returns -1 for an address that the block does not have.
+        """
         self.used_indirect_blocks.add(block_id)
         self.used_condition_index_blocks.add(block_id)
         return self.condition_index_helper_name(block_id)
@@ -672,7 +683,7 @@ class CodegenContext:
         return self.index_helper_name(block_id).replace("_resolve_index_", "_read_index_", 1)
 
     def use_read_index_block(self, block_id: int) -> str:
-        """The helper an instruction's source indexes *block_id* through."""
+        """Return the helper that an instruction's source indexes *block_id* through."""
         self.used_indirect_blocks.add(block_id)
         self.used_read_index_blocks.add(block_id)
         return self.read_index_helper_name(block_id)
@@ -681,7 +692,7 @@ class CodegenContext:
         return self.index_helper_name(block_id).replace("_resolve_index_", "_window_addrs_", 1)
 
     def use_window_addrs_block(self, block_id: int) -> str:
-        """The helper a dynamic window (``block.select(S, E)``) gets its addresses from."""
+        """Return the helper that a dynamic window (``block.select(S, E)``) gets addresses from."""
         self.used_indirect_blocks.add(block_id)
         self.used_window_addrs_blocks.add(block_id)
         return self.window_addrs_helper_name(block_id)
@@ -721,7 +732,8 @@ class CodegenContext:
                 "function uses a closure, a decorator or a wrapper."
             )
         if defined == "math" or hasattr(builtins, defined):
-            # The def lands in the generated module, over the name its other code calls.
+            # The def lands in the generated module and would replace the name that the
+            # other generated code calls.
             raise ValueError(
                 f"Callable name would shadow a name the generated code uses: {fn!r}. "
                 "Rename the function."
@@ -743,11 +755,11 @@ class CodegenContext:
         return symbol
 
     def function_constant(self, value: Any) -> str:
-        """A ``run_function`` constant as generated code names it.
+        """Return a ``run_function`` constant as generated code names it.
 
         Stepping hands the function one object, scan after scan, so what the function does
-        to it lasts.  A plain literal's text will do.  Anything else a kernel holds by
-        reference, and a code.py binds once at module level if its text rebuilds it.  Text
+        to it lasts.  A plain literal's text will do.  A kernel holds anything else by
+        reference.  A code.py binds it once at module level if its text rebuilds it.  Text
         can't say that two constants hold one list, so a code.py refuses that as well.
         """
         if _is_plain_literal(value):
@@ -775,14 +787,14 @@ class CodegenContext:
         return symbol
 
     def function_constant_lines(self) -> list[str]:
-        """Each constant's binding, which a code.py runs."""
+        """Return each constant's binding, which a code.py runs."""
         return [f"{symbol} = {value!r}" for symbol, value in self.function_constants.items()]
 
     def _call_by_reference(self, fn: Any) -> str:
-        """Bind *fn* itself to a symbol: a kernel lives in this process and calls the function.
+        """Bind *fn* itself to a symbol, because a kernel lives in this process and calls it.
 
-        A kernel takes any callable, so it needs no text of the function.  Whether it may be
-        called is for the kernel's gate, ``calls_that_depend_on_more_than_their_inputs``.
+        A kernel takes any callable, so it needs no text of the function.  The kernel's gate,
+        ``calls_that_depend_on_more_than_their_inputs``, decides whether it may be called.
         """
         fn_name = getattr(fn, "__name__", type(fn).__name__)
         symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
@@ -826,15 +838,14 @@ class CodegenContext:
         return block_id
 
     def _slot_addresses(self, binding: BlockBinding) -> dict[str, int]:
-        """The address of each slot of a block, by the name its slot resolves to.
+        """Return the address of each slot of a block, by the name its slot resolves to.
 
-        Memory is keyed by name, so a tag naming a slot is that slot however it
-        got the name: ``map_to``, ``slot(name=...)`` or the same spelling.  Read
-        from the slot configuration, not ``Block._tag_cache``: the cache holds
-        whichever slots something has indexed so far, and an indirect read only
-        indexes a slot when a scan reaches it.  What compiles must not depend on
-        that, or a kernel compiled before the pointer arrives keeps the name and
-        the slot in two cells.
+        Memory is keyed by name, so a tag that names a slot is that slot, however it
+        got the name: ``map_to``, ``slot(name=...)`` or the same spelling.  Read the
+        slot configuration, not ``Block._tag_cache``.  The cache holds whichever slots
+        something has indexed so far, and an indirect read indexes a slot only when a
+        scan reaches it.  What compiles must not depend on that.  Otherwise a kernel
+        compiled before the pointer arrives keeps the name and the slot in two cells.
         """
         addresses = self._slot_addresses_by_block.get(binding.block_id)
         if addresses is None:
@@ -849,12 +860,12 @@ class CodegenContext:
         return addresses
 
     def _slot_holders(self, binding: BlockBinding) -> dict[int, Tag]:
-        """The tag already known to hold each slot, by address, without indexing any.
+        """Return the tag already known to hold each slot, by address, without indexing any.
 
-        A name the program references wins: the engines seed the name, and a pointer
-        reads the same cell.  Otherwise the tag mapped onto the slot.
-        `Block._tag_cache` is left out because it holds whatever ran before the export asked
-        for.  A tag there holds only what the block's configuration gives it anyway.
+        A name that the program references wins: the engines seed the name, and a pointer
+        reads the same cell.  Otherwise use the tag mapped onto the slot.
+        `Block._tag_cache` is left out because it holds whatever ran before the export was
+        asked for.  A tag there holds only what the block's configuration gives it anyway.
         """
         holders: dict[int, Tag] = dict(binding.block._mapped_tags)
         for name, (block_id, addr) in self.tag_block_addresses.items():
@@ -863,13 +874,13 @@ class CodegenContext:
         return holders
 
     def _factory_power_on_values(self, binding: BlockBinding, answered: set[int]) -> dict[int, Any]:
-        """What a block's ``default_factory`` gives the slots nothing else answers for.
+        """Return what a block's ``default_factory`` gives the slots that nothing else answers for.
 
-        Asked through the block (`Block._factory_default`), which asks the factory once
-        per slot in address order and keeps the answer.  So a factory that counts gives
-        each slot what stepping reads there, and an export changes no value a later scan
-        reads.  A slot the factory raises for stays at zero, because the interpreter cannot
-        read it.
+        Ask through the block (`Block._factory_default`).  It asks the factory once per slot
+        in address order and keeps the answer.  So a factory that counts gives each slot the
+        value that stepping reads there, and an export changes no value that a later scan
+        reads.  A slot that the factory raises for stays at zero, because the interpreter
+        cannot read it.
         """
         block = binding.block
         if block.default_factory is None:
@@ -885,10 +896,10 @@ class CodegenContext:
         return values
 
     def block_power_on_literals(self, binding: BlockBinding) -> dict[int, str]:
-        """Source for the slots of a block that do not power on at the type's zero.
+        """Return source for the slots of a block that do not power on at the type's zero.
 
-        A slot with no holder powers on as `Block._get_tag` would build it.  One no
-        literal can spell stays at zero.
+        A slot with no holder powers on as `Block._get_tag` would build it.  A slot that
+        no literal can spell stays at zero.
         """
         literals = self._power_on_literals_by_block.get(binding.block_id)
         if literals is not None:
@@ -906,14 +917,14 @@ class CodegenContext:
         literals = {}
         for addr in sorted(values):
             literal = _default_literal(values[addr])
-            # By spelling: a Bool's False on an INT block is not the block's 0.
+            # Compare by spelling, because a Bool's False on an INT block is not the block's 0.
             if literal is not None and literal != zero:
                 literals[addr] = literal
         self._power_on_literals_by_block[binding.block_id] = literals
         return literals
 
     def block_retentive_overrides(self, binding: BlockBinding) -> dict[int, bool]:
-        """Each slot whose retentive flag may not be its block's, by address."""
+        """Return each slot whose retentive flag may differ from its block's, by address."""
         block = binding.block
         overrides = {
             addr: block._slot_field(addr, "retentive", block.retentive)

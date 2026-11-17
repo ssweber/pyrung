@@ -53,7 +53,7 @@ def resolve_tag_or_value_ctx(
         try:
             resolved_tag = source.resolve_ctx(ctx)
         except PastBankError:
-            # pyrung has no memory past a bank: the read is the type's zero.
+            # pyrung has no memory past a bank, so the read returns the type's zero.
             return source.block._type_default()
         return ctx.get_tag(resolved_tag.name, resolved_tag.default)
     # Check for Tag
@@ -97,9 +97,11 @@ def resolve_tag_ctx(
 
 
 def reads_indexed_element(value: Any, seen: set[int] | None = None) -> bool:
-    """True when *value* (a source or an expression) reads a block element
-    addressed at scan time (``Tbl[P]``, ``Tbl[Q + 1]``), which can fall below the
-    block."""
+    """Return True when *value*, a source or an expression, reads an indexed block element.
+
+    The element is addressed at scan time, as in ``Tbl[P]`` or ``Tbl[Q + 1]``, so it can
+    fall below the block.
+    """
     from pyrung.core.expression import Expression
     from pyrung.core.memory_block import IndirectExprRef
     from pyrung.core.memory_block import IndirectRef as IndirectRefType
@@ -119,10 +121,10 @@ def reads_indexed_element(value: Any, seen: set[int] | None = None) -> bool:
 
 
 def resolve_source_type_tag_ctx(source: IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
-    """A Tag with the type of the element *source* reads.
+    """Return a Tag with the type of the element that *source* reads.
 
-    Past its bank there is no element, and the read is the type's zero: the
-    bank's first element carries the type.  Read the value through
+    Past its bank there is no element, and the read returns the type's zero.  The
+    bank's first element then supplies the type.  Read the value through
     ``resolve_tag_or_value_ctx``, not from this Tag.
     """
     from pyrung.core.memory_block import PastBankError
@@ -220,10 +222,10 @@ def _set_fault_address_error(ctx: ScanContext) -> None:
 
 
 def _sequential_tags(start_tag: Tag, count: int) -> list[Tag]:
-    """*start_tag* and the tags after it, *count* in all, but none past its block's end.
+    """Return *start_tag* and the tags after it, *count* in all, but none past its block's end.
 
-    In a block they are the tags that hold the addresses (``elements_after``); a tag
-    in no block counts on by name.
+    In a block, these are the tags that hold the addresses (``elements_after``).  A tag
+    that is in no block counts on by name.
     """
     from pyrung.core.memory_block import elements_after, elements_that_fit
 

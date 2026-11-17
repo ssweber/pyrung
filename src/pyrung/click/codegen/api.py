@@ -87,10 +87,10 @@ def _verify_emitted_logic(
 ) -> None:
     """Fail when the generated code would change the logic the rows wire.
 
-    Compares every output's AF token, full condition (each contact by its
-    cell), pins, CLICK rung and wire in the source rows against the
-    ``with rung`` / ``with branch`` blocks the emitter renders, row for row
-    (see :func:`~pyrung.click.codegen.shaping.emitted_logic_mismatch`).
+    Compare every output's AF token, full condition (each contact by its cell), pins,
+    CLICK rung and wire in the source rows against the ``with rung`` / ``with branch``
+    blocks that the emitter renders, row for row (see
+    :func:`~pyrung.click.codegen.shaping.emitted_logic_mismatch`).
     """
     scopes = [("Main program", analyzed)]
     scopes.extend((f'Subroutine "{sub.name}"', sub.analyzed) for sub in subroutines)
@@ -208,16 +208,15 @@ def ladder_to_pyrung(
             parameters; their generated tags are marked external.
         output_path: Optional path to write the generated Python file.
             If ``None``, the code is returned as a string only.
-        validate: When *True* (default), run codegen self-checks: a decl-level
-            identity check that the generated structure defaults reconstruct
-            every source per-slot value (raises :class:`CodegenIdentityError`),
-            a rung-analysis check that no source contact is silently dropped
-            for lack of wiring into an output, and a logic check that every
-            output in the generated code keeps the condition (each contact
-            from its own cell), pins, CLICK rung and wire the source rows give
-            it (both raise
-            ``ValueError``). When *False*, a dropped contact only warns and the
-            logic check is skipped.
+        validate: When *True* (default), run three codegen self-checks.  A decl-level
+            identity check confirms that the generated structure defaults
+            reconstruct every source per-slot value (it raises
+            :class:`CodegenIdentityError`).  A rung-analysis check confirms that no
+            source contact is silently dropped for lack of wiring into an output.  A
+            logic check confirms that every output in the generated code keeps the
+            condition (each contact from its own cell), pins, CLICK rung and wire that
+            the source rows give it.  The last two raise ``ValueError``.  When *False*,
+            a dropped contact only warns and the logic check is skipped.
 
     Returns:
         The generated Python source code as a string.
@@ -319,7 +318,7 @@ def ladder_to_pyrung_project(
         validate: When *True* (default), run codegen self-checks (see
             :func:`ladder_to_pyrung`): a structure-default identity check
             (raises :class:`CodegenIdentityError`), a dropped-contact check and
-            a generated-logic check (raise ``ValueError``). When *False*,
+            a generated-logic check (both raise ``ValueError``).  When *False*,
             dropped contacts only warn.
 
     Returns:

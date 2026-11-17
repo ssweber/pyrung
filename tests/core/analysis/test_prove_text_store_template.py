@@ -12,7 +12,7 @@ from pyrung.core import Bool, Program, Rung, copy, out, to_text
 
 
 def _program(read: str) -> Program:
-    """B picks DS1 as 12 or 3; its text goes into TXT1 and on; *read* in TXT1 sets Y."""
+    """B picks DS1 as 12 or 3. Its text goes into TXT1 and on. *read* in TXT1 sets Y."""
     blocks = ClickBlocks()
     ds, txt = blocks.ds, blocks.txt
     b, y = Bool("B"), Bool("Y")

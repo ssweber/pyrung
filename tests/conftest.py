@@ -18,8 +18,8 @@ pytest_plugins = ["pytester"]
 
 # ---------------------------------------------------------------------------
 # Hard memory cap — kills the process before it OOMs the machine.
-# Override with PYTEST_MEMORY_CAP_MB env var (default 4096).  Per process: each xdist
-# worker has its own, and a worker it kills fails the run, naming the test.
+# Set PYTEST_MEMORY_CAP_MB to override it (default 4096).  The cap is per process, so each
+# xdist worker has its own. The run fails when the cap kills a worker, and names the test.
 # ---------------------------------------------------------------------------
 
 _MEMORY_CAP_MB = int(os.environ.get("PYTEST_MEMORY_CAP_MB", "4096"))
@@ -38,7 +38,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
     cap_bytes = _MEMORY_CAP_MB * 1024 * 1024
     proc = psutil.Process()
-    # Bound here: a test's fake clock replaces time.sleep, and a call from this
+    # Bind time.sleep now. A test's fake clock replaces it later, and a call from this
     # thread would advance that clock mid-scan.
     sleep = time.sleep
 
@@ -64,7 +64,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 @pytest.fixture(autouse=True)
 def _no_wall_clock_in_how(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An answer a test asserts must not depend on how busy the machine is."""
+    """Stop how() from reading the wall clock, so answers do not depend on machine load."""
     from pyrung.core.analysis.pilot import budget
 
     monkeypatch.setattr(budget, "WALL_CLOCK_ENABLED", False)
@@ -206,6 +206,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     group.addoption(
+        "--conformance-cases",
+        action="store",
+        default=None,
+        metavar="PICK",
+        help=(
+            "Run a project of picked cases, every rung in main: group/id or group, "
+            "comma-separated, @file for a file of them (env: PYRUNG_CONFORMANCE_CASES). "
+            "Export it with make conformance-export CASES=..."
+        ),
+    )
+    group.addoption(
         "--conformance-target",
         action="store",
         default=None,
@@ -250,7 +261,10 @@ def _assert_states_match(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> N
 
 
 def _nan_free(values: Any) -> dict[str, Any]:
-    """*values* as a dict, NaN spelled so two NaNs compare equal (a REAL may hold NaN)."""
+    """Return *values* as a dict in which NaN is spelled so that two NaNs compare equal.
+
+    A REAL may hold NaN.
+    """
     return {
         key: "<NaN>" if isinstance(value, float) and value != value else value
         for key, value in values.items()
@@ -515,7 +529,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # noqa
 
 @pytest.fixture(autouse=True)
 def _a_fold_mismatch_fails_its_test(request: pytest.FixtureRequest) -> Any:
-    """Name the test that met a mismatch, even if something on the way out caught it."""
+    """Fail the test that met a mismatch, even if something on the way out caught it."""
     module = sys.modules.get("tests.fold_check")
     before = 0 if module is None else len(module.undeclared())
     yield
@@ -530,7 +544,7 @@ def _a_fold_mismatch_fails_its_test(request: pytest.FixtureRequest) -> Any:
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node: Any, error: Any) -> None:
-    """An xdist worker's record of the check, for the controller to judge with the rest."""
+    """Absorb an xdist worker's record of the check, for the controller to judge with the rest."""
     record = getattr(node, "workeroutput", {}).get("fold_check")
     if record is not None:
         from tests import fold_check

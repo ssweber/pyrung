@@ -1,19 +1,19 @@
-"""When each contact of a rung is read, so an export keeps it there.
+"""Track when each contact of a rung is read, so that an export keeps it there.
 
-On a CLICK and in pyrung, each output solves only the path from the rail to it:
-the trunk's contacts are read as the rung starts, and a branch reads its own
-contacts when execution reaches it, after the outputs above it ran.  The exporter
+On a CLICK and in pyrung, each output solves only the path from the rail to it.
+The rung reads the trunk's contacts as it starts. A branch reads its own
+contacts when execution reaches it, after the outputs above it ran. The exporter
 factors label-equal contacts into a shared node (``branch(C, D)`` beside
-``branch(C, E)`` becomes ``branch(C)`` holding both), which reads them earlier,
-and an output its group cannot share a node with reads its whole path where it
+``branch(C, E)`` becomes ``branch(C)`` holding both), and the shared node reads them
+earlier. An output whose group cannot share a node reads its whole path where it
 stands.
 
-A move is harmless unless a row in between writes a tag the contact reads.
-:class:`ReadOrder` records where the source rung reads each contact and asks
+A move is harmless unless a row in between writes a tag that the contact reads.
+:class:`ReadOrder` records where the source rung reads each contact. It asks
 :func:`~pyrung.core.validation.order_dependence.reads_after_write` about the
-rows a move would cross.
+rows that a move would cross.
 
-Positions count outputs: a contact read at position *p* sees the writes of
+Positions count outputs. A contact read at position *p* sees the writes of
 outputs ``0..p-1`` of the rung (in solve order) and none after.
 """
 
@@ -36,11 +36,11 @@ if TYPE_CHECKING:
 
 
 def contact_positions(rung: Rung) -> tuple[list[list[Any]], list[list[int]]]:
-    """Each output's contacts in path order, and the position each is read at.
+    """Return each output's contacts in path order, and the position each is read at.
 
     Outputs come in solve order (as ``_collect_instruction_trees`` lists them).
     A row's own contacts are read at the position of the first output after
-    it: everything above has run, nothing below has.
+    it, because everything above has run and nothing below has.
     """
     conditions: list[list[Any]] = []
     positions: list[list[int]] = []
@@ -63,9 +63,10 @@ def contact_positions(rung: Rung) -> tuple[list[list[Any]], list[list[int]]]:
 
 @dataclass(frozen=True)
 class MovedRead:
-    """Output *output*'s contact *contact* would be read across a write of *tag*.
+    """A contact that a move would read across a write.
 
-    *writer* is the output (by position in the rung) whose write it crosses.
+    Output *output*'s contact *contact* would be read across a write of *tag*. *writer* is
+    the output (by position in the rung) whose write the contact crosses.
     """
 
     output: int
@@ -94,7 +95,7 @@ class ReadOrder:
         self._bank_of = self._builder.bank_of()
 
     def crossing(self, output: int, index: int, at: int) -> MovedRead | None:
-        """The first write a move of contact *index* of *output* to *at* crosses."""
+        """Return the first write that a move of contact *index* of *output* to *at* crosses."""
         was = self.positions[output][index]
         if was == at:
             return None
@@ -108,7 +109,10 @@ class ReadOrder:
         return MovedRead(output=output, contact=condition, tag=hit.tag, writer=lo + hit.writer)
 
     def check(self, exported: Rung) -> MovedRead | None:
-        """The first contact *exported* (the rung as drawn) would read across a write."""
+        """Return the first contact of *exported* that would be read across a write.
+
+        *exported* is the rung as drawn.
+        """
         _conditions, positions = contact_positions(exported)
         for output, read_at in enumerate(positions):
             if len(read_at) != len(self.positions[output]):  # pragma: no cover - defensive

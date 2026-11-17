@@ -120,8 +120,8 @@ def _assert_clicknick_success(
             for observation in event.data.get("effect_observations", ())
         )
     )
-    # The preset is now applied at the entry boundary of this real steer; the
-    # legacy dedicated preset Pulse no longer consumes its own scan.
+    # The preset is now applied at the entry boundary of this real steer.  The
+    # legacy dedicated preset Pulse no longer takes a scan of its own.
     assert checkpoint_acceptance.scan == 6
 
     adjacent = next(
@@ -198,7 +198,7 @@ def test_a_route_a_scan_has_already_spoiled_says_what_a_restart_needs(logic, cle
     assert plan.restart.clear == {"RouteSequenceInterrupted": 0, fixture.SequenceStep.name: 0}
     assert plan.restart.clear_scans == clear_scans
 
-    # What the report says a person can do works.
+    # Doing what the report tells a person to do works.
     runner.stop()
     runner._state = runner.state.with_tags(dict(plan.restart.clear))
     runner.start()
@@ -255,12 +255,11 @@ def test_neutral_reconnect_boundary_uses_one_exact_intrascan_pulse() -> None:
 
 
 def _field_order_reconnect_logic() -> Any:
-    """The reconnect rung in the field program's order (the repair branch above
-    the status branch), cut to the rungs around the reconnect.
+    """Build the reconnect rung in the field program's order, cut to the rungs around it.
 
-    The status branch reads its conditions when the scan reaches it, so it
-    sees the repair's 10 on the same scan.  The pilot used to raise
-    "conflicting lifecycle fact" here: a later act that reached the same
+    The repair branch is above the status branch.  The status branch reads its conditions
+    when the scan reaches it, so it sees the repair's 10 on the same scan.  The pilot used
+    to raise "conflicting lifecycle fact" here.  A later act that reached the same
     rejected source re-opened its spent theory with a smaller budget.
     """
     from pyrung import Or, Program, branch, copy, count_up, rung
@@ -313,8 +312,11 @@ def _retained_98(logic: Any) -> PLC:
 
 
 def _reconnect_overwrites(events: list[Any]) -> set[tuple[Any, Any, bool]]:
-    """What each rejected reconnect saw happen to the step: the value it
-    wrote, the value that displaced it, and whether that was the same scan."""
+    """Return what each rejected reconnect saw happen to the step.
+
+    That is the value it wrote, the value that displaced it, and whether that happened on
+    the same scan.
+    """
     reconnect = ((fixture.NetworkAvailable.name, True),)
     return {
         (
@@ -330,7 +332,7 @@ def _reconnect_overwrites(events: list[Any]) -> set[tuple[Any, Any, bool]]:
 
 
 def _assert_reconnect_overwritten_on_its_scan(plan: Any, events: list[Any]) -> None:
-    # The pilot tries the reconnect and rejects it each time: the status
+    # The pilot tries the reconnect and rejects it each time, because the status
     # branch below the repair turns its 10 into 94 on the same scan.  It does
     # not yet try a nonzero ServiceStatusInput, which keeps that branch off,
     # so the search runs out of budget.
@@ -384,8 +386,11 @@ def test_field_order_reconnect_is_reachable_by_hand(make_logic: Any) -> None:
 
 @_FIELD_ORDER_LOGICS
 def test_field_order_reconnect_reaches_step_10(make_logic: Any) -> None:
-    """The pilot alone stops: it holds the reconnect only as an exploratory hypothesis, or has
-    nothing left.  The last resort presses it, and how() asked again finds the rest."""
+    """The pilot alone stops.
+
+    It holds the reconnect only as an exploratory hypothesis, or it has nothing left.  The
+    last resort presses the reconnect, and how() asked again finds the rest.
+    """
     plan = _retained_98(make_logic()).how(fixture.SequenceStep == 10, max_scans=120)
 
     assert plan.reachable, plan.reason
