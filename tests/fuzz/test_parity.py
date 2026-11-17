@@ -10,7 +10,7 @@ from hypothesis import Phase, given, note, settings
 
 from pyrung.core import PLC, Block, Bool, CompiledPLC, Program, Rung, TagType, Word, copy, math
 
-from .conftest import DT, MAX_EXAMPLES, PARITY_SCANS
+from .conftest import DT, PARITY_SCANS, PROFILE
 from .minimize import minimize
 from .reproducer import format_parity_reproducer, write_reproducer
 from .strategies import build_program, program_specs
@@ -27,85 +27,70 @@ def _diff_dicts(left: dict, right: dict) -> str:
     return "\n".join(diffs)
 
 
-def test_engine_parity():
-    failures: list[str] = []
+@pytest.mark.fuzz
+@given(data=st.data())
+@settings(settings.get_profile(PROFILE), phases=[Phase.explicit, Phase.reuse, Phase.generate])
+def test_engine_parity(data):
+    try:
+        spec = data.draw(program_specs())
+        program = build_program(spec)
 
-    @given(data=st.data())
-    @settings(
-        max_examples=MAX_EXAMPLES,
-        deadline=None,
-        phases=[Phase.explicit, Phase.reuse, Phase.generate],
-    )
-    def inner(data):
-        try:
-            spec = data.draw(program_specs())
-            program = build_program(spec)
+        interpreted = PLC(program, dt=DT)
+        compiled = CompiledPLC(program, dt=DT)
 
-            interpreted = PLC(program, dt=DT)
-            compiled = CompiledPLC(program, dt=DT)
+        input_history: list[dict[str, bool | int]] = []
+        strat_map = spec.pool.input_strategy_map()
 
-            input_history: list[dict[str, bool | int]] = []
-            strat_map = spec.pool.input_strategy_map()
+        for scan in range(PARITY_SCANS):
+            inputs: dict[str, bool | int] = {}
+            for name in spec.pool.input_names():
+                if strat_map[name] == "bool":
+                    inputs[name] = data.draw(st.booleans())
+                else:
+                    inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
+            input_history.append(inputs)
+            interpreted.patch(inputs)
+            compiled.patch(inputs)
+            interpreted.step()
+            compiled.step()
 
-            for scan in range(PARITY_SCANS):
-                inputs: dict[str, bool | int] = {}
-                for name in spec.pool.input_names():
-                    if strat_map[name] == "bool":
-                        inputs[name] = data.draw(st.booleans())
-                    else:
-                        inputs[name] = data.draw(st.sampled_from(spec.pool.int_input_domain(name)))
-                input_history.append(inputs)
-                interpreted.patch(inputs)
-                compiled.patch(inputs)
-                interpreted.step()
-                compiled.step()
+            i_state = interpreted.current_state
+            c_state = compiled.current_state
 
-                i_state = interpreted.current_state
-                c_state = compiled.current_state
+            tag_diff = _diff_dicts(dict(i_state.tags), dict(c_state.tags))
+            mem_diff = _diff_dicts(dict(i_state.memory), dict(c_state.memory))
+            diff = tag_diff or mem_diff
 
-                tag_diff = _diff_dicts(dict(i_state.tags), dict(c_state.tags))
-                mem_diff = _diff_dicts(dict(i_state.memory), dict(c_state.memory))
-                diff = tag_diff or mem_diff
+            if i_state.timestamp != pytest.approx(c_state.timestamp) or diff:
 
-                if i_state.timestamp != pytest.approx(c_state.timestamp) or diff:
+                def _check_parity(candidate, _scan=scan, _hist=input_history):
+                    try:
+                        p = build_program(candidate)
+                        interp = PLC(p, dt=DT)
+                        comp = CompiledPLC(p, dt=DT)
+                        for step_inputs in _hist[: _scan + 1]:
+                            interp.patch(step_inputs)
+                            comp.patch(step_inputs)
+                            interp.step()
+                            comp.step()
+                        i_s = interp.current_state
+                        c_s = comp.current_state
+                        return dict(i_s.tags) != dict(c_s.tags) or dict(i_s.memory) != dict(
+                            c_s.memory
+                        )
+                    except Exception:
+                        return False
 
-                    def _check_parity(candidate, _scan=scan, _hist=input_history):
-                        try:
-                            p = build_program(candidate)
-                            interp = PLC(p, dt=DT)
-                            comp = CompiledPLC(p, dt=DT)
-                            for step_inputs in _hist[: _scan + 1]:
-                                interp.patch(step_inputs)
-                                comp.patch(step_inputs)
-                                interp.step()
-                                comp.step()
-                            i_s = interp.current_state
-                            c_s = comp.current_state
-                            return dict(i_s.tags) != dict(c_s.tags) or dict(i_s.memory) != dict(
-                                c_s.memory
-                            )
-                        except Exception:
-                            return False
-
-                    spec = minimize(spec, _check_parity)
-                    code = format_parity_reproducer(spec, scan, input_history, diff)
-                    note(f"\n--- Reproducer ---\n{code}")
-                    path = write_reproducer(code, "parity")
-                    if path is None:
-                        return
-                    note(f"Written to {path}")
-                    failures.append(str(path))
+                spec = minimize(spec, _check_parity)
+                code = format_parity_reproducer(spec, scan, input_history, diff)
+                note(f"\n--- Reproducer ---\n{code}")
+                path = write_reproducer(code, "parity")
+                if path is None:
                     return
-        finally:
-            gc.collect()
-
-    inner()
-
-    if failures:
-        raise AssertionError(
-            f"Found {len(failures)} parity bugs — see reproducers:\n"
-            + "\n".join(f"  {p}" for p in failures)
-        )
+                note(f"Written to {path}")
+                raise AssertionError(f"Found a parity bug, see the reproducer:\n  {path}")
+    finally:
+        gc.collect()
 
 
 def test_indirect_copy_tag_materialization():
