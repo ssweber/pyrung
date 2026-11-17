@@ -115,7 +115,7 @@
    ],
    [
     "S_DryerTemp_F",
-    -1
+    -0.5
    ]
   ],
   "still_need": [
@@ -2705,7 +2705,7 @@
      "tags": [
       [
        "S_DryerTemp_F",
-       -1
+       -0.5
       ]
      ]
     },
@@ -2749,7 +2749,7 @@
     }
    ],
    "lever_notes": {
-    "S_DryerTemp_F": "held S_DryerTemp_F < S_ValLowBandTemp_F (e.g., S_DryerTemp_F = -1)"
+    "S_DryerTemp_F": "held S_DryerTemp_F < S_ValLowBandTemp_F (e.g., S_DryerTemp_F = -0.5)"
    }
   },
   "plan_journal": [
@@ -2758,13 +2758,13 @@
     "inputs": [
      [
       "S_DryerTemp_F",
-      -1
+      -0.5
      ]
     ],
     "kind": "force",
     "label": "S_DryerTemp_F",
     "notes": [
-     "held S_DryerTemp_F < S_ValLowBandTemp_F (e.g., S_DryerTemp_F = -1)"
+     "held S_DryerTemp_F < S_ValLowBandTemp_F (e.g., S_DryerTemp_F = -0.5)"
     ],
     "pulsing_holds": [],
     "steady_holds": [],
