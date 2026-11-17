@@ -246,7 +246,7 @@ def _rows(*rows: str) -> list[tuple[str, ...]]:
 
 
 def _assert_or_merge(source: str, expected: list[tuple[str, ...]]) -> None:
-    """Export the rows as drawn, then read them back into a program that exports them again."""
+    """Assert that the rows export as drawn, and that a read back exports the same rows again."""
     logic, mapping = build_program(source)
     bundle = pyrung_to_ladder(logic, mapping)
     assert list(bundle.main_rows[1:-1]) == expected
@@ -935,8 +935,8 @@ def test_calc_hex_token_uses_inferred_hex_mode():
 
 def test_calc_exports_wide_constants_as_written_once_allowed():
     # pyrung runs the 3000000000 as its low 32 bits, as a pasted one ran on a CLICK.
-    # Validation refuses it (CLK_MATH_WIDE_CONSTANT), because CLICK's editor does. Once
-    # the code is allowed, the export writes the formula as written.
+    # Validation refuses it (CLK_MATH_WIDE_CONSTANT), because CLICK's editor does. Once you
+    # allow CLK_MATH_WIDE_CONSTANT, the export writes the formula as written.
     from pyrung.click.ladder import LadderExportError
 
     logic, mapping = build_program(
@@ -2344,7 +2344,10 @@ def test_device_id_outside_ds_is_refused(register):
 
 @pytest.mark.parametrize("source", ["DS1", "DD1", "DH1", "5"])
 def test_to_text_exponential_from_an_integer_is_refused(source):
-    """Offer Exponential Numbering only for a Real source, as CLICK does."""
+    """The export refuses Exponential Numbering from a source that is not Real.
+
+    CLICK offers Exponential Numbering only for a Real source.
+    """
     logic, mapping = build_program(
         f"""
         with Program() as p:

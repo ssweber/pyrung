@@ -31,7 +31,10 @@ ENGINES = (PLC, CompiledPLC)
 
 
 def _fires_at(program: Program, source: str, value: Any, hit: Bool) -> bool:
-    """Return whether a scan with *source* at *value* turns the coil on, if both engines agree."""
+    """Return whether a scan with *source* at *value* turns the coil on.
+
+    Assert that both engines give the same answer.
+    """
     answers = []
     for engine in ENGINES:
         plc = engine(program, dt=0.01)

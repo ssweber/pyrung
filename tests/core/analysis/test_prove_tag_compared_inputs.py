@@ -1,4 +1,6 @@
-"""Test that an input compared with a changing value takes every value, not a literal partition.
+"""Test that an input compared with a changing value gets that value's points.
+
+The input keeps its literal partition as well. It does not get every value in its range.
 
 The expression partition gives an input one value for each class that its literal comparisons
 split. Suppose the input is compared with another changing value. That value may be a timer or

@@ -538,7 +538,8 @@ def test_aggregate_sum_decomposition():
     """math(block.sum(), dest): trace decomposes to non-zero elements.
 
     Tracing Total=0 when the sum is 2 asks "how do I make the sum zero?"
-    The trace must clear each non-zero element, DS2 and DS4.
+    To make the sum zero, each non-zero element must be cleared.  The trace has a child
+    for each one, DS2 and DS4.
     """
     x_Go = Bool("x_Go", external=True)
     x_Alarm = Bool("x_Alarm", external=True)
@@ -2065,8 +2066,8 @@ def test_counter_fed_by_a_latched_bit_from_off():
 
 @pytest.mark.parametrize("sealed", [False, True])
 def test_counter_fed_by_a_seal_in_pulses_start_against_a_held_stop(sealed):
-    """``Or(Start, Run), ~Stop -> Run``: ``Start`` pulses, and ``Stop`` holds because
-    it is already off. Pulsing both in their own phases would never seal ``Run``."""
+    """``Or(Start, Run), ~Stop -> Run``: ``Start`` pulses, and ``Stop`` stays held off.
+    Pulsing both in their own phases would never seal ``Run``."""
     Start = Bool("SealStart", external=True)
     Stop = Bool("SealStop", external=True)
     Run = Bool("SealRun")

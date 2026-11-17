@@ -1,14 +1,15 @@
 """Check For/Next with body rungs, Break, Continue and nesting, as a property test.
 
-The test builds a random loop nest (up to three deep) into a pyrung program and runs
-a plain-Python interpreter on the same tree.  The tree mixes bare body
+The test builds a random loop nest (up to three deep) into a pyrung program.  It also runs
+the same tree through a model, a plain-Python interpreter.  The tree mixes bare body
 instructions (implicit always-true rungs) with conditioned body rungs holding
 ``break_loop()`` / ``continue_loop()``, ``out()`` coils and ``calc`` increments, read
-back from tags the body wrote on earlier iterations.  The interpreter and the
-compiled kernel must both match the model on every scan, and each other.
+back from tags the body wrote on earlier iterations.  pyrung's interpreter and the
+compiled kernel must both match the model on every scan, and match each other.
 
 The model encodes these rules, which were recorded on hardware in
 ``tests/conformance/program_control/test_loop.py`` and ``test_for_count.py``.
+
 - A For whose rung is false skips its body, so coils hold.
 - The count is read as unsigned 16-bit, and a count of 0 runs no iteration.
 - Break leaves the innermost loop, and Continue skips the rest of the iteration.

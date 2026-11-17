@@ -1,4 +1,4 @@
-"""Test RUNG_ORDER_DEPENDENT, which flags rows that read a tag that an earlier row wrote.
+"""Test RUNG_ORDER_DEPENDENT, which flags a row that reads what an earlier row of its rung wrote.
 
 The solve-order table (``tests/conformance/rungs/test_solve_order.py``,
 ``ORDER_DEPENDENT``) is the check's ground truth: it records, for every
@@ -212,7 +212,8 @@ def test_continued_rung_reads_its_chain():
 
 
 def test_box_leg_below_a_write_is_flagged():
-    # A box with pins ends its rung, so the write sits in the rung that this rung continues.
+    # A box with pins ends its rung. So the latch sits in the rung above, and the box's rung
+    # continues that rung.
     with Program() as program:
         with Rung(Go):
             latch(P)

@@ -496,8 +496,8 @@ def _count_kernel_scans(plc: PLC) -> ScansOutsideLoop:
 
 
 class TestResolvedOnReadSignalFold:
-    """A rung that reads a resolved-on-read signal lands where stepping does. The run still
-    folds between the signal's edges where it can."""
+    """When a rung reads a resolved-on-read signal, the run lands where stepping does. The run
+    still folds between the signal's edges where it can."""
 
     @staticmethod
     def _clock_heartbeat_program(preset_ms: int = 100_000) -> Program:

@@ -220,7 +220,7 @@ def acc_thousands(slot: Any, s: Side, scan: int, into: Any) -> None:
 def moves(slot: Any, acc: Any, prev: Any, first: int, last: int, into: Any) -> None:
     """Count into *into* the scans of *first*..*last* on which *acc* moved up.
 
-    Put it below the drum.
+    Call this below the drum's rung.
     """
     with Rung(slot.Scratch >= first, slot.Scratch <= last, acc > prev):
         math(into + 1, into)

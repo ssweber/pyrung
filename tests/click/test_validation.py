@@ -1818,9 +1818,9 @@ class TestForLoopCountAndRandBounds:
 
 
 class TestCalcPlainArguments:
-    """CLICK's editor accepts only a tag or a constant as an argument of one of these.
+    """In CLICK's editor, an argument of RAND, LSH, RSH, LRO or RRO must be a tag or a constant.
 
-    They are RAND, LSH, RSH, LRO and RRO.  It refused ``RAND ( DD615 / 2 , 10 )``.
+    The editor refused ``RAND ( DD615 / 2 , 10 )``.
     """
 
     @staticmethod

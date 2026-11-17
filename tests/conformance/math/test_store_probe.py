@@ -127,10 +127,11 @@ def _stage(slot, *instructions):
 
 
 def _end(slot):
-    """Read the destinations back on the scans after the window. Reading is idempotent.
+    """Return the rung condition for the scans after the window.
 
-    The rungs are not gated on ``Cmd`` or ``Fired``, because ``Scratch`` is 0 while idle
-    and a compare contact costs 3 steps of the part's budget.
+    A case reads its destinations back under this condition. Reading them again on each scan
+    changes nothing. The rungs are not gated on ``Cmd`` or ``Fired``, because ``Scratch`` is
+    0 while idle and a compare contact costs 3 steps of the part's budget.
     """
     return (slot.Scratch > WINDOW,)
 
