@@ -1,10 +1,9 @@
 """The order and width of a Real SUM: the ``real_sum`` group.
 
-Part ``math`` (``suite.PARTS``).  CLICK's SUM over a DF range adds in some order at some
-width.  pyrung adds plain left to right on every backend (core, kernel and
-generated code); the ruling is plain left to right on all backends, and a
-recording overrides the ruling.  Each case sums three orderings of one set into a
-DF and reads each sum, truncated, into an Int.
+Part ``math`` (``suite.PARTS``). CLICK's SUM over a DF range adds in some order at some
+width. pyrung adds plain left to right on every backend (core, kernel and generated
+code). That is the ruling for all backends, and a recording overrides it. Each case sums
+three orderings of one set into a DF and reads each sum, truncated, into an Int.
 
 The sets, as the candidates read them (first, second, third ordering):
 
@@ -30,10 +29,10 @@ compensated (Neumaier, fsum)      1, 1, 1      1, 1, 1      2
 - ``sum_absorbs``: {16777216, 1, 1}, read as the sum less 16777216.  float32 left to right
   or largest first absorbs each 1 (0); anything else reads 2.  It alone tells float32
   largest first from compensated.  pyrung reads 2.
-- ``math_keeps_the_one``: not a SUM: DF 1e8 + 1.0 - DF 1e8 in one Math (Result1), and
-  DF 1e30 + 1.0 - DF 1e30 (Result2).  The intermediates are wider than a float32
-  (``faults/real_intermediate_range`` read the range, not the precision), so 1, 0 at
-  double, 0, 0 at float32, and 1, 1 wider than double.
+- ``math_keeps_the_one``: this is not a SUM. It is DF 1e8 + 1.0 - DF 1e8 in one Math
+  (Result1) and DF 1e30 + 1.0 - DF 1e30 (Result2). The intermediates are wider than a
+  float32 (``faults/real_intermediate_range`` read the range, not the precision). So the
+  results are 1, 0 at double, 0, 0 at float32, and 1, 1 wider than double.
 
 The cases own DF70..DF100 and DF142..DF150.
 """

@@ -149,13 +149,13 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
 
 @pytest.fixture
 def small_limit(monkeypatch: pytest.MonkeyPatch) -> int:
-    """A column turns Unknown on its hundredth change, so a short run reaches the limit."""
+    """Lower the entry limit to 100, so a column turns Unknown on its hundredth change."""
     monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 100)
     return 100
 
 
 def _trimmed(record: RungFiringTimelines, cut: int) -> RungFiringTimelines:
-    """*record* trimmed to scan *cut*, as a record with a history window and no limit is."""
+    """Return *record* trimmed to scan *cut*, as a record with a history window and no limit is."""
     windowed = record.snapshot()
     windowed._limit = None
     windowed.trim_before(cut)
@@ -163,7 +163,7 @@ def _trimmed(record: RungFiringTimelines, cut: int) -> RungFiringTimelines:
 
 
 class _Uncapped(RungFiringTimelines):
-    """Stepping that keeps every value, where stepping stops at the limit to save memory."""
+    """A record that steps like the real one but keeps every value past the limit."""
 
     __slots__ = ()
 
@@ -179,9 +179,10 @@ def _loose(value: Any) -> Any:
 def _assert_true_to(
     stepped: RungFiringTimelines, truth: RungFiringTimelines, ours: RungFiringTimelines, last: int
 ) -> None:
-    """Each value ours knows is the value written, and ours says Unknown only where stepping does.
+    """Check that each value ours knows is the value written, and that ours says Unknown only
+    where stepping does.
 
-    *truth* is stepping that keeps every value.  A column that holds no Unknown answers every
+    *truth* is stepping that keeps every value. A column that holds no Unknown answers every
     other read as one of the two answers it.
     """
     holes: set[str] = set()
@@ -369,7 +370,7 @@ def _counting_up(index: int) -> list[Scan]:
 
 
 def _kept(cycle: Callable[[int], list[Scan]], cycles: int) -> RungFiringTimelines:
-    """The cycles stepped, with every value kept."""
+    """Return the cycles stepped, with every value kept."""
     truth: RungFiringTimelines = _Uncapped()
     scans = [scan for index in range(cycles) for scan in cycle(index)]
     for scan_id, scan in enumerate(scans, start=1):
@@ -410,7 +411,7 @@ def _three_counts(index: int) -> list[Scan]:
 
 
 def _irregular(writes: Callable[[int], Scan], count: int) -> list[Scan]:
-    """*count* scans of values no count or flip-flop takes, so they go in one by one."""
+    """Return *count* scans of values that fit no count or flip-flop, so each goes in on its own."""
     return [writes(-1 - value * value) for value in range(count)]
 
 
@@ -568,7 +569,7 @@ def test_random_plans_left_unapplied_leave_the_column_as_stepping_does(seed: int
 
 
 def _ramp_then_rest(index: int) -> list[Scan]:
-    """A count of three scans that stepping folds into one range, then a scan with no write."""
+    """Return three counting scans that stepping folds into one range, then a scan with no write."""
     return [
         *({0: ({"a": 10 * index + offset}, frozenset())} for offset in range(3)),
         {0: ({}, frozenset())},
@@ -605,7 +606,7 @@ def _ramp_rows(index: int) -> list[dict[str, Any]]:
 
 
 def _typed_scan(rng: random.Random, scan_id: int, kind: str) -> Scan:
-    """A scan whose tags each keep one type, as a tag does.
+    """Return a scan whose tags each keep one type, as a tag does.
 
     ``True == 1`` in Python, so a column of both may read back either.
     """
@@ -707,10 +708,10 @@ def test_a_column_gone_unknown_with_a_known_tail_takes_no_plan() -> None:
 
 
 def _cycled(first_scan: int, cycles: int) -> tuple[RungFiringTimelines, int]:
-    """Three cycles of period 3 appended, and *cycles* more as the loop records them.
+    """Append three cycles of period 3, then *cycles* more as the loop records them.
 
-    Returns the next scan.  Each cycle adds three entries, so the column turns Unknown after
-    about 330 cycles, and the cycles after that go in as one repeat.
+    Returns the next scan. Each cycle adds three entries, so the column turns Unknown after
+    about 330 cycles. The cycles after that go in as one repeat.
     """
     record: RungFiringTimelines = RungFiringTimelines()
     scan_id = first_scan
@@ -831,7 +832,7 @@ def test_a_column_the_loop_could_not_speak_for_keeps_its_later_values() -> None:
 
 
 def _squares(record: RungFiringTimelines, first: int, last: int) -> None:
-    """A new value nearly every scan, with no run that steps by one amount."""
+    """Append a new value nearly every scan, with no run that steps by one amount."""
     for scan_id in range(first, last + 1):
         record.append(0, scan_id, {"a": (scan_id * scan_id) % 1009})
 

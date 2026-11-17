@@ -1,6 +1,7 @@
 """Known-good prefix: cold boot to the burner loop.
 
-Drives the generated tumbler program like a test bench — no how(), no shortcuts:
+This test drives the generated tumbler program like a test bench, with no how() and no
+shortcuts:
 
 1. Hold physical permissives/feedback true.
 2. Select Production mode.
@@ -8,9 +9,9 @@ Drives the generated tumbler program like a test bench — no how(), no shortcut
 4. Keep the rotate sensor moving while the SFCs initialize.
 5. Wait until Heat reaches step 3 and turns on the burner output.
 
-The pre-rename export hit y_BurnerLoop around scan ~2016 at dt=0.010; the
-test asserts ordering and reachability within a padded budget, not exact scan
-numbers.
+The pre-rename export hit y_BurnerLoop around scan ~2016 at dt=0.010. The
+test asserts ordering and reachability within a padded budget. It does not
+assert exact scan numbers.
 """
 
 from __future__ import annotations
