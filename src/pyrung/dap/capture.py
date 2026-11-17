@@ -228,10 +228,13 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
         try:
             result = dispatch(adapter, cmd)
         except Exception as exc:
-            return ConsoleResult(
+            # The error answer carries no events, so the stop for the scans already run is queued.
+            if last_stop is not None:
+                adapter._enqueue_internal_event("stopped", last_stop)
+            raise adapter.DAPAdapterError(
                 f"Replay error at line {lineno}: {exc}\n"
                 f"Executed {executed}/{len(commands)} command(s)"
-            )
+            ) from exc
         executed += 1
         for event_name, body in result.events:
             if event_name == "stopped":

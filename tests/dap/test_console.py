@@ -445,11 +445,22 @@ class TestRunUntil:
             encoding="utf-8",
         )
         resp, _ = _repl(adapter, out, f"replay {transcript}")
-        result = resp["body"]["result"]
+        assert resp["success"] is False
+        message = resp["message"]
         assert "Replay error at line 2: run until: Ticks == 1 still false after 5 scan(s)" in (
-            result
+            message
         )
-        assert "Executed 1/3" in result
+        assert "Executed 1/3" in message
+
+    def test_a_timed_out_run_until_queues_the_stop_for_the_scans_it_ran(self, tmp_path: Path):
+        adapter, out = _setup_ticks(tmp_path)
+        resp, stopped = _repl(adapter, out, "run until Done within 3")
+        assert resp["success"] is False
+        assert stopped == []
+        adapter._drain_internal_events()
+        assert [event["body"]["reason"] for event in _stopped_events(_drain_messages(out))] == [
+            "step"
+        ]
 
 
 # ---------------------------------------------------------------------------

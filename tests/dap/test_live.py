@@ -195,6 +195,36 @@ class TestClientServer:
         assert ok is False
         assert "Unknown command" in text
 
+    def test_a_failed_replay_answers_as_an_error(self, live_session: Any, tmp_path: Path):
+        _adapter, _out, session_name = live_session
+        transcript = tmp_path / "session.txt"
+        transcript.write_text("step\nbadcommand xyz\n", encoding="utf-8")
+        ok, text = send_command(session_name, f"replay {transcript}")
+        assert ok is False
+        assert text.startswith("Replay error at line 2: ")
+
+    def test_a_failed_replay_stops_a_chain(
+        self,
+        live_session: Any,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        from pyrung.dap.live import main
+
+        adapter, _out, session_name = live_session
+        transcript = tmp_path / "session.txt"
+        transcript.write_text("badcommand xyz\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["pyrung live", "-s", session_name, f"replay {transcript}; force Button true"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert "Replay error at line 1" in capsys.readouterr().out
+        assert "Button" not in adapter._runner.forces
+
     def test_send_empty_command(self, live_session: Any):
         _adapter, _out, session_name = live_session
         ok, text = send_command(session_name, "")

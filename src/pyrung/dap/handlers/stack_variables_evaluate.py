@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from pyrung.core.state import SystemState
+from pyrung.core.tag import TagType
 from pyrung.dap.expressions import (
     And,
     Compare,
@@ -226,26 +227,38 @@ def parse_known_condition(adapter: Any, state: SystemState, expression: str) -> 
 
 
 def condition_predicate(adapter: Any, parsed: Expr) -> Callable[[SystemState], bool]:
-    """Compile a parsed condition into a test of any state.
+    """Compile a condition once, so the Watch, ``assert`` and ``run until`` read it alike.
 
-    It reads aliases such as ``Pump.Run``, and a choice label such as ``HELD`` stands for its value.
+    ``Pump.State`` reads the tag ``Pump_State``. A choice label such as ``HELD`` stands for
+    its value, so a word that isn't a label raises on any tag but a Char.
     """
     references = adapter._expression_references(parsed)
-    tags = adapter._require_runner_locked().tags
-    predicate = compile_condition(_with_choice_values(parsed, tags))
+    runner = adapter._require_runner_locked()
+    resolved = _with_choice_values(adapter, parsed, runner.tags, runner.current_state)
+    predicate = compile_condition(resolved)
     return lambda state: predicate(_state_with_reference_aliases(adapter, state, references))
 
 
-def _with_choice_values(expr: Expr, tags: Any) -> Expr:
+def _with_choice_values(adapter: Any, expr: Expr, tags: Any, state: SystemState) -> Expr:
     if isinstance(expr, Compare) and expr.right is not None and isinstance(expr.right.value, str):
-        value = resolve_choice_label(tags, expr.tag.name, expr.right.value)
-        if value is None:
-            return expr
-        return Compare(tag=expr.tag, op=expr.op, right=Literal(value=value))
+        typed = expr.right.value
+        name = _resolve_reference_name(adapter, state, expr.tag.name) or expr.tag.name
+        value = resolve_choice_label(tags, name, typed)
+        if value is not None:
+            return Compare(tag=expr.tag, op=expr.op, right=Literal(value=value))
+        tag = tags.get(name)
+        if getattr(tag, "choices", None) and tag.type is not TagType.CHAR:
+            # Only a Char holds text, so on any other tag the word must be one of its labels.
+            raise adapter.DAPAdapterError(f"{typed} is not a choice of {expr.tag.name}")
+        return expr
     if isinstance(expr, And):
-        return And(children=[_with_choice_values(child, tags) for child in expr.children])
+        return And(
+            children=[_with_choice_values(adapter, child, tags, state) for child in expr.children]
+        )
     if isinstance(expr, Or):
-        return Or(children=[_with_choice_values(child, tags) for child in expr.children])
+        return Or(
+            children=[_with_choice_values(adapter, child, tags, state) for child in expr.children]
+        )
     return expr
 
 

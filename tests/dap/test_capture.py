@@ -410,9 +410,28 @@ class TestReplayVerb:
             "patch Button true\nbadcommand xyz\nstep 1\n",
         )
         resp, _ = _repl(adapter, out, f"replay {transcript}")
-        assert resp["success"] is True
-        assert "Replay error at line 2" in resp["body"]["result"]
-        assert "Executed 1/3" in resp["body"]["result"]
+        assert resp["success"] is False
+        assert "Replay error at line 2" in resp["message"]
+        assert "Executed 1/3" in resp["message"]
+
+    def test_a_failed_replay_queues_the_stop_for_the_scans_it_ran(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(tmp_path, "session.txt", "step 2\nbadcommand xyz\nstep 1\n")
+        _repl(adapter, out, f"replay {transcript}")
+        adapter._drain_internal_events()
+        stops = [
+            msg["body"]["reason"]
+            for msg in _drain_messages(out)
+            if msg.get("type") == "event" and msg.get("event") == "stopped"
+        ]
+        assert stops == ["step"]
+
+    def test_a_failed_replay_with_no_scans_queues_no_stop(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(tmp_path, "session.txt", "badcommand xyz\n")
+        _repl(adapter, out, f"replay {transcript}")
+        adapter._drain_internal_events()
+        assert not [msg for msg in _drain_messages(out) if msg.get("event") == "stopped"]
 
     def test_replay_excluded_from_capture(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -674,6 +693,77 @@ class TestAssertVerb:
             "patch Button false\nstep\nassert Light == true\nstep 5\n",
         )
         resp, _ = _repl(adapter, out, f"replay {transcript}")
-        result = resp["body"]["result"]
-        assert "Replay error at line 6: assert failed: Light = False, expected True" in result
-        assert "Executed 5/7" in result
+        assert resp["success"] is False
+        message = resp["message"]
+        assert "Replay error at line 6: assert failed: Light = False, expected True" in message
+        assert "Executed 5/7" in message
+
+    def test_a_word_that_is_no_label_is_an_error(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        for text in ("assert State == HLED", "run until State == HLED within 5"):
+            resp, _ = _repl(adapter, out, text)
+            assert resp["success"] is False
+            assert resp["message"] == "HLED is not a choice of State"
+        assert _watch(adapter, out, "State == HLED") == (False, "HLED is not a choice of State")
+
+
+def _watch(adapter: DAPAdapter, out: io.BytesIO, expression: str) -> tuple[bool, str]:
+    messages = _send_request(
+        adapter,
+        out,
+        seq=50,
+        command="evaluate",
+        arguments={"expression": expression, "context": "watch"},
+    )
+    response = _single_response(messages)
+    if response["success"]:
+        return True, response["body"]["result"]
+    return False, response["message"]
+
+
+def _udt_choices_script() -> str:
+    return (
+        "from pyrung.core import Bool, Field, Int, PLC, Program, Rung, copy, udt\n"
+        "\n"
+        "@udt()\n"
+        "class Pump:\n"
+        "    State: Int = Field(choices={1: 'IDLE', 2: 'HELD'})\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        copy(2, Pump.State)\n"
+        "    with Rung(~button):\n"
+        "        copy(1, Pump.State)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+class TestChoiceLabelOnAField:
+    def test_assert_reads_a_label_on_a_dotted_field(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        _repl(adapter, out, "step", seq=10)
+        resp, _ = _repl(adapter, out, "assert Pump.State == IDLE", seq=11)
+        assert resp["success"] is True, resp.get("message")
+        resp, _ = _repl(adapter, out, "assert Pump.State == HELD", seq=12)
+        assert resp["message"] == "assert failed: Pump.State = 1, expected 'HELD'"
+
+    def test_watch_reads_a_label_on_a_dotted_field(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        _repl(adapter, out, "step", seq=10)
+        assert _watch(adapter, out, "Pump.State == IDLE") == (True, "True")
+        assert _watch(adapter, out, "Pump.State == HELD") == (True, "False")
+
+    def test_run_until_reads_a_label_on_a_dotted_field(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        resp, _ = _repl(adapter, out, "run until Pump.State == HELD within 5", seq=11)
+        assert resp["success"] is True, resp.get("message")
+        assert resp["body"]["result"].endswith(", Pump.State == HELD is true")
+
+    def test_a_word_that_is_no_label_of_the_field_is_an_error(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        resp, _ = _repl(adapter, out, "assert Pump.State == HLED")
+        assert resp["message"] == "HLED is not a choice of Pump.State"

@@ -419,6 +419,9 @@ def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
         out_of_time = cycles is None and runner.current_state.timestamp >= start_time + seconds
         if out_of_scans or out_of_time:
             elapsed = runner.current_state.timestamp - start_time
+            if scans:
+                # The error answer carries no events, so the stop for the scans run is queued.
+                adapter._enqueue_internal_event("stopped", adapter._stopped_body("step"))
             raise adapter.DAPAdapterError(
                 f"run until: {condition} still false after {scans} scan(s) ({elapsed:.3f}s)"
             )
