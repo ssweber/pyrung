@@ -81,6 +81,7 @@ from pyrung.core.analysis.pdg import (
     ProgramGraph,
     _extract_tag_names,
     _extract_write_targets,
+    continuous_search_results,
     unbounded_read_names,
 )
 from pyrung.core.analysis.write_sites import instruction_write_targets
@@ -440,15 +441,6 @@ def _collect_state_decided_reads(
     return {name: tuple(instrs) for name, instrs in readers.items()}, names
 
 
-def _continuous_search_results(program: Program) -> frozenset[str]:
-    """The result of each continuous search, which the search reads to resume after it."""
-    return frozenset(
-        instr.result.name
-        for instr in _iter_program_instructions(program)
-        if isinstance(instr, SearchInstruction) and instr.continuous
-    )
-
-
 def _collect_edge_tags(program: Program) -> frozenset[str]:
     """Collect tags referenced by explicit rise()/fall() conditions anywhere.
 
@@ -556,7 +548,7 @@ class _SliceElision:
         # A continuous search reads its result back the same way, to resume after it.
         self.self_read_tags: frozenset[str] = frozenset().union(
             *(node.exclusive_reads for node in graph.rung_nodes)
-        ) | _continuous_search_results(program)
+        ) | continuous_search_results(program)
         # The instructions that may read a tag on a scan their own memory decides.
         self.state_decided_readers, self.state_decided_names = _collect_state_decided_reads(
             program, graph

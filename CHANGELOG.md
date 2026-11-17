@@ -43,6 +43,7 @@
 - `how()` no longer misses the states where two tags the rungs compare with each other are equal, such as the Accs of two timers.
 - `how()` now keeps a drum step's preset or an off-delay's preset that a rung below the instruction sets (it took the preset for a value set before each read).
 - `how()` now keeps a continuous `search()`'s result, which the search reads to resume after it (it took the result for a value set before each read).
+- `why()` now follows a timer's Acc or a continuous `search()`'s result back to a later rung that writes it (it stopped at the tag).
 - `how()` and `program.check()` no longer assume that a copy or fill through a pointer writes every element the pointer can reach.
 - `how()` and `program.check()` no longer treat an element of a block of more than 1000 elements as never written when a write through a pointer with no declared bounds can store into it.
 - `program.check()` no longer reports these findings on a field feedback (a tag with `link=`):

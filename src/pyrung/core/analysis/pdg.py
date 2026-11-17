@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
+from pyrung.core.instruction.advanced import SearchInstruction
 from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
@@ -27,6 +28,7 @@ from pyrung.core.memory_block import (
     block_positions,
 )
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag, tag_written_from_outside
+from pyrung.core.validation._common import walk_instructions
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
 from .affine import extract_affine_expression
@@ -1702,6 +1704,19 @@ def _build_def_use_chains(
         )
         for tag_name in all_tags
     }
+
+
+def continuous_search_results(program: Program) -> frozenset[str]:
+    """The result of each continuous search, which the search reads to resume after it.
+
+    The def-use chains leave that read out, so a reader that trusts
+    ``ProgramGraph.unconditional_write_before_read`` excludes these tags itself.
+    """
+    return frozenset(
+        instr.result.name
+        for instr in walk_instructions(program)
+        if isinstance(instr, SearchInstruction) and instr.continuous
+    )
 
 
 def resolve_rung(program: Program, node: RungNode) -> Rung | None:
