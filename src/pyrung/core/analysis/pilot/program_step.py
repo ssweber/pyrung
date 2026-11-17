@@ -300,8 +300,8 @@ def read_frontier_motion(
     No instruction needs to own the motion.  A calc that is fed its own result moves a tag as
     a timer does.  Only a numeric frontier counts.  Its distance to its wanted value must
     never grow over the projected scans, and it must end smaller.  A wrap or a step away
-    does not count.  A value can move only every other scan, which is why the projection runs
-    more than one scan.
+    does not count.  Some values move only every other scan, so the projection runs more
+    than one scan.
 
     Return ``(tag, before, after)``, or None.  Nothing is installed on *plc*.
     """

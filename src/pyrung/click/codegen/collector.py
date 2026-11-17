@@ -906,8 +906,9 @@ def _register_timer_counter_clone(
     )
     var_name = _make_safe_identifier(raw_name, used_names=used_var_names)
 
-    # Name a field that the project left without a nickname after its own address.  That
-    # exports back as no nickname, because codegen never invents one (T1_Done, OvenTimer_Acc).
+    # A field that the project left without a nickname is named after its own address.
+    # That name exports back as no nickname.  So codegen never invents a nickname such as
+    # T1_Done or OvenTimer_Acc.
     field_nicknames = {"Done": done_nick or done_operand, "Acc": acc_nick or acc_operand}
 
     collection.timer_counter_clones.append(

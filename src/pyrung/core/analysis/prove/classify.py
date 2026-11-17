@@ -1721,9 +1721,10 @@ def collect_produced_value_domains(
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
 
-    # A write through a pointer may store into any unlisted tag, so such a tag has no
-    # complete set of writers.  The remote device decides what a receive() stores in
-    # its payload, so a payload has none either, even without ``external``.
+    # A write through a pointer may store into a tag without being listed as one of the
+    # tag's writers. So such a tag has no complete set of writers.  The remote device
+    # decides what a receive() stores in its payload, so a payload has none either, even
+    # without ``external``.
     incomplete_targets = (
         graph.unlisted_written()
         | _collect_receive_dest_names(program)

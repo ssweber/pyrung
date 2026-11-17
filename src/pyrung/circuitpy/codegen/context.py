@@ -92,7 +92,11 @@ def _is_plain_literal(value: Any) -> bool:
 
 
 def _renders_faithfully(value: Any, seen: set[int] | None = None) -> bool:
-    """Return whether ``repr(value)`` rebuilds *value*.  The value shares nothing inside itself."""
+    """Return whether ``repr(value)`` rebuilds *value* as one object.
+
+    Return False if *value* holds the same list, tuple or dict at two places. ``repr`` would
+    rebuild those as separate objects.
+    """
     if _is_plain_literal(value):
         return True
     kind = type(value)
@@ -663,7 +667,10 @@ class CodegenContext:
         return self.index_helper_name(block_id).replace("_resolve_index_", "_cond_index_", 1)
 
     def use_condition_index_block(self, block_id: int) -> str:
-        """Return the helper that a condition indexes *block_id* through.  It gives -1 outside."""
+        """Return the helper that a condition indexes *block_id* through.
+
+        The helper returns -1 for an address that the block does not have.
+        """
         self.used_indirect_blocks.add(block_id)
         self.used_condition_index_blocks.add(block_id)
         return self.condition_index_helper_name(block_id)

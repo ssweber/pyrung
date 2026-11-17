@@ -189,10 +189,10 @@ def _atom_reads(atom: Atom) -> frozenset[str] | None:
     """Return the tags that :func:`_eval_atom_from_state` reads to decide *atom*.
 
     A reader that pins or enumerates the tags of an atom needs all of them. If it misses
-    a tag, it reads that tag at its value now, as if it could not change. So an
-    arithmetic operand returns the tags that it reads. Return None when the atom reads a
-    tag that it cannot name, such as a pointer element. No domain lists that tag, so no
-    reader may decide the atom.
+    a tag, it reads that tag at its value now, as if it could not change. So for an
+    arithmetic operand, the result includes the tags that the operand reads. Return None
+    when the atom reads a tag that it cannot name, such as a pointer element. No domain
+    lists that tag, so no reader may decide the atom.
     """
     if atom.unsupported is not None or atom.indirect_ref is not None:
         return None

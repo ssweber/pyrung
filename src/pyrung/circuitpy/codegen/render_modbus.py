@@ -188,8 +188,8 @@ def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
         if claim is not None:
             block, addr = ctx.block_bindings[claim[0]].block, claim[1]
         else:
-            # No array holds it, so it is a raw register that a rung uses (``ds[3901]``) as a
-            # scalar.  Only its own tag knows the register.
+            # No array holds this tag. A raw register that a rung uses as a scalar
+            # (``ds[3901]``) takes this branch, and only its own tag knows the register.
             block = getattr(tag, "_pyrung_block", None)
             addr = getattr(tag, "_pyrung_block_addr", 0)
         if block is None or block.name not in _RAW_BANKS:

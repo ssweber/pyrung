@@ -38,8 +38,8 @@ Groups (this is the brief for the tool, written after two branches regressed how
                compared with an input, an input compared with an unbounded input, and an
                input compared with a set point plus 2
 
-Cases marked fast=False only run with --full.  The case name is its key.  Give a new case a
-name that no case has used, because two runs are compared by name.
+Cases marked fast=False only run with --full.  The case name is its key.  The tool compares
+two runs by name, so give a new case a name that no case has used, and never rename a case.
 """
 
 from __future__ import annotations
@@ -206,8 +206,8 @@ def mid_harness(on, scans, *, bench=None, dt=0.25, bench_scans=None):
 
 
 def mid_alarm(declared, bench, scans, dt=0.25):
-    """Build a feedback that settles and then falls: change the link under a held enable and
-    target the alarm."""
+    """Build a program whose feedback settles and then falls. Hold the enable, change the
+    link's on-delay, and target the alarm."""
 
     def build():
         p, En, Alarm = _alarm_program(declared)
@@ -360,9 +360,10 @@ def _two_ways():
 
 
 def _dwell(limit=0):
-    """Hold the sensor on or off for 30 ms, with watchdogs at 70 ms and a run of 250 ms.
+    """Build a program whose stable timers need the sensor held on or off for 30 ms.
 
-    State goes from 6 to 7 (or 8).
+    Its watchdogs finish at 70 ms and its run timer at 250 ms. State goes from 6 to 7, or
+    to 8 if a watchdog finishes first.
     """
     sensor = Bool("HoldSensor", external=True)
     stable_on, stable_off = Timer.clone("HoldStableOn"), Timer.clone("HoldStableOff")
@@ -421,7 +422,7 @@ def _armed(release_needed):
 
 
 def _timer_hold(lo=None, hi=None):
-    """Require Speed above 3 for the 1 s run timer.  The program owns Lim."""
+    """Build a program in which the 1 s run timer needs Speed above 3.  The program owns Lim."""
     speed, run = Int("Speed", external=True), Timer.clone("Rn")
     lim, target = Int("Lim", default=100), Bool("Target")
     with Program(strict=False) as prog:
@@ -441,7 +442,10 @@ def _timer_hold(lo=None, hi=None):
 
 
 def _two_routes(minutes):
-    """Route Fast through Danger on a long timer, and Slow around it on another timer."""
+    """Build a program in which Fast reaches Target through Danger on a long timer.
+
+    Slow reaches Target around Danger, on a timer twice as long.
+    """
     fast, slow = Bool("Fast", external=True), Bool("Slow", external=True)
     danger, target = Bool("Danger"), Bool("Target")
     t1, t2 = Timer.clone("LwT1"), Timer.clone("LwT2")
@@ -1540,7 +1544,7 @@ def _rescue_wait_on_a_bit():
 
 
 def _rescue_at_the_rung():
-    """Move the enable mid-scan as in truth/enable, before Go is pressed.
+    """Build the program of the case ``truth/enable moved mid-scan``, but leave Go unpressed.
 
     The plan has to press Go.
     """
@@ -1829,7 +1833,10 @@ def _accs_pair(offset):
 
 
 def _accs_written_above_an_input():
-    """Leave Level at 0 or 10 with its copies.  Hit needs Level above the input Limit."""
+    """Build a program whose copies leave Level at 0 or 10.
+
+    Hit needs Level above the input Limit, and Limit at 5 or more.
+    """
     level, limit, hit = Int("Level"), Int("Limit", external=True, min=0, max=9), Bool("Hit")
     with Program(strict=False) as prog:
         with Rung(Bool("Fill", external=True)):

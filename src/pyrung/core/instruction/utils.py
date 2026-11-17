@@ -39,7 +39,7 @@ def guard_oneshot_execution(func: F) -> F:
     ``_fault_settles_idle`` (a Math) also clears them on a scan where it is reached but
     does not run, either because its rung is false or because it is a one-shot that
     does not fire (CLICK, ``flag_steps``, ``flag_reads/oneshot_held``).  Any other
-    instruction leaves them set on such a scan.
+    instruction leaves them as they are on such a scan.
     """
 
     @wraps(func)

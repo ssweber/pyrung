@@ -157,6 +157,8 @@ def _written_value_satisfying(
 ) -> Any | None:
     """Return the value that a writer of this tag writes and that satisfies the comparison.
 
+    Return None if it finds no such value.
+
     A writer that adds a constant to the tag itself also qualifies.  Its candidate is the first
     value that repeated adds from the current value reach and that meets the comparison.
     """

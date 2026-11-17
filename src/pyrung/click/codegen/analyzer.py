@@ -719,9 +719,9 @@ def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
     """Split a CLICK rung of several wires into one pyrung rung per wire, row for row.
 
     The first wire is the rung. Each later wire is a ``.continued()`` rung of its own, and
-    the function never folds one wire onto another. A continued rung reads its contacts
-    where it stands, as the wire's rows do, so the pyrung code draws as the CLICK rung
-    does. Return ``None`` if the rung is one wire.
+    the function never folds one wire onto another, for two reasons. A continued rung reads
+    its contacts where it stands, as the wire's rows do. The pyrung code also draws as the
+    CLICK rung does. Return ``None`` if the rung is one wire.
     """
     instructions = rung.instructions
     if len(instructions) < 2:

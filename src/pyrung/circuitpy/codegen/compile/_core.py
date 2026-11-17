@@ -141,8 +141,8 @@ def _compile_edge_row(row: Any, ctx: CodegenContext, indent: int) -> list[str]:
 def _box_helper_conditions(item: Any) -> list[tuple[Any, str, Any]]:
     """Return the helper legs (pins) of one instruction box, in the order its compiler reads them.
 
-    Each leg is an ``(instruction, field_name, condition)`` tuple.  A box without legs
-    returns an empty list.
+    Each leg is an ``(instruction, field_name, condition)`` tuple.  For a box without legs,
+    the list is empty.
     """
     result: list[tuple[Any, str, Any]] = []
     if isinstance(item, OnDelayInstruction):
@@ -441,8 +441,8 @@ def compile_rung(
     The rung reads the trunk's contacts once, as it starts.  It reads each branch's own
     contacts where the solve reaches the branch, after the writes of the rows above it.
     Each box reads its pins as it starts.
-    With ``local_conditions``, the rung compiles only its own contacts. This is for a For
-    loop body rung, whose inherited loop-rung contacts are already true.
+    With ``local_conditions``, the function compiles only the rung's own contacts. This is
+    for a For loop body rung, whose inherited loop-rung contacts are already true.
     """
     previous = ctx._current_function
     ctx.set_current_function(fn_name)
@@ -583,7 +583,8 @@ def _compile_calc_instruction(
             set_flags.append(f"    if 43 in {CALC_FLAGS}:")
             set_flags.extend(f"        {line}" for line in out_of_range_body)
         if set_flags:
-            # This is one test on the path with no error.
+            # All the flag checks go under one test, so the path with no error runs only
+            # that test.
             set_flags.insert(0, f"if {CALC_FLAGS}:")
     if set_flags and isinstance(instr.expression, (IndirectRef, IndirectExprRef)):
         # An address below its block raises IndexError. Nothing is written, and the
@@ -770,8 +771,8 @@ def _compile_for_loop_instruction(
         capped = mask > control.FOR_COUNT_MASK_16
     if ctx.proof_metadata and capped:
         # The static facts' kernel stops a 32-bit count past its cap instead of running
-        # it. A Dint up to 2147483647 runs that many iterations.  The source names the loop
-        # by its index, not by its file and line.
+        # it. Without the cap, a Dint count up to 2147483647 would run that many iterations.
+        # The source names the loop by its index, not by its file and line.
         site = len(ctx.for_cap_sites)
         ctx.for_cap_sites.append(_for_count_site(instr))
         iterations_lines += [

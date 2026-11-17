@@ -84,8 +84,9 @@ def non_finite_reals(
     reals = [name for name, tag in graph.tags.items() if tag.type is TagType.REAL]
     if not reals:
         return frozenset()
-    # A write through a pointer may store into any unlisted tag, so that tag may hold what
-    # the write stores (``ProgramGraph.unlisted_writers_of``).
+    # A write through a pointer may store into a tag without being listed as one of the
+    # tag's writers. That tag may then hold what the write stores
+    # (``ProgramGraph.unlisted_writers_of``).
     unlisted = graph.unlisted_written()
     bounds: dict[str, Bounds | None] = {}
     moving: set[str] = set()

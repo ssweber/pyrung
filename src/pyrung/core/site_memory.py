@@ -1236,8 +1236,8 @@ def remap_site_memory_report(
     unmatched still passes its input memory to its edited counterpart
     (:func:`_match_input_memory`).  Other memory, such as timer carries and system memory,
     is kept as it is, with one exception.  A carry is cut to below one unit of its timer
-    in *new*. A carry is always less than one unit, and an edit to the timer's unit must
-    not finish the timer.
+    in *new*, for two reasons. By definition, a carry is less than one unit. And an edit
+    to the timer's unit must not finish the timer.
     """
     owned: dict[str, tuple[str, str]] = {}
     if old is not None:
@@ -1372,8 +1372,8 @@ def program_memory_defaults(program: Any) -> dict[str, Any]:
 # -- edge frames: which edge sites a row scans ------------------------------
 #
 # A row is one of these:
-# - a trunk, which is the own contacts of a top-level rung in main or a subroutine
-#   (a continued rung is a trunk of its own);
+# - a trunk, which is the contacts of a top-level rung in main or a subroutine, without
+#   the contacts of its branches (a continued rung is a trunk of its own);
 # - a branch, which is its local contacts;
 # - a box, which is an instruction's helper legs (reset, jump, ...);
 # - a For loop's body rung;
@@ -1381,10 +1381,10 @@ def program_memory_defaults(program: Any) -> dict[str, Any]:
 # Each row has an edge frame of its own. The frame holds the edge sites that the row's
 # own contacts hold, in solve order.  When the solve reaches a row, every edge site in
 # it stores the bit that its contact sees (``_edge:e{N}``), whether the contact is
-# powered or not.  A CLICK also updates an edge contact's memory whenever it scans the
-# contact.  The row's condition view is taken first, so its edges compare the bit
-# against the memory as it was before the row. That keeps ``evaluate()`` a pure read.
-# A row below sees the stores of the rows above it, as it sees their writes.
+# powered or not.  pyrung does this because a CLICK updates an edge contact's memory
+# whenever it scans the contact.  The row's condition view is taken first, so its edges
+# compare the bit against the memory as it was before the row. That keeps ``evaluate()``
+# a pure read. A row below sees the stores of the rows above it, as it sees their writes.
 
 
 def edge_memory_key(cond: Any) -> str:
@@ -1441,8 +1441,9 @@ def _frame_instruction(instr: Any, contacts: set[int], rows: _Rows) -> None:
         power = _is_power_field(instr, name)
         for item in value if isinstance(value, tuple) else (value,):
             for edge in _iter_edges(item):
-                # The edges in a power field are its rung's contacts. The row that owns
-                # them scans them, unless the instruction was built by hand.
+                # The edges in a power field are usually its rung's contacts, and the row
+                # that owns those contacts scans them. An instruction built by hand can hold
+                # other edges in a power field. The box's own frame holds those.
                 if not (power and id(edge) in contacts):
                     _frame_add(edge, frame)
     _stamp_row(instr, frame, rows)

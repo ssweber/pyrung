@@ -352,7 +352,10 @@ class _DrumBaseInstruction(Instruction):
             ctx.set_memory(self.memory_key("_drum_jog_prev"), jog_curr)
 
     def _jog(self, ctx: ScanContext, enabled: bool, step: int) -> int:
-        """Handle a jog edge on a valid step: go forward with its row, or complete."""
+        """Handle a jog edge on a valid step.
+
+        Go forward to the next step and its row. On the last step, complete the drum.
+        """
         if step < self.step_count:
             step += 1
             self._move(ctx, step)
@@ -407,8 +410,11 @@ class _DrumBaseInstruction(Instruction):
         """Record whatever the kind remembers from each scan.  *step* is where the scan ends."""
 
     def _plan_past_flag(self, constraint: Eq | Cmp, snapshot: Snapshot) -> AdvanceStep | None:
-        """Plan past a completion flag that is on.  The flag stops own logic, so anything but the
-        flag waits for the reset that frees it."""
+        """Plan past a completion flag that is on.
+
+        While the flag is on, the drum skips its own time and event logic. So a target other
+        than the flag waits for the reset that clears the flag.
+        """
         flag = self.completion_flag
         if constraint.tag == flag.name or not snapshot.get(flag.name, flag.default):
             return None

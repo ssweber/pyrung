@@ -1,7 +1,7 @@
 """A guarded scan loop over the generated kernel.
 
-A long run spends most of its scans repeating the scan before it. Only a timer's
-accumulator and a clock move. This module traces one real scan over the kernel's
+A long run spends most of its scans repeating the scan before it. In those scans, only a
+timer's accumulator and a clock move. This module traces one real scan over the kernel's
 *generated source* and emits a tiny loop that repeats that scan. The loop does
 arithmetic on the values that move, and it guards every decision that depends on one
 of them. Nothing is jumped: every scan in the loop runs. If a guard fails, the loop
@@ -11,8 +11,9 @@ Why one loop iteration equals one kernel scan
 ---------------------------------------------
 
 The kernel is a deterministic function of what it reads: ``tags``, ``blocks`` and
-``memory``. It never reads ``prev``, and ``dt`` is fixed for a run. The tracer
-interprets the kernel's source statement by statement on the state at trace time.
+``memory``. The tracer declines a scan that reads ``prev``, and ``dt`` is fixed for a
+run. The tracer interprets the kernel's source statement by statement on the state at
+trace time.
 Every value it reads is one of two things:
 
 * A **constant** is a recorded (key, value) pair. A trace only runs from a state in
@@ -40,11 +41,11 @@ the next iteration. Nothing commits until every guard of the iteration has passe
 exception raised by a loop operation also exits the loop, so the real scan decides
 what happens on that iteration.
 
-The rest of a scan around the kernel functions is idle on entry, and the loop keeps
-it idle. ``step_replay`` also runs the scan hooks, input overrides and system tag
-refresh. Pending patches, forces and ``randint`` draws make the loop decline
-(:meth:`ScanLoop._blocked` and :meth:`ScanLoop._whole_run_blocker`). The hooks must be
-quiet on entry. A scan that would change anything the hooks read
+The loop checks that the rest of a scan around the kernel functions is idle on entry,
+and the loop keeps that part idle. ``step_replay`` also runs the scan hooks, input
+overrides and system tag refresh. Pending patches, forces and ``randint`` draws make
+the loop decline (:meth:`ScanLoop._blocked` and :meth:`ScanLoop._whole_run_blocker`).
+The hooks must be quiet on entry. A scan that would change anything the hooks read
 (:data:`~pyrung.core.system_points.HOOK_TAG_NAMES`) declines. The loop computes clock
 and RTC values with the functions that the real scan uses.
 
@@ -67,8 +68,8 @@ Self check
 ----------
 
 The argument above relies on the tracer agreeing with Python about the generated
-source. So the first iteration of each new trace runs on a copy of the state. The
-tracer compares its result with the real compiled scan run from the same state. The
+source. So the first iteration of each new trace runs on a copy of the state. After
+the real compiled scan runs from the same state, the loop compares the two results. The
 comparison covers every tag, block cell, memory entry, block write record, the scan
 id and the timestamp, types included. A mismatch stops the loop for the rest of the
 run. Under ``--fold-check`` (:data:`STRICT_SELF_CHECK`) it raises
@@ -227,8 +228,9 @@ BURST_SIZES: tuple[int, ...] | None = None
 # Counts accumulated over all runs in this process: loop scans, real scans, traces and
 # the reasons for declining.
 TOTALS: Counter[str] = Counter()
-# Each observer is called for every self check mismatch, whether or not the run keeps it.
-# A count cannot say which mismatch it was.
+# The loop calls each observer with the message of every self check mismatch, before it
+# raises or logs a warning. The observers exist because a count cannot say which mismatch
+# happened.
 SELF_CHECK_OBSERVERS: list[Callable[[str], None]] = []
 
 
@@ -838,7 +840,10 @@ class _Tracer:
         return _current_value(self._kernel, key)
 
     def release(self) -> None:
-        """Drop everything except what a coast needs to write another loop from this trace."""
+        """Drop everything except what a coast needs to write another loop from this trace.
+
+        A coast keeps many traces, so each one must stay small.
+        """
         self.cells = {key: self.cells[key] for key in self.entries}
         self.constants = {}
         self.seeds = set()
@@ -1850,10 +1855,13 @@ def build_trace(
 ) -> ScanTrace:
     """Trace the scan about to run, repeating until the set of moving cells stops changing.
 
-    Raises :class:`Decline` if the tracer meets something it does not understand. This
-    function adds to *seeds*, because a cell that moved once may well move again and the
-    next trace should know. If *keep_plan* is set, a coast can write its own loops of this
-    scan (:func:`coast_loop`).
+    Raises :class:`Decline` when the loop cannot stand for this scan. The reasons include
+    something the tracer does not understand, moving cells that do not settle within
+    ``MAX_FIXED_POINT_PASSES`` passes, a scan that changes what the scan hooks read, a stop
+    predicate that holds, and a scan that leaves a value out of bounds. This function adds
+    to *seeds*, because a cell that moved once may well move again and the next trace
+    should know. If *keep_plan* is set, a coast can write its own loops of this scan
+    (:func:`coast_loop`).
     """
     for _pass in range(MAX_FIXED_POINT_PASSES):
         tracer = _Tracer(source, replay, seeds)
@@ -2232,7 +2240,8 @@ class ScanLoop:
     def _blocked(self) -> str | None:
         """Return the reason the next scan cannot run in the loop, or None.
 
-        This method also refreshes the system tags for the next scan, as the scan would.
+        If it returns None, it has also refreshed the system tags for the next scan, as the
+        scan would.
         """
         replay = self._replay
         kernel = replay._kernel

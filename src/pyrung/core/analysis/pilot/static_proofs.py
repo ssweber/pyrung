@@ -42,9 +42,9 @@ its preset exceeds the delay plus some scans of slop.
 
 The plant reads the enable between scans and a rung reads it mid-scan.  So the proof
 holds only while those two readings agree to within a scan.  That requires the
-enable to have no pointer write and not be ``free``.  It has either no writer, or
-one writer that is an ``out`` coil on a main-level rung with no for loop.  Anything
-wider gives ``STOPPED``.
+enable to have no pointer write and not be ``free``.  It must also have either no
+writer, or one writer that is an ``out`` coil on a main-level rung with no for loop.
+Anything wider gives ``STOPPED``.
 
 **Mutually exclusive** (``exclusion_evidence``).  ``X=a`` and ``Y=b`` cannot both
 hold at the end of a scan when two things are true.  No rung produces both.  Each
@@ -135,7 +135,8 @@ class ProofFacts:
 
         Return ``None`` when that list cannot be made.  That happens for a free tag, a
         tag that nothing in the program writes (so something else does), a write through
-        a pointer, and a write that fires with its rung false.
+        a pointer, a write that fires with its rung false, and a writer rung that holds a
+        for loop.
         """
         writers = self.pdg.writers_of.get(tag, frozenset())
         if not writers or tag in self.free or self._writable_through_pointer(tag):
@@ -297,7 +298,10 @@ class _LinkProof:
         return None
 
     def _timer_done_blocked(self, tag: str, value: Any, stack: frozenset[Any]) -> Any:
-        """Handle a non-retentive on-delay Done.  Return ``NotImplemented`` when *tag* is no Done."""
+        """Handle a non-retentive on-delay's Done.
+
+        Return ``NotImplemented`` when no on-delay timer writes *tag* as its Done.
+        """
         pdg = self.facts.pdg
         writers = pdg.writers_of.get(tag, frozenset())
         found = [
