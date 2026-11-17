@@ -1,30 +1,28 @@
-"""A write past the bank: the ``past_write`` group (subroutine ``Conf_PastWrite``).
+"""Test a write past the bank, in the ``past_write`` group (subroutine ``Conf_PastWrite``).
 
-The last group of part ``copy``, the group the other groups never depend on, so it
-can be left out.  **It writes into a real CLICK's memory past the DD bank.**  Do
-not load its subroutine, or run its group, on a CLICK whose memory matters; delete
-the ``Conf_PastWrite`` call rung in main to leave it out.  The simulator and
-the P1AM code have no memory there.
+This is the last group of part ``copy``. No other group depends on it, so you can leave it out.
+**It writes into a real CLICK's memory past the DD bank.** Do not load its subroutine, or run
+its group, on a CLICK whose memory matters. To leave it out, delete the ``Conf_PastWrite`` call
+rung in main. The simulator and the P1AM code have no memory there.
 
-``past_bank_write``: ``copy(5, dd[ptr])`` with ptr 1531, then the DD read back through
-the pointer, and the flags.  Result1 is the read before the write: the write happens
-only if it is 0 (memory that reads 0 looks unused), so a CLICK whose DD1531 holds
-anything is left alone (the case then reads Result1 as that value, and the write,
-flags and read after are not what it asks).  Result2 is the read after.  Result3 has
-bit 1 for SC43 on after the write and bit 2 for SC44.  A last Copy writes 0 back,
-under the same guard, so the 5 does not outlive the case: it once outlived two
-project loads and broke ``faults/pointer_past_bank_lands``.  A nonzero DD1531 is left
-alone, and ``past_clean`` clears it.
+``past_bank_write`` runs ``copy(5, dd[ptr])`` with ptr 1531. It then reads the DD back through
+the pointer and reads the flags. Result1 is the read before the write. The write happens only if
+Result1 is 0, because memory that reads 0 looks unused. So a CLICK whose DD1531 holds anything
+is left alone. In that case Result1 reads as that value, and the write, the flags and the read
+after are not what the case asks. Result2 is the read after. Result3 has bit 1 for SC43 on after
+the write and bit 2 for SC44. A last Copy writes 0 back, under the same guard, so the 5 does not
+outlive the case. It once outlived two project loads and broke
+``faults/pointer_past_bank_lands``. A nonzero DD1531 is left alone, and ``past_clean`` clears
+it.
 
-On a CLICK the write lands and raises no flag: 0, 5, 0.
-pyrung drops the write and reads 0, 0, 0, so the case is ``pending="PASTBANK"``.
+On a CLICK the write lands and raises no flag, and the three results are 0, 5, 0. pyrung drops
+the write and reads 0, 0, 0, so the case is ``pending="PASTBANK"``.
 
-Why DD1531, and one address: ``faults/pointer_past_bank`` and
-``faults/pointer_past_bank_lands`` read past the bank on a CLICK as 1 at DD1001 and
-0 at DD1531 and DD1532.  DD1001 holds something (the memory that follows the
-bank); DD1531 and DD1532 read 0 and no wrap (``lands`` found DD531 untouched), so
-they look unused.  DD1531 is the one pointer ``lands`` already reads, and the case
-writes there and nowhere else.
+Why DD1531, and one address: ``faults/pointer_past_bank`` and ``faults/pointer_past_bank_lands``
+read past the bank on a CLICK as 1 at DD1001 and 0 at DD1531 and DD1532. DD1001 holds something,
+the memory that follows the bank. DD1531 and DD1532 read 0 and do not wrap (``lands`` found
+DD531 untouched), so they look unused. DD1531 is the one pointer ``lands`` already reads. The
+case writes there and nowhere else.
 
 The flags are read with coils (a Math or Copy to read the first would settle the
 second), the first read after the write, and folded into Result3 a scan later.

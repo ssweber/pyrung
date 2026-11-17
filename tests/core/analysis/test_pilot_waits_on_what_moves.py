@@ -1,4 +1,4 @@
-"""how() when all it needs to do is let the program run: it waits on what is really moving."""
+"""how() waits on what is really moving when all it needs to do is let the program run."""
 
 from __future__ import annotations
 
