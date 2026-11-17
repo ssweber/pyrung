@@ -305,7 +305,7 @@ def test_ascending_pairs_share_one_slab(monkeypatch: pytest.MonkeyPatch) -> None
     misses = _read(plc, truth, scans, monkeypatch)
 
     # 13 pairs take 6 fills. They used to take 20, one per read of a scan that is not a
-# checkpoint.
+    # checkpoint.
     assert misses == [1100, 1101, 2001, 2900, 3801, 4700]
 
 
