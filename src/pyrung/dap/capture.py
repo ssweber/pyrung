@@ -219,7 +219,7 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
 
     _configure_replay_harness(adapter, harness_mode)
 
-    from pyrung.dap.console import dispatch
+    from pyrung.dap.console import dispatch, queue_stop_for_error
 
     executed = 0
     hit_bp = False
@@ -228,13 +228,15 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
         try:
             result = dispatch(adapter, cmd)
         except Exception as exc:
-            # The error answer carries no events, so the stop for the scans already run is queued.
-            if last_stop is not None:
-                adapter._enqueue_internal_event("stopped", last_stop)
-            raise adapter.DAPAdapterError(
+            error = adapter.DAPAdapterError(
                 f"Replay error at line {lineno}: {exc}\n"
                 f"Executed {executed}/{len(commands)} command(s)"
-            ) from exc
+            )
+            # A "step" stop, never a reload's "entry", which would clear the editor's decorations.
+            error.stop_queued = getattr(exc, "stop_queued", False)
+            if last_stop is not None:
+                queue_stop_for_error(adapter, error)
+            raise error from exc
         executed += 1
         for event_name, body in result.events:
             if event_name == "stopped":

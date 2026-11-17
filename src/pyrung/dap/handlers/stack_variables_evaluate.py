@@ -227,7 +227,7 @@ def parse_known_condition(adapter: Any, state: SystemState, expression: str) -> 
 
 
 def condition_predicate(adapter: Any, parsed: Expr) -> Callable[[SystemState], bool]:
-    """Compile a condition once, so the Watch, ``assert`` and ``run until`` read it alike.
+    """Compile a condition the way the Watch, ``assert`` and ``run until`` all read it.
 
     ``Pump.State`` reads the tag ``Pump_State``. A choice label such as ``HELD`` stands for
     its value, so a word that isn't a label raises on any tag but a Char.

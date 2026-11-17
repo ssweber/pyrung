@@ -38,7 +38,7 @@
 ### Fixes
 
 - The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
-- A `replay` that stops on a failed line answers with an error (it answered as a success), so `pyrung live` exits 1 and a `;` chain stops.
+- A `replay` that stops on a failed line now reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).

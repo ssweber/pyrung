@@ -156,9 +156,6 @@ All [nothing].
   that is gone becomes whatever now names its old address. Recordings hold names: the nickname, or the display
   address where there is none.
 - Declining ClickNick's setup prompt means no recording.
-- Breakpoint conditions (`compile_condition_for_breakpoint`) resolve no choice labels or `Pump.State` aliases, and an
-  unknown tag never fires. They should share the Watch's rule, with labels looked up at evaluation time because
-  breakpoints outlive a reload. [nothing]
 
 ## 4. One door
 
@@ -305,6 +302,11 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **Breakpoint conditions share no rule with the Watch.** `compile_condition_for_breakpoint` resolves no choice labels
+  or `Pump.State` aliases, and a condition on an unknown tag never fires. Its users are breakpoint conditions,
+  logpoint conditions and data-breakpoint conditions (monitor_data_breakpoints.py:169). They should share the Watch's
+  rule, with labels looked up at evaluation time because breakpoints outlive a reload. `to_conditions` (how() and
+  causal) resolves labels but raises KeyError on a `Pump.State` alias.
 - **Text stores.**
   - A text into a logical block mapped mid-bank should count on into the bank, as CLICK does. Today it stops at the
     block end with CLK_TEXT_PAST_BLOCK, while a windowed compare on the same tag reads on through the bank.

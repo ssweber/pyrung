@@ -433,6 +433,24 @@ class TestReplayVerb:
         adapter._drain_internal_events()
         assert not [msg for msg in _drain_messages(out) if msg.get("event") == "stopped"]
 
+    def test_a_failed_replay_after_a_reload_never_ends_on_entry(self, tmp_path: Path):
+        # An "entry" stop clears the editor's decorations, so a failed replay sends one "step".
+        for failing_line in ("run until Light within 3", "badcommand xyz"):
+            adapter, out = _setup(tmp_path)
+            transcript = _write_transcript(
+                tmp_path, "session.txt", f"step\nreload\n{failing_line}\n"
+            )
+            resp, stopped = _repl(adapter, out, f"replay {transcript}")
+            assert resp["message"].startswith("Replay error at line 3: ")
+            assert stopped == []
+            adapter._drain_internal_events()
+            stops = [
+                msg["body"]["reason"]
+                for msg in _drain_messages(out)
+                if msg.get("type") == "event" and msg.get("event") == "stopped"
+            ]
+            assert stops == ["step"], failing_line
+
     def test_replay_excluded_from_capture(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
         transcript = _write_transcript(

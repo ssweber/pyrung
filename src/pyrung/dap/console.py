@@ -419,12 +419,12 @@ def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
         out_of_time = cycles is None and runner.current_state.timestamp >= start_time + seconds
         if out_of_scans or out_of_time:
             elapsed = runner.current_state.timestamp - start_time
-            if scans:
-                # The error answer carries no events, so the stop for the scans run is queued.
-                adapter._enqueue_internal_event("stopped", adapter._stopped_body("step"))
-            raise adapter.DAPAdapterError(
+            error = adapter.DAPAdapterError(
                 f"run until: {condition} still false after {scans} scan(s) ({elapsed:.3f}s)"
             )
+            if scans:
+                queue_stop_for_error(adapter, error)
+            raise error
         _advance_one_full_scan(adapter)
         scans += 1
         if adapter._current_rung_hits_breakpoint_locked():
@@ -439,6 +439,18 @@ def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
         events=[("stopped", adapter._stopped_body("step"))],
         hit_breakpoint=hit_bp,
     )
+
+
+def queue_stop_for_error(adapter: Any, error: Any) -> None:
+    """Queue a "stopped" event for the scans a failing command ran, and mark *error* as done so.
+
+    An error answer carries no events, so without the stop the client's view stays on the
+    old scan. The mark keeps a ``replay`` around the command from queuing a second stop.
+    """
+    if getattr(error, "stop_queued", False):
+        return
+    adapter._enqueue_internal_event("stopped", adapter._stopped_body("step"))
+    error.stop_queued = True
 
 
 def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:

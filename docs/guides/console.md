@@ -101,7 +101,7 @@ run until Count >= 10 within 2 s   # a Watch expression, given at most 2 s
 run until State == HELD within 50  # a choice label stands for its value
 ```
 
-`run until` runs whole scans until its condition holds. It runs no scan if the condition already holds. Write the condition as you would in a Watch. Past the limit, `run until` fails with an error that names the condition and the scans it ran. A replay stops at that line.
+`run until` runs whole scans until its condition holds. It runs no scan if the condition already holds. Write the condition as you would in a Watch. Past the limit, `run until` fails with an error that names the condition and how many scans it ran. A replay stops at that line.
 
 The `within` limit is required. Give it room, because the scan count to a step in a sequence can change when the program does.
 
