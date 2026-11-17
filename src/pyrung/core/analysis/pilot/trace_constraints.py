@@ -155,7 +155,7 @@ def _written_value_satisfying(
     pdg: ProgramGraph,
     program: Any,
 ) -> Any | None:
-    """The value a writer of this tag writes that satisfies the comparison, if any.
+    """Return the value that a writer of this tag writes and that satisfies the comparison.
 
     A writer that adds a constant to the tag itself also qualifies.  Its candidate is the first
     value that repeated adds from the current value reach and that meets the comparison.
@@ -187,7 +187,7 @@ _HOLDS = {**_CMP_OPS, "ne": lambda value, bound: value != bound}
 def _counted_value_satisfying(
     atom: Atom, threshold: Any, snapshot: dict[str, Any], step: Any, pdg: ProgramGraph
 ) -> Any | None:
-    """The first value of ``now + n * step`` (n >= 1) that satisfies *atom*, if one is in range."""
+    """Return the first ``now + n * step`` (n >= 1) that satisfies *atom*, if one is in range."""
 
     now: Any = snapshot.get(atom.tag)
     numbers = (now, threshold, step)

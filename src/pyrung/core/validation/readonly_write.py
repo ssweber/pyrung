@@ -75,7 +75,7 @@ def _any_write_targets(instr: Any) -> list[tuple[str, str]]:
 
 
 def _written_tags_by_name(sites: list[WriteSite]) -> dict[str, list[Tag]]:
-    """The tag objects the sites write, by name, to read their flags from."""
+    """Return the tag objects that the sites write, by name, to read their flags from."""
     by_name: dict[str, list[Tag]] = {}
     for instr in {id(site.instruction): site.instruction for site in sites}.values():
         for tag in instruction_written_tags(instr):
