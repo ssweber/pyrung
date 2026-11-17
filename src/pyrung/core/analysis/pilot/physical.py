@@ -10,10 +10,10 @@ if TYPE_CHECKING:
 
 
 def upstream_through_plant(pdg: Any, harness: Any, tags: Iterable[str]) -> frozenset[str]:
-    """Every tag that can reach *tags*: through the program, and through the plant.
+    """Return every tag that can reach *tags*, through the program and through the plant.
 
-    The program graph's upstream slice stops at a harness feedback, which no rung
-    writes. Its enable drives it, so the cone goes on from the enable.
+    The program graph's upstream slice stops at a harness feedback, because no rung
+    writes it. The feedback's enable drives it, so the cone goes on from the enable.
     """
     enables: dict[str, set[str]] = {}
     if harness is not None:
@@ -51,10 +51,10 @@ def install_harness(plc: PLC, unlink: list[str] | None = None) -> frozenset[str]
     lets PILOT reach a fault that is otherwise unreachable while the link
     holds the sensor lockstep with its driver.
 
-    Overrides on a harness *plc* already carries (a debug session's bench
+    Overrides that the harness on *plc* already carries (a debug session's bench
     links, inherited by the fork) carry over, so PILOT plans with the same
-    wiring the session runs.  *plc* stands in for the session it forks, so nothing
-    settles here: a plan starts from the session's own counts, or from cold if the
+    wiring that the session runs. *plc* stands in for the session it forks, so nothing
+    settles here. A plan starts from the session's own counts, or from cold if the
     session has no harness.
     """
     from pyrung.core.harness import Harness

@@ -18,9 +18,10 @@ if TYPE_CHECKING:
 class UnsupportedConstruct(Exception):
     """Trace encountered a program construct for which it has no read rule.
 
-    Raised at read time for a condition of a class pyrung does not know, and out of
-    ``how()``; ``recording.py`` renders the caret/source diagnostic. Arithmetic in a
-    comparison is known, and is a gate with no lever instead.
+    The trace raises this at read time for a condition of a class that pyrung does not
+    know. The exception propagates out of ``how()``, and ``recording.py`` renders the
+    caret/source diagnostic. Arithmetic in a comparison is known. It is a gate with no
+    lever instead.
     """
 
     def __init__(
@@ -41,7 +42,7 @@ class UnsupportedConstruct(Exception):
 
 @dataclass(frozen=True)
 class DomainPrior:
-    """The value domains from the static facts, for resolving inequality atoms.
+    """Hold the value domains from the static facts, for resolving inequality atoms.
 
     ``nd_domains`` maps a free input to its domain; ``stateful_domains`` maps a
     program-owned tag to values its writers can produce; and ``func_deps`` is

@@ -628,13 +628,13 @@ def _walk_backward(
     transition: Transition,
     trail: tuple[str, ...] = (),
 ) -> None:
-    """Depth-first backward walk from a single transition, on an explicit stack.
+    """Walk backward depth-first from a single transition, on an explicit stack.
 
-    A walk frame yields each predecessor transition it would recurse into; the
-    driver runs that frame to completion before resuming the parent, so steps
-    and roots land in exactly the order plain recursion would produce.  Chain
+    A walk frame yields each predecessor transition that it would recurse into. The
+    driver runs that frame to completion before it resumes the parent. So steps
+    and roots land in exactly the order that plain recursion would produce. Chain
     depth grows with history (an accumulator ``math(T + 3, T)`` hops once per
-    scan), so the walk must not consume one interpreter frame per hop.
+    scan), so the walk must not use one interpreter frame per hop.
     """
     stack: list[_WalkFrame] = [_walk_frame(context, transition, trail, frozenset())]
     while stack:
@@ -662,10 +662,10 @@ def _walk_frame(
     Terminals are classified into ``deep.roots`` (external / never-written /
     system / unattributed).
 
-    A writer already on the current path (*lineage*) for the same tag is a
-    recurrence, not a new cause: ``math(T + 3, T)`` reads its own previous
-    result, and two calcs feeding each other hand the value back and forth.
-    The step above already names the value read; walking on would repeat the
+    A writer that is already on the current path (*lineage*) for the same tag is a
+    recurrence, not a new cause. For example, ``math(T + 3, T)`` reads its own previous
+    result, and two calcs that feed each other hand the value back and forth.
+    The step above already names the value read. Walking on would repeat the
     same explanation once per scan, so the walk stops there.
     """
     logic = context.logic
@@ -707,8 +707,8 @@ def _walk_frame(
         tag_obj = pdg.tags.get(name) if pdg is not None else None
         if tag_obj is not None and getattr(tag_obj, "external", False):
             return "external"
-        # No recorded write is at hand to confirm, so a write through a pointer counts
-        # only where the program's own values can aim it.
+        # No recorded write is at hand to confirm the write. So a write through a pointer
+        # counts only where the program's own values can aim it.
         if pdg is not None and pdg.may_be_written(name):
             return None
         return "never_written"
@@ -1076,8 +1076,8 @@ def _walk_frame(
         # Attribute from the exact entry-time view when replay captured one.
         # Otherwise reconstruct the committed historical state. Cache
         # residency affects cost only; it never selects a causal model.
-        # A branch writer's inherited contacts are read on the rows above it
-        # (``RungRun.condition_view``), its own on the branch row.
+        # The solve reads a branch writer's inherited contacts on the rows above the branch
+        # (``RungRun.condition_view``). It reads the branch's own contacts on the branch row.
         view: Any = fire_view if fire_view is not None else _HistoricalView(history.at(scan_id))
         _eval = _row_evaluator(fire_run, view)
 
@@ -1228,7 +1228,7 @@ def _walk_frame(
         yield from _chase_supports(steps[step_idx].enablers, trail, writer_lineage)
 
     if resolved_writers and not walked:
-        # Cut on this path only; another path may still need to explain it.
+        # Cut on this path only. Another path may still need to explain it.
         visited.discard(visit_key)
         seed = _recurrence_seed(context, tag_name, scan_id, lineage)
         if seed is not None:
@@ -1241,13 +1241,13 @@ def _recurrence_seed(
     scan_id: int,
     lineage: _Lineage,
 ) -> Transition | None:
-    """The transition that seeded a recurrence: the last write by any other writer.
+    """Return the transition that seeded a recurrence: the last write by any other writer.
 
-    ``copy(Setpoint, T)`` then ``math(T + 3, T)`` every scan: the recurrence
-    explains nothing new, but where it started from does.  Main-scope writers
-    only (the firing timelines index them by rung); no other writer, or no write
-    by one in the retained history, means the recurrence ran from the initial
-    value and the cut is the end of the walk.
+    Take ``copy(Setpoint, T)`` followed by ``math(T + 3, T)`` every scan. The recurrence
+    explains nothing new, but where it started from does. Only main-scope writers count,
+    because the firing timelines index them by rung. If there is no other writer, or no
+    write by one in the retained history, the recurrence ran from the initial value and the
+    cut is the end of the walk.
     """
     pdg = context.pdg
     timelines = context.timelines
@@ -1337,14 +1337,14 @@ def _resolve_indirect_writers(
     """Resolve the indirect writers that stored *tag_name* in this scan.
 
     When a block exceeds ``_INDIRECT_BLOCK_CAP``, the PDG drops per-tag
-    writes and records an ``IndirectWriteRef`` descriptor instead.  The walk
+    writes and records an ``IndirectWriteRef`` descriptor instead. The walk
     credits such a write only when a run of its rung in this scan wrote
-    *to_value* to *tag_name*.  The crossing it builds takes the instruction's
+    *to_value* to *tag_name*. The crossing that the walk builds takes the instruction's
     source tags as triggers and the pointer as an enabler.
 
     The pointer at the end of the scan can differ from the one the write used,
-    because a subroutine called twice in a scan sets it twice.  The run's own
-    write names the tag either way.
+    because a subroutine that is called twice in a scan sets the pointer twice. The run's
+    own write names the tag either way.
     """
     writers: list[tuple[int, Rung, str | None]] = []
     crossings: dict[
@@ -1592,9 +1592,9 @@ def _writer_fire_view(
     end-of-scan state) when there is no replay — a logic-list PLC with no
     Program, or a scan out of replay range.  Memoized per distinct scan.
 
-    Callers try the exact writer run first (``latest_writer_run``): its
+    Callers try the exact writer run first (``latest_writer_run``). Its
     ``condition_view`` routes a branch's inherited contacts to the rows that
-    read them.  This per-rung view is the fallback.
+    read them. This per-rung view is the fallback.
     """
     if node_views_fn is None:
         return None
@@ -1757,11 +1757,11 @@ def _executed_writers_from_pdg(
 
 
 def _same_value(written: Any, to_value: Any) -> bool:
-    """Whether the value a rung's write states, read from the program, equals *to_value*.
-    A NaN matches a NaN.
+    """Return True if the value that a rung's write states equals *to_value*.
 
-    A deferred value (an ``IndirectRef`` from static extraction) raises on ``==``.
-    It cannot match a stored value, so it is a non-match.
+    The function reads the value from the program. A NaN matches a NaN. A deferred value
+    (an ``IndirectRef`` from static extraction) raises on ``==``. It cannot match a stored
+    value, so it is a non-match.
     """
     try:
         return not value_changed(written, to_value)
@@ -2048,7 +2048,7 @@ def recorded_effect(
 
 
 class _RungWriteCounterfactualView:
-    """One-tag overlay over the replayed ConditionView of one row."""
+    """Overlay one tag on the replayed ConditionView of one row."""
 
     __slots__ = ("_base", "_name", "_value")
 
@@ -2067,21 +2067,22 @@ class _RungWriteCounterfactualView:
 
 
 def _run_sp_tree(run: RungRun | None, rung: Rung) -> Any:
-    """*rung*'s SP tree; an observed *run*'s, whose leaves name their rows."""
+    """Return *rung*'s SP tree, or an observed *run*'s tree, whose leaves name their rows."""
     return run.sp_tree() if run is not None else rung.sp_tree()
 
 
 def _row_view(run: RungRun | None, view: Any, condition: Condition) -> Any:
-    """The view that read *condition*: its row's, for an observed run."""
+    """Return the view that read *condition*. For an observed run, that is the view of its row."""
     return run.condition_view(condition) if run is not None else view
 
 
 def _row_evaluator(run: RungRun | None, view: Any) -> Callable[[Condition], bool]:
     """Evaluate a rung's conditions as the solve read them.
 
-    With an observed *run*, each condition is read on the view of its own row
-    (``RungRun.condition_view``): a branch's inherited contacts on the rows
-    above it, its local contacts on the branch row.  Otherwise on *view*.
+    With an observed *run*, the function reads each condition on the view of its own row
+    (``RungRun.condition_view``). It reads a branch's inherited contacts on the rows
+    above the branch, and its local contacts on the branch row. Without a *run*, it reads
+    every condition on *view*.
     """
     if run is None:
 
@@ -2101,7 +2102,7 @@ def _row_run(
     run: RungRun,
     view: Any,
 ) -> RungRun | None:
-    """The run whose row read with *view*: *run*, or a row it hangs from."""
+    """Return the run whose row read with *view*: *run*, or a row that *run* hangs from."""
     current: RungRun | None = run
     while current is not None:
         if current.view is view:
@@ -2118,9 +2119,9 @@ def _rung_write_changes_outcome(
     tag_name: str,
     from_value: Any,
 ) -> bool:
-    """Whether reverting one read on *run*'s own row changes conductivity.
+    """Return True if reverting one read on *run*'s own row changes conductivity.
 
-    Only the run's own row is reverted: the rows a branch hangs from were read
+    The function reverts the run's own row only. The rows that a branch hangs from were read
     on views of their own, which the reverted read never reached.
     """
     _actual = _row_evaluator(run, run.view)
