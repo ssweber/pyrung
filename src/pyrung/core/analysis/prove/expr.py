@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Expr, Or
 from pyrung.core.expression import Expression
@@ -116,7 +116,7 @@ def _expression_value(expr: Expression, state: Mapping[str, Any]) -> int | float
     if names is None or not names <= state.keys():
         return None
     try:
-        value = expr.evaluate(_StateView(state))  # type: ignore[arg-type]
+        value = expr.evaluate(cast(Any, _StateView(state)))
     except (TypeError, ValueError, ArithmeticError):
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
