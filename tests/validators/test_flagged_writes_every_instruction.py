@@ -477,9 +477,9 @@ def test_two_writes_to_a_final_tag_are_reported(case: Case) -> None:
     assert name in {finding.target_name for finding in report.findings}
 
 
-# The built-in Timer's EN and TT and Counter's CU and CD are final.  A timer or counter
-# used twice is COIL_CONFLICTING_OUTPUT's to judge, which allows callers that exclude
-# each other, so the final check does not count its status bits.
+# The built-in Timer's EN and TT and Counter's CU and CD are final.  COIL_CONFLICTING_OUTPUT
+# judges a timer or counter that is used twice.  It allows callers that exclude each other,
+# so the final check does not count the status bits.
 ReuseT = Timer.clone("ReuseT")
 ReuseC = Counter.clone("ReuseC")
 ReuseState = Int("ReuseState")
