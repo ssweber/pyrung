@@ -7,14 +7,18 @@
 
     kernel_b{0,1}_p{0,1}_f{0,1}.py   compile_kernel's source, for blockless, proof_metadata
                                      and force_rung_enable off (0) and on (1)
+    kernel_b{0,1}_p{0,1}_f{0,1}.meta the kernel's other fields, such as timer_unit_ns
     code.py, pyrung_rt.py            generate_circuitpy's output on a P1AM with one module
 
 A mode that refuses the program writes ``<mode>.err`` with the exception's type and
-message instead, so a refusal must stay the same too.  The corpus is
-``render_corpus_programs`` (every emitter branch, three ways each), the facts idiom
-corpus (``tests/facts/corpus.py``) and the conformance programs (the whole suite, and its
-groups on memory of their own).  The run prints the seconds ``compile_kernel`` spent
-writing source (``timings["source"]``) and the seconds ``generate_circuitpy`` took.
+message instead, so a refusal must stay the same too.  The corpus has three parts:
+
+- ``render_corpus_programs``, which reaches every emitter branch three ways
+- the facts idiom corpus, ``tests/facts/corpus.py``
+- the conformance suite, built as one program and as its groups apart (``build_apart``)
+
+The run prints which pyrung it imported.  It also prints the seconds ``compile_kernel``
+spent writing source (``timings["source"]``) and the seconds ``generate_circuitpy`` took.
 
 ``compare`` lists every file that differs or is in only one render, and exits 1 if any is.
 Time the base and the branch in the same interpreter.  The source does not depend on it,
@@ -141,6 +145,39 @@ def _code_py(built: Any) -> Any:
     return generate_circuitpy(built, hw, target_scan_ms=10.0)
 
 
+def _meta(kernel: Any) -> str:
+    """The fields of *kernel* that the run reads beside its source, one line each.
+
+    The sets and ``timer_unit_ns`` are sorted, since their order means nothing.
+    ``referenced_tags`` and ``block_specs`` keep their order.
+    """
+    fields = {
+        "timer_unit_ns": sorted(kernel.timer_unit_ns.items()),
+        "referenced_tags": list(kernel.referenced_tags),
+        "block_specs": [
+            (
+                name,
+                spec.symbol,
+                spec.size,
+                spec.default,
+                spec.tag_type.name,
+                spec.tag_names,
+                spec.tag_indices,
+            )
+            for name, spec in kernel.block_specs.items()
+        ],
+        "materialized_tag_names": sorted(kernel.materialized_tag_names),
+        "indirect_block_info": sorted(
+            (symbol, block, start, end, sorted(addresses))
+            for symbol, (block, start, end, addresses) in kernel.indirect_block_info.items()
+        ),
+        "edge_tags": sorted(kernel.edge_tags),
+        "has_io_gaps": kernel.has_io_gaps,
+        "calls_functions": kernel.calls_functions,
+    }
+    return "".join(f"{name}: {value!r}\n" for name, value in fields.items())
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(text.encode("utf-8"))
@@ -181,6 +218,7 @@ def render(out: Path, only: str | None = None) -> dict[str, float]:
                         continue
                     times["kernel source"] += timings["source"]
                     _write(folder / f"{mode}.py", kernel.source)
+                    _write(folder / f"{mode}.meta", _meta(kernel))
         started = time.perf_counter()
         try:
             output = _code_py(built)
@@ -236,6 +274,9 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "render":
+        import pyrung
+
+        print(f"pyrung from {Path(pyrung.__file__).parent}")
         started = time.perf_counter()
         times = render(args.out, args.only)
         files = len(_files(args.out))

@@ -1,17 +1,18 @@
-"""The programs devtools/render_corpus.py renders: one per branch of the instruction emitters.
+"""Programs for devtools/render_corpus.py that reach every branch of the instruction emitters.
 
-Each ``VARIANTS`` entry is a label and a body that adds one or more instructions inside a
+Each ``variants()`` entry is a label and a body that adds one or more instructions inside a
 rung.  The tool builds each body three ways, so every emitter meets each enable form:
 
     rung     under ``Rung(Enable)``, with no fault flag referenced (fault bodies are ``pass``)
     faults   the same, plus a rung reading the four fault flags the emitters set
     for      inside a ``forloop`` body, where the enable is the literal ``True``
 
-``PROGRAMS`` entries are whole programs: rung conditions, branches, subroutines and edges.
-The tool adds the facts idiom corpus and the conformance programs beside these.
+``programs()`` entries are whole programs.  They cover rung conditions, branches,
+subroutines, loops and edges.  The tool adds the facts idiom corpus and the conformance
+programs beside these.
 
-A label is a file name in the render, so it never changes once written: two renders are
-compared by name.
+A label names a folder in the render.  Two renders are compared by name, so a label never
+changes once written.
 """
 
 from __future__ import annotations
@@ -873,6 +874,17 @@ def _loops() -> Program:
     return program
 
 
+def _loop_return() -> Program:
+    with Program(strict=False) as program:
+        with Rung(Bool("Enable")):
+            call("Sub")
+        with subroutine("Sub"):
+            with Rung(Bool("A")):
+                with forloop(3):
+                    return_early()
+    return program
+
+
 def programs() -> list[tuple[str, Callable[[], Program]]]:
     """Whole programs, in a fixed order."""
     return [
@@ -880,4 +892,5 @@ def programs() -> list[tuple[str, Callable[[], Program]]]:
         ("branches", _branches),
         ("subroutines", _subroutines),
         ("loops", _loops),
+        ("loop_return", _loop_return),
     ]

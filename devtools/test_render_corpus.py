@@ -1,4 +1,4 @@
-"""Tests for render_corpus.py: a render repeats byte for byte, and compare finds a change.
+"""Check that render_corpus.py renders the same bytes twice, and that compare finds a change.
 
 Run: timeout 300 uv run pytest devtools/test_render_corpus.py -q
 """
@@ -23,7 +23,8 @@ def test_two_renders_compare_equal_and_a_change_is_found(tmp_path: Path) -> None
     assert (first / render_corpus.SUMS).read_bytes() == (second / render_corpus.SUMS).read_bytes()
     rendered = sorted(path.name for path in (first / ONLY).iterdir())
     assert "code.py" in rendered
-    assert sum(name.startswith("kernel_") for name in rendered) == 8
+    assert sum(name.startswith("kernel_") and name.endswith(".py") for name in rendered) == 8
+    assert sum(name.endswith(".meta") for name in rendered) == 8
 
     changed = second / ONLY / "kernel_b1_p0_f0.py"
     changed.write_bytes(changed.read_bytes() + b"\n")
