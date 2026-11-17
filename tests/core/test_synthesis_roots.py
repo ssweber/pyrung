@@ -201,7 +201,7 @@ def _exact(tags: Any) -> dict[str, tuple[type, Any]]:
 @pytest.mark.parametrize("exact_anchor", [False, True], ids=["preview", "anchor"])
 @pytest.mark.parametrize("enable", [True, False], ids=["enabled", "not_enabled"])
 def test_a_kernel_holds_the_plant_tags_stepping_does(exact_anchor: bool, enable: bool) -> None:
-    """A plant stores its timers' zeros from its first scan, into a tag no rung has written."""
+    """A plant stores its timers' zeros from its first scan, into a tag that no rung has written."""
     plc = PLC(_coupling_program(), dt=0.01)
     Harness(plc).install()
     plc.patch({"Enable": enable})
@@ -454,7 +454,10 @@ def test_a_replay_of_the_install_scan_steps_on_as_the_run_did(path: str) -> None
 
 
 def test_a_replay_of_a_scan_a_reload_edited_starts_from_the_edit() -> None:
-    """A reload drops coil memory no coupling keeps, in place, from the scan it reloads at."""
+    """A reload drops the coil memory that no coupling keeps.
+
+    It does so in place, from the scan it reloads at.
+    """
     fb = Bool("ReloadFb", physical=Physical("S", on_delay="300ms"), link="ReloadEn")
     enable, lamp, toggle = Bool("ReloadEn"), Bool("ReloadLamp"), Bool("ReloadTog")
     with Program(strict=False) as prog:

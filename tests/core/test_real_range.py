@@ -1,10 +1,10 @@
 """A finite REAL never leaves CLICK's range, +/-3.4028235E+38.
 
-pyrung keeps 64-bit precision (a documented deviation from CLICK's float32),
-but a store past the range is +/-Inf, as a CLICK's float32 Math stores it,
-with the out-of-range flag (SC43) for ``calc``.  A finite user-supplied value
-past the range is refused; a patch or force may be +/-Inf or NaN.  The
-``runner_factory`` cases run on the interpreter and the compiled kernel.
+pyrung keeps 64-bit precision, a documented deviation from CLICK's float32. A store past
+the range gives +/-Inf, as a CLICK's float32 Math does. In ``calc`` it also sets the
+out-of-range flag (SC43). pyrung refuses a finite user-supplied value past the range. A
+patch or force may be +/-Inf or NaN. The ``runner_factory`` cases run on the interpreter
+and the compiled kernel.
 """
 
 from __future__ import annotations
@@ -244,7 +244,7 @@ def test_an_inf_operand_follows_ieee(runner_factory):
     [(3.0e38, 2, INF), (-3.0e38, 3, -INF), (-3.0e38, 2, INF), (10.0, 400.0, INF)],
 )
 def test_a_power_past_the_range_is_inf(runner_factory, base, exponent, stored):
-    """``**`` overflows to +/-Inf with SC43, as ``*`` does (Python raises instead)."""
+    """``**`` overflows to +/-Inf and sets SC43, as ``*`` does. Python raises instead."""
     b = Real("B", default=base)
     dest = Real("Dest")
     with Program() as program:
@@ -292,7 +292,7 @@ def test_a_non_finite_bitwise_operand_is_zero_and_sc43(runner_factory, make, val
 @pytest.mark.parametrize("value", [3.0, pymath.nan, INF, -INF])
 @pytest.mark.parametrize("which", ["lo", "hi"])
 def test_a_real_randint_bound_reads_zero_with_no_flag(runner_factory, value, which):
-    """As a CLICK reads RAND of a DF: 0, with no flag, whatever the DF holds."""
+    """RAND of a DF reads 0 and sets no flag, whatever the DF holds, as on a CLICK."""
     r = Real("R", default=3.0)
     dest = Dint("Dest", default=7)
     after = Int("After")
@@ -314,8 +314,10 @@ def test_a_real_randint_bound_reads_zero_with_no_flag(runner_factory, value, whi
 
 @pytest.mark.parametrize("value", [pymath.nan, INF, -INF])
 def test_a_non_finite_forloop_count_runs_no_iteration_and_sc43(runner_factory, value):
-    """pyrung's choice (a CLICK For takes an integer count): a REAL count
-    holding Inf or NaN runs no iteration, sets SC43, and the scan runs on."""
+    """pyrung's choice, because a CLICK For takes an integer count.
+
+    A REAL count holding Inf or NaN runs no iteration and sets SC43. The scan runs on.
+    """
     r = Real("R", default=3.0)
     hits = Int("Hits")
     after = Bool("After")
@@ -432,7 +434,7 @@ def test_copy_inf_into_an_integer_clamps(runner_factory):
     tags = plc.current_state.tags
     assert tags["I"] == 32767
     assert tags["D"] == -2147483648
-    assert tags["W"] == 65535  # a CLICK reading: +Inf into a Word is its top
+    assert tags["W"] == 65535  # CLICK reads +Inf into a Word as its top value
     assert tags["N"] == 0
 
 
@@ -459,8 +461,10 @@ def test_inf_and_nan_compare_as_ieee(runner_factory):
 @pytest.mark.usefixtures("loop_from_first_scan")
 @pytest.mark.parametrize("start", [1.0, INF])
 def test_a_real_that_overflows_in_the_loop_matches_stepping(start):
-    """A REAL doubling each scan under a running timer reaches +Inf (and SC43)
-    the same way in the loop and stepped; from +Inf it stays +Inf."""
+    """A REAL that doubles each scan under a running timer reaches +Inf and sets SC43.
+
+    It does so the same way in the loop and when stepped. Once at +Inf it stays +Inf.
+    """
     from pyrung.core import Timer, on_delay
 
     def build():

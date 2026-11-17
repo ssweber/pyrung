@@ -1,10 +1,10 @@
-"""Retain and bind the first scan a Pilot invocation runs from scan 0.
+"""Retain and bind the first scan that a Pilot invocation runs from scan 0.
 
-A plan starts from the session, and a scan the session already ran is not Pilot's to
-revisit: leaving that state takes a restart, which is a step of the plan (``restart.py``).
+A plan starts from the session.  A scan that the session already ran is not Pilot's to
+revisit.  Leaving that state takes a restart, which is a step of the plan (``restart.py``).
 At scan 0 nothing has run, so Compass's ObserveScan runs the first scan on Pilot's own fork.
-This module retains that execution receipt and binds it to Compass's selected route before
-WorkingTheory interprets it.
+This module retains the execution receipt of that scan.  It binds the receipt to Compass's
+selected route before WorkingTheory interprets it.
 """
 
 from __future__ import annotations

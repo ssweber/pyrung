@@ -168,8 +168,10 @@ def test_branch_flow_terminal_blocks_following_branch_local_instruction() -> Non
 
 
 def test_box_with_pins_in_a_branch_ends_the_whole_rung() -> None:
-    """A box with pins ends its rung, not just its branch: CLICK draws its pins
-    from the box's own wire, so a sibling branch goes in a continued() rung."""
+    """A box with pins ends its whole rung, not just its branch.
+
+    CLICK draws the pins from the box's own wire, so a sibling branch goes in a continued() rung.
+    """
     enable = Bool("Enable")
     mode_a = Bool("ModeA")
     mode_b = Bool("ModeB")

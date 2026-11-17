@@ -64,7 +64,7 @@ def test_a_math_that_stays_in_range_is_finite() -> None:
 
 
 def test_adding_a_constant_to_itself_never_reaches_inf() -> None:
-    # An added 1.0 rounds away past 2 ** 53, long before the Real range, so the sum never reaches Inf.
+    # Adding 1.0 rounds away past 2 ** 53, long before the Real range, so the sum never reaches Inf.
     prog = _with((GO, lambda: math(OUT + 1.0, OUT)))
     assert _non_finite(prog) == set()
 
@@ -137,8 +137,8 @@ def test_a_tangent_is_unbounded() -> None:
 
 
 def test_an_element_a_pointer_write_lists_no_target_for_may_hold_one() -> None:
-    """A write through a pointer with no declared bounds, into a block of more than 1000
-    elements, lists no targets.  So it may store Inf into BigR5."""
+    """A write through a pointer with no declared bounds, into a block of over 1000 elements,
+    has no list of targets.  So the write may store Inf into BigR5."""
     big = Block("BigR", TagType.REAL, 1, 2000)
     pointer = Int("WritePointer", external=True)
     with Program(strict=False) as prog:
@@ -232,7 +232,7 @@ def test_check_makes_no_claim_on_a_nan_compared_with_itself() -> None:
 
 
 def test_an_input_real_copied_into_an_int_keeps_a_domain() -> None:
-    # A copy of NaN into an Int stores 0, and of +/-Inf stores 32767 or -32768.
+    # Copying NaN into an Int stores 0.  Copying +/-Inf stores 32767 or -32768.
     temp = Real("DryerTemp", external=True)
     shown = Int("TempShown")
     with Program(strict=False) as prog:

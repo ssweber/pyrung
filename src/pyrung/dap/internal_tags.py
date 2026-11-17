@@ -1,4 +1,4 @@
-"""pyrung's own bookkeeping tags, which the debugger leaves out.
+"""Recognize pyrung's own bookkeeping tags, which the debugger leaves out.
 
 pyrung adds tags of its own to a running program:
 
@@ -14,8 +14,8 @@ pyrung adds tags of its own to a running program:
 - ``on`` and ``off`` above with a unit (``__cpl_on_Ts__{feedback}``): the same
   timer, for a delay too long to count in milliseconds.
 
-They are not the program's, so the DAP does not list them. Only these exact
-prefixes are matched: a user tag such as ``__init__`` or ``__spare__1`` is shown.
+They are not the program's, so the DAP does not list them.  Only these exact
+prefixes are matched.  A user tag such as ``__init__`` or ``__spare__1`` is shown.
 """
 
 from __future__ import annotations
@@ -38,15 +38,15 @@ _INTERNAL_TAG_PREFIX = re.compile(
 
 
 def is_internal_tag_name(name: str) -> bool:
-    """True for a tag pyrung adds itself (a bracket's rule bit, a harness timer)."""
+    """Return True for a tag pyrung adds itself (a bracket's rule bit, a harness timer)."""
     return _INTERNAL_TAG_PREFIX.match(name) is not None
 
 
 def visible_tag_names(names: Iterable[str]) -> list[str]:
-    """The names in ``names`` that are the program's, in their order."""
+    """Return the names in ``names`` that are the program's, in their order."""
     return [name for name in names if not is_internal_tag_name(name)]
 
 
 def visible_tags(tags: Mapping[str, _V]) -> dict[str, _V]:
-    """``tags`` without pyrung's internal ones."""
+    """Return ``tags`` without pyrung's internal ones."""
     return {name: value for name, value in tags.items() if not is_internal_tag_name(name)}

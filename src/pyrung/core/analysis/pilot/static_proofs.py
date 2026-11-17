@@ -1,47 +1,58 @@
-"""The static proofs behind ``PlanStatus.CANNOT_REACH``.
+"""Prove ``PlanStatus.CANNOT_REACH`` statically for how().
 
-``CANNOT_REACH`` claims no scan sequence gets there, so each proof here reasons
-about every write to a tag rather than the one route a trace prefers. Whatever
-it cannot enumerate it does not prove: the answer falls back to ``STOPPED``,
-which claims nothing. Two writes are not yet seen, so a proof over them can be false:
-a text Copy from a tag spilling past its first slot, sized at run time, and a block
-write onto a plain tag named like the slot.
+``CANNOT_REACH`` claims that no scan sequence gets there.  So each proof here reasons
+about every write to a tag, not about the one route a trace prefers.  When a proof
+cannot enumerate something, it proves nothing.  The answer then falls back to
+``STOPPED``, which claims nothing.
 
-Three facts carry both proofs:
+Two kinds of write are not seen yet, so a proof over them can be false.  One is a
+text Copy from a tag that spills past its first slot, sized at run time.  The other
+is a block write onto a plain tag that is named like the slot.
 
-* ``ProofFacts.producers`` lists every rung able to put a value in a tag, and
+Three facts support both proofs:
+
+* ``ProofFacts.producers`` lists every rung that can put a value in a tag.  It
   refuses when a write can happen outside the rung's condition (a coil going
-  false, a timer), through a pointer, or in a for loop. A pointer write counts
-  against every slot of its block, whatever range the pointer declares: a declared
-  range only warns.
-* A tag the plan, the plant or the outside may set (``free``: steerable, forced or
-  patched in the session how() was asked from, harness feedback, external, an input
-  block's slot, system) has no such list.
-* The state how() starts from counts: a value already there needs no producer.
+  false, a timer), through a pointer, or in a for loop.  A pointer write counts
+  against every slot of its block, whatever range the pointer declares, because a
+  declared range only warns.
+* A tag that the plan, the plant or the outside may set has no such list.  These
+  tags are ``free``: steerable, forced or patched in the session how() was asked
+  from, harness feedback, external, an input block's slot, and system tags.
+* The state that how() starts from counts.  A value that is already there needs
+  no producer.
 
-**Blocked by a link** (``linked_feedback_block``). A value is blocked when it
-does not hold now and every producer's condition needs a blocked value. Take the
-first scan any value in the proof appears: its producer read another value of
-the proof, already there, which contradicts first. That leaves where the proof
-bottoms out, the Done of a non-retentive, main-level on-delay with a literal preset,
-on a fixed dt, where only the timer writes its Acc and Done, and whose rung's own
-contacts hold a bool coupling's enable and feedback opposed (``En, ~Fb`` or
-``~En, Fb``). No rung or pointer writes that feedback and the session does not
-override it, so only the plant moves it. The plant ends that state within its delay,
-and the timer starts over whenever its rung goes false, so it cannot time out when
+**Blocked by a link** (``linked_feedback_block``).  A value is blocked when it
+does not hold now and every producer's condition needs a blocked value.  Suppose
+a value of the proof ever appears, and take the first scan in which any value of
+the proof appears.  Its producer read another value of the proof that was already
+there, which contradicts "first".  That leaves the place where the proof bottoms
+out.  It is the Done bit of an on-delay timer that meets all of these conditions:
+
+* The timer is non-retentive, on a main-level rung, with a literal preset, on a
+  fixed dt.
+* Only the timer writes its Acc and Done.
+* The rung's own contacts hold a bool coupling's enable and feedback opposed
+  (``En, ~Fb`` or ``~En, Fb``).
+
+No rung or pointer writes that feedback and the session does not override it, so
+only the plant moves it.  The plant ends the opposed state within its delay.  The
+timer starts over whenever its rung goes false.  So the timer cannot time out when
 its preset exceeds the delay plus some scans of slop.
 
-The plant reads the enable between scans and a rung reads it mid-scan, so this holds
-only while those two agree to within a scan. The enable has no pointer write, and
-either no writer, or one writer, an ``out`` coil on a main-level rung with no for
-loop, and is not ``free``. Anything wider is ``STOPPED``.
+The plant reads the enable between scans and a rung reads it mid-scan.  So the proof
+holds only while those two readings agree to within a scan.  That requires the
+enable to have no pointer write and not be ``free``.  It must also have either no
+writer, or one writer that is an ``out`` coil on a main-level rung with no for loop.
+Anything wider gives ``STOPPED``.
 
-**Mutually exclusive** (``exclusion_evidence``). ``X=a`` and ``Y=b`` cannot both
-hold at the end of a scan when no rung produces both and each rung producing one
-leaves the other off, by writing it off or by reading it off in its own
-condition. Suppose both held. Take the later of the two last writes that put them
-in place: right after it the other was off, and nothing wrote it since. Only when
-neither was ever written does that fail, so both holding at the start is no proof.
+**Mutually exclusive** (``exclusion_evidence``).  ``X=a`` and ``Y=b`` cannot both
+hold at the end of a scan when two things are true.  No rung produces both.  Each
+rung that produces one leaves the other off, either by writing it off or by reading
+it off in its own condition.  Suppose both held.  Take the later of the two last
+writes that put them in place.  Right after that write the other was off, and nothing
+wrote it since.  This fails only when neither was ever written.  So the proof fails
+when both already hold at the start.
 """
 
 from __future__ import annotations
@@ -71,9 +82,9 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.drive_setup import DriveSetup
     from pyrung.core.harness import Coupling
 
-# Scans a coupling's feedback may lag its delay, and a rung's timer the plant's.
+# How many scans a coupling's feedback may lag its delay, and a rung's timer the plant's.
 _WINDOW_SLOP_SCANS = 3
-# Past this the walk gives up: no proof, which is always allowed.
+# Past this many steps the walk gives up and returns no proof, which is always allowed.
 _MAX_PROOF_STEPS = 2000
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL})
 
@@ -114,16 +125,18 @@ class ProofFacts:
             return bool(literal) == bool(value)
         if _values_match(literal, value):
             return True
-        # A copy clamps what is out of range and truncates a real: no numeric type does either here.
+        # A copy clamps what is out of range and truncates a real.  A literal int from 0 to
+        # 32766 needs neither in any numeric type, so it writes exactly itself.
         numeric = known is not None and known.type in _NUMERIC_TYPES
         return not (numeric and type(literal) is int and 0 <= literal < 32767)
 
     def producers(self, tag: str, value: Any) -> tuple[int, ...] | None:
-        """Every node able to put *value* in *tag*, each only while its rung is true.
+        """Return every node that can put *value* in *tag*, each only while its rung is true.
 
-        ``None`` when that list cannot be made: a free tag, a tag nothing in the program
-        writes (so something else does), a write through a pointer, or a write that
-        fires with its rung false.
+        Return ``None`` when that list cannot be made.  That happens for a free tag, a
+        tag that nothing in the program writes (so something else does), a write through
+        a pointer, a write that fires with its rung false, and a writer rung that holds a
+        for loop.
         """
         writers = self.pdg.writers_of.get(tag, frozenset())
         if not writers or tag in self.free or self._writable_through_pointer(tag):
@@ -151,12 +164,12 @@ class ProofFacts:
 
 
 def _has_a_loop(rung: Any) -> bool:
-    """``instruction_writes_tag`` does not see into a for loop, so a rung with one can hide a write."""
+    """Return whether *rung* has a for loop, which hides writes from ``instruction_writes_tag``."""
     return any(isinstance(instr, ForLoopInstruction) for instr in rung._instructions)
 
 
 def _pointer_written_blocks(program: Any) -> frozenset[Block]:
-    """Every block some instruction writes at an address only the scan knows."""
+    """Return every block that some instruction writes at an address only the scan knows."""
     blocks: set[Block] = set()
     for instr in walk_instructions(program):
         for target in instruction_write_targets(instr):
@@ -212,7 +225,7 @@ def _contact(atoms: list[Any], tag: str, form: str) -> bool:
 
 
 def _plant_delays_ms(physical: Any) -> tuple[int, int]:
-    """How long the plant's debounce takes each way, rounded up to the one unit both sides count in."""
+    """Return the plant's debounce delay each way, rounded up to the unit both sides count in."""
     on_preset, off_preset, _unit, unit_ms = coil_timer(
         physical.on_delay_ms or 0, physical.off_delay_ms or 0
     )
@@ -220,7 +233,10 @@ def _plant_delays_ms(physical: Any) -> tuple[int, int]:
 
 
 class _LinkProof:
-    """One walk back from a target.  A result is the links used, ``None`` when not proved."""
+    """One walk back from a target.
+
+    A result is the set of links used, or ``None`` when not proved.
+    """
 
     def __init__(self, facts: ProofFacts) -> None:
         self.facts = facts
@@ -282,7 +298,10 @@ class _LinkProof:
         return None
 
     def _timer_done_blocked(self, tag: str, value: Any, stack: frozenset[Any]) -> Any:
-        """A non-retentive on-delay's Done, ``NotImplemented`` when *tag* is no timer's Done."""
+        """Handle a non-retentive on-delay's Done.
+
+        Return ``NotImplemented`` when no on-delay timer writes *tag* as its Done.
+        """
         pdg = self.facts.pdg
         writers = pdg.writers_of.get(tag, frozenset())
         found = [
@@ -347,9 +366,10 @@ class _LinkProof:
         return None
 
     def _opposed_delay(self, atoms: list[Any], coupling: Coupling) -> float | None:
-        """How long the plant lets these contacts hold the feedback against its enable, if bounded.
+        """Return how long the plant lets these contacts hold the feedback against its enable.
 
-        Only an on/off delay coupling has that bound. A flasher has no resting value.
+        Return ``None`` when there is no bound.  Only an on/off delay coupling has a bound.
+        A flasher has no resting value.
         """
         facts = self.facts
         fb = coupling.fb_name
@@ -380,9 +400,9 @@ class _LinkProof:
     def _read_as_the_plant_reads(self, en: str) -> bool:
         """Does a rung read this enable as the plant does, between scans, at most a scan late?
 
-        Nothing writing it, it moves only between scans. One main-level ``out`` coil gives it
-        one position per scan, so a rung reads this scan's or the last. Any other write can
-        move it after one reader and back before the next.
+        If nothing writes the enable, it moves only between scans.  One main-level ``out``
+        coil gives it one position per scan, so a rung reads this scan's value or the last.
+        Any other write can move it after one reader and back before the next.
         """
         facts = self.facts
         if facts._writable_through_pointer(en):
@@ -403,10 +423,11 @@ class _LinkProof:
 
 
 def linked_feedback_block(target_tag: str, target_value: Any, facts: ProofFacts) -> str | None:
-    """The reason *target_tag* cannot take *target_value* with the harness links intact, if proved.
+    """Return why *target_tag* cannot take *target_value* with the harness links intact.
 
-    The harness owns the feedback, and every way to the value needs a watchdog-style dwell that
-    its link cuts short.  ``unlink=`` models the dead sensor that would let it finish.
+    Return ``None`` when that is not proved.  The harness owns the feedback.  Every way to
+    the value needs a watchdog-style dwell, and the link cuts that dwell short.  ``unlink=``
+    models the dead sensor that would let the dwell finish.
     """
     if not facts.couplings:
         return None
@@ -464,7 +485,7 @@ def _reads_off(expr: Any, tag: str, value: Any) -> bool:
 
 
 def _rung_chain(facts: ProofFacts, node: RungNode) -> list[Any]:
-    """The rung and the branches down to *node*: all of them are true when it fires."""
+    """Return the rung and the branches down to *node*.  All of them are true when it fires."""
     rung = resolve_rung(facts.program, replace(node, branch_path=()))
     if rung is None:
         return []
@@ -480,10 +501,10 @@ def _rung_key(node: RungNode) -> tuple[str | None, int]:
 
 
 def _leaves_other_off(facts: ProofFacts, node_index: int, tag: str, value: Any) -> str | None:
-    """How firing this node leaves *tag* off *value*, in words, or ``None``."""
+    """Return how firing this node leaves *tag* off *value*, in words, or ``None``."""
     node = facts.pdg.rung_nodes[node_index]
     where = _scope_ref(node_index, node)
-    # A return may leave between this rung's write of one and its write of the other.
+    # A return may exit the rung between its write of one tag and its write of the other.
     may_return = any(
         other.guard_reads for other in facts.pdg.rung_nodes if _rung_key(other) == _rung_key(node)
     )
@@ -526,7 +547,7 @@ def _each_leaves_other_off(
 def exclusion_evidence(
     facts: ProofFacts, a: tuple[str, Any], b: tuple[str, Any]
 ) -> tuple[list[str], list[str]] | None:
-    """What keeps ``a`` and ``b`` from holding together, each way round, or ``None`` if unproved."""
+    """Return what keeps ``a`` and ``b`` from holding together, each way round, or ``None``."""
     if facts.holds(*a) and facts.holds(*b):
         return None
     makes_a = facts.producers(*a)

@@ -1,4 +1,4 @@
-"""Column A is CLICK's left power rail: no exported row carries a vertical token there.
+"""Column A is CLICK's left power rail, so no exported row has a vertical token there.
 
 CLICK refuses ``T``, ``|`` and ``T:`` in column A ("Vertical-down tokens are not
 allowed in Column A").  Items that hang straight from the rail are separate wires.

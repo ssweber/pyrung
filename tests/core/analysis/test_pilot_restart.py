@@ -16,7 +16,7 @@ from pyrung.core.analysis.pilot.restart import RestartReport
 
 
 def _only_on_a_first_scan():
-    """Target is on for the first scan alone, and the session is past it."""
+    """Return a program where Target is on for the first scan alone, with the session past it."""
     target = Bool("Target")
     with Program(strict=False) as prog:
         with Rung(system.sys.first_scan):
@@ -25,7 +25,10 @@ def _only_on_a_first_scan():
 
 
 def _spent_by_the_first_scan():
-    """As above, on a retentive Step the first scan moves off the value that gives Target."""
+    """Return a program like ``_only_on_a_first_scan``, with a retentive Step.
+
+    The first scan moves Step off the value that turns Target on.
+    """
     step = Int("Step")
     target = Bool("Target")
     with Program(strict=False) as prog:
@@ -37,7 +40,7 @@ def _spent_by_the_first_scan():
 
 
 def _stuck():
-    """The last rung takes Target back every scan, and no restart changes that."""
+    """Return a program whose last rung resets Target every scan, so no restart helps."""
     go = Bool("Go", external=True)
     target = Bool("Target")
     with Program(strict=False) as prog:
@@ -69,7 +72,7 @@ def test_a_plan_that_needs_the_restart_says_so_as_its_first_step() -> None:
     assert "how() found no way from where the session is" in text
     assert "\n2. " in text
     assert plan.total_scans == 1
-    # The session did not move, and the plan is one a real run gives.
+    # The session did not move.  A replay of the plan reaches the target.
     assert plc.current_state is before
     assert plan.replay().state.tags[target.name] is True
 
@@ -175,7 +178,10 @@ def test_a_force_the_restart_releases_is_named() -> None:
 
 
 def _trips_on_a_restart():
-    """Running is on after every scan, so only the state before the first scan lacks it."""
+    """Return a program where Running is on after every scan.
+
+    So only the state before the first scan lacks it.
+    """
     running = Bool("Running")
     target = Bool("Target")
     with Program(strict=False) as tripped:
@@ -257,7 +263,7 @@ def test_a_clear_cut_short_keeps_what_it_has_and_says_so() -> None:
         [(_fake(True, 7), False), (_fake(True, 5), False), (_fake(False), True)]
     )
 
-    # A went, and time ran out on B: nothing was learned about B or C.
+    # A went, and time ran out on B.  Nothing was learned about B or C.
     assert clear == {"B": 0, "C": 0}
     assert scans == 5
     assert untried is True

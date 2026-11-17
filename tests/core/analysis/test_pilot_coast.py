@@ -103,11 +103,11 @@ def _dual_output_program():
 
 
 def _counter_program():
-    """A per-scan integer count: ``Count`` increments by 1 every scan.
+    """Build a per-scan integer count: ``Count`` increments by 1 every scan.
 
-    (A ``count_up`` counts rising edges, so a held rung counts once: the
-    per-scan source is an unconditional self-calc, read against a limit as a
-    counter's preset was.  ``Enable`` only mirrors the old counter's rung.)
+    A ``count_up`` counts rising edges, so a held rung counts once.  The per-scan
+    source is therefore an unconditional self-calc, read against a limit as a
+    counter's preset was.  ``Enable`` only mirrors the old counter's rung.
     """
     Enable = Bool("Enable", external=True)
     Count = Dint("Count")
@@ -255,7 +255,7 @@ def _static_channel_long_timer_program():
 
 
 def _step_until(plc: PLC, pred, cap: int = 20_000) -> int:
-    """Drive a jit=False fork scan-by-scan; return the first scan pred holds."""
+    """Step a jit=False fork scan by scan and return the first scan on which pred holds."""
     start = plc.state.scan_id
     while not pred(plc.state):
         plc.step()
@@ -521,8 +521,10 @@ class TestCrossingExactness:
         assert plc.state.tags["Count"] == n
 
     def test_self_feeding_calc_lands_on_stepped_scan(self):
-        """``math(f(X), X)`` moves every scan with no accumulator behind it.
-        The coast must not treat ``X`` as frozen and skip its sequence."""
+        """Check that ``math(f(X), X)`` moves every scan with no accumulator behind it.
+
+        The coast must not treat ``X`` as frozen and skip its sequence.
+        """
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         X = Int("X", default=1)
@@ -1210,8 +1212,8 @@ class TestSettleLandingSingleHop:
         assert len(hops) == 1
         assert hops[0].kind == DEPARTURE
         assert hops[0].transitions == (("State", 1, 2),)
-        # The confirmation window folds, but its scan-ids still elapse — the
-        # landing sits a full confirm window past the hop.
+        # The confirmation window folds, but its scan-ids still elapse.  The landing
+        # sits a full confirm window past the hop.
         assert receipt.end_scan >= hops[0].scan + 50
 
 

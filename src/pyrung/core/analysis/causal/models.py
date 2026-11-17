@@ -307,7 +307,7 @@ class CausalChain:
 
     @property
     def confidence(self) -> float:
-        """``1 / len(ambiguous_roots)``, or 1.0 when there are none.
+        """Return ``1 / len(ambiguous_roots)``, or 1.0 when there are no ambiguous roots.
 
         In why mode ``ambiguous_roots`` holds two kinds of root:
 

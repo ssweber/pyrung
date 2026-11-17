@@ -107,7 +107,7 @@ class TestCoverageCollector:
         plc = long_run(stepped=False)
         assert plc._unrecorded_scans
         with pytest.raises(UnrecordedScansError):
-            plc.query.cold_rungs()  # a question has its limit
+            plc.query.cold_rungs()  # the query refuses, because the run left some scans unrecorded
 
         collector = CoverageCollector()
         collector.collect(plc)

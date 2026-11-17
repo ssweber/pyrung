@@ -88,7 +88,7 @@ _current_blocks: dict[str, Block] = {}
 
 
 def _blocks() -> dict[str, Block]:
-    """The blocks of the program being built.  :func:`build_variant` makes them fresh."""
+    """Return the blocks of the program being built.  :func:`build_variant` makes new ones."""
     if not _current_blocks:
         _current_blocks.update(
             bits=Block("Bits", TagType.BOOL, 1, 32),
@@ -102,7 +102,7 @@ def _blocks() -> dict[str, Block]:
 
 
 def _rows(kind: Any) -> Any:
-    """A named array of two fields at stride 4.  Its ranges are not a slice of one block."""
+    """Return a named array of two fields at stride 4.  Its ranges are not a slice of one block."""
 
     @named_array(kind, count=2, stride=4)
     class Row:
@@ -737,7 +737,7 @@ def _modbus_raw() -> Iterator[tuple[str, Body]]:
 
 
 def variants() -> list[tuple[str, Body]]:
-    """Every body, in a fixed order."""
+    """Return every body, in a fixed order."""
     groups = (
         _coils,
         _timers,
@@ -770,7 +770,7 @@ def _fault_rung() -> None:
 
 
 def build_variant(body: Body, flavor: str) -> Program:
-    """*body* in a program of *flavor* (``rung``, ``faults`` or ``for``)."""
+    """Build a program that holds *body* in the given *flavor* (``rung``, ``faults`` or ``for``)."""
     _current_blocks.clear()
     with Program(strict=False) as program:
         with Rung(Bool("Enable")):
@@ -886,7 +886,7 @@ def _loop_return() -> Program:
 
 
 def programs() -> list[tuple[str, Callable[[], Program]]]:
-    """Whole programs, in a fixed order."""
+    """Return the whole programs, in a fixed order."""
     return [
         ("conditions", _conditions),
         ("branches", _branches),

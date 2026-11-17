@@ -228,8 +228,8 @@ def monotone_profile(
     returned profile exposes none of those implementation details as fields;
     callers ask ``plan`` for the operation appropriate to the current target.
 
-    An ascending owner completes at ``acc >= preset`` and a descending one at
-    ``acc <= preset``, with the preset's own sign, as the instruction computes Done.
+    An ascending owner completes at ``acc >= preset``.  A descending owner completes at
+    ``acc <= preset``.  Both use the preset's own sign, as the instruction computes Done.
 
     *prepare* gives the operation that must come first when *advance* alone would not
     move the owner, such as enabling an off delay that was never enabled.

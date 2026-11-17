@@ -112,8 +112,8 @@ def _compile_out_instruction(
     indent: int,
 ) -> list[str]:
     sp = " " * indent
-    # Each range write takes the next local name, so this builds the writes in output order.
-    # A literal True enable never runs the off side, so this does not build it.
+    # Each range write takes the next local name, so build the writes in output order.
+    # A literal True enable never runs the off side, so do not build it.
     always = _bool_literal(enabled_expr) is True
     if instr.oneshot:
         key = f"_oneshot:{ctx.state_key_for(instr)}"
@@ -163,7 +163,7 @@ def _reset_expr(
 
 
 def _rest_or_run(reset_expr: str | None, rest: list[str], run: list[str]) -> list[str]:
-    """Lines that run *rest* on a scan the reset is on, and *run* on any other scan."""
+    """Return lines that run *rest* on a scan where the reset is on, and *run* on any other."""
     if reset_expr is None:
         return run
     return emit_if_enabled(reset_expr, rest, otherwise=run, fold=False)
@@ -276,9 +276,9 @@ def _preset_key(
     instr: OnDelayInstruction | OffDelayInstruction | CountUpInstruction | CountDownInstruction,
     ctx: CodegenContext,
 ) -> str | None:
-    """The memory key that holds a timer's or counter's preset for the prover.
+    """Return the memory key that holds a timer's or counter's preset for the prover.
 
-    It is None unless the kernel is built with ``proof_metadata``.
+    Return None unless the kernel is built with ``proof_metadata``.
     """
     return prove_effective_preset_key(instr.done_bit.name) if ctx.proof_metadata else None
 
@@ -288,8 +288,8 @@ def _count_edge_lines(
 ) -> list[str]:
     """Bind *name* to a counter input's rising edge and update its memory.
 
-    The memory is the input as the counter last scanned it, written on every
-    scan the counter runs (reset scans included); it starts off, so an input
+    The memory is the input as the counter last scanned it.  It is written on every scan
+    that the counter runs, reset scans included.  It starts off, so an input that is
     already on at the first scan counts (see ``counters.count_edge``).
     """
     sp = " " * indent
@@ -422,7 +422,7 @@ def _compile_copy_instruction(
 
 
 def _copy_source_fits(source: object, target_type: str) -> bool:
-    """True for a literal the store leaves alone, which needs no clamp test."""
+    """Return True for a literal that the store leaves alone, so it needs no clamp test."""
     if type(source) is not int:
         return False
     if target_type == "INT":
@@ -437,8 +437,10 @@ def _compile_copy_converter_instruction(
     indent: int,
     converter: CopyConverter | None = None,
 ) -> list[str]:
-    """A Copy with *converter* (``instr.convert``, or the plain one across text), or a
-    text literal's fan-out when it is ``None``."""
+    """Compile a Copy with *converter* (``instr.convert``, or the plain one across text).
+
+    When *converter* is ``None``, compile a text literal's fan-out instead.
+    """
     if converter is not None and not isinstance(converter, CopyConverter):
         raise TypeError("copy converter compiler requires CopyConverter")
 
@@ -449,8 +451,8 @@ def _compile_copy_converter_instruction(
     source_expr = _compile_copy_source(instr.source, ctx)
     source_read: list[str] = []
     if _past_end_keeps(instr.source):
-        # Read where a pointer past the end drops the copy (the guard's IndexError),
-        # not inside the conversion's own handler, which would flag it.
+        # Read the source where a pointer past the end drops the copy (the guard's IndexError).
+        # Reading it inside the conversion's own handler would flag it.
         source_read = [f"_{stem}_source = {source_expr}"]
         source_expr = f"_{stem}_source"
 

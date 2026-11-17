@@ -151,8 +151,8 @@ def _assert_codegen_body(source: str, expected: str) -> None:
 
 
 def _assert_wires_import_as(source: str, expected: str) -> None:
-    """The export of *source*, with its continued rungs joined into one CLICK rung, imports as
-    *expected*."""
+    """Assert that *source*, exported with its continued rungs joined into one CLICK rung, imports
+    as *expected*."""
     logic, mapping = build_program(source)
     bundle = join_continued(pyrung_to_ladder(logic, mapping), logic)
     code = strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
@@ -2637,7 +2637,7 @@ class TestRoundTrip:
     @pytest.mark.parametrize("instruction", ["send", "receive"])
     @pytest.mark.parametrize("left_off", ["busy", "success", "error", "exception_response"])
     def test_status_bit_left_off_round_trips(self, instruction, left_off):
-        """CLICK lets any Send/Receive status bit be left off; it stays off through import."""
+        """CLICK lets you leave any Send/Receive status bit off. It stays off through import."""
         busy = "sending" if instruction == "send" else "receiving"
         operand = "source=DS1" if instruction == "send" else "dest=DS1"
         bits = {busy: "C1", "success": "C2", "error": "C3", "exception_response": "DS2"}
@@ -2679,7 +2679,7 @@ class TestRoundTrip:
         assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
 
     def test_event_drum_jump_step_is_keyword(self):
-        """A drum's jump pin imports as .jump(cond, step=...); step is keyword-only."""
+        """A drum's jump pin imports as .jump(cond, step=...). The step argument is keyword-only."""
         _assert_codegen_body(
             """
             with rung(X1):
@@ -2716,14 +2716,14 @@ class TestRoundTrip:
                 "to_text(termination_code=19)",
                 'to_text(suppress_zero=True, termination_code="$13")',
             ),
-            # A DF source writes only exponential; suppress_zero does not apply to it.
+            # A DF source writes only exponential. suppress_zero does not apply to it.
             ("DF1", "to_text(suppress_zero=False)", "to_text(exponential=False)"),
             ("DF1", "to_text(exponential=True)", "to_text(exponential=True)"),
             ("2.5", "to_text()", "to_text(exponential=False)"),
         ],
     )
     def test_copy_to_text(self, source_operand, source, generated):
-        """to_text writes the one flag its source has, and keeps CLICK's termination_code=none."""
+        """to_text writes the one flag its source has. It keeps CLICK's termination_code=none."""
         _assert_codegen_body(
             f"""
             with rung(X1):
@@ -2749,7 +2749,7 @@ class TestRoundTrip:
         ],
     )
     def test_import_refuses_to_text_exponential_from_an_integer(self, source, refused):
-        """CLICK offers Exponential Numbering only for a DF source, so import refuses it elsewhere."""
+        """CLICK offers Exponential Numbering only for a DF source. Import refuses it elsewhere."""
         from pyrung.click.ladder.types import LadderBundle
 
         header = (
@@ -3312,7 +3312,7 @@ class TestNicknameMerge:
         namespace["mapping"].to_nickname_file(nickname_path)
         rows = pyclickplc.read_csv(nickname_path)
 
-        # Each address keeps the nickname it came with, and gains none.
+        # Each address keeps the nickname it came with. No address gets a new one.
         for address, (bank, index) in {"T1": ("T", 1), "TD1": ("TD", 1)}.items():
             row = rows.get(get_addr_key(bank, index))
             assert (row.nickname if row is not None else None) == source_nicknames.get(address)
@@ -3329,8 +3329,8 @@ class TestNicknameMerge:
     def test_timer_clone_conforms_to_its_addresses_retentive(
         self, tmp_path: Path, records, expected_retentive: str
     ):
-        """The clone takes the retentive policy its T/TD rows set (bank default when
-        absent), and exports the same rows back."""
+        """The clone gets the retentive policy that its T/TD rows set, or the bank default when
+        they set none. Export writes the same rows back."""
         import pyclickplc
         from pyclickplc.addresses import AddressRecord, get_addr_key
         from pyclickplc.banks import BANKS
@@ -3386,8 +3386,8 @@ class TestNicknameMerge:
     def test_timer_clone_keeps_its_addresses_comments(
         self, tmp_path: Path, records, expected_comments: str
     ):
-        """A T/TD row's comment rides on the clone, named or not, and exports back
-        on the same row without gaining a nickname."""
+        """A T/TD row's comment goes onto the clone, named or not. Export writes it back
+        on the same row and adds no nickname."""
         import pyclickplc
         from pyclickplc.addresses import AddressRecord, get_addr_key
         from pyclickplc.banks import BANKS
@@ -3491,7 +3491,7 @@ class TestNicknameMerge:
         assert rows[get_addr_key("CTD", 1)].nickname == "LifetimeParts"
 
     def test_timer_without_nickname_invents_none(self, tmp_path: Path):
-        """An unnamed Timer's fields are named after their addresses, so export
+        """The fields of an unnamed Timer are named after their addresses. Export
         writes no nickname for them."""
         _assert_codegen_full(
             """

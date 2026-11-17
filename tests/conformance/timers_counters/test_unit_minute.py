@@ -1,15 +1,15 @@
 """The long pairs of ``test_unit_pairs.py``: the ``unit_minute`` group (subroutine
-``Conf_UnitMinute``, part ``units``).  A group of its own for its wait: leave it out with
-``GROUP=unit_pairs``.
+``Conf_UnitMinute``, part ``units``).  It has a group of its own because of its wait.
+Run with ``GROUP=unit_pairs`` to leave it out.
 
 ``one_minute`` runs a 1 min timer against a 60 s one.  In process, at the 10 ms ``DT``, it
-is the case that tells a count kept as float fractions of its unit from an exact one: 6000
-scans of 10 ms sum to just under a minute, so such a 1 min timer is Done on scan 6001 and
-the 60 s timer on 6000, and ``Result1`` reads 1.
+tells a count kept as float fractions of its unit from an exact count.  6000 scans of
+10 ms sum to just under a minute.  A 1 min timer that counts in floats is therefore Done
+on scan 6001 and the 60 s timer on 6000, and ``Result1`` reads 1.
 
 A millisecond timer cannot join it.  CLICK's timer accumulator is a 16-bit Int, so its
-preset stops at 32767: a 60000 ms timer is never Done.  ``thirty_seconds`` runs the longest
-round delay milliseconds can hold, 30000 ms, against 30 s.
+preset stops at 32767.  A 60000 ms timer is never Done.  ``thirty_seconds`` runs 30000 ms
+against 30 s, the longest round delay that milliseconds can hold.
 """
 
 from __future__ import annotations

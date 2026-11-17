@@ -51,7 +51,10 @@ def _recorder(ctx: CodegenContext | None) -> Recorder | None:
 
 
 def _literal(text: str) -> Const | None:
-    """*text* as a constant when it is a Python literal, such as ``0`` or ``True``."""
+    """Return *text* as a constant if it is a Python literal, such as ``0`` or ``True``.
+
+    Return None for any other text.
+    """
     try:
         return Const(ast.literal_eval(text))
     except (ValueError, SyntaxError):
@@ -61,7 +64,7 @@ def _literal(text: str) -> Const | None:
 def emit_mem_get(
     key: str, default: str, *, quote: Quote = "double", ctx: CodegenContext | None = None
 ) -> str:
-    """The instruction memory cell *key*, or *default* while it is unwritten."""
+    """Return the source that reads instruction memory cell *key*, or *default* if unwritten."""
     text = f"_mem.get({_key_literal(key, quote)}, {default})"
     if (rec := _recorder(ctx)) is not None:
         literal = _literal(default)
@@ -72,7 +75,7 @@ def emit_mem_get(
 def emit_mem_set(
     key: str, value: str, *, quote: Quote = "repr", ctx: CodegenContext | None = None
 ) -> str:
-    """A store of *value* into the instruction memory cell *key*."""
+    """Return the source that stores *value* into instruction memory cell *key*."""
     if (rec := _recorder(ctx)) is not None:
         value = rec.mark(Store(Memory(key), _literal(value)), value)
     return f"_mem[{_key_literal(key, quote)}] = {value}"
@@ -81,14 +84,17 @@ def emit_mem_set(
 def emit_store(
     target: str, value: str, *, ctx: CodegenContext | None, dst: str, term: Term | Compare | None
 ) -> str:
-    """A store of *value* into the tag *dst*, written to *target*.  *term* says what it stores."""
+    """Return the source that assigns *value* to *target*, the write target of the tag *dst*.
+
+    *term* tells the recorder what the store holds.
+    """
     if (rec := _recorder(ctx)) is not None:
         value = rec.mark(Store(dst, term), value)
     return f"{target} = {value}"
 
 
 def _frac_key(acc: Tag) -> str:
-    """The memory cell holding the part of a unit a timer's *acc* has not counted yet."""
+    """Return the key of the cell that holds the part of a unit that *acc* has not counted yet."""
     return f"_frac:{acc.name}"
 
 
@@ -103,12 +109,17 @@ def emit_frac(
 
 
 def emit_frac_keep(acc: Tag) -> str:
-    """A store of *acc*'s fraction back into its cell, so a scan that does not tick writes it."""
+    """Return the source that stores *acc*'s fraction back into its cell.
+
+    A scan that does not tick still writes the fraction.
+    """
     return emit_frac(acc, _frac_get(acc))
 
 
 def emit_prev(key: str, *, cast: bool = True, ctx: CodegenContext | None = None) -> str:
-    """A bit as the instruction memory *key* last stored it.  It reads False until the first store.
+    """Return the source that reads the bit last stored in instruction memory *key*.
+
+    It reads False until the first store.
 
     Edge contacts and counter inputs read the cell without ``bool()`` (``cast=False``).
     Every other emitter wraps it.
@@ -125,7 +136,7 @@ def emit_rise(
     paren: bool = False,
     ctx: CodegenContext | None = None,
 ) -> str:
-    """True on the scan the bit *now* is on and *key* holds it off.
+    """Return the source that is true on a scan where *now* is on and *key* holds it off.
 
     The drum writes ``(not ...)`` in brackets (``paren=True``), and the other emitters do not.
     """
@@ -151,7 +162,7 @@ def emit_oneshot(
     held: Sequence[str] = (),
     before: Sequence[str] = (),
 ) -> list[str]:
-    """A one-shot that runs *fire* on the first scan the rung test *enabled* is on.
+    """Return the lines of a one-shot that runs *fire* on the first scan *enabled* is on.
 
     *off* runs while the rung is off, and *held* runs on each later enabled scan.  *before*
     runs on every enabled scan ahead of the test.  A literal ``True`` enable leaves the rung
@@ -169,9 +180,9 @@ def emit_oneshot(
 
 
 def _saturate(value: str, high: int, low: int | None = None) -> str:
-    """*value* held at or below *high*, and at or above *low* when it is given.
+    """Return the source that holds *value* at or below *high*, and at or above *low* if given.
 
-    The timers write ``min(value, high)``, and the counters write
+    The timers write ``min(value, high)``. The counters write
     ``max(low, min(high, value))``.
     """
     if low is None:
@@ -180,10 +191,11 @@ def _saturate(value: str, high: int, low: int | None = None) -> str:
 
 
 def _carry_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext) -> list[str]:
-    """This scan's time into ``_int_units`` whole units and a ``_new_frac`` remainder.
+    """Return the lines that split this scan's time into ``_int_units`` and ``_new_frac``.
 
-    Integer nanoseconds, as ``instruction.utils.elapsed_units``.  A board's clock reads them
-    directly, and its floats are too short to hold a time.  The kernel has only ``dt``.
+    The lines work in integer nanoseconds, as ``instruction.utils.elapsed_units`` does.  A
+    board's clock reads integer nanoseconds directly, and a board's floats are too short to
+    hold a time.  The kernel has only ``dt``.
     """
     ctx.timer_unit_ns[acc.name] = unit.ns
     if ctx.kernel_runtime:
@@ -207,12 +219,12 @@ def emit_tick(
     max_acc: int = _INT_MAX,
     frac_first: bool = False,
 ) -> list[str]:
-    """Lines that add this scan's time to *acc* in ``_acc``, held at *max_acc*.
+    """Return the lines that add this scan's time to *acc* in ``_acc``, held at *max_acc*.
 
-    The rest of a unit is left in ``_new_frac`` for the caller to store.  The drum stores
+    The rest of a unit stays in ``_new_frac`` for the caller to store.  The drum stores
     ``_new_frac`` before the add (``frac_first``).  The tick reads Acc with *acc_read* into
-    ``_acc`` first, or inside the add with *inline*.  With no *acc_read*, the caller has read
-    ``_acc``.
+    ``_acc`` first, or inside the add with *inline*.  With no *acc_read*, the caller has
+    already read ``_acc``.
     """
     lines = [f"_acc = int({acc_read})"] if acc_read is not None and not inline else []
     lines += _carry_lines(acc, unit, ctx)
@@ -229,7 +241,7 @@ def emit_tick(
 def emit_count(
     acc: Tag, acc_read: str, *, up: str | None, down: str | None, ctx: CodegenContext
 ) -> list[str]:
-    """Lines that step Acc in ``_acc`` by one on each counted edge, held to the DINT range.
+    """Return the lines that step Acc in ``_acc`` by one on each counted edge, within DINT range.
 
     *up* and *down* name the edge locals.  An up counter sums the edges in ``_delta``, and a
     down counter (``up=None``) steps ``_acc`` itself.
@@ -267,7 +279,7 @@ def emit_done(
     frac: bool = False,
     paren: bool = True,
 ) -> list[str]:
-    """Lines that read *preset*, set *done* from ``_acc`` *op* the preset, and store ``_acc``.
+    """Return the lines that read *preset*, set *done* from ``_acc`` *op* it, and store ``_acc``.
 
     *done* and *acc* are the write targets of the timer or counter *owner*.  A *preset_key*
     also stores the preset for the prover.  A timer passes *frac*, and the lines store its
@@ -298,7 +310,10 @@ def emit_acc_rest(
     frac: bool = False,
     done_value: bool = False,
 ) -> list[str]:
-    """Lines that set *done* to *done_value* and *acc* to 0, and clear the fraction (*frac*)."""
+    """Return the lines that set *done* to *done_value* and *acc* to 0.
+
+    With *frac*, the lines also clear the fraction of the owner's Acc.
+    """
     lines = [emit_frac(owner.accumulator, "0", ctx=ctx)] if frac else []
     done_text = str(done_value)
     return [
@@ -317,9 +332,9 @@ def emit_cmp(
     ctx: CodegenContext | None = None,
     terms: tuple[Term, Term] | None = None,
 ) -> str:
-    """The compare *left* *op* *right*, in brackets unless ``paren=False``.
+    """Return the compare *left* *op* *right*, in brackets unless ``paren=False``.
 
-    *terms* say what *left* and *right* hold, for the recorder.
+    *terms* tell the recorder what *left* and *right* hold.
     """
     if op not in ("==", "!=", "<", "<=", ">", ">="):
         raise ValueError(f"Unsupported comparison: {op!r}")
@@ -331,12 +346,12 @@ def emit_cmp(
 
 
 def emit_reached(acc: str, preset: str) -> str:
-    """True once a timer's *acc* has reached *preset*."""
+    """Return the source that is true once a timer's *acc* has reached *preset*."""
     return emit_cmp(acc, ">=", preset, paren=False)
 
 
 def emit_truth(value: str, *, as_int: bool = False, negate: bool = False) -> str:
-    """*value* as a contact reads it.
+    """Return the source that reads *value* as a contact does.
 
     A bit reads as ``bool(value)``, or ``(not bool(value))`` with *negate*.  A number
     (``as_int``) is true when it is not 0.
@@ -347,7 +362,7 @@ def emit_truth(value: str, *, as_int: bool = False, negate: bool = False) -> str
 
 
 def emit_choose(by: str, dst: str, values: Sequence[str]) -> list[str]:
-    """Lines that set *dst* to the value at place *by* in *values*, counting from 1.
+    """Return the lines that set *dst* to the value at place *by* in *values*, counting from 1.
 
     Any other *by* leaves *dst* as it was.
     """
@@ -361,7 +376,7 @@ def emit_choose(by: str, dst: str, values: Sequence[str]) -> list[str]:
 def emit_if_enabled(
     enabled: str, body: Sequence[str], *, otherwise: Sequence[str] = (), fold: bool = True
 ) -> list[str]:
-    """*body* under the rung test *enabled*, and *otherwise* under its ``else``.
+    """Return *body* under the rung test *enabled*, and *otherwise* under its ``else``.
 
     With *fold*, a literal ``True`` enable leaves the test out and keeps only *body*.  The
     timers and the latch and reset coils write ``if True:`` (``fold=False``).

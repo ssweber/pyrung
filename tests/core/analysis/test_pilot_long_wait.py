@@ -1,9 +1,9 @@
-"""how() behind a long wait: the wait is not what ends it, and it lands where stepping does.
+"""how() answers a goal behind a long wait, and lands on the state that stepping reaches.
 
-A seek under the plan's own holds pays for its scans by what they cost, a loop scan being a
-hundredth of an interpreted one, so the length of a timer does not turn a right answer into a
-decline.  Scan counts here are the timers' own arithmetic, checked by stepping the recording
-where that is cheap enough to step.
+The wait does not end the search.  A search under the plan's own holds charges each scan by what
+it costs, and a loop scan costs a hundredth of an interpreted one.  So the length of a timer
+does not turn a right answer into a decline.  The scan counts here come from the timers' own
+arithmetic.  The tests check them by stepping the recording where that is cheap enough.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.pilot.coast import CoastSession
 from pyrung.core.coast_run import coast_until, work_charged
 
-# Marks the cases make test-fold skips, the ones that take longest under its check. make test
-# and make test-pilot still run them.
+# Marks the cases that take longest under the fold check.  ``make test-fold`` skips them, and
+# ``make test`` and ``make test-pilot`` still run them.
 _SLOW_UNDER_FOLD = pytest.mark.skipif(
     "config.getoption('fold_check', default=False)", reason="too slow under the fold check"
 )
@@ -114,7 +114,7 @@ def _how(prog: Program, goal: Bool) -> Any:
 
 
 def _stepped_from_the_start(fork: PLC) -> PLC:
-    """The recording, interpreted scan by scan from scan 0, past every checkpoint it has."""
+    """Return a replay of the recording, interpreted scan by scan from 0, past every checkpoint."""
     replay, log, anchor, lifecycle = fork._build_replay_fork(None)
     for scan in range(anchor + 1, fork.state.scan_id + 1):
         fork._apply_log_entries_for_scan(replay, scan, log, lifecycle)
@@ -162,7 +162,7 @@ def test_a_chain_of_timers_under_a_hold_lands_on_the_first_scan(
 def test_one_timer_past_a_million_scans_lands_on_the_first_scan(
     preset: int, unit: str, coil: Any, scans: int
 ) -> None:
-    """The estimate pays for the loop's scans, and the interpreted scans around them are paid too."""
+    """The estimate charges for the loop's scans and also for the interpreted scans around them."""
     prog, goal = _one_timer(preset, unit, coil)
     path = _how(prog, goal)
     assert path.reachable, str(path)
@@ -212,7 +212,7 @@ def test_the_recording_stepped_from_the_start_lands_there_too(build: Any, landin
 
 
 def _untrimmed(monkeypatch: pytest.MonkeyPatch, prog: Program, goal: Bool) -> Any:
-    """The plan as the drive found it, with the temporary logic it went in with."""
+    """Return the plan as the drive found it, with the temporary logic it went in with."""
     monkeypatch.setattr(api._trim, "trim_holds", lambda plan, *_args: plan)
     path = _how(prog, goal)
     monkeypatch.undo()
@@ -222,7 +222,7 @@ def _untrimmed(monkeypatch: pytest.MonkeyPatch, prog: Program, goal: Bool) -> An
 def test_a_drum_reset_on_the_way_in_leaves_the_drum_to_run_its_whole_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The plan's one scan of reset takes the step from 0 to 1, and the drum then runs from there."""
+    """The plan's one scan of reset moves the step from 0 to 1, and the drum runs on from there."""
     prog, goal = _drum()
     path = _untrimmed(monkeypatch, prog, goal)
     assert path.reachable, str(path)
@@ -271,7 +271,7 @@ def test_a_goal_no_rung_can_reach_declines_at_once() -> None:
 
 
 def test_a_wait_under_a_hold_that_never_ends_stops_at_the_ledger() -> None:
-    """A timer that resets itself never gets to the goal's value, and its loop could run for ever."""
+    """A timer that resets itself never reaches the goal's value, so its loop could run for ever."""
     go = Bool("LwGo")
     lamp = Bool("LwLamp")
     t1 = Timer.clone("LwT1")
@@ -296,7 +296,7 @@ def _timer_program() -> Program:
 def test_a_budget_in_work_lands_where_stepping_does(
     monkeypatch: pytest.MonkeyPatch, loop: bool
 ) -> None:
-    """Fifty units of budget at a hundred loop scans each, and the state stepping leaves there."""
+    """A budget of fifty units at a hundred loop scans each lands on the state stepping reaches."""
     if not loop:
         monkeypatch.setattr(coast_run, "TRACE_ROOM", 10**9)
     plc = PLC(_timer_program(), dt=0.01)

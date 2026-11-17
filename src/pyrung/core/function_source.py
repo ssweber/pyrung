@@ -1,12 +1,13 @@
-"""The text a ``run_function`` body is embedded as, and whether that text is the function.
+"""Produce the text that a ``run_function`` body is embedded as, and check that it is the function.
 
-A generated ``code.py`` carries a function's source, not the function: it is the one place
-a copy exists, since a replay kernel runs in this process and calls the function itself.
-Source is read from the file, so it can be the wrong text altogether (edited since the
-import, or a line shift that lands on another function), and taking a method or a nested
-function out of its indentation can change what its string literals say.  So the text is
-taken with care here, and then compiled and compared with the function it stands for:
-bytecode, constants and names, recursively.
+A generated ``code.py`` carries a function's source, not the function itself.  That is the
+only place where a copy exists, because a replay kernel runs in this process and calls the
+function directly.  The source is read from the file, so it can be the wrong text
+altogether.  The file may have been edited since the import, or a line shift may land on
+another function.  Taking a method or a nested function out of its indentation can also
+change what its string literals say.  So this module takes the text with care.  Then it
+compiles the text and compares it with the function that it stands for, recursively:
+bytecode, constants and names.
 """
 
 from __future__ import annotations
@@ -39,7 +40,10 @@ def _template_string_types() -> tuple[type, ...]:
 
 
 def _lines_inside_a_literal(source: str) -> set[int]:
-    """Indices of *source*'s lines that begin inside a string: their whitespace is its text."""
+    """Return the indices of *source*'s lines that begin inside a string.
+
+    The whitespace on those lines is part of the string's text.
+    """
     literal_types = (ast.Constant, ast.JoinedStr, *_template_string_types())
     inside: set[int] = set()
     for node in ast.walk(ast.parse("if 1:\n" + source)):
@@ -70,7 +74,7 @@ def _out_of_its_margin(source: str) -> str:
 
 
 def _without_staticmethod(source: str) -> str:
-    """Drop a ``@staticmethod`` line: outside its class the plain function is what it was."""
+    """Drop a ``@staticmethod`` line, because outside its class the plain function is the same."""
     try:
         body = ast.parse(source).body
     except SyntaxError:
@@ -87,10 +91,10 @@ def _without_staticmethod(source: str) -> str:
 
 
 def embedded_source(fn: Any) -> str:
-    """The text to embed for *fn*: its source at column 0, its string literals untouched.
+    """Return the text to embed for *fn*: its source at column 0, its string literals untouched.
 
-    Raises what ``inspect.getsource`` raises.  The text is only as good as the file: ask
-    ``is_the_function`` before trusting it.
+    Raise whatever ``inspect.getsource`` raises.  The text is only as good as the file, so
+    call ``is_the_function`` before you trust it.
     """
     return _without_staticmethod(_out_of_its_margin(inspect.getsource(fn).rstrip()))
 
@@ -104,10 +108,11 @@ def _names_in(code: CodeType) -> set[str]:
 
 
 def _imports_it_names(code: CodeType) -> str:
-    """``import`` lines for each name in *code* that its file imports at module level.
+    """Return ``import`` lines for each name in *code* that its file imports at module level.
 
-    The compiler asks that of a name before it calls a method on it, so ``math.floor(v)``
-    is other bytecode, with the same meaning, once ``import math`` is out of sight.
+    The compiler checks whether a name is imported before it compiles a method call on it.
+    Once ``import math`` is out of sight, ``math.floor(v)`` compiles to other bytecode with
+    the same meaning.
     """
     try:
         lines, _ = inspect.findsource(code)
@@ -123,7 +128,7 @@ def _imports_it_names(code: CodeType) -> str:
 
 
 def is_the_function(text: str, fn: Any) -> bool:
-    """Whether *text*, compiled as *fn* was, defines exactly the code *fn* runs."""
+    """Return whether *text*, compiled as *fn* was, defines exactly the code that *fn* runs."""
     code = getattr(fn, "__code__", None)
     if not isinstance(code, CodeType):
         return False

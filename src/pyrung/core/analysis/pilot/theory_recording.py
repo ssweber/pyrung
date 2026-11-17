@@ -553,10 +553,10 @@ def _record_theory_transition(
             return
         opening_identity = ("theory-open", observation.claim.identity)
         if ("open", opening_identity) in state.theory_state.ledger.applied_facts:
-            # This exact claim, from this exact source boundary, already had
-            # its theory, and that theory has ended.  Reaching the claim again
-            # (a later act that lands on the same rejected source) replays a
-            # closed history; it opens nothing, whatever budget is left.
+            # This exact claim, from this exact source boundary, already had its theory,
+            # and that theory has ended.  A later act can land on the same rejected source
+            # and reach the claim again.  That replays a closed history, so it opens
+            # nothing, whatever budget is left.
             return
         record_fact(
             state,

@@ -182,7 +182,8 @@ def test_pacer_keeps_sim_time_at_wall_time_times_speed():
     assert pacer.delay(2.0, 0.010) == pytest.approx(0.005)
     clock.now += 0.005
     assert pacer.delay(2.0, 0.020) == pytest.approx(0.005)
-    # Running late within the lag bound: no wait, and no baseline reset.
+    # The scan runs late but within the lag bound. The pacer returns no wait and keeps its
+    # baseline.
     clock.now += 0.020
     assert pacer.delay(2.0, 0.030) == 0.0
     assert pacer.delay(2.0, 0.040) == pytest.approx(0.0)
@@ -194,7 +195,7 @@ def test_pacer_does_not_burst_after_falling_far_behind():
     pacer.delay(1.0, 0.0)
     clock.now += 5.0  # a long stall
     assert pacer.delay(1.0, 0.010) == 0.0
-    # The baseline was reset: the next scan waits a full period again
+    # The baseline was reset, so the next scan waits a full period again
     # instead of running 5 seconds of scans flat out.
     assert pacer.delay(1.0, 0.020) == pytest.approx(0.010)
     assert PACE_MAX_LAG_SECONDS < 5.0
@@ -238,7 +239,7 @@ def test_continue_worker_paces_with_injected_clock(tmp_path: Path):
     _wait_for(adapter, out_stream, "stopped", lambda b: b["reason"] == "pause")
 
     assert len(waits) >= 19
-    # dt = 10 ms at 2x real time: every scan after the baseline waits 5 ms.
+    # With dt = 10 ms at 2x real time, every scan after the baseline waits 5 ms.
     assert waits[1:] == pytest.approx([0.005] * (len(waits) - 1))
     _shutdown(adapter, out_stream)
 
@@ -264,7 +265,10 @@ runner = PLC(prog, dt=0.010)
 
 
 def test_frames_show_no_change_when_an_equal_value_is_written(tmp_path: Path):
-    """``False`` over ``0`` and ``-0.0`` over ``0.0`` replace the value, and are no change."""
+    """Writing ``False`` over ``0``, or ``-0.0`` over ``0.0``, replaces the stored value.
+
+    The frame shows no change.
+    """
     source = """from pyrung.core import Bool, Int, PLC, Program, Real, Rung, math, out
 
 Coiled = Int("Coiled")
@@ -366,14 +370,14 @@ def test_set_mode_run_applies_forces_and_patches_before_first_scan(tmp_path: Pat
         {"mode": "run", "forces": {"Button": True}, "patches": {"Level": 42}},
     )
     body = _response(messages)["body"]
-    # STOP -> RUN cleared the old force before the new ones were applied.
+    # STOP -> RUN cleared the old force before it applied the new ones.
     assert body == {"mode": "run", "forces": {"Button": True}, "pendingPatches": {"Level": 42}}
     frame = _events(messages, "pyrungScanFrame")[-1]
     assert frame["mode"] == "run"
     assert frame["running"] is False
     assert frame["trace"]["forces"] == {"Button": True}
     assert frame["pendingPatches"] == {"Level": 42}
-    # No scan ran: the transition reset scan_id without executing logic.
+    # No scan ran. The transition reset scan_id without executing logic.
     assert runner.current_state.scan_id == 0
     assert runner.current_state.tags.get("Light", False) is False
 
@@ -533,8 +537,8 @@ def test_addresses_without_tag_map_are_errors(tmp_path: Path, monkeypatch: pytes
 
 
 def test_patch_after_console_step_lands_in_the_next_step_scan(tmp_path: Path):
-    # `step N` stops on the first rung of the following scan, whose prepare
-    # phase already ran.  A patch sent then must still reach the next scan.
+    # `step N` stops on the first rung of the following scan, after that scan's prepare
+    # phase has run. A patch sent at that point must still reach the next scan.
     adapter, out_stream = _launch(tmp_path)
     runner = adapter._runner
     assert runner is not None
@@ -556,12 +560,12 @@ def test_patch_drained_by_an_abandoned_scan_is_queued_again(tmp_path: Path):
     assert runner is not None
     _request(adapter, out_stream, "pyrungPatch", {"tag": "Level", "value": 4})
 
-    # One rung into the scan: the patch is taken but not yet committed.
+    # One rung into the scan, the patch is taken but not yet committed.
     messages = _request(adapter, out_stream, "next")
     assert dict(runner.pending_patches) == {"Level": 4}
     assert _events(messages, "pyrungScanFrame")[-1]["pendingPatches"] == {"Level": 4}
 
-    # A console force restarts the partial scan; the patch must survive that.
+    # A console force restarts the partial scan. The patch must survive the restart.
     _request(adapter, out_stream, "evaluate", {"expression": "force Button true"})
     assert dict(runner.pending_patches) == {"Level": 4}
 

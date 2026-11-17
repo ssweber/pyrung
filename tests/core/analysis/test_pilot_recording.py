@@ -270,7 +270,7 @@ def test_scan_entry_journal_repeats_configuration_overwritten_by_program() -> No
 
 
 def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
-    """The coast receipt, not runner history, owns exact coast edits."""
+    """Exact coast edits come from the coast receipt, not from runner history."""
     step = _Step(inputs={}, scan_before=10, scan_after=13)
     receipt = CoastReceipt(
         kind="bearing_coast",

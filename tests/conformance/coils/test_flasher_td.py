@@ -1,5 +1,6 @@
-"""A flasher's frozen off TD when a lowered preset ends its on phase: the ``flasher_td`` group
-(part ``text_flasher``).
+"""Test a flasher's frozen off TD when a lowered preset ends its on phase.
+
+This is the ``flasher_td`` group (part ``text_flasher``).
 
 A false rung freezes a flasher's TDs and the restart is a fresh on phase (``out``, on hardware).
 An on phase that times out starts its off phase from 0.  This case reads one cut short by a lowered
@@ -125,6 +126,6 @@ def test_flasher_td():
 
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
 def test_flasher_td_at_any_scan(monkeypatch, dt):
-    """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""
+    """The group passes at any scan time. A CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     assert_all_passed(run(Group("flasher_td", [replace(group.cases[0], scans=int(2.0 / dt))])))

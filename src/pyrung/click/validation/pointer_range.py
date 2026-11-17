@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 class _PointerBounds:
-    """The addresses each pointer use can reach, from value_sets and the tags' declared values.
+    """The addresses each pointer use can reach, from value_sets and the declared values.
 
     A pointer the value sets leave unbounded keeps its declared ``choices`` or
     ``min``/``max``.  One with neither has no known bound and is never reported.
@@ -84,7 +84,7 @@ class _PointerBounds:
         return sets
 
     def reach(self, ref: Any) -> frozenset[int] | None:
-        """Every address *ref* can use, or None when its values are not bounded."""
+        """Return every address *ref* can use, or None when its values are not bounded."""
         if self._sets is None:
             self._sets = self._build()
         if isinstance(ref, IndirectBlockRange):
@@ -98,7 +98,7 @@ class _PointerBounds:
 
 
 def _uses(instruction: Any) -> list[tuple[str, Any]]:
-    """Each pointer an instruction's operands hold, with the field it is in."""
+    """Return each pointer that an instruction's operands hold, with the field it is in."""
     found: list[tuple[str, Any]] = []
     seen: set[int] = set()
     for field in _instruction_fields(instruction) or ():

@@ -63,20 +63,20 @@ def test_all_groups_over_modbus(
         expected = sum(len(g.cases) for g in build.groups) + len(build.skipped)
     else:
         build = suite.build_for(conformance_endpoint, conformance_groups)
-        # Without GROUP=, every loaded group.
+        # Without GROUP=, count the cases of every loaded group.
         loaded = [g for g in (*suite.ALL_GROUPS, *suite.APART_GROUPS) if g.name in build.names]
         expected = sum(len(g.cases) for g in loaded)
     groups = conformance_groups or list(build.names)
-    # system/scan_counter_wraps_to_zero only tells once SD9 has passed 32767.
-    # pyrung's own targets read 0 either way, so only a CLICK waits.
+    # system/scan_counter_wraps_to_zero can tell only once SD9 has passed 32767.
+    # pyrung's own targets read 0 either way, so only a CLICK has to wait.
     if conformance_endpoint is not None and test_system.group.name in groups:
         with capsys.disabled():
             wait_for_scan_counter_wrap(conformance_endpoint)
     results = run_modbus(build, conformance_endpoint, groups=groups, sim=conformance_sim)
     if conformance_endpoint is not None:
-        # A real CLICK: record what passed, drop what failed (confirmed.toml).  A case
-        # whose range holds every candidate answers nothing by passing: it records what
-        # it read instead (readings.toml).
+        # A real CLICK: record what passed and drop what failed (confirmed.toml). A case
+        # whose range holds every candidate proves nothing by passing. It records what it
+        # read instead (readings.toml).
         added, dropped, read = record_run(
             suite.CONFIRMED_PATH, suite.READINGS_PATH, results, on=date.today().isoformat()
         )
@@ -96,7 +96,7 @@ def _one_plc(
     endpoint: Endpoint | None,
     local: type[SimServer] | type[CircuitPySim] = SimServer,
 ) -> Generator[Endpoint]:
-    """*endpoint*, or one *local* target kept running for the whole block."""
+    """Yield *endpoint*, or one *local* target that stays running for the whole block."""
     if endpoint is not None:
         yield endpoint
         return
@@ -120,7 +120,7 @@ def test_suite_repeats_without_restarting(
     conformance_cases: str | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
-    """The suite twice on one PLC, then each group alone, A -> B -> ... -> B -> A.
+    """Run the suite twice on one PLC, then each group alone, A -> B -> ... -> B -> A.
 
     Every case resets its own state while ``Cmd == 0``, so a run never depends
     on what ran before it on the same PLC.
@@ -146,11 +146,12 @@ def test_the_groups_apart_on_a_local_target(
     conformance_cases: str | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
-    """Each part apart on pyrung's own target, once, as one program of its own.
+    """Run each part apart on pyrung's own target, once, as a program of its own.
 
-    ``test_all_groups_over_modbus`` takes them on a CLICK loaded with one, or by ``GROUP=``.
-    A part runs alone because a case may need its Math, or its timers, to be the scan's last.
-    Off fixed scan the counts are wall clock, and no case fails on them.
+    ``test_all_groups_over_modbus`` runs a part on a CLICK that has that part loaded, or
+    when ``GROUP=`` picks it. A part runs alone because a case may need its Math, or its
+    timers, to be the scan's last. Without a fixed scan the counts are wall-clock time,
+    and no case fails on them.
     """
     if conformance_endpoint is not None or conformance_groups or conformance_cases:
         pytest.skip("runs when the whole suite runs on a local target")
@@ -184,7 +185,7 @@ def test_a_case_that_fires_last_waits_past_the_timeout_and_does_not_settle() -> 
     )
     started = time.monotonic()
     assert_all_passed(run_modbus(Group("slow", [slow]), timeout=0.1))
-    # 100_000 scans is 1000 s of settle time, had it counted.
+    # If it had counted, 100_000 scans would be 1000 s of settle time.
     assert time.monotonic() - started < 30.0
 
 
@@ -332,7 +333,7 @@ def _scans_past(sim: SimServer, scan_id: int) -> None:
 
 @pytest.mark.parametrize("cap", [MAX_SCAN_DT_S, None])
 def test_a_stall_advances_the_sim_by_at_most_max_scan_dt(cap: float | None) -> None:
-    """A 300 ms host stall is one capped scan, not a 300 ms one (``None``: the whole gap)."""
+    """A 300 ms host stall adds one capped scan, not 300 ms (``None`` lets the whole gap in)."""
     build = build_program([_alpha(), _beta()], _TWO_GROUPS)
     with SimServer(build, max_scan_dt=cap) as sim:
         _scans_past(sim, 2)
@@ -350,20 +351,20 @@ def test_a_stall_advances_the_sim_by_at_most_max_scan_dt(cap: float | None) -> N
 def test_the_longest_scan_voids_a_plc_run_and_is_noted_on_a_local_one(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The sim scans every 10 ms or so, past a 5 ms limit."""
+    """The sim scans about every 10 ms, which is past a 5 ms limit."""
     right = case("Reads 7", ladder=_prove_constant, expect={"Result1": 7}, id="right")
     wrong = case("Reads 8", ladder=_prove_constant, expect={"Result1": 8}, id="wrong")
     build = build_program(Group("scan", [right, wrong]), scan_limit_ms=5)
     with SimServer(build) as sim:
         assert sim.endpoint is not None
-        # A stale record the harness must clear before the run.
+        # Plant a stale record. The harness must clear it before the run.
         with sim._lock:
             sim.plc.patch({"Conf_LongestScan": 30000})
         _scans_past(sim, sim.plc.current_state.scan_id + 1)
         capsys.readouterr()
         results = run_modbus(build, sim.endpoint, local=True)
         out = capsys.readouterr().out
-        # The same endpoint, taken for a real PLC.
+        # The same endpoint, treated as a real PLC.
         with pytest.raises(ScanTimeError, match="Run void: this program assumes scans of at"):
             run_modbus(build, sim.endpoint)
     line = r"longest scan (\d+) ms passed the 5 ms limit of this program"
@@ -376,7 +377,7 @@ def test_the_longest_scan_voids_a_plc_run_and_is_noted_on_a_local_one(
 
 
 def test_circuitpy_target_runs_the_generated_code() -> None:
-    """The P1AM-200 code for the program, on this machine, answering through its own server."""
+    """The program's P1AM-200 code runs on this machine and answers through its own server."""
     build = build_program([_alpha(), _beta()], _TWO_GROUPS)
     results = run_modbus(build, sim=CircuitPySim)
     assert [(r.group, r.case.id) for r in results] == [
@@ -440,7 +441,7 @@ def test_pending_case_is_an_xfail_on_a_local_target_and_judged_on_a_plc() -> Non
     (local,) = run_modbus(build)
     assert local.passed and local.xfail
     with SimServer(build) as sim:
-        # A served endpoint is judged as a CLICK unless told it is pyrung's own.
+        # A served endpoint is judged as a CLICK unless you say it is pyrung's own.
         (as_plc,) = run_modbus(build, sim.endpoint)
         (as_local,) = run_modbus(build, sim.endpoint, local=True)
     assert not as_plc.passed and not as_plc.xfail

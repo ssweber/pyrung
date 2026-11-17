@@ -25,8 +25,8 @@ Forms that fall through (add no constraint, defer to the caller):
 
 - ``SumExpr`` (aggregate over a block range) — the Phase 3 sign-oracle seam;
   attributing ``sum != 0`` to "some operand nonzero" needs sign reasoning.
-- ``RangeAggregateExpr`` (max/min/median/mean) — not additive, so no member
-  value follows from the destination; forward still reports the exact
+- ``RangeAggregateExpr`` (max/min/median/mean) — not additive.  No member
+  value follows from the destination.  Forward still reports the exact
   ``Aggregate(operation=kind)`` relation.
 - non-affine / unrecognised expressions, multiply and two-tag inequalities,
   ``==``/``!=`` comparison targets, a tag-valued bound, wrapped multiplication

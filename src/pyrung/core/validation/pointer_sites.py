@@ -122,8 +122,8 @@ def site_evidence(
             else:
                 apply(item, guaranteed)
 
-    # Rungs solve one after another, so the access sees every rung above it
-    # (a ``continued()`` rung is no exception: it reads live).
+    # Rungs solve one after another, so the access sees every rung above it.  A
+    # ``continued()`` rung is no exception, because it reads live.
     for previous in rungs[: loc.rung_index]:
         visit(previous)
 
@@ -143,9 +143,9 @@ def site_evidence(
             for chain in reach
         ] or [()]
 
-    # The rows from the rail down to the access.  A row reads its own contacts
-    # when the solve reaches it (the trunk as the rung starts), after the rows
-    # above it ran; a branch's ``_conditions`` repeat its ancestors' first.
+    # These are the rows from the rail down to the access.  A row reads its own contacts
+    # when the solve reaches it, after the rows above it ran.  The trunk reads them as the
+    # rung starts.  A branch's ``_conditions`` begin with its ancestors' conditions.
     path = [rungs[loc.rung_index]]
     for branch_index in loc.branch_path:
         path.append(path[-1]._branches[branch_index])

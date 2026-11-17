@@ -121,28 +121,29 @@ class EnabledFunctionCallInstruction(Instruction):
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 
 
-# What a For does with a count of 0.  CLICK reads a 16-bit count as unsigned:
-# a DS of -1 runs 65535 iterations (hardware 2026-10-29).  It reads a 32-bit
-# count whole and signed.  A DD of 65536 runs 65536 (hardware 2026-11-05).  A
-# DD of -1, -65535 or -2 and a CTD of -1 run none (hardware 2026-11-06,
-# 2026-11-10).  It reads a constant whole, so 70000 runs 70000
-# (hardware 2026-11-10).  A count of 0 runs none.  The runtime, the debugger
-# and the generated P1AM-200 code all read this one switch.
+# This switch sets how many iterations a For runs with a count of 0.  The runtime, the
+# debugger and the generated P1AM-200 code all read it.
+# CLICK reads a 16-bit count as unsigned: a DS of -1 runs 65535 iterations
+# (hardware 2026-10-29).  It reads a 32-bit count whole and signed.  A DD of 65536 runs
+# 65536 (hardware 2026-11-05).  A DD of -1, -65535 or -2 and a CTD of -1 run none
+# (hardware 2026-11-06, 2026-11-10).  It reads a constant whole, so 70000 runs 70000
+# (hardware 2026-11-10).  A count of 0 runs none.
 FOR_ZERO_COUNT_ITERATIONS = 0
 
 #: The mask of a 16-bit count (DS, TD, SD) and of a 32-bit one (DD, CTD, a constant).
 FOR_COUNT_MASK_16 = 0xFFFF
 FOR_COUNT_MASK_32 = 0xFFFFFFFF
-#: The most a 32-bit count runs: past it, its bits are a negative count, which runs none.
+#: The most iterations a 32-bit count runs.  Past it, the bits are a negative count, which
+#: runs none.
 FOR_COUNT_MAX_32 = 0x7FFFFFFF
 
 
 def for_count_mask(count: Any) -> int:
-    """The mask a For reads *count* through: a Dint register or a constant is read whole.
+    """Return the mask that a For reads *count* through.
 
-    A Dint tag, a Dint block element (a DD, a CTD) and an integer constant are
-    read as signed 32-bit.  Anything else (an Int, a Word, an expression, a
-    REAL) is read as unsigned 16-bit.
+    A For reads a Dint register or a constant whole.  A Dint tag, a Dint block element
+    (a DD, a CTD) and an integer constant are read as signed 32-bit.  Anything else
+    (an Int, a Word, an expression, a REAL) is read as unsigned 16-bit.
     """
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
@@ -157,14 +158,14 @@ def for_count_mask(count: Any) -> int:
 
 
 def for_loop_iterations(count_value: Any, mask: int = FOR_COUNT_MASK_16) -> int:
-    """How many times a For runs its body for a resolved count, as on CLICK.
+    """Return how many times a For runs its body for a resolved count, as on CLICK.
 
-    The count is read through *mask* (:func:`for_count_mask`): a 16-bit one as
-    unsigned, ``count & 0xFFFF``, and a Dint whole and signed, so a negative
-    one runs none.  A count of 0 runs :data:`FOR_ZERO_COUNT_ITERATIONS`
-    iterations.  A REAL count holding Inf or NaN runs none (pyrung's choice:
-    CLICK's editor refuses a REAL count, and a pasted one stops the PLC on its
-    watchdog; :meth:`ForLoopInstruction.iterations` also sets SC43 for it).
+    The function reads the count through *mask* (:func:`for_count_mask`).  A 16-bit
+    count is read as unsigned, ``count & 0xFFFF``.  A Dint is read whole and signed, so a
+    negative one runs none.  A count of 0 runs :data:`FOR_ZERO_COUNT_ITERATIONS`
+    iterations.  A REAL count that holds Inf or NaN runs none.  That is pyrung's choice.
+    CLICK's editor refuses a REAL count, and a pasted one stops the PLC on its watchdog.
+    :meth:`ForLoopInstruction.iterations` also sets SC43 for it.
     """
     if not _finite_count(count_value):
         return 0
@@ -179,7 +180,7 @@ def _finite_count(count_value: Any) -> bool:
 
 
 def _count_may_be_non_finite(count: Any) -> bool:
-    """Whether a For count can resolve to Inf or NaN (a REAL source)."""
+    """Return whether a For count can resolve to Inf or NaN, which a REAL source can."""
     from pyrung.core.expression import Expression
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
@@ -196,14 +197,14 @@ class ForLoopInstruction(OneShotMixin, Instruction):
     """For-loop instruction.
 
     Executes its body N times within one scan.  The body is an ordered mix of
-    bare instructions (implicit always-true body rungs) and body rungs, which
+    bare instructions (implicit always-true body rungs) and body rungs.  Body rungs
     evaluate their own contacts afresh on every iteration.  ``instructions``
-    is the flat view: every body instruction in source order, body-rung
-    instructions included, nested loops as single items.
+    is the flat view. It lists every body instruction in source order, including the
+    instructions of body rungs, and it lists a nested loop as a single item.
 
-    When the loop's rung is false the body is skipped, as on CLICK: its
+    When the loop's rung is false, the body is skipped, as on CLICK.  Its
     ``out()`` coils keep their values and its one-shots do not re-arm.  Only
-    the For's own one-shot re-arms.  The count is read once, when the loop
+    the For's own one-shot re-arms.  The loop reads the count once, when it
     starts (:func:`for_loop_iterations`).
     """
 
@@ -225,9 +226,9 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         OneShotMixin.__init__(self, oneshot)
         self.count = count
         self.idx_tag = idx_tag
-        # Only a For whose count can be Inf or NaN sets SC43, and only one whose
-        # count reads an indexed element can set SC44: the analyses (PDG, static facts)
-        # see a flag written where it can be.
+        # Only a For whose count can be Inf or NaN sets SC43.  Only a For whose count
+        # reads an indexed element can set SC44.  The analyses (PDG, static facts) then
+        # see a flag written only where it can be.
         fault_writes: tuple[str, ...] = ()
         if _count_may_be_non_finite(count):
             fault_writes = ("fault.out_of_range",)
@@ -247,11 +248,11 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         self.instructions = flat
 
     def iterations(self, ctx: ScanContext) -> int:
-        """How many times the body runs this scan, reading the count now.
+        """Return how many times the body runs this scan, reading the count now.
 
-        A count that is Inf or NaN (a REAL source) runs no iteration and sets
-        SC43 (``system.fault.out_of_range``), pyrung's choice.  One that reads an
-        element below its block runs no iteration and sets SC44.
+        A count that is Inf or NaN, which a REAL source can give, runs no iteration and
+        sets SC43 (``system.fault.out_of_range``).  That is pyrung's choice.  A count that
+        reads an element below its block runs no iteration and sets SC44.
         """
         try:
             count_value = resolve_tag_or_value_ctx(self.count, ctx)
@@ -267,15 +268,15 @@ class ForLoopInstruction(OneShotMixin, Instruction):
 
     @property
     def body_rungs(self) -> tuple[Rung, ...]:
-        """The conditioned body rungs, in source order."""
+        """Return the conditioned body rungs, in source order."""
         return tuple(item for item in self.body if not isinstance(item, Instruction))
 
     def iter_body(self) -> Iterator[tuple[Instruction, tuple[Condition, ...]]]:
-        """Each direct body instruction, in ``instructions`` order, with the
-        local contacts of the body rung it sits in (empty for a bare item).
+        """Yield each direct body instruction, in ``instructions`` order.
 
-        A walker that threads rung conditions down to instructions appends
-        these to the loop rung's own.
+        Each instruction comes with the local contacts of the body rung it sits in.  A
+        bare item has none.  A walker that threads rung conditions down to instructions
+        appends these contacts to the loop rung's own.
         """
         for item in self.body:
             if isinstance(item, Instruction):
@@ -301,8 +302,8 @@ class ForLoopInstruction(OneShotMixin, Instruction):
             try:
                 for item in self.body:
                     if isinstance(item, Instruction):
-                        # A bare body box is a row of its own: it reads its
-                        # pins as it starts (instruction_condition_view).
+                        # A bare body box is a row of its own. It reads its pins as it
+                        # starts (instruction_condition_view).
                         item.execute(ctx, True)
                     else:
                         item._execute_in_loop(ctx)
@@ -323,13 +324,13 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         return True
 
     def _reset_oneshot_state(self, ctx: ScanContext) -> None:
-        """Re-arm the For's own one-shot (the rung is false); children keep theirs."""
+        """Re-arm the For's own one-shot when the rung is false.  The children keep theirs."""
         if self._oneshot:
             ctx.set_memory(self.memory_key("_oneshot"), False)
 
 
 def iter_loop_body_rungs(instructions: Any) -> Iterator[Rung]:
-    """Every forloop body rung among *instructions*, nested loops included."""
+    """Yield every forloop body rung among *instructions*, including those of nested loops."""
     for instruction in instructions:
         if isinstance(instruction, ForLoopInstruction):
             yield from instruction.body_rungs

@@ -135,7 +135,7 @@ def _compile_flasher_phase(
     ctx: CodegenContext,
     sp: str,
 ) -> list[str]:
-    """The running phase's tick.  At or past its preset, the other phase runs from the next scan."""
+    """Tick the running phase.  At or past its preset, the other phase runs from the next scan."""
     sp4 = sp + "    "
     if on_phase:
         acc, other, limit, other_phase = (

@@ -98,10 +98,10 @@ def _refine_preserved_tag_deadlines(
 ) -> GuardRequirementCondition:
     """Preserve the established protected-tag production refinement.
 
-    The complete Stage-2 occurrence walk is exposed separately, as report
-    evidence (the delayed regression also reads it for a guard with nothing
-    adjustable in it). This compatibility seam deliberately retains the pre-Stage-2
-    exact-run complement, fallback, and identity behavior used by production.
+    The complete Stage-2 occurrence walk is exposed separately, as report evidence.  The
+    delayed regression also reads it for a guard with nothing adjustable in it.  This
+    compatibility seam deliberately keeps the pre-Stage-2 exact-run complement, fallback
+    and identity behavior that production uses.
     """
 
     protected = dict(preserved_values)

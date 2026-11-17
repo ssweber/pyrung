@@ -224,7 +224,7 @@ class TestFallDSL:
 
 
 class TestEdgeSiteMemory:
-    """Each edge contact keeps its own memory (``_edge:e{N}``), stored when scanned."""
+    """Each edge contact keeps its own memory (``_edge:e{N}``) and stores into it when scanned."""
 
     def test_site_memory_follows_the_bit_its_contact_saw(self, runner_factory):
         Button = Bool("Button")
@@ -385,9 +385,9 @@ class TestEdgeCombinations:
 
 
 class TestEdgeOutsideProgram:
-    """An edge in ``run_until()``/``when()`` is no contact of the program.
+    """An edge in ``run_until()``/``when()`` is not a contact of the program.
 
-    It keeps its own memory, judged after each scan against the bit as the
+    It keeps its own memory. The edge is judged after each scan, against the bit as the
     predicate last saw it (from when it was armed).
     """
 
@@ -411,7 +411,7 @@ class TestEdgeOutsideProgram:
         assert state.tags["Light"] is True
 
     def test_run_until_rise_waits_for_a_fresh_edge(self):
-        """Already on when armed: no edge until it goes off and on again."""
+        """A bit that is already on when armed gives no edge until it goes off and on again."""
         plc, light = self._plc()
         plc.patch({"Button": True})
         plc.step()
@@ -442,7 +442,7 @@ class TestEdgeOutsideProgram:
         assert hits == [2, 5]
 
     def test_when_rise_reenabled_does_not_count_the_scans_it_skipped(self):
-        """Light turned on while the breakpoint was off: no edge on re-enable."""
+        """A light that turned on while the breakpoint was off gives no edge on re-enable."""
         plc, light = self._plc()
         hits: list[int] = []
         handle = plc.when(rise(light)).do(lambda state: hits.append(state.scan_id))
@@ -472,7 +472,7 @@ class TestEdgeOutsideProgram:
         assert first == second == [2]
 
     def test_program_edge_reused_in_run_until_keeps_its_own_memory(self):
-        """The predicate copies the contact: the program's site is untouched."""
+        """The predicate copies the contact, so the program's site is untouched."""
         from pyrung.core import PLC
 
         button = Bool("Button", external=True)

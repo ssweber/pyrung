@@ -177,8 +177,8 @@ class _TraceEnv:
     # Joint terminal supports rank alternatives only; they never authorize an
     # assignment or reject the temporary detour needed by a retentive target.
     preferred_actions: tuple[tuple[str, Any], ...] = ()
-    # The comparisons the caller asked how() for, by ``Atom._key()``.  Only these take a
-    # ``!=`` lever from what the tag's writers write (``_written_value_satisfying``).
+    # The comparisons that the caller asked how() for, by ``Atom._key()``. Only these get
+    # a ``!=`` lever from what the tag's writers write (``_written_value_satisfying``).
     goal_atom_keys: frozenset[Any] = frozenset()
 
 
@@ -287,17 +287,17 @@ def _expr_route_key(expr: Any) -> str:
 # so Compass can learn the transition from action observations.
 _SAME_TAG_VALUE_BUDGET = 1
 
-# How deep a trace goes along a wire: a tag it has not yet met on its path,
-# written by at most one rung that reads at most one tag.  Past ``max_depth``
-# only these continue; see ``_trace_back``.
+# How deep a trace goes along a wire. A wire is a tag that the trace has not yet met on
+# its path. At most one rung writes it, and that rung reads at most one tag. Past
+# ``max_depth`` only wires continue. See ``_trace_back``.
 _CHAIN_DEPTH = 60
 
 
 def _is_wire(pdg: ProgramGraph, tag: str) -> bool:
-    """Whether *tag* passes one tag on, as a coil a single contact drives does.
+    """Return True if *tag* passes one tag on, as a coil that a single contact drives does.
 
-    A wire adds no branch to the trace, so following it far finds the one input
-    at its end and no other leaf.
+    A wire adds no branch to the trace. Following it far finds the one input at its end
+    and no other leaf.
     """
     writers = pdg.writers_of.get(tag, frozenset())
     if len(writers) > 1:
@@ -317,13 +317,14 @@ def _loop_call_gates(program: Any) -> dict[tuple[str | None, int, tuple[int, ...
 def _loop_call_gates_as_of(
     program: Any, _edits: int
 ) -> dict[tuple[str | None, int, tuple[int, ...], str], Any]:
-    """What a call inside a forloop needs beyond its rung's contacts, per call site.
+    """Return what a call inside a forloop needs beyond its rung's contacts, per call site.
 
-    Keyed ``(caller subroutine, rung index, branch path, callee)``, as a rung node
-    names its place.  The caller map's extra conditions: each enclosing loop's
-    ``count != 0``, and the body-rung contacts no iteration changes.  They hold on
-    every scan that runs the call, decided or not, so the trace may ask for them.
-    A rung that also calls the callee outside a loop needs none of them.
+    The key is ``(caller subroutine, rung index, branch path, callee)``, which is how a
+    rung node names its place. The values are the caller map's extra conditions. These
+    are each enclosing loop's ``count != 0`` and the body-rung contacts that no iteration
+    changes. They hold on every scan that runs the call, decided or not, so the trace
+    may ask for them. A rung that also calls the callee outside a loop needs none of
+    them.
     """
     from pyrung.core.analysis.simplified import _conditions_list_to_expr, simplify
     from pyrung.core.validation._common import _iter_program_calls
@@ -641,21 +642,21 @@ def _has_steerable(node: TraceNode) -> bool:
 
 
 def _mark_pulse_last_conjunct(nodes: list[TraceNode]) -> None:
-    """Pulse one conjunct of a counter's count demand; the others are holds.
+    """Pulse one conjunct of a counter's count demand, and hold the others.
 
-    A counter counts the rising edges of its whole input, with a memory that
-    changes only on scans it runs: pulsing every conjunct in phase can defeat
-    it (a ``forloop`` guard pulsed off skips the body, so the counter never
-    sees its input fall).  The last conjunct with a steerable leaf is the one
-    nearest the instruction; the conjuncts before it hold their value.  Other
-    owners' pulse demands (drum events, shift clocks, edge-reset pins) pulse
-    every steerable leaf, as before counters counted edges.
+    A counter counts the rising edges of its whole input. Its memory changes only on
+    the scans that it runs, so pulsing every conjunct in phase can defeat it. For
+    example, a ``forloop`` guard that is pulsed off skips the body, so the counter never
+    sees its input fall. The last conjunct with a steerable leaf is the one nearest the
+    instruction. That conjunct pulses, and the conjuncts before it hold their value.
+    Other owners' pulse demands (drum events, shift clocks, edge-reset pins) pulse every
+    steerable leaf, as they did before counters counted edges.
 
-    Within that conjunct the pulsed leaves must toggle in phase.  Each pulsed
-    leaf flips every scan from its current value, so leaves still away from
-    their needed value and leaves already at it would never all agree on one
-    scan (a seal-in's ``Start`` pulsed against its already-off ``Stop``).  So
-    when the conjunct has leaves still to move, only those pulse; a conjunct
+    Within the pulsed conjunct, the leaves must toggle in phase. Each pulsed leaf flips
+    every scan from its current value. Leaves that are still away from their needed
+    value and leaves that are already at it would never all agree on one scan. An
+    example is a seal-in's ``Start`` pulsed against its already-off ``Stop``. So when
+    the conjunct has leaves still to move, only those leaves pulse. A conjunct that is
     already fully on (every leaf satisfied, retained) pulses all its leaves.
     """
     for node in reversed(nodes):
@@ -668,11 +669,11 @@ def _mark_pulse_last_conjunct(nodes: list[TraceNode]) -> None:
 
 
 def _pulsable_leaves(node: TraceNode) -> list[TraceNode]:
-    """Steerable leaves that drive *node* within the scan.
+    """Return the steerable leaves that drive *node* within the scan.
 
-    A self-advancing frontier (a timer feeding the counter's input) makes its
-    own edges; the steerable leaves beneath it are that timer's holds, and
-    pulsing them would only restart it.
+    A self-advancing frontier, such as a timer that feeds the counter's input, makes its
+    own edges. The steerable leaves beneath it are that timer's holds, and pulsing them
+    would only restart it.
     """
     if node.advance is not None or any(child.advance is not None for child in node.children):
         return []
@@ -683,7 +684,7 @@ def _pulsable_leaves(node: TraceNode) -> list[TraceNode]:
 
 
 def _needs_prior_program_stage(node: TraceNode, env: _TraceEnv) -> bool:
-    """Whether this demand first needs persistent program state to move."""
+    """Return True if this demand first needs persistent program state to move."""
 
     if node.writer_rung is not None:
         rung = env.pdg.rung_nodes[node.writer_rung]
@@ -708,13 +709,12 @@ def _trace_demand(
 ) -> list[TraceNode]:
     """Resolve one profile condition through the ordinary trace machinery.
 
-    *counts_edges*: the demand is a counter's pulse demand (a count input, or
-    an edge on its reset pin).  A counter counts its input's rising edges, so
-    an input already on is no count: its steerable leaves stay actions (to be
-    pulsed off and on again), and only the conjunct nearest the counter
-    pulses (:func:`_mark_pulse_last_conjunct`).  An input carried by program
-    state instead (a coil, a latch) is moved by
-    :func:`_counter_input_cycle` in the caller.
+    *counts_edges* is True when the demand is a counter's pulse demand, which is a count
+    input or an edge on its reset pin. A counter counts the rising edges of its input,
+    so an input that is already on is no count. Its steerable leaves stay actions, to be
+    pulsed off and on again, and only the conjunct nearest the counter pulses
+    (:func:`_mark_pulse_last_conjunct`). When program state carries the input instead (a
+    coil, a latch), the caller moves it with :func:`_counter_input_cycle`.
     """
 
     if demand is None or demand.condition is None:
@@ -743,7 +743,7 @@ def _trace_demand_expression(
     retain_satisfied: bool,
     counts_edges: bool = False,
 ) -> list[TraceNode]:
-    """:func:`_trace_demand` for an already-lowered demand expression."""
+    """Do the work of :func:`_trace_demand` for a demand expression that is already lowered."""
 
     nodes = _trace_expression(
         env,
@@ -755,9 +755,9 @@ def _trace_demand_expression(
     )
 
     def _retain_satisfied_steerables(node: TraceNode) -> None:
-        # A profile hold is a lifetime requirement, not merely a value check.
-        # Keep an already-true input in the action details so PILOT can renew
-        # its scoped rung after the previous boundary expires.
+        # A profile hold is a requirement for the whole lifetime, not only a value check.
+        # Keep an input that is already true in the action details, so that PILOT can
+        # renew its scoped rung after the previous boundary expires.
         if node.satisfied and node.tag in env.steerable:
             node.is_steerable = True
         for child in node.children:
@@ -776,9 +776,9 @@ def _trace_demand_expression(
                 or _needs_prior_program_stage(node, env)
             )
         ):
-            # First move an owned state/pipeline register into the condition
-            # the instruction needs.  The command that establishes that state
-            # is not itself a level hold for the later timer/counter coast.
+            # First move an owned state or pipeline register into the condition that
+            # the instruction needs. The command that establishes that state is not
+            # itself a level hold for the later timer or counter coast.
             node.data_flow = "enable"
     if pulse and counts_edges:
         _mark_pulse_last_conjunct(nodes)
@@ -788,10 +788,10 @@ def _trace_demand_expression(
 
 
 def _edges_as_levels(expr: Any) -> Any:
-    """*expr* with each ``rise(X)``/``fall(X)`` read as the level ``X``/``~X``.
+    """Return *expr* with each ``rise(X)``/``fall(X)`` replaced by the level ``X``/``~X``.
 
-    A counter counts the rising edges of its input, and ``rise(X)`` rises
-    exactly when ``X`` does, so for counting the edge contact is its level.
+    A counter counts the rising edges of its input, and ``rise(X)`` rises exactly when
+    ``X`` does. So for counting, the edge contact is the same as its level.
     """
 
     if isinstance(expr, Atom) and expr.form in ("rise", "fall"):
@@ -804,11 +804,11 @@ def _edges_as_levels(expr: Any) -> Any:
 
 
 def _counter_reset_off(owner: Any, step: Any, counts_edges: bool) -> tuple[ConditionDemand, ...]:
-    """The level inputs that must hold for a count on the pulsed input to land.
+    """Return the level inputs that must hold for a count on the pulsed input to land.
 
-    A counter's generated code counts only under its reset's ``else``, so the reset is
-    one more hold while the counter advances.  An edge reset (``rise(R)``) is off on
-    every scan but the one it rises on, so it adds nothing.
+    A counter's generated code counts only under the ``else`` of its reset. So while
+    the counter advances, the reset is one more hold. An edge reset (``rise(R)``) is
+    off on every scan except the one where it rises, so it adds no hold.
     """
 
     if not counts_edges or step.pulse is None:
@@ -834,10 +834,11 @@ def _counter_reset_off(owner: Any, step: Any, counts_edges: bool) -> tuple[Condi
 
 
 def _counter_phase_support(env: _TraceEnv, nodes: list[TraceNode]) -> frozenset[str]:
-    """Tags one phase of a counter input's cycle sets or depends on.
+    """Return the tags that one phase of a counter input's cycle sets or depends on.
 
-    Every tag the phase traces, and for a program-owned one (a coil, a latch)
-    everything upstream of it: a leaf there may be what holds it in place.
+    These are every tag that the phase traces. For a program-owned tag (a coil, a latch)
+    they also include everything upstream of it, because a leaf there may be what holds
+    the tag in place.
     """
 
     tags: set[str] = set()
@@ -857,16 +858,15 @@ def _counter_phase_blockers(
     provenance: tuple[str, ...],
     depth: int,
 ) -> list[TraceNode] | None:
-    """What keeps a counter's holds met through one phase of its input.
+    """Return the unmet holds of a counter for one phase of its input.
 
-    *phase* is the input's trace for that phase (on, or off).  The holds (its
-    level reset pin off, its subroutine's call gate on) are read on the
-    snapshot as it stands once *phase* lands, so an act that itself turns the
-    reset on (the same button latches the input and drives the reset) is seen
-    to break it.  A broken hold may only be met through leaves outside the
-    phase's support; the returned nodes are the unmet holds.  ``None`` when a
-    hold cannot be met that way: in this phase the counter never counts, or
-    its count is cleared.
+    *phase* is the input's trace for that phase, either on or off. The holds are the
+    level reset pin off and the subroutine's call gate on. This function reads them on
+    the snapshot as it stands once *phase* lands. An act that itself turns the reset on
+    is therefore seen to break the hold. One example is a button that latches the input
+    and also drives the reset. A broken hold may only be met through leaves outside the
+    phase's support. Return ``None`` when a hold cannot be met that way. In that phase
+    the counter never counts, or its count is cleared.
     """
 
     support = _counter_phase_support(env, phase)
@@ -894,9 +894,9 @@ def _counter_phase_blockers(
     snapshot = _route_judgment._route_overlay(phase, env.snapshot)
     phase_env = _at(snapshot)
     for demand in holds:
-        # The overlay sets only what the phase traces.  A reset carried by a
-        # coil the phase energizes (``Rung(Start, M): out(Rc)``) still reads
-        # off there; when everything that breaks the hold is already met, it
+        # The overlay sets only what the phase traces. If the phase energizes a coil that
+        # carries the reset (``Rung(Start, M): out(Rc)``), the reset still reads off on the
+        # overlay. When everything that breaks the hold is already met, the hold
         # breaks as the phase lands.
         breaking = _trace(phase_env, ConditionDemand(demand.condition, not demand.value))
         if any(not node.satisfied for node in breaking) and all(
@@ -906,8 +906,8 @@ def _counter_phase_blockers(
             phase_env = _at(snapshot)
 
     def _unmet(nodes: list[TraceNode]) -> list[TraceNode]:
-        # A node whose every leaf is met settles on its own as the phase
-        # lands (a coil whose rung the phase already turns off).
+        # A node whose every leaf is met settles on its own as the phase lands. An example
+        # is a coil whose rung the phase already turns off.
         return [
             node
             for node in nodes
@@ -931,11 +931,11 @@ def _down_edge_cancels(
     off_phase: list[TraceNode],
     needs_off: bool,
 ) -> bool:
-    """Whether an up counter's down input rises once per cycle of its up input.
+    """Return True if an up counter's down input rises once per cycle of its up input.
 
-    An up and a down edge cancel, so a down input that follows the up input
-    (``count_up(C, 3).down(Y)`` on input ``Y``) takes back every count, and
-    one that mirrors it (``down(~Y)``) takes it back at each release.
+    An up edge and a down edge cancel. A down input that follows the up input
+    (``count_up(C, 3).down(Y)`` on input ``Y``) takes back every count. A down input that
+    mirrors the up input (``down(~Y)``) takes back the count at each release.
     """
 
     relations = relations_for(owner.instruction)
@@ -953,10 +953,9 @@ def _down_edge_cancels(
 class _CounterCycle:
     """How the next count of a counter can come from this read.
 
-    ``transition`` is a one-shot act on a program-owned input; ``holds``
-    replaces the reset-pin holds of an ordinary pulse frontier; ``futile``
-    says why no cycle of the input can count.  All empty: the ordinary pulse
-    frontier, unchanged.
+    ``transition`` is a one-shot act on a program-owned input. ``holds`` replaces the
+    reset-pin holds of an ordinary pulse frontier. ``futile`` says why no cycle of the
+    input can count. If all three are empty, the ordinary pulse frontier is unchanged.
     """
 
     transition: TraceNode | None = None
@@ -976,41 +975,39 @@ def _counter_input_cycle(
 ) -> _CounterCycle:
     """Read how a counter's input is cycled for its next count.
 
-    A counter counts its input's rising edges, so holding its input never
-    advances it: each count is one off-to-on transition of the input.  When
-    the input is carried by program-owned state (an internal coil, a latched
-    or sealed-in bit), that transition is not a pulse of a steerable leaf but
-    an ordinary one-shot demand on the input itself:
+    A counter counts the rising edges of its input, so holding the input never advances
+    the counter. Each count is one off-to-on transition of the input. Program-owned
+    state may carry the input, such as an internal coil or a latched or sealed-in bit.
+    Then that transition is not a pulse of a steerable leaf. It is an ordinary one-shot
+    demand on the input itself:
 
     - the input is already on and no steerable leaf of it can be pulsed: no
       count can come until it falls, so release it (trace its negation);
     - the input is off and first needs a persistent program stage (a latch)
       established: establish it once.  The count lands as it comes on.
 
-    Neither transition owns a counter lifetime (no hold until Done).  After
-    it lands, a fresh read traces the next transition, so a latched driver is
-    cycled off and on once per count.  Otherwise a steerable leaf of the input
+    Neither transition owns a counter lifetime, so there is no hold until Done. After a
+    transition lands, a fresh read traces the next transition. A latched driver is
+    therefore cycled off and on once per count. Otherwise a steerable leaf of the input
     is pulsed, as before.
 
-    Either way the counter's holds (its level reset pin off, its subroutine's
-    call gate on) must stay met through both phases of the cycle: through the
-    on phase or the count is lost, through the off phase or the reset clears
-    the count already made.  Each phase is checked on the snapshot it lands
-    (:func:`_counter_phase_blockers`).  An unmet hold rides the transition
-    act as a blocker, or is held while pulsing.  A transition with blockers is
-    marked as establishing program state, as a latch input already is: an
-    establishing action is the sole bearing and defers the others, which
-    would leave the blockers behind for good.  A hold that no leaf outside
-    the phase can meet makes the cycle futile, and the read says so instead
-    of offering an act that would repeat forever, as does an up counter's
-    down input that rises once per cycle (:func:`_down_edge_cancels`).  The
-    off phase is not needed when the input is off and one count is all that
-    remains.
+    Either way, the counter's holds must stay met through both phases of the cycle. The
+    holds are the level reset pin off and the subroutine's call gate on. They must hold
+    through the on phase, or the count is lost. They must hold through the off phase, or
+    the reset clears the count already made. Each phase is checked on the snapshot where
+    it lands (:func:`_counter_phase_blockers`). An unmet hold rides the transition act as
+    a blocker, or is held while pulsing. A transition with blockers is marked as
+    establishing program state, as a latch input already is. An establishing action is
+    the sole bearing and defers the others, which would leave the blockers behind for
+    good. If no leaf outside the phase can meet a hold, the cycle is futile. The read
+    says so, instead of offering an act that would repeat forever. It says the same for
+    an up counter whose down input rises once per cycle (:func:`_down_edge_cancels`).
+    The off phase is not needed when the input is off and one count is all that remains.
 
-    The check is static: it sees what the phase traces and the coils that
-    phase energizes, not a reset that a timer or an edge sets later.  The
-    transition therefore carries its :class:`CounterEdge`, and verification
-    rejects a step under it that raises the input without counting.
+    The check is static. It sees what the phase traces and the coils that the phase
+    energizes. It does not see a reset that a timer or an edge sets later. The
+    transition therefore carries its :class:`CounterEdge`, and verification rejects a
+    step under it that raises the input without counting.
     """
 
     if demand is None or demand.condition is None:
@@ -1077,7 +1074,7 @@ def _counter_input_cycle(
         nodes, blockers = on_phase, on_blockers
         note = "counter input needs program state: establish it for one rising edge"
     if not any(_has_steerable(node) for node in nodes):
-        # No steerable way to move the input: keep the ordinary frontier.
+        # No steerable leaf can move the input, so keep the ordinary frontier.
         return _CounterCycle()
     target_atom = _trace_constraints._constraint_atom(constraint)
     return _CounterCycle(
@@ -1116,7 +1113,7 @@ def _select_call_gate(
     subroutine: str,
     call_gates: list[_CallGateTrace],
 ) -> _CallGateTrace | None:
-    """Choose one coherent call site for a subroutine used by this trace."""
+    """Return one coherent call site for a subroutine that this trace uses."""
 
     if not call_gates:
         return None
@@ -1278,12 +1275,12 @@ def _advance_frontier(
         and owner.instruction is not None
         and not (step.pulse is not None and counts_edges)
     ):
-        # Keep the established scalar coast shape for an instruction-owned
-        # accumulator threshold. Its enable is traced at the producer that
-        # needs it; expanding that future enable here would add a second
-        # prerequisite and distort route scoring and target distance.  A
-        # counter is the exception: it counts edges, so its accumulator never
-        # moves under a coast; it needs the same pulse demand as its Done.
+        # Keep the established scalar coast shape for an accumulator threshold that an
+        # instruction owns. The trace reads its enable at the producer that needs it.
+        # Expanding that future enable here would add a second prerequisite and distort
+        # route scoring and target distance. A counter is the exception. It counts
+        # edges, so its accumulator never moves under a coast. It needs the same pulse
+        # demand as its Done.
         return boundary
     gate_nodes = _owner_call_gate_nodes(env, owner, provenance, depth)
     running_linear = owner.profile.linear is not None and step.progress is not None
@@ -1334,8 +1331,8 @@ def _advance_frontier(
                     note=cycle.futile,
                 )
             if cycle.holds is not None:
-                # The holds as they must stand through the cycle, met through
-                # leaves the pulse does not move.
+                # These are the holds as they must stand through the cycle. They are met
+                # through leaves that the pulse does not move.
                 demand_nodes = list(cycle.holds)
         demand_nodes.extend(pulse_nodes)
     establish_nodes = [
@@ -1365,15 +1362,15 @@ def _advance_frontier(
             and not requires_action
             and _route_judgment.route_has_no_dead_end(establish_nodes)
         ):
-            # The instruction is not active yet, but its owned program stage
-            # will establish itself without an external act. Keep the future
-            # scalar boundary: scanning/coasting is the only useful operation.
+            # The instruction is not active yet, but the program stage that it owns
+            # will establish itself without an external act. Keep the future scalar
+            # boundary. Scanning or coasting is the only useful operation.
             return boundary
-        # A persistent program prerequisite still needs an action. Let the
-        # ordinary writer trace expose that nearer transition; after it lands,
-        # retracing will make this profile the immediate frontier.  A channel
-        # the program does not write (a plant timer the harness synthesized) has
-        # no such trace: its profile's demands are the only route, so keep them.
+        # A persistent program prerequisite still needs an action. Let the ordinary
+        # writer trace expose that nearer transition. After it lands, retracing makes
+        # this profile the immediate frontier. A channel that the program does not write
+        # (a plant timer that the harness synthesized) has no such trace. The demands of
+        # its profile are the only route, so keep them.
         if env.pdg.writers_of.get(constraint.tag):
             return None
     children = [boundary, *gate_nodes, *demand_nodes]
@@ -1389,12 +1386,12 @@ def _advance_frontier(
 
 
 def _writer_holds_its_conditions(env: _TraceEnv, rung: Any, tag: str, value: Any) -> bool:
-    """Whether this writer is the owner that reaches ``tag == value`` by holding its rung.
+    """Return True if this writer is the owner that reaches ``tag == value`` by holding its rung.
 
-    A timer's Done: its profile says hold, and its rung's conditions are what it holds.
-    Its own profile may have deferred to this writer trace, because those conditions
-    still need an act; the act must then last until the Done, not until the first
-    boundary nested under it.
+    A timer's Done is an example. Its profile says to hold, and the conditions of its
+    rung are what it holds. Its own profile may have deferred to this writer trace,
+    because those conditions still need an act. The act must then last until the Done,
+    not until the first boundary nested under it.
     """
     owner = env.advance_index.resolve(tag)
     if owner is None or owner.instruction is None:
@@ -1414,7 +1411,7 @@ def trace_target(
     *,
     constraints: _trace_read.TraceReadConstraints | None = None,
 ) -> TraceNode:
-    """Read an entire objective, retaining all conjunctive terminal demands."""
+    """Read an entire objective and retain all of its conjunctive terminal demands."""
     if target.members:
         from pyrung.core.analysis.pilot.multitarget import input_preferences
 
@@ -1861,8 +1858,9 @@ def _trace_expression(
         return []
 
     if isinstance(expr, Atom):
-        # Arithmetic in a comparison is a gate this trace has no lever for, like a relation
-        # with none below.  Execution still reads it, so a plan through it is still verified.
+        # Arithmetic in a comparison is a gate that this trace has no lever for, like a
+        # relation with none below it. Execution still reads it, so a plan through it is
+        # still verified.
         if isinstance(expr.unsupported, ExprCompare):
             return []
         if expr.unsupported is not None:
@@ -2109,16 +2107,15 @@ def _trace_back(
     if vkey in _visited:
         return TraceNode(tag=tag, value=value)
 
-    # ``max_depth`` is the fail-closed boundary for value walks that keep
-    # manufacturing fresh visit keys.  A self-affine stepper with no reachable
-    # base writer can otherwise invert forever (107 <- 105 <- 103 <- ...), so
-    # the ordinary ``(tag, value)`` cycle guard never fires.  Returning an
-    # unresolved leaf preserves the honest frontier; recursion exhaustion is
-    # never a valid analysis result.  A wire of distinct tags cannot do that:
-    # the visited keys end it, and it adds no other leaf on the way.  It goes on
-    # to ``_CHAIN_DEPTH``, which only keeps the recursion inside Python's own
-    # limit.  Anything wider stops here, so deep leaves of a large tree do not
-    # crowd out what is next.
+    # ``max_depth`` stops value walks that keep producing fresh visit keys. A
+    # self-affine stepper with no reachable base writer can otherwise invert forever
+    # (107 <- 105 <- 103 <- ...), and the ordinary ``(tag, value)`` cycle guard never
+    # fires. Returning an unresolved leaf keeps the frontier honest. Running out of
+    # recursion is never a valid analysis result. A wire of distinct tags cannot loop
+    # like that. The visited keys end it, and it adds no other leaf on the way. A wire
+    # goes on to ``_CHAIN_DEPTH``, which only keeps the recursion inside Python's own
+    # limit. Anything wider stops here, so deep leaves of a large tree do not crowd out
+    # what comes next.
     if _depth >= env.max_depth and (
         _depth >= _CHAIN_DEPTH
         or any(seen == tag for seen, _ in _ancestry)

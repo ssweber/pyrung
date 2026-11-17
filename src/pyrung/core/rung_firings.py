@@ -6,9 +6,9 @@ Three independent facts are retained:
 * ``(rung, tag) -> final attempted value ranges``
 * ``(rung, tag) -> scans with more than one attempted value``
 
-The last fact is sparse: false is implicit.  Exact instruction order, reads,
-and individual write occurrences deliberately do not live here; consumers
-replay only the selected kernel scans when they need that evidence.
+The last fact is sparse: false is implicit.  This module does not keep the exact
+instruction order, the reads or the individual writes, on purpose.  A consumer that
+needs that evidence replays only the kernel scans it selected.
 """
 
 from __future__ import annotations
@@ -22,15 +22,17 @@ from pyrsistent import PMap, pmap
 
 K = TypeVar("K")
 
-# Scans a question may step again to get the records of scans that have none, about what a
-# compiled run would have cost stepped.  Past this it is an error rather than a wait nobody asked for.
+# The most scans that one question may step again to get records for scans that have none.
+# Past this the question raises an error, so the caller does not wait for a long replay that
+# nobody asked for.
 SETTLE_SCAN_LIMIT = 250_000
-# why() steps at most this many.  It is the snapshot tool, and a debugger console blocks on it.
+# why() steps at most this many scans.  It is the snapshot tool, and a debugger console waits
+# for it.
 WHY_SETTLE_SCAN_LIMIT = 10_000
 
 
 class UnrecordedScansError(ValueError):
-    """A question reaches more scans without records than it may step again for."""
+    """Raised when a question reaches more scans without records than it may step again."""
 
     def __init__(self, first: int, last: int, scans: int) -> None:
         super().__init__(
@@ -49,12 +51,12 @@ class UnrecordedScansError(ValueError):
 
 
 class SearchQuestionRefused(BaseException):
-    """A how() asked a question that met :class:`UnrecordedScansError`.
+    """Raised when a question in a how() search meets :class:`UnrecordedScansError`.
 
-    The search reads causes under many ``except Exception`` that mean "no evidence", and scans
-    it cannot afford to read are not evidence that nothing happened in them.  So in a search
-    the refusal is a BaseException, whichever catch it passes, and ends the search with a
-    terminal saying so.
+    The search reads causes inside many ``except Exception`` blocks that mean "no evidence".
+    But scans that the search cannot afford to read are not evidence that nothing happened
+    in them.  So in a search the refusal is a BaseException, and those blocks do not catch
+    it.  It ends the search with a terminal that says so.
     """
 
     def __init__(self, refusal: UnrecordedScansError) -> None:
@@ -62,7 +64,7 @@ class SearchQuestionRefused(BaseException):
         self.refusal = refusal
 
 
-# The changes a column holds before it keeps later values as Unknown.
+# A column records at most this many changes.  After that it records later values as Unknown.
 _ENTRY_LIMIT = 1_000
 _UNKNOWN_VALUE = object()
 _MISSING_WRITE = object()
@@ -112,11 +114,11 @@ class ValueRange:
 class Repeat:
     """Ranges that repeat every *period* scans, *count* times, in one entry.
 
-    ``ranges`` are the first repetition's.  Repetition r is the same ranges moved r * period
-    scans later.  Each range's values also move by r times its entry in ``steps``, which is
-    empty when nothing steps.  A step applies only to whole-number values.  A list holding a
-    repeat reads as the list with every repetition written out.  That is the list that
-    appending each scan would have made.
+    ``ranges`` holds the first repetition.  Repetition r has the same ranges, moved r * period
+    scans later.  Each range's values also move by r times its entry in ``steps``.  ``steps``
+    is empty when no value moves.  A step applies only to whole-number values.  A list that
+    holds a repeat reads as if every repetition were written out.  That is the list you get
+    by appending each scan.
     """
 
     start_scan_id: int
@@ -131,18 +133,20 @@ class RungFiringTimelines(Generic[K]):
     """Append-only columnar firing index, generic over rung identity.
 
     A column turns Unknown on the scan of its 1,000th change (``_ENTRY_LIMIT``).  A scan
-    changes its column unless it holds the value before it, or flips or counts as the scan
-    before it did.  A scan's change depends only on the scan and the three before it.  So
-    each way of recording scans counts the same, in any order.  Until then a column holds at
-    most two ranges per change.  After the column turns Unknown, it still keeps a range for
-    each run of scans that wrote, and one for each run that did not.  A rung's fired ranges
-    have no limit.  So without a history window, a rung that fires every few scans gains a
-    range each firing.  A runner without a window stops adding to its records once they hold
-    ``MAX_RECORD_RUNS`` runs, and a question steps the later scans again.
+    changes its column unless it holds the value of the scan before it, or flips or counts
+    the way the scan before it did.  Whether a scan changes its column depends only on that
+    scan and the three before it.  So every way of recording the scans counts the same
+    changes, in any order.  Until the column turns Unknown, it holds at most two ranges per
+    change.  After that it still keeps one range for each run of scans that wrote and one
+    for each run that did not.  A rung's fired ranges have no limit.  So without a history
+    window, a rung that fires every few scans gains a range with each firing.  A runner
+    without a window stops adding to its records once they hold ``MAX_RECORD_RUNS`` runs.
+    A question then steps the later scans again.
 
-    A record trimmed to a history window has no limit, since the window bounds its memory.
-    After a trim each column holds the kept scans from its first write on.  So what a record
-    holds never depends on scans a trim took, which a long run may never have recorded.
+    A record trimmed to a history window has no limit, because the window bounds its memory.
+    After a trim, each column holds the kept scans from its first write on.  So what a record
+    holds never depends on scans that a trim removed, which a long run may never have
+    recorded.
     """
 
     __slots__ = (
@@ -173,7 +177,8 @@ class RungFiringTimelines(Generic[K]):
         self._counts: dict[tuple[K, str], int] = {}
         # Each column that turned Unknown, and the scan of the change that reached the limit.
         self._unknown_keys: dict[tuple[K, str], int] = {}
-        # Columns with a range a stretch could not speak for.  Later scans still say.
+        # Columns with an Unknown range that covers only a stretch of scans.  Later scans can
+        # still hold known values.
         self._partly_unknown: set[tuple[K, str]] = set()
         # The scans that ran with no records, in order, until a settle fills them in.
         self._gaps: list[tuple[int, int]] = []
@@ -205,7 +210,7 @@ class RungFiringTimelines(Generic[K]):
         self._done()
 
     def note_gap(self, first: int, last: int) -> None:
-        """Scans *first*..*last* ran and left no records.  A settle fills them in."""
+        """Record that scans *first*..*last* ran and left no records.  A settle fills them in."""
         gaps = self._gaps
         if gaps and gaps[-1][1] == first - 1:
             gaps[-1] = (gaps[-1][0], last)
@@ -218,7 +223,7 @@ class RungFiringTimelines(Generic[K]):
             RungFiringTimelines._check(self)
 
     def _push(self, key: tuple[K, str], timeline: list[Any], scan_id: int, value: Any) -> None:
-        """Append one scan's value to a column, which turns Unknown on its last change."""
+        """Append one scan's value to a column.  The column turns Unknown on its last change."""
         unknown = self._unknown_keys
         if key in unknown:
             _append_value(timeline, scan_id, value if value is _MISSING_WRITE else _UNKNOWN_VALUE)
@@ -248,7 +253,7 @@ class RungFiringTimelines(Generic[K]):
         scan_id: int,
         gaps: list[tuple[int, int]] | None = None,
     ) -> Any:
-        """The column's value on *scan_id*, from *ranges* or else what the record knows of it."""
+        """Return the column's value on *scan_id*, from *ranges* or else from the record."""
         range_ = _find_range(ranges, scan_id)
         if range_ is not None:
             return _value_at(range_, scan_id)
@@ -269,11 +274,12 @@ class RungFiringTimelines(Generic[K]):
         last: int | None,
         gaps: list[tuple[int, int]] | None = None,
     ) -> Iterator[tuple[tuple[int, ...], int, int]]:
-        """The scans in *first*..*last* that change the column, in order.
+        """Yield the scans in *first*..*last* that change the column, in order.
 
-        Each group ``(scans, period, times)`` is a change on each of *scans* moved on 0 to
-        *times* - 1 periods.  From the fourth repetition of a repeat on, each one looks back
-        only at repetitions like it, so one group stands for the rest.
+        Each group ``(scans, period, times)`` stands for a change on each of *scans*, moved
+        on by 0 to *times* - 1 periods.  From the fourth repetition of a repeat on, each
+        repetition looks back only at repetitions like itself.  So one group stands for all
+        the rest.
         """
         found: list[int] = []
 
@@ -322,10 +328,10 @@ class RungFiringTimelines(Generic[K]):
         deltas: Mapping[str, int] | None = None,
         unknown: frozenset[str] | set[str] = frozenset(),
     ) -> None:
-        """As if :meth:`append` ran for each of *count* scans from *first_scan_id*.
+        """Record *count* scans from *first_scan_id* as if :meth:`append` ran for each.
 
-        *writes* are the values on the first scan.  A tag in *deltas* moves by that much
-        each scan, and a tag in *unknown* reads as ``Unknown`` over the whole range.
+        *writes* are the values on the first scan.  A tag in *deltas* moves by that amount
+        each scan.  A tag in *unknown* reads as ``Unknown`` over the whole range.
         """
         last = first_scan_id + count - 1
         for tag in self._tags_by_rung.get(rung_index, ()):
@@ -341,19 +347,20 @@ class RungFiringTimelines(Generic[K]):
         self._done()
 
     def run_count(self) -> int:
-        """The ranges held, which is what these timelines cost."""
+        """Return the number of ranges held.  That number is what these timelines cost."""
         return sum(map(len, self._fired_ranges.values())) + sum(
             map(len, self._value_timelines.values())
         )
 
     def plan_repeat(self, last_scan_id: int, period: int) -> RepeatPlan | None:
-        """How to record more cycles of the last *period* scans, or None if it cannot.
+        """Return a plan to record more cycles of the last *period* scans, or None if it cannot.
 
         The caller promises that each later cycle appends what the last cycle appended, moved
-        one period on.  Each whole number also moves as it moved between the last two cycles.
-        Each column must have taken the same shape on its last cycles.  A column's cycle may
-        start on any scan of the period.  Then appending the later cycles scan by scan would
-        repeat that shape.  So each later cycle reads back as appending it would have.
+        one period on.  Each whole number also moves the way it moved between the last two
+        cycles.  Each column must have taken the same shape on its last cycles.  A column's
+        cycle may start on any scan of the period.  Appending the later cycles scan by scan
+        would then repeat that shape.  So each later cycle reads back as if it had been
+        appended scan by scan.
         """
         actions: list[tuple[Any, list[Any], Any]] = []
         tables: tuple[tuple[Mapping[Any, list[Any]], bool], ...] = (
@@ -373,7 +380,10 @@ class RungFiringTimelines(Generic[K]):
     def _repeat_action(
         self, key: Any, ranges: list[Any], last: int, period: int, values: bool
     ) -> Any:
-        """None for a column the cycles leave alone, False if it cannot repeat."""
+        """Return how the column takes more cycles.
+
+        Return None for a column that the cycles leave alone, and False if it cannot repeat.
+        """
         if not ranges:
             return None
         end = ranges[-1].end_scan_id
@@ -386,7 +396,7 @@ class RungFiringTimelines(Generic[K]):
         tail = _last_written_out(ranges)
         if tail.start_scan_id <= last - 2 * period + 1 and end == last:
             # One range runs through the last two cycles, so each later scan extends it.  A
-            # count keeps its rate, and any other range must hold the same values a cycle on.
+            # count keeps its rate.  Any other range must hold the same values a cycle on.
             # Any payload but a count gives a value set by the scan's parity alone, so the
             # first two scans of the cycle stand for all of them.
             first = last - period + 1
@@ -413,9 +423,9 @@ class RungFiringTimelines(Generic[K]):
     def _cycle_action(
         self, key: Any, ranges: list[Any], edge: int, last: int, period: int, values: bool
     ) -> _Cycle | None:
-        """The column's last cycles ending at scan *edge*, if they repeat with steps."""
+        """Return the column's last cycles ending at scan *edge*, if they repeat with steps."""
         # Appending a scan looks back two scans at most.  So two cycles of two scans or more
-        # show what a later cycle does, and a cycle of one scan needs three.
+        # show what a later cycle does.  A cycle of one scan needs three cycles.
         cycles = []
         for back in (2, 1, 0) if period == 1 else (1, 0):
             first = edge - (back + 1) * period + 1
@@ -465,11 +475,11 @@ class RungFiringTimelines(Generic[K]):
         return _Cycle(cycle, steps, step, trailing, limit, changes)
 
     def tags_of(self, rung_index: K) -> Iterable[str]:
-        """Every tag this rung has written."""
+        """Return every tag this rung has written."""
         return self._tags_by_rung.get(rung_index, ())
 
     def append_fired_run(self, rung_index: K, first_scan_id: int, last_scan_id: int) -> None:
-        """The firing half of :meth:`append`, for each scan of the range."""
+        """Record the firing half of :meth:`append` for each scan of the range."""
         self._tags_by_rung.setdefault(rung_index, set())
         ranges = self._fired_ranges.setdefault(rung_index, [])
         _unroll_tail(ranges)
@@ -490,14 +500,15 @@ class RungFiringTimelines(Generic[K]):
         varied: bool = False,
         odd: Any = _ABSENT,
     ) -> None:
-        """One tag's half of :meth:`append`, for each scan of the range.
+        """Record one tag's half of :meth:`append` for each scan of the range.
 
-        *value* is what it reads on the first scan, ``_MISSING_WRITE`` if the rung does not write
-        it there, and it moves by *delta* each scan.  Give *odd* for a tag that switches between
-        two values every scan, with no *delta*.  The tag then reads *value* on the first scan and
-        *odd* on the next.  Such a run may start on ``_MISSING_WRITE`` only once the rung has
-        written the tag, and is *varied* only if neither value is ``_MISSING_WRITE``.  A rung's
-        tags ask nothing of each other, so they may go in in any order, and its firings with
+        *value* is what the tag reads on the first scan.  It is ``_MISSING_WRITE`` if the rung
+        does not write the tag there.  The value moves by *delta* each scan.  Pass *odd*, and
+        no *delta*, for a tag that switches between two values every scan.  The tag then
+        reads *value* on the first scan and *odd* on the next.  Such a run may start on
+        ``_MISSING_WRITE`` only once the rung has written the tag.  It is *varied* only if
+        neither value is ``_MISSING_WRITE``.  A rung's tags do not depend on each other, so
+        you may add them in any order.  The same holds for its firings, which you add with
         :meth:`append_fired_run`.
         """
         key = (rung_index, tag)
@@ -544,10 +555,10 @@ class RungFiringTimelines(Generic[K]):
                 return
 
     def replace_range(self, settled: RungFiringTimelines[K], first: int, last: int) -> None:
-        """Take scans *first*..*last* from *settled*, an index of them made later.
+        """Replace scans *first*..*last* with those from *settled*, an index made later.
 
-        Each column then turns Unknown on the scan stepping would have, or on the scan it did
-        already if that came first.
+        Each column then turns Unknown on the scan where stepping would have turned it.  If
+        the column had already turned Unknown on an earlier scan, it keeps that scan.
         """
         _replace_ranges(self._fired_ranges, settled._fired_ranges, _trim_scan_ranges, first, last)
         _replace_ranges(self._varied_ranges, settled._varied_ranges, _trim_scan_ranges, first, last)
@@ -616,11 +627,13 @@ class RungFiringTimelines(Generic[K]):
         first: int,
         gaps: list[tuple[int, int]],
     ) -> None:
-        """Count the changes a settle from *first* on added, and turn Unknown where stepping did.
+        """Count the changes that a settle added from *first* on, and turn Unknown at the limit.
 
-        *old* is the column before the settle, and *gaps* the gaps after it.  The count is the
-        same up to *first*.  A scan in a gap counts no change, and nor does a scan whose change
-        depends on one.  So a settle only adds changes, and the column turns Unknown no later.
+        The column turns Unknown on the scan where stepping would have turned it.  *old* is
+        the column before the settle.  *gaps* are the gaps after it.  The count is the same
+        up to *first*.  A scan in a gap counts no change, and neither does a scan whose change
+        depends on one.  So a settle only adds changes, and the column turns Unknown no later
+        than it did before.
         """
         if self._limit is None:
             return
@@ -648,8 +661,9 @@ class RungFiringTimelines(Generic[K]):
 
         The column then has the same ranges it would have had if those scans had been stepped.
         Appending a scan reads the last two ranges at most.  The ranges from *appended_from* on
-        came from appending, and the first of them may be cut short.  So two ranges on from
-        that one, the rest go on unchanged once the last two agree.  Nothing is counted.
+        came from appending, and the first of them may be cut short.  So once three of them
+        are in, and the last two ranges of the timeline match the two before the next one,
+        the rest go on unchanged.  Nothing is counted.
         """
         for index, item in enumerate(ranges):
             if (
@@ -666,7 +680,7 @@ class RungFiringTimelines(Generic[K]):
                 _append_range(timeline, item)
 
     def _rejoined_repeat(self, timeline: list[Any], repeat: Repeat) -> None:
-        """Append *repeat* as stepping appends it, as one repeat once its repetitions settle.
+        """Append *repeat* as stepping appends it.  The result is one repeat once it settles.
 
         Once the column's last cycles take one shape, a plan records the rest as a jump does.
         """
@@ -689,7 +703,7 @@ class RungFiringTimelines(Generic[K]):
                 return
 
     def fired_throughout(self, first_scan_id: int, last_scan_id: int) -> set[K]:
-        """The rungs that fired on every scan of the range."""
+        """Return the rungs that fired on every scan of the range."""
         fired: set[K] = set()
         for rung_index, ranges in self._fired_ranges.items():
             range_ = _find_scan_range(ranges, first_scan_id)
@@ -760,14 +774,14 @@ class RungFiringTimelines(Generic[K]):
         return pmap(writes)
 
     def varied_on(self, rung_index: K, tag_name: str, scan_id: int) -> bool:
-        """Whether this scope attempted unequal values for the tag this scan."""
+        """Return whether this scope attempted unequal values for the tag on this scan."""
         return (
             _find_scan_range(self._varied_ranges.get((rung_index, tag_name), []), scan_id)
             is not None
         )
 
     def value_at(self, rung_index: K, tag_name: str, scan_id: int) -> Any:
-        """Final attempted value, or a private unknown/missing sentinel."""
+        """Return the final attempted value, or a private sentinel for unknown or missing."""
         range_ = _find_value_range(self._value_timelines.get((rung_index, tag_name), ()), scan_id)
         return _MISSING_WRITE if range_ is None else _value_at(range_, scan_id)
 
@@ -778,12 +792,12 @@ class RungFiringTimelines(Generic[K]):
         value: Any,
         scan_ids: tuple[int, ...],
     ) -> tuple[int, ...]:
-        """Intersect ordered scans with matching final values or varied writes.
+        """Return the scans in *scan_ids* with a matching final value or a varied write.
 
-        The retained columns are range-compressed.  Walk those ranges directly
-        so a long constant non-matching interval stays O(ranges), rather than
-        issuing one binary-search lookup per physical scan.  Unknown value
-        ranges remain conservative and nominate every selected scan they cover.
+        The retained columns are range-compressed.  This method walks the ranges directly.
+        A long constant range that does not match then costs one step, not one binary-search
+        lookup per scan.  An Unknown range is conservative and nominates every selected
+        scan it covers.
         """
 
         if not scan_ids:
@@ -913,7 +927,7 @@ class RungFiringTimelines(Generic[K]):
         return tuple(sorted(candidates, reverse=True))
 
     def value_is_known(self, rung_index: K, tag_name: str) -> bool:
-        """Whether retained final values remain exact for this one column."""
+        """Return whether the retained final values for this column are exact."""
         key = (rung_index, tag_name)
         return key not in self._unknown_keys and key not in self._partly_unknown
 
@@ -959,7 +973,8 @@ class RungFiringTimelines(Generic[K]):
                 kept = _as_of(_trim_value_ranges(ranges, None, max_scan_id), ranges, max_scan_id)
                 gone = self._unknown_keys.get(key)
                 if self._limit is not None and (gone is None or gone > max_scan_id):
-                    # Take off the changes after the cut.  It reached the limit after it, if at all.
+                    # Remove the changes after the cut.  The column reached the limit after the
+                    # cut, if at all.
                     held = self._limit if gone is not None else self._counts.get(key, 0)
                     held -= _total(self._change_groups(key, ranges, max_scan_id + 1, gone))
                     self._unknown_keys.pop(key, None)
@@ -1076,7 +1091,7 @@ def _joins(last: Any, range_: Any) -> bool:
 
 
 def _append_value(timeline: list[ValueRange], scan_id: int, value: Any) -> int:
-    """Append a scalar value.  Returns how many ranges the column gained, -1 to 1."""
+    """Append a scalar value.  Return the change in the number of ranges, from -1 to 1."""
     _unroll_tail(timeline)
     if timeline:
         last = timeline[-1]
@@ -1128,7 +1143,7 @@ def _value_at(range_: ValueRange, scan_id: int) -> Any:
 
 
 def _find_range(ranges: Sequence[Any], scan_id: int) -> Any:
-    """The written-out range holding *scan_id*, or None."""
+    """Return the written-out range that holds *scan_id*, or None."""
     lo, hi = 0, len(ranges)
     while lo < hi:
         mid = (lo + hi) // 2
@@ -1252,7 +1267,7 @@ def _ranges_have_write(ranges: Sequence[ValueRange], first_scan: int, last_scan:
 
 
 def _replace_ranges(mine: Any, theirs: Any, trim: Any, first: int, last: int) -> None:
-    """One table's scans *first*..*last* taken from *theirs*."""
+    """Replace scans *first*..*last* in one table with the scans from *theirs*."""
     for key in set(mine) | set(theirs):
         ranges = mine.get(key, [])
         middle = trim(theirs.get(key, []), first, last)
@@ -1351,7 +1366,10 @@ def _repetition(repeat: Repeat, index: int) -> list[Any]:
 
 
 def _repeats(repeat: Repeat, first: int, last: int) -> list[Any]:
-    """Repetitions *first*..*last* of *repeat*, as one entry.  A single repetition is written out."""
+    """Return repetitions *first*..*last* of *repeat* as one entry.
+
+    A single repetition is written out.
+    """
     if first > last:
         return []
     if first == last:
@@ -1371,7 +1389,7 @@ def _repeats(repeat: Repeat, first: int, last: int) -> list[Any]:
 
 
 def _overlapping(repeat: Repeat, first: int | None, last: int | None) -> tuple[int, int]:
-    """The first and last repetition with a scan in *first*..*last*."""
+    """Return the first and last repetition that has a scan in *first*..*last*."""
     period = repeat.period
     lo = 0 if first is None else max(0, -((repeat.ranges[-1].end_scan_id - first) // period))
     hi = repeat.count - 1
@@ -1381,7 +1399,7 @@ def _overlapping(repeat: Repeat, first: int | None, last: int | None) -> tuple[i
 
 
 def _expanded(ranges: Sequence[Any], first: int | None, last: int | None) -> Iterator[Any]:
-    """The written-out ranges with a scan in *first*..*last*, in order."""
+    """Yield the written-out ranges that have a scan in *first*..*last*, in order."""
     start = 0 if first is None else bisect_left(ranges, first, key=_end_of)
     for position in range(start, len(ranges)):
         element = ranges[position]
@@ -1400,7 +1418,7 @@ def _expanded(ranges: Sequence[Any], first: int | None, last: int | None) -> Ite
 
 
 def _expanded_reversed(ranges: Sequence[Any], last: int | None) -> Iterator[Any]:
-    """The written-out ranges that start at or before *last*, latest first."""
+    """Yield the written-out ranges that start at or before *last*, latest first."""
     stop = len(ranges) if last is None else bisect_right(ranges, last, key=_start_of)
     for position in range(stop - 1, -1, -1):
         element = ranges[position]
@@ -1415,7 +1433,7 @@ def _expanded_reversed(ranges: Sequence[Any], last: int | None) -> Iterator[Any]
 
 
 def _first_write(ranges: Sequence[Any], first: int) -> int | None:
-    """The first scan from *first* on that writes the column, or None."""
+    """Return the first scan from *first* on that writes the column, or None."""
     for range_ in _expanded(ranges, first, None):
         # A range that holds no write on its first scan alternates with one.
         low = max(first, range_.start_scan_id)
@@ -1447,7 +1465,7 @@ def _last_written_out(ranges: Sequence[Any]) -> Any:
 
 
 def _unroll_tail(ranges: list[Any]) -> None:
-    """Write out a list's last two ranges, which an append reads and may change."""
+    """Write out a list's last two ranges.  An append reads them and may change them."""
     while True:
         if ranges and type(ranges[-1]) is Repeat:
             after: list[Any] = []
@@ -1509,10 +1527,10 @@ def _same_payload(left: Any, right: Any) -> bool:
 def _cycle_steps(
     earlier: Sequence[Any], later: Sequence[Any], period: int
 ) -> tuple[int, ...] | None:
-    """How far each range's values moved from *earlier* to *later*, or None.
+    """Return how far each range's values moved from *earlier* to *later*, or None.
 
-    None unless *later* is *earlier* moved one period on, range for range.  Each range must
-    hold the same values, or whole numbers that all moved by one amount.
+    Return None unless *later* is *earlier* moved one period on, range for range.  Each range
+    must hold the same values, or whole numbers that all moved by one amount.
     """
     if len(earlier) != len(later):
         return None
@@ -1553,7 +1571,7 @@ def _payload_step(earlier: Any, later: Any) -> int | None:
 
 
 def _steps_keep_their_order(cycle: Sequence[Any], steps: tuple[int, ...]) -> bool:
-    """Whether every value of a column with steps moves by one amount.
+    """Return whether every value of a column with steps moves by one amount.
 
     Appending compares neighbouring values.  When all of them are whole numbers that move by
     one amount, each comparison comes out the same on every cycle.  A value that stood still
@@ -1624,10 +1642,10 @@ def _append_range(timeline: list[Any], range_: ValueRange) -> None:
 
 
 def _carries(tail: Any, range_: ValueRange) -> bool:
-    """Whether appending the rest of *range_* would only lengthen *tail*.
+    """Return whether appending the rest of *range_* would only lengthen *tail*.
 
-    That needs the same kind of range agreeing on the range's last two scans.  Two flip-flops
-    or two counts can agree on one scan and part on the next.
+    That is true only if *tail* is the same kind of range and agrees with *range_* on its last
+    two scans.  Two flip-flops or two counts can agree on one scan and part on the next.
     """
     high = range_.end_scan_id
     return (
@@ -1639,10 +1657,10 @@ def _carries(tail: Any, range_: ValueRange) -> bool:
 
 
 def _continues(value: Any, one: Any, two: Any, three: Any) -> bool:
-    """Whether *value* goes on from *one*, *two* and *three*, the values on the scans before it.
+    """Return whether *value* goes on from *one*, *two* and *three*, the values before it.
 
-    It goes on if it holds *one*, or if it flips or counts as *one* did.  A scan the record
-    cannot see counts as going on.  So a gap left open keeps the count low.
+    It goes on if it equals *one*, or if it flips or counts the way *one* did.  A scan the
+    record cannot see counts as going on.  So a gap that is still open keeps the count low.
     """
     kind = _kind(value, one, two)
     if kind is None or kind is _HIDDEN or kind == "held":
@@ -1651,7 +1669,7 @@ def _continues(value: Any, one: Any, two: Any, three: Any) -> bool:
 
 
 def _kind(value: Any, one: Any, two: Any) -> Any:
-    """The way *value* goes on from *one* and *two*, or None if it does not go on."""
+    """Return the way *value* goes on from *one* and *two*, or None if it does not go on."""
     if one is _HIDDEN or one is _ABSENT:
         return None if one is _ABSENT else _HIDDEN
     if _equal(value, one):
@@ -1670,7 +1688,7 @@ def _total(groups: Iterable[tuple[tuple[int, ...], int, int]]) -> int:
 
 
 def _nth(groups: Iterable[tuple[tuple[int, ...], int, int]], count: int) -> int | None:
-    """The scan of change number *count*, from 1, or None if the groups hold fewer."""
+    """Return the scan of change number *count*, counting from 1, or None if there are fewer."""
     for scans, period, times in groups:
         if count <= len(scans) * times:
             moves, index = divmod(count - 1, len(scans))
@@ -1680,9 +1698,10 @@ def _nth(groups: Iterable[tuple[tuple[int, ...], int, int]], count: int) -> int 
 
 
 def _as_unknown(element: Any) -> Any:
-    """*element* as stepping keeps it in a column that turned Unknown.
+    """Return *element* as stepping keeps it in a column that turned Unknown.
 
-    Each value written reads Unknown, and each scan with no write stays one.
+    Each value that was written reads Unknown.  Each scan with no write stays a scan with
+    no write.
     """
     if type(element) is Repeat:
         ranges = tuple(_as_unknown(range_) for range_ in element.ranges)
@@ -1703,7 +1722,7 @@ def _as_unknown(element: Any) -> Any:
 
 
 def _as_of(prefix: list[Any], ranges: list[Any], scan_id: int) -> list[Any]:
-    """*prefix*, the ranges up to *scan_id*, as appending them had left them by then.
+    """Return *prefix*, the ranges up to *scan_id*, as appending them had left them by then.
 
     Appending makes an alternating or arithmetic range only on its third scan.  So a range
     cut short of three scans was single scans then.
@@ -1726,9 +1745,9 @@ def _as_of(prefix: list[Any], ranges: list[Any], scan_id: int) -> list[Any]:
 
 
 def _missing_writes(fired: list[Any], first: int, last: int | None) -> list[Any]:
-    """A scan with no write for each firing in *first*..*last*.
+    """Return a no-write range for each firing in *first*..*last*.
 
-    Stepping appends that to each column of a rung that fires without writing its tag.  A
+    Stepping appends one to each column of a rung that fires without writing its tag.  A
     record made from a later scan has no column for a tag until its rung writes it.
     """
     if last is not None and first > last:
@@ -1750,7 +1769,7 @@ def _as_missing(element: Any) -> Any:
 
 
 def _unknown_or_missing(range_: Any) -> bool:
-    """Whether *range_* holds no value: ``Unknown``, no write, or a flip between the two."""
+    """Return whether *range_* holds no value.  That is ``Unknown``, no write, or a flip of both."""
     payload = range_.payload
     if isinstance(payload, Alternating):
         return all(

@@ -183,7 +183,7 @@ _status_site_counter = itertools.count(1)
 
 
 def is_modbus_status_tag(name: str) -> bool:
-    """Whether *name* is the hidden tag of a send/receive status bit that was left off."""
+    """Return whether *name* is the hidden tag of a send/receive status bit that was left off."""
     return name.startswith(MODBUS_STATUS_TAG_PREFIX)
 
 
@@ -194,7 +194,7 @@ def _status_tags(
     error: Tag | None,
     exception_response: Tag | None,
 ) -> tuple[Tag, Tag, Tag, Tag]:
-    """The four status tags, a hidden one for each bit left off (CLICK allows any)."""
+    """Return the four status tags, with a hidden tag for each bit left off (CLICK allows any)."""
     site = next(_status_site_counter)
 
     def resolve(tag: Tag | None, field_name: str, tag_type: TagType) -> Tag:
@@ -215,10 +215,10 @@ def _status_tags(
 
 
 def _device_id_value(device_id: int | Tag, ctx: ScanContext) -> int:
-    """Returns the number, or the value its DS tag holds as the request starts.
+    """Return the device id: the number itself, or the value its DS tag holds as the request starts.
 
-    A value no device can answer to is passed on as it is.  What a CLICK does with one
-    is not yet known.
+    A value that no device can answer to is passed on as it is.  What a CLICK does with
+    such a value is not yet known.
     """
     if isinstance(device_id, Tag):
         return int(ctx.get_tag(device_id.name, device_id.default))
@@ -688,8 +688,8 @@ def send(
     ``remote_start`` may be a Click address string (e.g. ``"DS1"``) for Click
     PLCs, or a :class:`ModbusAddress` for raw Modbus devices.
 
-    Status bits are optional, as in CLICK: one left off still runs, on a
-    hidden tag that CLICK export leaves off.
+    Status bits are optional, as in CLICK.  If you leave a status bit off, the instruction
+    still writes that bit, to a hidden tag.  CLICK export leaves the hidden tag off.
     """
     sending, success, error, exception_response = _status_tags(
         "sending", sending, success, error, exception_response
@@ -754,8 +754,8 @@ def receive(
     ``remote_start`` may be a Click address string (e.g. ``"DS1"``) for Click
     PLCs, or a :class:`ModbusAddress` for raw Modbus devices.
 
-    Status bits are optional, as in CLICK: one left off still runs, on a
-    hidden tag that CLICK export leaves off.
+    Status bits are optional, as in CLICK.  If you leave a status bit off, the instruction
+    still writes that bit, to a hidden tag.  CLICK export leaves the hidden tag off.
     """
     receiving, success, error, exception_response = _status_tags(
         "receiving", receiving, success, error, exception_response

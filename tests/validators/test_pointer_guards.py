@@ -94,7 +94,7 @@ def test_branch_write_before_access_invalidates_guard():
 
 
 def test_branch_guard_reads_the_parent_write_live():
-    # The branch solves after copy(101) above it: it reads 101, never 5, so
+    # The branch solves after the copy(101) above it. It reads 101, never 5, so
     # the guarded access never runs with an escaping pointer.
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True, default=5)

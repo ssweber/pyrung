@@ -4,10 +4,10 @@ A random program mixes the v4 instructions (Out variants with Timer UDTs, For/Ne
 with Break and Continue, range aggregates, ``randint``) under random rung
 conditions and is driven by a random input schedule.  Two properties:
 
-- the interpreter and the compiled kernel hold the same tags and memory after
+- the interpreter and the compiled kernel have the same tags and memory after
   every scan;
 - a long ``run_for`` (the guarded scan loop, forced to fire on short stretches)
-  lands on the state stepping reaches, tags, memory and clock.
+  ends in the state that stepping reaches, in tags, memory and clock.
 
 Scan periods are binary fractions of a second, so timer remainders are exact.
 """

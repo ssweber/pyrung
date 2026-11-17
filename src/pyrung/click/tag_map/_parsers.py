@@ -48,9 +48,9 @@ _EXPLICIT_BLOCK_START_RE = re.compile(
 _TAG_META_GROUP_RE = re.compile(r"\[[^\[\]]*\]")
 _CHOICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
 _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
-# A ``link=`` value names the enable — a tag name or a Click address — with an
-# optional ``:trigger`` (a choices label or an integer): ``link=State:SORTING``.
-# ``~`` marks a bit enable that drives while OFF (``link=~Enable``); Click
+# A ``link=`` value names the enable, which is a tag name or a Click address.  It may end
+# with a ``:trigger``, which is a choices label or an integer: ``link=State:SORTING``.
+# A leading ``~`` marks a bit enable that drives while it is OFF (``link=~Enable``).  Click
 # forbids ``~`` in nicknames, so the prefix is never part of a name.
 _LINK_VALUE_RE = re.compile(r"^(?:~[^~:,\|\[\]]+|[^~:,\|\[\]]+(?::[^:,\|\[\]]+)?)$")
 _BOOL_CHOICE_PRESET: ChoiceMap = {0: "False", 1: "True"}
@@ -88,7 +88,10 @@ class TagMeta:
     uom: str | None = None
 
     def physical_values(self) -> dict[str, str | bool]:
-        """The response keys this comment sets, in table order, with a flag as ``True``."""
+        """Return the response keys that this comment sets, in table order.
+
+        A flag appears as ``True``.
+        """
         values: dict[str, str | bool] = {}
         for name in PHYSICAL_KEYS:
             value = getattr(self, name)
@@ -98,9 +101,10 @@ class TagMeta:
 
     @property
     def physical_kind(self) -> PhysicalKind | None:
-        """The kind the response keys make, or ``None`` with none.
+        """Return the kind that the response keys make, or ``None`` if there are none.
 
-        Raises ``ValueError`` for keys of two kinds or a kind missing a key it needs.
+        Raise ``ValueError`` if the keys are of two kinds, or if a kind lacks a key that it
+        needs.
         """
         return kind_of_keys(self.physical_values())
 
@@ -498,9 +502,9 @@ def _check_physical(values: dict[str, str | bool], system: str | None) -> None:
 
 
 def _is_tag_meta(tokens: list[str]) -> bool:
-    """True when a ``[...]`` group of *tokens* holds metadata, not the user's own text.
+    """Return True when a ``[...]`` group of *tokens* holds metadata, not the user's own text.
 
-    The first token that is not ``toggle`` or ``maintained`` decides. Those two words are
+    The first token that is not ``toggle`` or ``maintained`` decides.  Those two words are
     common in a note (``Selector switch [maintained]``), and a flag alone is never metadata.
     """
     first = next((token for token in tokens if token not in _PHYSICAL_FLAG_TOKENS), None)
@@ -546,7 +550,8 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
             choices = _parse_tag_meta_choices(token.split("=", maxsplit=1)[1])
             continue
         if token.startswith("link="):
-            # ``Tag:trigger`` fails the scalar grammar on its ``:``; check it whole.
+            # ``Tag:trigger`` fails the scalar grammar because of its ``:``.  So check the
+            # whole value against the link grammar.
             link = token.split("=", maxsplit=1)[1].strip()
             if _LINK_VALUE_RE.fullmatch(link) is None:
                 raise ValueError(f"Invalid TagMeta link value {link!r}.")
@@ -756,7 +761,7 @@ def format_tag_meta(meta: TagMeta | None) -> str:
             tokens.append(f"choices={'|'.join(pairs)}")
     flags = [name for name in response if PHYSICAL_KEYS[name].is_flag]
     if flags and meta.link is None and meta.physical is None:
-        # A flag answers a linked command, and the reader takes a group of flags alone as text.
+        # A flag answers a linked command.  The reader takes a group of flags alone as text.
         raise ValueError(f"TagMeta {flags[0]} needs link= or physical= beside it.")
     return f"[{', '.join(tokens)}]"
 

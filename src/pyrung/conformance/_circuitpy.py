@@ -1,10 +1,10 @@
-"""The conformance program as P1AM-200 code, run on this machine.
+"""Run the conformance program as P1AM-200 code on this machine.
 
-:class:`CircuitPySim` stands where :class:`~pyrung.conformance.SimServer`
-does, but what it serves is not pyrung's engine: it is the ``code.py`` that
-``generate_circuitpy()`` writes for a P1AM-200, run unchanged under this
-machine's Python by :mod:`pyrung.circuitpy.host`, answering Modbus through its
-own generated server.  The harness talks to it exactly as it talks to a CLICK.
+:class:`CircuitPySim` takes the place of :class:`~pyrung.conformance.SimServer`.
+It does not serve pyrung's engine.  It serves the ``code.py`` that
+``generate_circuitpy()`` writes for a P1AM-200.  :mod:`pyrung.circuitpy.host` runs that
+file unchanged under this machine's Python, and the file answers Modbus through its own
+generated server.  The harness talks to it exactly as it talks to a CLICK.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ _LOG_TAIL = 4000
 
 
 def _cleanup(directory: tempfile.TemporaryDirectory[str]) -> None:
-    """Remove *directory*, retrying briefly: Windows can hold ``host.log`` a moment after exit.
+    """Remove *directory*, retrying briefly.  Windows can hold ``host.log`` for a moment after exit.
 
     After the retries the directory is left behind rather than failing the run.
     """
@@ -52,17 +52,18 @@ def _cleanup(directory: tempfile.TemporaryDirectory[str]) -> None:
 
 
 def generate(build: ConformanceProgram, *, ip: str = "127.0.0.1", port: int = 502) -> Any:
-    """``generate_circuitpy()`` output for *build*: the P1AM-200 project to load.
+    """Return the ``generate_circuitpy()`` output for *build*, the P1AM-200 project to load.
 
-    The generated server serves every register *build*'s TagMap maps (slots,
-    their spares, the hashes), every raw register a case uses, and every cell of
-    a bank a case reaches by pointer or block instruction.  A read of any other
-    address in a CLICK bank returns 0, as on a CLICK.
+    The generated server serves three groups of registers.  The first is every register that
+    the TagMap of *build* maps (slots, their spares, the hashes).  The second is every raw
+    register that a case uses.  The third is every cell of a bank that a case reaches by
+    pointer or block instruction.  A read of any other address in a CLICK bank returns 0,
+    as on a CLICK.
     """
     from pyrung.circuitpy import P1AM, ModbusServerConfig, generate_circuitpy
 
     hw = P1AM()
-    hw.slot(1, "P1-08SIM")  # the generator wants one module; the program reads none
+    hw.slot(1, "P1-08SIM")  # the generator needs one module, though the program reads none
     return generate_circuitpy(
         build.program,
         hw,
@@ -76,8 +77,8 @@ class CircuitPySim:
     """The conformance program's P1AM-200 code, run on this machine and served over Modbus.
 
     ``code.py`` runs in a child Python with stand-ins for the board's hardware
-    (:mod:`pyrung.circuitpy.host`): its own scan loop, wall-clock timers, and
-    its own generated Modbus server between scans.  The RUN/STOP switch reads
+    (:mod:`pyrung.circuitpy.host`).  It has its own scan loop, wall-clock timers, and
+    its own generated Modbus server that runs between scans.  The RUN/STOP switch reads
     RUN.  A rung's STOP command (SC50) puts the code in STOP, and the code
     keeps serving Modbus in STOP.  The Modbus server refuses a write to SC50
     with exception code 2, as a CLICK does.  Same interface as
@@ -152,7 +153,7 @@ class CircuitPySim:
             _cleanup(directory)
 
     def raise_if_failed(self) -> None:
-        """Raise if ``code.py`` has exited: on a board it never returns."""
+        """Raise if ``code.py`` has exited.  On a board it never returns."""
         proc = self._proc
         if proc is None or proc.poll() is None:
             return

@@ -1,4 +1,4 @@
-"""Fixtures for the conformance suite."""
+"""Provide the fixtures for the conformance suite."""
 
 from __future__ import annotations
 
@@ -22,14 +22,14 @@ TARGETS = {"pyrung": SimServer, "circuitpy": CircuitPySim}
 
 @pytest.fixture(scope="session")
 def conformance_endpoint(request: pytest.FixtureRequest) -> Endpoint | None:
-    """``host[:port]`` of the PLC under test, or ``None`` for pyrung's local soft PLC."""
+    """Return ``host[:port]`` of the PLC under test, or ``None`` for pyrung's local soft PLC."""
     raw = request.config.getoption("conformance_plc", default=None) or os.environ.get(ENDPOINT_ENV)
     return parse_endpoint(raw) if raw else None
 
 
 @pytest.fixture(scope="session")
 def conformance_groups(request: pytest.FixtureRequest) -> list[str] | None:
-    """Group names to run over Modbus, or ``None`` for every group."""
+    """Return the group names to run over Modbus, or ``None`` to run every group."""
     raw = request.config.getoption("conformance_group", default=None) or os.environ.get(GROUP_ENV)
     if not raw:
         return None
@@ -56,7 +56,10 @@ def conformance_cases(request: pytest.FixtureRequest) -> str | None:
 
 @pytest.fixture(scope="session")
 def conformance_sim(request: pytest.FixtureRequest) -> type[SimServer] | type[CircuitPySim]:
-    """The local target a run without ``--conformance-plc`` starts (``sim=`` of ``run_modbus``)."""
+    """Return the local target that a run without ``--conformance-plc`` starts.
+
+    It is the ``sim=`` argument of ``run_modbus``.
+    """
     name = (
         request.config.getoption("conformance_target", default=None)
         or os.environ.get(TARGET_ENV)

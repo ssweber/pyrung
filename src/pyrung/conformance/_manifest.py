@@ -1,4 +1,4 @@
-"""The checked-in layout: a fixed DS block per group and a fixed slot per case.
+"""Define the checked-in layout: a fixed DS block per group and a fixed slot per case.
 
 A manifest is TOML::
 
@@ -10,9 +10,9 @@ A manifest is TOML::
     int_wraps = 1       # case id -> slot index; never renumber
     div_by_zero = 2
 
-New cases append with the next index; a removed case's line can stay as a
-gap.  Nothing ever moves, so one group's edits never shift another group's
-(or another case's) registers.
+Append a new case with the next index.  The line of a removed case can stay as a
+gap.  Nothing ever moves, so editing one group never shifts the registers of another
+group or another case.
 """
 
 from __future__ import annotations
@@ -28,9 +28,10 @@ from pyrung.conformance._slot import DS_LAST, HEADER_END, block_size
 if TYPE_CHECKING:
     from pyrung.conformance._case import Group
 
-#: Slot capacity suggested for a new group (a block of 200 registers).
+#: Slot capacity that the error message suggests for a new group (a block of 200 registers).
 DEFAULT_SLOTS = 19
-#: New groups are suggested at the next free ``base`` aligned to this (DS101, DS301, ...).
+#: The error message suggests, for a new group, the next free ``base`` aligned to this
+#: (DS101, DS301, ...).
 _BASE_ALIGN = 100
 
 
@@ -61,7 +62,7 @@ class Manifest:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], source: str = "manifest") -> Manifest:
-        """Validate parsed manifest data (the TOML document as a dict)."""
+        """Validate parsed manifest data, which is the TOML document as a dict."""
         raw_groups = data.get("groups", {})
         if not isinstance(raw_groups, Mapping):
             raise ManifestError(f"{source}: [groups] must be a table.")
@@ -110,9 +111,9 @@ class Manifest:
 
     @classmethod
     def packed(cls, groups: Sequence[Group]) -> Manifest:
-        """A throwaway layout: groups packed from DS11 in order, slots in case order.
+        """Return a throwaway layout with groups packed from DS11 in order and slots in case order.
 
-        For harness tests and quick local runs only.  Adding a case moves every
+        Use it for harness tests and quick local runs only.  Adding a case moves every
         later register, so programs for a real CLICK use a checked-in manifest.
         """
         layouts: dict[str, GroupLayout] = {}
@@ -128,7 +129,7 @@ class Manifest:
         return cls(groups=layouts, source="packed layout")
 
     def layout_for(self, group: Group) -> GroupLayout:
-        """The group's block, or :class:`ManifestError` telling the developer what to add."""
+        """Return the group's block, or raise :class:`ManifestError` that says what to add."""
         wire = [c.id for c in group.cases if c.in_process_only is None]
         layout = self.groups.get(group.name)
         if layout is None:
@@ -163,7 +164,7 @@ class Manifest:
 
 
 def load_manifest(path: str | Path) -> Manifest:
-    """Read and validate a manifest TOML file."""
+    """Read and validate a manifest TOML file, and return the :class:`Manifest`."""
     p = Path(path)
     with p.open("rb") as handle:
         data = tomllib.load(handle)

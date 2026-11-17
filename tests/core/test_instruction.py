@@ -1913,7 +1913,7 @@ class TestBlockCopyTextModes:
         assert new_state.tags["DS3"] == 3
 
     def test_blockcopy_to_value_failure_sets_out_of_range_and_skips_the_bad_character(self):
-        """A CLICK reading: the bad slot keeps what it held, the others are written."""
+        """On a real CLICK, the bad slot keeps its old value and the other slots are written."""
         from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import BlockCopyInstruction
 
@@ -2059,10 +2059,10 @@ class TestNopInstruction:
 
 
 class TestBlankCharIsNul:
-    """A blank TXT is NUL: a CLICK TXT is one byte, with no separate empty state.
+    """A blank TXT is NUL. A CLICK TXT is one byte and has no separate empty state.
 
-    ``fill("")`` and ``reset()`` blank a CHAR to the same NUL an unwritten one
-    holds, so Copy ASCII Code Value of it writes 0 instead of nothing.
+    ``fill("")`` and ``reset()`` blank a CHAR to the NUL that an unwritten CHAR already
+    holds. Copy ASCII Code Value of a blanked CHAR therefore writes 0, not nothing.
     """
 
     @staticmethod

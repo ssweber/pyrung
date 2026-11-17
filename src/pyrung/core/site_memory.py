@@ -1,43 +1,44 @@
 """Site identity: every place in a program that keeps memory across scans.
 
-A CLICK keeps one memory cell per *place* in the program: a one-shot coil, a
-drum's jump leg, an edge contact.  pyrung names those places here, once per
-program, so every consumer (interpreter, compiled kernel, static facts, hot reload)
-uses the same names.
+A CLICK keeps one memory cell for each *place* in the program: a one-shot coil, a
+drum's jump leg, an edge contact.  This module names those places once per
+program. The interpreter, the compiled kernel, the static facts and hot reload all
+use the same names.
 
 :func:`bind_sites` walks a program in solve order and returns a
 :class:`SiteTable`:
 
-- **Instruction sites** keep the ``i{N}`` keys ``Program`` has always assigned
-  (walk order: each rung's instructions, then its branches; a For loop's
-  flattened body follows the loop).  ``Instruction.memory_key(prefix)`` gives
+- **Instruction sites** keep the ``i{N}`` keys that ``Program`` has always assigned.
+  The walk visits each rung's instructions, then its branches. A For loop's
+  flattened body follows the loop.  ``Instruction.memory_key(prefix)`` returns
   ``prefix:i{N}``.
 - **Edge sites** (``rise()`` / ``fall()`` contacts) get ``e{N}`` in solve
-  order: a rung's contacts, then its items in source order (a branch's local
-  contacts and items, an instruction's helper legs such as a counter's reset or
-  a drum's jump, a For loop's body rows).  Each keeps one memory cell,
-  ``_edge:e{N}``: the contact's bit as that contact last saw it.  An edge
-  condition object met at a second site is copied, so each edge object stands
-  for exactly one site.
+  order. That order is a rung's contacts, then its items in source order: a branch's
+  local contacts and items, an instruction's helper legs (such as a counter's reset
+  or a drum's jump), and a For loop's body rows.  Each edge site has one memory
+  cell, ``_edge:e{N}``, which holds the bit the contact saw last.  If an edge
+  condition object appears at a second site, the walk copies it, so each edge
+  object belongs to exactly one site.
 
 Overlays get their own namespace, so their keys never collide with the user
-program's: plant rungs are ``plant:i{N}`` / ``plant:e{N}``, PILOT holds are
-``pilot:i{N}`` / ``pilot:e{N}``.  The harness keys each of its coils by the
+program's. Plant rungs use ``plant:i{N}`` and ``plant:e{N}``. PILOT holds use
+``pilot:i{N}`` and ``pilot:e{N}``.  The harness keys each of its coils by the
 feedback it drives (``plant:fb.{name}``).  An instruction that was never bound has no
-key, and asking for one raises (there is no ``id()`` fallback).
+key. Asking for one raises, and there is no ``id()`` fallback.
 
 Every site records a fingerprint ``(scope, source line, kind, operands)`` and
-its contacts (an edge also its row as source text), so hot reload can carry
-memory to the matching site of the new program, and drop it where no site
-matches unambiguously (:func:`remap_site_memory`); an instruction's inputs as it
-last saw them (its rung, its helper legs) also follow an edit of what it reads.
-An edge site with no match in the old program (added or edited) starts from its
-tag's current value (:func:`seed_new_edge_memory`).
+its contacts. An edge site also records its row as source text. Hot reload uses
+these to carry memory to the matching site of the new program
+(:func:`remap_site_memory`), and drops the memory where no site matches
+unambiguously.  An instruction's inputs as it last saw them (its rung and its
+helper legs) also follow an edit of what the instruction reads.
+An edge site with no match in the old program, because it was added or edited,
+starts from its tag's current value (:func:`seed_new_edge_memory`).
 
-Keys are stamped on the objects.  A bound object is never renamed: a bare rung
-list whose objects would clash (rungs of two programs, or of two lists) is
-bound as a copy (:func:`bind_logic_list`), so a program, and every runner
-already scanning its rungs, keeps its keys.
+The keys are stamped on the objects, and a bound object is never renamed. If a bare
+rung list holds objects that would clash (rungs of two programs, or of two lists),
+:func:`bind_logic_list` binds a copy. A program, and every runner already scanning
+its rungs, keeps its keys.
 """
 
 from __future__ import annotations
@@ -67,10 +68,10 @@ contact last saw it (off at RUN)."""
 SITE_INSTRUCTION = "instruction"
 SITE_EDGE = "edge"
 
-# Instruction fields that carry the rung's own power (the conjunction of the
-# rung's contacts, captured when the instruction was built).  Their edges are
-# the rung's contacts, not sites of their own.  Every other ``_conditions``
-# field is a helper leg (reset, jump, jog, clock, events, a counter's down leg).
+# These instruction fields hold the rung's own power: the conjunction of the rung's
+# contacts, captured when the instruction was built.  Their edges are the rung's
+# contacts, not sites of their own.  Every other ``_conditions`` field is a helper
+# leg (reset, jump, jog, clock, events, a counter's down leg).
 _POWER_FIELDS = frozenset(
     {"enable_condition", "_enable_condition", "up_condition", "data_condition", "auto_condition"}
 )
@@ -79,7 +80,7 @@ _POWER_FIELDS = frozenset(
 def _is_power_field(instr: Any, name: str) -> bool:
     if name in _POWER_FIELDS:
         return True
-    # A down counter's count input is its rung; an up counter's ``down_condition``
+    # A down counter's count input is its rung. On an up counter, ``down_condition``
     # is the ``.down()`` helper leg.
     from pyrung.core.instruction.counters import CountDownInstruction
 
@@ -140,7 +141,7 @@ class SiteTable:
         self._by_key.update({s.key: s for s in self.sites})
 
     def site(self, key: str) -> Site:
-        """The site named *key*; raises ``KeyError`` for an unknown key."""
+        """Return the site named *key*, or raise ``KeyError`` if there is none."""
         return self._by_key[key]
 
     @property
@@ -152,11 +153,11 @@ class SiteTable:
         return tuple(s for s in self.sites if s.site == SITE_EDGE)
 
     def sites_reading(self, tag_name: str) -> tuple[Site, ...]:
-        """Edge sites whose contact reads *tag_name*."""
+        """Return the edge sites whose contact reads *tag_name*."""
         return tuple(s for s in self.edge_sites if s.tag == tag_name)
 
     def memory_defaults(self) -> dict[str, Any]:
-        """Every memory key the sites own, with the value an unwritten key reads as."""
+        """Return every memory key the sites own, with the value an unwritten key reads as."""
         return {name: default for s in self.sites for name, default in s.memory}
 
 
@@ -165,11 +166,11 @@ def namespaced(namespace: str, local_key: str) -> str:
 
 
 def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
-    """``(prefix, default)`` for each memory cell *instr* keeps under its site key.
+    """Return ``(prefix, default)`` for each memory cell *instr* keeps under its site key.
 
-    The default is the value the interpreter and the compiled kernel read for a
-    key that was never written (``get(key, default)``), so an absent key and a
-    key holding its default are the same state.
+    The default is the value that the interpreter and the compiled kernel read for a
+    key that was never written (``get(key, default)``). A missing key and a key that
+    holds its default are therefore the same state.
     """
     from pyrung.core.instruction.advanced import ShiftInstruction
     from pyrung.core.instruction.counters import (
@@ -208,7 +209,7 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
     if isinstance(instr, _DrumBaseInstruction):
         slots.append(("_drum_jump_prev", False))
         slots.append(("_drum_jog_prev", False))
-        # Its rung as the last scan left it: a false-to-true writes the outputs.
+        # The rung as the last scan left it. A false-to-true change writes the outputs.
         slots.append(("_drum_rung_prev", False))
     if isinstance(instr, EventDrumInstruction):
         slots.append(("_drum_event_prev", False))
@@ -217,7 +218,7 @@ def instruction_memory(instr: Instruction) -> tuple[tuple[str, Any], ...]:
 
 
 def _timer_carries(instr: Instruction) -> tuple[tuple[str, int], ...]:
-    """``(_frac key, nanoseconds to a unit)`` for each accumulator *instr* ticks."""
+    """Return ``(_frac key, nanoseconds to a unit)`` for each accumulator *instr* ticks."""
     unit = getattr(instr, "unit", None)
     if not isinstance(unit, TimeUnit):
         return ()
@@ -255,7 +256,7 @@ def _operand_text(value: Any) -> str:
 
 
 def _operand_texts(instr: Instruction) -> dict[str, str]:
-    """Each operand field of *instr* (reads, then writes) -> its source text."""
+    """Map each operand field of *instr*, reads then writes, to its source text."""
     fields = dict.fromkeys(type(instr)._reads + type(instr)._writes)
     return {name: _operand_text(getattr(instr, name, None)) for name in fields}
 
@@ -265,15 +266,17 @@ def _instruction_operands(instr: Instruction) -> tuple[str, ...]:
 
 
 def _leg_text(instr: Instruction, name: str) -> str:
-    """Helper leg *name* of *instr* (a condition, or a tuple of them) as source text."""
+    """Return helper leg *name* of *instr*, a condition or a tuple of them, as text."""
     value = getattr(instr, name, None)
     items = value if isinstance(value, tuple) else (value,)
     return ", ".join("None" if item is None else _contacts_text((item,))[0] for item in items)
 
 
 def _row_text(rung: Rung) -> tuple[str, ...]:
-    """A top-level rung as source text: its contacts and instructions in order
-    (branches and For bodies included)."""
+    """Return a top-level rung as source text: its contacts and instructions in order.
+
+    Branches and For bodies are included.
+    """
     from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.rung import Rung as RungLogic
 
@@ -344,7 +347,7 @@ def _iter_edges(cond: Any) -> Iterable[Any]:
             yield from _iter_edges(child)
 
 
-# Owner of every binding no program owns (a bare rung list, an overlay).
+# The owner of every binding that no program owns, such as a bare rung list or an overlay.
 _UNOWNED = object()
 
 
@@ -365,24 +368,25 @@ class _Binder:
         self.only_unbound = only_unbound
         self.program_owned = program_owned
         self.owner: object = owner if owner is not None else _UNOWNED
-        # only_unbound: the one object allowed to keep each key it already
-        # carries, and every key some object of the list carries (a fresh key
-        # never takes one of those).
+        # Used only when only_unbound is set. ``keepers`` maps each key to the one object
+        # allowed to keep it. ``reserved`` holds every key that some object of the list
+        # carries, so a fresh key never takes one of those.
         self.keepers: Mapping[str, Any] = keepers or {}
         self.reserved = reserved
         self.fresh_counts = {"i": 0, "e": 0}
         self.sites: list[Site] = []
         self.instruction_count = 0
         self.edge_count = 0
-        # Edge objects claimed by this run, by identity.
+        # The edge objects that this run has claimed, by identity.
         self.claimed: set[int] = set()
-        # Per top-level rung: replaced condition objects (old id -> new) and the
-        # edge objects that are this rung tree's own contacts.
+        # For the current top-level rung, ``subst`` maps the id of each replaced condition
+        # object to its replacement. ``rung_edges`` holds the edge objects that are
+        # this rung tree's own contacts.
         self.subst: dict[int, Any] = {}
         self.rung_edges: set[int] = set()
         self.scope = "main"
         self.row = 0
-        # The top-level rung being bound, and its source text once an edge asks.
+        # The top-level rung being bound. Its source text is built when an edge first asks.
         self.row_rung: Any = None
         self.row_text: tuple[str, ...] | None = None
 
@@ -396,20 +400,25 @@ class _Binder:
                 return key
 
     def _keeps(self, obj: Any, key: str | None) -> bool:
-        """only_unbound: *obj* keeps the key it carries (it is that key's keeper)."""
+        """Return whether, under only_unbound, *obj* is the keeper of the key it carries."""
         return self.only_unbound and key is not None and self.keepers.get(key) is obj
 
     def foreign(self, obj: Any) -> bool:
-        """Whether another binding stamped *obj*: its keys are that binding's, so
-        this one must work on a copy, never re-key the object in place."""
+        """Return whether another binding stamped *obj*.
+
+        The keys on *obj* belong to that binding. This binding must work on a copy and
+        never re-key the object in place.
+        """
         if self.only_unbound:
             return False
         owner = getattr(obj, "_site_owner", None)
         return owner is not None and owner is not self.owner
 
     def holds_foreign(self, rung: Any) -> bool:
-        """Whether *rung*, a rung of its tree or an instruction in it is another
-        binding's (a rung or instruction object shared with another program)."""
+        """Return whether *rung*, a rung of its tree or an instruction in it is another binding's.
+
+        That happens when a rung or instruction object is shared with another program.
+        """
         from pyrung.core.instruction.control import ForLoopInstruction
         from pyrung.core.rung import Rung as RungLogic
 
@@ -433,8 +442,10 @@ class _Binder:
         return _rung(rung)
 
     def stamp_rungs(self, rungs: Sequence[Rung]) -> None:
-        """Mark every rung of *rungs*' trees as this binding's (a list bound as
-        it is, ``only_unbound``, takes nothing over)."""
+        """Mark every rung in the trees of *rungs* as this binding's.
+
+        A list bound as it is (``only_unbound``) takes nothing over.
+        """
         if self.only_unbound:
             return
         from pyrung.core.instruction.control import ForLoopInstruction
@@ -456,7 +467,10 @@ class _Binder:
     # -- instruction keys ---------------------------------------------------
 
     def number_instructions(self, rungs: Sequence[Rung], scope: str) -> None:
-        """Assign ``i{N}`` in the order ``Program`` always has (keys never renumber)."""
+        """Assign ``i{N}`` keys in the order that ``Program`` has always used.
+
+        Keys never renumber.
+        """
         from pyrung.core.instruction.control import ForLoopInstruction
         from pyrung.core.rung import Rung as RungLogic
 
@@ -470,8 +484,8 @@ class _Binder:
                 self.instruction_count += 1
                 key: str | None = instr._state_key
                 if key is None or not self._keeps(instr, key):
-                    # bind_sites copied every rung holding another binding's
-                    # instruction, so this one is this binding's to re-key.
+                    # bind_sites copied every rung that held another binding's
+                    # instruction, so this binding can re-key this one.
                     assert not self.foreign(instr)
                     key = self._fresh_key("i", self.instruction_count)
                     instr._state_key = key
@@ -530,22 +544,22 @@ class _Binder:
     def _claim(self, cond: Any, leg: str, line_hint: int | None) -> Any:
         """Claim every edge in *cond* as a site at *leg*; return the condition to keep.
 
-        A tree with no edge claimed before comes back unchanged.  Otherwise the
-        path to each already-claimed edge is copied (tags are shared, not
-        copied) and the copy is returned.
+        If no edge in the tree was claimed before, return the tree unchanged.
+        Otherwise copy the path to each edge that was already claimed, and return the
+        copy.  The copy shares the tags.
         """
         kind = _edge_kind(cond)
         if kind is not None:
             owner = getattr(cond, "_site_key", None)
             self.edge_count += 1
             if id(cond) not in self.claimed and self._keeps(cond, owner):
-                # Bound by the program this rung came from: keep its key.
+                # The program that this rung came from bound it, so it keeps its key.
                 assert owner is not None
                 key = owner
             else:
-                # A second site, or an edge another binding (another program,
-                # a bare list a runner scans, another namespace) already keyed,
-                # gets an object of its own: that binding keeps its key.
+                # A second site gets an object of its own. So does an edge that another
+                # binding already keyed (another program, a bare list that a runner scans,
+                # another namespace). That binding keeps its key.
                 if id(cond) in self.claimed or (
                     not self.only_unbound
                     and owner is not None
@@ -592,7 +606,10 @@ class _Binder:
         return self.row_text
 
     def _substituted(self, cond: Any) -> Any:
-        """*cond* with this rung tree's replaced contacts swapped in (never mutates)."""
+        """Return *cond* with this rung tree's replaced contacts swapped in.
+
+        It does not change *cond*.
+        """
         if cond is None:
             return None
         replaced = self.subst.get(id(cond))
@@ -694,8 +711,8 @@ class _Binder:
         new = self._substituted(value)
         if new is not value:
             swapped[id(value)] = new
-        # An edge in the power field that is not one of the rung's contacts
-        # (an instruction built by hand) is a site of its own.
+        # An edge in the power field that is not one of the rung's contacts is a site
+        # of its own. This happens when an instruction was built by hand.
         if any(id(e) not in self.rung_edges for e in _iter_edges(new)):
             claimed = self._claim_foreign_power(new, leg, line)
             if claimed is not new:
@@ -734,19 +751,19 @@ def bind_sites(
     _keepers: Mapping[str, Any] | None = None,
     _reserved: frozenset[str] = frozenset(),
 ) -> SiteTable:
-    """Name every memory-keeping site of a program; stamp the keys on its objects.
+    """Name every memory-keeping site of a program and stamp the keys on its objects.
 
-    Instructions get ``_state_key`` (``i{N}``), edge conditions ``_site_key``
-    (``e{N}``), both prefixed ``namespace:`` outside the user program.  Main
-    rungs come first, then subroutines in definition order.  Rebinding the same
-    rungs reproduces the same keys.  *program_owned* marks the keys as a
-    ``Program``'s; *owner* is the binding's owner (the ``Program``).
+    Each instruction gets a ``_state_key`` (``i{N}``) and each edge condition gets a
+    ``_site_key`` (``e{N}``). Outside the user program, both have a ``namespace:``
+    prefix.  Main rungs come first, then subroutines in definition order.  Binding the
+    same rungs again produces the same keys.  *program_owned* marks the keys as a
+    ``Program``'s. *owner* is the owner of this binding, which is the ``Program``.
 
-    Keys are never re-stamped on another owner's objects: an edge another
-    binding keyed is copied before this one keys it, and a rung of *rungs* or
-    *subroutines* whose tree holds another binding's rung or instruction is
-    replaced (in that list) by a structural copy, so the other program, and a
-    runner already scanning it, keep their keys.
+    This function never re-stamps keys on another owner's objects. If an edge was keyed
+    by another binding, it copies the edge before it keys it. If the tree of a rung in
+    *rungs* or *subroutines* holds another binding's rung or instruction, it replaces
+    that rung in the list with a structural copy. The other program, and any runner
+    already scanning it, keep their keys.
     """
     binder = _Binder(
         namespace,
@@ -769,7 +786,7 @@ def bind_sites(
     for _scope, scope_rungs in scopes:
         binder.stamp_rungs(scope_rungs)
         for rung in scope_rungs:
-            # Keys may have changed: each row rebuilds its edge frame when scanned next.
+            # The keys may have changed, so each row rebuilds its edge frame on its next scan.
             rung._edge_frame = None
     instruction_sites = [s for s in binder.sites if s.site == SITE_INSTRUCTION]
     edge_sites = [s for s in binder.sites if s.site == SITE_EDGE]
@@ -777,8 +794,10 @@ def bind_sites(
 
 
 def _own_copies(binder: _Binder, rungs: Sequence[Rung]) -> None:
-    """Replace each rung of *rungs* that holds another binding's rung or
-    instruction with a structural copy of it (see :func:`bind_sites`)."""
+    """Replace each rung of *rungs* that holds another binding's rung or instruction.
+
+    The replacement is a structural copy of the rung. See :func:`bind_sites`.
+    """
     memo: dict[int, Any] = {}
     for index, rung in enumerate(rungs):
         if not binder.holds_foreign(rung):
@@ -793,11 +812,11 @@ def _own_copies(binder: _Binder, rungs: Sequence[Rung]) -> None:
 
 
 def _list_site_holders(rungs: Sequence[Rung]) -> list[tuple[Any, str | None]]:
-    """Every site object of *rungs* with the key it carries, once per place it sits.
+    """Return every site object of *rungs* with the key it carries, once per place it sits.
 
-    An object at two places appears twice (an edge object shared by two
-    contacts, a rung listed twice).  A power field's edges that are the rung's
-    own contacts are not places of their own; they are skipped.
+    An object at two places appears twice, such as an edge object that two contacts
+    share or a rung that is listed twice.  The edges in a power field that are the
+    rung's own contacts are not places of their own, so this function skips them.
     """
     from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.rung import Rung as RungLogic
@@ -843,9 +862,10 @@ def _list_site_holders(rungs: Sequence[Rung]) -> list[tuple[Any, str | None]]:
 
 
 def _bound_as_is(rungs: Sequence[Rung]) -> bool | None:
-    """Whether every site of *rungs* already carries a key no other place carries.
+    """Return whether every site of *rungs* already carries a key that no other place carries.
 
-    ``None`` when no site is bound at all (a list of fresh rungs).
+    Return ``None`` when no site is bound at all, which is the case for a list of fresh
+    rungs.
     """
     holders = _list_site_holders(rungs)
     if all(key is None for _obj, key in holders):
@@ -861,7 +881,10 @@ def _bound_as_is(rungs: Sequence[Rung]) -> bool | None:
 
 
 def _copy_condition(cond: Any, memo: dict[int, Any]) -> Any:
-    """*cond* with every edge (and every composite holding one) copied; the rest shared."""
+    """Return *cond* with every edge, and every composite that holds one, copied.
+
+    The other conditions are shared with *cond*.
+    """
     if cond is None:
         return None
     done = memo.get(id(cond))
@@ -941,20 +964,22 @@ def _copy_rung(rung: Any, memo: dict[int, Any]) -> Any:
 
 
 def copy_rungs(rungs: Sequence[Rung]) -> list[Rung]:
-    """A structural copy of *rungs*, unbound: rungs, instructions and edge contacts
-    are new objects; tags and every condition without an edge are shared."""
+    """Return an unbound structural copy of *rungs*.
+
+    The rungs, instructions and edge contacts are new objects. The tags, and every
+    condition that has no edge, are shared with the original.
+    """
     memo: dict[int, Any] = {}
     return [_copy_rung(rung, memo) for rung in rungs]
 
 
 def private_edges(cond: Any, namespace: str) -> tuple[Any, tuple[Any, ...]]:
-    """*cond* with each edge contact copied and keyed ``{namespace}:e{N}``, and
-    those copies.
+    """Return *cond* with each edge contact copied and keyed ``{namespace}:e{N}``, and the copies.
 
-    For a condition judged outside the scan (``run_until()``, ``when()``): its
-    edges are no program's contacts, so they get keys of their own, and the
-    caller keeps their memory.  *cond* and any program holding its edges are
-    left as they were.
+    Use this for a condition that is judged outside the scan, such as in ``run_until()``
+    or ``when()``.  Its edges are not any program's contacts, so they get keys of their
+    own, and the caller keeps their memory.  This function does not change *cond* or any
+    program that holds its edges.
     """
     copied = _copy_condition(cond, {})
     edges: list[Any] = []
@@ -969,21 +994,22 @@ def private_edges(cond: Any, namespace: str) -> tuple[Any, tuple[Any, ...]]:
 
 
 def bind_logic_list(rungs: Sequence[Any]) -> tuple[list[Any], SiteTable]:
-    """Bind rungs handed to ``PLC`` as a bare list; return the rungs to scan and
-    their table.
+    """Bind rungs that were handed to ``PLC`` as a bare list.
+
+    Return the rungs to scan and their table.  There are three cases.
 
     - A list of fresh rungs binds in place, like a program (``i{N}``/``e{N}``).
-    - A list whose every site already carries a key no other site of the list
-      carries (one program's rungs, a list bound before, or a slice of one)
-      keeps those keys; nothing is renamed.
-    - Anything else (rungs of two programs or of two lists, fresh rungs mixed
-      with bound ones, one rung listed twice) is copied and the copy bound
-      fresh.  The originals keep their keys, so a program, or another runner
-      scanning the same rung objects, never sees its keys change.
+    - Suppose every site in the list already carries a key that no other site of the
+      list carries. This is true of one program's rungs, a list that was bound before,
+      and a slice of one.  The list keeps those keys, and nothing is renamed.
+    - Any other list is copied, and the copy is bound fresh.  This covers rungs of two
+      programs or of two lists, fresh rungs mixed with bound ones, and one rung listed
+      twice.  The originals keep their keys. A program, or another runner that scans
+      the same rung objects, never sees its keys change.
     """
     from pyrung.core.rung import Rung as RungLogic
 
-    # A stand-in object scanned through ``evaluate()`` keeps no site memory.
+    # A stand-in object that is scanned through ``evaluate()`` keeps no site memory.
     scanned = rungs if isinstance(rungs, list) else list(rungs)
     real = [rung for rung in scanned if isinstance(rung, RungLogic)]
     state = _bound_as_is(real)
@@ -998,23 +1024,26 @@ def bind_logic_list(rungs: Sequence[Any]) -> tuple[list[Any], SiteTable]:
 
 
 def site_table_of(logic: Any) -> SiteTable | None:
-    """The site table bound for *logic* (a ``Program`` or a ``PLC``), if any."""
+    """Return the site table bound for *logic*, a ``Program`` or a ``PLC``, or ``None``."""
     table = getattr(logic, "_site_table", None)
     return table if isinstance(table, SiteTable) else None
 
 
 def _match_sites(old: Sequence[Site], new: Sequence[Site]) -> dict[str, str]:
-    """Old site key -> new site key, for the sites reload may carry memory between.
+    """Map old site keys to new site keys, for the sites that reload may carry memory between.
 
-    1. Exact fingerprint ``(scope, line, kind, operands)`` plus the site's
-       contacts and (an edge) its row's text: groups of the same size pair in
-       source order (one source line that builds several rungs, such as a
-       helper called in a loop).
-    2. The rest, with the line ignored: ``(scope, kind, operands, contacts,
-       row text)`` pairs only when exactly one old and one new site have it, so
-       an edit that shifts lines keeps the memory of the sites it did not touch.
+    Matching runs in two passes.
 
-    Anything else is unmatched; its memory is dropped, not guessed.
+    1. Match the exact fingerprint ``(scope, line, kind, operands)`` plus the site's
+       contacts and, for an edge, its row's text.  Groups of the same size pair up in
+       source order. One source line can build several rungs, for example a helper
+       that is called in a loop.
+    2. Match the remaining sites with the line ignored, on ``(scope, kind, operands,
+       contacts, row text)``.  A pair matches only when exactly one old site and one
+       new site have that value. An edit that shifts lines therefore keeps the memory
+       of the sites it did not touch.
+
+    Any other site is unmatched. Its memory is dropped and never guessed.
     """
     matched: dict[str, str] = {}
 
@@ -1089,7 +1118,7 @@ _RUNG = ""
 
 
 def _input_leg(site: Site, prefix: str) -> str:
-    """The helper leg *prefix* holds on *site*, or :data:`_RUNG` for its rung."""
+    """Return the helper leg that *prefix* holds on *site*, or :data:`_RUNG` for its rung."""
     leg = _LEG_INPUT_MEMORY.get(prefix)
     if leg is None or (site.instruction is not None and _is_power_field(site.instruction, leg)):
         # A down counter's count input is its rung.
@@ -1100,16 +1129,18 @@ def _input_leg(site: Site, prefix: str) -> str:
 def _match_input_memory(
     old: Sequence[Site], new: Sequence[Site], matched: Mapping[str, str]
 ) -> dict[str, dict[str, str]]:
-    """Leg (:data:`_RUNG` for the rung) -> old site key -> new site key, for the
-    input memory (:data:`_INPUT_MEMORY`) of sites :func:`_match_sites` left unmatched.
+    """Pair the input memory of sites that :func:`_match_sites` left unmatched.
 
-    Rung memory depends on the instruction's contacts alone, so it follows a site
-    whose read operands changed (a preset, a source) when exactly one old and one new
-    site share its scope, kind, written operands and contacts.  A leg's memory also
-    needs that leg's text unchanged, and is paired on it.  Without it a held input
-    would read as a rising edge after reload: a timed coil or a one-shot would fire
-    again, a counter count once more, a flasher restart.  A changed target or contact
-    drops all of it; a changed leg drops that leg's memory.
+    The input memory is :data:`_INPUT_MEMORY`.  The result maps a leg (:data:`_RUNG` for
+    the rung) to a map from old site key to new site key.
+
+    Rung memory depends only on the instruction's contacts. It follows a site whose read
+    operands changed (a preset, a source) when exactly one old site and one new site
+    share its scope, kind, written operands and contacts.  A leg's memory is also paired
+    on that leg's text, so the text must be unchanged.  Without this pairing, a held
+    input would read as a rising edge after reload. A timed coil or a one-shot would
+    fire again, a counter would count once more, and a flasher would restart.  A changed
+    target or contact drops all of the memory. A changed leg drops that leg's memory.
     """
     used = set(matched.values())
     unmatched_old = [site for site in old if site.key not in matched]
@@ -1153,11 +1184,12 @@ _OVERLAY_NAMESPACES = frozenset({PLANT_NAMESPACE, PILOT_NAMESPACE})
 
 
 def _is_overlay_memory(name: str) -> bool:
-    """Memory of a plant/PILOT overlay site (``_oneshot:pilot:i3``).
+    """Return whether *name* is the memory of a plant or PILOT overlay site.
 
-    A harness coil's memory (``_toggle:plant:fb.Lamp``) is not.  Its key names the
-    feedback it drives, so the coil rebuilt for the new program finds it.  Dropped, a
-    toggle or timed coil whose enable is on would see a rise on the first scan.
+    An example is ``_oneshot:pilot:i3``.  A harness coil's memory, such as
+    ``_toggle:plant:fb.Lamp``, is not overlay memory.  Its key names the feedback that it
+    drives, so the coil rebuilt for the new program finds it.  If reload dropped it, a
+    toggle or timed coil with its enable on would see a rise on the first scan.
     """
     if f":{PLANT_FEEDBACK_SITE}" in name:
         return False
@@ -1183,7 +1215,7 @@ def remap_site_memory(
 ) -> tuple[dict[str, Any], tuple[str, ...]]:
     """Carry site memory to the matching sites of a new program.
 
-    Returns ``(memory, dropped keys)``.  See :func:`remap_site_memory_report`.
+    Return ``(memory, dropped keys)``.  See :func:`remap_site_memory_report`.
     """
     report = remap_site_memory_report(memory, old, new)
     return report.memory, report.dropped
@@ -1196,16 +1228,16 @@ def remap_site_memory_report(
 ) -> SiteMemoryRemap:
     """Carry site memory to the matching sites of a new program.
 
-    Memory of a site of *old* moves to the site of *new* that
-    :func:`_match_sites` pairs it with, or is dropped.  Memory of overlay
-    sites (``plant:`` / ``pilot:``) is dropped too: the overlays are rebuilt
-    for the new program.  A harness coil's memory (``plant:fb.{name}``) is kept.
-    Edge memory (``_edge:e{N}``) is site memory like any other.  A site left
-    unmatched still carries its input memory to an edited
-    counterpart (:func:`_match_input_memory`).  Other memory (timer carries,
-    system memory) is kept as is, except that a carry is cut to below one unit of
-    its timer in *new*: it is less than a unit by what it means, and an edit to the
-    timer's unit must not finish the timer.
+    The memory of a site in *old* moves to the site in *new* that :func:`_match_sites`
+    pairs it with. If there is no such site, the memory is dropped.  The memory of overlay
+    sites (``plant:`` and ``pilot:``) is dropped too, because the overlays are rebuilt for
+    the new program.  A harness coil's memory (``plant:fb.{name}``) is kept.
+    Edge memory (``_edge:e{N}``) is site memory like any other.  A site that is left
+    unmatched still passes its input memory to its edited counterpart
+    (:func:`_match_input_memory`).  Other memory, such as timer carries and system memory,
+    is kept as it is, with one exception.  A carry is cut to below one unit of its timer
+    in *new*, for two reasons. By definition, a carry is less than one unit. And an edit
+    to the timer's unit must not finish the timer.
     """
     owned: dict[str, tuple[str, str]] = {}
     if old is not None:
@@ -1255,17 +1287,18 @@ def seed_new_edge_memory(
     new: SiteTable | None,
     tags: Mapping[str, Any],
 ) -> tuple[dict[str, Any], tuple[Site, ...]]:
-    """*memory* with every edge site of *new* that no site of *old* matches
-    seeded from its tag's value in *tags*.
+    """Return *memory* with every unmatched edge site of *new* seeded from its tag's value.
 
-    Run after :func:`remap_site_memory` on reload: an edge contact the new
-    program adds (or one edited so it no longer matches) then starts as if it
-    had seen its tag last scan, so a held bit never rises (or falls) just
-    because the program was reloaded.  A matched site keeps what the remap
-    gave it, including no memory at all: a contact that has only seen its tag
-    off has never written its memory, and must still see a rise.  A site whose
-    tag *tags* does not hold is left to its default.  Returns ``(memory,
-    seeded sites)``.
+    An unmatched site is one that no site of *old* matches.  The value comes from *tags*.
+    Return ``(memory, seeded sites)``.
+
+    Call this after :func:`remap_site_memory` on reload.  An edge contact that the new
+    program adds, or that was edited so it no longer matches, then starts as if it had
+    seen its tag on the last scan. A held bit therefore never rises or falls just because
+    the program was reloaded.  A matched site keeps what the remap gave it, even when that
+    is no memory at all. A contact that has only seen its tag off has never written its
+    memory, and it must still see a rise.  A site whose tag is not in *tags* keeps its
+    default.
     """
     out = dict(memory)
     if new is None:
@@ -1287,13 +1320,13 @@ LEGACY_EDGE_PREFIX = "_prev:"
 
 
 def migrate_legacy_edge_memory(state: Any, table: SiteTable | None) -> Any:
-    """*state* with pyrung's old per-tag edge history moved to edge sites.
+    """Return *state* with pyrung's old per-tag edge history moved to edge sites.
 
-    Before edge memory was kept per contact, ``_prev:X`` held X at the end of
-    the previous scan, one entry per tag.  Each such entry seeds the memory of
-    every edge site reading X (``_edge:e{N}``) that *state* does not already
-    hold, and is dropped; with no site reading X it is just dropped.  A state
-    without ``_prev:`` entries is returned as is.
+    Before pyrung kept edge memory for each contact, it kept one ``_prev:X`` entry for
+    each tag, which held X at the end of the previous scan.  This function seeds each
+    such entry into the memory of every edge site that reads X (``_edge:e{N}``) and that
+    *state* does not already hold. Then it drops the entry.  If no site reads X, it just
+    drops the entry.  A state without ``_prev:`` entries is returned as it is.
     """
     memory = state.memory
     legacy = [
@@ -1315,11 +1348,11 @@ def migrate_legacy_edge_memory(state: Any, table: SiteTable | None) -> Any:
 
 
 def program_memory_defaults(program: Any) -> dict[str, Any]:
-    """Every site-memory key of *program* with its unwritten default.
+    """Return every site-memory key of *program* with its unwritten default.
 
-    Reads the program's :class:`SiteTable`; a program that was never bound
-    (assembled by hand) is walked directly, keyed by the keys its instructions
-    carry.
+    This function reads the program's :class:`SiteTable`.  If the program was never bound
+    because it was assembled by hand, the function walks it directly and uses the keys
+    that its instructions carry.
     """
     table = site_table_of(program)
     if table is not None:
@@ -1338,21 +1371,24 @@ def program_memory_defaults(program: Any) -> dict[str, Any]:
 
 # -- edge frames: which edge sites a row scans ------------------------------
 #
-# A row is a trunk (a top-level rung's own contacts, main or subroutine; a
-# continued rung is a trunk of its own), a branch (its local contacts), a box
-# (an instruction's helper legs: reset, jump, ...), a For loop's body rung, or
-# a bare For-body instruction (a box).  Each row has an edge frame of its own:
-# the edge sites its own contacts hold, in solve order.  When the solve reaches
-# a row, every edge site in it stores the bit its contact sees
-# (``_edge:e{N}``), powered or not (a CLICK updates an edge contact's memory
-# whenever the contact is scanned).  The row's condition view is taken first,
-# so its edges compare the bit against the memory as it was before the row:
-# ``evaluate()`` stays a pure read.  A row below sees the stores of the rows
-# above it, as it sees their writes.
+# A row is one of these:
+# - a trunk, which is the contacts of a top-level rung in main or a subroutine, without
+#   the contacts of its branches (a continued rung is a trunk of its own);
+# - a branch, which is its local contacts;
+# - a box, which is an instruction's helper legs (reset, jump, ...);
+# - a For loop's body rung;
+# - a bare For-body instruction, which is a box.
+# Each row has an edge frame of its own. The frame holds the edge sites that the row's
+# own contacts hold, in solve order.  When the solve reaches a row, every edge site in
+# it stores the bit that its contact sees (``_edge:e{N}``), whether the contact is
+# powered or not.  pyrung does this because a CLICK updates an edge contact's memory
+# whenever it scans the contact.  The row's condition view is taken first, so its edges
+# compare the bit against the memory as it was before the row. That keeps ``evaluate()``
+# a pure read. A row below sees the stores of the rows above it, as it sees their writes.
 
 
 def edge_memory_key(cond: Any) -> str:
-    """``_edge:e{N}`` of an edge condition; raises for an edge never bound."""
+    """Return the ``_edge:e{N}`` key of an edge condition, or raise if it was never bound."""
     key = cond._site_key
     if key is None:
         raise RuntimeError(
@@ -1405,8 +1441,9 @@ def _frame_instruction(instr: Any, contacts: set[int], rows: _Rows) -> None:
         power = _is_power_field(instr, name)
         for item in value if isinstance(value, tuple) else (value,):
             for edge in _iter_edges(item):
-                # A power field's edges are its rung's contacts (scanned with
-                # the row that owns them), unless built by hand.
+                # The edges in a power field are usually its rung's contacts, and the row
+                # that owns those contacts scans them. An instruction built by hand can hold
+                # other edges in a power field. The box's own frame holds those.
                 if not (power and id(edge) in contacts):
                     _frame_add(edge, frame)
     _stamp_row(instr, frame, rows)
@@ -1419,8 +1456,10 @@ def _frame_instruction(instr: Any, contacts: set[int], rows: _Rows) -> None:
 
 
 def _frame_row(rung: Any, rows: _Rows) -> None:
-    """Frame the contacts *rung* adds as a row (a branch: its local ones), not
-    the rows inside it."""
+    """Frame the contacts that *rung* adds as a row, but not the rows inside it.
+
+    For a branch, these are its local contacts.
+    """
     conditions = rung._conditions
     frame: dict[str, Any] = {}
     for index in range(rung._branch_condition_start, len(conditions)):
@@ -1442,13 +1481,13 @@ def _frame_rung(rung: Any, contacts: set[int], rows: _Rows) -> None:
 
 
 def edge_rows(rung: Any) -> _Rows:
-    """``(memory key, edge condition)`` of every row in top-level *rung*, by ``id``.
+    """Return ``(memory key, edge condition)`` for every row in top-level *rung*, by ``id``.
 
-    The rows are *rung*'s trunk, each of its (nested) branches and boxes, and
-    every For-body row inside it (a body rung with its branches and boxes, or
-    a bare body instruction), each with the edge sites its own contacts hold,
-    in solve order.  Also stamps each row's ``_edge_frame`` (``(memory key,
-    tag)`` pairs) for the interpreter, which scans a row's frame when the
+    The rows are *rung*'s trunk, each of its nested branches and boxes, and every
+    For-body row inside it. A For-body row is a body rung with its branches and boxes,
+    or a bare body instruction.  Each row holds the edge sites of its own contacts,
+    in solve order.  This function also stamps each row's ``_edge_frame``, which is a
+    tuple of ``(memory key, tag)`` pairs.  The interpreter scans a row's frame when the
     solve reaches the row.
     """
     contacts: set[int] = set()
@@ -1459,29 +1498,33 @@ def edge_rows(rung: Any) -> _Rows:
 
 
 def build_edge_frames(rung: Any) -> tuple[tuple[str, str], ...]:
-    """``(memory key, tag)`` of the edge sites *rung*'s own row holds (its trunk).
+    """Return ``(memory key, tag)`` for the edge sites in *rung*'s own row, its trunk.
 
-    Also stamps the frame of every row inside it (``_edge_frame``): each
-    branch, box and For-body row, scanned when the solve reaches it.
+    This function also stamps the frame (``_edge_frame``) of every row inside the rung:
+    each branch, box and For-body row.  The solve scans each frame when it reaches the
+    row.
     """
     edge_rows(rung)
     return rung._edge_frame
 
 
 def build_box_frame(instr: Any) -> tuple[tuple[str, str], ...]:
-    """``(memory key, tag)`` of the edge sites box *instr*'s helper legs hold,
-    for a box run outside a framed rung (an instruction unit test)."""
+    """Return ``(memory key, tag)`` for the edge sites in box *instr*'s helper legs.
+
+    Use this for a box that runs outside a framed rung, such as in an instruction unit
+    test.
+    """
     _frame_instruction(instr, set(), {})
     return instr._edge_frame
 
 
 def scan_edge_frame(ctx: Any, view: Any, frame: Sequence[tuple[str, str]]) -> None:
-    """Store, for each edge site of *frame*, the bit its contact sees in *view*.
+    """Store, for each edge site of *frame*, the bit that its contact sees in *view*.
 
-    These are bookkeeping reads, kept out of the read journal: a contact's
-    evaluation reads the same bit and memory from *view*, so the journal holds
-    exactly the reads its conditions make, in their order (as when edge
-    memory was stored at the end of the scan).
+    These are bookkeeping reads, and they stay out of the read journal.  A contact's
+    evaluation reads the same bit and memory from *view*. The journal therefore holds
+    exactly the reads that the conditions make, in their order, as it did when edge
+    memory was stored at the end of the scan.
     """
     sink = getattr(view, "_read_sink", None)
     if sink is not None:
@@ -1492,8 +1535,8 @@ def scan_edge_frame(ctx: Any, view: Any, frame: Sequence[tuple[str, str]]) -> No
             current = bool(view.get_tag(name, False))
             if current != bool(view.get_memory(key, False)):
                 if hold is not None:
-                    # A live view sees the store: keep the memory as it was
-                    # before the row for the row's own edge contacts.
+                    # A live view sees the store. Hold the memory as it was before the
+                    # row, so the row's own edge contacts read the old value.
                     hold(key)
                 ctx.set_memory(key, current)
     finally:
@@ -1502,12 +1545,12 @@ def scan_edge_frame(ctx: Any, view: Any, frame: Sequence[tuple[str, str]]) -> No
 
 
 def edge_memory_seeding(logic: Any, values: Mapping[str, Any]) -> dict[str, bool]:
-    """Edge memory that makes every edge contact on a tag of *values* remember it.
+    """Return edge memory that makes every edge contact on a tag in *values* remember it.
 
-    *logic* is a ``Program`` or a list of rungs.  For each tag name in
-    *values*, every edge site reading the tag gets ``bool(value)``: a
-    hypothetical scan then sees the tag move from that value at each of them,
-    as if the previous scan had ended on it.
+    *logic* is a ``Program`` or a list of rungs.  For each tag name in *values*, every
+    edge site that reads the tag gets ``bool(value)``.  A hypothetical scan then sees the
+    tag move from that value at each of those sites, as if the previous scan had ended
+    on it.
     """
     out: dict[str, bool] = {}
     table = site_table_of(logic)

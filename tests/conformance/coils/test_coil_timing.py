@@ -1,44 +1,48 @@
-"""A debounce's off side: the ``coil_timing`` group (part ``follow_timing``).
+"""Test a debounce's off side: the ``coil_timing`` group (part ``follow_timing``).
 
-Two cases on a debounce's off TD, beside ``deb_zero``'s.
+The group has two cases on a debounce's off TD, beside the cases in ``deb_zero``.
 
-- ``off_td_held``: does a debounce's off TD keep its value while the rung is true?  A debounce of
-  0 / 500 ms, in steps that ``Scratch`` holds.  The reset leaves the off TD timed out (500 ms or
-  more), and the case starts with it so.  A clock (a TON on the debounce's rung) times each spell
-  the rung is on, from 0.  Each step's rungs come below the debounce in reverse order, so each new
-  step starts on the next scan.
+- ``off_td_held`` asks whether a debounce's off TD keeps its value while the rung is true. The
+  debounce is 0 / 500 ms, and the steps are numbered in ``Scratch``. The reset leaves the off TD
+  timed out (500 ms or more), and the case starts from that state. A clock, a TON on the
+  debounce's rung, times each spell that the rung is on, from 0. The rungs for the steps come
+  below the debounce in reverse order, so each step starts on the next scan.
 
   - Step 0: the rung is on until the clock reads 50.
-  - Step 1: the scan the rung falls.  Result3 is 1 if the off TD is under 100, 0 if not.
-  - Step 2: the rung stays off until the off TD reads 100 or more.  Result1 is 1 if the coil is
-    still on then, 0 if it is off.
-  - Step 3: the rung is on again.  Once the clock reads 50, Result2 is 1 if the off TD is still
-    100 or more, 2 if it is 0.  ``Fired`` goes up on that scan.
+  - Step 1: the rung falls on this scan. Result3 is 1 if the off TD is under 100, and 0 if not.
+  - Step 2: the rung stays off until the off TD reads 100 or more. Result1 is 1 if the coil is
+    still on then, and 0 if it is off.
+  - Step 3: the rung is on again. Once the clock reads 50, Result2 is 1 if the off TD is still
+    100 or more, and 2 if it is 0. ``Fired`` goes up on that scan.
 
-  The readings (Result1, Result2, Result3):
+  The readings (Result1, Result2, Result3) can be one of three:
 
   - 1, 2, 1: the rung's rise clears the off TD, and the fall times from 0.
-  - 1, 1, 1: the off TD is held while the rung is true (as for the on side), and a fall starts it
-    from 0.
-  - 0, 1, 0: it is held while the rung is true and a fall resumes it.  It is past its preset at
-    once, and the coil drops on the scan after the fall.
+  - 1, 1, 1: the off TD keeps its value while the rung is true, as the on side does, and a fall
+    starts it from 0.
+  - 0, 1, 0: the off TD keeps its value while the rung is true, and a fall resumes it. It is past
+    its preset at once, and the coil drops on the scan after the fall.
 
   A CLICK reads the first of these, so the off TD is under 100 on the scan of the fall
   (``deb_fall/off_td_at_fall``, 1..2).
-- ``deb_off_against_tof``: a debounce of 0 / 5 ms and a TOF of 5 ms on one rung, on scans 2 and 3.
-  The scan each goes off first (Result1 the debounce, Result2 the TOF, up to 40, 0 for never) and
-  ErrorCode = Result1 - Result2: 1 where the debounce's off side takes a scan more than a TOF of
-  its preset, as ``zero_and_below`` reads at 0, 0 where they agree.  A CLICK reads 6, 5, 1, a scan
-  more.  pyrung reads 5, 4, 1 at the in-process 10 ms scan (on a CLICK the scans are shorter, so
-  the off comes later), so the scans are ranges and ErrorCode is exact.  The reset writes none of
-  the three TDs.  A TOF whose Acc is zeroed while its rung is false keeps its Done on
-  (``timers/tof_times_only_when_false``), so a reset that zeroed them would never see ``ready``
-  (the TOF's Done off).  No case needs that write.  The rung's rise clears the debounce's on TD and the TOF's, and holds the
-  debounce's off TD at 0.  The case lists the three TDs in ``keep`` only because they move
-  after it fires.
+- ``deb_off_against_tof`` puts a debounce of 0 / 5 ms and a TOF of 5 ms on one rung, and uses
+  scans 2 and 3. Result1 is the scan on which the debounce goes off, and Result2 is the scan on
+  which the TOF goes off. Each is at most 40, and 0 means it never went off.
+  ErrorCode = Result1 - Result2. It is 1 when the debounce's off side takes one scan longer than
+  a TOF of the same preset, as ``zero_and_below`` reads at 0. It is 0 when they agree.
 
-pyrung's in-process readings are pinned in ``test_pyrung_reads_the_debounce_lag``.  The cases own
-what ``memory.OWNED_APART`` lists under this group.
+  A CLICK reads 6, 5, 1, so the debounce is one scan later. pyrung reads 5, 4, 1 at the
+  in-process 10 ms scan. A CLICK scans faster, so its off comes later. For that reason the scans
+  are ranges and ErrorCode is exact.
+
+  The reset writes none of the three TDs. A TOF whose Acc is zeroed while its rung is false keeps
+  its Done on (``timers/tof_times_only_when_false``). A reset that zeroed them would then never
+  see ``ready``, which is the TOF's Done off. No case needs that write. The rung's rise clears
+  the debounce's on TD and the TOF's, and holds the debounce's off TD at 0. The case lists the
+  three TDs in ``keep`` only because they move after it fires.
+
+``test_pyrung_reads_the_debounce_lag`` pins the readings that pyrung takes in-process. The cases
+own what ``memory.OWNED_APART`` lists under this group.
 """
 
 from __future__ import annotations
@@ -118,8 +122,9 @@ group = Group(
             "= 1, 0 if it drops)",
             ladder=prove_off_td_held,
             ready=lambda slot: ~c[242],
-            # The off TD is timed out in the reset: what the case starts from, on every repeat.
-            # The on TD is kept after the rung falls, as for any debounce; the next rise starts it from 0.
+            # The reset leaves the off TD timed out, and the case starts from that on every repeat.
+            # The on TD is kept after the rung falls, as for any debounce. The next rise starts
+            # it from 0.
             keep=(td[115], td[116]),
             expect={"Result1": 1, "Result2": 2, "Result3": 1},
             scans=40,
@@ -130,7 +135,7 @@ group = Group(
             "(Result1), the TOF (Result2), the debounce's lag (ErrorCode = 1, 0 on one scan)",
             ladder=prove_deb_off_against_tof,
             ready=lambda slot: (~c[246], ~t[124]),
-            # No init writes these TDs: the TOF's would hold its Done on (see the docstring).
+            # No init writes these TDs. Writing the TOF's would hold its Done on (see the docstring).
             keep=(td[122], td[123], td[124]),
             expect={
                 "Result1": range(5, OFF_WINDOW + 1),
@@ -148,7 +153,7 @@ def test_coil_timing():
 
 
 def test_pyrung_reads_the_debounce_lag():
-    """What pyrung reads at the in-process 10 ms scan."""
+    """Pin what pyrung reads at the in-process 10 ms scan."""
     read = {r.case.id: r.actual for r in run(group)}
     assert read == {
         "off_td_held": {"Result1": 1, "Result2": 2, "Result3": 1},
@@ -158,7 +163,10 @@ def test_pyrung_reads_the_debounce_lag():
 
 @pytest.mark.parametrize("dt", [0.0004, 0.001, 0.010, 0.025, 0.040])
 def test_off_td_held_at_any_scan(monkeypatch, dt):
-    """The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms."""
+    """Check the case at scan times from 0.4 to 40 ms.
+
+    A CLICK scans in about 1 ms or less, and the soft PLC in 10 to 40 ms.
+    """
     monkeypatch.setattr(runner_module, "DT", dt)
     held = next(c for c in group.cases if c.id == "off_td_held")
     assert_all_passed(run(Group("coil_timing", [replace(held, scans=int(0.5 / dt))])))

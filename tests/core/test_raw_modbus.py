@@ -157,7 +157,10 @@ class TestModbusRtuTarget:
 
 
 class TestCLICKV4TargetForms:
-    """CLICK v4's port and Slave ID forms; where CLICK or laddercodec refuses one, so does pyrung."""
+    """Covers CLICK v4's port and Slave ID forms.
+
+    Where CLICK or laddercodec refuses a form, pyrung refuses it too.
+    """
 
     @pytest.mark.parametrize(
         "make",

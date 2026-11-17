@@ -1,17 +1,17 @@
 """A FOR whose count is a Real: the ``for_count`` group, in-process only.
 
-CLICK's editor takes a FOR count from a constant, DS, DD, TD, CTD or SD and
-refuses a DF.  A pasted one stops the PLC.  A CLICK runs the first FOR, over DF496 = 3.0, about
-545000 times (DD601) until a 10 s watchdog raises error 0107, and never reaches the
-+Inf and NaN ones.  That fits the Real's 32 bits read whole, 1077936128 for 3.0.  So no CLICK run can pass
-this, and the case holds what pyrung does with such a count.
+CLICK's editor takes a FOR count from a constant, DS, DD, TD, CTD or SD and refuses a DF.
+A pasted one stops the PLC. A CLICK runs the first FOR, over DF496 = 3.0, about 545000
+times (DD601) until a 10 s watchdog raises error 0107, and never reaches the +Inf and NaN
+ones. That fits the Real's 32 bits read whole, 1077936128 for 3.0. So no CLICK run can
+pass this case. It records what pyrung does with such a count.
 
 - ``non_finite_count``: one FOR each, counted by its body into DD601..DD603,
   over DF496 = 3.0 (Result1), DF497 = +Inf (3.0E+38 * 10; Result2, the count
   copied into an Int, and Result3, the count / 4) and DF498 = NaN (+Inf - +Inf;
   Result4).  ``for_loop_iterations`` truncates a finite Real count and reads it
-  as unsigned 16-bit, as an Int count is, and a non-finite one runs no iteration
-  and raises SC43: 3, 0, 0, 0.
+  as unsigned 16-bit, as it does an Int count.  A non-finite count runs no
+  iteration and raises SC43.  The results are 3, 0, 0, 0.
 """
 
 from __future__ import annotations

@@ -199,7 +199,7 @@ _STEP_LIMIT_NEAR = 0.95
 
 
 def _export_bundle(program: Program, tag_map: TagMap) -> Any:
-    """The export of *program* for the findings that read its rows, or None."""
+    """Return the export of *program* for the findings that read its rows, or None."""
     import warnings
 
     from pyrung.click.ladder import LadderExportError, pyrung_to_ladder
@@ -213,7 +213,7 @@ def _export_bundle(program: Program, tag_map: TagMap) -> Any:
 
 
 def _evaluate_step_limit(bundle: Any, mode: ValidationMode) -> list[ClickFinding]:
-    """CLK_STEP_LIMIT: the estimated program steps exceed, or come near, CLICK's 8000."""
+    """Return a CLK_STEP_LIMIT finding if the estimated steps exceed or near CLICK's 8000."""
     from pyrung.click.ladder.steps import CLICK_STEP_LIMIT, estimate_steps
 
     estimate = estimate_steps(bundle)

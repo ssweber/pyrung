@@ -9,11 +9,11 @@ _BARE_CHECK = "avoided condition"
 
 
 class _AvoidCheckRaised(BaseException):
-    """An avoid check raised on a real state, on its way out of the search to the caller.
+    """Carries an error from an avoid check on a real state out of the search to the caller.
 
-    A BaseException, as ``SearchOutOfTime`` is: the search reads its causes under many
-    ``except Exception`` that mean "no evidence", and a check that raised has not said a
-    state is clear.  ``pilot_how`` and ``pilot_events`` turn it into the public
+    This is a BaseException, as ``SearchOutOfTime`` is.  The search reads its causes under
+    many ``except Exception`` blocks that mean "no evidence", and a check that raised has not
+    said that a state is clear.  ``pilot_how`` and ``pilot_events`` turn it into the public
     ``AvoidCheckError``.
     """
 
@@ -23,20 +23,21 @@ class _AvoidCheckRaised(BaseException):
         self.error = error
 
 
-# Every ask of an avoid is one of two kinds, and a site picks by the state it holds.
+# Every ask of an avoid is one of two kinds.  A call site picks the kind by the state it holds.
 #
-# ON A REAL STATE: the state how() starts from, or a scan a trial really ran, failed trials
-# included.  A raise there is an error, since the check has not said that state is clear:
-# ``_member_on_scan``, ``_avoid_scan_names``.
+# ON A REAL STATE: the state how() starts from, or a scan that a trial really ran, including
+# failed trials.  If the check raises there, that is an error, because the check has not said
+# that the state is clear.  The functions are ``_member_on_scan`` and ``_avoid_scan_names``.
 #
-# WEIGHED: anything else, such as values laid over a state, the resting baseline, or the
-# state a restart lands on before its first scan.  A raise there says nothing about the
-# route, so that member is not violated, and the others keep their answers:
-# ``_member_weighed``, ``_avoid_weighed_names`` and what is built on them.
+# WEIGHED: any other state, such as values laid over a state, the resting baseline, or the
+# state that a restart lands on before its first scan.  If the check raises there, it says
+# nothing about the route.  That member counts as not violated, and the other members keep
+# their answers.  The functions are ``_member_weighed``, ``_avoid_weighed_names`` and what
+# is built on them.
 
 
 def _member_on_scan(check: str, pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:
-    """Whether *pred* holds on a real state.  A *pred* that raises gave no answer to read."""
+    """Return whether *pred* holds on a real state.  A *pred* that raises gave no answer."""
     try:
         return bool(pred(state))
     except Exception as error:
@@ -44,7 +45,10 @@ def _member_on_scan(check: str, pred: Callable[[dict[str, Any]], Any], state: An
 
 
 def _member_weighed(pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:
-    """Whether *pred* holds on a state no scan need have had.  A raise is not violated."""
+    """Return whether *pred* holds on a state that no scan need have had.
+
+    A *pred* that raises counts as not violated.
+    """
     try:
         return bool(pred(state))
     except Exception:
@@ -52,7 +56,9 @@ def _member_weighed(pred: Callable[[dict[str, Any]], Any], state: Any) -> bool:
 
 
 def _avoid_scan_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
-    """Names of the avoid conditions a real state trips (``()`` when avoid is None).
+    """Return the names of the avoid conditions that a real state trips.
+
+    Return ``()`` when avoid is None.
 
     A ``_AvoidPredicate`` reports its violated member names; a bare callable
     (someone passed ``avoid_pred=`` a raw predicate) reports a generic name.
@@ -66,7 +72,7 @@ def _avoid_scan_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _avoid_weighed_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
-    """Names of the avoid conditions a weighed state trips, each member on its own."""
+    """Return the names of the avoid conditions that a weighed state trips, each member alone."""
     if avoid is None:
         return ()
     members = getattr(avoid, "members", None)
@@ -76,8 +82,8 @@ def _avoid_weighed_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
         member.name
         for member in members
         # A member that reads a tag it cannot name never trips a weighed state.  A condition
-        # would read a tag the state lacks as violated, and a callable would raise.  So a
-        # member trips only when the state has every tag it reads and its check says yes.
+        # would read a tag that the state lacks as violated, and a callable would raise.  So a
+        # member trips only when the state has every tag that it reads and its check says yes.
         if member.tags is not None
         and all(tag in snap for tag in member.tags)
         and _member_weighed(member.pred, snap)
@@ -89,7 +95,7 @@ def _avoid_weighed_after_clear(
     start: dict[str, Any],
     observed: dict[str, Any],
 ) -> tuple[str, ...]:
-    """Members clear at *start* that a weighed *observed* trips."""
+    """Return the members that are clear at *start* and that a weighed *observed* trips."""
     exempt = _avoid_weighed_names(avoid, start)
     return tuple(name for name in _avoid_weighed_names(avoid, observed) if name not in exempt)
 
@@ -99,18 +105,18 @@ def _avoid_violations(
     pairs: list[tuple[str, Any]] | tuple[tuple[str, Any], ...],
     snapshot: dict[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    """Names of the avoid conditions that *pairs* would force.
+    """Return the names of the avoid conditions that *pairs* would force.
 
-    Static: overlays each ``(tag, value)`` onto *snapshot* (or the resting
-    baseline when no snapshot is given, the neutral world a hold asserts its
-    tag against) and evaluates the avoid predicate. This is the action gate's
-    primitive (a candidate/hold whose overlay trips avoid depends on it).
+    This is a static check.  It overlays each ``(tag, value)`` onto *snapshot* and evaluates
+    the avoid predicate.  When no snapshot is given, it uses the resting baseline, the
+    neutral world that a hold asserts its tag against.  This is the action gate's primitive,
+    because a candidate or hold whose overlay trips avoid depends on it.
 
-    What it asks is weighed.  The baseline has the steerable inputs and nothing else, so a
-    callable can raise on it for a tag every real state has, and a hold laid over a state
-    is no scan either: both go on, and the gates judge the scans they lead to.  A check
-    that answers keeps its answer, so one reading only what the baseline has can still
-    refuse the hold.
+    The state it asks about is weighed.  The baseline has the steerable inputs and nothing
+    else, so a callable can raise on it for a tag that every real state has.  A hold laid over
+    a state is not a scan either.  In both cases the search goes on, and the gates judge the
+    scans that the hold leads to.  A check that answers keeps its answer, so a check that reads only
+    what the baseline has can still refuse the hold.
     """
     avoid = getattr(ctx, "avoid_pred", None)
     if avoid is None:
@@ -128,7 +134,10 @@ def _avoid_forces(
 
 
 def _hold_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
-    """Whether a hold of *pair* may be installed.  ``_avoid_violations`` says what is asked."""
+    """Return whether a hold of *pair* may be installed.
+
+    ``_avoid_violations`` describes what is asked.
+    """
     tag, _value = pair
     compass = getattr(ctx, "compass", None)
     action_tags = getattr(compass, "action_tags", frozenset())

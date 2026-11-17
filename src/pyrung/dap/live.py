@@ -142,7 +142,7 @@ class LiveServer:
         adapter = self._adapter
         changed = False
         try:
-            # The last command wins: step, run and reload pause a running continue first.
+            # The last command wins.  Step, run and reload first pause a running continue.
             from pyrung.dap.handlers.simulation import pause_before_console_command
 
             pause_before_console_command(adapter, command)
@@ -179,8 +179,8 @@ class LiveServer:
                 )
                 if trace_body is not None:
                     adapter._last_trace_was_step = True
-            # Tell the DAP client what a live command did, as a DAP request
-            # would: its events, the trace that follows a stop, and a frame.
+            # Tell the DAP client what a live command did, as a DAP request would.
+            # Send its events, the trace that follows a stop, and a frame.
             for event_name, event_body in result.events:
                 adapter._enqueue_internal_event(event_name, event_body)
                 if event_name == "stopped" and trace_body is not None:

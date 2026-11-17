@@ -1,4 +1,4 @@
-"""The long-run check can fail: each comparison in tests/fold_check.py, against a broken run."""
+"""Show that each comparison in tests/fold_check.py fails when it is given a broken run."""
 
 from __future__ import annotations
 
@@ -68,7 +68,8 @@ def test_a_late_stop_is_caught() -> None:
 
 
 def test_the_twin_is_asked_on_the_plain_state() -> None:
-    # A predicate that reads a traced state differently is judged as a user's would read it.
+    # fold_check asks the twin about the plain state. A predicate that reads a traced state
+    # differently is therefore judged the way a user's predicate would be.
     plc = _plc()
     with (
         fold_check.deliberate(),
@@ -83,7 +84,8 @@ def test_the_twin_is_asked_on_the_plain_state() -> None:
 
 
 def test_a_predicate_naming_a_module_is_not_asked() -> None:
-    # A module is shared with the run, so a twin's ask could move what the run reads.
+    # A copy of this predicate would share the module with the run. If fold_check asked the
+    # copy, it could change what the run reads. So fold_check skips the predicate.
     plc = _plc()
     before = fold_check.STATS["predicate skipped: not copyable"]
     fold_check._checked(
@@ -111,8 +113,8 @@ def test_a_predicate_naming_a_timer_is_asked() -> None:
 
 
 def test_a_trace_that_misreads_a_predicate_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Reads no tag and answers False: the coast runs past a stop that holds for a while, then
-    # goes on to its budget, so only a twin asked past the trace can say so.
+    # The trace reads no tag and answers False. The coast runs past a stop that holds for a
+    # while and goes on to its budget. Only a twin that is asked past the trace can show this.
     plc, acc = _timing_plc("MisreadT")
     monkeypatch.setattr(read_trace._TracedTags, "__getitem__", lambda _self, _key: False)
 
@@ -149,7 +151,7 @@ def _opaque(pred: Any) -> SimpleNamespace:
 
 
 def _seek(plc: PLC, *members: Any, budget: int = 5_000) -> None:
-    """A real seek for a target that never comes, with these ``avoid=`` members armed."""
+    """Run a real seek for a target that never comes, with these ``avoid=`` members armed."""
     import pyrung.core.analysis.pilot.coast as pilot_coast
 
     session = pilot_coast.CoastSession(plc)
@@ -181,8 +183,8 @@ def test_an_opaque_avoid_is_let_off_between_the_scans_it_is_judged_on(installed)
 def test_an_opaque_avoid_lets_no_other_member_off(
     installed, monkeypatch: pytest.MonkeyPatch, opaque_says: Any
 ) -> None:
-    # The trace misreads, so the compiled member's stop is run past in a stretch.  The opaque
-    # member beside it answers for itself only, whatever it says on that scan.
+    # The trace misreads, so the run goes past the compiled member's stop in one stretch. The
+    # opaque member beside it answers for itself only, whatever it says on that scan.
     fold_check.install()
     timer = Timer.clone("BesideT")
     run = Bool("Run")
@@ -253,7 +255,7 @@ def test_a_predicate_over_the_real_runner_is_not_asked() -> None:
 
 @pytest.fixture
 def installed(monkeypatch: pytest.MonkeyPatch):
-    """The real wrappers, installed for this test only (everything is restored)."""
+    """Let the test install the real wrappers for itself only and restore everything after it."""
     import pyrung.core.analysis.pilot.coast as pilot_coast
     import pyrung.core.coast_run as coast_run
 
@@ -378,8 +380,8 @@ def test_a_counting_predicate_is_judged_from_its_own_copy() -> None:
         k[0] += 1
         return k[0] >= 5
 
-    # The folded run's own calls are not made here; the copy is taken first and
-    # the real closure is untouched afterwards.
+    # The folded run does not call the predicate here. The copy is taken first, so the real
+    # closure is untouched afterwards.
     fold_check._checked("run_until", plc, _stepper(plc, 5), predicate)
     assert k == [0]
 
@@ -494,7 +496,10 @@ def test_a_copied_predicate_keeps_reads_untraced_from_the_real_trace() -> None:
 
 
 class _CopiesItsOwnWay:
-    """Copies itself through copy.deepcopy(), which hands back the function it holds."""
+    """Copies itself through copy.deepcopy().
+
+    copy.deepcopy() returns each function that the object holds as it is, not a copy of it.
+    """
 
     def __init__(self, **parts: Any) -> None:
         self.__dict__.update(parts)
@@ -529,7 +534,7 @@ def _in_a_slot_beside_a_dict(step: Any) -> Any:
     return holder
 
 
-# Boxes a weak reference points to, kept alive for the test that reads them.
+# Keeps the boxes that a weak reference points to alive for the test that reads them.
 _ALIVE: list[Any] = []
 
 
@@ -683,7 +688,10 @@ def test_declares_a_mismatch():
 
 
 def _session(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
-    """A session of its own: what fails it is the point, and this one must not fail."""
+    """Run *source* in a pytest session of its own.
+
+    The callers check what makes that session fail. The session that runs them must not fail.
+    """
     test = tmp_path / "test_swallow.py"
     test.write_text(source, encoding="utf-8")
     return subprocess.run(
@@ -728,7 +736,10 @@ def test_a_declared_mismatch_fails_nothing(tmp_path: Path) -> None:
 def test_a_mismatch_seen_only_at_the_end_fails_the_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Outside any test (a fixture of a wider scope, say): the session still answers."""
+    """A mismatch outside any test still fails the session.
+
+    A fixture of a wider scope is one place where such a mismatch can occur.
+    """
     from types import SimpleNamespace
 
     from tests import conftest
@@ -755,7 +766,7 @@ Tm = Timer.clone("Tm")
 
 
 def _timed() -> PLC:
-    """On a timer, so the guarded loop runs long stretches of it."""
+    """Build a PLC with a timer, so that the guarded loop runs long stretches of it."""
     with Program(strict=False) as program:
         with Rung(Go):
             on_delay(Tm, 5000)
@@ -769,7 +780,7 @@ def _timed() -> PLC:
 
 
 def _short_of(scans: int):
-    """_run_compiled that stops *scans* early and says it is done."""
+    """Return a _run_compiled that stops *scans* early and reports that it is done."""
     real = compiled_run._run_compiled
 
     def run(plc, kernel, budget, predicate, *rest):
@@ -842,7 +853,10 @@ def test_a_run_charging_past_the_units_asked_is_caught() -> None:
 
 
 def test_a_run_short_of_the_units_asked_is_caught() -> None:
-    """A unit left over would have paid for 100 more scans, however few were run."""
+    """fold_check catches a run that stops with a unit left over.
+
+    That unit would have paid for 100 more scans, however few scans the run ran.
+    """
     plc = _plc()
     with (
         fold_check.deliberate(),
@@ -862,7 +876,10 @@ def test_a_run_spending_every_unit_stopped_on_its_budget() -> None:
 
 
 def test_a_coast_in_units_through_install_is_held_to_the_coast_own_charge(installed) -> None:
-    """The loop's scans come at their price, the rest a unit each, and every scan is compared."""
+    """The installed coast charges the loop's scans at their price and every other scan one unit.
+
+    fold_check compares every scan and finds no mismatch.
+    """
     coast_run = installed
     fold_check.install()
     plc = _timed()
@@ -922,7 +939,11 @@ def _raises_at_1500(v):
 
 
 def _raising(function: Any = _raises_at_1500) -> PLC:
-    """On a timer and a count: lands in the loop, and raises once the count gets there."""
+    """Build a PLC with a timer and a count.
+
+    A run of it lands in the loop. The run raises when the count reaches the value at which
+    *function* raises.
+    """
     with Program(strict=False) as program:
         with Rung(Go):
             on_delay(Tm, 2000)
@@ -1336,7 +1357,7 @@ _ON_EITHER_BASE = pytest.mark.parametrize(
 
 
 def _two_bases_apart(applies) -> tuple[PLC, PLC]:
-    """Two runners, each base with its own date, time of day and microsecond."""
+    """Return two runners whose bases differ in date, time of day and microsecond."""
     plc, twin = applies(), applies()
     plc._rtc_base = datetime(2030, 1, 2, 3, 4, 5, 111)
     twin._rtc_base = datetime(2030, 2, 3, 13, 14, 15, 222)
@@ -1364,7 +1385,10 @@ def test_own_twin_holds_what_a_rung_applied_on_each_base(applies) -> None:
 )
 @_ON_EITHER_BASE
 def test_own_twin_sees_an_apply_that_set_something_else(applies, off) -> None:
-    """The rung ran the same on both, so only the log and the base can show it."""
+    """own_twin catches an apply that set something else.
+
+    The rung ran the same on both runners, so only the log and the base can show it.
+    """
     plc, twin = _two_bases_apart(applies)
     with (
         fold_check.deliberate(),
@@ -1527,7 +1551,7 @@ def test_own_twin_passes_a_block_that_raises_after_its_compare() -> None:
 
 
 def _uses_of_own_twin(path: Path) -> set[str]:
-    """Each function of *path* that names own_twin, whether or not it calls it there."""
+    """Return the name of each function in *path* that names own_twin, called there or not."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     used: set[str] = set()
 
@@ -1635,7 +1659,7 @@ def test_deliberate_does_not_mask_what_escapes_it() -> None:
 
 
 def test_deliberate_closes_on_a_test_failing_inside_it() -> None:
-    # pytest's failure is a BaseException: a block left open would swallow the next mismatch.
+    # pytest's failure is a BaseException. A block left open would swallow the next mismatch.
     before = len(fold_check.MISMATCHES)
     with pytest.raises(pytest.fail.Exception):
         with fold_check.deliberate():
@@ -1862,7 +1886,7 @@ class TestACoastStoppedByTheLedger:
         plc = _timed()
         memo = coast_run.memo_of(plc)
         memo.work_left = lambda: 5
-        # A program with no kernel pays a unit a scan, so the ledger stops it.
+        # A program with no kernel pays one unit per scan, so the ledger stops the run.
         monkeypatch.setattr(coast_run, "_kernel_for", lambda *_a: None)
         stats: dict[str, int] = {}
         coast_run.coast_until(plc, lambda _s: False, budget=100, stats=stats)
@@ -1932,7 +1956,8 @@ class TestACoastStoppedByTheLedger:
         honest = installed.coast_until
 
         def by_the_engine(plc: Any, predicate: Any, **kwargs: Any) -> Any:
-            # Each interpreted scan a unit and each loop scan a hundredth, as dev priced them.
+            # Clearing _loop_priced_scans prices the run the way the dev branch once did. Each
+            # interpreted scan costs one unit, and each loop scan a hundredth of a unit.
             try:
                 return honest(plc, predicate, **kwargs)
             finally:
@@ -2054,7 +2079,8 @@ def _rtc_apply_early() -> PLC:
         with Rung():
             copy(system.rtc.hour, Hr)
     plc = PLC(program, dt=0.01)
-    # Not the hour it applies, whatever the time is; a set_rtc() would be in the log itself.
+    # Set an hour other than the one the rung applies. A set_rtc() call would appear in the log
+    # itself, so this uses _set_rtc_internal.
     plc._set_rtc_internal(datetime(2030, 1, 2, 9, 0, 0), plc.state.timestamp)
     plc.patch({"Go": True})
     return plc
@@ -2082,9 +2108,12 @@ def test_a_wrong_rtc_origin_is_caught_in_the_log(installed, monkeypatch) -> None
 def test_a_wrong_rtc_origin_is_caught_at_the_scan_before_an_early_apply(
     installed, monkeypatch
 ) -> None:
-    """In both runners' logs, so only a replay against the states stepped shows it."""
+    """fold_check catches a wrong rtc origin that is in both runners' logs.
+
+    The logs agree, so only a replay against the states that stepping produced can show it.
+    """
     _origin_from_the_apply(monkeypatch, None)
-    # The records differ too, a scan later.  So this test turns that check off.
+    # The records also differ, a scan later. This test turns that check off.
     monkeypatch.setattr(fold_check, "compare_records", lambda *args: None)
     fold_check.install()
     with (

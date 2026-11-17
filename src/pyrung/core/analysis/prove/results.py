@@ -1,4 +1,4 @@
-"""Result types of the static facts."""
+"""Define the result types of the static facts."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 class Intractable:
     """The facts could not be built.
 
-    ``tags`` names the tags at fault and ``hints`` says what to change.
+    ``tags`` names the tags at fault, and ``hints`` says what to change.
     ``_debug_context`` holds the partial classification, which the pass pipeline
     keeps building on.
     """
@@ -23,6 +23,6 @@ class Intractable:
     _debug_context: Any = None
 
 
-# A timer's Done between off and done in how()'s domain prior and PILOT's
-# world key (``absorb._done_acc_state``).
+# The state of a timer's Done between off and done.  how()'s domain prior and PILOT's
+# world key use it (``absorb._done_acc_state``).
 PENDING = "Pending"

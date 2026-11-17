@@ -87,7 +87,7 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
         return
 
     if isinstance(value, RandIntExpr):
-        # The draw's hidden DINT tag holds the result; the bounds set the family.
+        # The draw's hidden DINT tag holds the result.  The bounds set the family.
         _collect_calc_tag_types(value.lo, found, seen)
         _collect_calc_tag_types(value.hi, found, seen)
         return
@@ -125,7 +125,7 @@ def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
 
 
 def _int32(value: int) -> int:
-    """*value* cut to its low 32 bits, read as a signed Dint."""
+    """Cut *value* to its low 32 bits and read it as a signed Dint."""
     return ((value + 0x8000_0000) & 0xFFFF_FFFF) - 0x8000_0000
 
 
@@ -143,8 +143,10 @@ class _CalcForm:
 
 
 def _same(a: Any, b: Any) -> bool:
-    """Whether bounds *a* and *b* are one constant, or one node (``==`` on an
-    expression builds a condition, not a bool)."""
+    """Return whether bounds *a* and *b* are one constant, or one node.
+
+    ``==`` on an expression builds a condition, not a bool, so this compares nodes by identity.
+    """
     a = a.value if isinstance(a, LiteralExpr) else a
     b = b.value if isinstance(b, LiteralExpr) else b
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
@@ -153,8 +155,11 @@ def _same(a: Any, b: Any) -> bool:
 
 
 def _rebuild(value: Any, form: _CalcForm) -> Any:
-    """*value* rewritten by *form*: itself when nothing changes, else a copy of the
-    tree with the changed nodes rebuilt."""
+    """Return *value* rewritten by *form*.
+
+    Return *value* itself when nothing changes.  Otherwise return a copy of the tree with
+    the changed nodes rebuilt.
+    """
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
@@ -202,14 +207,14 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
             return BinaryExpr(node, LiteralExpr(0xFFFF), _op_and, "&")
         return node
     if isinstance(value, RandIntExpr):
-        # A bound keeps its ops: only its constants are cut (CLICK's editor takes
-        # no formula as a bound, CLK_MATH_ARG_NOT_PLAIN).
+        # A bound keeps its ops, and only its constants are cut.  CLICK's editor takes
+        # no formula as a bound (CLK_MATH_ARG_NOT_PLAIN).
         form = replace(form, calc_ops=False)
         lo = _rebuild(value.lo, form)
         hi = _rebuild(value.hi, form)
         if lo is value.lo and hi is value.hi:
             return value
-        # A hex Math's cut is its own draw only where it differs from a decimal one's.
+        # A hex Math's cut is its own draw only where it differs from a decimal Math's.
         signed = _CalcForm(calc_ops=False)
         unsigned = form.unsigned and not (
             _same(_rebuild(value.lo, signed), lo) and _same(_rebuild(value.hi, signed), hi)
@@ -219,16 +224,16 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
 
 
 def cut_int_constants(value: Any) -> Any:
-    """*value* (a calc expression) with each integer constant cut to 32 bits, signed.
+    """Return *value* (a calc expression) with each integer constant cut to 32 bits, signed.
 
-    What a decimal Math runs (:func:`calc_form`), the bounds of a ``randint()``
-    included.  Only a constant past a Dint's range changes.
+    This is what a decimal Math runs (:func:`calc_form`), including the bounds of a
+    ``randint()``.  Only a constant past a Dint's range changes.
     """
     return _rebuild(value, _CalcForm(calc_ops=False))
 
 
 def calc_form(expression: Any, mode: CalcMode) -> Any:
-    """*expression* as a CLICK Math in *mode* runs it (measured, 2026-11-11).
+    """Return *expression* as a CLICK Math in *mode* runs it (measured, 2026-11-11).
 
     - A decimal Math keeps each integer constant whole, whatever the destination
       (``DD1 / 65536`` divides by 65536).  CLICK's editor refuses a constant past
@@ -243,16 +248,16 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
     - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
       a negative power is +Inf (:data:`~pyrung.core.expression.CALC_OPS`).
       Outside ``calc`` they stay Python's.
-    - ``abs()`` of an Int or Dint tag cannot take the bottom of its range:
-      ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43, and so is ``abs(DD1)``
-      with DD1 = -2147483648.  Keyed on the operand's type, so into a wider
-      destination too (``abs(DS1)`` into a Dint read 0 on a CLICK).
+    - ``abs()`` of an Int or Dint tag cannot return the bottom of its range.
+      ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43.  ``abs(DD1)`` with
+      DD1 = -2147483648 does the same.  The rule depends on the operand's type, so it
+      also applies with a wider destination: ``abs(DS1)`` into a Dint read 0 on a CLICK.
     - In hex mode a left shift keeps 16 bits: the bits shifted out are gone, so
       ``lsh(DH1, 1)`` of 0x8001 stores 0x0002 and raises no SC43 (read).  They
       are gone mid-formula too (``rsh(lsh(DH1, 1), 1)`` is 1): pyrung's choice,
       not yet read.
 
-    Returns *expression* itself when nothing changes (no operation in it).
+    Return *expression* itself when nothing changes (no operation in it).
     """
     if mode == "hex":
         form = _CalcForm(unsigned=True, mask_shifts=True)
@@ -351,7 +356,7 @@ class CalcInstruction(OneShotMixin, Instruction):
         "fault.math_operation_error",
     )
     _fault_follows = _fault_writes
-    # A CLICK Math clears its four flags even on a false rung, or as a one-shot
+    # A CLICK Math clears its four flags even on a false rung, and even as a one-shot
     # that does not fire (``flag_steps``, ``flag_reads``).
     _fault_settles_idle = True
     _conditions = ()
@@ -380,17 +385,17 @@ class CalcInstruction(OneShotMixin, Instruction):
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         # Evaluate expression (handles Tag, Expression, IndirectRef, literal).
-        # A failing operation is 0 and notes its flag in *faults* (CALC_FAULTS):
-        # the formula carries on, and a division by zero is 0, not Inf, so a
-        # result that is not finite comes from an Inf or NaN operand, or an overflow.
+        # A failing operation gives 0 and notes its flag in *faults* (CALC_FAULTS).  The
+        # formula carries on.  A division by zero gives 0 and not Inf, so a result that
+        # is not finite comes from an Inf or NaN operand, or from an overflow.
         faults: list[str] = []
         token = CALC_FAULTS.set(faults)
         try:
             value = resolve_tag_or_value_ctx(self.expression, ctx)
         except IndexError:
-            # An indexed source below its block: the address-error flag,
-            # nothing written (as copy(), the kernel and CircuitPython do),
-            # after the flags of its address's failing operations.
+            # An indexed source below its block sets the address-error flag and writes
+            # nothing, as copy(), the kernel and CircuitPython do.  The flag comes after
+            # the flags of the failing operations in its address.
             value = None
         finally:
             CALC_FAULTS.reset(token)

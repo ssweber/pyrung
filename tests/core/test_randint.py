@@ -1,4 +1,4 @@
-"""randint(lo, hi): a per-scan draw on a hidden input tag, reproduced by replay."""
+"""Test randint(lo, hi), a per-scan draw on a hidden input tag that replay reproduces."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def _die_program() -> tuple[Program, RandIntExpr, Tag]:
 
 
 def _int_and_word() -> tuple[Program, RandIntExpr, list[str]]:
-    # Past a Dint, so the decimal Math cuts the bounds to 32 bits and the hex one to 16.
+    # Past a Dint, so the decimal Math cuts the bounds to 32 bits and the hex Math cuts to 16.
     roll = randint(2**32 + 100000, 2**32 + 110000)
     with Program(strict=False) as logic:
         with Rung():
@@ -93,7 +93,8 @@ def _tag_read_in_a_subroutine() -> tuple[Program, RandIntExpr, list[str]]:
     return logic, roll, [name, f"{name}.ucut", "Die", "Shown"]
 
 
-#: Programs whose draws stepping once took otherwise than the kernel (review of the uncut draw).
+#: Programs whose draws once differed between stepping and the kernel. The review of the
+#: uncut draw found them.
 _KERNEL_SITE_PROGRAMS = {
     "int_and_hex_word": _int_and_word,
     "calc_and_tag_copy": lambda: _tag_read_by_a_rung(with_calc=True, as_condition=False),
@@ -143,7 +144,7 @@ class TestDraws:
         )
 
     def test_draws_follow_the_rungs_not_the_order_the_draws_were_made(self):
-        """A draw made earlier for another program (an imported helper) changes nothing."""
+        """A draw that another program made earlier (an imported helper) changes nothing."""
 
         def build(first: RandIntExpr, second: RandIntExpr) -> Program:
             with Program(strict=False) as logic:
@@ -239,7 +240,7 @@ class TestBoundsAsCLICKReadsThem:
         assert state.tags["fault.out_of_range"] is False
 
     def test_every_randint_declares_the_math_error(self):
-        # Every Math clears SC46 as it starts, so each one writes it.
+        # Every Math clears SC46 when it starts, so every Math writes SC46.
         lo = Int("Lo", default=4)
         with Program(strict=False) as logic:
             with Rung():
@@ -255,7 +256,7 @@ class TestBoundsAsCLICKReadsThem:
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_equal_tag_bounds_are_a_math_error(self, factory):
-        """Two tags holding one value: 0 with SC46, as equal constants (CLICK, 2026-11-05)."""
+        """Two tags with one value give 0 and set SC46, like equal constants (CLICK, 2026-11-05)."""
         lo, hi = Dint("Lo", default=7), Dint("Hi", default=7)
         die = Int("Die", default=9)
         with Program(strict=False) as logic:
@@ -269,7 +270,7 @@ class TestBoundsAsCLICKReadsThem:
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     @pytest.mark.parametrize("tags", [False, True], ids=["constants", "tags"])
     def test_a_math_error_zeroes_only_the_randint(self, factory, tags):
-        """randint(7, 7) + 5 is 5 with SC46: the rest of the formula runs."""
+        """randint(7, 7) + 5 gives 5 and sets SC46. The rest of the formula still runs."""
         lo, hi = Dint("Lo", default=7), Dint("Hi", default=7)
         die = Int("Die", default=9)
         with Program(strict=False) as logic:
@@ -298,7 +299,7 @@ class TestBoundsAsCLICKReadsThem:
         ],
     )
     def test_an_int_keeps_the_low_16_bits_of_a_whole_draw(self, bounds, lowest, highest):
-        """The bounds stay whole, so the draw is 70000..70002 and wraps with SC43."""
+        """The bounds stay whole, so the draw is 70000..70002 and the Int wraps it and sets SC43."""
         die = Int("Die")
         with Program(strict=False) as logic:
             with Rung():
@@ -313,7 +314,7 @@ class TestBoundsAsCLICKReadsThem:
         assert (min(values), max(values)) == (lowest, highest)
 
     def test_an_int_wraps_a_draw_across_65536(self):
-        """The draw is over 65000..66000, and the Int keeps its low 16 bits (CLICK, 2026-11-11)."""
+        """The draw is over 65000..66000 and the Int keeps its low 16 bits (CLICK, 2026-11-11)."""
         roll = randint(65000, 66000)
         die = Int("Die")
         with Program(strict=False) as logic:
@@ -326,7 +327,7 @@ class TestBoundsAsCLICKReadsThem:
         assert 400 < max(values) <= 464
 
     def test_reversed_wide_bounds_are_no_error(self):
-        """RAND ( 70000 , 4464 ) draws between them (CLICK, 2026-11-11)."""
+        """RAND ( 70000 , 4464 ) draws between the two bounds (CLICK, 2026-11-11)."""
         with Program(strict=False) as logic:
             with Rung():
                 math(randint(70000, 4464), Dint("Wide"))
@@ -335,7 +336,7 @@ class TestBoundsAsCLICKReadsThem:
         assert max(values) - min(values) > 30000
 
     def test_hex_bounds_each_cut_on_their_own(self):
-        """A pair that crosses 65536 is cut bound by bound, not as a range."""
+        """A pair of bounds that crosses 65536 is cut one bound at a time, not as a range."""
         roll = randint(65000, 66000)
         with Program(strict=False) as logic:
             with Rung():
@@ -489,13 +490,16 @@ class TestBoundsAsCLICKReadsThem:
         ],
     )
     def test_only_the_draws_a_math_runs_are_drawn(self, factory, dests, drawn):
-        """One draw per RAND a Math runs, as on a CLICK: each its own site's, as if alone."""
+        """A Math draws once for each RAND it runs, as on a CLICK.
+
+        Each draw comes from its own site and has the value it would have if it ran alone.
+        """
         roll = randint(70000, 90000)
         with Program(strict=False) as logic:
             with Rung():
                 for index, dest in enumerate(dests):
                     math(roll, dest(f"Die{index}"))
-        # The program's one randint draws as number 1, and its cut as ~1.
+        # The program's one randint draws as number 1. Its cut draws as ~1.
         sites = {
             "uncut": (roll.tag.name, 1, 70000, 90000),
             "cut": (f"{roll.tag.name}.ucut", ~1, 4464, 24464),
@@ -506,14 +510,14 @@ class TestBoundsAsCLICKReadsThem:
             for which, (name, site, lo, hi) in sites.items():
                 held = state.tags.get(name, roll.tag.default if which == "uncut" else lo)
                 if which in drawn:
-                    # Drawn as the scan runs, before its id moves on.
+                    # The draw happens while the scan runs, before the scan id moves on.
                     assert held == randint_draw(site, state.scan_id - 1, lo, hi)
                 else:
                     assert held == (roll.tag.default if which == "uncut" else lo)
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_signed_and_an_unsigned_cut_of_one_draw_both_draw(self, factory):
-        """A decimal cut and a hex Word's share a number, and each draws over its own cut."""
+        """A decimal cut and a hex Word cut share a draw number. Each draws over its own cut."""
         roll = randint(2**32 + 100000, 2**32 + 110000)
         with Program(strict=False) as logic:
             with Rung():
@@ -533,9 +537,9 @@ class TestBoundsAsCLICKReadsThem:
 
     @pytest.mark.parametrize("program", sorted(_KERNEL_SITE_PROGRAMS))
     def test_stepping_draws_the_sites_the_kernel_draws(self, program):
-        """Stepping draws by name the sites the kernel reaches, so a long run is stepping."""
-        # *roll* is held as a script holds it: a site is known while its draw is alive, and a
-        # rung reading ``roll.tag`` alone does not keep it so.
+        """Stepping draws by name at the sites the kernel reaches, so a long run is stepping."""
+        # *roll* is held as a script holds it. A site is known while its draw is alive.
+        # A rung that reads ``roll.tag`` alone does not keep the draw alive.
         logic, roll, watched = _KERNEL_SITE_PROGRAMS[program]()
         stepped = PLC(logic, dt=0.01)
         compiled = CompiledPLC(logic, dt=0.01)
@@ -561,7 +565,7 @@ class TestBoundsAsCLICKReadsThem:
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_patch_or_force_of_a_draw_no_math_runs_moves_nothing(self, factory):
-        """The uncut tag of a hex cut draw holds what is put there, as a tag nothing writes."""
+        """The uncut tag of a hex cut draw keeps what you put there, like a tag nothing writes."""
         roll = randint(70000, 90000)
         with Program(strict=False) as logic:
             with Rung():
@@ -590,7 +594,7 @@ class TestBoundsAsCLICKReadsThem:
 
 
 class TestBoundsAsWritten:
-    """Only a bare ``Real`` tag as a bound reads 0; every other bound still draws."""
+    """A bare ``Real`` tag as a bound reads 0. Every other bound still draws."""
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_a_real_block_element_reads_zero(self, factory):
@@ -643,7 +647,7 @@ class TestBoundsAsWritten:
 
     @pytest.mark.parametrize("factory", [PLC, CompiledPLC])
     def test_equal_float_literals_are_a_math_error(self, factory):
-        """Each bound is read as an integer: 2 and 2 are equal, 0 with SC46."""
+        """Each bound is read as an integer, so 2 and 2 are equal and give 0 with SC46."""
         die = Int("Die", default=7)
         with Program(strict=False) as logic:
             with Rung():
@@ -685,7 +689,7 @@ class TestBoundsAsWritten:
 
 class TestReplay:
     def test_a_rebuilt_program_draws_what_the_first_build_stepped(self):
-        """Forks, history, replay and a long run of a second build all draw as the first stepped."""
+        """Forks, history, replay and a long run of a rebuild draw what the first build stepped."""
         stepped = _draws(PLC(_die_program()[0], dt=0.01), "Die", 2100)
         randint(1, 6)  # another program's draw, made in between
         plc = PLC(_die_program()[0], dt=0.01, history=3000)
@@ -699,7 +703,7 @@ class TestReplay:
         assert _draws(CompiledPLC(_die_program()[0], dt=0.01), "Die", 2100) == stepped
 
     def test_a_hold_that_reads_a_draw_moves_no_draw(self):
-        """A hold rung ahead of the program's rungs leaves the draws as stepping makes them."""
+        """A hold rung ahead of the program's rungs leaves the draws as stepping made them."""
         from pyrung.core.analysis.pilot.overlay import _set_synth_holds
 
         first, second = randint(1, 100000), randint(1, 100000)
@@ -827,7 +831,7 @@ class TestStaticFacts:
         ],
     )
     def test_every_bound_writes_the_math_error_flag(self, make, writes_it):
-        # A bound that cannot raise SC46 still writes it, because the Math clears it.
+        # A bound that cannot raise SC46 still writes it, because the Math clears SC46.
         with Program(strict=False) as logic:
             with Rung():
                 math(make(Int("N")), Dint("D"))
@@ -835,7 +839,7 @@ class TestStaticFacts:
         assert ("fault.math_operation_error" in instr._fault_writes) is writes_it
 
     def test_a_domain_error_in_a_bound_sets_the_flag(self):
-        """N = -1 makes ``sqrt(N)`` a math error, which sets SC46."""
+        """N = -1 makes ``sqrt(N)`` a math error, and that sets SC46."""
         n = Int("N", external=True, min=-1, max=1)
         d, b = Dint("D"), Bool("B")
 

@@ -121,7 +121,7 @@ SC46 = system.fault.math_operation_error
 
 
 def _noted(mask, *pairs):
-    """On the first scan: *mask* = the sum of the bits whose condition holds."""
+    """On the first scan, set *mask* to the sum of the bits whose condition holds."""
     with Rung(FIRST):
         copy(0, mask)
     for condition, bit in pairs:

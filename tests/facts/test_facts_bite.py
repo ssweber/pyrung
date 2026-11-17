@@ -24,7 +24,7 @@ DONE = Timer.clone("Delay").Done.name
 
 
 def stepper() -> Any:
-    """Step runs 0 -> 1 -> 2 while Go is on and goes back to 0 when it drops."""
+    """Return a program where Step runs 0 -> 1 -> 2 while Go is on and resets when Go drops."""
     go = Bool("Go", external=True)
     step = Int("Step")
     shown = Int("StepShown")
@@ -41,7 +41,7 @@ def stepper() -> Any:
 
 
 def delayed() -> Any:
-    """A 50 ms on-delay behind an input, and a bit that shows the input."""
+    """Return a program with a 50 ms on-delay behind an input and a bit that shows the input."""
     go = Bool("Go", external=True)
     running = Bool("Running")
     timer = Timer.clone("Delay")
@@ -53,7 +53,7 @@ def delayed() -> Any:
 
 
 def gauge() -> Any:
-    """A level input from 0 to 100 and an alarm above 50."""
+    """Return a program with a level input from 0 to 100 and an alarm above 50."""
     level = Int("Level", external=True, min=0, max=100)
     with Program() as prog:
         with Rung(level > 50):
@@ -62,7 +62,7 @@ def gauge() -> Any:
 
 
 def kept_count() -> Any:
-    """A count of Go's edges from 0 to 5, and a copy of it taken when Store is on.
+    """Return a program that counts Go's edges from 0 to 5 and copies the count when Store is on.
 
     A rung reads the copy, so the copy is part of the state the facts describe.
     """
@@ -82,7 +82,7 @@ def kept_count() -> Any:
 
 
 def never_counts() -> Any:
-    """A count whose rung reads a bit nothing writes, so the count never moves."""
+    """Return a program whose count rung reads a bit that nothing writes, so it never counts."""
     count = Int("NeverCount")
     with Program() as prog:
         with Rung(Bool("NeverOn")):
@@ -275,7 +275,7 @@ def test_a_write_the_instruction_does_not_declare(monkeypatch: pytest.MonkeyPatc
 
 
 def counted_loop() -> Any:
-    """A forloop that adds 1 to a total three times on each scan Go is on."""
+    """Return a program with a forloop that adds 1 to a total three times on each scan Go is on."""
     total = Int("LoopTotal")
     with Program() as prog:
         with Rung(Bool("Go", external=True)):

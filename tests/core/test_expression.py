@@ -716,19 +716,21 @@ class TestExpressionEdgeCases:
 
     @pytest.mark.parametrize("symbol", ["/", "//", "%"])
     def test_division_by_zero_outside_calc_is_zero(self, symbol):
-        """Outside calc an expression is permissive: a division by zero gives 0."""
+        """Outside calc, an expression returns 0 for a division by zero."""
         DS = Block("DS", TagType.INT, 1, 9)
         expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
         assert expr.evaluate(ctx) == 0
-        assert (expr + 5).evaluate(ctx) == 5  # only the failing operation is 0
+        assert (expr + 5).evaluate(ctx) == 5  # only the failing operation gives 0
 
     @pytest.mark.parametrize("symbol", ["/", "//", "%"])
     def test_division_by_zero_inside_calc_is_its_term_with_sc40(self, symbol):
-        """Inside calc (CALC_FAULTS) a division by zero is 0 too, and notes SC40;
-        the rest of the formula runs.  A raw ``%`` (one calc_form leaves, as in a
-        pointer or a randint() bound) by 0 is such a division."""
+        """Inside calc (CALC_FAULTS), a division by zero is 0 too, and it notes SC40.
+
+        The rest of the formula runs. A raw ``%`` by 0 counts as such a division. A raw ``%``
+        is one that calc_form leaves, as in a pointer or a randint() bound.
+        """
         DS = Block("DS", TagType.INT, 1, 9)
         expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol] + 5
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
@@ -742,8 +744,11 @@ class TestExpressionEdgeCases:
         assert faults == ["fault.division_error"]
 
     def test_calc_form_swaps_in_clicks_mod_and_power(self):
-        """calc runs CLICK's MOD (truncated; by 0 a 0 with no flag) and 0 ** 0 as
-        such an error; the expression itself keeps Python's ``%`` and ``**``."""
+        """Make calc run CLICK's MOD and ``**``, while the expression keeps Python's.
+
+        CLICK's MOD truncates, and MOD by 0 gives 0 with no flag. 0 ** 0 also gives 0 with no
+        flag.
+        """
         from pyrung.core.instruction.calc import calc_form
 
         DS = Block("DS", TagType.INT, 1, 9)
@@ -855,7 +860,7 @@ def _eval_in(expr, tags):
 
 
 class TestRangeAggregateExpr:
-    """BlockRange.max()/.min()/.median()/.mean() -> RangeAggregateExpr."""
+    """Checks that BlockRange.max()/.min()/.median()/.mean() return a RangeAggregateExpr."""
 
     DS = Block("DS", TagType.INT, 1, 10)
     VALUES = {"DS1": 3, "DS2": -7, "DS3": 10, "DS4": 4}
@@ -868,7 +873,7 @@ class TestRangeAggregateExpr:
         assert _eval_in(self.DS.select(1, 3).median(), self.VALUES) == 3
 
     def test_median_even_count_of_integers_truncates_toward_zero(self):
-        # sorted: -7, 3, 4, 10 -> (3 + 4) / 2 = 3.5, an integer on a CLICK: 3
+        # sorted: -7, 3, 4, 10 -> (3 + 4) / 2 = 3.5, which is 3 on a CLICK because it is an integer
         assert _eval_in(self.DS.select(1, 4).median(), self.VALUES) == 3
         assert _eval_in(self.DS.select(1, 2).median(), {"DS1": -9, "DS2": -2}) == -5
 
@@ -898,7 +903,10 @@ class TestRangeAggregateExpr:
         assert _eval_in(expr, self.VALUES) == 17
 
     def test_is_sibling_not_sum(self):
-        """Every isinstance(x, SumExpr) arm computes a sum; aggregates must not match it."""
+        """Check that an aggregate is not a SumExpr.
+
+        Every isinstance(x, SumExpr) arm computes a sum.
+        """
         from pyrung.core.expression import Expression, RangeAggregateExpr, SumExpr
 
         expr = self.DS.select(1, 4).max()

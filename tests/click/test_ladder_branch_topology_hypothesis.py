@@ -764,10 +764,10 @@ def test_continued_branch_round_trip(tree):
 
 @st.composite
 def _mixed_rung(draw):
-    """A rung of contacts and Ors, with outputs and branches (two deep) in any order.
+    """Generate a rung of contacts and Ors, with outputs and branches (two deep) in any order.
 
     An Or's row may be an And that holds another Or.  The rung's own conditions may be empty or
-    start with an Or on the rail.  Returns ``(conditions, items, cond_tags, out_tags)``.  An item
+    start with an Or on the rail.  Return ``(conditions, items, cond_tags, out_tags)``.  An item
     is an output tag or ``(branch_conditions, items)``.
     """
     make_cond, make_out, cond_tags, out_tags = _new_tag_builders()
@@ -834,9 +834,9 @@ def _export_mixed(conditions, items, cond_tags, out_tags):
 @given(tree=_mixed_rung())
 @settings(max_examples=400, deadline=None)
 def test_mixed_rung_follows_the_drawing_rule_and_keeps_its_logic(tree):
-    """The validator's round trip runs inside the export.
+    """The export runs the validator's round trip itself.
 
-    Importing the export and exporting it again gives the same rows.
+    Importing the export and exporting it again returns the same rows.
     """
     logic, mapping, bundle = _export_mixed(*tree)
     check_scope(bundle.main_rows)

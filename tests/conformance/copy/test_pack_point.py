@@ -1,19 +1,19 @@
 """Pack Copy of text with a decimal point into a DD: the ``pack_point`` group (part ``follow2_values``).
 
-On a CLICK "12.9" packed into an Int is 12, with no SC43 (``text/pack_text_int_fraction``).
-The parse stops at the point.  CLICK's help (topic 059) says that "12.345" packed into a DD
-is an error, "Period separator not allowed".  A CLICK stops at the point for a DD too, with no
-SC43.
+On a CLICK, packing "12.9" into an Int gives 12 and sets no SC43
+(``text/pack_text_int_fraction``).  The parse stops at the point.  CLICK's help (topic 059)
+says that packing "12.345" into a DD is an error, "Period separator not allowed".  A CLICK
+stops at the point for a DD too, and sets no SC43.
 
 ``point_into_dd``: each text is staged into TXT and packed into a DD preset to 99, on one rung,
 with SC43 read by a coil on the rung right after it:
 
-- Result1, "12.9" into a DD: 12, the parse stopping at the point.  99 would be the DD left alone,
-  refused, and 13 a rounding.
-- Result2, "12.345" into a DD (help 059's example): 12, as for Result1.
-- ErrorCode: SC43 after "12.9" (bit 1) and after "12.345" (bit 2).  0: no error.  3 would be the
-  refusal with SC43 that help 059 describes.
-- Result3 and Result4, the control: "12" into a DD is 12 with no SC43 (Result4 = 0).
+- Result1 packs "12.9" into a DD and reads 12, because the parse stops at the point.  99 would
+  mean the DD was left alone, refused, and 13 would mean a rounding.
+- Result2 packs "12.345" into a DD (help 059's example) and reads 12, as Result1 does.
+- ErrorCode records SC43 after "12.9" (bit 1) and after "12.345" (bit 2).  0 means no error.
+  3 would be the refusal with SC43 that help 059 describes.
+- Result3 and Result4 are the control.  "12" packed into a DD is 12 with no SC43 (Result4 = 0).
 
 The case owns what ``memory.OWNED_APART`` lists under this group.
 """
@@ -29,7 +29,7 @@ from tests.conformance.probe_kit import finish, once
 
 SC43 = system.fault.out_of_range
 
-#: The texts, the first TXT each is staged from, the DD each packs into, and the coil of its SC43.
+#: Each row is a text, the first TXT it is staged from, the DD it packs into and its SC43 coil.
 TEXTS = (
     ("12.9", 301, dd[151], c[691]),
     ("12.345", 311, dd[152], c[692]),

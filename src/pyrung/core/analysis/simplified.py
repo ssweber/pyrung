@@ -418,13 +418,14 @@ def _build_rung_map(program: Program) -> dict[int, Rung]:
 class _SolveOrder:
     """Where each graph node reads and writes in one scan's solve order.
 
-    Each instruction reads its conditions when the scan reaches it; a
-    branch's own contacts see what earlier instructions wrote, and the
-    conditions it shares with them (its rung's and its parent branches') keep
-    the value they were first solved with.  Positions count each node's first
-    read and its instructions in that order (main rungs, then subroutines in
-    graph order), so a node whose instructions come after a branch in source
-    order writes after that branch reads, although its node index is lower.
+    Each instruction reads its conditions when the scan reaches it.  A branch's own contacts
+    see what earlier instructions wrote.  The conditions that it shares with them (its
+    rung's and its parent branches') keep the value they were first solved with.
+
+    Positions number each node's first read and its instructions in that order: main
+    rungs first, then subroutines in graph order.  A node whose instructions come after a
+    branch in source order therefore writes after that branch reads, although its node
+    index is lower.
     """
 
     reads: dict[int, int]  # node index -> position its own contacts are read at
@@ -433,7 +434,7 @@ class _SolveOrder:
     parents: dict[int, int | None]  # node index -> the rung or branch it is on
 
     def chain(self, node: int) -> list[int]:
-        """The rung and branches from the top of *node*'s rung down to *node*."""
+        """Return the rung and branches from the top of *node*'s rung down to *node*."""
         chain = [node]
         parent = self.parents.get(node)
         while parent is not None:
@@ -443,23 +444,25 @@ class _SolveOrder:
         return chain
 
     def reader_position(self, nodes: list[int]) -> int:
-        """The latest position at which any of *nodes* reads its contacts."""
+        """Return the latest position at which any of *nodes* reads its contacts."""
         return max(self.reads[ni] for ni in nodes)
 
     def write_position(self, writer: int, tag: str | None = None) -> int:
-        """Where *writer* last writes *tag* (or, without one, its last instruction)."""
+        """Return where *writer* last writes *tag* (or, without one, its last instruction)."""
         if tag is not None and (writer, tag) in self.tag_writes:
             return self.tag_writes[(writer, tag)]
         return self.writes.get(writer, self.reads[writer])
 
     def written_before(self, writer: int, position: int, tag: str | None = None) -> bool:
-        """True when *writer* has written *tag* by *position*."""
+        """Return True when *writer* has written *tag* by *position*."""
         return self.write_position(writer, tag) < position
 
 
 def _build_solve_order(program: Program) -> _SolveOrder:
-    """Number every node's read and instructions in solve order, mirroring
-    build_program_graph's node order."""
+    """Number every node's read and instructions in solve order.
+
+    The node order mirrors build_program_graph.
+    """
     from pyrung.core.rung import Rung as _Rung
     from pyrung.core.validation._common import _resolve_tag_names
 
@@ -498,7 +501,8 @@ def _build_solve_order(program: Program) -> _SolveOrder:
     return _SolveOrder(reads=reads, writes=writes, tag_writes=tag_writes, parents=parents)
 
 
-#: Resolves an expression whose contacts the scan reads at a position.
+#: A function that resolves an expression, given the position at which the scan reads its
+#: contacts.
 _Resolve = Callable[["Expr", int], "Expr"]
 
 
@@ -509,11 +513,11 @@ def _unresolved(expr: Expr, _position: int) -> Expr:
 def _node_parts(
     ni: int, rung_map: dict[int, Rung], order: _SolveOrder
 ) -> list[tuple[Expr, int]] | None:
-    """*ni*'s conditions, split by where the scan reads them.
+    """Split *ni*'s conditions by where the scan reads them.
 
-    One part per level from the top of the rung down to *ni*: that rung's or
-    branch's own contacts and the position they are read at.  ``None`` when
-    *ni* is missing from *rung_map*.
+    Return one part per level from the top of the rung down to *ni*.  A part is the own
+    contacts of that rung or branch, with the position they are read at.  Return ``None``
+    when *ni* is missing from *rung_map*.
     """
     rung = rung_map.get(ni)
     if rung is None:
@@ -524,7 +528,7 @@ def _node_parts(
     for level in order.chain(ni):
         owner = rung_map.get(level)
         if owner is None or owner._branch_condition_start != covered:
-            # Not the shape a branch is built with; read every contact
+            # This is not the shape a branch is built with.  Read every contact
             # where *ni* reads its own.
             return [(_conditions_list_to_expr(list(conditions)), order.reads[ni])]
         covered = len(owner._conditions)
@@ -563,9 +567,9 @@ def _try_factored_branches(
 ) -> Expr | None:
     """Factor sibling branches into ``And(parent, Or(local₁, local₂, ...))``.
 
-    Returns ``None`` unless the writers are all branches of one parent: only
-    then do they inherit the same contacts.  The inherited part is resolved
-    where the scan read it, each local part where its branch reads it.
+    Return ``None`` unless the writers are all branches of one parent, because only
+    then do they inherit the same contacts.  Resolve the inherited part where the scan
+    read it, and each local part where its branch reads it.
     """
     nodes = [graph.rung_nodes[ni] for ni in effective]
     if not all(n.branch_path for n in nodes):
@@ -688,12 +692,12 @@ def _combine_single_scope(
     *,
     tag: str | None = None,
 ) -> tuple[Expr, list[int]] | None:
-    """Combine writers within one scope: last rung-group wins.
+    """Combine writers within one scope.  The last rung-group wins.
 
-    In that rung the writers are taken in solve order.  An ``out`` writes its
-    power whether on or off, so with *tag* set the last ``out`` of *tag* wins
-    over every writer above it; the writers after it (a latch, a copy) are
-    ORed in.  Sibling branches factor as ``And(parent, Or(...))`` (else ORed).
+    In that rung the writers are taken in solve order.  An ``out`` writes its power
+    whether on or off.  So with *tag* set, the last ``out`` of *tag* wins over every writer
+    above it, and the writers after it (a latch, a copy) are ORed in.  Sibling branches
+    factor as ``And(parent, Or(...))``, and are otherwise ORed.
     """
     by_rung: dict[int, list[int]] = {}
     for ni in indices:
@@ -754,12 +758,12 @@ def _expr_for_writers(
     unconditionally-reached reset would collapse the form to ``True``).  When
     *every* writer only resets the tag, the True form is ``False``.
 
-    *before*, when set, is a reader's position in *order*: it restricts to
-    the writers that have written the tag by then (if none have, the reader
-    sees the last scan's value, so every writer stays).
+    When *before* is set, it is a reader's position in *order*.  The result then covers
+    only the writers that have written the tag by then.  If none have, the reader sees the
+    last scan's value, so every writer stays.
 
-    *resolve* is applied to each part of the form with the position the scan
-    reads that part's contacts at (see :func:`_node_parts`).
+    This function applies *resolve* to each part of the form, with the position at which
+    the scan reads that part's contacts (see :func:`_node_parts`).
 
     Returns ``(expr, effective_node_indices)`` or ``None`` if no writers.
     """
@@ -866,8 +870,8 @@ def _resolve_pivots(
     """Recursively substitute pivot atoms with their writing rung's expression.
 
     Only pivots in *resolvable* (all writers are OTE) are substituted.
-    *reader_position* is where, in *order*, the expression's contacts are
-    read: a pivot takes the form of the writers that ran before it.
+    *reader_position* is the position in *order* where the scan reads the expression's
+    contacts.  A pivot takes the form of the writers that ran before that position.
     """
     if depth >= _MAX_DEPTH:
         return expr
@@ -973,7 +977,7 @@ def _pivot_resolver(
     ctx: _GuardCtx | None = None,
     _stats: dict[str, int] | None = None,
 ) -> _Resolve:
-    """A *resolve* for :func:`_expr_for_writers` that substitutes pivots."""
+    """Return a *resolve* for :func:`_expr_for_writers` that substitutes pivots."""
 
     def resolve(expr: Expr, position: int) -> Expr:
         return _resolve_pivots(

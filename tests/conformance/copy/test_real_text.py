@@ -1,4 +1,4 @@
-"""What a Copy of a Real into a TXT writes: the ``real_text`` group (part ``follow_values``).
+"""Test what a Copy of a Real into a TXT writes: the ``real_text`` group (part ``follow_values``).
 
 ``store_probe/real_into_text_and_fill`` read "66.6999969" from TXT541 for a DF of 66.7, then '0'
 in TXT551..TXT555.  Those '0's were left over, since a CLICK leaves the TXTs past the digits alone.
@@ -20,8 +20,9 @@ shows ("10000.0000000"), on the float32 value, writes:
 pyrung writes the digits as ``to_text()`` does, from the Real's 64-bit value.  That gives CLICK's text
 where the float32 and float64 digits agree, and "123456.7000000" and "66.7000000" where they
 do not.  Each case expects the 10 characters a CLICK writes (``CASES``).  A CLICK writes
-"123456.7031250" for 123456.7 and leaves the TXTs past the digits alone, with no NUL after them.  pyrung's digits for 123456.7
-differ, so ``six_digits_first`` and ``six_digits_past`` are pending ``F32``.
+"123456.7031250" for 123456.7 and leaves the TXTs past the digits alone, with no NUL after them.
+pyrung's digits for 123456.7 differ, so ``six_digits_first`` and ``six_digits_past`` are
+pending ``F32``.
 
 Nobody has read the text of a Real near 3.4E+38 off a CLICK (``LONGEST``).  The most negative
 Real, -3.4028235E+38, writes the longest text of any Real in fixed notation.  These cases have a DF
@@ -148,7 +149,7 @@ def _longest_sentence(window: int, read: str) -> str:
 
 
 def _codes(read: str) -> dict[str, int]:
-    """The fields that hold *read*, two characters a field."""
+    """Return the code of each field that holds *read*, two characters a field."""
     return {f: 128 * ord(read[2 * k]) + ord(read[2 * k + 1]) for k, f in enumerate(FIELDS)}
 
 

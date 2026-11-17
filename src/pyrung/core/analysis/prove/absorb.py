@@ -1,9 +1,9 @@
 """Done/Acc pairing, and the accumulator absorption of how()'s domain prior.
 
-What lives here is structural (Done/Acc pairs, write targets, the data-read
-exclusivity check ``_has_forbidden_data_read``, which classify shares) plus
-the absorptions PILOT's ``how()`` prior is built from (``_build_prior_facts``).
-Its world key projects a timer's Done and Acc onto
+This module holds the structural parts: Done/Acc pairs, write targets, and the
+data-read exclusivity check ``_has_forbidden_data_read``, which classify shares.  It
+also holds the absorptions that PILOT's ``how()`` prior is built from
+(``_build_prior_facts``).  The prior's world key projects a timer's Done and Acc onto
 ``False``/``PENDING``/``True`` (``_done_acc_state``).  It projects a progress
 accumulator onto threshold-crossing bits (``_ThresholdVectorSpec``), and its
 earned-work ordinal sources come from the same vectors.  PILOT replays every
@@ -86,17 +86,17 @@ class _DoneAccInfo:
 
 
 def _drum_flag_without_its_time(drum: Any, program: Program) -> str | None:
-    """Why *drum*'s completion flag can be on without its last step's time up, or None.
+    """Return why *drum*'s completion flag can be on without its last step's time up, or None.
 
     The Done/Acc tri-state reads a flag that is on as settled, whatever the
     accumulator holds.  That holds for a time drum only while the flag comes
-    on at the last step and stays there until a reset.  A jump keeps the flag
-    on but moves the step and clears the accumulator; a jog on the last step
-    turns the flag on with that step's time not yet up; a flag that starts on
-    has no time behind it; and another writer of its step register can move
-    it, or of the flag can free it with its accumulator as it stands.  Then
-    the drum's time is a real dimension, not absorbed.  The reason reads as a
-    hint.
+    on at the last step and stays there until a reset.  Five things break that.
+    A jump keeps the flag on but moves the step and clears the accumulator.  A jog
+    on the last step turns the flag on with that step's time not yet up.  A flag that
+    starts on has no time behind it.  Another writer of the step register can move
+    the step.  Another writer of the flag can free it with its accumulator as it
+    stands.  Then the drum's time is a real dimension, not absorbed.  The reason
+    reads as a hint.
     """
     from pyrung.core.validation._common import walk_instructions
 
@@ -220,7 +220,7 @@ def _prior_key_done_specs(
     done_acc: Mapping[str, str],
     done_kinds: Mapping[str, str],
 ) -> tuple[_StateKeyDoneSpec, ...]:
-    """The Done bits of the how() prior's world key: each with an absorbed accumulator."""
+    """Return the Done bits of the how() prior's world key that have an absorbed accumulator."""
     specs: list[_StateKeyDoneSpec] = []
     for index, done_name in enumerate(stateful_names):
         acc_name = done_acc.get(done_name)
@@ -239,7 +239,7 @@ def _prior_key_done_specs(
 
 
 def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
-    """``(tag_name, instruction_type)`` for each tag *instr* writes.
+    """Return ``(tag_name, instruction_type)`` for each tag that *instr* writes.
 
     The destinations are the ones ``write_sites`` reads from the instruction's
     declarations, with the receive payload and timer and counter status bits.

@@ -1,11 +1,12 @@
-"""A clock read through a tag the plateau guard might not see move.
+"""Test a clock that is read through a tag the plateau guard might not see move.
 
-A rung reading a clock ends the window at each of its edges, unless the clock only
-drives an *indicator*: an ``out()`` bit on rungs of plain contacts, whose readers
-all sit below its writers and write nothing but indicators.  The guard does not
-watch an indicator and each landing rebuilds it.  Anything else a clock-driven tag
-reaches keeps the clock a bound: a second clock on a rung, a comparison, a latch, a
-copy, a subroutine gated by it.  Blink indicators are common and cheap, so they stay in the loop.
+A rung that reads a clock ends the window at each of its edges, unless the clock only drives
+an *indicator*. An indicator is an ``out()`` bit on rungs of plain contacts. All its readers
+sit below its writers, and they write nothing but indicators. The guard does not watch an
+indicator, and each landing rebuilds it. Anything else that a clock-driven tag reaches keeps
+the clock a bound. That covers a second clock on a rung, a comparison, a latch, a copy and a
+subroutine that the clock-driven tag gates. Blink indicators are common and cheap, so they
+stay in the loop.
 """
 
 from __future__ import annotations
@@ -102,7 +103,7 @@ def _plc(body: Body, patch: dict[str, Any] | None) -> PLC:
 
 
 def _assert_exact(body: Body, scans: int = 1200, patch: dict[str, Any] | None = None) -> None:
-    """The loop and a replay equal stepping, at the end and at scans a replay reaches."""
+    """Check the loop and a replay equal stepping, at the end and at scans a replay reaches."""
     stepped = _plc(body, patch)
     expected: dict[int, dict[str, Any]] = {}
     for _ in range(scans):
@@ -127,7 +128,7 @@ def _kernel_scans(body: Body, scans: int = 1200) -> int:
 
 
 def _assert_lands_as_stepped(body: Body, *conditions: Any) -> None:
-    """``run_until`` stops on one scan with one state, folded or stepped, for each."""
+    """Check that ``run_until`` stops on one scan with one state, folded or stepped, for each."""
     for condition in conditions:
         folded, stepped = _plc(body, None), _plc(body, None)
         folded.run_until(condition, max_cycles=2000, jit=True)
@@ -289,7 +290,7 @@ def _blink_written_in_a_sub() -> None:
 
 
 def _sampled_by_a_blink_on_the_call() -> None:
-    # H only updates while F runs the subroutine: it depends on the order of edges.
+    # H only updates while F runs the subroutine, so it depends on the order of edges.
     _blinks()
     with Rung(F):
         call("s")
@@ -387,7 +388,7 @@ def _two_clocks_copied() -> None:
 
 
 def _standing_value_in_three_steps() -> None:
-    # Settles only over several phases, with no reader to show it.
+    # The value settles only over several phases, and no reader shows it.
     with Rung(clk100):
         copy(7, V)
     with Rung(~clk100):
@@ -702,7 +703,7 @@ def _blink_into_a_range() -> None:
 
 
 def _indicator_read_above_its_writer() -> None:
-    # The reader sees last scan's blink: one scan late.
+    # The reader sees the blink of the last scan, so it is one scan late.
     with Rung(F):
         out(Lamp)
     _blink()
@@ -721,7 +722,7 @@ def _indicator_feeds_latch() -> None:
 
 
 def _blink_in_an_uncalled_subroutine() -> None:
-    # A writer no main rung reaches has no position to sit above its reader.
+    # No main rung reaches this writer, so it has no position above its reader.
     with subroutine("Never"):
         with Rung(clk100):
             out(F)
@@ -731,7 +732,7 @@ def _blink_in_an_uncalled_subroutine() -> None:
 
 
 def _seal_in_on_a_clock() -> None:
-    # The same rung reads and writes it, so it is no function of its scan.
+    # The same rung reads and writes F, so F is not a function of its scan.
     with Rung(Or(clk100, F)):
         out(F)
     with Rung(F):
@@ -740,7 +741,7 @@ def _seal_in_on_a_clock() -> None:
 
 
 def _branch_lamp_above_its_writer() -> None:
-    # H reads the F of the scan before.
+    # H reads the F from the previous scan.
     with Rung(Mode):
         with branch(F):
             out(H)
@@ -752,7 +753,7 @@ def _branch_lamp_above_its_writer() -> None:
 
 
 def _function_over_a_gated_blink(calls: list[int]) -> Body:
-    # The function moves the bit every scan; nothing but the plateau guard can see it.
+    # The function moves the bit every scan. Only the plateau guard can see that.
     def alternate() -> dict[str, bool]:
         calls.append(1)
         return {"v": len(calls) % 2 == 0}
@@ -907,12 +908,12 @@ class TestWhatIsNotAnIndicator:
         _assert_exact(_branch_lamp_above_its_writer, patch={"Mode": True})
 
     def test_a_second_writer_stays_in_the_guard(self) -> None:
-        # Its moves are not a function of the clock, and a probe scan shows them.
+        # Its moves are not a function of the clock. A probe scan shows them.
         def run(jit: bool) -> tuple[int, dict[str, Any]]:
             calls: list[int] = []
             plc = _plc(_function_over_a_gated_blink(calls), None)
-            # A monitor on what holds changes nothing here, and tells --fold-check to
-            # leave this run alone: a stepped twin would call the same function.
+            # A monitor on G changes nothing here. It tells --fold-check to leave this run
+            # alone, because a stepped twin would call the same function.
             plc.monitor(G, lambda _cur, _prev: None)
             plc.run_until(NEVER, max_cycles=700, jit=jit)
             return len(calls), _state(plc)
@@ -1009,7 +1010,7 @@ def _constant_then_blink() -> None:
 
 
 def _seed_282_shape(preset: int) -> Body:
-    # From the fuzzer: a chain off a blink into a call and a latch that holds itself.
+    # From the fuzzer: a chain from a blink into a call and into a latch that holds itself.
     def body() -> None:
         B0, B1, B3, B4, M1 = Bool("B0"), Bool("B1"), Bool("B3"), Bool("B4"), Bool("M1")
         with Rung():

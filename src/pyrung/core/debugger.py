@@ -547,8 +547,11 @@ class PLCDebugger:
         self,
         rung_state: DebugRungState,
     ) -> dict[int, _BranchTraceState]:
-        """Each direct branch's region before the solve reaches it: off, its
-        contacts skipped (final at once under an unpowered parent)."""
+        """Return each direct branch's region before the solve reaches it.
+
+        A branch is off with its contacts skipped.  It is final at once under an unpowered
+        parent.
+        """
         from pyrung.core.rung import Rung as RungClass
 
         execution = rung_state.execution

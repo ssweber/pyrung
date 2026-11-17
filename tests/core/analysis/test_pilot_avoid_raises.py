@@ -1,13 +1,14 @@
-"""An ``avoid=`` check that raises did not say the state is clear.
+"""If an ``avoid=`` check raises, that does not mean the state is clear.
 
 A check that raises on a real state reaches the caller as a named error.  A real state is
-the one how() starts from, or a scan a trial really runs, failed trials included.  Whichever
-gate met it, it never reads as a pass and never as a verdict.
+the one how() starts from, or a scan that a trial really runs, including failed trials.  No
+gate treats that raise as a pass or as a verdict.
 
-A raise on any other state says nothing about the route and denies nothing: the resting
-baseline, a hold laid over a state, a route's demands, the state behind the start when a plan
-rewinds and re-runs the entry scan.  That member is not violated, the others keep their answers,
-and the gates judge the scans those choices lead to.
+A raise on any other state says nothing about the route and rules nothing out.  The other
+states are the resting baseline, a hold laid over a state, a route's demands, and the state
+behind the start when a plan rewinds and re-runs the entry scan.  The member that raised is
+not violated, the other members keep their answers, and the gates judge the scans that
+those choices lead to.
 """
 
 from __future__ import annotations
@@ -231,7 +232,7 @@ def test_search_control_passes_through_a_check(stop, said, monkeypatch) -> None:
     prog, target, *_ = _two_ways()
 
     def _ends_the_search(snapshot: dict) -> bool:
-        # A scanned state has the system tags: the search is under way.
+        # A scanned state has the system tags, so the search is under way.
         if "fault.out_of_range" in snapshot:
             raise stop()
         return False
@@ -444,7 +445,7 @@ def test_a_check_that_answers_on_the_resting_baseline_keeps_that_answer() -> Non
 
 
 def test_a_condition_with_a_program_owned_side_denies_no_hold() -> None:
-    """``Input > Limit``: the baseline has no Limit, and a real state without Limit is avoided."""
+    """``Input > Limit``.  The baseline has no Limit.  A real state without Limit is avoided."""
     ctx = _hold_ctx(_compile_avoid(Int("Input") > Int("Limit")), {"Input": 0})
     assert _avoid_scan_names(ctx.avoid_pred, {"Input": 5})
     assert not _avoid_scan_names(ctx.avoid_pred, {"Input": 5, "Limit": 9})
@@ -532,7 +533,7 @@ def _holds(plan) -> int:
 
 
 def _avoided_scans(plan, avoided) -> list[int]:
-    """Scans of the plan in the avoided state.  The fork has them all; a replay keeps its last."""
+    """Scans of the plan in the avoided state.  The fork has all of them.  A replay has the last."""
     return [
         state.scan_id for state in plan.fork.history.latest(100000) if avoided(dict(state.tags))
     ]
@@ -654,7 +655,7 @@ def test_a_check_true_only_at_the_failed_landing_keeps_the_route(release_needed,
 
 
 def test_a_check_no_scan_of_the_route_can_clear_stops_without_spending_the_budget() -> None:
-    """Armed needs Start held while the sensor is held: the action gate says so at once."""
+    """Armed needs Start held while the sensor is held.  The action gate says so at once."""
     prog, state = _armed_dwell(False)
     assert _drive(prog, state == 7, None).status is PlanStatus.REACHED
 
@@ -710,7 +711,7 @@ def test_releasing_an_input_that_really_is_on_stops() -> None:
 
 
 def test_the_form_of_a_check_does_not_change_the_answer() -> None:
-    """The baseline has no HoldState: a condition and a callable both have no answer for it."""
+    """The baseline has no HoldState, so a condition and a callable both have no answer for it."""
     prog, state, *_ = _dwell_program()
 
     assert _drive(prog, state == 7, None).status is PlanStatus.REACHED
@@ -719,10 +720,10 @@ def test_the_form_of_a_check_does_not_change_the_answer() -> None:
 
 
 def test_a_check_is_not_asked_about_a_real_input_put_back_at_rest() -> None:
-    """RecipeShown copies Recipe every scan, so no real state has them apart.
+    """RecipeShown copies Recipe every scan, so no real state has the two with different values.
 
-    Putting Recipe back at 0 under a real RecipeShown of 5 would be a state that never
-    happens, and raise for it.
+    If a plan put Recipe back at 0 under a real RecipeShown of 5, that would be a state that
+    no real run reaches.  The check would raise on it.
     """
     sensor = Bool("HoldSensor", external=True)
     recipe = Int("Recipe", external=True)
@@ -1076,7 +1077,7 @@ def _dwell_target():
 
 
 def _entry_preset():
-    """The first scan latches X, and a timer with no preset takes it away on the next."""
+    """The first scan latches X.  A timer with no preset resets X on the next scan."""
     x = Bool("HX")
     target = Bool("HT")
     wait = Timer.clone("HW")
@@ -1265,7 +1266,7 @@ def test_a_system_tag_a_restart_lacks_keeps_the_answer(row) -> None:
 
 
 def test_a_division_by_a_step_cleared_for_the_restart_keeps_the_answer() -> None:
-    """The step is 0 only on the state the restart lands on, and no scan has that."""
+    """The step is 0 only on the state that the restart lands on.  No scan has that state."""
     make, target, step, _status = _ENTRY_REQUIREMENTS["aborted"]
     without = make().how(target, max_scans=2000)
     assert step in without.restart.clear
@@ -1351,7 +1352,7 @@ def test_a_member_that_answers_keeps_its_answer_beside_one_that_raises() -> None
 
 
 def test_a_raise_on_the_landing_of_a_wait_reaches_the_caller() -> None:
-    """True where the wait starts, so nothing else asks the member again: only the landing does."""
+    """True where the wait starts, so nothing else asks the member again.  Only the landing does."""
     prog, target, dt = _route_by_waiting()
 
     def _clear_on_landing(snapshot: dict) -> bool:

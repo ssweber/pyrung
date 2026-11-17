@@ -598,9 +598,9 @@ def _every_memory_kind(*, preset: int = 10, jump_step: int = 1) -> Program:
 
 
 class TestReloadInputMemory:
-    """Memory of an instruction's inputs as it last saw them follows an edit of what
-    it reads (a preset, a source, a jump step); a leg's memory only while that leg is
-    unchanged."""
+    """When you edit what an instruction reads (a preset, a source, a jump step), the reload
+    carries the memory of the instruction's inputs as it last saw them. It carries a leg's
+    memory only while that leg is unchanged."""
 
     def test_every_slot_is_classified(self):
         from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
@@ -640,8 +640,9 @@ class TestReloadInputMemory:
         ids=["down_leg", "reset_leg", "target", "contacts"],
     )
     def test_a_preset_edited_with_a_leg_target_or_contact(self, edit, carried):
-        """The rung's count input needs the target and contacts unchanged; the down
-        leg's memory its own leg too.  The reset leg keeps no memory."""
+        """The rung's count input memory is kept only if the target and contacts are
+        unchanged. The down leg's memory also needs its own leg unchanged. The reset leg
+        keeps no memory."""
         old = self._build(self._COUNTER.format(preset=10))
         new = self._build(self._COUNTER.format(preset=20).replace(*edit))
         memory = {"_cu:i1": True, "_cd:i1": True}
@@ -655,9 +656,9 @@ class TestReloadInputMemory:
         ids=["down_leg", "reset_leg"],
     )
     def test_a_leg_only_edit_matches_the_site_and_carries_everything(self, edit):
-        """A helper leg is no part of a site's identity: an edit to it alone keeps the
-        site, so even the edited leg's memory is carried (the new leg's first scan
-        compares with the old leg's last value)."""
+        """A helper leg is not part of a site's identity. An edit to it alone keeps the
+        site, so even the edited leg's memory is carried. The new leg's first scan
+        compares with the old leg's last value."""
         old = self._build(self._COUNTER.format(preset=10))
         new = self._build(self._COUNTER.format(preset=10).replace(*edit))
         memory = {"_cu:i1": True, "_cd:i1": True}

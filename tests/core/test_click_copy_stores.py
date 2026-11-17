@@ -1,5 +1,7 @@
-"""What a Copy, Block copy and Fill store, as a CLICK read it (conformance round 2026-11-05),
-except where a test names a row as pyrung's own choice.
+"""Check what a Copy, Block copy and Fill store, as a CLICK read it (conformance round
+2026-11-05).
+
+A test says so where a row is pyrung's own choice.
 
 Each runs on every backend ``runner_factory`` gives: the interpreter, the compiled kernel, or
 both in lockstep.  The kernel is the CircuitPython codegen's, so the generated P1AM-200 code
@@ -460,8 +462,8 @@ def test_a_logical_compare_built_after_mapping_reads_the_hardware(runner_factory
 
 
 def test_a_char_mapping_alone_does_not_hold_its_bank():
-    """The slot a Char is mapped to is kept weakly: once nothing holds the bank, the
-    tag is mapped nowhere, and compares as a Char of no block."""
+    """The slot that a Char is mapped to is held weakly. Once nothing holds the bank, the
+    tag is mapped nowhere, and it compares as a Char of no block."""
     import gc
     import weakref
 

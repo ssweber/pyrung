@@ -34,10 +34,10 @@ class SystemNicknameRepairRequired(ValueError):
 
 
 class OldCommentFormError(ValueError):
-    """Raised when a nickname comment holds an annotation form this pyrung no longer reads.
+    """Raised when a nickname comment holds an annotation form that this pyrung no longer reads.
 
-    An editor matches on ``code`` or the class, then offers "Upgrade Project". ``row`` is the
-    nickname and address of the offending row once a project load knows it.
+    An editor matches on ``code`` or the class, then offers "Upgrade Project".  Once a
+    project load knows the offending row, ``row`` holds that row's nickname and address.
     """
 
     code = "OLD_COMMENT_FORM"

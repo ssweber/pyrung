@@ -1,6 +1,6 @@
-"""Tests for retrospective causal chain analysis (Section C).
+"""Test retrospective causal chain analysis (Section C).
 
-Covers the worked example from the spec (Sensor_Pressure → Sts_FaultTripped)
+The tests cover the worked example from the spec (Sensor_Pressure → Sts_FaultTripped)
 and edge cases for the backward walk algorithm.
 """
 
@@ -64,7 +64,7 @@ def _build_worked_example():
 
 
 class TestWorkedExample:
-    """The worked example from the causal chains spec."""
+    """Tests for the worked example from the causal chains spec."""
 
     def test_fault_tripped_chain(self) -> None:
         """Sensor_Pressure → Sts_FaultTripped chain.
@@ -137,8 +137,8 @@ class TestWorkedExample:
         assert faulted.held_since_scan is None
 
         # Root causes: the trigger AND the deep walk's temporal hop on the
-        # held Permissive_OK enabler (its establishing patch at scan 1 is a
-        # genuine but-for support of the fault).
+        # held Permissive_OK enabler. Its establishing patch at scan 1 is a
+        # genuine but-for support of the fault.
         conjunctive_tags = {t.tag_name for t in chain.conjunctive_roots}
         assert conjunctive_tags == {"Sensor_Pressure", "Permissive_OK"}
 
@@ -157,7 +157,7 @@ class TestWorkedExample:
         assert chain.confidence == 1.0
 
     def test_fault_tripped_chain_shallow(self) -> None:
-        """deep=False restores the trigger-only walk: one root, no terminals."""
+        """With deep=False, cause() walks the trigger only: one root and no terminals."""
         logic = _build_worked_example()
         runner = PLC(logic)
 
@@ -175,7 +175,7 @@ class TestWorkedExample:
         assert chain.roots == []
 
     def test_fault_tripped_at_specific_scan(self) -> None:
-        """cause(tag, scan=N) should explain the transition at that scan."""
+        """cause(tag, scan=N) explains the transition at that scan."""
         logic = _build_worked_example()
         runner = PLC(logic)
 
@@ -191,7 +191,7 @@ class TestWorkedExample:
         assert chain.effect.scan_id == 2
 
     def test_alarm_horn_chain(self) -> None:
-        """Alarm_Horn chain should trace back through Sts_FaultTripped to Sensor_Pressure."""
+        """The Alarm_Horn chain traces back through Sts_FaultTripped to Sensor_Pressure."""
         logic = _build_worked_example()
         runner = PLC(logic)
 
@@ -245,7 +245,7 @@ class TestEdgeCases:
         assert runner.cause("NonExistent") is None
 
     def test_unconditional_rung(self) -> None:
-        """An unconditional rung should produce a step with no proximate causes."""
+        """An unconditional rung produces a step with no proximate causes."""
         X = Bool("X")
 
         with Program() as logic:
@@ -261,7 +261,7 @@ class TestEdgeCases:
         assert len(chain.conjunctive_roots) >= 1
 
     def test_tag_object_accepted(self) -> None:
-        """cause() should accept a Tag object, not just a string."""
+        """cause() accepts a Tag object as well as a string."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -278,7 +278,7 @@ class TestEdgeCases:
         assert chain.effect.tag_name == "Light"
 
     def test_two_hop_chain(self) -> None:
-        """A → B → C chain should produce 2 steps."""
+        """An A → B → C chain produces 2 steps."""
         A = Bool("A")
         B = Bool("B")
         C = Bool("C")
@@ -312,7 +312,7 @@ class TestEdgeCases:
         assert "A" in root_tags
 
     def test_or_condition_only_true_branch_matters(self) -> None:
-        """With Or(A, B), only the TRUE branch should be proximate."""
+        """With Or(A, B), only the TRUE branch is a proximate cause."""
         A = Bool("A")
         B = Bool("B")
         X = Bool("X")
@@ -339,7 +339,7 @@ class TestEdgeCases:
         assert "B" not in all_tags
 
     def test_scan_specific_no_change_returns_none(self) -> None:
-        """cause(tag, scan=N) where tag didn't change at N returns None."""
+        """cause(tag, scan=N) returns None if the tag did not change at scan N."""
         X = Bool("X")
         with Program() as logic:
             with Rung():
@@ -353,7 +353,7 @@ class TestEdgeCases:
         assert runner.cause("X", scan=2) is None
 
     def test_duration_scans(self) -> None:
-        """duration_scans should span from earliest step to effect.
+        """duration_scans spans from the earliest step to the effect.
 
         Rung order matters: Rung 0 reads B (before Rung 1 writes it),
         so C transitions one scan after B — a cross-scan chain.
@@ -381,7 +381,7 @@ class TestEdgeCases:
 
     def test_enabling_only_transition_is_not_self_rooted(self) -> None:
         """If a writer has only held enablers, cause() must not root the written
-        tag itself — the deep walk resolves the held enabler's establishing
+        tag itself. The deep walk resolves the held enabler's establishing
         transition instead."""
         Enable = Bool("Enable", external=True)
 
@@ -1582,8 +1582,8 @@ class TestBranchInheritedRows:
         assert m_cond.evaluate(inner_run.condition_view(m_cond)) is True
 
     def test_shared_condition_object_is_read_on_each_row(self) -> None:
-        """One condition object on the trunk and on a branch is two contacts:
-        each is read on its own row, so cause() names what each one read."""
+        """A condition object that is on both the trunk and a branch counts as two contacts.
+        Each is read on its own row, so cause() names what each one read."""
         A = Bool("A")
         Z = Bool("Z")
         Y = Bool("Y")
@@ -1610,7 +1610,7 @@ class TestBranchInheritedRows:
         assert [(e.tag_name, e.value) for e in step.enablers] == [("A", True)]
 
     def test_compacted_projection_keeps_inherited_contacts(self) -> None:
-        """A compacted branch view holds only its own contacts' reads; the
+        """A compacted branch view holds only its own contacts' reads. The
         inherited contacts stay readable on the trunk row's compacted view."""
         plc = self._trunk_reset_above_branch()
         projection = plc._replay_pilot_rung_write_projection_at(plc.current_state.scan_id)

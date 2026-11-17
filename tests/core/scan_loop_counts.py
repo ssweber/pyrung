@@ -1,4 +1,4 @@
-"""Measuring long runs: what ran in the guarded scan loop, and what did not."""
+"""Count the scans of long runs that ran in the guarded scan loop, and those that did not."""
 
 from __future__ import annotations
 
@@ -7,14 +7,17 @@ from typing import Any
 from pyrung import Bool
 from pyrung.core import scan_trace
 
-# A stop condition that never holds, for "run this many scans" with run_until().  A
-# callable would keep the run interpreted; a condition goes through the loop.
+# A stop condition that never holds.  Pass it to run_until() to run a fixed number of scans.
+# A callable would keep the run interpreted, but a condition goes through the loop.
 NEVER = Bool("ScanLoopTestNever")
 
 
 class ScansOutsideLoop:
-    """Counts the scans of a runner that did not run in the loop: interpreted or real
-    compiled scans.  ``counter["n"]``, as the rate tests read it."""
+    """Counts the scans of a runner that did not run in the loop.
+
+    These are the interpreted scans and the real compiled scans.  The rate tests read the count
+    as ``counter["n"]``.
+    """
 
     def __init__(self, plc: Any) -> None:
         self._interpreted = 0

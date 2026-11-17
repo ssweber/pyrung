@@ -35,8 +35,8 @@ def compute_reference_constants(
     2. Used as a copy/fill source feeding some destination D
     3. D consumes that tag as a static reference, either through a table
        pipeline or an explicit tag-valued comparison
-    4. Nothing outside the ladder writes the tag (``tag_written_from_outside``).  So
-       it is a declared program constant, not an operator or field interface.
+    4. Nothing outside the ladder writes the tag (``tag_written_from_outside``).  So the
+       tag is a declared program constant, not an operator or field interface.
     """
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
@@ -232,7 +232,7 @@ def scan_transient_rest(
         return False, None
     if pdg.unlisted_writers_of(tag):
         # A write through a pointer that lists no targets may store any value after the
-        # writes listed here.
+        # writes that are listed here.
         return False, None
 
     writer_indices = pdg.writers_of.get(tag, frozenset())

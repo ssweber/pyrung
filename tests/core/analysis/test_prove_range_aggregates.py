@@ -1,4 +1,4 @@
-"""Prover coverage for range aggregates (sum / max / min / median / mean) inside math()."""
+"""Test prover coverage of range aggregates (sum / max / min / median / mean) inside math()."""
 
 from __future__ import annotations
 

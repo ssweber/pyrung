@@ -39,11 +39,12 @@ if TYPE_CHECKING:
 
 
 def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
-    """The conversion a Copy with no ``convert=`` makes across text, as CLICK's does.
+    """Return the conversion that a Copy with no ``convert=`` makes across text, as CLICK does.
 
-    A number register into a TXT writes its text, as ``to_text()`` does (CLICK's dialog
-    has no Copy there without a conversion, and starts on Copy Value with Suppress zero).
-    A TXT into a number reads its digit, as ``to_value`` does.  ``None`` for any other Copy.
+    A number register into a TXT writes its text, as ``to_text()`` does.  CLICK's dialog
+    has no Copy there without a conversion, and it starts on Copy Value with Suppress zero.
+    A TXT into a number reads its digit, as ``to_value`` does.  Return ``None`` for any
+    other Copy.
     """
     from pyrung.core.copy_converters import to_text, to_value
     from pyrung.core.tag import TagType
@@ -58,7 +59,7 @@ def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
 
 
 def _source_past_end_keeps(source: Any, ctx: ScanContext) -> bool:
-    """True for a pointer *source* past the end of a bank whose Copy then writes nothing.
+    """Return True for a pointer *source* past the end of a bank whose Copy then writes nothing.
 
     CLICK leaves the destination of a Copy from past DS, DH, DF or TXT, with no flag
     (``Block._past_end_keeps``); past any other bank the read is the type's zero.
@@ -154,7 +155,7 @@ class CopyInstruction(OneShotMixin, Instruction):
         try:
             resolved_target = resolve_tag_ctx(self.dest, ctx)
         except PastBankError:
-            # The write is dropped, with no flag. The source is still read.
+            # The write is dropped with no flag.  The source is still read.
             resolved_target = None
         except IndexError:
             _set_fault_address_error(ctx)
@@ -331,7 +332,7 @@ class CopyInstruction(OneShotMixin, Instruction):
                 _set_fault_out_of_range(ctx)
             return
         except (ValueError, OverflowError):
-            # int() of NaN raises the first, of +/-Inf the second.
+            # int() raises ValueError for NaN and OverflowError for +/-Inf.
             _set_fault_out_of_range(ctx)
             return
 
@@ -427,8 +428,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 f"dest has {len(dst_tags)} elements"
             )
 
-        # A character that does not convert leaves its own element and faults; the
-        # others are written (CLICK: "1A2" over 99s is 1, 99, 2).
+        # A character that does not convert leaves its own element unchanged and faults.
+        # The other characters are written (CLICK: "1A2" over 99s is 1, 99, 2).
         updates = {}
         for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
             try:

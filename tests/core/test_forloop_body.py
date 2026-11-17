@@ -174,8 +174,8 @@ def test_body_rung_contact_driven_by_same_iteration_write(runner_factory):
 
 
 def test_bare_body_helper_leg_reads_the_body_rows_above_it(runner_factory):
-    """A bare body instruction is a row of its own: its reset leg reads Rst as
-    latched by the body row above it, on every path and backend."""
+    """A bare body instruction is a row of its own.
+    Its reset leg reads Rst as the body row above it latched it, on every path and backend."""
     with Program() as logic:
         with Rung(Enable):
             with forloop(2):
@@ -191,8 +191,8 @@ def test_bare_body_helper_leg_reads_the_body_rows_above_it(runner_factory):
 
 @pytest.mark.parametrize("backend", [PLC, CompiledPLC], ids=["interpreted", "compiled"])
 def test_bare_body_drum_reads_its_pins_before_it_corrects_the_step(backend):
-    """A bare body box reads its legs as its row starts, before its own writes:
-    the jump leg sees the uncorrected step 7, not the 1 the drum writes."""
+    """A bare body box reads its legs when its row starts, before its own writes.
+    The jump leg sees the uncorrected step 7, not the 1 that the drum writes."""
     step = Int("Step")
     with Program(strict=False) as logic:
         with Rung(Enable):
@@ -268,8 +268,8 @@ def test_body_instructions_capture_the_loop_and_body_rung_conditions():
     bare_ctu, body_ctu = loop.instructions
     assert isinstance(bare_ctu, CountUpInstruction)
     assert isinstance(body_ctu, CountUpInstruction)
-    # Bare body instructions carry the loop rung's condition; body-rung ones
-    # carry the loop rung's and their own.
+    # Bare body instructions carry the loop rung's condition.  Instructions in a body rung
+    # carry the loop rung's condition and their own.
     assert "Enable" in repr(bare_ctu.up_condition)
     assert "Enable" in repr(body_ctu.up_condition)
     assert "Gate" in repr(body_ctu.up_condition)

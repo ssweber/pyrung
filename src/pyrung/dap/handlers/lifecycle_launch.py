@@ -95,10 +95,9 @@ def discover_click_project(
 ) -> tuple[TagMap | None, Iterable[Any] | None]:
     """Return the launched program's ``(TagMap, blocks)``; either may be ``None``.
 
-    A ``mapping`` TagMap in the program's own namespace wins (single-file
-    programs).  Otherwise the project's tags module is used: generated CLICK
-    projects define ``mapping`` and ``blocks`` (the ``ClickBlocks()`` set) in
-    ``plc/tags.py``.
+    A ``mapping`` TagMap in the program's own namespace wins (single-file programs).
+    Otherwise this function reads the project's tags module.  Generated CLICK projects
+    define ``mapping`` and ``blocks`` (the ``ClickBlocks()`` set) in ``plc/tags.py``.
     """
     from pyrung.click.tag_map import TagMap
 
@@ -127,8 +126,8 @@ class ClickBinding:
 def stage_click_project(adapter: Any, namespace: dict[str, Any], project_dir: Path) -> ClickBinding:
     """Find the program's TagMap and build its Modbus provider, leaving the adapter as it is.
 
-    The provider reads the adapter's runner when a client asks, so it serves the
-    new program once :func:`commit_click_project` puts it in place.
+    The provider reads the adapter's runner when a client asks.  It serves the new program
+    once :func:`commit_click_project` puts the binding in place.
     """
     from pyclickplc.server import MemoryDataProvider
 

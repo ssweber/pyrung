@@ -59,7 +59,7 @@ class FinalWritersReport:
 
 
 def _status_only_names(instr: Any) -> frozenset[str]:
-    """The tags *instr* writes only through its own status fields, such as a timer's EN."""
+    """Return the tags that *instr* writes only through its own status fields, like a timer's EN."""
     every = {tag.name for tag in instruction_written_tags(instr)}
     return frozenset(every - {tag.name for tag in instruction_written_tags(instr, status=False)})
 

@@ -1,9 +1,9 @@
-"""The guarded scan loop against stepping, at fine granularity.
+"""Compare the guarded scan loop with stepping, a few scans at a time.
 
-Every program here runs twice: through ``run_for`` / ``run_until`` with the loop
-firing a few scans at a time, and interpreted, scan by scan.  Each state the loop
-leaves between firings must equal the twin's state at that scan, with stimulus
-changing mid-run, and each case says how much of it ran in the loop, so a decline
+Every program here runs twice. One run goes through ``run_for`` / ``run_until`` with the
+loop firing a few scans at a time. Its twin is interpreted, scan by scan. Each state the
+loop leaves between firings must equal the twin's state at that scan, while the stimulus
+changes mid-run. Each case also counts how many scans ran in the loop, so a decline
 cannot pass as agreement.
 """
 
@@ -97,7 +97,7 @@ Txt = Block("TrTxt", TagType.CHAR, 1, 4)
 
 @pytest.fixture
 def fine_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every run through the kernel, the loop firing a few scans at a time, loudly."""
+    """Make every run fire the loop a few scans at a time, and make a self-check mismatch raise."""
     monkeypatch.setattr(compiled_run, "INTERPRETED_PREFIX", 1)
     monkeypatch.setattr(scan_trace, "MIN_RUN_SCANS", 1)
     monkeypatch.setattr(scan_trace, "BURST_SIZES", BURSTS)
@@ -107,8 +107,8 @@ def fine_loop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _plc(program: Program, dt: float) -> PLC:
     plc = PLC(program, dt=dt)
-    # From construction too: the log keeps the base a set_rtc() replaced, and two
-    # runners built apart would differ there by the microseconds between them.
+    # Set the clock at construction as well. The log keeps the base that a set_rtc() call
+    # replaced, and two runners built apart would differ there by a few microseconds.
     plc._set_rtc_internal(RTC_START, 0.0)
     plc.set_rtc(RTC_START)
     return plc
@@ -119,7 +119,7 @@ def _assert_equal(ours: Any, stepped: Any) -> None:
 
 
 class _Observed:
-    """The states the loop leaves between firings."""
+    """Records the states the loop leaves between firings."""
 
     def __init__(self, plc: PLC) -> None:
         self.plc = plc
@@ -143,10 +143,10 @@ def _step_to(
     seen: dict[int, Any],
     truth: dict[int, Any] | None = None,
 ) -> int:
-    """Scan the twin on as one run does: a stopped runner resumes only at the next call.
+    """Scan the twin on, the way one run does: a stopped runner resumes only at the next call.
 
-    *truth* keeps a sample of the states stepped, for what history later says of them;
-    a restart starts a new recording, so it forgets the old one's.
+    *truth* collects a sample of the states that were stepped, to check what history says
+    about them later. A restart starts a new recording, so it clears the old sample.
     """
     compared = 0
     twin._ensure_running()
@@ -167,7 +167,7 @@ def _step_to(
 
 
 def _a_sample_of(truth: dict[int, Any]) -> dict[int, Any]:
-    """Evenly spaced states of those kept, the last among them."""
+    """Return evenly spaced states from those kept, including the last one."""
     scans = sorted(truth)
     every = max(1, len(scans) // fold_check.HISTORY_SAMPLES)
     return {scan: truth[scan] for scan in scans[::-1][::every][: fold_check.HISTORY_SAMPLES]}
@@ -180,7 +180,10 @@ def _lockstep(
     dt: float = 0.01,
     prepare: Callable[[PLC], None] | None = None,
 ) -> Counter[str]:
-    """Run *program* through the segments, (seconds, patches first), against a twin."""
+    """Run *program* through the segments and compare it with a twin.
+
+    Each segment is (seconds, patches). The patches apply before the segment runs.
+    """
     plc = _plc(program, dt)
     twin = _plc(program, dt)
     if prepare is not None:
@@ -201,7 +204,7 @@ def _lockstep(
         _assert_equal(plc.state, twin.state)
         fold_check.compare_runners("compiled", plc, twin, start)
         fold_check.compare_continuation("compiled", plc, twin)
-    # Once, at the end: the scans of every segment have to outlast the ones after them.
+    # Compare history once, at the end. The scans of every segment must outlast the later ones.
     fold_check.compare_history("compiled", plc, twin, start, _a_sample_of(truth))
     counts = Counter(scan_trace.TOTALS)
     counts.subtract(before)
@@ -497,7 +500,7 @@ def _corpus_rtc_apply_date() -> None:
 
 
 def _corpus_rtc_apply_held() -> None:
-    """An apply on every scan: the hook is never quiet, so no scan reaches the loop."""
+    """Apply the clock on every scan. The hook is never quiet, so no scan reaches the loop."""
     with Rung(Run):
         on_delay(T, 1_000)
     with Rung(T.Done):
@@ -533,7 +536,7 @@ def _corpus_forloop() -> None:
 
 
 def _corpus_text_to_codes() -> None:
-    # Copy to text iterates the text's characters, and bounds the store by the block's length.
+    # Copy to text iterates the text's characters. It limits the store to the block's length.
     with Rung():
         copy("A", Txt[1])
     with Rung(Run):
@@ -631,7 +634,8 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
     ),
 }
 
-# Cases where the loop has every right to run nothing: each scan is a decision.
+# Cases where the loop may run no scans at all. rtc_apply_held applies the clock on every
+# scan, so no scan reaches the loop.
 _NO_COVERAGE_EXPECTED: frozenset[str] = frozenset({"rtc_apply_held"})
 
 
@@ -654,7 +658,7 @@ def test_corpus_equals_stepping_between_firings(name: str, fine_loop: None) -> N
 @pytest.mark.parametrize("seed", [1, 2, 3])
 @pytest.mark.parametrize("name", sorted(CORPUS))
 def test_corpus_under_random_stimulus(name: str, seed: int, fine_loop: None) -> None:
-    """The inputs flip at random scans, so a trace meets states no test author chose."""
+    """Flip the inputs at random scans, so a trace meets states that no test author chose."""
     fill_program, dt, _segments = CORPUS[name]
     rng = random.Random(f"{name}/{seed}")
     segments: list[tuple[float, dict[Any, Any]]] = [(0.05 * dt / 0.01, {Run: True})]
@@ -670,7 +674,7 @@ def test_corpus_under_random_stimulus(name: str, seed: int, fine_loop: None) -> 
 
 
 def test_corpus_as_a_whole_mostly_runs_in_the_loop(fine_loop: None) -> None:
-    """Coverage across the corpus, so a decline creeping in shows up here."""
+    """Check that the corpus mostly runs in the loop, so a new decline shows up here."""
     loop = real = 0
     for fill_program, dt, segments in CORPUS.values():
         counts = _lockstep(_build(fill_program), segments, dt=dt)
@@ -691,7 +695,10 @@ def test_a_copy_to_text_runs_in_the_loop(fine_loop: None) -> None:
 
 
 def test_long_preset_lands_on_the_stepped_scan_at_production_settings() -> None:
-    """Long bursts, no observer: only the landing and the checkpoints to compare."""
+    """Run long bursts with no observer.
+
+    With no observer, the test can compare only the landing and the checkpoints with the twin.
+    """
     program = _build(_corpus_timer_long_preset)
     plc = _plc(program, 0.1)
     twin = _plc(program, 0.1)
@@ -706,7 +713,7 @@ def test_long_preset_lands_on_the_stepped_scan_at_production_settings() -> None:
 
 
 def test_a_harness_plant_runs_in_the_loop_as_part_of_the_scan(fine_loop: None) -> None:
-    """A plant is a second kernel function, before the input drain: it is traced too."""
+    """Trace a plant too. It is a second kernel function that runs before the input drain."""
     Plant = Real("TrPlant", physical=Physical("TrSensor", ramp_on=1.0, ramp_off=-0.5), link="TrRun")
 
     def fill_program() -> None:
@@ -736,10 +743,10 @@ def test_a_harness_plant_runs_in_the_loop_as_part_of_the_scan(fine_loop: None) -
 
 
 def test_a_bool_plant_latches_its_arming_key_as_stepping_does(fine_loop: None) -> None:
-    """A plant's arming latch stays out of the state until it fires.
+    """Keep a plant's arming latch out of the state until the latch fires.
 
-    The kernel holds it at its default until then, so this is where a key added on the
-    wrong scan would show: the compare is by key as well as by value.
+    The kernel holds the latch at its default until then. A key that the loop added on
+    the wrong scan would show up here, because the comparison covers keys and values.
     """
     Feedback = Bool(
         "TrFeedback", physical=Physical("TrMotor", on_delay="2s", off_delay="500ms"), link="TrRun"
@@ -768,7 +775,7 @@ def test_a_bool_plant_latches_its_arming_key_as_stepping_does(fine_loop: None) -
 
 
 def _reads_and_writes(tag: Any) -> Callable[[], None]:
-    """A program that reads *tag*, and if it may, stores into it: a value, then the default."""
+    """Return a program that reads *tag* and, if it is writable, stores a value then the default."""
 
     def fill_program() -> None:
         if tag.type == TagType.BOOL:
@@ -801,7 +808,7 @@ def _reads_and_writes(tag: Any) -> Callable[[], None]:
 
 @pytest.mark.parametrize("name", sorted(SYSTEM_TAGS_BY_NAME))
 def test_every_system_tag_read_and_written_equals_stepping(name: str, fine_loop: None) -> None:
-    """Keys included: a stored point stays out of the state until its first write."""
+    """Compare keys too. A stored point stays out of the state until its first write."""
     program = _build(_reads_and_writes(SYSTEM_TAGS_BY_NAME[name]))
     _lockstep(program, [(1.0, {Run: True}), (2.0, {})])
 
@@ -873,8 +880,11 @@ LAST_WRITTEN = {
 def test_a_stretch_between_published_states_leaves_what_stepping_does(
     name: str, fine_loop: None
 ) -> None:
-    """A value that leaves and comes back to an equal one of another type or sign of zero,
-    between two published states: 0 -> True -> False, 0.0 -> -5.5 -> -0.0."""
+    """Check a value that changes and returns between two published states.
+
+    It comes back as an equal value of another type, or as a zero of the other sign:
+    0 -> True -> False, or 0.0 -> -5.5 -> -0.0. The loop must leave what stepping leaves.
+    """
 
     def program() -> None:
         with Rung(Run):
@@ -981,12 +991,12 @@ def test_stop_predicate_lands_on_the_stepped_scan(name: str, fine_loop: None) ->
     twin.run_until(*conditions, max_cycles=400, jit=False)
     assert plc.state.scan_id == twin.state.scan_id
     _assert_equal(plc.state, twin.state)
-    # The last judgement is the real one: on the scan the guard refused.
+    # A real scan judges the stop predicate last, on the scan that the guard refused.
     assert scan_trace.TOTALS["loop scans"] > before or plc.state.scan_id <= 3
 
 
 def test_stop_predicate_holds_on_every_scan_it_would_on_stepping(fine_loop: None) -> None:
-    """Repeated stops: each landing, each stop judged from where the last one left."""
+    """Stop repeatedly, and judge each stop from where the previous one landed."""
     program = _build(_stop_program)
     plc = _plc(program, 0.01)
     twin = _plc(program, 0.01)
@@ -1048,7 +1058,7 @@ def test_bounds_are_watched_on_every_scan_of_the_loop(fine_loop: None) -> None:
     _assert_equal(plc.state, twin.state)
     assert plc.bounds_violations.keys() == twin.bounds_violations.keys()
     assert scan_trace.TOTALS["loop scans"] > before
-    # Limited passes its maximum at scan 1001 or so; the run steps from there.
+    # Limited passes its maximum at scan 1001 or so. The run steps from there.
     with _Observed(plc) as observed:
         plc.run_for(8.0)
     _step_to(twin, plc.state.scan_id, observed.states)
@@ -1074,7 +1084,7 @@ def _timer_program() -> Program:
 def test_self_check_mismatch_fails_loudly_under_strict(
     fine_loop: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A tracer disagreeing with Python about an operator is caught on its first scan."""
+    """Catch a tracer that disagrees with Python about an operator on its first scan."""
     wrong = dict(scan_trace._BINARY_OPERATORS)
     wrong[ast.Add] = ("-", wrong[ast.Add][1])
     monkeypatch.setattr(scan_trace, "_BINARY_OPERATORS", wrong)
@@ -1085,7 +1095,7 @@ def test_self_check_mismatch_fails_loudly_under_strict(
 def test_self_check_mismatch_declines_the_rest_of_the_run(
     fine_loop: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Not strict: the run steps on, equal to stepping, and the loop stays off."""
+    """Without strict mode, the run steps on as stepping does, and the loop stays off."""
     monkeypatch.setattr(scan_trace, "STRICT_SELF_CHECK", False)
     wrong = dict(scan_trace._BINARY_OPERATORS)
     wrong[ast.Add] = ("-", wrong[ast.Add][1])
@@ -1105,16 +1115,18 @@ def test_self_check_mismatch_declines_the_rest_of_the_run(
 def test_lockstep_bites_when_guards_are_removed(
     fine_loop: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without guards the first iteration is still right, so the self check passes;
-    the comparison between firings has to catch it.  If this stops failing, the
-    corpus above proves nothing."""
+    """Show that the comparison between firings catches a loop with no guards.
+
+    Without guards the first iteration is still right, so the self check passes.
+    If this stops failing, the corpus above proves nothing.
+    """
     monkeypatch.setattr(scan_trace._Tracer, "_guard", lambda *_args, **_kwargs: None)
     with fold_check.deliberate(), pytest.raises(AssertionError, match="differs from stepping"):
         _lockstep(_build(_corpus_sequencer), [(8.0, {})])
 
 
 def test_block_cell_rewritten_with_its_own_value_goes_live_in_the_loop(fine_loop: None) -> None:
-    """The rewrite changes no value, but the cell is in the committed state from then."""
+    """Write a cell with its own value. No value changes, but the cell is committed from then on."""
 
     def fill_program() -> None:
         with Rung():
@@ -1152,7 +1164,7 @@ def test_cap_on_traces_per_run_holds(fine_loop: None, monkeypatch: pytest.Monkey
 
 
 def test_a_program_that_keeps_exiting_backs_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Attempts thin out: mostly plain real scans, with few attempts to pay for."""
+    """Back off, so attempts become rare and most scans are plain real scans."""
     monkeypatch.setattr(compiled_run, "INTERPRETED_PREFIX", 1)
     monkeypatch.setattr(scan_trace, "MIN_RUN_SCANS", 1)
     program = _busy_toggle()
@@ -1226,7 +1238,10 @@ def test_a_run_function_body_is_not_traced(fine_loop: None) -> None:
 
 
 def test_every_system_tag_is_classified_exactly_once() -> None:
-    """A new system tag must be decided on: calling a moving tag constant lands wrong."""
+    """Force a decision for each new system tag.
+
+    If the loop read a moving tag as constant, it would land on a wrong state.
+    """
     assert _CLASSIFIED_SYSTEM_TAGS == frozenset(SYSTEM_TAGS_BY_NAME)
     assert not MOVING_SYSTEM_TAGS & DECLINING_SYSTEM_TAGS
     assert not MOVING_SYSTEM_TAGS & CONSTANT_SYSTEM_TAGS
@@ -1234,8 +1249,11 @@ def test_every_system_tag_is_classified_exactly_once() -> None:
 
 
 def test_constant_system_tags_do_not_depend_on_time_or_scan_id() -> None:
-    """Resolve every derived tag at far apart times and scans: a tag that differs and
-    is not moving or declining would be read as a constant, wrongly."""
+    """Resolve every derived tag at far apart times and scans.
+
+    A tag whose value differs, and that is not moving or declining, would be wrongly
+    read as a constant.
+    """
     plc = _plc(_timer_program(), 0.01)
     runtime = plc._system_runtime
     plc.run(2)
@@ -1250,7 +1268,7 @@ def test_constant_system_tags_do_not_depend_on_time_or_scan_id() -> None:
     samples = [at(1 + i, 0.37 + 1234.567 * i) for i in range(1, 40)]
     moves = {name for name in _DERIVED_TAG_NAMES if len({repr(s[name]) for s in samples}) > 1}
     assert moves <= MOVING_SYSTEM_TAGS | DECLINING_SYSTEM_TAGS
-    # And nothing listed as moving has been quietly made constant.
+    # Also check that no tag listed as moving has quietly become constant.
     assert moves >= {system.sys.clock_1s.name, system.rtc.second.name}
 
 
@@ -1305,7 +1323,7 @@ def test_unknown_forms_decline(body: list[str], reason: str) -> None:
     "tags", [{"B": 0}, {"A": 1}, {}], ids=["read key gone", "written key gone", "both gone"]
 )
 def test_a_loop_handed_containers_that_lost_a_key_runs_no_scan(tags: dict[str, int]) -> None:
-    """The real scan raises or adds the key: the loop must leave that to it, untouched."""
+    """Leave a missing key to the real scan, which raises or adds it, and run no scans."""
     source = _step_source("x = tags['A']", "tags['A'] = x + 1", "tags['B'] = x")
     parsed, replay = _replay_stub(source, A=1, B=0)
     trace = build_trace(parsed, replay, {("tags", "A"), ("tags", "B")}, None, {})
@@ -1316,7 +1334,7 @@ def test_a_loop_handed_containers_that_lost_a_key_runs_no_scan(tags: dict[str, i
 
 
 def test_a_loop_with_every_key_runs_its_scans() -> None:
-    """The control of the one above."""
+    """Run all five scans when every key is present, as the control for the test above."""
     source = _step_source("x = tags['A']", "tags['A'] = x + 1", "tags['B'] = x")
     parsed, replay = _replay_stub(source, A=1, B=0)
     trace = build_trace(parsed, replay, {("tags", "A"), ("tags", "B")}, None, {})
@@ -1328,7 +1346,7 @@ def test_a_loop_with_every_key_runs_its_scans() -> None:
 
 
 def test_a_moving_value_inside_a_container_is_not_lost() -> None:
-    """``max`` over a list holding a moving value: stripping the mark would freeze it."""
+    """Keep the moving mark on a value in a list passed to ``max``, or the value would freeze."""
     source = _step_source(
         "a = tags['A']",
         "tags['A'] = a + 1",
@@ -1356,7 +1374,7 @@ def test_a_kernel_global_rebound_elsewhere_is_no_constant() -> None:
 
 
 def test_chains_membership_and_identity_trace_exactly() -> None:
-    """Forms the prototype declined: run the loop against the plain Python scan."""
+    """Trace the forms that the prototype declined, and compare with the plain Python scan."""
     source = _step_source(
         "a = tags['A']",
         "tags['A'] = a + 1",
@@ -1369,13 +1387,13 @@ def test_chains_membership_and_identity_trace_exactly() -> None:
     trace = build_trace(parsed, replay, {("tags", "A")}, None, {})
     tags = dict(replay._kernel.tags)
     used, timestamp = trace.loop(tags, {}, {}, 0.0, 0.01, 10, None)
-    assert used == 3  # A reaches 4: that scan leaves the traced membership
+    assert used == 3  # A reaches 4, and that scan leaves the traced membership
     assert tags["A"] == 4
     assert timestamp == pytest.approx(0.03)
 
 
 def test_a_comprehension_target_stays_in_the_comprehension() -> None:
-    """Python scopes the target to the list: the local of that name reads as before."""
+    """Python scopes the target to the list, so the local of that name keeps its value."""
     source = _step_source(
         "x = tags['A']",
         "tags['A'] = x + 1",
@@ -1402,7 +1420,7 @@ def test_a_comprehension_target_named_as_a_global_declines() -> None:
 
 
 def test_a_load_that_raises_is_a_failed_guard_not_a_crash() -> None:
-    """A key gone from the dicts: the firing runs no scans, and a real scan takes over."""
+    """Run no scans when a key is gone from the dicts, and let a real scan take over."""
     source = _step_source("a = tags['A']", "tags['A'] = a + 1")
     parsed, replay = _replay_stub(source, A=1)
     trace = build_trace(parsed, replay, {("tags", "A")}, None, {})

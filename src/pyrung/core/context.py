@@ -32,13 +32,16 @@ WriteOccurrenceSink = Callable[
     OccurrenceSourceToken,
 ]
 
-# Read-path sentinel: hot lookups cache the ``state.tags``/``state.memory``
-# pmaps once and probe them a single time via try/except instead of ``in`` + ``[]``.
+# Read-path sentinel.  A hot lookup caches the ``state.tags`` and ``state.memory`` pmaps
+# once.  It then probes them a single time with try/except, instead of ``in`` plus ``[]``.
 _MISSING = object()
 
 
 def refused_inside_its_own_scan() -> RuntimeError:
-    """What a PLC raises when a function its scan is calling asks for what only fits between scans."""
+    """Return the error that a PLC raises for a call that only fits between scans.
+
+    A function that the PLC's own scan is calling made the call.
+    """
     return RuntimeError(
         "A run_function called step(), run(), run_for(), run_until(), start(), stop() or "
         "reboot(), or set battery_present, on the PLC running it, which a PLC can't do in the "
@@ -49,11 +52,12 @@ def refused_inside_its_own_scan() -> RuntimeError:
 
 
 def same_stored_value(old: Any, new: Any) -> bool:
-    """Whether storing *new* over *old* leaves the same value, type and sign of zero too.
+    """Return whether storing *new* over *old* leaves the same value, type and sign of zero.
 
-    ``==`` is not enough: a state that kept the old object on ``False`` over ``0`` or
-    ``-0.0`` over ``0.0`` would depend on when it was last published, and a compiled
-    range publishes sparsely.  What a tag holds is what was last written to it.
+    ``==`` is not enough.  If a state kept the old object when ``False`` was written over
+    ``0``, or ``-0.0`` over ``0.0``, the stored value would depend on when it was last
+    published.  A compiled range publishes sparsely.  What a tag holds is what was last
+    written to it.
     """
     if old is new:
         return True
@@ -65,7 +69,7 @@ def same_stored_value(old: Any, new: Any) -> bool:
 def _commit_changed(base: PMap, pending: Mapping[str, Any], read: Mapping[str, Any]) -> PMap:
     """Publish only final values that differ from the immutable scan base.
 
-    *read* is what the scan read *base* through: the base itself, or a plain dict of it.
+    *read* is what the scan read *base* through.  It is the base itself, or a plain dict of it.
     """
     evolver = None
     for key, value in pending.items():
@@ -93,20 +97,19 @@ class RungId(NamedTuple):
 class ConditionView:
     """Read-only view of tag/memory state for one row's condition evaluation.
 
-    A row (a rung's trunk, a branch, a continued rung, a For-body rung) reads
-    its contacts when the solve reaches it, so they see the writes of the rows
-    above it; a row reads its contacts before its outputs write.
+    A row is a rung's trunk, a branch, a continued rung or a For-body rung.  A row reads
+    its contacts when the solve reaches it, so the contacts see the writes of the rows
+    above it.  A row reads its contacts before its outputs write.
 
-    A *live* view (``live=True``) reads the context's pending writes directly:
-    the interpreter's natural path takes one per row and drops it once the row
-    is evaluated.  Its edge contacts still compare against the memory as it
-    was before the row (``_hold_memory``: the row's scan stores each edge
-    site's new bit, and the view keeps the old one).
+    A *live* view (``live=True``) reads the context's pending writes directly.  The
+    interpreter's natural path takes one view for each row and drops it once the row is
+    evaluated.  Its edge contacts still compare against the memory as it was before the
+    row.  ``_hold_memory`` does this: the row's scan stores each edge site's new bit, and
+    the view keeps the old one.
 
-    A *frozen* view copies the pending writes when it is taken.  A box reads
-    its enable and pins through one taken at box entry, so no pin sees the
-    box's own writes; observers hold frozen views to re-evaluate a row after
-    the scan.
+    A *frozen* view copies the pending writes when it is taken.  A box reads its enable
+    and pins through a view taken at box entry, so no pin sees the box's own writes.
+    Observers hold frozen views to re-evaluate a row after the scan.
     """
 
     __slots__ = (
@@ -131,8 +134,8 @@ class ConditionView:
         self._resolver = ctx._resolver
         self._scope_token = ctx._condition_scope_token
         self._read_sink = ctx._read_sink
-        # Edge memory as it was before this view's row was scanned, by key, with
-        # the origin and definition its read had (live views only).
+        # The edge memory as it was before this view's row was scanned, by key.  Each
+        # entry also holds the origin and definition of the read.  Only live views use it.
         self._edge_prior: dict[str, tuple[Any, ReadOccurrenceOrigin, Any]] | None = None
         self._live = live
         if live:
@@ -152,13 +155,14 @@ class ConditionView:
 
     @property
     def live(self) -> bool:
-        """Whether this view reads the context's pending writes as they happen."""
+        """Return whether this view reads the context's pending writes as they happen."""
         return self._live
 
     def _hold_memory(self, key: str) -> None:
-        """Keep *key*'s memory as this view sees it now, before its row stores
-        a new value there (a live view's edge sites; a frozen view holds it
-        already)."""
+        """Keep *key*'s memory as this view sees it now, before its row stores a new value.
+
+        This applies to the edge sites of a live view.  A frozen view already holds it.
+        """
         if not self._live:
             return
         held = self._edge_prior
@@ -499,11 +503,13 @@ class ScanContext:
                 summary[0] = value
 
     def call_user_function(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-        """Call a ``run_function`` body; meanwhile this scan's PLC refuses what only fits between scans.
+        """Call a ``run_function`` body.
 
-        Only for the call: a paused ``scan_steps`` generator sits between prepare and
-        commit with no user code running, and stepping beside it is legal.  A count, since
-        a body can resume a paused scan of its PLC, which can call a body in turn.
+        While the body runs, this scan's PLC refuses what only fits between scans.
+        The refusal lasts only for the call.  A paused ``scan_steps`` generator sits between
+        prepare and commit with no user code running, and stepping beside it is legal.  The
+        PLC keeps a count of running calls, because a body can resume a paused scan of its
+        PLC, and that scan can call another body.
         """
         runner = self._runner
         if runner is None:
@@ -656,8 +662,10 @@ class ScanContext:
         return self._state
 
     def _new_condition_view(self, *, live: bool = False) -> ConditionView:
-        """Create a row's condition view (see :class:`ConditionView`), frozen
-        unless *live*, with an override point for analysis contexts."""
+        """Create a row's condition view (see :class:`ConditionView`).
+
+        The view is frozen unless *live* is set.  Analysis contexts override this method.
+        """
         return ConditionView(self, live=live)
 
     # =========================================================================
@@ -845,10 +853,10 @@ class ScanContext:
 
     @property
     def modbus_io(self) -> Literal["replay", "live"] | None:
-        """What a send() or receive() does on this scan, decided here for every runner.
+        """Return what a send() or receive() does on this scan.  This decides it for every runner.
 
         Only a real forward scan talks to the device.  A replay, a cause() rebuild, how()
-        or a context with no runner would send requests the session never made.
+        or a context with no runner would send requests that the session never made.
         """
         if self._is_replay_io:
             return "replay"
@@ -859,7 +867,7 @@ class ScanContext:
 
     @property
     def modbus_requests(self) -> dict[int, Any]:
-        """The runner's requests in flight, by instruction ``id()``.  A fork owns its own."""
+        """Return the runner's requests in flight, by instruction ``id()``.  A fork has its own."""
         assert self._runner is not None
         return self._runner._modbus_requests
 

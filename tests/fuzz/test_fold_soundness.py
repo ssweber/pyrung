@@ -1,19 +1,19 @@
-"""Loop soundness fuzzer: saturated-heartbeat and stable-input shapes.
+"""Fuzz the soundness of the loop on saturated-heartbeat and stable-input shapes.
 
-**Saturated heartbeat:**  A system clock gating a rung that reads an accumulator
-through a comparison that saturates partway up the ramp.  The clock ends every
-window, before and after the comparison settles.
+**Saturated heartbeat:**  A system clock gates a rung that reads an accumulator through a
+comparison. The comparison saturates partway up the ramp. The clock ends every window, before
+and after the comparison settles.
 
-**Stable-input rungs:**  Clock-gated rungs over external inputs beside one over
-the accumulator.  None is an indicator (an edge contact remembers), so every clock
-edge ends a window; every tag must still be bit-equal to scan-by-scan.
+**Stable-input rungs:**  Clock-gated rungs over external inputs sit beside one rung over the
+accumulator. None is an indicator (an edge contact remembers), so every clock edge ends a
+window. Every tag must still be bit-equal to scan-by-scan.
 
-Both families compare the whole tag image exactly, timer accumulators
-included: the loop runs each timer's per-scan carry.
+Both families compare the whole tag image exactly, timer accumulators included. The loop runs
+the per-scan carry of each timer.
 
-Reproducer on failure: the drawn ``spec`` is the reproducer: it is printed via
-``note`` and embedded in the assertion message, and ``_build(spec)`` /
-``_build_stable(spec)`` reconstructs the exact program.
+Reproducer on failure: the drawn ``spec`` is the reproducer. The test prints it via ``note``
+and embeds it in the assertion message. ``_build(spec)`` or ``_build_stable(spec)``
+reconstructs the exact program.
 """
 
 from __future__ import annotations
@@ -36,10 +36,12 @@ _BODY = ["calc", "coil"]
 
 @st.composite
 def _heartbeat_spec(draw: st.DrawFn) -> dict:
-    """A saturated-heartbeat program: a ramping timer/counter, a clock-gated
-    rung reading its accumulator through one comparison, and a stable-input
-    body.  The threshold sits strictly below the preset so the comparison
-    saturates partway up the ramp (the interesting window)."""
+    """Draw the spec of a saturated-heartbeat program.
+
+    The program has a ramping timer/counter, a clock-gated rung that reads its accumulator
+    through one comparison, and a stable-input body. The threshold sits strictly below the
+    preset, so the comparison saturates partway up the ramp (the interesting window).
+    """
     src = draw(st.sampled_from(_SRC))
     if src == "timer":
         preset = draw(st.integers(min_value=2_000, max_value=20_000))  # ms
@@ -72,7 +74,7 @@ def _cmp(acc, form: str, k: int):
 
 
 def _build(spec: dict):
-    """Reconstruct the program from a spec.  Returns ``(program, done_tag)``."""
+    """Reconstruct the program from a spec and return ``(program, done_tag)``."""
     Enable = Bool("Enable", external=True)
     Reset = Bool("Reset", external=True)  # left False — the ramp runs to Done
     A = Int("A", external=True)
@@ -104,7 +106,7 @@ def _run(spec: dict, *, jit: bool) -> dict:
     plc = PLC(prog, dt=spec["dt"])
     plc.patch({"Enable": True, "A": spec["a"], "B": spec["b"]})
     plc.run_until(done, max_cycles=40_000, jit=jit)
-    # Every tag, the scan-time diagnostics included: a landing records the
+    # Return every tag, the scan-time diagnostics included. A landing records the
     # normal dt of the scan it stands for.
     return dict(plc.state.tags)
 
@@ -128,8 +130,8 @@ def _run(spec: dict, *, jit: bool) -> dict:
 )
 # Boundary-straddle regression: Done (16 750 ms; first found as a per-scan
 # counter's 1676 counts) lands at t=16.75 s, exactly a clock_500ms rise
-# edge.  Accumulated scan time drifts to 16.74999999999982 (clock low)
-# while a big-step timestamp lands on 16.75 (clock high) — the
+# edge. Accumulated scan time drifts to 16.74999999999982 (clock low),
+# while a big-step timestamp lands on 16.75 (clock high). The
 # OTE coil disagreed (Beat True vs False) until clock phase was
 # grid-snapped (system_points.clock_phase).
 @example(
@@ -146,7 +148,7 @@ def _run(spec: dict, *, jit: bool) -> dict:
     }
 )
 def test_saturated_heartbeat_fold_is_bit_equal(spec: dict) -> None:
-    """run_until(Done) in the loop must equal scan-by-scan across the heartbeat family."""
+    """Check that run_until(Done) in the loop equals scan-by-scan across the heartbeat family."""
     folded = _run(spec, jit=True)
     stepped = _run(spec, jit=False)
     if folded != stepped:
@@ -172,7 +174,7 @@ _N_STABLE = [1, 2, 3]
 
 @st.composite
 def _stable_input_spec(draw: st.DrawFn) -> dict:
-    """A program mixing stable-input and accumulator-reading clock-gated rungs.
+    """Draw the spec of a program that mixes stable-input and accumulator-reading rungs.
 
     - A ramping timer/counter advancing to Done.
     - One clock-gated rung reading the accumulator through a comparison
@@ -270,7 +272,7 @@ def _run_stable(spec: dict, *, jit: bool) -> dict:
     }
 )
 def test_stable_input_rungs_are_bit_equal(spec: dict) -> None:
-    """Every tag must be bit-equal to scan-by-scan."""
+    """Check that every tag is bit-equal to scan-by-scan."""
     folded = _run_stable(spec, jit=True)
     stepped = _run_stable(spec, jit=False)
     if folded != stepped:
@@ -428,7 +430,7 @@ def reader(shape, *, src=0, k=5, d=100, form="ge", count=True):
 @example(spec=spec_of(["timer_ms"], [reader("expr", k=1, d=100), reader("stored", k=1, d=100)]))
 @example(spec=spec_of(["selfcalc", "timer_ms"], [reader("operand"), reader("display")]))
 def test_composite_readers_fold_is_bit_equal(spec: dict) -> None:
-    """Every reader shape the reviews found must leave stepping's exact state."""
+    """Check that every reader shape that the reviews found leaves the exact state of stepping."""
     f_scan, folded = _run_composite(spec, jit=True)
     s_scan, stepped = _run_composite(spec, jit=False)
     if (f_scan, folded) != (s_scan, stepped):

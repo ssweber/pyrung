@@ -132,7 +132,7 @@ def note_metadata_edit() -> None:
 
 
 def metadata_edits() -> int:
-    """How many times `note_metadata_edit` has been called in this process."""
+    """Return how many times `note_metadata_edit` has been called in this process."""
     return _metadata_edits
 
 
@@ -411,9 +411,9 @@ class Tag:
 
         If *target* is a block slot (e.g. ``ds[165]``), the tag is
         registered as the canonical occupant of that address so that
-        ``block[addr]`` returns this tag directly.  ``Block.reset()``
-        clears the registration with the slot overrides.  A system point
-        can't be one (`refuse_system_point_in_block`).
+        ``block[addr]`` returns this tag directly. ``Block.reset()``
+        clears the registration with the slot overrides. A system point
+        cannot be registered this way (`refuse_system_point_in_block`).
         """
         block = getattr(target, "_pyrung_block", None)
         if block is not None:
@@ -430,9 +430,9 @@ class Tag:
             block._slot_names_changed += 1
             note_metadata_edit()
             block._tag_cache.pop(addr, None)
-            # The slot, for a text compare's window (`text_window_condition`) and a
-            # store of several elements (`_store_block`); weak, so the mapping alone
-            # does not keep the bank alive.
+            # This is the slot. A text compare's window (`text_window_condition`) and a
+            # store of several elements (`_store_block`) use it. The reference is weak, so
+            # the mapping alone does not keep the bank alive.
             object.__setattr__(self, "_pyrung_hw_slot", (weakref.ref(block), addr))
         return MappingEntry(source=self, target=target)
 
@@ -922,13 +922,13 @@ class Real(_TagTypeBase):
 
     Retentive by default. Use for analog presets and process values.
 
-    pyrung keeps a REAL at Python's 64-bit precision, where a CLICK REAL is a
-    32-bit IEEE 754 float: ``16777216.0 + 1`` reads 16777217 in pyrung and
-    16777216 on a CLICK.  The range is CLICK's float32 one: a finite value
-    never leaves +/-3.4028235E+38.  A ``calc`` or ``copy`` result past it is
-    +/-Inf, as a CLICK stores it (``calc`` also sets
-    ``system.fault.out_of_range``).  A default or literal must be finite and in
-    range; a patch or force may be +/-Inf or NaN, never a finite value past
+    pyrung keeps a REAL at Python's 64-bit precision, but a CLICK REAL is a
+    32-bit IEEE 754 float. ``16777216.0 + 1`` reads 16777217 in pyrung and
+    16777216 on a CLICK. The range is CLICK's float32 range, so a finite value
+    never leaves +/-3.4028235E+38. A ``calc`` or ``copy`` result past that range
+    is +/-Inf, as a CLICK stores it (``calc`` also sets
+    ``system.fault.out_of_range``). A default or literal must be finite and in
+    range. A patch or force may be +/-Inf or NaN, but never a finite value past
     the range.
 
     Example:

@@ -1,26 +1,26 @@
-"""A call in a forloop body, or from another subroutine, is a call site.
+"""Test that a call in a forloop body, or from another subroutine, is a call site.
 
-Whether a subroutine's writes happen at all is decided by the guard of every
-call on a path into it.  The caller map behind input-liveness pruning skipped
-calls in forloop bodies, and gave a write in a subroutine called from another
-subroutine only its own call site's conditions; the PDG's upstream slice
-likewise stopped one caller up.  An indirect comparison (``DS[P] != 0``, or a
-loop counting ``DS[P]``) lowers to an atom that names neither the pointer nor
-the elements.  The guard's inputs were then pruned as dead, although a
-concrete PLC reaches ``And(Y3, ~Btn)``.  Scan 1 runs the call with ``Btn`` on,
-scan 2 skips it with ``Btn`` off, and ``Y2`` holds.
+Whether a subroutine's writes happen at all depends on the guard of every call on a path
+into it. Three things used to go wrong. The caller map behind input-liveness pruning skipped
+calls in forloop bodies. For a subroutine that another subroutine calls, the map attached to
+each write in it only the conditions of the subroutine's own call site. The upstream slice
+of the PDG stopped one caller up.
 
-The shared caller map keeps only conditions that hold on every scan that runs
-the call: a body rung's contacts count only where no iteration can change them.
-Where the conditions do not decide the call (a body-rung contact an iteration
-can change, a oneshot loop, a ``break_loop()``) the subroutine is marked
-inexact and the validators and pilot guards do not claim anything from them.
+An indirect comparison (``DS[P] != 0``, or a loop counting ``DS[P]``) lowers to an atom that
+names neither the pointer nor the elements. The inputs of the guard were then pruned as dead,
+although a concrete PLC reaches ``And(Y3, ~Btn)``. Scan 1 runs the call with ``Btn`` on.
+Scan 2 skips it with ``Btn`` off, and ``Y2`` holds.
 
-A condition the lowering does not understand (``(DQ + 0) != 0``) becomes an
-opaque atom too, and the inputs it reads stay live the same way.
+The shared caller map keeps only the conditions that hold on every scan that runs the call.
+The contacts of a body rung count only where no iteration can change them. Sometimes the
+conditions do not decide the call: a body-rung contact that an iteration can change, a oneshot
+loop, or a ``break_loop()``. Then the subroutine is marked inexact, and the validators and
+pilot guards do not claim anything from it.
 
-Every shape reads ``Y2`` in a main rung so that it is state on its own
-account.
+A condition that the lowering does not understand (``(DQ + 0) != 0``) also becomes an opaque
+atom. The inputs it reads stay live the same way.
+
+Every shape reads ``Y2`` in a main rung, so that Y2 is state on its own account.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def _concrete_reaches(
     predicate: Callable[[Any], bool],
     depth: int = 4,
 ) -> bool:
-    """Exhaustive concrete search: every input combination on every scan."""
+    """Search a concrete PLC exhaustively, with every input combination on every scan."""
     plc = PLC(program, dt=0.010)
 
     def key(runner: PLC) -> tuple[frozenset, frozenset]:
@@ -247,8 +247,8 @@ def _always_called_loop():
 
 def _zero_count_loop():
     # A REAL constant is read through 16 bits, so 65536.0 runs no iteration
-    # and work is never called.  An integer constant always runs (forloop()
-    # refuses one outside 1..2 ** 31 - 1).
+    # and work is never called. An integer constant always runs (forloop()
+    # rejects one outside 1..2 ** 31 - 1).
     with Program(strict=False) as logic:
         with Rung():
             with forloop(65536.0):
@@ -498,7 +498,7 @@ _SHAPES = {
 
 
 def test_expected_reachability() -> None:
-    """The shapes mean what they say: only the two controls are safe."""
+    """Check that each shape behaves as its name says. Only the two controls are safe."""
     safe = {"always_called_loop", "zero_count_loop"}
     for name, build in _SHAPES.items():
         logic, space = build()
@@ -540,7 +540,7 @@ def test_upstream_slice_climbs_every_caller(shape_name: str) -> None:
 
 
 # The prover does not model forloop body rungs, break_loop() or
-# continue_loop() yet: it must say so.
+# continue_loop() yet, so it must say so.
 _UNMODELED_SHAPES = {
     "break_before_call": _break_before_call,
     "continue_before_call": _continue_before_call,
@@ -638,7 +638,10 @@ DDP = Int("DDP", external=True, min=1, max=2, default=1)
 
 
 def _dint_count_loop(count: Any, *producers: Any) -> Program:
-    """forloop(count) calls work; producer i copies into the count when Sel == i."""
+    """Build a program where forloop(count) calls work and producer i copies into the count.
+
+    Producer i copies when Sel == i.
+    """
     with Program(strict=False) as logic:
         for i, source in enumerate(producers):
             with Rung(Sel == i):
@@ -682,7 +685,7 @@ _DINT_COUNTS: dict[str, tuple[Callable[[], Program], bool]] = {
     "min_only": (lambda: _dint_count_loop(Dint("Dc", external=True, min=0)), False),
     "max_only": (lambda: _dint_count_loop(Dint("Dc", external=True, max=5)), False),
     "declared_internal": (lambda: _dint_count_loop(Dint("Dc", min=0, max=5), 3), True),
-    # What the program writes is not read: only a declaration makes a Dint exact.
+    # The prover does not read what the program writes. Only a declaration makes a Dint exact.
     "produced": (lambda: _dint_count_loop(Dint("Dc"), 3, 7), False),
     "produced_under_a_wide_declaration": (
         lambda: _dint_count_loop(Dint("Dc", min=-5, max=_CAP * 2), 3, 7),

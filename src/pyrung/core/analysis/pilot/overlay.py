@@ -59,7 +59,7 @@ class PilotRung:
 
 
 class PilotRungExecutionState(Enum):
-    """One installed rule's status in the state the PILOT holds start from."""
+    """The status of one installed rule in the state that the PILOT holds start from."""
 
     DORMANT = "dormant"
     ELIGIBLE = "eligible"
@@ -114,10 +114,10 @@ def _constraint_condition(
 ) -> Any | None:
     """Lower a crossing ``Constraint`` to an equivalent runtime condition.
 
-    The constraint algebra is the planner's data-only language; coasts need the
-    executable Condition language so they can expose exact reads and crossing
-    thresholds.  Unsupported constraint shapes return
-    ``None`` and leave the caller's predicate authoritative.
+    The constraint algebra is the planner's data-only language.  Coasts need the
+    executable Condition language, so they can expose exact reads and crossing
+    thresholds.  An unsupported constraint shape returns ``None``, and the caller's
+    predicate stays authoritative.
     """
     from pyrung.core.condition import (
         AllCondition,
@@ -136,8 +136,8 @@ def _constraint_condition(
 
     tag = plc._tag_known_or_reached(constraint.tag)
     if tag is None:
-        # An advance profile owns concrete Tag objects for its channels, so a
-        # channel the runner neither knows nor reaches takes its metadata from the profile.
+        # An advance profile owns concrete Tag objects for its channels.  So a channel that
+        # the runner neither knows nor reaches takes its metadata from the profile.
         from pyrung.core.analysis.pilot.advance import build_advance_index
 
         owner = (
@@ -360,7 +360,7 @@ def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilo
     from pyrung.core.synthesis import _condition_and, _condition_complement
 
     def _demand_active(demand: Any) -> Any:
-        # The plain contact the demand stands for, so the printed rung reads as ladder.
+        # Use the plain contact that the demand stands for, so the printed rung reads as ladder.
         condition = _as_condition(demand.condition)
         if bool(demand.value):
             return condition
@@ -420,11 +420,12 @@ def _pilot_rung_execution_receipt(
 ) -> PilotOverlayExecution:
     """Classify every installed rule using the compiler's exact expansion.
 
-    All conditions read one snapshot, the state the holds start from.  Every guard of
-    :func:`guarded_copy_rung` means that state too, and the rung it builds agrees when it
-    runs.  The last active expanded rule for each destination is the effective owner.
-    Earlier active starts remain eligible, earlier active continuation branches remain
-    continuing, and an operation prevented from starting by a peer's progress is shadowed.
+    All conditions read one snapshot, which is the state the holds start from.  Every
+    guard of :func:`guarded_copy_rung` reads that same state, and the rung it builds agrees
+    when it runs.  The last active expanded rule for each destination is the effective
+    owner.  Earlier active starts remain eligible and earlier active continuation branches
+    remain continuing.  An operation that a peer's progress prevents from starting is
+    shadowed.
     """
     from pyrung.core.analysis.sp_values import _SnapshotView
     from pyrung.core.condition import _as_condition
@@ -515,8 +516,8 @@ def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
         rules.append((dest, rule.rung.value, rule.guard))
     holds = [guarded_copy_rung(rules)] if rules else []
     for rung in holds:
-        # What the rung was built from, kept with it: an epoch keeps its holds, so a plan's
-        # recording says which PILOT rungs ran on each of its scans.
+        # Keep what the rung was built from with the rung.  An epoch keeps its holds, so a
+        # plan's recording says which PILOT rungs ran on each of its scans.
         setattr(rung, PILOT_RUNGS_BUILT_FROM, materialized)
     _set_synth_holds(plc, holds)
 
@@ -529,10 +530,11 @@ def _pilot_hold(synthesis: Any) -> Any | None:
 
 
 def pilot_logic_at(recording: PLC, scan: int) -> Any | None:
-    """The temporary logic as it was built and ran on the scan after *scan*, or None.
+    """Return the temporary logic as it was built and ran on the scan after *scan*, or None.
 
     A plan prints this rung, not the rules it came from, so its text is the logic that ran.
-    The recording's own tip has run no scan under its logic yet, so its synthesis answers there.
+    The recording's own tip has run no scan under its logic yet, so its synthesis answers
+    for the tip.
     """
     for epoch, _first, _last in recording._causal_lineage.epochs_covering(scan + 1, scan + 1):
         return _pilot_hold(epoch.synthesis)
@@ -542,10 +544,11 @@ def pilot_logic_at(recording: PLC, scan: int) -> Any | None:
 
 
 def pilot_rules_rung(pilot_rungs: Iterable[PilotRung], tags: Mapping[str, Any]) -> Any | None:
-    """*pilot_rungs* built into a rung on their own, as :func:`_set_pilot_rungs` builds them.
+    """Build *pilot_rungs* into a rung on their own, as :func:`_set_pilot_rungs` builds them.
 
     This is for logic that has not run, such as a proposal or a step built by hand.  A tag
-    missing from *tags* stands in by its value's type, which is all the build reads from it.
+    missing from *tags* is replaced by a tag of its value's type, which is all the build
+    reads from it.
     """
     from pyrung.core.synthesis import guarded_copy_rung
     from pyrung.core.tag import Bool, Char, Int, Real
@@ -608,15 +611,16 @@ def fork_with_pilot_rungs(
     replay of the child's later scans may therefore use its current synthesis
     without redefining inherited historical scans.
 
-    A public fork also starts with no forces or pending patches, but a plan is about
-    what stepping the session does, so these keep them unless told otherwise.
+    A public fork starts with no forces or pending patches.  A plan is about what
+    stepping the session does, so these forks keep the forces and patches unless you
+    pass ``keep_overrides=False``.
     """
     fork = source.fork(
         scan_id=scan_id,
         history_budget=history_budget,
         inherit_log=inherit_log,
     )
-    # how() does no Modbus I/O.  The forks it returns, plan.fork among them, keep the flag.
+    # how() does no Modbus I/O.  The forks it returns keep this flag, including plan.fork.
     fork._modbus_stubbed = True
     if keep_overrides:
         fork._forces.update(source._forces)

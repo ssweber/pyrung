@@ -53,7 +53,7 @@ def _coil_chain(length: int, *, plant: bool = False) -> tuple[PLC, Bool]:
 
 
 def test_an_input_past_the_depth_of_the_trace_is_a_stated_move() -> None:
-    """Seventy coils in a row: the trace stops before it reaches Go."""
+    """Check that the trace stops before it reaches Go in a row of seventy coils."""
     plc, goal = _coil_chain(70)
     scan = plc.state.scan_id
 
@@ -73,7 +73,10 @@ def test_an_input_past_the_depth_of_the_trace_is_a_stated_move() -> None:
 
 
 def test_a_long_chain_of_coils_is_traced_to_its_input() -> None:
-    """Forty coils, and the same behind a valve's feedback: past the old depth of 15."""
+    """Check a chain of forty coils, and the same chain behind a valve's feedback.
+
+    Both are past the old depth of 15.
+    """
     for plant in (False, True):
         plc, goal = _coil_chain(40, plant=plant)
 

@@ -125,8 +125,8 @@ class TraceCrossingBranch:
 class CounterEdge:
     """The count a counter-input transition is for.
 
-    ``level`` is the counter's input read as a level, ``direction`` the sign
-    one count moves ``accumulator`` toward the target.  A step under the
+    ``level`` is the counter's input read as a level.  ``direction`` is the sign
+    in which one count moves ``accumulator`` toward the target.  A step under the
     transition loses that count when it raises the input without the
     accumulator moving that way, or moves the accumulator back.
     """
@@ -136,7 +136,7 @@ class CounterEdge:
     level: Any
 
     def lost(self, before: typing.Mapping[str, Any], after: typing.Mapping[str, Any]) -> bool:
-        """Whether the step from *before* to *after* lost this count."""
+        """Return whether the step from *before* to *after* lost this count."""
 
         old, new = before.get(self.accumulator), after.get(self.accumulator)
         if type(old) is not int or type(new) is not int:

@@ -651,8 +651,8 @@ def _group_outputs(
     """Group per-output SP trees into top-level condition_tree + instructions.
 
     Outputs share a leading contact only where the drawing has one cell for it,
-    teed off to each (:func:`factor_outputs` by cell): that cell is read once,
-    at the first of them, in pyrung as on a CLICK.  Two cells with the same
+    teed off to each output (:func:`factor_outputs` by cell). pyrung reads that cell
+    once, at the first of the outputs, as a CLICK does. Two cells with the same
     label stay two contacts.
     """
     if not trees:
@@ -689,11 +689,11 @@ def _group_outputs(
 
 
 def _row_wires(rows: Sequence[Sequence[str]]) -> list[int]:
-    """The wire each row of a CLICK rung sits on: 0, 1, ... from the top.
+    """Return the wire that each row of a CLICK rung sits on: 0, 1, ... from the top.
 
-    A wire is rows joined by verticals (a ``T``, ``|`` or ``T:`` cell reaching
-    the row below); a row no vertical reaches from the row above starts the
-    next wire at the rail.
+    A wire is a set of rows joined by verticals. A ``T``, ``|`` or ``T:`` cell that reaches
+    the row below makes such a join. A row that no vertical reaches from the row above
+    starts the next wire at the rail.
     """
     wires: list[int] = []
     for index, row in enumerate(rows):
@@ -716,17 +716,17 @@ def _row_wires(rows: Sequence[Sequence[str]]) -> list[int]:
 
 
 def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
-    """A CLICK rung of several wires: one pyrung rung per wire, row for row.
+    """Split a CLICK rung of several wires into one pyrung rung per wire, row for row.
 
-    The first wire is the rung, each later wire a ``.continued()`` rung of its
-    own, never folded onto another: a continued rung reads its contacts where
-    it stands, as the wire's rows do, and the pyrung code draws as the CLICK
-    rung does.  ``None`` where the rung is one wire.
+    The first wire is the rung. Each later wire is a ``.continued()`` rung of its own, and
+    the function never folds one wire onto another, for two reasons. A continued rung reads
+    its contacts where it stands, as the wire's rows do. The pyrung code also draws as the
+    CLICK rung does. Return ``None`` if the rung is one wire.
     """
     instructions = rung.instructions
     if len(instructions) < 2:
         return None
-    # NOP wires stay one rung, as a nop() in a branch for each contact, so none is lost.
+    # NOP wires stay one rung. Each contact gets a nop() in a branch, so no contact is lost.
     if all(instr.af_token == NOP for instr in instructions):
         return None
     if any(instr.wire is None for instr in instructions) or rung.source_outputs is None:
@@ -835,7 +835,7 @@ def _analyze_rungs(
     return analyzed
 
 
-# Pin labels each instruction takes, in the fixed order CLICK draws them.
+# The pin labels that each instruction takes, in the fixed order CLICK draws them.
 _PIN_ORDER: dict[str, tuple[str, ...]] = {
     "on_delay": ("reset",),
     "count_up": ("down", "reset"),
@@ -857,10 +857,10 @@ def _attach_pins(
     """Attach each pin row to the instruction it belongs to.
 
     A pin label (``.reset()``, ``.jump(n)``, ...) belongs to the nearest
-    instruction row above it.  Rows without an AF token (OR branches, padding)
-    may sit anywhere between an instruction's pin rows: what a pin reads comes
-    from the wiring into its row, and a row wired into nothing is reported by
-    the dropped-contact check.  Labels must follow the instruction's fixed pin
+    instruction row above it. Rows without an AF token (OR branches, padding)
+    may sit anywhere between an instruction's pin rows. What a pin reads comes
+    from the wiring into its row. The dropped-contact check reports a row that is
+    wired into nothing. Labels must follow the instruction's fixed pin
     order, each at most once.
     """
     instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
@@ -999,9 +999,9 @@ def _analyze_single_rung(
                 f"Rung drops output instruction(s) present in the source during grouping: {detail}."
             )
 
-    # Compute SP trees for pin row conditions.  A pin's condition comes from
+    # Compute SP trees for pin row conditions. A pin's condition comes from
     # the wiring into its row, so OR branches and padding rows may sit between
-    # pin rows (above or below a label); _attach_pins decides ownership.
+    # pin rows (above or below a label). _attach_pins decides ownership.
     pin_trees: dict[int, SPNode | None] = {}
     if pin_sinks and source is not None:
         for pr, ps in pin_sinks.items():
@@ -1010,13 +1010,13 @@ def _analyze_single_rung(
     if pin_row_set:
         _attach_pins(rows, pin_row_set, pin_trees, instructions, af_rows)
 
-    # Dropped-condition detection: every content edge's Leaf should reach at
+    # Dropped-condition detection. Every content edge's Leaf should reach at
     # least one output or pin tree before output grouping (the pre-group trees
-    # hold every cell each output reads).  Positions absent from every
-    # pre-group tree were pruned as dead-end edges (unwired conditions) and
-    # silently omitted from the logic.  This only sees
-    # drops made here; a contact lost later (splitting, emission) is caught by
-    # shaping.emitted_logic_mismatch against source_outputs.
+    # hold every cell each output reads). A position that is absent from every
+    # pre-group tree was pruned as a dead-end edge (an unwired condition) and
+    # silently omitted from the logic. This check sees only the drops made here.
+    # shaping.emitted_logic_mismatch catches a contact lost later (splitting,
+    # emission) by comparing against source_outputs.
     present: set[tuple[int, int]] = set()
     for tree, _af_token, _af_row in output_trees:
         for leaf in _walk_tree_leaves(tree):
@@ -1041,9 +1041,9 @@ def _analyze_single_rung(
                 "invalid topology."
             )
 
-    # Record each output as the source wired it (full condition + pins) so the
-    # logic check can compare the generated code against it after grouping,
-    # splitting and emission (see shaping.emitted_logic_mismatch).
+    # Record each output as the source wired it (full condition + pins). After grouping,
+    # splitting and emission, the logic check compares the generated code against this
+    # record (see shaping.emitted_logic_mismatch).
     instruction_index_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
     source_outputs = tuple(
         _SourceOutput(

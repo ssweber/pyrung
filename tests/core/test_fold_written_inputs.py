@@ -1,8 +1,9 @@
-"""A preset or comparison operand written around its reader.
+"""Test a preset or comparison operand that the program writes before or after its reader.
 
-A rung reading such a tag between two writes reads a value no scan boundary shows.  The same
-rung with a single write, on either side of the reader, reads what the boundary shows.  Every
-program here runs in the loop and stepped, and the landing and a replay must equal stepping.
+A rung that reads such a tag between two writes reads a value that no scan boundary shows.
+The same rung with a single write, on either side of the reader, reads what the boundary
+shows.  Most tests here run each program in the loop and stepped.  They require the landing
+and a replay to equal stepping.
 """
 
 from __future__ import annotations

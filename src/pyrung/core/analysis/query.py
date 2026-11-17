@@ -110,7 +110,7 @@ def _rung_sort_key(ident: tuple[str | None, int]) -> tuple[int, str, int]:
 
 
 def _fired_within(timelines: Any, rungs: set[Any], first: int, last: int) -> set[Any]:
-    """The rungs in *rungs* that fired on some scan in *first*..*last*."""
+    """Return the rungs in *rungs* that fired on some scan in *first*..*last*."""
     fired = set()
     for rung in rungs:
         scan = timelines.latest_firing_scan_at_or_before(frozenset({rung}), last)
@@ -862,7 +862,7 @@ class QueryNamespace:
         return [_rung_label(sub, idx) for sub, idx in idents]
 
     def _firing_records(self, first: int) -> list[tuple[Any, Any, int, int]]:
-        """The firing records of this runner and each parent, each with its scans from *first* on.
+        """Return the firing records of this runner and each parent, from scan *first* on.
 
         A fork records only the scans it ran itself.  A scan it took from its parent is read
         from the parent's records.

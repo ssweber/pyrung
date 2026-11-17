@@ -28,12 +28,12 @@ SCANS = 3000
 
 @pytest.fixture(autouse=True)
 def _no_collector(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A collector PYRUNG_JIT_STATS started would count these runs too.
+    # A collector that PYRUNG_JIT_STATS started would count these runs too.
     monkeypatch.setattr(jit_stats, "ACTIVE", [])
 
 
 def _program() -> Program:
-    """A timer that runs while Go is on, and N set to 5 once it is done."""
+    """Return a program that runs a timer while Go is on and sets N to 5 once it is done."""
     with Program(strict=False) as program:
         with Rung(Go):
             on_delay(T, 10_000, "ms")
@@ -96,7 +96,10 @@ def test_the_code_kept_is_bounded() -> None:
 
 
 def _names_item_by_item(program: Program) -> frozenset[str]:
-    """The materialized-tag walk as it was, queueing every item it meets up to a program."""
+    """Return the names of the materialized tags that the earlier walk finds.
+
+    The walk queues every item it meets, but it does not go into a Program.
+    """
     found: set[str] = set()
     visited: set[int] = set()
     queue: list[Any] = [*program.rungs]
@@ -137,7 +140,7 @@ def _names_item_by_item(program: Program) -> frozenset[str]:
 
 
 def _copy_program() -> Program:
-    """A block copy, and a rung reading one cell of the bank it fills."""
+    """Return a program with a block copy and a rung that reads one cell of the bank it fills."""
     with Program(strict=False) as program:
         with Rung(Go):
             blockcopy(Bank.select(1, 20), Bank.select(21, 40))
