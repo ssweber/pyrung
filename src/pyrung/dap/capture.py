@@ -174,7 +174,9 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
 
     if sub.lower() == "stop":
         if not capture.recording:
-            raise adapter.DAPAdapterError("No active recording")
+            raise adapter.DAPAdapterError(
+                "No recording is running. Start one with 'record <action>'."
+            )
         transcript, _entries = capture.stop()
         return ConsoleResult(
             f"Recording stopped. 'record save' writes it to {_default_file_name(capture.finished)}.\n"
@@ -198,7 +200,11 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
     warnings: list[str] = []
     if runner.forces:
         forced = ", ".join(sorted(runner.forces.keys()))
-        warnings.append(f"Warning: active forces at record start: {forced}")
+        were = "was" if len(runner.forces) == 1 else "were"
+        warnings.append(
+            f"Warning: {forced} {were} already forced when the recording started. "
+            "The recording does not include those forces."
+        )
 
     program_text = getattr(adapter, "_program_path", None)
     program_path = Path(program_text) if program_text else None
@@ -376,7 +382,7 @@ def replay_file(adapter: Any, filepath: Path, harness_mode: str | None) -> Conso
     remaining = len(commands) - executed
     suffix = ""
     if hit_bp:
-        suffix = f" (breakpoint, {remaining} command(s) remaining)"
+        suffix = f". A breakpoint stopped the replay with {remaining} command(s) left"
         last_stop = adapter._stopped_body("breakpoint")
     # One stop at the end tells the client where the replay left the scan.
     events: list[tuple[str, dict[str, Any] | None]] = (

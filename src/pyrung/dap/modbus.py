@@ -179,7 +179,10 @@ def start_modbus(adapter: Any, config: ModbusConfig) -> None:
     if server.start():
         text = f"Modbus TCP server listening on {config.host}:{server.port}"
     else:
-        text = f"Modbus TCP server not started. {server.error}"
+        text = (
+            f"Modbus TCP server not started. {str(server.error).rstrip('.')}. "
+            "To use another host or port, set modbus in the launch configuration."
+        )
     adapter._enqueue_internal_event("output", {"category": "console", "output": f"{text}\n"})
 
 

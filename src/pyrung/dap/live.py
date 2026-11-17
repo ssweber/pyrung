@@ -203,7 +203,7 @@ def _resolve_address(session_name: str) -> tuple[str, int]:
     """Read the port file for *session_name* and return ``('localhost', port)``."""
     pf = _port_file(session_name)
     if not pf.exists():
-        raise FileNotFoundError(f"Session '{session_name}' not found (no port file)")
+        raise FileNotFoundError(f"Session '{session_name}' not found.")
     port = int(pf.read_text(encoding="utf-8").strip())
     return ("localhost", port)
 
@@ -292,18 +292,26 @@ def _build_command_epilog() -> str:
     return _format_grouped_help()
 
 
+_NO_SESSIONS = "No active sessions. Start a pyrung debug session first."
+_LIST_HINT = "Run 'pyrung live list' to see the active sessions."
+
+
 def main() -> None:
     """``pyrung live`` command-line entry point."""
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
     parser = argparse.ArgumentParser(
         prog="pyrung live",
-        description="Attach to a running pyrung DAP session",
+        description="Send console commands to a running pyrung debug session.",
         epilog=_build_command_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--session", "-s", help="Session name to connect to")
-    parser.add_argument("command", nargs="*", help="Console command (use ; to chain)")
+    parser.add_argument(
+        "command",
+        nargs="*",
+        help="Console command to run. To run several, separate them with ; and quote the line.",
+    )
     args = parser.parse_args()
 
     show_list = (not args.session and args.command and args.command[0] == "list") or (
@@ -312,7 +320,7 @@ def main() -> None:
     if show_list:
         sessions = list_sessions()
         if not sessions:
-            print("No active sessions")
+            print(_NO_SESSIONS)
         elif len(sessions) == 1:
             print(f"Active session: {sessions[0]}")
             print("Usage: pyrung live <command>  (e.g. pyrung live help)")
@@ -328,7 +336,7 @@ def main() -> None:
         if len(sessions) == 1:
             args.session = sessions[0]
         elif not sessions:
-            parser.error("no active sessions")
+            parser.error(_NO_SESSIONS)
         else:
             parser.error(
                 f"multiple sessions active ({', '.join(sessions)}), use --session to pick one"
@@ -349,10 +357,14 @@ def main() -> None:
         try:
             ok, text = send_command(args.session, command, on_progress=_print_progress)
         except ConnectionRefusedError:
-            print(f"Cannot connect to session '{args.session}'", file=sys.stderr)
+            print(
+                f"Cannot connect to session '{args.session}'. The session may have ended. "
+                f"{_LIST_HINT}",
+                file=sys.stderr,
+            )
             sys.exit(1)
         except FileNotFoundError:
-            print(f"Session '{args.session}' not found", file=sys.stderr)
+            print(f"Session '{args.session}' not found. {_LIST_HINT}", file=sys.stderr)
             sys.exit(1)
         except KeyboardInterrupt:
             # Ask the session to cancel rather than just dropping the socket:

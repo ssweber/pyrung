@@ -58,7 +58,7 @@ def on_pyrung_force(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         try:
             runner.force(tag_name, value)
         except KeyError as exc:
-            raise adapter.DAPAdapterError(f"unknown tag: {tag_name}") from exc
+            raise adapter.DAPAdapterError(f"Unknown tag '{tag_name}'.") from exc
         except ValueError as exc:
             raise adapter.DAPAdapterError(f"cannot force: {exc}") from exc
         except TypeError as exc:
@@ -118,7 +118,7 @@ def on_pyrung_patch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         try:
             runner.patch({tag_name: value})
         except KeyError as exc:
-            raise adapter.DAPAdapterError(f"unknown tag: {tag_name}") from exc
+            raise adapter.DAPAdapterError(f"Unknown tag '{tag_name}'.") from exc
         except ValueError as exc:
             raise adapter.DAPAdapterError(f"cannot patch: {exc}") from exc
         except TypeError as exc:
@@ -152,7 +152,8 @@ def _on_pyrung_patch_batch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         try:
             runner.patch(cleaned)
         except KeyError as exc:
-            raise adapter.DAPAdapterError(f"unknown tag: {exc}") from exc
+            name = exc.args[0] if exc.args else exc
+            raise adapter.DAPAdapterError(f"Unknown tag '{name}'.") from exc
         except ValueError as exc:
             raise adapter.DAPAdapterError(f"cannot patch: {exc}") from exc
         except TypeError as exc:
