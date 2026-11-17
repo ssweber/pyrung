@@ -1,7 +1,7 @@
 """Runner reboot and battery-aware retention behavior.
 
-With a battery a reboot keeps what STOP -> RUN keeps, the retentive tags; without
-one it keeps nothing.
+With a battery, a reboot keeps what STOP -> RUN keeps, which is the retentive tags.
+Without a battery, a reboot keeps nothing.
 """
 
 from __future__ import annotations

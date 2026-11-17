@@ -1,9 +1,8 @@
-"""A pointer is an Int or Dint tag; an index expression is integer-valued.
+"""A pointer is an Int or Dint tag, and an index expression is integer-valued.
 
-A Real, Word, Bool or Char pointer, or an index expression with any other
-operand or one that may be a float (a float constant, ``/``, ``**`` or a math
-function), is refused when the program is built; so is a ``select()`` bound
-that breaks the same rule.
+Building the program refuses a Real, Word, Bool or Char pointer. It also refuses an index
+expression with any other operand, or one that may be a float (a float constant, ``/``,
+``**`` or a math function). A ``select()`` bound that breaks the same rule is refused too.
 """
 
 from __future__ import annotations
