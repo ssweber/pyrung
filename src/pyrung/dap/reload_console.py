@@ -46,7 +46,7 @@ from pyrung.dap.handlers.lifecycle_launch import (
     stage_click_project,
 )
 from pyrung.dap.harness_console import StagedHarness, commit_harness, stage_harness
-from pyrung.dap.links import BenchDrop, BenchLink, active_overrides, bench_active
+from pyrung.dap.links import BenchDrop, BenchLink, active_overrides, bench_active, in_program
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -383,7 +383,7 @@ def _coil_moves(
         for fb in blocked:
             carry, coupling = moves.pop(fb)
             target = coupling.fb_name
-            carry.drop("in use", target, f"a coil already runs on {target}")
+            carry.drop("in use", target, f"{target} keeps its own link after the reload")
     return {fb: coupling for fb, (_carry, coupling) in moves.items()}
 
 
@@ -407,7 +407,7 @@ def _why(carry: _Carry) -> str:
     if carry.reason == "unlinked":
         return f"the new program does not link {about}"
     if carry.reason == "in program":
-        return f"the new program links {about} the same way"
+        return in_program(about)
     return carry.detail or str(carry.reason)
 
 
@@ -604,9 +604,11 @@ def _reload_locked(
     links, tag map and breakpoints as they were.
     """
     if adapter._thread_running_locked():
-        raise adapter.DAPAdapterError("Cannot reload while continue is running")
+        raise adapter.DAPAdapterError(
+            "Cannot reload while the debugger is running scans. Pause first."
+        )
     if adapter._capture.recording:
-        raise adapter.DAPAdapterError("Cannot reload while recording; stop recording first")
+        raise adapter.DAPAdapterError("Cannot reload while recording. Run 'record stop' first.")
     try:
         staged = _stage_reload(adapter, plan if plan is not None else ReloadPlan(), plan is None)
     except adapter.DAPAdapterError:
@@ -676,7 +678,7 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
         new_runner = adapter._discover_runner(namespace)
     except adapter.DAPAdapterError as exc:
         raise adapter.DAPAdapterError(
-            "Reload failed: could not discover runner in new program. Old runner preserved."
+            f"Reload failed. The old program stays loaded. {exc}"
         ) from exc
 
     new_known_tags = dict(new_runner._known_tags_by_name)
@@ -688,8 +690,8 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
             continue
         if old_tag.type != new_tag.type:
             warnings.append(
-                f"  {name}: type changed {old_tag.type.name} -> {new_tag.type.name}, "
-                f"using new default"
+                f"  {name} changed type from {old_tag.type.name} to {new_tag.type.name}. "
+                "It starts at its default value."
             )
             tags_to_drop.add(name)
 
@@ -723,8 +725,8 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
     patched_memory = remap.memory
     if remap.dropped:
         warnings.append(
-            f"  {len(remap.dropped)} site memory value(s) had no matching site "
-            "in the new program, reset: " + ", ".join(sorted(remap.dropped))
+            f"  Reset {len(remap.dropped)} instruction memory value(s), because their "
+            "instruction changed or is gone in the new program: " + ", ".join(sorted(remap.dropped))
         )
     if renames:
         patched_tags, patched_memory = rename_coil_state(
@@ -738,7 +740,7 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
     )
     if seeded_edges:
         warnings.append(
-            f"  {len(seeded_edges)} edge contact(s) new or edited start from "
+            f"  {len(seeded_edges)} new or edited edge contact(s) start from "
             "their tag's current value: "
             + ", ".join(
                 f"{site.kind}({site.tag})"
@@ -831,8 +833,8 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
     stale = _drop_coil_memory_no_coupling_owns(reloaded)
     if stale:
         warnings.append(
-            f"  {len(stale)} harness coil memory value(s) had no matching coupling, "
-            "reset: " + ", ".join(stale)
+            f"  Reset {len(stale)} harness memory value(s), because no link in the new program "
+            "uses them: " + ", ".join(stale)
         )
 
     # The report reads only what was staged, so it describes exactly what _commit_reload
@@ -945,7 +947,10 @@ def _autoreload_loop(adapter: Any, program_dir: Path, stop_event: threading.Even
                     "output",
                     {
                         "category": "console",
-                        "output": "[autoreload] Skipped: continue is running\n",
+                        "output": (
+                            "[autoreload] Did not reload, because the debugger is running "
+                            "scans. Pause, then run reload.\n"
+                        ),
                     },
                 )
                 continue

@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.pilot.departure import (
     DepartureObservation,
     DepartureResult,
@@ -97,7 +98,7 @@ def _checkpoint_index(state: _PilotState, owner: _CheckpointOwner) -> int:
     for index, checkpoint in enumerate(state.checkpoints):
         if checkpoint.owner is owner:
             return index
-    raise ValueError("recovery checkpoint is no longer owned by this world")
+    raise ValueError(internal_error("recovery checkpoint is no longer owned by this world"))
 
 
 def _pending_recovery_index(state: _PilotState, pending: PendingDeparture) -> int:
@@ -126,7 +127,7 @@ def _trial_checkpoint(
     """Snapshot one accepted trial using its owned target objective."""
     verified = trial.verification
     if not isinstance(verified, AssessedMotion):
-        raise ValueError("target acceptance has no trend checkpoint")
+        raise ValueError(internal_error("target acceptance has no trend checkpoint"))
     resolved_trend = verified.trend if trend is None else trend
     return _Checkpoint(
         verified.new_key,
@@ -335,7 +336,7 @@ def _adopt_settled_world(
     """
     if settlement_execution is None:
         if settled_work is not state.work or settled_work.state.scan_id != state.work.state.scan_id:
-            raise RuntimeError("settled World has no execution receipt")
+            raise RuntimeError(internal_error("settled World has no execution receipt"))
         return
     # The settlement fork, its sparse exact kernel scans, logical replay span,
     # and dwell credit enter the persistent World as one operation update.

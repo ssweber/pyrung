@@ -239,7 +239,7 @@ class TestConsole:
         adapter, out = _launch(tmp_path)
         _say(adapter, out, "link Aux Motor on_delay=50ms")
         text = _say(adapter, out, "link Aux Motor on_delay=20ms off_delay=10ms")
-        assert "already has this link in the program" in text
+        assert "Dropped the bench link on Aux: the program already links Aux the same way." in text
         assert adapter._bench_links == {}
 
     def test_bench_off_sets_bench_links_aside(self, tmp_path: Path):
@@ -288,7 +288,9 @@ class TestReload:
         _say(adapter, out, "link Spare Motor on_delay=0ms")
         (tmp_path / "logic.py").write_text(_SPARE_DECLARED, encoding="utf-8")
         text = _say(adapter, out, "reload")
-        assert "Bench link on Spare is now in the program." in text
+        assert (
+            "Dropped the bench link on Spare: the program already links Spare the same way." in text
+        )
         assert adapter._bench_links == {}
 
 

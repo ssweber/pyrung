@@ -109,9 +109,9 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
             # readonly constant (a named-array/enum element) point at its literal.
             hint = f" (e.g. {value.name}.default = {value.default!r})" if value.readonly else ""
             raise ValueError(
-                f"pilot: how() target {tag_name} == {value.name!r} compares against a "
-                f"Tag, not a concrete value. Pass the value it stands for{hint} or a "
-                f"literal so the target is a frozen scalar."
+                f"pilot: how() target {tag_name} == {value.name!r} compares with a tag, "
+                f"not a concrete value. For ==, how() needs a fixed value. Pass the value "
+                f"that the tag stands for{hint}, or a literal."
             )
         if isinstance(value, Expression):
             raise ValueError(
@@ -131,7 +131,8 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
 
     if isinstance(cond, AnyCondition):
         raise ValueError(
-            f"pilot: how() has no either-or target: {cond!r}.  Ask for one arm at a time."
+            f"pilot: how() does not accept an either-or target such as {cond!r}. "
+            "Ask for one of its conditions at a time."
         )
 
     raise ValueError(
@@ -160,7 +161,10 @@ def _members(condition: Any) -> Iterator[Any]:
 def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
     """Single-target parse — for the diagnostic/live entry points."""
     if len(conditions) != 1:
-        raise ValueError("pilot currently supports exactly one target condition")
+        raise ValueError(
+            "pilot: pilot_events() takes exactly one target condition, and you passed "
+            f"{len(conditions)}. Call how() for a goal of several conditions."
+        )
     return _parse_one(conditions[0])
 
 

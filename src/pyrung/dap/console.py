@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pyrung.core import AvoidCheckError
+from pyrung.core.analysis.graph import NO_NEXT_STEP
 from pyrung.core.state import value_changed
 from pyrung.dap import execution_flow
 
@@ -138,7 +139,8 @@ def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> C
     if entry is None:
         known = ", ".join(sorted(_REGISTRY))
         raise adapter.DAPAdapterError(
-            f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
+            f"Unknown command '{verb}'. Available: {known}. "
+            "To watch a condition such as Motor == 1, add it to the Watch panel."
         )
     result = entry.handler(adapter, expression)
     capture_hook(adapter, verb, expression, provenance=provenance)
@@ -160,7 +162,7 @@ def _cmd_get(adapter: Any, expression: str) -> ConsoleResult:
     lines: list[str] = []
     for name in parts[1:]:
         if name not in tags:
-            raise adapter.DAPAdapterError(f"get: unknown tag '{name}'")
+            raise adapter.DAPAdapterError(f"Unknown tag '{name}'.")
         lines.append(f"{name} = {tags[name]!r}")
     return ConsoleResult("\n".join(lines))
 
@@ -355,8 +357,8 @@ def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
         raise adapter.DAPAdapterError(
-            "Usage: run <cycles> or run <duration> (e.g. run 10, run 500ms), "
-            "or run until <expression> within <cycles or duration>"
+            "Usage: run <scans> or run <duration> (e.g. run 10, run 500ms), "
+            "or run until <expression> within <scans or duration>"
         )
     with stop_if_scans_ran(adapter):
         if parts[1].lower() == "until":
@@ -382,7 +384,9 @@ def _run_limit(adapter: Any, tokens: list[str]) -> tuple[int | None, float]:
     try:
         ms = parse_duration(spec)
     except ValueError as exc:
-        raise adapter.DAPAdapterError(f"Cannot parse '{spec}' as cycle count or duration") from exc
+        raise adapter.DAPAdapterError(
+            f"Cannot read '{spec}' as a scan count or a duration. Write a number such as 10, or a time such as 500ms."
+        ) from exc
     return None, ms / 1000.0
 
 
@@ -399,13 +403,13 @@ def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
     splits = list(_WITHIN_RE.finditer(text))
     if not splits or not text[: splits[-1].start()].strip():
         raise adapter.DAPAdapterError(
-            "Usage: run until <expression> within <cycles or duration> "
+            "Usage: run until <expression> within <scans or duration> "
             "(e.g. run until Done within 500, run until Done within 2 s)"
         )
     condition = text[: splits[-1].start()].strip()
     cycles, seconds = _run_limit(adapter, text[splits[-1].end() :].split())
     if cycles is not None and cycles < 1:
-        raise adapter.DAPAdapterError("cycle count must be >= 1")
+        raise adapter.DAPAdapterError("The scan count must be 1 or more.")
     if cycles is None and seconds <= 0:
         raise adapter.DAPAdapterError("duration must be positive")
 
@@ -486,7 +490,7 @@ def stop_if_scans_ran(adapter: Any) -> Iterator[None]:
 
 def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:
     if cycles < 1:
-        raise adapter.DAPAdapterError("cycle count must be >= 1")
+        raise adapter.DAPAdapterError("The scan count must be 1 or more.")
     scans = 0
     hit_bp = False
     for _ in range(cycles):
@@ -498,7 +502,7 @@ def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:
     scan_id = adapter._current_scan_id
     suffix = " (breakpoint)" if hit_bp else ""
     return ConsoleResult(
-        f"Ran {scans} cycle(s), now at scan {scan_id}{suffix}",
+        f"Ran {scans} scan(s), now at scan {scan_id}{suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
         hit_breakpoint=hit_bp,
     )
@@ -850,10 +854,10 @@ class _PilotProgressFormatter:
             self._after_correction = False
             self._last_holds = ()
             source_scan = getattr(requirement, "source_scan", None)
-            source = f"scan {source_scan}" if source_scan is not None else "retained history"
+            source = f"scan {source_scan}" if source_scan is not None else "an earlier scan"
             assignments = tuple(data.get("assignments", ()))
             applied = f" and applied {_pilot_assignments(assignments)}" if assignments else ""
-            return f"  Rewound to {source}{applied}; re-orienting.\n"
+            return f"  Went back to {source}{applied}. Looking for the next step from there.\n"
 
         if kind == "bearing_coast":
             if self._retry_open:
@@ -889,7 +893,7 @@ class _PilotProgressFormatter:
             after = data.get("bearing_coast_actual_value")
             elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
             if isinstance(stretched, int) and stretched > 0 and isinstance(kernel, int):
-                elapsed += f" ({stretched:,} in the loop; {kernel:,} interpreted)"
+                elapsed += f" ({stretched:,} run on the fast path, {kernel:,} run one at a time)"
             prefix = " " if self._wait_open or self._retry_open else "  "
             wait_channel = self._wait_channel
             resuming = self._resuming_open
@@ -943,7 +947,7 @@ class _PilotProgressFormatter:
             prefix = " unexpected.\n" if self._departure_open else "\n"
             self._departure_open = False
             self._investigation_open = True
-            return prefix + "  Preventable?"
+            return prefix + "  Can how() prevent this move?"
 
         if kind == "trend_regression":
             position = self._position_text(data.get("position", ()))
@@ -999,11 +1003,16 @@ class _PilotProgressFormatter:
                 actions = tuple(candidate.get("actions", ()))
                 if actions:
                     proposals.append(_pilot_assignments(actions))
-            detail = f": {'; '.join(proposals)}" if proposals else ""
-            return f"\nGuidance required before trying exploratory inputs{detail}.\n"
+            if not proposals:
+                return None
+            listed = "".join(f"\n    {proposal}" for proposal in proposals)
+            return (
+                "\nhow() has no evidence that these input changes help, so it does not try "
+                f"them:{listed}\n  To try one, set it yourself and run how again.\n"
+            )
 
         if kind == "stuck":
-            reason = str(data.get("reason") or "No productive next action was found.")
+            reason = str(data.get("reason") or f"{NO_NEXT_STEP}.")
             reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
             prefix = (
                 "\n"
@@ -1018,7 +1027,12 @@ class _PilotProgressFormatter:
                 )
                 else ""
             )
-            return f"{prefix}\nStopping: {reason}\n"
+            waiting = ""
+            if "; still waiting on " in reason:
+                reason, rest = reason.split("; still waiting on ", 1)
+                waiting = f"\nWaiting for: {rest}"
+            reason = reason if reason.endswith((".", "!", "?")) else reason + "."
+            return f"{prefix}\nStopping: {reason}{waiting}\n"
 
         if kind == "finished":
             return "\n"
@@ -1059,9 +1073,8 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
             "[avoid <expression>[, <expression>...]]  "
             "(e.g. how Running, how State == HELD avoid State == FAULTED, "
             "how Burner avoid ProdMode, MaintFault).  "
-            "Comma-separated targets must all hold at the end of the path.  "
-            "Comma-separated avoid conditions are a union; each is avoided "
-            "independently."
+            "Every target must hold at the end of the path.  "
+            "The path avoids every condition listed after avoid."
         )
     expr_str = parts[1].strip()
     runner = adapter._require_runner_locked()
@@ -1094,7 +1107,9 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         try:
             conds = to_conditions(parsed, runner.tags)
         except KeyError as exc:
-            raise adapter.DAPAdapterError(f"how {label}: unknown tag {exc}") from exc
+            name = exc.args[0] if exc.args else exc
+            where = "how target" if label == "target" else "avoid condition"
+            raise adapter.DAPAdapterError(f"Unknown tag '{name}' in the {where}.") from exc
         return conds
 
     conditions = _resolve("target", expr_str)
@@ -1384,7 +1399,7 @@ def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
         form = forms.get(tag_name)
         if form is None:
             if tag_name not in {n for n in runner.program.dataview().tags}:
-                raise adapter.DAPAdapterError(f"Unknown tag '{tag_name}'")
+                raise adapter.DAPAdapterError(f"Unknown tag '{tag_name}'.")
             raise adapter.DAPAdapterError(
                 f"'{tag_name}' is not a terminal tag. Only terminals have simplified forms."
             )

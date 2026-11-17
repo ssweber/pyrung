@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pyrung.core.analysis.graph import NO_NEXT_STEP
 from pyrung.core.analysis.pilot.avoid import _avoid_scan_names, _AvoidCheckRaised
 from pyrung.core.analysis.pilot.budget import WallClock
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
@@ -54,9 +55,7 @@ class LastResort:
             move = f"{number}. Set {self.tag}={self.value!r} before the next scan."
         else:
             move = f"{number}. Wait {self.scans} {'scan' if self.scans == 1 else 'scans'}."
-        reason = (self.session_reason or "No productive next action was found").removeprefix(
-            "pilot: "
-        )
+        reason = (self.session_reason or NO_NEXT_STEP).removeprefix("pilot: ")
         reason = reason.split("; still waiting on ", 1)[0]
         return (
             f"{move}\n   Nothing in the trace pointed to this. how() tried it because it was "

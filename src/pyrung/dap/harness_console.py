@@ -213,7 +213,9 @@ def _harness_install(adapter: Any) -> ConsoleResult:
     execution_flow.invalidate_mid_scan(adapter)
     banner = try_auto_install(adapter)
     if banner is None:
-        return ConsoleResult("No Physical+link= couplings found; nothing to install")
+        return ConsoleResult(
+            "Nothing to install, because no feedback tag has a link in the program or on the bench."
+        )
     return ConsoleResult(banner)
 
 

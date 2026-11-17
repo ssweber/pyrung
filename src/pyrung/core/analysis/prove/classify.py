@@ -3810,7 +3810,9 @@ def _classify_dimensions_from_graph(
         )
         done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
         result = Intractable(
-            reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
+            reason=(
+                f"The analysis cannot bound the values of {', '.join(sorted(infeasible_tags))}."
+            ),
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(infeasible_tags),
@@ -3848,7 +3850,7 @@ def _classify_dimensions_from_graph(
         )
         done_kinds_partial = {d: done_acc_info.kinds[d] for d in done_acc}
         result = Intractable(
-            reason=f"unannotated function output: {', '.join(sorted(fn_escape))}",
+            reason=f"Nothing bounds the function outputs {', '.join(sorted(fn_escape))}.",
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(fn_escape),

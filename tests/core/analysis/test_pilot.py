@@ -443,7 +443,7 @@ def test_bool_output_routes_report_and_avoid():
     assert default.changes.get("ProdCmd") is True
     rendered = str(default)
     assert "Route: ProdMode" in rendered
-    assert "Other routes: avoid=ProdMode" in rendered
+    assert "For another route, pass avoid=ProdMode to how()." in rendered
     assert "Route: via" not in rendered
 
     # avoid= steers off the production route to the same place.

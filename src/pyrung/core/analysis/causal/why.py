@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.pdg import continuous_search_results, resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.state import value_changed
@@ -539,11 +540,16 @@ class _RungResolver:
             result = resolve_rung(self._program, node)
             if result is not None:
                 return result
-            raise LookupError(f"Cannot resolve rung: {node.subroutine}[{node.rung_index}]")
+            where = node.subroutine or "main"
+            raise LookupError(
+                internal_error(f"why() found no rung at index {node.rung_index} of {where}")
+            )
         if node.subroutine is not None:
             raise LookupError(
-                f"Cannot resolve subroutine rung without program: "
-                f"{node.subroutine}[{node.rung_index}]"
+                internal_error(
+                    f"why() has no program to look up rung index {node.rung_index} of "
+                    f"{node.subroutine}"
+                )
             )
         rung = self._main[node.rung_index]
         for branch_idx in node.branch_path:

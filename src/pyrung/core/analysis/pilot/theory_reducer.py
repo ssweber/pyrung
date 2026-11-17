@@ -757,7 +757,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.source != parent.provisional_tip:
             raise TheoryInvariantError("world rebase source is not the current progress boundary")
         if fact.rebased_source == fact.source:
-            raise TheoryInvariantError("world rebase changed its physical execution boundary")
+            raise TheoryInvariantError("world rebase did not change its source boundary")
         overlay_delta = theory_boundary_overlay_delta(fact.source, fact.rebased_source)
         if overlay_delta is None:
             raise TheoryInvariantError("world rebase changed its physical execution boundary")

@@ -48,11 +48,11 @@ def parse_args(
             try:
                 value = coercer(value)
             except Exception as exc:
-                raise error(f"Invalid value for field: {field.name}") from exc
+                raise error(f"Field {field.name} cannot take the value {value!r}.") from exc
 
         field_type = resolved_types.get(field.name, field.type)
         if not _matches_type(value, field_type):
-            raise error(f"Invalid type for field: {field.name}")
+            raise error(f"Field {field.name} cannot take a value of type {type(value).__name__}.")
         kwargs[field.name] = value
 
     return model(**kwargs)

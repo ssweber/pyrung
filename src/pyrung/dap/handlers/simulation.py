@@ -101,7 +101,9 @@ def set_mode_locked(
         adapter._pending_stop = False
         if runner.mode == "stop":
             if adapter._thread_running_locked():
-                raise adapter.DAPAdapterError("Cannot enter RUN while continue is running")
+                raise adapter.DAPAdapterError(
+                    "Cannot enter RUN while the debugger is running scans. Pause first."
+                )
             execution_flow.invalidate_mid_scan(adapter)
             adapter._current_scan_id = None
             runner.start()
@@ -117,7 +119,7 @@ def _apply(adapter: Any, verb: str, action: Any, target: str) -> None:
     try:
         action()
     except KeyError as exc:
-        raise adapter.DAPAdapterError(f"unknown tag: {target}") from exc
+        raise adapter.DAPAdapterError(f"Unknown tag '{target}'.") from exc
     except (ValueError, TypeError) as exc:
         raise adapter.DAPAdapterError(f"cannot {verb} {target}: {exc}") from exc
 
@@ -263,7 +265,7 @@ def resolve_target_locked(adapter: Any, target: str) -> str:
     try:
         bank, index = parse_address(target)
     except ValueError:
-        raise adapter.DAPAdapterError(f"unknown tag: {target}") from None
+        raise adapter.DAPAdapterError(f"Unknown tag '{target}'.") from None
     display = format_address_display(bank, index)
 
     provider = adapter._click_provider
@@ -272,11 +274,12 @@ def resolve_target_locked(adapter: Any, target: str) -> str:
         return name
     if bank in ("XD", "YD"):
         raise adapter.DAPAdapterError(
-            f"{display} is a word image of {bank[0]} bits; use the bit addresses instead"
+            f"{display} packs {bank[0]} bits into one word. "
+            f"Force or patch the {bank[0]} bit addresses instead."
         )
     suffix = "" if adapter._has_tag_map else "; the project has no TagMap"
     raise adapter.DAPAdapterError(
-        f"unknown tag: {target} (address {display} is not mapped to a tag{suffix})"
+        f"Unknown tag '{target}' (address {display} is not mapped to a tag{suffix})"
     )
 
 

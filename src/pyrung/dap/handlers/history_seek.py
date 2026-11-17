@@ -320,7 +320,9 @@ def on_pyrung_fork_at(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     with adapter._state_lock:
         if adapter._thread_running_locked():
-            raise adapter.DAPAdapterError("Cannot fork while continue is running")
+            raise adapter.DAPAdapterError(
+                "Cannot fork while the debugger is running scans. Pause first."
+            )
 
         runner = adapter._require_runner_locked()
         try:

@@ -86,15 +86,16 @@ def _parse_query(query: str) -> _ParsedQuery:
     q = query.strip()
     if ":" not in q:
         raise ValueError(
-            f"pyrungCausal.query missing ':'; expected cause:Tag, effect:Tag, or recovers:Tag (got {query!r})"
+            f"The query {query!r} has no ':'. Write a command, a colon and a tag, such as "
+            "cause:Tag, effect:Tag, recovers:Tag, why:Tag or how:Tag."
         )
     cmd, _, rest = q.partition(":")
     cmd_lower = cmd.lower().strip()
     if cmd_lower not in _COMMANDS:
-        raise ValueError(f"pyrungCausal.query unknown command {cmd!r}; expected one of {_COMMANDS}")
+        raise ValueError(f"Unknown query command {cmd!r}. Use cause, effect, recovers, why or how.")
     rest = rest.strip()
     if not rest:
-        raise ValueError(f"pyrungCausal.query missing tag name (got {query!r})")
+        raise ValueError(f"The query {query!r} has no tag name. Write the tag after the colon.")
 
     if cmd_lower in ("why", "how"):
         return _ParsedQuery(cmd_lower, rest, None, has_value=False, value=None)
@@ -106,21 +107,23 @@ def _parse_query(query: str) -> _ParsedQuery:
             scan = int(scan_s.strip())
         except ValueError as e:
             raise ValueError(
-                f"pyrungCausal.query scan after '@' must be an integer (got {scan_s!r})"
+                f"The scan after '@' must be a whole number, and the query has {scan_s!r}."
             ) from e
         if not tag:
-            raise ValueError(f"pyrungCausal.query missing tag name before '@' (got {query!r})")
+            raise ValueError(f"The query {query!r} has no tag name before '@'.")
         if cmd_lower == "recovers":
-            raise ValueError("pyrungCausal recovers:Tag does not accept @scan")
+            raise ValueError("recovers:Tag does not accept @scan. Remove the @ and the scan.")
         return _ParsedQuery(cmd_lower, tag, scan, has_value=False, value=None)
 
     if ":" in rest:
         tag, _, value_s = rest.partition(":")
         tag = tag.strip()
         if not tag:
-            raise ValueError(f"pyrungCausal.query missing tag name before ':' (got {query!r})")
+            raise ValueError(f"The query {query!r} has no tag name before the value.")
         if cmd_lower == "recovers":
-            raise ValueError("pyrungCausal recovers:Tag does not accept :value")
+            raise ValueError(
+                "recovers:Tag does not accept a value. Remove the second ':' and the value."
+            )
         return _ParsedQuery(cmd_lower, tag, None, has_value=True, value=_parse_value(value_s))
 
     return _ParsedQuery(cmd_lower, rest, None, has_value=False, value=None)
@@ -130,8 +133,12 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     """Dispatch a causal query to the runner and serialize the chain."""
     parsed_args = adapter._parse_request_args(_CausalRequestArgs, args)
 
-    if not isinstance(parsed_args.query, str) or not parsed_args.query.strip():
-        raise adapter.DAPAdapterError("pyrungCausal.query must be a non-empty string")
+    if not isinstance(parsed_args.query, str):
+        raise adapter.DAPAdapterError("The query must be text such as cause:Tag.")
+    if not parsed_args.query.strip():
+        raise adapter.DAPAdapterError(
+            "The query is empty. Write a command and a tag, such as cause:Tag."
+        )
 
     try:
         pq = _parse_query(parsed_args.query)
@@ -158,7 +165,8 @@ def on_pyrung_causal(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             try:
                 conditions = to_conditions(expr, runner.tags)
             except KeyError as exc:
-                raise adapter.DAPAdapterError(f"how: unknown tag {exc}") from exc
+                name = exc.args[0] if exc.args else exc
+                raise adapter.DAPAdapterError(f"Unknown tag '{name}' in the how target.") from exc
             path = runner.how(*conditions)
             return {
                 "query": parsed_args.query,

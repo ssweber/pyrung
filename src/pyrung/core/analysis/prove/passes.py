@@ -581,15 +581,14 @@ def _for_iterations_intractable(exc: ForIterationsBeyondCap, dimensions: int) ->
     return Intractable(
         reason=(
             f"forloop({exc.count}) at {exc.where} can run {exc.iterations} times in one"
-            f" scan, more than the facts run ({PROVE_FOR_ITERATION_CAP})"
+            f" scan. The analysis runs a loop at most {PROVE_FOR_ITERATION_CAP} times."
         ),
         dimensions=dimensions,
         estimated_space=0,
         tags=list(exc.tags),
         hints=[
-            f"  {exc.count}: a Dint count is read whole, so a positive one can run up to"
-            " 2147483647 times; narrow it with min=/max=/choices=, or test the loop"
-            " with run_for()",
+            f"  {exc.count} is a Dint, so the loop can run up to 2147483647 times. Narrow it"
+            " with min=/max=/choices=, or test the loop with run_for().",
         ],
     )
 

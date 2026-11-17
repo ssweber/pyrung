@@ -243,7 +243,7 @@ def test_undeclared_word_stops_without_guessing_at_a_cause():
     assert finished["reached"] is False, "an undeclared free word has no complete domain to probe"
     assert (
         finished["reason"]
-        == "No productive next action was found; still waiting on Output=True (have False)"
+        == "how() found no next step that makes progress; still waiting on Output=True (have False)"
     )
 
     # The last resort may try the word with no reason.  Only its scans keep the move, and the

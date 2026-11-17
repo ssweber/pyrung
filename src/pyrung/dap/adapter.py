@@ -690,7 +690,7 @@ class DAPAdapter:
 
     def _require_runner_locked(self) -> PLC:
         if self._runner is None:
-            raise DAPAdapterError("No program launched")
+            raise DAPAdapterError("No program is loaded. Launch a program first.")
         return self._runner
 
     def _shutdown(self) -> HandlerResult:

@@ -74,7 +74,9 @@ def on_data_breakpoint_info(adapter: Any, args: dict[str, Any]) -> HandlerResult
     if variables_reference != adapter._monitor_scope_ref or not isinstance(name, str):
         return {
             "dataId": None,
-            "description": "Data breakpoints are supported for PLC monitors",
+            "description": (
+                "You can set a data breakpoint only on a PLC monitor. Add a monitor on the tag first."
+            ),
         }, []
 
     with adapter._state_lock:

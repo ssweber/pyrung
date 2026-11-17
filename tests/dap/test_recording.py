@@ -334,7 +334,7 @@ class TestReplayWithNoDebugger:
     def test_a_missing_program_says_so(self, tmp_path: Path):
         rec = tmp_path / "orphan.rec"
         rec.write_text("# program: gone.py\nstep 1\n", encoding="utf-8")
-        with pytest.raises(ReplayFailed, match="program not found"):
+        with pytest.raises(ReplayFailed, match="Cannot find the program"):
             replay_recording(rec)
 
     def test_a_program_that_fails_to_load_says_so(self, tmp_path: Path):
