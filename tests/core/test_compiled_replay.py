@@ -168,8 +168,8 @@ def test_a_dormant_range_keeps_through_a_reset_only_if_retentive(
         tags = runner.current_state.tags
         assert runner.current_state.scan_id == 1
         if retentive:
-            # A battery reboot keeps what STOP -> RUN keeps: what a retentive slot the
-            # rungs reach holds, named or not.
+            # A battery reboot keeps what STOP -> RUN keeps. That is any retentive slot
+            # that the rungs reach, named or not.
             assert (tags["ResetRange1"], tags["ResetRange2"]) == (7, 7)
             assert tags["ResetRangeEnabled"] is False
         else:
@@ -206,7 +206,7 @@ def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
 
 def test_compiled_plc_forced_block_tag_survives_battery_reboot() -> None:
     enabled = Bool("ForcedRangeEnabled", external=True)
-    # Retentive, so a battery keeps it (a non-retentive slot resets, as on STOP -> RUN).
+    # Retentive, so a battery keeps it. A non-retentive slot resets, as on STOP -> RUN.
     values = Block("ForcedRange", TagType.INT, 1, 2, retentive=True)
 
     with Program(strict=False) as program:
@@ -293,7 +293,7 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     compiled.reboot()
 
     _assert_states_equivalent(plc, compiled)
-    # The rungs reach it and it is retentive, so a battery keeps it, whichever way the
+    # The rungs reach it and it is retentive, so a battery keeps it. This holds however the
     # patch spelled it.
     assert compiled.current_state.tags["PatchedRange1"] == 31
 
@@ -355,8 +355,8 @@ def test_compiled_plc_preserves_named_array_range_identity_and_shape(
         dt=0.010,
     )
 
-    # An explicit semantic range seeds the fields in both runners, while its
-    # sparse backing span and padding never become observable state.
+    # An explicit semantic range seeds the fields in both runners. Its sparse backing span
+    # and padding never become observable state.
     _assert_states_equivalent(plc, compiled)
     semantic_names = {
         "ReplayRow1_first",
@@ -540,8 +540,8 @@ def test_recompile_keeps_mapped_condition_tag_scalar(blockless: bool) -> None:
     assert len(ds._tag_cache) == 5000
     second = compile_kernel(program, blockless=blockless)
 
-    # Recompilation sees the now-materialized block cache, but a condition on
-    # its mapped scalar occupant must not snapshot all 5,000 block entries.
+    # Recompilation sees the block cache that is now materialized. A condition on its
+    # mapped scalar occupant must still not snapshot all 5,000 block entries.
     assert "_cond_block_snap" not in second.source
 
     first_kernel = first.create_kernel()
@@ -785,7 +785,7 @@ def test_compiled_plc_matches_plc_for_rtc_apply_and_system_points() -> None:
 
 
 def test_intra_rung_write_visible_to_timer_reset_in_compiled_kernel() -> None:
-    """The compiled kernel reads a box's pins at box entry, after the wire above."""
+    """The compiled kernel reads a box's pins at box entry, after the wire above it."""
     Enable = Bool("Enable")
     ResetBtn = Bool("ResetBtn")
 
@@ -875,10 +875,10 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
     [
         (None, 1 << 30, 0, 2900, 2900),
         (None, 1 << 30, 0, 2800, 2800),
-        # 1300 scans on, the window of 1000 scans starts at the checkpoint after tip - 1000.
+        # After 1300 scans, the window of 1000 scans starts at the checkpoint after tip - 1000.
         (1000, 1 << 30, 0, 2900, 3200),
         (1000, 1 << 30, 0, 2800, 3000),
-        # Six checkpoints of the padded state pass 1 MiB, so the floor moves one interval more.
+        # Six checkpoints of the padded state pass 1 MiB, so the floor moves up one more interval.
         (1000, 1_048_576, 1000, 2900, 3400),
     ],
 )
@@ -978,7 +978,7 @@ def test_a_replay_of_a_checkpoint_steps_on_with_a_battery_change_made_after_it()
             fork.step()
             assert dict(fork.state.tags) == dict(live[scan].tags), scan
             assert dict(fork.state.memory) == dict(live[scan].memory), scan
-    # Past the tip, the change belongs to scan 201, as in history and fork().
+    # Past the tip, the change belongs to scan 201. History and fork() do the same.
     for fork in _replay_both_ways(source, 200):
         assert fork._battery_present
         assert dict(fork.state.memory) == dict(source.history.at(200).memory)
@@ -1157,8 +1157,8 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
 def test_a_math_write_to_a_read_only_system_tag_raises_in_a_run_as_in_stepping(
     loop_from_first_scan: None, run: str
 ) -> None:
-    # The kernel writes a system tag without the check that stepping makes, so a
-    # program with such a write must stay off it.
+    # The kernel writes a system tag without the check that stepping makes. A program that
+    # writes a system tag must therefore stay off the kernel.
     go = Bool("RoSysGo")
     timer = Timer.clone("RoSysT")
     with Program(strict=False) as program:
@@ -1196,8 +1196,9 @@ def test_a_replay_of_a_world_the_kernel_cannot_run_lands_interpreted() -> None:
 
 
 def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) -> None:
-    """When a prebuilt kernel is supplied, construction must not re-walk the
-    program graph — the materialized tag set is already on the kernel."""
+    """When you supply a prebuilt kernel, construction must not re-walk the program graph.
+
+    The materialized tag set is already on the kernel."""
     from pyrung.circuitpy.codegen import render_kernel
 
     enable = Bool("Enable")

@@ -55,9 +55,8 @@ def _captured_projection(*, pulse: bool = True):
     plc = PLC(program)
     plc.step()
     if pulse:
-        # Pulse the edge once so its contact's memory is written (an entry
-        # read, not the unwritten default) when the captured scan sees it rise
-        # again.
+        # Pulse the edge once so that its contact's memory is written. The captured scan
+        # then reads an entry, not the unwritten default, when the edge rises again.
         plc.patch({edge.name: True})
         plc.step()
         plc.patch({edge.name: False})
@@ -167,7 +166,7 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
         if run.kind == "rung" and run is not anchor and run.rung._use_prior_snapshot
     )
     branch_run = next(run for run in projection.runs if run.kind == "branch")
-    # Each row has a view of its own, taken as the solve reached it.
+    # Each row has its own view, which the solve took when it reached that row.
     assert len({id(anchor.view), id(continued.view), id(branch_run.view)}) == 3
 
     guard_reads = tuple(
@@ -186,8 +185,8 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
     assert entry_read.occurrence.source == "entry"
     assert resolved_read.occurrence.source == "resolved"
     assert default_read.occurrence.source == "default"
-    # The edge contact reads its tag, then its own memory (``_edge:e{N}``,
-    # the contact's site key; it was ``_prev:<tag>`` when memory was per tag).
+    # The edge contact reads its tag, then its own memory (``_edge:e{N}``, the contact's
+    # site key). Memory was ``_prev:<tag>`` when it was kept per tag.
     edge_contact = anchor.rung._conditions[4]
     assert memory_read.occurrence.name == edge_contact._memory_key
     edge_reads = [
@@ -208,8 +207,8 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
 
 
 def test_compaction_keeps_guards_when_the_edge_memory_read_is_a_default() -> None:
-    # The edge's memory is unwritten: its read is a default, which compaction
-    # keeps as an absence.  The guards must judge the same after it.
+    # The edge's memory is unwritten, so its read is a default. Compaction keeps a default
+    # as an absence. The guards must judge the same after compaction.
     _plc, _capture, projection, _pending, _entry, _edge = _captured_projection(pulse=False)
     anchor = next(run for run in projection.runs if len(run.rung._conditions) == 5)
     memory_read = next(
