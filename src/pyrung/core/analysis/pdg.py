@@ -184,8 +184,8 @@ class ProgramGraph:
     pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
     indirect_writes: tuple[IndirectWriteRef, ...] = ()
     # The writes through a pointer that list no targets, by block.  Each is a writer node
-    # and the addresses it can reach (None for every element).  See
-    # ``unlisted_writers_of``.
+    # and the addresses the program's own pointer values reach (None for every element).
+    # See ``unlisted_writers_of`` and ``pointer_writers_of``.
     unlisted_writes: dict[Block, tuple[tuple[int, frozenset[int] | None], ...]] = field(
         default_factory=dict
     )
@@ -381,7 +381,8 @@ class ProgramGraph:
         A write through a pointer with no declared bounds, into a block of more than 1000
         elements, names none of its targets.  ``writers_of`` and the facts' writer lists
         leave it out, so a check that reads "no writer" as "constant" or "input" asks this
-        too.  The answer covers every element the pointer can reach.
+        too.  It answers "can the program's own values aim the pointer at this tag?".  So
+        each write counts only for the addresses the program can store in its pointer.
         """
         if not self.unlisted_writes:
             return frozenset()
@@ -389,6 +390,29 @@ class ProgramGraph:
         for block, addr in self.tag_positions(tag_name, self.unlisted_writes):
             nodes |= self.unlisted_writers_at(block, addr)
         return nodes
+
+    def pointer_writers_of(
+        self, tag_name: str, blocks: Collection[Block] | None = None
+    ) -> frozenset[int]:
+        """The nodes whose unlisted write through a pointer can store into ``tag_name``.
+
+        It answers "could this write have stored into the tag, whatever its pointer
+        held?".  A patch or a force can put any value in a pointer, so every write into a
+        block counts for every element of it.  A walk over a recorded run asks this, and
+        keeps a write only when the run shows it stored into the tag.  *blocks* keeps only
+        the writes into those blocks.
+        """
+        if not self.unlisted_writes:
+            return frozenset()
+        written = (
+            self.unlisted_writes
+            if blocks is None
+            else [block for block in blocks if block in self.unlisted_writes]
+        )
+        nodes: set[int] = set()
+        for block, _addr in self.tag_positions(tag_name, written):
+            nodes.update(node for node, _reach in self.unlisted_writes[block])
+        return frozenset(nodes)
 
     def tag_positions(
         self, tag_name: str, blocks: Collection[Block]
@@ -483,8 +507,21 @@ class ProgramGraph:
         return frozenset(name for name in self.tags if self.unlisted_writers_of(name))
 
     def all_writers_of(self, tag_name: str) -> frozenset[int]:
-        """The nodes that may write ``tag_name``: ``writers_of`` and :meth:`unlisted_writers_of`."""
+        """The nodes that may write ``tag_name``: ``writers_of`` and :meth:`unlisted_writers_of`.
+
+        It answers "which rungs can write the tag, from the program alone?".  A static
+        answer asks this.
+        """
         return self.writers_of.get(tag_name, frozenset()) | self.unlisted_writers_of(tag_name)
+
+    def writers_in_any_run_of(self, tag_name: str) -> frozenset[int]:
+        """The nodes that may write ``tag_name``: ``writers_of`` and :meth:`pointer_writers_of`.
+
+        It answers "which rungs could have written the tag in a run, whatever a patch or a
+        force put in a pointer?".  A walk over a recorded run asks this, and keeps a rung
+        only when the run shows it wrote the tag.
+        """
+        return self.writers_of.get(tag_name, frozenset()) | self.pointer_writers_of(tag_name)
 
     def may_be_written(self, tag_name: str) -> bool:
         """Whether a rung may write ``tag_name``, listed in ``writers_of`` or not."""
@@ -2228,12 +2265,14 @@ class _UnlistedReach:
     def narrow(
         self, writes: list[_UnlistedWrite]
     ) -> dict[Block, tuple[tuple[int, frozenset[int] | None], ...]]:
-        """*writes* by block, each with the addresses it can reach (None: all of them)."""
+        """*writes* by block, each with the addresses it can reach (None: all of them).
+
+        A write that reaches no address stays, with an empty reach.  A patch or a force on
+        its pointer can still aim it into the block.
+        """
         by_block: dict[Block, dict[int, set[int] | None]] = {}
         for node, instr, dest in writes:
             addresses = self.addresses(instr, dest)
-            if addresses is not None and not addresses:
-                continue
             by_node = by_block.setdefault(dest.block, {})
             known = by_node.get(node, set())
             by_node[node] = None if addresses is None or known is None else known | addresses

@@ -192,6 +192,9 @@ class ChainStep:
     Recorded mode adds ``"held"``: a why-held step for a tag that never
     transitioned — the rung shown is why the tag *holds* its value, and
     ``enablers`` are its stable supports (the absence hop).
+    ``uncertain`` is True in why mode for a rung that writes through a pointer
+    listing no targets.  The pointer may have stored elsewhere, so the rung may
+    not be the writer.  The why report marks the step with ``?``.
     """
 
     transition: Transition
@@ -219,6 +222,7 @@ class ChainStep:
     # causal step. ``None`` means the step came from ordinary SP-tree/timeline
     # attribution rather than a ReverseResult adapter.
     crossing_exact: bool | None = None
+    uncertain: bool = False
 
     def with_caller(
         self,
@@ -265,6 +269,8 @@ class ChainStep:
             d["caller_rung_index"] = self.caller_rung_index
         if self.crossing_exact is not None:
             d["crossing_exact"] = self.crossing_exact
+        if self.uncertain:
+            d["uncertain"] = True
         return d
 
 
@@ -301,6 +307,16 @@ class CausalChain:
 
     @property
     def confidence(self) -> float:
+        """``1 / len(ambiguous_roots)``, or 1.0 when there are none.
+
+        In why mode ``ambiguous_roots`` holds two kinds of root:
+
+        - The triggers of a rung that set the tag and no longer conducts.  One of them
+          set it.  A trigger shared by two set rungs counts twice.
+        - The roots reached only under a write through a pointer that may have stored
+          elsewhere.  They may not matter at all.  Each tag counts once, and a tag that
+          another path also reached does not count.
+        """
         if not self.ambiguous_roots:
             return 1.0
         return 1.0 / len(self.ambiguous_roots)
@@ -567,7 +583,8 @@ class CausalChain:
             prefix = " *" if is_abnormal(step) else "  "
             contacts = _fmt_contacts(step, cl)
             suffix = f" -- {contacts}" if contacts else ""
-            lines.append(f"{prefix}r{step.rung_index + 1}: {instr}({t.tag_name}){suffix}")
+            maybe = "?" if step.uncertain else ""
+            lines.append(f"{prefix}r{step.rung_index + 1}: {instr}({t.tag_name}){maybe}{suffix}")
 
         return "\n".join(lines)
 
