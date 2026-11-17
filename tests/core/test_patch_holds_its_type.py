@@ -193,7 +193,7 @@ def test_a_copy_of_a_non_finite_into_a_bool_is_false_in_generated_code(
 
 
 def test_a_name_nothing_reads_has_no_type_to_hold() -> None:
-    """Keep the value as written and report it, because nothing in the program types the name."""
+    """A patched name that nothing in the program types keeps the value as written."""
     plc = PLC(_program(), dt=0.01)
     plc.patch({"NoSuchTag": 0.5})
     plc.step()

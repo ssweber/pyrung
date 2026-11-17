@@ -84,7 +84,8 @@ def test_the_twin_is_asked_on_the_plain_state() -> None:
 
 
 def test_a_predicate_naming_a_module_is_not_asked() -> None:
-    # The twin shares a module with the run. Asking the twin could change what the run reads.
+    # A copy of this predicate would share the module with the run. If fold_check asked the
+    # copy, it could change what the run reads. So fold_check skips the predicate.
     plc = _plc()
     before = fold_check.STATS["predicate skipped: not copyable"]
     fold_check._checked(
@@ -254,7 +255,7 @@ def test_a_predicate_over_the_real_runner_is_not_asked() -> None:
 
 @pytest.fixture
 def installed(monkeypatch: pytest.MonkeyPatch):
-    """Install the real wrappers for this test only and restore everything afterwards."""
+    """Let the test install the real wrappers for itself only and restore everything after it."""
     import pyrung.core.analysis.pilot.coast as pilot_coast
     import pyrung.core.coast_run as coast_run
 
@@ -495,7 +496,10 @@ def test_a_copied_predicate_keeps_reads_untraced_from_the_real_trace() -> None:
 
 
 class _CopiesItsOwnWay:
-    """Copies itself through copy.deepcopy() and returns the same function that it holds."""
+    """Copies itself through copy.deepcopy().
+
+    copy.deepcopy() returns each function that the object holds as it is, not a copy of it.
+    """
 
     def __init__(self, **parts: Any) -> None:
         self.__dict__.update(parts)
@@ -684,9 +688,9 @@ def test_declares_a_mismatch():
 
 
 def _session(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
-    """Run *source* in a separate pytest session.
+    """Run *source* in a pytest session of its own.
 
-    The test checks what fails that session, so the session itself must not fail.
+    The callers check what makes that session fail. The session that runs them must not fail.
     """
     test = tmp_path / "test_swallow.py"
     test.write_text(source, encoding="utf-8")
@@ -732,9 +736,9 @@ def test_a_declared_mismatch_fails_nothing(tmp_path: Path) -> None:
 def test_a_mismatch_seen_only_at_the_end_fails_the_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Fail the session for a mismatch that arrives outside any test.
+    """A mismatch outside any test still fails the session.
 
-    A fixture of a wider scope is one example.
+    A fixture of a wider scope is one place where such a mismatch can occur.
     """
     from types import SimpleNamespace
 
@@ -849,7 +853,10 @@ def test_a_run_charging_past_the_units_asked_is_caught() -> None:
 
 
 def test_a_run_short_of_the_units_asked_is_caught() -> None:
-    """Catch a run that leaves a unit over, because a unit would have paid for 100 more scans."""
+    """fold_check catches a run that stops with a unit left over.
+
+    That unit would have paid for 100 more scans, however few scans the run ran.
+    """
     plc = _plc()
     with (
         fold_check.deliberate(),
@@ -869,9 +876,9 @@ def test_a_run_spending_every_unit_stopped_on_its_budget() -> None:
 
 
 def test_a_coast_in_units_through_install_is_held_to_the_coast_own_charge(installed) -> None:
-    """Charge the loop's scans at their price and the other scans one unit each.
+    """The installed coast charges the loop's scans at their price and every other scan one unit.
 
-    Compare every scan.
+    fold_check compares every scan and finds no mismatch.
     """
     coast_run = installed
     fold_check.install()
@@ -934,7 +941,8 @@ def _raises_at_1500(v):
 def _raising(function: Any = _raises_at_1500) -> PLC:
     """Build a PLC with a timer and a count.
 
-    It lands in the loop and raises when the count gets there.
+    A run of it lands in the loop. The run raises when the count reaches the value at which
+    *function* raises.
     """
     with Program(strict=False) as program:
         with Rung(Go):
@@ -1377,9 +1385,9 @@ def test_own_twin_holds_what_a_rung_applied_on_each_base(applies) -> None:
 )
 @_ON_EITHER_BASE
 def test_own_twin_sees_an_apply_that_set_something_else(applies, off) -> None:
-    """Catch an apply that set something else.
+    """own_twin catches an apply that set something else.
 
-    The rung ran the same on both runners, so only the log and the base show it.
+    The rung ran the same on both runners, so only the log and the base can show it.
     """
     plc, twin = _two_bases_apart(applies)
     with (
@@ -1543,7 +1551,7 @@ def test_own_twin_passes_a_block_that_raises_after_its_compare() -> None:
 
 
 def _uses_of_own_twin(path: Path) -> set[str]:
-    """Return each function in *path* that names own_twin, whether or not it calls it."""
+    """Return the name of each function in *path* that names own_twin, called there or not."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     used: set[str] = set()
 
@@ -1948,7 +1956,8 @@ class TestACoastStoppedByTheLedger:
         honest = installed.coast_until
 
         def by_the_engine(plc: Any, predicate: Any, **kwargs: Any) -> Any:
-            # Charge each interpreted scan one unit and each loop scan a hundredth of a unit.
+            # Clearing _loop_priced_scans prices the run the way the dev branch once did. Each
+            # interpreted scan costs one unit, and each loop scan a hundredth of a unit.
             try:
                 return honest(plc, predicate, **kwargs)
             finally:
@@ -2099,9 +2108,9 @@ def test_a_wrong_rtc_origin_is_caught_in_the_log(installed, monkeypatch) -> None
 def test_a_wrong_rtc_origin_is_caught_at_the_scan_before_an_early_apply(
     installed, monkeypatch
 ) -> None:
-    """Catch a wrong rtc origin that is in both runners' logs.
+    """fold_check catches a wrong rtc origin that is in both runners' logs.
 
-    Only a replay against the states that stepping produced shows it.
+    The logs agree, so only a replay against the states that stepping produced can show it.
     """
     _origin_from_the_apply(monkeypatch, None)
     # The records also differ, a scan later. This test turns that check off.

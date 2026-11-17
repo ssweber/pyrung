@@ -662,7 +662,11 @@ def test_stop_to_run_matches_the_interpreter(build: Any, monkeypatch: pytest.Mon
 def test_a_retentive_slot_keeps_its_value_across_stop_to_run(
     default: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The slot is reached only by a pointer.  The interpreter loses its value, which is a bug."""
+    """The slot is reached only by a pointer.
+
+    The interpreter loses its value.  That is a separate bug in the interpreter, and this test
+    does not cover it.
+    """
     slots = Block("Cb", TagType.INT, 1, 8)
     slots.slot(3, default=default, retentive=True)
     namespace = _scan_with_switch(_written_through_a_pointer(slots, 3), _RUN_STOP_RUN, monkeypatch)

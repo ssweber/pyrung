@@ -178,7 +178,10 @@ DEADLINE_MS = 1500
 
 
 def entered(slot: Any, step: int, into: Any) -> None:
-    """Record in *into* the scan on which the drum (``Result1``) first reads *step*."""
+    """Record in *into* the scan on which the drum (``Result1``) first reads *step*.
+
+    Call this below the drum's rung.
+    """
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, slot.Result1 == step, into == 0):
         copy(slot.Scratch, into)
 

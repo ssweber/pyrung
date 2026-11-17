@@ -58,8 +58,8 @@ cases tell the models apart:
   (Result1); bounds cut to 16 bits, signed, like the other constants: 70000 is
   4464, so 2232; clamped to 32767: 16383; CLICK refusing the bounds at paste:
   never fires.  A CLICK reads 0, which is none of them, so the Math writes 0, as a
-  Math error does.  ``faults/rand_wide_bounds_flags`` decides which flag, if any,
-  comes with it, and finds equal bounds the likely cause.
+  Math error does.  The case ``faults/rand_wide_bounds_flags`` reads which flag,
+  if any, comes with it.  That case finds that the equal bounds are the likely cause.
   CLICK's editor refuses them typed in; a paste gets them through.
 - ``int_math_real_operand_constant`` (probe): a wide constant when the other
   operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into

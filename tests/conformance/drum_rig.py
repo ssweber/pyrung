@@ -15,8 +15,8 @@ The step registers are DS, because CLICK's editor accepts no other type for a dr
 accumulators are TD, and the completion flags and outputs are C bits.  A time drum moves
 by a jog, or by the Acc that a case stages past a preset, because a preset cannot be
 timed in scans over the wire.  Its presets are otherwise 30 s, so no scan's time pushes
-a trace over.  A time & event drum's steps are event-only (levels).  Its events move it,
-where the time drum moves by time or by the jog.
+a trace over.  A time & event drum's steps are event-only (levels), so its events move
+it.  The time drum moves by time or by the jog instead.
 """
 
 from __future__ import annotations

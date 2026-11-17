@@ -1,8 +1,8 @@
 """Check how CLICK solves the rows of one rung, in the ``row_solve`` group.
 
-The group is the subroutine ``Conf_RowSolve``.  Its drawings are ones that pyrung's
-exporter writes and CLICK accepts: branches off the trunk, and a box with a continued
-wire below it.  They belong to the part ``control``, beside ``rungs`` and ``solve_order``.
+The group runs in the subroutine ``Conf_RowSolve`` and belongs to the part ``control``,
+beside ``rungs`` and ``solve_order``.  Its drawings are ones that pyrung's exporter writes
+and CLICK accepts: branches off the trunk, and a box with a continued wire below it.
 
 The models, as in ``test_solve_order.py``:
 

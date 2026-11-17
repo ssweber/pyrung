@@ -97,7 +97,7 @@ Txt = Block("TrTxt", TagType.CHAR, 1, 4)
 
 @pytest.fixture
 def fine_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run every program through the kernel, with the loop firing a few scans at a time."""
+    """Make every run fire the loop a few scans at a time, and make a self-check mismatch raise."""
     monkeypatch.setattr(compiled_run, "INTERPRETED_PREFIX", 1)
     monkeypatch.setattr(scan_trace, "MIN_RUN_SCANS", 1)
     monkeypatch.setattr(scan_trace, "BURST_SIZES", BURSTS)
@@ -634,7 +634,8 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
     ),
 }
 
-# Cases where the loop may run no scans at all, because it decides on each scan.
+# Cases where the loop may run no scans at all. rtc_apply_held applies the clock on every
+# scan, so no scan reaches the loop.
 _NO_COVERAGE_EXPECTED: frozenset[str] = frozenset({"rtc_apply_held"})
 
 
@@ -694,7 +695,10 @@ def test_a_copy_to_text_runs_in_the_loop(fine_loop: None) -> None:
 
 
 def test_long_preset_lands_on_the_stepped_scan_at_production_settings() -> None:
-    """Run long bursts with no observer, so only the landing and the checkpoints compare."""
+    """Run long bursts with no observer.
+
+    With no observer, the test can compare only the landing and the checkpoints with the twin.
+    """
     program = _build(_corpus_timer_long_preset)
     plc = _plc(program, 0.1)
     twin = _plc(program, 0.1)
@@ -987,7 +991,7 @@ def test_stop_predicate_lands_on_the_stepped_scan(name: str, fine_loop: None) ->
     twin.run_until(*conditions, max_cycles=400, jit=False)
     assert plc.state.scan_id == twin.state.scan_id
     _assert_equal(plc.state, twin.state)
-    # The real scan makes the last judgement, on the scan where the guard refused.
+    # A real scan judges the stop predicate last, on the scan that the guard refused.
     assert scan_trace.TOTALS["loop scans"] > before or plc.state.scan_id <= 3
 
 
@@ -1234,7 +1238,10 @@ def test_a_run_function_body_is_not_traced(fine_loop: None) -> None:
 
 
 def test_every_system_tag_is_classified_exactly_once() -> None:
-    """Force a decision for each new system tag, because a moving tag read as constant is wrong."""
+    """Force a decision for each new system tag.
+
+    If the loop read a moving tag as constant, it would land on a wrong state.
+    """
     assert _CLASSIFIED_SYSTEM_TAGS == frozenset(SYSTEM_TAGS_BY_NAME)
     assert not MOVING_SYSTEM_TAGS & DECLINING_SYSTEM_TAGS
     assert not MOVING_SYSTEM_TAGS & CONSTANT_SYSTEM_TAGS

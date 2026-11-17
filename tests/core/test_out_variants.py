@@ -135,7 +135,10 @@ class TestDebounce:
         ]
 
     def test_off_td_is_0_while_the_rung_is_true(self, runner_factory):
-        """``coil_timing/off_td_held``: the rise clears the off TD, and a write to it reads 0."""
+        """``coil_timing/off_td_held``: the rise clears the off TD.
+
+        While the rung is true, the off TD reads 0, even after a write to it.
+        """
         Valve = Bool("Valve")
         with Program() as logic:
             with Rung(In):
@@ -160,7 +163,10 @@ class TestDebounce:
         assert [r[0] for r in rows] == [True, True, True, True, True, False, True]
 
     def test_off_side_from_power_up(self, runner_factory):
-        """A coil that is on at power-up counts its off side with no rise or fall, then holds."""
+        """A coil that is on at power-up counts its off side with no rise or fall.
+
+        Once the coil is off, the coil and its off TD hold.
+        """
         Valve = Bool("Valve", default=True)
         with Program() as logic:
             with Rung(In):

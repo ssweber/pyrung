@@ -1,4 +1,6 @@
-"""Write past the DD bank after clearing it: the ``past_clean`` group (part ``follow_values``).
+"""Write to DD1531, past the DD bank, after clearing it.
+
+This is the ``past_clean`` group, in the part ``follow_values``.
 
 **It writes into a real CLICK's memory past the DD bank, at DD1531.** Do not run it on a CLICK
 whose memory matters. To leave it out, delete its call rung in main. It ends by writing 0 there
@@ -6,7 +8,7 @@ again, which ``faults/pointer_past_bank_lands`` (part ``system``) expects to rea
 and the P1AM code have no memory there.
 
 ``past_write/past_bank_write`` skips its write when DD1531 already holds 5. This case writes
-whatever is there.
+no matter what DD1531 holds.
 
 ``clear_then_write`` goes through the pointer DS4226 = 1531 (``past_write``'s). It reads each
 value into a field preset to -7 on its scan, so -7 means the read left its destination alone:

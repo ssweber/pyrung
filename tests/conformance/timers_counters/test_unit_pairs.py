@@ -1,10 +1,11 @@
 """Timers in different units with one delay are Done on one scan: the ``unit_pairs`` group
 (subroutine ``Conf_UnitPairs``, part ``units``).
 
-Over the wire, time is the wall clock.  A case cannot choose how long a scan lasts, so it
-cannot count the scan on which a timer should end.  It asks about a relation instead, one
-that holds whatever a scan takes: two timers on one rung, one in seconds and one in
-milliseconds, get the same time on every scan.  A rung below them latches ``Result1`` on any
+Over the wire, time is the wall clock.  So a case cannot choose how long a scan lasts, and
+it cannot count the scan on which a timer should end.  It asks about a relation instead.
+Whether the relation holds does not depend on how long a scan takes.  The relation is that
+two timers on one rung, one in seconds and one in milliseconds, get the same time on every
+scan.  A rung below them latches ``Result1`` on any
 scan where one timer is Done and the other is not.  So ``Result1`` means "they ever
 differed", and the case expects it off.  ``Result2`` means both timers got there, and
 ``Fired`` goes up with it.

@@ -1158,7 +1158,7 @@ def test_a_math_write_to_a_read_only_system_tag_raises_in_a_run_as_in_stepping(
     loop_from_first_scan: None, run: str
 ) -> None:
     # The kernel writes a system tag without the check that stepping makes. A program that
-    # writes a system tag must therefore stay off the kernel.
+    # writes a read-only system tag must therefore stay off the kernel.
     go = Bool("RoSysGo")
     timer = Timer.clone("RoSysT")
     with Program(strict=False) as program:

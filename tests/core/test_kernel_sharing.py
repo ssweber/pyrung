@@ -96,7 +96,10 @@ def test_the_code_kept_is_bounded() -> None:
 
 
 def _names_item_by_item(program: Program) -> frozenset[str]:
-    """Collect the materialized tags with the earlier walk, which queues every item it meets."""
+    """Return the names of the materialized tags that the earlier walk finds.
+
+    The walk queues every item it meets, but it does not go into a Program.
+    """
     found: set[str] = set()
     visited: set[int] = set()
     queue: list[Any] = [*program.rungs]
