@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.sp_tree import SPLeaf, SPNode, SPSeries
+from pyrung.core.expression import Expression
+from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -48,16 +50,59 @@ class Atom:
     # readers with a strict support boundary can report that they did not
     # understand it.
     unsupported: Any = field(default=None, compare=False, hash=False, repr=False)
+    # The pointer element an indirect comparison reads (``DS[Ptr] == 5``).  Its atom's
+    # tag is only the comparison's class name.
+    indirect_ref: Any = field(default=None, compare=False, hash=False, repr=False)
 
     def _key(self) -> tuple[str, str, Any, bool, int | float, int | float]:
         return (
             self.tag,
             self.form,
-            self.operand,
+            _operand_key(self.operand),
             self.operand_is_tag,
             self.operand_scale,
             self.operand_offset,
         )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Atom):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self) -> int:
+        return hash(self._key())
+
+
+class _ByIdentity:
+    """An operand that equals only itself.
+
+    An expression or a pointer element answers ``==`` with a condition, and an
+    expression has no hash.  So an atom compares and hashes such an operand by identity.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _ByIdentity) and other.value is self.value
+
+    def __hash__(self) -> int:
+        return id(self.value)
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+
+def _operand_key(operand: Any) -> Any:
+    if isinstance(operand, (Expression, IndirectRef, IndirectExprRef, IndirectBlockRange)):
+        return _ByIdentity(operand)
+    try:
+        hash(operand)
+    except TypeError:
+        return _ByIdentity(operand)
+    return operand
 
 
 @dataclass(frozen=True)
@@ -322,6 +367,7 @@ def _condition_to_expr(condition: Any) -> Expr:
             _INDIRECT_COMPARE_FORMS[cls_name],
             _operand_label(condition.value),
             operand_is_tag=_operand_is_tag(condition.value),
+            indirect_ref=condition.indirect_ref,
         )
 
     return Atom(cls_name, "xic", unsupported=condition)
@@ -973,6 +1019,7 @@ def _negate(expr: Expr) -> Expr:
                 operand_scale=expr.operand_scale,
                 operand_offset=expr.operand_offset,
                 unsupported=expr.unsupported,
+                indirect_ref=expr.indirect_ref,
             )
         return Atom(
             expr.tag,
@@ -982,6 +1029,7 @@ def _negate(expr: Expr) -> Expr:
             operand_scale=expr.operand_scale,
             operand_offset=expr.operand_offset,
             unsupported=expr.unsupported,
+            indirect_ref=expr.indirect_ref,
         )
 
     # De Morgan for compound expressions

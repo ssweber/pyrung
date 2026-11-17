@@ -59,4 +59,6 @@ def test_domains_only_prior_keeps_the_partition() -> None:
     logic, _bad, _seq = _timer_equals_input()
     ctx = _build_prior_facts(logic)
     assert not isinstance(ctx, Intractable)
-    assert len(ctx.nondeterministic_dims["KIn"]) < 20
+    # KIn shares the Acc's values, and each gap between two of them gets two more, one for
+    # each tag compared.  That is still far from every value from 0 to 39.
+    assert len(ctx.nondeterministic_dims["KIn"]) < 30

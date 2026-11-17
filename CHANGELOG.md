@@ -40,7 +40,9 @@
 - `program.check()` no longer reports a dead write for a `to_text()` copy whose first TXT a later copy overwrites.
 - `how()` no longer assumes that a `Real` holds a number when it may hold NaN or Inf, such as after a `math()` past the Real range or a `pack_words()` into it.
 - `how()` no longer assumes that a timer's or counter's Acc starts at 0 when a copy or a `math()` writes it, or that an up counter with a down input stays between 0 and its preset.
-- `how()` no longer misses the states where two tags the rungs compare with each other are equal, such as the Accs of two timers.
+- `how()` no longer misses the states where two tags a rung compares directly are equal, such as the Accs of two timers.
+- `how()` no longer misses values of a tag that a rung compares with a pointer element, with arithmetic or with an input that has no bounds.
+- `how()` no longer raises `TypeError` on a rung that compares a tag with arithmetic, such as `Fed.Acc == Cut.Acc + 2`.
 - `how()` now keeps a drum step's preset or an off-delay's preset that a rung below the instruction sets (it took the preset for a value set before each read).
 - `how()` now keeps a continuous `search()`'s result, which the search reads to resume after it (it took the result for a value set before each read).
 - `why()` now follows a timer's Acc or a continuous `search()`'s result back to a later rung that writes it (it stopped at the tag).

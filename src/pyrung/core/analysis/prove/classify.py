@@ -65,7 +65,7 @@ from pyrung.core.analysis.reverse_edges import (
 from pyrung.core.analysis.reverse_edges import (
     tag_name_from_value as _tag_name_from_value,
 )
-from pyrung.core.analysis.simplified import Expr, _condition_to_expr, simplified_forms
+from pyrung.core.analysis.simplified import Atom, Expr, _condition_to_expr, simplified_forms
 from pyrung.core.expression import is_randint_tag, randint_sites
 from pyrung.core.input_overrides import held_candidates
 from pyrung.core.instruction.conversions import (
@@ -106,10 +106,9 @@ from .non_finite import non_finite_reals
 from .results import PENDING, Intractable
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Callable, Iterable, Mapping
 
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.simplified import Atom
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
 
@@ -2553,34 +2552,152 @@ def _with_done_boundary(
     return tuple(sorted({*domain, boundary}))
 
 
+_COMPARISON_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
+
+#: The form of the atom that stands for a comparison with values no list holds.  No reader
+#: of an atom knows it.  So the tag counts as compared, and no absorption drops its value.
+_UNLISTED_COMPARISON = "compared_unlisted"
+
+
+class _TagComparisons(NamedTuple):
+    """The pairs of tags the rungs compare, and the tags compared with values no list holds."""
+
+    pairs: frozenset[tuple[str, str]]
+    unlisted: frozenset[str]
+
+
+def _tag_comparisons(atom_index: Mapping[str, list[Atom]], graph: ProgramGraph) -> _TagComparisons:
+    """Find the tags a rung compares with each other, and those compared with values no list holds.
+
+    A pointer element and an expression take their values from the tags they read, so no
+    list holds them.  A tag compared with one goes in *unlisted*, and so does each tag
+    whose value the element or the expression reads.  So do the tags in an expression a
+    rung compares (``A - B == 50``).
+    """
+    from pyrung.core.expression import ExprCompare, Expression
+    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
+
+    changing = (Expression, IndirectRef, IndirectExprRef, IndirectBlockRange)
+    pairs: set[tuple[str, str]] = set()
+    unlisted: set[str] = set()
+    seen: set[int] = set()
+
+    def read(value: Any) -> None:
+        unlisted.update(_compared_value_names(value, graph, set()))
+
+    for atoms in atom_index.values():
+        for atom in atoms:
+            if id(atom) in seen:
+                continue
+            seen.add(id(atom))
+            if isinstance(atom.unsupported, ExprCompare):
+                read((atom.unsupported.left, atom.unsupported.right))
+                continue
+            if atom.form not in _COMPARISON_FORMS or atom.operand is None:
+                continue
+            if atom.indirect_ref is not None:
+                read(atom.indirect_ref)
+                if atom.operand_is_tag:
+                    unlisted.add(atom.operand)
+                elif isinstance(atom.operand, changing):
+                    read(atom.operand)
+            elif atom.operand_is_tag:
+                if atom.operand_scale != 1 or atom.operand_offset != 0:
+                    unlisted.update((atom.tag, atom.operand))
+                elif atom.operand != atom.tag:
+                    left, right = sorted((atom.tag, atom.operand))
+                    pairs.add((left, right))
+            elif isinstance(atom.operand, changing):
+                unlisted.add(atom.tag)
+                read(atom.operand)
+    return _TagComparisons(frozenset(pairs), frozenset(unlisted))
+
+
+def _drop_unlisted_comparisons(
+    domains: Mapping[str, dict[str, tuple[Any, ...]]],
+    pairs: Iterable[tuple[str, str]],
+    unlisted: Iterable[str],
+    fixed: Mapping[str, tuple[Any, ...]],
+    every_value: Callable[[str], tuple[Any, ...] | None],
+) -> set[str]:
+    """Take the domain from each tag compared with values no list holds, and return those tags.
+
+    A domain stands for the values between its split points, and such a comparison gives
+    it none.  So a run can reach a value that answers the comparison unlike every value of
+    the domain.  The tag keeps a domain only when it can have one that lists every value
+    the tag can hold.  *every_value* gives that domain, or None.
+
+    A tag compared with a tag that has no domain is compared with values no list holds
+    too.  A tag outside *domains* has its values in *fixed* when it has any.  So taking
+    one domain can take the domains of the tags compared with it.  *domains* maps each
+    kind of domain to its dict, which this updates in place.
+    """
+    owner = {name: kind for kind, found in domains.items() for name in found}
+    partners: dict[str, set[str]] = {}
+    for left, right in pairs:
+        partners.setdefault(left, set()).add(right)
+        partners.setdefault(right, set()).add(left)
+    pending = set(unlisted) & owner.keys()
+    pending |= {
+        name
+        for name in owner
+        if any(p not in owner and p not in fixed for p in partners.get(name, ()))
+    }
+    dropped: set[str] = set()
+    checked: set[str] = set()
+    work = sorted(pending, reverse=True)
+    while work:
+        name = work.pop()
+        if name in checked or name not in owner:
+            continue
+        checked.add(name)
+        kind = owner[name]
+        every = every_value(name)
+        if every is not None:
+            domains[kind][name] = tuple(sorted(set(every) | set(domains[kind][name])))
+            continue
+        del domains[kind][name]
+        del owner[name]
+        dropped.add(name)
+        work.extend(sorted((p for p in partners.get(name, ()) if p in owner), reverse=True))
+    return dropped
+
+
 def _close_tag_comparisons(
     domains: Mapping[str, dict[str, tuple[Any, ...]]],
     tags: Mapping[str, Tag],
-    atom_index: Mapping[str, list[Atom]],
+    pairs: Iterable[tuple[str, str]],
+    fixed: Mapping[str, tuple[Any, ...]],
 ) -> None:
     """Give tags the rungs compare with each other the split points of one another.
 
     A domain stands for the values between its split points.  For ``A == B`` to answer
     True on a swap, the two domains need a common value between the same split points,
     and for ``A < B`` an ordered pair there.  So every tag of a group the rungs compare
-    with each other gets the values of every domain in the group.  One more value below
-    and one above stand for two tags both past the outermost split point.
+    with each other gets the values of every domain in the group.  All the group's tags
+    can sit between the same two split points, or past the same end, in any order.  So
+    each gap between two split points, and each end, also gets as many values as the
+    group has tags.
 
     *domains* maps each kind of domain to its dict, which this updates in place.  A tag
-    with ``choices=`` keeps its domain, since it holds no other value.
+    with ``choices=`` keeps its domain, since it holds no other value.  A tag in *fixed*
+    has no domain to update, such as a readonly preset, but its values are split points.
     """
     owner = {name: kind for kind, found in domains.items() for name in found}
 
+    def values_of(name: str) -> tuple[Any, ...]:
+        if name in owner:
+            return domains[owner[name]][name]
+        return fixed.get(name, ())
+
     def numeric(name: str) -> bool:
         tag = tags.get(name)
+        values = values_of(name)
         return (
-            name in owner
+            bool(values)
             and tag is not None
             and tag.type not in {TagType.BOOL, TagType.CHAR}
-            and all(
-                isinstance(v, (int, float)) and not isinstance(v, bool)
-                for v in domains[owner[name]][name]
-            )
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values)
         )
 
     parent: dict[str, str] = {}
@@ -2590,33 +2707,49 @@ def _close_tag_comparisons(
             name = parent[name]
         return name
 
-    for name in sorted(atom_index):
-        for atom in atom_index[name]:
-            if not atom.operand_is_tag or atom.form not in {"eq", "ne", "lt", "le", "gt", "ge"}:
-                continue
-            left, right = atom.tag, atom.operand
-            if left == right or not (numeric(left) and numeric(right)):
-                continue
-            a, b = sorted((root(left), root(right)))
-            if a != b:
-                parent[b] = a
+    for left, right in sorted(pairs):
+        if not (numeric(left) and numeric(right)):
+            continue
+        a, b = sorted((root(left), root(right)))
+        if a != b:
+            parent[b] = a
 
     groups: dict[str, list[str]] = {}
     for name in sorted(parent.keys() | set(parent.values())):
         groups.setdefault(root(name), []).append(name)
-    for members in groups.values():
-        points = {v for name in members for v in domains[owner[name]][name]}
-        points |= {min(points) - 1, max(points) + 1}
+    for group in groups.values():
+        members = [name for name in group if name in owner]
+        if not members:
+            continue
+        points = sorted({v for name in group for v in values_of(name)})
+        count = len(members)
+        added = set(points)
+        added |= {points[0] - step for step in range(1, count + 1)}
+        added |= {points[-1] + step for step in range(1, count + 1)}
+        for low, high in itertools.pairwise(points):
+            added |= {low + step for step in range(1, count + 1) if low + step < high}
         for name in members:
             tag = tags[name]
             if tag.choices is not None:
                 continue
-            values = set(domains[owner[name]][name]) | held_candidates(tag, points)
+            values = set(domains[owner[name]][name]) | held_candidates(tag, added)
             if tag.min is not None:
                 values = {v for v in values if v >= tag.min}
             if tag.max is not None:
                 values = {v for v in values if v <= tag.max}
             domains[owner[name]][name] = tuple(sorted(values))
+
+
+def _accumulator_names(program: Program) -> set[str]:
+    """The tags an instruction times or counts in, which move on from any value stored there."""
+    from pyrung.core.tag import Tag
+    from pyrung.core.validation._common import walk_instructions
+
+    return {
+        accumulator.name
+        for instr in walk_instructions(program)
+        if isinstance(accumulator := getattr(instr, "accumulator", None), Tag)
+    }
 
 
 class _AccStarts(NamedTuple):
@@ -3206,6 +3339,9 @@ def _classify_dimensions_from_graph(
         profile_last = _classify_profile_mark(timings, "pointer_domains", profile_last)
 
     atom_idx = _build_atom_index(all_exprs)
+    comparisons = _tag_comparisons(atom_idx, graph)
+    for name in sorted(comparisons.unlisted):
+        atom_idx.setdefault(name, []).append(Atom(name, _UNLISTED_COMPARISON))
     if profile:
         profile_last = _classify_profile_mark(timings, "atom_index", profile_last)
     influences_comparison = _comparison_influencing_tags(graph, atom_idx, program)
@@ -3391,7 +3527,8 @@ def _classify_dimensions_from_graph(
             done_name = done_by_acc[tag_name]
             starts = acc_starts[tag_name]
             if starts is None:
-                # The outside or a write may store values no list holds, so no domain.
+                # The outside or a write may store values no list holds, or two
+                # instructions time or count the Acc.  So it gets no domain.
                 if unclassified is not None:
                     unclassified.add(tag_name)
                 else:
@@ -3516,9 +3653,57 @@ def _classify_dimensions_from_graph(
         if tag_name in consumed_accs:
             domain = _with_done_boundary(domain, tag, tag_name, done_acc_info, done_by_acc)
         stateful[tag_name] = domain
-    _close_tag_comparisons(
-        {"stateful": stateful, "nondeterministic": nondeterministic}, graph.tags, atom_idx
-    )
+    # A tag preset is a comparison of the Acc with the preset tag, which turns the Done on.
+    tag_pairs = set(comparisons.pairs)
+    for done_name, preset_name in done_acc_info.preset_tags.items():
+        acc_name = done_acc_info.pairs[done_name]
+        if acc_name in consumed_accs and preset_name in graph.tags:
+            left, right = sorted((acc_name, preset_name))
+            tag_pairs.add((left, right))
+    timed = set(done_acc_info.pairs.values()) | unmodeled_accs | _accumulator_names(program)
+    domains = {"stateful": stateful, "nondeterministic": nondeterministic}
+    fixed = {
+        name: values
+        for name, values in structural_domains.items()
+        if name not in stateful
+        and name not in nondeterministic
+        and name not in infeasible_tags
+        and (unclassified is None or name not in unclassified)
+        and not graph.written_from_outside(name)
+        and name not in receive_dest_names
+    }
+    # A tag nothing writes holds its power-on value.
+    for name in {name for pair in tag_pairs for name in pair}:
+        tag = graph.tags.get(name)
+        if (
+            tag is not None
+            and name not in fixed
+            and not graph.may_be_written(name)
+            and not graph.written_from_outside(name)
+            and name not in receive_dest_names
+        ):
+            fixed[name] = (tag.default,)
+
+    def every_value(name: str) -> tuple[Any, ...] | None:
+        tag = graph.tags[name]
+        if tag.choices is not None:
+            return tuple(sorted(tag.choices))
+        outside = graph.written_from_outside(name) or name in receive_dest_names
+        if name in structural_domains and not outside and name not in timed:
+            return structural_domains[name]
+        if name not in graph.writers_of and not graph.unlisted_writers_of(name):
+            # An input holds its declared values.
+            return _declared_domain(tag)
+        return None
+
+    for name in sorted(
+        _drop_unlisted_comparisons(domains, tag_pairs, comparisons.unlisted, fixed, every_value)
+    ):
+        if name in graph.writers_of and unclassified is not None:
+            unclassified.add(name)
+        else:
+            infeasible_tags.append(name)
+    _close_tag_comparisons(domains, graph.tags, tag_pairs, fixed)
     if profile:
         profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
