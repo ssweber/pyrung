@@ -136,6 +136,7 @@ class TestAtomReads:
         assert _referenced_tags(ExprAnd((Atom("Run", "xic"), compared))) is None
 
     def test_a_pinned_gate_refuses_an_operand_tag_it_lacks(self):
+        """This pins the gate's contract.  The evaluator's own check already refused before the fix."""
         from pyrung import Int
         from pyrung.core.analysis.pilot.availability import _guard_eval_atom
         from pyrung.core.analysis.simplified import _condition_to_expr

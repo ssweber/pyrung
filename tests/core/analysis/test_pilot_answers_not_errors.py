@@ -115,6 +115,28 @@ class TestArithmeticInARung:
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
 
+    @pytest.mark.parametrize(("entry", "status"), [(9, "REACHED"), (5, "STOPPED")])
+    def test_an_avoid_compared_with_a_pointer_element(self, entry: int, status: str) -> None:
+        """Start copies 5 into Lvl, so only a Tb1 of 5 puts the route in ``Lvl == Tb[P]``.
+
+        That avoid once tripped on every state, so how() stopped for either Tb1.
+        """
+        level, pointer = Int("Lvl"), Int("P", default=1)
+        table = Block("Tb", TagType.INT, 1, 3)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("Dummy")):
+                copy(table[pointer], Int("Sink"))
+            with Rung(Bool("Start", external=True)):
+                copy(5, level)
+            with Rung(level == 5):
+                latch(hit)
+        plc = PLC(program, dt=0.01)
+        plc.patch({"Tb1": entry, "P": 1})
+        plc.step()
+        plan = plc.how(hit, avoid=level == table[pointer], **BOUND)
+        assert plan.status is PlanStatus[status], plan.reason
+
     def test_a_tag_not_equal_to_arithmetic(self) -> None:
         """``A != B + 2`` beside ``A == B + 2`` once raised a TypeError from inside how()."""
         left, right = (
