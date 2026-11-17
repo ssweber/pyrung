@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 
-from .advance import AdvanceProfile, ConditionDemand, monotone_profile
+from .advance import (
+    AdvanceProfile,
+    ConditionDemand,
+    monotone_profile,
+    recorded_completion_controls,
+)
 from .base import Instruction
 from .conversions import (
     _clamp_dint,
@@ -168,6 +173,7 @@ class CountUpInstruction(Instruction):
             restore_is_pulse=isinstance(
                 self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
             ),
+            completion_controls=recorded_completion_controls(self),
         )
 
 
@@ -280,4 +286,5 @@ class CountDownInstruction(Instruction):
             restore_is_pulse=isinstance(
                 self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
             ),
+            completion_controls=recorded_completion_controls(self),
         )

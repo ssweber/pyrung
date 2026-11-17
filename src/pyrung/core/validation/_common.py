@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from pyrung.core.analysis.write_sites import static_write_target_tags
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -69,81 +70,8 @@ _CallerMap = dict[str, list[_CallerEntry]]
 
 
 def _resolve_tag_names(target: Any) -> list[str]:
-    """Extract statically-known tag names from an output target."""
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-
-    if isinstance(target, ImmediateRef):
-        return _resolve_tag_names(target.value)
-    if isinstance(target, Tag):
-        return [target.name]
-    if isinstance(target, BlockRange):
-        return [t.name for t in target.tags()]
-    if isinstance(target, IndirectBlockRange):
-        return []  # runtime-only, skip
-    return []
-
-
-def _resolve_tag_objects(target: Any) -> list[Tag]:
-    """Extract Tag objects from an output target."""
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
-
-    if isinstance(target, ImmediateRef):
-        return _resolve_tag_objects(target.value)
-    if isinstance(target, Tag):
-        return [target]
-    if isinstance(target, BlockRange):
-        return list(target.tags())
-    if isinstance(target, IndirectBlockRange):
-        return []
-    return []
-
-
-def _build_tag_map(program: Program) -> dict[str, Tag]:
-    """Build a name→Tag map from all tag references in a program."""
-    from pyrung.core.instruction.control import ForLoopInstruction
-
-    tag_map: dict[str, Tag] = {}
-
-    def _collect_from_rung(rung: Any) -> None:
-        for cond in rung._conditions:
-            tag_obj = getattr(cond, "tag", None)
-            if tag_obj is not None:
-                raw = tag_obj
-                if isinstance(raw, ImmediateRef):
-                    raw = object.__getattribute__(raw, "value")
-                if isinstance(raw, Tag) and raw.name not in tag_map:
-                    tag_map[raw.name] = raw
-        for instr in rung._instructions:
-            target = getattr(instr, "target", None)
-            if target is not None:
-                for tag_obj in _resolve_tag_objects(target):
-                    if tag_obj.name not in tag_map:
-                        tag_map[tag_obj.name] = tag_obj
-            source = getattr(instr, "source", None)
-            if source is not None:
-                for tag_obj in _resolve_tag_objects(source):
-                    if tag_obj.name not in tag_map:
-                        tag_map[tag_obj.name] = tag_obj
-            _collect_loop_counts(instr)
-        for branch in rung._branches:
-            _collect_from_rung(branch)
-
-    def _collect_loop_counts(instr: Any) -> None:
-        # A loop's count gates the calls in its body (caller-map conditions).
-        if not isinstance(instr, ForLoopInstruction):
-            return
-        if isinstance(instr.count, Tag) and instr.count.name not in tag_map:
-            tag_map[instr.count.name] = instr.count
-        for child in instr.instructions:
-            _collect_loop_counts(child)
-
-    for rung in program.rungs:
-        _collect_from_rung(rung)
-    for sub_name in program.subroutines:
-        for rung in program.subroutines[sub_name]:
-            _collect_from_rung(rung)
-
-    return tag_map
+    """Statically known tag names of an operand, in address order (none for a pointer)."""
+    return [tag.name for tag in static_write_target_tags(target)]
 
 
 def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:

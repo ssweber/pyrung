@@ -32,6 +32,7 @@ from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY
 from pyrung.core.instruction.timers import tof_armed_key
 from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.memory_block import block_room, element_names_after
+from pyrung.core.relations.records import Const, TagValue
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
@@ -40,12 +41,12 @@ from ._emit import (
     emit_cmp,
     emit_count,
     emit_done,
-    emit_frac,
     emit_if_enabled,
     emit_mem_get,
     emit_mem_set,
     emit_oneshot,
     emit_rise,
+    emit_store,
     emit_tick,
     emit_truth,
 )
@@ -79,7 +80,7 @@ def _compile_status_bit_lines(
         tag = getattr(instr, attr, None)
         if tag is not None:
             lvalue = _compile_lvalue(tag, ctx)
-            lines.append(f"{sp}{lvalue} = {val_expr}")
+            lines.append(f"{sp}{emit_store(lvalue, val_expr, ctx=ctx, dst=tag.name, term=None)}")
     return lines
 
 
@@ -183,11 +184,18 @@ def _compile_on_delay_instruction(
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
     reset_expr = _reset_expr(instr, ctx)
-    rest = emit_acc_rest(done_write, acc_write, frac=acc)
+    rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx, frac=True)
     run = [
         *emit_tick(acc, instr.unit, ctx, acc_read=acc_read),
         *emit_done(
-            done_write, acc_write, ">=", preset, preset_key=_preset_key(instr, ctx), frac=acc
+            done_write,
+            acc_write,
+            ">=",
+            preset,
+            owner=instr,
+            ctx=ctx,
+            preset_key=_preset_key(instr, ctx),
+            frac=True,
         ),
     ]
     otherwise = rest if reset_expr is None else []
@@ -226,31 +234,32 @@ def _compile_off_delay_instruction(
     sp4 = " " * (indent + 4)
     sp8 = " " * (indent + 8)
     sp12 = " " * (indent + 12)
-    arm = emit_mem_set(armed_key, "True", quote="double")
     tick = emit_tick(acc, instr.unit, ctx, acc_read=None)
     done = emit_done(
         done_write,
         acc_write,
         "<",
         preset,
+        owner=instr,
+        ctx=ctx,
         preset_key=_preset_key(instr, ctx),
-        frac=acc,
+        frac=True,
         paren=False,
     )
+    on = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx, frac=True, done_value=True)
+    moved = emit_cmp("_acc", "!=", "0", paren=False, ctx=ctx, terms=(TagValue(acc.name), Const(0)))
     # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
     lines = [
-        f"{sp}_tof_armed = {emit_mem_get(armed_key, 'False')}",
+        f"{sp}_tof_armed = {emit_mem_get(armed_key, 'False', ctx=ctx)}",
         f"{sp}if {enabled_expr}:",
         f"{sp4}if not _tof_armed:",
-        f"{sp8}{arm}",
-        f"{sp4}{emit_frac(acc, '0')}",
-        f"{sp4}{done_write} = True",
-        f"{sp4}{acc_write} = 0",
+        f"{sp8}{emit_mem_set(armed_key, 'True', quote='double', ctx=ctx)}",
+        *(f"{sp4}{line}" for line in on),
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
-        f"{sp4}if _tof_armed or {done_read} or {emit_cmp('_acc', '!=', '0', paren=False)}:",
+        f"{sp4}if _tof_armed or {done_read} or {moved}:",
         f"{sp8}if not _tof_armed:",
-        f"{sp12}{arm}",
+        f"{sp12}{emit_mem_set(armed_key, 'True', quote='double', ctx=ctx)}",
         *(f"{sp8}{line}" for line in (*tick, *done)),
     ]
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
@@ -274,7 +283,9 @@ def _preset_key(
     return prove_effective_preset_key(instr.done_bit.name) if ctx.proof_metadata else None
 
 
-def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list[str]:
+def _count_edge_lines(
+    name: str, key: str, input_expr: str, indent: int, ctx: CodegenContext
+) -> list[str]:
     """Bind *name* to a counter input's rising edge and update its memory.
 
     The memory is the input as the counter last scanned it, written on every
@@ -285,8 +296,8 @@ def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list
     now = f"{name}_now"
     return [
         f"{sp}{now} = bool({input_expr})",
-        f"{sp}{name} = {emit_rise(now, key, cast=False)}",
-        f"{sp}{emit_mem_set(key, now)}",
+        f"{sp}{name} = {emit_rise(now, key, cast=False, ctx=ctx)}",
+        f"{sp}{emit_mem_set(key, now, ctx=ctx)}",
     ]
 
 
@@ -304,19 +315,28 @@ def _compile_count_up_instruction(
         ctx.mark_function_global(ctx._current_function, "_mem")
     site = ctx.state_key_for(instr)
     up_key = f"{COUNT_UP_MEMORY}:{site}"
-    lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent)
+    lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent, ctx)
     down_expr: str | None = None
     if instr.down_condition is not None:
         down_expr = _get_condition_snapshot(instr, "down_condition", ctx) or compile_condition(
             instr.down_condition, ctx
         )
         lines.extend(
-            _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent)
+            _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent, ctx)
         )
-    rest = emit_acc_rest(done_write, acc_write)
+    rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx)
+    down_edge = None if down_expr is None else "_cd_edge"
     run = [
-        *emit_count(acc_read, up="_cu_edge", down=None if down_expr is None else "_cd_edge"),
-        *emit_done(done_write, acc_write, ">=", preset, preset_key=_preset_key(instr, ctx)),
+        *emit_count(instr.accumulator, acc_read, up="_cu_edge", down=down_edge, ctx=ctx),
+        *emit_done(
+            done_write,
+            acc_write,
+            ">=",
+            preset,
+            owner=instr,
+            ctx=ctx,
+            preset_key=_preset_key(instr, ctx),
+        ),
     ]
     sp = " " * indent
     lines.extend(f"{sp}{line}" for line in _rest_or_run(_reset_expr(instr, ctx), rest, run))
@@ -343,11 +363,19 @@ def _compile_count_down_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     down_key = f"{COUNT_DOWN_MEMORY}:{ctx.state_key_for(instr)}"
-    lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent)
-    rest = emit_acc_rest(done_write, acc_write)
+    lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent, ctx)
+    rest = emit_acc_rest(done_write, acc_write, owner=instr, ctx=ctx)
     run = [
-        *emit_count(acc_read, up=None, down="_cd_edge"),
-        *emit_done(done_write, acc_write, "<=", preset, preset_key=_preset_key(instr, ctx)),
+        *emit_count(instr.accumulator, acc_read, up=None, down="_cd_edge", ctx=ctx),
+        *emit_done(
+            done_write,
+            acc_write,
+            "<=",
+            preset,
+            owner=instr,
+            ctx=ctx,
+            preset_key=_preset_key(instr, ctx),
+        ),
     ]
     sp = " " * indent
     lines.extend(f"{sp}{line}" for line in _rest_or_run(_reset_expr(instr, ctx), rest, run))

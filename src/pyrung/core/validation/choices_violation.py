@@ -10,13 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.write_sites import static_write_target_tags
 from pyrung.core.tag import Tag
-from pyrung.core.validation._common import (
-    WriteSite,
-    _build_tag_map,
-    _resolve_tag_names,
-    site_frame,
-)
+from pyrung.core.validation._common import WriteSite, site_frame
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.severity import Severity
@@ -67,9 +63,10 @@ class ChoicesViolationReport:
 # ---------------------------------------------------------------------------
 
 
-def _literal_copy_targets(instr: Any) -> list[tuple[str, str, Any]]:
-    """Return (tag_name, instruction_type, literal_value) for copy instructions
-    where the source is a literal (not a tag or expression)."""
+def _literal_copy_targets(instr: Any) -> list[tuple[Tag, str, Any]]:
+    """Return (tag, instruction_type, literal_value) for each tag a copy or fill
+    stores a literal into.  The choices come from the tag written, so a block
+    slot's own choices count."""
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
     itype = type(instr).__name__
@@ -79,14 +76,12 @@ def _literal_copy_targets(instr: Any) -> list[tuple[str, str, Any]]:
         if isinstance(source, (Tag, type(None))) or hasattr(source, "_pyrung_structure_runtime"):
             return []  # dynamic source
         if isinstance(source, (int, float, str)):
-            names = _resolve_tag_names(instr.target)
-            return [(name, itype, source) for name in names]
+            return [(tag, itype, source) for tag in static_write_target_tags(instr.target)]
 
     if isinstance(instr, FillInstruction):
         source = instr.value
         if isinstance(source, (int, float, str)):
-            names = _resolve_tag_names(instr.dest)
-            return [(name, itype, source) for name in names]
+            return [(tag, itype, source) for tag in static_write_target_tags(instr.dest)]
 
     return []
 
@@ -98,13 +93,11 @@ def _literal_copy_targets(instr: Any) -> list[tuple[str, str, Any]]:
 
 def validate_choices(program: Program) -> ChoicesViolationReport:
     """Validate a Program for literal writes that violate choices constraints."""
-    tag_map = _build_tag_map(program)
-
     # Custom walk: collect write sites with literal values
     from pyrung.core.instruction.control import ForLoopInstruction
     from pyrung.core.validation._common import FactScope
 
-    literal_sites: list[tuple[WriteSite, Any]] = []
+    literal_sites: list[tuple[WriteSite, Any, Tag]] = []
 
     def _walk_instructions(
         instructions: list[Any],
@@ -115,9 +108,9 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
         conditions: tuple[Any, ...],
     ) -> None:
         for instr_idx, instr in enumerate(instructions):
-            for tag_name, itype, value in _literal_copy_targets(instr):
+            for tag, itype, value in _literal_copy_targets(instr):
                 site = WriteSite(
-                    target_name=tag_name,
+                    target_name=tag.name,
                     scope=scope,
                     subroutine=subroutine,
                     rung_index=rung_index,
@@ -129,7 +122,7 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
                     source_line=getattr(instr, "source_line", None),
                     instruction=instr,
                 )
-                literal_sites.append((site, value))
+                literal_sites.append((site, value, tag))
             if isinstance(instr, ForLoopInstruction):
                 for child, local in instr.iter_body():
                     _walk_instructions(
@@ -158,9 +151,8 @@ def validate_choices(program: Program) -> ChoicesViolationReport:
 
     # Check each literal write against the tag's choices
     findings: list[ChoicesViolationFinding] = []
-    for site, value in literal_sites:
-        tag = tag_map.get(site.target_name)
-        if tag is None or tag.choices is None:
+    for site, value, tag in literal_sites:
+        if tag.choices is None:
             continue
         if value not in tag.choices:
             allowed = tuple(tag.choices.keys())

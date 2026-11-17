@@ -14,7 +14,7 @@ The whole suite is **one CLICK program**: a main program that calls one subrouti
 | Modbus, P1AM-200 code | `make test-conformance TARGET=circuitpy` (or `--conformance-target`, or env `PYRUNG_CONFORMANCE_TARGET`) | `run_modbus(suite.build(), sim=CircuitPySim)` | wall clock |
 | Guarded loop | `make test` (unmarked), `test_loop_corpus*.py` | every case's program by `run_for()`/`run_until()` against a stepped twin, `expect` judged (`PYRUNG_LOOP_CORPUS_DEEP=1` for every drill) | exact scan counts |
 
-Add `GROUP=name[,name...]` (or `--conformance-group`, or env `PYRUNG_CONFORMANCE_GROUP`) to run some groups only. The Modbus runs share every line of client code; only the endpoint differs. `-rP` prints the report: one line per case (`PASS`/`XFAIL`/`FAIL`/`SKIP`/`STALE`, `[confirmed]`/`[unconfirmed]`, the pending step and the probe question; a `FAIL` or `XFAIL` line is followed by what the case read) and totals.
+Add `GROUP=name[,name...]` (or `--conformance-group`, or env `PYRUNG_CONFORMANCE_GROUP`) to run some groups only. `CASES=` runs a project of picked cases instead ("Picked cases in main"). The Modbus runs share every line of client code; only the endpoint differs. `-rP` prints the report: one line per case (`PASS`/`XFAIL`/`FAIL`/`SKIP`/`STALE`, `[confirmed]`/`[unconfirmed]`, the pending step and the probe question; a `FAIL` or `XFAIL` line is followed by what the case read) and totals.
 
 ## Where things live
 
@@ -378,6 +378,37 @@ To run it on a CLICK:
 3. SC51 (watchdog reset) and SC50 (STOP) are sent last, and only with `PYRUNG_CONFORMANCE_STOP=1` set. SC50 puts the PLC in STOP. The run then reminds you to put the PLC back in RUN.
 
 A run on the soft PLC or `TARGET=circuitpy` rewrites `build/modbus_raw-readings/<target>.toml` (`pyrung.toml` or `circuitpy.toml`). Compare them with the CLICK's entries in `readings.toml`.
+
+## Picked cases in main
+
+```
+make conformance-export CASES=word_store,drum/events_are_edges OUT=dir
+make test-conformance PLC=192.168.0.10 CASES=word_store,drum/events_are_edges
+```
+
+`CASES=` (or `--conformance-cases`, or env `PYRUNG_CONFORMANCE_CASES`) picks cases and writes them as one CLICK project with every case rung in main. An entry is `group/id` for one case or `group` for all of its cases. An entry `@file` reads more entries from a file, with `#` starting a comment. Give it to pytest as `--conformance-cases=@file`. Pytest reads a spaced `--conformance-cases @file` as a file of its own arguments. ClickNick's PLC queue runs these projects. It writes a whole project to its CLICK and asks its questions over Modbus, so it needs no person to paste.
+
+- Each case keeps its manifest slot, so its registers are the ones its part uses.
+- A case's hash is its rows as its part exports them, so a pass writes the `confirmed.toml` entry a part run writes. `test_pick.py` checks this for every case that can be picked.
+- Main runs the groups in `ALL_GROUPS` order (`APART_GROUPS` for groups on memory of their own), and each group's cases in group order. The order of the entries does not matter. An in-main group (`loop_call`, `drum_idle`) runs in that order too. Its part runs it after every other group.
+- Main starts as a part's does, with the layout hash in `DS1` and the longest scan in `DS2`. Each group's hash rung comes next, above the group's cases.
+- The layout hash names every picked case. Run with the same `CASES=` the export took. A run with another pick, or with `GROUP=`, stops with `BuildMismatchError`.
+- A group's hash register holds a hash of its picked cases' own hashes. The group's whole rows would hold cases the project leaves out. A case that changed since the export still marks its group stale.
+- The export refuses a pick over `PART_STEP_BUDGET` and gives the step count. It prints the steps, the rungs in main, and each group's hash and cases.
+- A helper subroutine a case calls (`loop_call`, `drum_idle`) stays a subroutine.
+
+The export refuses these and says why (`suite.main_refusal`):
+
+- `call_twice` and `call_more`, which main calls twice a scan. Their cases count calls.
+- `ret_branch`. Its Return must end a subroutine.
+- `boot_read`, since a person boots the PLC between runs, and `rtc_set`, which moves the PLC's clock.
+- `flag_scan`. It reads flags across a scan, so what it reads depends on the rungs of part `boot`. `flag_carry` asks the same question alone.
+- `fixed_scan` and `for_signed`. A person sets fixed scan or the watchdog first.
+- `modbus_raw`, which `test_raw_requests` drives.
+- `past_write` and `past_clean`. They write past the DD bank. A run cut off can leave DD1531 holding 5, and a later `faults/pointer_past_bank_lands` then fails. They still run in their parts.
+- An in-process-only case named by its id. A group picked whole reports such a case skipped.
+- `for_wide` beside any other case. Its scans of over a second are past the 50 ms the others assume.
+- Groups of the whole suite beside groups on memory of their own, or groups of two different parts on memory of their own. Each such part was read on a CLICK alone.
 
 ## Coverage checklist
 

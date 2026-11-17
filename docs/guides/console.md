@@ -61,7 +61,7 @@ analysis:
 capture:
   assert <tag> == <value>
   harness <install|remove|status>                       needs physical+link=
-  record <action> | record stop
+  record <action> | record stop | record save [file]
   replay <filepath> [--harness current|recorded|off]
 
 other:
@@ -175,26 +175,48 @@ unmonitor Button           # stop watching
 
 ## Session capture
 
-Record a sequence of console commands as a replayable transcript. ClickNick doesn't support `record` or `replay` yet.
+Record console commands into a file that `replay` and [pytest](testing.md#recordings-as-tests) can run. ClickNick doesn't support `record` or `replay` yet.
 
 ```text
 record start_machine       # begin recording action "start_machine"
-patch State 1
-run 500ms
-patch State 2
-step 1
-record stop                # stop recording, print transcript
+patch Start true
+run until Running within 2 s
+assert Running == true
+record save                # stop, and write start_machine.rec next to the program
 ```
 
-On stop, the transcript is printed as plain text, with one command per line and a `# action:` comment header. The transcript is the session file format. Paste it back into the console, or save it to a file for replay.
+`record save` writes `<action>.rec` in the program's folder. Give it a file name to write somewhere else, as in `record save tests/start.rec`. In `record save` and `replay`, a relative path starts at the program's folder. `record stop` ends the recording and prints it without saving it. A `record save` after that saves it.
+
+`record save` replaces a file that is already there, and says so. If the file is in git, git still has the old version.
+
+A recording is a text file with one command per line, under a header of `#` lines:
 
 ```text
-replay session.txt                            # use the current program harness
-replay session.txt --harness recorded         # replay recorded harness inputs
-replay session.txt --harness off              # ignore harness inputs
+# action: start_machine
+# program: logic.py
+# program sha256: 5f2c0e...
+# pyrung: 0.17.0
+# scan time: 0.01 s
+# harness: on
+patch Start true
+run until Running within 2 s
+assert Running == true
 ```
 
-Replay executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line. The default `current` harness mode installs the harness declared by the current program and skips recorded harness inputs. `recorded` removes the current harness and applies provenance-tagged harness inputs from the transcript. `off` removes the harness and skips those inputs.
+The `program` line names the program file, relative to the recording's folder. Replay reads the `scan time` and `harness` lines. The other lines are there for a person reading the file.
+
+```text
+replay start_machine.rec                      # the harness as it was recorded
+replay start_machine.rec --harness current    # the current program's harness
+replay start_machine.rec --harness recorded   # the harness inputs the file holds
+replay start_machine.rec --harness off        # no harness
+```
+
+Replay runs each command in order. It stops at a breakpoint, or at the first command that fails, and reports that line. Without `--harness`, a recording made with the harness off replays with no harness. Any other recording replays with the current program's harness. `current` skips the harness inputs in the file. `recorded` removes the program's harness and applies the inputs from the file.
+
+Replaying a recording made with the harness off removes the session's harness. The harness stays off after the replay. Add `--harness current` to keep it.
+
+A PLC that hasn't run a scan yet takes the recording's scan time. A PLC that has already scanned keeps its own scan time, and replay prints a note.
 
 ### Checks
 
