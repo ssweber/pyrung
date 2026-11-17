@@ -10,8 +10,10 @@ Repo-specific rules for the bob plugin (`/bob:bob`). The plugin reads this file 
   own PR once CI is green on the head commit and a fresh reviewer has passed that commit. A PR
   that waits on Sam (his judgment, CLICK software, a real PLC) stays open (user, 2026-11-15).
   Never push main. Only Sam tags, releases and publishes.
-- Worktrees `../pyrung-wt/<name>` on `bob/<name>`; mergeq home `../pyrung-wt/buildbot`
-  (queue, logs, results, `jobs/<id>/{HANDOFF,REVIEW,LEDGER}.md`).
+- Worktrees are `../pyrung-wt/<name>` on `bob/<name>`. The mergeq home is `../pyrung-wt/buildbot`
+  (queue, logs, results).
+- `<jobs>` is `jobs_dir` in config.toml (`../pyrung-wt/buildbot/jobs`). It holds
+  `<jobs>/<id>/{HANDOFF,REVIEW,LEDGER}.md`, and the read-only agents may write there.
 - Plan: `scratchpad/roadmap.md`. An arc doc lives in `../pyrung-wt/buildbot/jobs/<arc>/` (out of git, so give
   builders the absolute path). One arc doc per arc: fold rulings and leftovers into it, not side notes. When the
   arc closes, its open items move into the roadmap.
