@@ -1,8 +1,8 @@
 """A source reaches a comparison through what a scan stores on the way.
 
-A target's store changes what it was given.  A WORD holds 65535 for the -1 an INT copies to it,
-and a calc to an INT holds -32768 for the 32767 of ``I + 1``.  Each row is stepped on both
-engines, which must agree that the coil turns on.
+A store into a target changes the value it was given.  A WORD stores 65535 when an INT
+copies -1 to it.  A math into an INT wraps ``I + 1`` to -32768 when ``I`` is 32767.  Each row
+is stepped on both engines, which must agree that the coil turns on.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ ENGINES = (PLC, CompiledPLC)
 
 
 def _fires_at(program: Program, source: str, value: Any, hit: Bool) -> bool:
-    """Whether a scan with *source* at *value* turns the coil on, the engines agreeing."""
+    """Return whether a scan with *source* at *value* turns the coil on, if both engines agree."""
     answers = []
     for engine in ENGINES:
         plc = engine(program, dt=0.01)
@@ -49,7 +49,7 @@ _HIT = Bool("Hit")
 
 
 def _rungs(*pairs: tuple[Any, ...]) -> Program:
-    """A program of ``(body, *conditions)`` rungs."""
+    """Return a program of ``(body, *conditions)`` rungs."""
     with Program(strict=False) as program:
         for body, *conditions in pairs:
             with Rung(*conditions):
@@ -62,7 +62,7 @@ def _hit() -> None:
 
 
 def _a_square_squared() -> Program:
-    """The calc's target is not compared and nothing is carried back to it, only to what it feeds."""
+    """The math's target is not compared.  Nothing is carried back to it, only to what it feeds."""
     squared = Dint("Squared")
     return _rungs(
         (lambda: copy(_I, _DI),),

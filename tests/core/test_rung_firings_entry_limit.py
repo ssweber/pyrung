@@ -35,12 +35,12 @@ ONE = frozenset((0,))
 
 
 def _flasher(scan_id: int) -> bool:
-    """On for three scans, off for three."""
+    """Return True for three scans, then False for three, and repeat."""
     return (scan_id - 1) // 3 % 2 == 0
 
 
 def _held(scan_id: int) -> int:
-    """A count that holds each value three scans."""
+    """Return a count that stays on each value for three scans."""
     return (scan_id - 1) // 3
 
 
@@ -209,7 +209,7 @@ def _limit_before_the_gap() -> _Shape:
 
 
 def _short_prefix(anchor_at_gap: bool) -> _Shape:
-    """A merge leaves fewer ranges than scans, then the gap brings ninety-five new values."""
+    """A merge leaves fewer ranges than scans.  Then the gap brings ninety-five new values."""
     head = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 100, 101, 102, 103, 104]
     window = _held_pairs(2000, 95)
     first = len(head) + 1
@@ -750,7 +750,7 @@ def _forty_counts() -> Program:
 
 
 def _padded(tags: int) -> SystemState:
-    """A state with *tags* more tags, which no rung uses, to make each checkpoint bigger."""
+    """Return a state with *tags* extra tags that no rung uses, to make each checkpoint bigger."""
     return SystemState().with_tags({f"Pad{k}": 0 for k in range(tags)})
 
 
@@ -783,8 +783,8 @@ def test_a_long_run_over_the_memory_budget_trims_to_steppings_floor(
 
 
 def test_a_settles_replay_over_the_memory_budget_keeps_every_scan_it_steps() -> None:
-    # A settle hands its replay's records to the runner.  So the replay trims nothing (its own
-    # budget would take the oldest interval the runner kept).
+    # A settle hands its replay's records to the runner.  So the replay trims nothing.  Its own
+    # budget would remove the oldest interval that the runner kept.
     plc = PLC(
         _forty_counts(),
         dt=0.01,

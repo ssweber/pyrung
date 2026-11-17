@@ -1,10 +1,11 @@
 """A store that writes several elements stops at the end of its block.
 
 A text (``to_text()``, a Real copied into a TXT, a string literal) or a text's digits
-(``to_value``) go into the target and the elements after it.  Past the end of the block
-the rest are dropped, with no flag and no tag past the block, as a single write past the
-end is.  A target below the block keeps its address error.  What a CLICK does at the end
-of its TXT bank is not yet read: writing what fits is pyrung's choice.
+(``to_value``) is written into the target and the elements after it.  Past the end of the
+block the rest are dropped.  They set no flag and write no tag past the block, the same as
+a single write past the end.  A target below the block keeps its address error.  What a
+CLICK does at the end of its TXT bank has not been read yet.  Writing what fits is
+pyrung's choice.
 
 Every case runs on the interpreter, the compiled kernel (legacy and blockless) and the
 generated CircuitPython code, and they agree.
@@ -51,10 +52,10 @@ SC44 = system.fault.address_error
 def _scan(
     prog: Program, engine: str, watch: list[Any], monkeypatch
 ) -> tuple[dict[str, Any], set[str]]:
-    """*watch*'s values after one scan of *prog* on *engine*, and every tag name it holds.
+    """Return *watch*'s values after one scan of *prog* on *engine*, and every tag name held.
 
-    Generated CircuitPython holds only the tags the program names, so its name set is
-    empty: what it stores past the block is no tag at all.
+    Generated CircuitPython holds only the tags that the program names, so its name set is
+    empty.  What it stores past the block is no tag at all.
     """
     names: set[str] = set()
     if engine in ("interpreted", "compiled"):
@@ -83,7 +84,7 @@ def _watched(block: Block, first: int, last: int) -> list[Any]:
 
 
 def _past(names: set[str], prefix: str, end: int) -> list[str]:
-    """The tags in *names* of the block *prefix* past its last address *end*."""
+    """Return the tags in *names* that are in the block *prefix* and past its last address *end*."""
     found = []
     for name in names:
         suffix = name[len(prefix) :]
@@ -100,9 +101,10 @@ def _past(names: set[str], prefix: str, end: int) -> list[str]:
     ids=["six_fit", "three_fit", "last"],
 )
 def test_a_real_into_text_writes_what_fits(engine, form, start, text, monkeypatch):
-    """``1.5`` is "1.5000000": the TXT bank's 1000 ends it, and nothing is written past.
+    """``1.5`` is "1.5000000".  The TXT bank's 1000 ends it, and nothing is written past it.
 
-    By address, by a DS pointer, and as a plain Copy (which converts a Real to text).
+    The cases are a store by address, by a DS pointer, and as a plain Copy.  A plain Copy
+    converts a Real to text.
     """
     blocks = ClickBlocks()
     txt, df, ds = blocks.txt, blocks.df, blocks.ds
@@ -149,7 +151,7 @@ def test_a_text_literal_writes_what_fits(engine, monkeypatch):
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_digits_into_numbers_write_what_fits(engine, monkeypatch):
-    """``to_value`` puts one digit in each DS; DS4500 ends the bank."""
+    """``to_value`` writes one digit into each DS.  DS4500 ends the bank."""
     blocks = ClickBlocks()
     ds, txt = blocks.ds, blocks.txt
     watch = _watched(ds, 4498, 4500)
@@ -169,8 +171,8 @@ def test_digits_into_numbers_write_what_fits(engine, monkeypatch):
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_bad_digit_past_the_end_still_faults(engine, monkeypatch):
-    """The text is converted whole before it is stored: a character that is no digit
-    leaves every element and raises SC43, past the end too (pyrung's choice)."""
+    """The text is converted whole before it is stored.  A character that is not a digit
+    leaves every element unchanged and raises SC43, also past the end.  That is pyrung's choice."""
     blocks = ClickBlocks()
     ds = blocks.ds
     watch = _watched(ds, 4499, 4500)
@@ -243,8 +245,9 @@ def test_the_write_sites_of_a_text_stop_at_the_block_end():
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_text_into_a_bank_of_another_blocks_object_keeps_its_addresses(engine, monkeypatch):
-    """Two ``ClickBlocks()`` are one TXT bank: a range over one still lets a text
-    into the other land at its own addresses, TXT2 too, which no rung names."""
+    """Two ``ClickBlocks()`` are one TXT bank.  A range over one block does not stop a text
+    stored into the other from landing at its own addresses.  That includes TXT2, which no
+    rung names."""
     first, second = ClickBlocks(), ClickBlocks()
     watch = [second.txt[1], first.txt[5]]
     with Program(strict=False) as prog:
@@ -267,8 +270,8 @@ def test_a_text_into_a_bank_of_another_blocks_object_keeps_its_addresses(engine,
 
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_text_writes_the_tags_that_hold_the_addresses(engine, monkeypatch):
-    """A block mapped onto the bank, and a named slot, hold their addresses: a text
-    run over them writes those tags, not a tag named for the address."""
+    """A block mapped onto the bank and a named slot keep their addresses.  A text run over
+    them writes those tags, not a tag named for the address."""
     blocks = ClickBlocks()
     txt = blocks.txt
     msg = Block("Msg", TagType.CHAR, 1, 10)
@@ -293,9 +296,9 @@ def test_a_text_writes_the_tags_that_hold_the_addresses(engine, monkeypatch):
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("bank_read_first", [False, True], ids=["fresh", "bank_read"])
 def test_a_text_into_a_mapped_block_ends_with_that_block(engine, bank_read_first, monkeypatch):
-    """Msg on TXT101..110 ends a text at Msg10, though a CLICK writes on into TXT111
-    (CLK_TEXT_PAST_BLOCK says so).  Reading the bank's address first, which makes
-    the bank the slot's block, changes nothing."""
+    """A text stored into Msg on TXT101..110 ends at Msg10, though a CLICK writes on into
+    TXT111 (CLK_TEXT_PAST_BLOCK says so).  Reading the bank's address first makes the bank
+    the slot's block.  The result is the same."""
     blocks = ClickBlocks()
     txt = blocks.txt
     msg = Block("Msg", TagType.CHAR, 1, 10)
@@ -319,10 +322,11 @@ _BEFORE = ["fresh", "bank_read", "legacy_compiled"]
 
 
 def _mapped_scalar_program(kind: str, before: str):
-    """A scalar tag mapped by a TagMap onto a bank slot, then a store of several
-    elements from it: a text into ``Name`` on TXT3, or digits into ``Count`` on
-    DS4499.  *before* reads the bank's address, or compiles a legacy kernel (which
-    reads every bank address), before the scan."""
+    """A scalar tag that a TagMap maps onto a bank slot, then a store of several elements.
+
+    The store is a text into ``Name`` on TXT3, or digits into ``Count`` on DS4499.  Before
+    the scan, *before* reads the bank's address or compiles a legacy kernel, which reads
+    every bank address."""
     blocks = ClickBlocks()
     txt, ds = blocks.txt, blocks.ds
     if kind == "text":
@@ -351,8 +355,8 @@ def _mapped_scalar_program(kind: str, before: str):
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("before", _BEFORE)
 def test_a_text_into_a_tag_mapped_onto_the_bank_writes_the_next_slots(engine, before, monkeypatch):
-    """``TagMap({Name: txt[3]})``: "ABC" into Name writes TXT3..TXT5, as a CLICK
-    does, however the bank was read before."""
+    """With ``TagMap({Name: txt[3]})``, "ABC" into Name writes TXT3..TXT5.  A CLICK does
+    the same, however the bank was read before."""
     prog, watch = _mapped_scalar_program("text", before)
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
     assert [values[tag.name] for tag in watch] == ["A", "B", "C"]
@@ -363,7 +367,7 @@ def test_a_text_into_a_tag_mapped_onto_the_bank_writes_the_next_slots(engine, be
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("before", _BEFORE)
 def test_digits_into_a_tag_mapped_onto_the_bank_write_what_fits(engine, before, monkeypatch):
-    """``Count`` on DS4499: "1234" writes 1 there and 2 in DS4500, and drops the rest."""
+    """``Count`` on DS4499: "1234" writes 1 there and 2 in DS4500.  The rest is dropped."""
     prog, watch = _mapped_scalar_program("digits", before)
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
     assert [values[tag.name] for tag in watch] == [1, 2]
@@ -379,8 +383,9 @@ _ODD_NAMES = ["Q{0}", "Q{", r"Q\x", 'Q"x', "Q'x"]
     "name", _ODD_NAMES, ids=["braces", "brace", "backslash", "dquote", "squote"]
 )
 def test_a_text_into_a_block_of_any_name_writes_its_elements(engine, name, monkeypatch):
-    """The kernel names the elements after the target from the block's name, which
-    may hold a brace, a backslash or a quote: each stays as written."""
+    """The kernel builds the names of the elements after the target from the block's name.
+
+    That name may contain a brace, a backslash or a quote, and each stays as written."""
     blk = Block(name, TagType.CHAR, 1, 10)
     watch = [blk[1], blk[2], blk[3]]
     with Program(strict=False) as prog:
