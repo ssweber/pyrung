@@ -1,30 +1,34 @@
-"""Temporary logic a reached plan turns out not to need, found by running the plan without it.
+"""Remove temporary logic that a reached plan does not need, found by running the plan without it.
 
-The pilot installs temporary logic when the trace says an input has to stay where it is through
-a wait.  Often nothing would have moved it: a plain Set holds as well, or the program holds it
-itself.  The trace can't always tell, but running the plan can.  So, once a plan has reached,
-each piece of temporary logic is tried in the order it went in: the plan is run again from its
-anchor without it, and then with a Set of its value in its place.  The simpler plan is kept
-only if it still reaches the goal on the same scan, with nothing to avoid on the way: each wait
-watches the avoid checks as the drive's own seeks do, and every check is judged again where each
-wait ends.  A check that raises on a try's state ends that try, not how(): that state is not the
-plan's, and the plan the drive found stands.
+The pilot installs temporary logic when the trace says an input has to stay where it is
+through a wait.  Often nothing would have moved the input.  A plain Set holds it as well,
+or the program holds it itself.  The trace can't always tell, but running the plan can.
 
-A release (logic holding an input False) is tried as a Set first, so a command the plan lets go
-of stays let go of.  When that Set comes too soon for a person (below), the release is tried left
-out, and the command may stay pressed.  A note on the relation an install satisfies goes with
-its Set: the relation is the requirement, the value an example.  An install of several rungs
-with notes stays, since its notes don't say which is whose.
+So once a plan has reached, each piece of temporary logic is tried in the order it went in.
+The plan is run again from its anchor without the logic, and then with a Set of the logic's
+value in its place.  The simpler plan is kept only if it still reaches the goal on the same
+scan, with nothing to avoid on the way.  Each wait watches the avoid checks as the drive's
+own seeks do, and every check is judged again where each wait ends.  A check that raises on
+a try's state ends that try, not how().  That state is not the plan's, and the plan the
+drive found stands.
 
-A person can't make two moves less than a second apart.  So a Set isn't tried when another Set
-the text prints comes less than a second before or after it.  Sets on one scan count as one move,
-since one Data View write makes them all.  The logic is then tried only left out, as for an input
-nothing can Set.
+A release (logic holding an input False) is tried as a Set first, so a command that the
+plan lets go of stays let go of.  When that Set comes too soon for a person (below), the
+release is tried left out, and the command may stay pressed.  A note on the relation that an
+install satisfies goes with its Set.  The relation is the requirement and the value is an
+example.  An install of several rungs with notes stays, because its notes don't say which
+note belongs to which rung.
 
-The text leaves out a patch of an input logic holds.  So logic over an input the recording
-patches to its value where the logic goes in is only ever that Set (or stays, when the Set comes
-too soon), and logic over an input it patches on another scan the logic is in stays: without
-it, the replay would make a patch the text doesn't name.
+A person can't make two moves less than a second apart.  So a Set isn't tried when another
+Set that the text prints comes less than a second before or after it.  Sets on one scan
+count as one move, because one Data View write makes them all.  The logic is then tried only
+left out, as for an input that nothing can Set.
+
+The text leaves out a patch of an input that the logic holds.  So logic over an input that
+the recording patches to its value where the logic goes in is only ever that Set (or stays,
+when the Set comes too soon).  Logic over an input that the recording patches on another scan
+while the logic is in stays.  Without it, the replay would make a patch that the text doesn't
+name.
 
 The kept plan is that new run, so what it says and what it replays are one recording.
 """
@@ -51,7 +55,8 @@ from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.coast_run import memo_of
 
 # Each try runs the whole plan again.  A plan's own scans mostly run in the guarded loop, so a
-# try costs a small part of the search that found it; this keeps a slow one from costing more.
+# try costs a small part of the search that found it.  This limit stops a slow try from costing
+# more.
 _WALL_S = 2.0
 
 # A person needs about a second between two moves, so the trim hands them no Set closer than that
@@ -60,18 +65,18 @@ _HUMAN_FLOOR_S = 1.0
 
 _Change = Mapping[tuple[Any, ...], str]
 
-# A wait between two of the plan's moves ends on its scan count, so nothing ends it.
+# A wait between two of the plan's moves ends only when its scan count runs out.
 _NEVER = CoastTrigger(
     name="replayed wait", kind="dwell", predicate=lambda _state: False, predicate_reads=()
 )
 
 
 def _timeline(plan: Plan) -> list[tuple[int, tuple[Any, ...]]] | None:
-    """Each scan from the anchor on where the temporary logic changed, and what ran from there.
+    """Return each scan from the anchor on where the temporary logic changed, and what ran there.
 
-    Read from the recording's own epochs, which keep the holds their scans ran under: the hold
-    log keeps what reverted attempts installed too.  None if a hold doesn't say what it was
-    built from.
+    Read the recording's own epochs, which keep the holds their scans ran under.  The hold
+    log would not do, because it also keeps what reverted attempts installed.  Return None
+    if a hold doesn't say what it was built from.
     """
     recording = plan.fork
     timeline: list[tuple[int, tuple[Any, ...]]] = []
@@ -94,7 +99,7 @@ def _timeline(plan: Plan) -> list[tuple[int, tuple[Any, ...]]] | None:
 
 
 def _installed(timeline: list[tuple[int, tuple[Any, ...]]]) -> list[Any]:
-    """Each piece of temporary logic once, in the order it went in."""
+    """Return each piece of temporary logic once, in the order it went in."""
     seen: set[tuple[Any, ...]] = set()
     rungs: list[Any] = []
     for _first, active in timeline:
@@ -107,12 +112,12 @@ def _installed(timeline: list[tuple[int, tuple[Any, ...]]]) -> list[Any]:
 
 
 def _left(clock: WallClock | None) -> float:
-    """Seconds a try has left; no clock (the wall clock turned off) is no bound."""
+    """Return the seconds a try has left.  No clock (the wall clock turned off) means no bound."""
     return math.inf if clock is None else clock.left()
 
 
 def _ran_clear(fork: Any, scans: int, avoid: Any, limits: Callable[[], None]) -> bool:
-    """Run *scans* scans, as a seek does; False if a state to avoid came up on the way.
+    """Run *scans* scans, as a seek does.  Return False if a state to avoid came up on the way.
 
     The avoid checks are armed where the wait starts, as a seek arms them, and every one is
     judged again where it ends.  The try's own clock bounds the wait.
@@ -137,7 +142,7 @@ def _drive(
     avoid: Any,
     clock: WallClock | None,
 ) -> Any | None:
-    """The plan run again from its anchor, with *change* made, or None if that doesn't reach."""
+    """Run the plan again from its anchor with *change* made.  Return None if that doesn't reach."""
     recording = plan.fork
     tip = recording.state.scan_id
     snap = recording._scan_log.snapshot()
@@ -208,9 +213,9 @@ def _names_left(
 
 
 def _journal(journal: tuple[PlanStep, ...], change: _Change) -> tuple[PlanStep, ...]:
-    """The journal with the dropped logic gone and each Set where its logic went in."""
+    """Return the journal with the dropped logic gone and each Set where its logic went in."""
     steps: list[PlanStep] = []
-    # Where in *steps* a step taken out of the plan left two waits next to each other.
+    # Positions in *steps* where taking a step out of the plan left two waits next to each other.
     joins: set[int] = set()
     for step in journal:
         if not step.rungs:
@@ -233,7 +238,7 @@ def _journal(journal: tuple[PlanStep, ...], change: _Change) -> tuple[PlanStep, 
                         scans=0,
                         inputs=sets,
                         label=", ".join(dict.fromkeys(tag for tag, _value in sets)),
-                        # Only a step of one rung is trimmed with notes on: they are its own.
+                        # Only a step of one rung is trimmed with notes on.  The notes are its own.
                         notes=step.notes,
                     )
                 )
@@ -286,7 +291,7 @@ def _bare_wait(step: PlanStep) -> bool:
 
 
 def _joined_waits(steps: list[PlanStep], joins: set[int]) -> tuple[PlanStep, ...]:
-    """Two waits left next to each other, once the logic installed between them is gone, as one."""
+    """Join two waits that are left next to each other once the logic between them is gone."""
     joined: list[PlanStep] = []
     for index, step in enumerate(steps):
         last = joined[-1] if joined else None
@@ -309,7 +314,7 @@ def _joined_waits(steps: list[PlanStep], joins: set[int]) -> tuple[PlanStep, ...
 
 
 def _too_fast(plan: Plan, change: _Change) -> bool:
-    """Whether a Set in *change* comes less than a second from another Set the plan prints."""
+    """Return whether a Set in *change* comes less than a second from another printed Set."""
     dt = plan.dt
     if not dt:
         return False
@@ -339,10 +344,11 @@ def _hold_log(hold_log: tuple[Any, ...], change: _Change) -> tuple[Any, ...]:
 def _patches_under(
     plan: Plan, timeline: list[tuple[int, tuple[Any, ...]]], rung: Any
 ) -> tuple[bool, bool]:
-    """Whether the recording patches *rung*'s input where it goes in, and while it is in.
+    """Return whether the recording patches *rung*'s input where it goes in, and while it is in.
 
-    The plan's text leaves out a patch of an input logic holds, so taking the logic out leaves
-    a patch the text doesn't name: one where it went in, to its own value, is its Set.
+    The plan's text leaves out a patch of an input that the logic holds.  So taking the logic
+    out leaves a patch that the text doesn't name.  A patch where the logic went in, to its
+    own value, becomes its Set.
     """
     key = _rung_identity(rung)
     patches = plan.fork._scan_log.snapshot().patches_by_scan
@@ -373,7 +379,7 @@ def trim_holds(
     settable: frozenset[str],
     clock: WallClock | None,
 ) -> Plan:
-    """*plan* with the temporary logic it reaches without taken out, or *plan* as it was."""
+    """Return *plan* with the temporary logic that it reaches without taken out, or as it was."""
     if not plan.reachable or plan.fork is None:
         return plan
     timeline = _timeline(plan)
@@ -382,7 +388,8 @@ def trim_holds(
         return plan
     own = WallClock.starting_now(_WALL_S if clock is None else min(_WALL_S, clock.left()))
     # A note says what relation the logic satisfies.  An install of one rung hands its notes to
-    # the Set in its place; one of several can't say which note is whose, so its logic stays.
+    # the Set in its place.  An install of several rungs can't say which note belongs to which
+    # rung, so its logic stays.
     noted = {
         _rung_identity(rung)
         for step in plan.journal
@@ -399,9 +406,11 @@ def trim_holds(
         at_install, elsewhere = _patches_under(plan, timeline, rung)
         if elsewhere:
             continue
-        # A release is a Set of False first: dropping it leaves a command where it was pressed.
+        # A release is tried as a Set of False first, because dropping it leaves a command
+        # where it was pressed.
         tries = ("set", "drop") if rung.value is False else ("drop", "set")
-        # Patched to its value where it went in, its logic dropped is that Set.
+        # If the recording patched the input to its value where the logic went in, dropping
+        # the logic gives that Set.
         for what in ("set",) if at_install else tries:
             if what == "set" and rung.dest not in settable:
                 continue
@@ -416,7 +425,7 @@ def trim_holds(
                 break
     if fork is None:
         return plan
-    # The caller gets the fork to run, with no memo of the tries'.
+    # The caller gets the fork to run, without the memo of the tries.
     fork._coast_memo = None
     return replace(
         plan,

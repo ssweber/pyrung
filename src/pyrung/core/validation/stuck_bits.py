@@ -224,12 +224,13 @@ def _loop_exit_skippable(program: Program) -> frozenset[int]:
 
 
 def _loop_run_conditions(program: Program) -> dict[int, tuple[Condition, ...] | None]:
-    """Per forloop body instruction (by id), the conditions its loop runs under.
+    """Return, for each forloop body instruction (by id), the conditions its loop runs under.
 
     A false For rung skips its body, so an ``out()`` there runs only when the
     innermost loop around it is enabled.  A loop whose count is read from a tag
-    may run no iteration at all (a count of 0), and a oneshot loop runs its body
-    only on its rung's rising edge; their bodies map to ``None``.
+    may run no iteration at all (a count of 0).  A oneshot loop runs its body
+    only on its rung's rising edge.  The bodies of these two kinds of loop map
+    to ``None``.
     """
     from pyrung.core.instruction.control import (
         ForLoopInstruction,
@@ -591,10 +592,10 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     tag_map = _build_tag_map(program)
     domains = _domain_map(tag_map)
     reach_chains = _scope_reach_chains(program)
-    # A subroutine entered through a call its conditions do not decide (a
-    # forloop body-rung contact an iteration can change, a oneshot loop, a
-    # break_loop()) may run on every scan or not: nothing can be claimed, so
-    # its coils are not reported.
+    # A call can enter a subroutine in a way that its conditions do not decide (a
+    # forloop body-rung contact that an iteration can change, a oneshot loop, a
+    # break_loop()).  Such a subroutine may or may not run on every scan, so nothing
+    # can be claimed about it and its coils are not reported.
     for sub_name in _inexact_entry_subroutines(program):
         reach_chains[sub_name] = ((),)
     return_rungs = _return_rungs(program)
@@ -611,7 +612,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     # Coils whose out() instructions run on every scan de-energize themselves; the
     # rest hold their last value on the scans nothing writes them, and their out()
     # is a latch with no matching reset.
-    # An out() a break_loop()/continue_loop() can skip proves nothing either.
+    # An out() that a break_loop()/continue_loop() can skip proves nothing either.
     skippable = _loop_exit_skippable(program)
     provable_out_sites = {
         tag: [s for s in tag_sites if id(s.instruction) not in skippable]

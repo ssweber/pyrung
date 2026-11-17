@@ -19,17 +19,17 @@ class StoreTransform:
 IDENTITY_STORE = StoreTransform()
 
 #: Largest finite magnitude a CLICK REAL holds (+/-3.4028235E+38).  pyrung
-#: keeps a REAL at 64-bit precision but never outside this range: a result
+#: keeps a REAL at 64-bit precision but never outside this range.  A result
 #: past it is +/-Inf, as a CLICK's float32 Math stores it.
 REAL_MAX = 3.4028235e38
 
 #: The blank CHAR.  A CLICK TXT is one byte, so blank and NUL ($00) are the
-#: same value: an unwritten TXT, ``fill("")`` and ``reset()`` all leave NUL.
+#: same value.  An unwritten TXT, ``fill("")`` and ``reset()`` all leave NUL.
 BLANK_CHAR = "\x00"
 
 
 def store_char(value: Any) -> Any:
-    """The value a CHAR holds when *value* is stored: ``""`` becomes NUL.
+    """Return the value a CHAR holds when *value* is stored.  ``""`` becomes NUL.
 
     Every path that stores into a CHAR (instruction writes, reset, patch and
     force, tag defaults) goes through here, so the engine has one blank.
@@ -38,18 +38,18 @@ def store_char(value: Any) -> Any:
 
 
 def real_in_range(value: Any) -> bool:
-    """True when *value* is a finite REAL: within +/-``REAL_MAX`` (not Inf, not NaN)."""
+    """Return True when *value* is a finite REAL: within +/-``REAL_MAX`` (not Inf, not NaN)."""
     return -REAL_MAX <= value <= REAL_MAX
 
 
 def check_real_value(value: Any, what: str, *, allow_non_finite: bool = False) -> None:
     """Raise ``ValueError`` when a user-supplied REAL value is out of range.
 
-    A finite value past +/-``REAL_MAX`` is always refused: no float32 holds it.
-    +/-Inf and NaN are refused too unless *allow_non_finite*: a REAL register
-    holds them (a Math overflow stores +/-Inf), so a patch or force may write
-    one, but a constant or default cannot be one.  Non-numbers are left to the
-    caller's own checks.
+    A finite value past +/-``REAL_MAX`` is always refused, because no float32 holds
+    it.  +/-Inf and NaN are also refused unless *allow_non_finite* is set.  A REAL
+    register holds them (a Math overflow stores +/-Inf).  So a patch or force may
+    write one, but a constant or default cannot be one.  Non-numbers are left to
+    the caller's own checks.
     """
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if real_in_range(value):
@@ -62,11 +62,11 @@ def check_real_value(value: Any, what: str, *, allow_non_finite: bool = False) -
 
 
 def store_real(value: Any) -> float:
-    """The value a REAL holds when *value* is stored: past +/-``REAL_MAX`` it is +/-Inf.
+    """Return the value a REAL holds when *value* is stored.  Past +/-``REAL_MAX`` it is +/-Inf.
 
     A CLICK REAL is a float32, so a result past its range is +/-Inf (not a
     saturated +/-``REAL_MAX``).  Inf and NaN are kept.  pyrung keeps a finite
-    value at 64-bit precision: a compare, no float32 round trip.
+    value at 64-bit precision, so a compare involves no float32 round trip.
     """
     try:
         real = float(value)
@@ -79,7 +79,7 @@ def store_real(value: Any) -> float:
     return real
 
 
-#: Where a ``"word"`` store stops below: a value under it stores as it does (0x8000).
+#: The floor of a ``"word"`` store.  A value under it stores as the floor does (0x8000).
 WORD_STORE_FLOOR = -32768
 
 
@@ -88,9 +88,9 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
 
     Besides ``identity``, ``real``, ``bool``, ``char``, ``clamp`` and ``wrap``:
 
-    - ``word``: a Copy into a Word from a register.  Past *upper* it clamps; below 0
-      it keeps the low 16 bits of the value, first stopped at ``WORD_STORE_FLOOR``
-      (-1 is 0xFFFF, -Inf 0x8000, +Inf 0xFFFF).
+    - ``word``: a Copy into a Word from a register.  Past *upper* it clamps.  Below 0
+      it keeps the low 16 bits of the value, after stopping the value at
+      ``WORD_STORE_FLOOR`` (-1 is 0xFFFF, -Inf 0x8000, +Inf 0xFFFF).
     """
 
     kind = storage.kind
@@ -99,7 +99,7 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
     if kind == "real":
         return store_real(value)
     if isinstance(value, float) and not math.isfinite(value):
-        # A clamp pins +/-Inf at its bound; NaN, and anything that wraps, is 0.
+        # A clamp pins +/-Inf at its bound.  NaN, and anything that wraps, is 0.
         if kind == "clamp" and value == value and storage.lower is not None:
             return storage.upper if value > 0 else storage.lower
         if kind == "word" and value == value and storage.upper is not None:
