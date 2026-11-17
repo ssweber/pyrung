@@ -167,7 +167,10 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
 def _check_operands(
     targets: list[tuple[str, Any, Any]], pdg: Any, snapshot: Mapping[str, Any]
 ) -> None:
-    """A relational operand has to have a value in the search, or the goal has no meaning."""
+    """Raise ValueError if a relational operand has no value in the search.
+
+    The goal has no meaning without one.
+    """
     for tag, _value, predicate in targets:
         if (
             predicate is not None
@@ -182,10 +185,11 @@ def _check_operands(
 
 
 def _carry_goal_tags(setup: _drive_setup.DriveSetup, conditions: tuple[Any, ...]) -> None:
-    """Name each tag of the goal to the search: a pointer or a range writes a slot unnamed.
+    """Register each tag of the goal with the search.
 
-    An operand tag that only a patch or force by name gave a value is registered too, so a rung
-    the search adds compares with the tag and not with its name.
+    A pointer or a range can write a slot without naming it.  The search also registers an
+    operand tag whose only value came from a patch or force by name.  A rung that the search
+    adds then compares with the tag, not with its name.
     """
     from pyrung.core.tag import Tag
 
@@ -253,7 +257,7 @@ def _plan_from_outcome(
 
 @contextmanager
 def _avoid_errors_named() -> Iterator[None]:
-    """A check that raised in the search reaches the caller under its public name."""
+    """Re-raise a check error from the search as ``AvoidCheckError``, its public name."""
     try:
         yield
     except _AvoidCheckRaised as raised:
@@ -272,8 +276,8 @@ def pilot_events(
 
     ``unlink`` frees the named harness-feedback tags for fault injection (see
     :func:`pilot_how`). ``avoid_pred`` excludes routes, actions, and observed
-    states the same way ``how(avoid=...)`` does, and one that raises on a real
-    state ends the stream with ``AvoidCheckError``.
+    states the same way ``how(avoid=...)`` does.  If ``avoid_pred`` raises on a real
+    state, the stream ends with ``AvoidCheckError``.
     """
     with _avoid_errors_named():
         stopped = _in_stop(plc, conditions, avoid_pred)
@@ -303,7 +307,7 @@ _Options = ParamSpec("_Options")
 def _says_modbus_is_not_simulated(
     how: Callable[Concatenate[PLC, _Options], Plan],
 ) -> Callable[Concatenate[PLC, _Options], Plan]:
-    """A plan for a program with send() or receive() says that how() ran none of them."""
+    """Mark the plan for a program with send() or receive() to say that how() ran none of them."""
 
     @wraps(how)
     def said(plc: PLC, *args: _Options.args, **kwargs: _Options.kwargs) -> Plan:
@@ -328,9 +332,9 @@ def pilot_how(
 
     For a multi-route value target (``Bool == True/False`` or word
     ``tag == value``) PILOT starts with a deterministic preferred route and
-    records the route that actually reached the goal on ``Plan.route``;
-    ``avoid_pred`` excludes a reported route so PILOT can take another. One that
-    raises on a real state ends the search with ``AvoidCheckError``.
+    records the route that actually reached the goal on ``Plan.route``.
+    ``avoid_pred`` excludes a reported route so PILOT can take another.  If it
+    raises on a real state, the search ends with ``AvoidCheckError``.
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so
@@ -425,7 +429,7 @@ def pilot_how(
 
 
 def _in_stop(plc: PLC, conditions: tuple[Any, ...], avoid_pred: Any = None) -> Plan | None:
-    """The plan for a PLC in STOP, whose next scan is a restart.
+    """Return the plan for a PLC in STOP, whose next scan is a restart.  Return None if it runs.
 
     A goal that already holds is reached with nothing to plan.  Any other goal is Stopped.
     The setup must not step the PLC.  A waiting patch or force would make that step restart the
@@ -468,7 +472,7 @@ def _in_stop(plc: PLC, conditions: tuple[Any, ...], avoid_pred: Any = None) -> P
 
 
 def _stopped_events(plan: Plan) -> Iterator[PilotEvent]:
-    """The events of a search that ends as *plan* before it steps anything."""
+    """Yield the events of a search that ends as *plan* before it steps anything."""
     scan, reason = plan.anchor_scan, plan.reason
     if plan.status is PlanStatus.REACHED:
         yield PilotEvent(
@@ -515,7 +519,7 @@ def _stopped_events(plan: Plan) -> Iterator[PilotEvent]:
 
 
 def _goal_check(conditions: tuple[Any, ...]) -> Callable[[Any], bool]:
-    """The goal as a check on a state's tags, judged as the search judges it.
+    """Return the goal as a check on a state's tags, judged as the search judges it.
 
     A goal whose tag the state lacks does not hold.  The prover's check reads such a goal as
     holding.  A trimmed run that never wrote the goal's tag would then pass.
@@ -538,7 +542,7 @@ def _how_from(
     start_had_a_scan: bool = True,
     check_operands: bool = True,
 ) -> tuple[Plan, _drive_setup.DriveSetup, _engine._DriveOutcome | None]:
-    """One how() from where *plc* stands, with what the caller needs to decide what comes next.
+    """Run one how() from where *plc* stands.  Return what the caller needs to decide what next.
 
     A try after the first ask skips the operand check, which the first ask passed.  A restart
     drops a tag that only a patch or force by name gave, and the try reads that tag at its

@@ -13,11 +13,11 @@ from pyrung.circuitpy.codegen._constants import _STORE_TYPE_HELPERS
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.core.system_points import system
 
-#: XD and YD are served from the X and Y bits, not from tags mapped to them.
+#: The server reads XD and YD from the X and Y bits, not from tags mapped to them.
 _WORD_BANKS = {"DS", "DD", "DH", "DF", "TD", "CTD", "TXT", "SD"}
 _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
-#: Banks a rung can use raw (``ds[3901]``), served as used.  System points and
-#: the XD/YD word images have their own paths.
+#: Banks that a rung can use raw (``ds[3901]``).  The server serves them as the rung uses them.
+#: System points and the XD/YD word images have their own paths.
 _RAW_BANKS = frozenset(MODBUS_MAPPINGS) - {"SC", "SD", "XD", "YD"}
 _XD0 = MODBUS_MAPPINGS["XD"].base
 _YD0 = MODBUS_MAPPINGS["YD"].base
@@ -25,9 +25,9 @@ _YD0 = MODBUS_MAPPINGS["YD"].base
 #: by a spare word.
 _XY_WORDS = BANKS["XD"].max_addr - BANKS["XD"].min_addr + 1
 _Y0 = MODBUS_MAPPINGS["Y"].base
-#: Banks of two-register cells (Dint, Real), whose half-word write reads the other half.
+#: Banks of two-register cells (Dint, Real).  A write to half a cell reads the other half.
 _WIDE_BANKS = tuple(sorted(bank for bank, mapping in MODBUS_MAPPINGS.items() if mapping.width == 2))
-#: Coil banks a client may only read (FC 2), so a coil write there answers 02.
+#: Coil banks that a client can only read (FC 2).  A coil write to them answers 02.
 _COIL_READ_ONLY = tuple(
     sorted(
         bank
@@ -38,11 +38,11 @@ _COIL_READ_ONLY = tuple(
 
 
 def _modbus_spans(is_coil: bool) -> tuple[tuple[int, int], ...]:
-    """The Modbus addresses of CLICK's coil or register banks, as merged ranges.
+    """Return the Modbus addresses of CLICK's coil or register banks, as merged ranges.
 
-    The server reads 0 in them where nothing is stored, as a CLICK reads memory nothing
-    wrote.  X and Y run to unit 32 of slot 8, since a CLICK reads OFF in units 17..32 of
-    every slot.  XD and YD are left out, because the generated code serves them first.
+    Where nothing is stored, the server reads 0, as a CLICK does for memory that nothing
+    wrote.  X and Y run to unit 32 of slot 8, because a CLICK reads OFF in units 17..32 of
+    every slot.  The ranges leave out XD and YD, because the generated code serves them first.
     """
     spans: list[tuple[int, int]] = []
     for bank, mapping in MODBUS_MAPPINGS.items():
@@ -65,11 +65,12 @@ def _modbus_spans(is_coil: bool) -> tuple[tuple[int, int], ...]:
 
 
 def _cell_runs(ctx: CodegenContext, is_coil: bool) -> list[tuple[str, str, int, int, int]]:
-    """``(bank, array, first, last, index)`` for each run of raw CLICK cells the code keeps.
+    """Return ``(bank, array, first, last, index)`` for each run of raw CLICK cells in the code.
 
-    A pointer or a block instruction (``ds[Ptr]``, ``fill(0, c.select(1, 100))``) keeps a
-    bank's cells in an array, and the server serves each of them as a CLICK does.  Modbus
-    addresses *first..last* hold the cells from *index* on.  A TXT register holds two cells.
+    A pointer or a block instruction (``ds[Ptr]``, ``fill(0, c.select(1, 100))``) makes the
+    code keep a bank's cells in an array, and the server serves each of them as a CLICK does.
+    Modbus addresses *first..last* hold the cells from *index* on.  A TXT register holds two
+    cells.
     """
     runs: list[tuple[str, str, int, int, int]] = []
     for binding in ctx.emitted_bindings():
@@ -102,7 +103,7 @@ def _cell_runs(ctx: CodegenContext, is_coil: bool) -> list[tuple[str, str, int, 
 
 
 def _df_words(value: str) -> str:
-    """Python source for the two Modbus words of the float in *value*, low word first.
+    """Return Python source for the two Modbus words of the float in *value*, low word first.
 
     A CLICK serves every NaN as 0xFFFF:0xFFFF, so the generated code does too.
     """
@@ -160,7 +161,7 @@ def _ip_tuple_literal(value: str) -> str:
 
 
 def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
-    """Every TagMap register, then every raw CLICK register a rung uses (``ds[3901]``)."""
+    """Return every TagMap register, then every raw CLICK register a rung uses (``ds[3901]``)."""
     if ctx.tag_map is None:
         return ()
     slots: list[_ModbusBackedSlot] = []
@@ -187,8 +188,8 @@ def _modbus_backed_slots(ctx: CodegenContext) -> tuple[_ModbusBackedSlot, ...]:
         if claim is not None:
             block, addr = ctx.block_bindings[claim[0]].block, claim[1]
         else:
-            # No array holds it: a raw register a rung uses (``ds[3901]``) is a
-            # scalar, and only its own tag knows the register.
+            # No array holds it, so it is a raw register that a rung uses (``ds[3901]``) as a
+            # scalar.  Only its own tag knows the register.
             block = getattr(tag, "_pyrung_block", None)
             addr = getattr(tag, "_pyrung_block_addr", 0)
         if block is None or block.name not in _RAW_BANKS:
@@ -244,7 +245,7 @@ def _render_ethernet_setup(ctx: CodegenContext) -> list[str]:
 
 
 def _writable(slot: _ModbusBackedSlot) -> bool:
-    """Whether a Modbus write may store into *slot*.
+    """Return whether a Modbus write may store into *slot*.
 
     CLICK's Data View marks the rest of SC and SD Read Only, and the server refuses a write
     to them with exception 02.
@@ -256,10 +257,10 @@ def _writable(slot: _ModbusBackedSlot) -> bool:
 def _txt_pair(
     slot: _ModbusBackedSlot, reg_slots: list[_ModbusBackedSlot]
 ) -> tuple[int, _ModbusBackedSlot | None, _ModbusBackedSlot | None] | None:
-    """The odd TXT of *slot*'s register and the slots of its two bytes.
+    """Return the odd TXT of *slot*'s register and the slots of its two bytes.
 
-    ``None`` for an even slot whose odd slot is served too, since that slot's entry handles
-    both bytes.
+    Return ``None`` for an even slot whose odd slot is served too, because the entry for
+    that odd slot handles both bytes.
     """
     pair_index = (slot.index - 1) // 2 * 2 + 1
 
@@ -273,7 +274,7 @@ def _txt_pair(
 
 
 def _word_expr(data_type: DataType, symbol: str, pos: str) -> str | None:
-    """The Modbus word at *pos* of the cell in *symbol*, or ``None`` for TXT and bits."""
+    """Return the Modbus word at *pos* of the cell in *symbol*, or ``None`` for TXT and bits."""
     if data_type == DataType.INT:
         return f"struct.unpack('<H', struct.pack('<h', int({symbol})))[0]"
     if data_type == DataType.HEX:
@@ -286,7 +287,7 @@ def _word_expr(data_type: DataType, symbol: str, pos: str) -> str | None:
 
 
 def _store_expr(data_type: DataType, symbol: str, pos: str) -> str | None:
-    """The new value of the cell in *symbol* after ``_word`` is written at *pos*."""
+    """Return the new value of the cell in *symbol* after ``_word`` is written at *pos*."""
     if data_type == DataType.INT:
         return "struct.unpack('<h', struct.pack('<H', _word))[0]"
     if data_type == DataType.HEX:
@@ -406,7 +407,7 @@ def _reg_write_chain(ctx: CodegenContext, reg_slots: list[_ModbusBackedSlot]) ->
 
 
 def _cell_lines(ctx: CodegenContext) -> list[str]:
-    """The functions that find and convert the raw CLICK cells the code keeps in arrays."""
+    """Return the functions that find and convert the raw CLICK cells kept in arrays."""
     lines = ["def _mb_coil_cell(addr):"]
     for bank, symbol, lo, hi, index in _cell_runs(ctx, True):
         lines.append(f"    if {lo} <= addr <= {hi}:")
@@ -445,7 +446,7 @@ def _cell_lines(ctx: CodegenContext) -> list[str]:
 
 
 def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
-    """The server's address map and accessors, or nothing for a program with no server."""
+    """Return the server's address map and accessors, or nothing for a program with no server."""
     if ctx.modbus_server is None:
         return []
     backed = _modbus_backed_slots(ctx)
@@ -475,7 +476,8 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         f"_MB_SC_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SC'].writable or ()))!r}",
         f"_MB_SD_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SD'].writable or ()))!r}",
         f"_MB_WIDE = {_WIDE_BANKS!r}",
-        # A YD register keeps what a client wrote, for Y bits no tag holds and the spare words.
+        # A YD register stores what a client wrote, for Y bits that no tag holds and for the
+        # spare words.
         f"_mb_yd = [0] * {_XY_WORDS}",
         "",
         "def _mb_in(addr, spans):",
@@ -498,7 +500,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "    return base + word * 16",
         "",
         *_cell_lines(ctx),
-        # Each address is a tag's slot (the maps) or a cell of a raw array, or holds nothing.
+        # Each address is a tag's slot (in the maps), a cell of a raw array, or nothing.
         "def _mb_coil_get(addr):",
         "    _mapped = _MB_COIL_MAP.get(addr)",
         "    if _mapped is not None:",
@@ -580,9 +582,9 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "        return False",
         '    if _mapped[0] == "SD" and _mapped[1] not in _MB_SD_WRITABLE:',
         "        return False",
-        # A write to half of a Dint or Real keeps the other half.  A cell holding what no
-        # register can (a Dint past 32 bits) has no other half to keep.  Reading the cell
-        # first finds that, so a multi-write refuses it before storing anything.
+        # A write to half of a Dint or Real must keep the other half.  A cell that holds what
+        # no register can (a Dint past 32 bits) has no other half to keep.  Reading the cell
+        # first detects this, so a multi-write refuses it before storing anything.
         "    if _mapped[0] in _MB_WIDE:",
         "        try:",
         "            _mb_reg_get(addr)",
@@ -621,7 +623,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
 
 
 def _modbus_protocol_lines() -> list[str]:
-    """``_mb_err`` and ``_mb_handle``, the same in code.py and in the runtime."""
+    """Return the source of ``_mb_err`` and ``_mb_handle``, the same in code.py and the runtime."""
     return [
         "def _mb_err(tid, uid, fc, code):",
         "    return struct.pack('>HHHBB', int(tid) & 0xFFFF, 0, 3, int(uid) & 0xFF, (int(fc) & 0x7F) | 0x80) + bytes([int(code) & 0xFF])",
