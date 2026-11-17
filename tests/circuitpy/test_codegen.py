@@ -1930,6 +1930,28 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, watched, scans=1)
         assert results == {name: ("6", 6, True, False, False, False) for name in results}
 
+    def test_a_copy_of_a_whole_number_into_a_txt_writes_its_digits_on_every_backend(
+        self, monkeypatch
+    ):
+        """CLICK's dialog stores a Copy of a DS into a TXT as Copy Value with Suppress zero
+        (clicknick copy-encodings, the DS source rows), which is ``to_text()``."""
+        n = Int("N", default=-42)
+        h = Word("H", default=0xAB)
+        chars = Block("Txt", TagType.CHAR, 1, 12)
+        int_text = Bool("IntText")
+        word_text = Bool("WordText")
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(n, chars[1])
+                copy(h, chars[5])
+            with Rung(chars[1] == "-", chars[2] == "4", chars[3] == "2"):
+                out(int_text)
+            with Rung(chars[5] == "A", chars[6] == "B"):
+                out(word_text)
+
+        results = _on_every_backend(prog, monkeypatch, (int_text, word_text), scans=1)
+        assert results == {name: (True, True) for name in results}
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
         """A code needs an integer: the TXT stays as it was, with SC43, and the rung runs on."""

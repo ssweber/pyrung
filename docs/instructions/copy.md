@@ -55,7 +55,7 @@ copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCI
 
 `to_value` of a letter or other non-digit sets the out-of-range fault and leaves the destination alone. A blank TXT reads as 0.
 
-A `copy()` of a TXT into a number with no `convert` is `to_value`, and a `copy()` of a `Real` into a TXT with no `convert` is `to_text()`.
+A `copy()` of a TXT into a number with no `convert` is `to_value`. A `copy()` of a number tag into a TXT with no `convert` is `to_text()`.
 
 ### Numeric → Text
 

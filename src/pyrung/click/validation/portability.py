@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from pyclickplc.addresses import format_address_display
+
 from pyrung.core.expression import (
     BinaryExpr,
     Expression,
@@ -713,6 +715,16 @@ _NO_SUM_BANKS = frozenset({"CT", "TXT"})
 _SLOTTED_BANKS = frozenset({"X", "Y"})
 _MDN_MAX_BYTES = 1024
 _BANK_BYTES: dict[str, int] = {"DD": 4, "DF": 4, "CTD": 4}
+# XD and YD hold XD0, XD0u, then XD1..XD8 at MDB addresses 0, 1, then 2, 4, .. 16.  A range
+# from XD0 on to XD1 therefore holds XD0u, which a pyrung block of XD never holds.
+_WORD_IO_BANKS = frozenset({"XD", "YD"})
+
+
+def _next_address(bank: str, address: int) -> int:
+    """The MDB address after *address* in *bank*'s CLICK address space."""
+    if bank in _WORD_IO_BANKS and address >= 2:
+        return address + 2
+    return address + 1
 
 
 def _collect_range_aggregates(expr: Any, out: list[tuple[str, BlockRange]], seen: set[int]) -> None:
@@ -797,12 +809,15 @@ def _evaluate_range_aggregates(
         if bank in _SLOTTED_BANKS:
             ordered = all(a < b for a, b in zip(numbers, numbers[1:], strict=False))
         else:
-            ordered = all(a + 1 == b for a, b in zip(numbers, numbers[1:], strict=False))
+            ordered = all(
+                _next_address(bank, a) == b for a, b in zip(numbers, numbers[1:], strict=False)
+            )
         if not ordered:
             emit(
                 CLK_MATH_RANGE_NOT_CONTIGUOUS,
                 f"{click_name} range does not map to one contiguous low:high run of {bank} "
-                f"addresses (first {bank}{numbers[0]}, last {bank}{numbers[-1]})",
+                f"addresses (first {format_address_display(bank, numbers[0])}, "
+                f"last {format_address_display(bank, numbers[-1])})",
                 "Map the range to consecutive addresses in ascending order, and drop "
                 ".reverse(): the aggregate does not depend on member order.",
             )
@@ -1508,18 +1523,36 @@ def _collect_plain_arg_sites(
         _collect_plain_arg_sites(child, out, seen)
 
 
-def _is_bad_bound_type(bound: Any) -> bool:
-    """RAND takes an integer constant or an Int or Dint tag: not a DF, a float, a bit or a Word."""
+# The banks CLICK's RAND takes as a bound (laddercodec editor_grids, 2026-11-16).  A decimal
+# Math refuses TD, CTD and SD, and a hex Math refuses XD and YD (OBJ-1002).
+_RAND_BOUND_BANKS = {"decimal": frozenset({"DS", "DD"}), "hex": frozenset({"DH"})}
+# The tag types of those banks, for a bound the tag map does not map.
+_RAND_BOUND_TYPES = {
+    "decimal": frozenset({TagType.INT, TagType.DINT}),
+    "hex": frozenset({TagType.WORD}),
+}
+
+
+def _is_bad_bound_type(bound: Any, *, hex_mode: bool, resolver: _ResolutionCache) -> bool:
+    """RAND takes an integer constant, a DS or DD tag, or a DH tag in a hex Math."""
+    kind = "hex" if hex_mode else "decimal"
     if isinstance(bound, TagExpr):
-        return bound.tag.type not in (TagType.INT, TagType.DINT)
+        slot = resolver.resolve_direct_tag(bound.tag)
+        if slot is None:
+            return bound.tag.type not in _RAND_BOUND_TYPES[kind]
+        return slot.memory_type not in _RAND_BOUND_BANKS[kind]
     return isinstance(bound, LiteralExpr) and isinstance(bound.value, (float, bool))
 
 
 def _evaluate_rand_bounds(
-    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
+    instruction: Any,
+    base_location: ProgramLocation,
+    mode: ValidationMode,
+    resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """CLICK's editor takes only an integer constant or an Int or Dint tag as a RAND bound,
-    refuses equal constant bounds, and an expression as an argument of RAND, LSH, RSH, LRO or RRO."""
+    """CLICK's editor takes only an integer constant or a DS or DD tag as a RAND bound
+    (a DH tag in a hex Math), refuses equal constant bounds, and an expression as
+    an argument of RAND, LSH, RSH, LRO or RRO."""
     if type(instruction).__name__ != "CalcInstruction":
         return []
     location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
@@ -1543,18 +1576,22 @@ def _evaluate_rand_bounds(
         )
     rands: list[RandIntExpr] = []
     _collect_rands(instruction.source_expression, rands, set())
+    hex_mode = instruction.mode == "hex"
     for rand in rands:
-        if any(_is_bad_bound_type(b) for b in (rand.lo, rand.hi)):
+        if any(
+            _is_bad_bound_type(b, hex_mode=hex_mode, resolver=resolver) for b in (rand.lo, rand.hi)
+        ):
             findings.append(
                 ClickFinding(
                     code=CLK_RAND_BOUND_TYPE,
                     severity=_route_severity(CLK_RAND_BOUND_TYPE, mode),
                     message=(
                         f"randint() at {location_text} has a bound that is not an integer "
-                        "constant or an Int or Dint tag; the CLICK editor takes no other."
+                        "constant or a DS or DD tag, or a DH tag in a hex Math. The CLICK "
+                        "editor takes no other."
                     ),
                     location=location_text,
-                    suggestion="Use integer constants, or copy the bound into an Int or Dint tag.",
+                    suggestion="Use integer constants, or copy the bound into a DS or DD tag.",
                 )
             )
         elif (
@@ -1578,10 +1615,18 @@ def _evaluate_rand_bounds(
 
 
 def _collect_wide_constants(
-    expr: Any, out: list[int], seen: set[int], *, low: int, high: int
+    expr: Any, out: list[int | float], seen: set[int], *, low: int, high: int, whole: bool
 ) -> None:
-    """Each integer constant in *expr* outside *low*..*high*, a RAND's bounds included."""
+    """Each integer constant in *expr* outside *low*..*high*, a RAND's bounds included.
+
+    With *whole*, a float constant counts as its integer, and one with a fraction is
+    collected too, since a hex Math takes only whole numbers.
+    """
     if isinstance(expr, bool):
+        return
+    if whole and isinstance(expr, float):
+        if not expr.is_integer() or not low <= expr <= high:
+            out.append(expr)
         return
     if isinstance(expr, int):
         if not low <= expr <= high:
@@ -1591,41 +1636,42 @@ def _collect_wide_constants(
         return
     seen.add(id(expr))
     if isinstance(expr, LiteralExpr):
-        _collect_wide_constants(expr.value, out, seen, low=low, high=high)
+        _collect_wide_constants(expr.value, out, seen, low=low, high=high, whole=whole)
         return
     for child in vars(expr).values():
         # Only subexpressions: a constant is a LiteralExpr (an int attribute, such
         # as a RAND's site number, is not one).
         if isinstance(child, Expression):
-            _collect_wide_constants(child, out, seen, low=low, high=high)
+            _collect_wide_constants(child, out, seen, low=low, high=high, whole=whole)
 
 
 def _evaluate_wide_constants(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
-    """A Math constant CLICK does not keep as written.
+    """A Math constant CLICK's editor refuses.
 
-    A decimal Math keeps a constant whole, and CLICK's editor refuses one past a
-    DD's range (2026-11-11).  A hex Math reads each constant as its low 16 bits.
+    A decimal Math takes a constant in a DD's range (2026-11-11).  A hex Math takes a
+    whole number in 0h..FFFFh (2026-11-16).  pyrung writes -32768..-1 there as its 16
+    bits, so -1 is FFFFh, the value pyrung's own hex Math reads.
     """
     if type(instruction).__name__ != "CalcInstruction":
         return []
     hex_mode = instruction.mode == "hex"
-    # A hex Math reads a constant as its low 16 bits, unsigned (& 0xFFFF): -1 is 65535.
-    low, high = (0, 65535) if hex_mode else (-2147483648, 2147483647)
-    wide: list[int] = []
-    _collect_wide_constants(instruction.source_expression, wide, set(), low=low, high=high)
+    low, high = (-32768, 65535) if hex_mode else (-2147483648, 2147483647)
+    wide: list[int | float] = []
+    _collect_wide_constants(
+        instruction.source_expression, wide, set(), low=low, high=high, whole=hex_mode
+    )
     if not wide:
         return []
     location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
     listed = ", ".join(str(value) for value in dict.fromkeys(wide))
     if hex_mode:
         message = (
-            f"math() at {location_text} has a constant past 16 bits ({listed}); a CLICK "
-            "hex Math reads each constant as its low 16 bits, unsigned, so 70000 "
-            "reads 4464 and -1 reads 65535."
+            f"math() at {location_text} has a constant that is not a whole 16-bit value "
+            f"({listed}). A CLICK hex Math takes 0h..FFFFh, so the export refuses it."
         )
-        suggestion = "Write the constant as its 16-bit value, 0..65535 (0h..FFFFh)."
+        suggestion = "Write the constant as a whole 16-bit value, 0..65535 (0h..FFFFh)."
     else:
         message = (
             f"math() at {location_text} has a constant past a DD's range ({listed}). "

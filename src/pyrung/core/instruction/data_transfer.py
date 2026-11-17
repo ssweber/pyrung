@@ -41,15 +41,16 @@ if TYPE_CHECKING:
 def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
     """The conversion a Copy with no ``convert=`` makes across text, as CLICK's does.
 
-    A Real into a TXT writes its text, as ``to_text()`` does; a TXT into a number reads
-    its digit, as ``to_value`` does.  ``None`` for any other Copy.
+    A number register into a TXT writes its text, as ``to_text()`` does (CLICK's dialog
+    has no Copy there without a conversion, and starts on Copy Value with Suppress zero).
+    A TXT into a number reads its digit, as ``to_value`` does.  ``None`` for any other Copy.
     """
     from pyrung.core.copy_converters import to_text, to_value
     from pyrung.core.tag import TagType
 
     source_type = copy_source_kind(source)
     dest_type = copy_source_kind(dest)
-    if source_type is TagType.REAL and dest_type is TagType.CHAR:
+    if source_type in _NUMBER_TYPES and dest_type is TagType.CHAR:
         return to_text()
     if source_type is TagType.CHAR and dest_type in _NUMBER_TYPES:
         return to_value
@@ -82,8 +83,8 @@ class CopyInstruction(OneShotMixin, Instruction):
     a string literal.  Destination may be a `Tag` or `IndirectRef`.
 
     Pass ``convert=`` to enable text/numeric conversion (see
-    :mod:`pyrung.core.copy_converters`).  With none, a REAL into a CHAR writes its
-    text (``to_text()``) and a CHAR into a number reads its digit (``to_value``), as
+    :mod:`pyrung.core.copy_converters`).  With none, a number register into a CHAR writes
+    its text (``to_text()``) and a CHAR into a number reads its digit (``to_value``), as
     CLICK's plain Copy does; ``convert`` holds that converter and ``authored_convert``
     what was written.
 

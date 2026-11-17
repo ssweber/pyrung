@@ -107,8 +107,8 @@ def main() -> None:
     def unchecked_export() -> object:
         return pyrung_to_ladder(program, tag_map, validate=False)
 
-    def skip_precheck(_exporter: _LadderExporter) -> None:
-        return None
+    def skip_precheck(_exporter: _LadderExporter, _allow: object = ()) -> list[str]:
+        return []
 
     def render_and_roundtrip() -> object:
         with patch.object(_LadderExporter, "_run_precheck", skip_precheck):

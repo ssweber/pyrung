@@ -1,0 +1,363 @@
+"""Forms CLICK v4's editor accepts, which the export once refused.
+
+Each test names the CLICK answer it rests on.  The answer files are:
+- clicknick ``buildbot/jobs/editor-answers/RESULTS.md`` (rows A6 to A10)
+- clicknick ``buildbot/jobs/lc-diff-click/RESULTS.md`` (rows A7-pairs and A-txt-yd)
+- clicknick ``buildbot/jobs/copy-encodings/RESULTS.md``
+- clicknick ``buildbot/jobs/lc-diff-click/RESULTS6.md`` (Copy rows 1 to 8)
+- laddercodec ``tests/fixtures/editor_grids/*.answers.json``
+
+A form CLICK refuses next to an accepted one stays refused.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
+from pyrung.click.ladder import LadderExportError
+from pyrung.click.validation import (
+    CLK_BANK_NOT_WRITABLE,
+    CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_COPY_WIDE_CONSTANT,
+    CLK_MATH_MODE_MIXED,
+    CLK_MATH_RANGE_NOT_CONTIGUOUS,
+    CLK_MATH_WIDE_CONSTANT,
+    CLK_RAND_BOUND_TYPE,
+    validate_click_program,
+)
+from pyrung.core import Word, randint, to_ascii, to_value
+from pyrung.core.program import Program, Rung, blockcopy, copy, fill, math, out
+from tests.click.helpers import round_trip_logic
+
+x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
+
+
+def _program(write) -> Program:
+    prog = Program(strict=False)
+    with prog:
+        with Rung(x[1]):
+            write()
+    return prog
+
+
+def _codes(write) -> set[str]:
+    report = validate_click_program(_program(write), TagMap(), mode="strict")
+    return {f.code for f in report.errors}
+
+
+def _exports_as(write, token: str) -> Program:
+    """*write* has no finding and exports as *token*."""
+    prog = _program(write)
+    assert _codes(write) == set()
+    assert token in pyrung_to_ladder(prog, TagMap()).main_rows[1]
+    return prog
+
+
+def _exports_and_imports_as(write, token: str) -> None:
+    """*write* exports as *token* and imports back to the same rung."""
+    code, before, after = round_trip_logic(_exports_as(write, token), TagMap())
+    assert before == after, code
+
+
+def _refused(write, code: str) -> None:
+    assert code in _codes(write)
+    with pytest.raises(LadderExportError, match=code):
+        pyrung_to_ladder(_program(write), TagMap())
+
+
+# --- An Out coil on SC ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("address", [162, 171, 303, 305, 326])
+def test_an_out_coil_takes_the_sc_bits_clicks_out_picker_lists(address):
+    # editor-answers A6 (SC162, SC171, SC303, SC326) and pickcheck.answers.json (SC305).
+    _exports_and_imports_as(lambda: out(sc[address]), f"out(SC{address})")
+
+
+@pytest.mark.parametrize("address", [1, 77, 307])
+def test_an_out_coil_on_an_sc_click_refuses_is_still_refused(address):
+    # editor-answers A6 (SC1) and pickcheck.answers.json (SC77, SC307): OBJ-003.
+    _refused(lambda: out(sc[address]), CLK_BANK_NOT_WRITABLE)
+
+
+# --- Math into SD and YD ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dest", [sd[29], sd[61], sd[147]], ids=lambda dest: dest.name)
+def test_a_decimal_math_into_a_writable_sd_exports(dest):
+    # editor-answers A9 (SD29) and pickcheck.answers.json (SD61, SD147).
+    _exports_and_imports_as(
+        lambda: math(ds[1] + 1, dest), f"math(DS1 + 1,{dest.name},mode=decimal)"
+    )
+
+
+@pytest.mark.parametrize("dest", [sd[1], sd[62], sd[148]], ids=lambda dest: dest.name)
+def test_a_decimal_math_into_an_sd_click_refuses_is_still_refused(dest):
+    # editor-answers A9 (SD1) and pickcheck.answers.json (SD62, SD148): OBJ-003.
+    _refused(lambda: math(ds[1] + 1, dest), CLK_BANK_NOT_WRITABLE)
+
+
+def test_a_hex_math_into_yd_exports():
+    # editor-answers A10 and math_hex.answers.json: a hex Math takes YD0 and YD1 as its
+    # Result.  The import reads no YD yet.
+    _exports_as(lambda: math(dh[1] + dh[2], yd[1]), "math(DH1 + DH2,YD1,mode=hex)")
+
+
+# --- Copy into YD -----------------------------------------------------------------------
+# The import reads no XD or YD address yet, so these check the export alone.
+
+
+def test_a_copy_into_yd_exports():
+    # copy_single.answers.json: "single DS1 -> YD0" is accepted.
+    _exports_as(lambda: copy(ds[1], yd[1]), "copy(DS1,YD1)")
+
+
+@pytest.mark.parametrize(
+    "convert, token",
+    [(to_value, "copy(TXT1,YD1,convert=to_value)"), (to_ascii, "copy(TXT1,YD1,convert=to_ascii)")],
+    ids=["value", "ascii"],
+)
+def test_a_copy_of_text_into_yd_exports(convert, token):
+    # lc-diff-click A-txt-yd: CLICK offers Copy Character Value and Copy ASCII Code Value.
+    _exports_as(lambda: copy(txt[1], yd[1], convert=convert), token)
+
+
+def test_a_copy_of_a_bit_into_yd_is_still_refused():
+    # copy_single.answers.json: "single C1 -> YD0" is refused (OBJ-024).
+    _refused(lambda: copy(c[1], yd[1]), CLK_COPY_BANK_INCOMPATIBLE)
+
+
+# --- Block copy into SD and between TXT -------------------------------------------------
+
+
+@pytest.mark.parametrize("bank", [ds, dd, dh, df, sd], ids=lambda bank: bank.name)
+def test_a_block_copy_into_sd31_exports(bank):
+    # editor-answers A7 (DS1..DS2) and lc-diff-click A7-pairs (DD, DH, DF, SD).  CLICK sets
+    # the end to SD32 for each, the DD and DF pairs too.
+    name = bank.name
+    _exports_and_imports_as(
+        lambda: blockcopy(bank.select(1, 2), sd.select(31, 32)),
+        f"blockcopy({name}1..{name}2,SD31..SD32)",
+    )
+
+
+def test_a_block_copy_onto_a_read_only_sd_is_still_refused():
+    # editor-answers A7: DS1..DS2 into SD29 is refused (OBJ-018), since SD30 is read-only.
+    _refused(lambda: blockcopy(ds.select(1, 2), sd.select(29, 30)), CLK_BANK_NOT_WRITABLE)
+
+
+def test_a_block_copy_between_txt_exports():
+    # editor-answers A8: TXT1..TXT2 into TXT11 is accepted.
+    _exports_and_imports_as(
+        lambda: blockcopy(txt.select(1, 2), txt.select(11, 12)),
+        "blockcopy(TXT1..TXT2,TXT11..TXT12)",
+    )
+
+
+# --- Hex Math ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bank, token",
+    [(xd, "SUM ( XD1 : XD4 )"), (yd, "SUM ( YD1 : YD4 )")],
+    ids=["XD", "YD"],
+)
+def test_a_sum_over_xd_or_yd_exports(bank, token):
+    # math_hex.answers.json: SUM(XD1:XD8) is accepted.  XD0u sits between XD0 and XD1, so
+    # XD1..XD4 is a run of CLICK addresses with no gap.  The import reads no XD or YD yet.
+    _exports_as(lambda: math(bank.select(1, 4).sum(), dh[100]), f"math({token},DH100,mode=hex)")
+
+
+def test_a_sum_from_xd0_is_still_refused():
+    # CLICK's XD0:XD1 range runs through XD0u (math_hex.answers.json accepts SUM(XD0:XD0u)
+    # and SUM(XD0u:XD1)), and a pyrung block of XD never holds XD0u.
+    _refused(lambda: math(xd.select(0, 1).sum(), dh[100]), CLK_MATH_RANGE_NOT_CONTIGUOUS)
+
+
+def test_a_hex_math_of_minus_one_exports_as_ffffh():
+    # math_hex.answers.json: "hex DH1 = DH1 + FFFFh" is accepted.  A hex Math reads -1 as
+    # FFFFh.
+    _exports_and_imports_as(lambda: math(dh[1] + -1, dh[100]), "math(DH1 + FFFFh,DH100,mode=hex)")
+
+
+def test_a_hex_rand_of_two_dh_exports():
+    # math_hex.answers.json: RAND(DH1,DH2) is accepted.
+    _exports_and_imports_as(
+        lambda: math(randint(dh[1], dh[2]), dh[100]), "math(RAND ( DH1 , DH2 ),DH100,mode=hex)"
+    )
+
+
+def test_a_hex_rand_of_xd_or_yd_is_still_refused():
+    # math_hex.answers.json: RAND(XD1,Ah) and RAND(YD1,Ah) are refused (OBJ-1002).
+    _refused(lambda: math(randint(xd[1], yd[1]), dh[3]), CLK_RAND_BOUND_TYPE)
+
+
+def test_a_hex_rand_of_words_mapped_to_xd_is_still_refused():
+    # math_hex.answers.json: a RAND bound in XD is refused (OBJ-1002), whatever the tag's type.
+    lo, hi, dest = Word("Lo"), Word("Hi"), Word("Dest")
+
+    def write():
+        math(randint(lo, hi), dest)
+
+    tag_map = TagMap([lo.map_to(xd[1]), hi.map_to(xd[2]), dest.map_to(dh[3])])
+    report = validate_click_program(_program(write), tag_map, mode="strict")
+    assert CLK_RAND_BOUND_TYPE in {f.code for f in report.errors}
+
+
+@pytest.mark.parametrize(
+    "write",
+    [lambda: math(ds[1] + 1, yd[1]), lambda: math(dh[1] + 1, sd[29])],
+    ids=["decimal-into-YD", "hex-into-SD"],
+)
+def test_a_math_result_in_the_other_modes_bank_is_still_refused(write):
+    # editor-answers A10 and sc_sd_writable.answers.json: YD is a hex Result and SD a
+    # decimal one.  pyrung makes either Math a mixed one.
+    _refused(write, CLK_MATH_MODE_MIXED)
+
+
+@pytest.mark.parametrize("constant", [65536, 70000, -32769])
+def test_a_hex_math_constant_past_16_bits_is_refused_even_when_allowed(constant):
+    # math_hex.answers.json: 10000h is refused (OBJ-1009).  Export once wrote the low 16
+    # bits (70000 as 1170h), a different number from the one the program reads.
+    write = lambda: math(dh[1] + constant, dh[100])  # noqa: E731
+    assert CLK_MATH_WIDE_CONSTANT in _codes(write)
+    with pytest.raises(LadderExportError, match=f"Constant {constant} does not fit in 16 bits"):
+        pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_MATH_WIDE_CONSTANT,))
+
+
+def test_a_hex_math_constant_with_a_fraction_is_reported():
+    # math_hex.answers.json: CLICK refuses a fraction in a hex Math (OBJ-1001).
+    _refused(lambda: math(dh[1] + 1.5, dh[100]), CLK_MATH_WIDE_CONSTANT)
+
+
+# --- A Fill of one register -------------------------------------------------------------
+
+
+def test_a_fill_of_one_yd_exports_as_the_copy_click_accepts():
+    # A Fill of one register exports as a Copy, and copy_single.answers.json accepts a Copy
+    # into YD0.
+    _exports_as(lambda: fill(5, yd.select(1, 1)), "copy(5h,YD1)")
+
+
+def test_a_fill_of_several_yd_is_still_refused():
+    # CLICK's Fill was not asked about YD, so the Fill rule stays.
+    _refused(lambda: fill(5, yd.select(1, 2)), CLK_BANK_NOT_WRITABLE)
+
+
+# --- Copy of a number into text ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("source, name", [(ds[1], "DS1"), (dd[1], "DD1"), (dh[1], "DH1")])
+def test_a_plain_copy_of_an_integer_into_txt_exports_as_clicks_copy_value(source, name):
+    # copy-encodings: CLICK's dialog opens a DS into TXT on Copy Value with Suppress zero,
+    # which it saves as conversion 1, to_text(suppress_zero=1).  An integer source writes
+    # no Exponential flag, so the check on exponential= never sees one.
+    _exports_and_imports_as(
+        lambda: copy(source, txt[5]),
+        f"copy({name},TXT5,convert=to_text(suppress_zero=1,termination_code=none))",
+    )
+
+
+# --- A constant into a Word -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "write, token",
+    [
+        (lambda: copy(-1, dh[1]), "copy(FFFFh,DH1)"),
+        (lambda: copy(65535, yd[1]), "copy(FFFFh,YD1)"),
+        (lambda: fill(-32768, dh.select(1, 4)), "fill(8000h,DH1..DH4)"),
+    ],
+    ids=["minus-one-into-DH", "65535-into-YD", "fill-minus-32768"],
+)
+def test_a_constant_that_fits_in_16_bits_exports_into_a_word(write, token):
+    # Sam's ruling (2026-11-17): a Copy or Fill constant into DH, XD or YD follows the hex
+    # Math's rule.  -32768..-1 is written as its 16 bits.
+    _exports_as(write, token)
+
+
+@pytest.mark.parametrize(
+    "write, constant, allow",
+    [
+        (lambda: copy(70000, dh[1]), 70000, ()),
+        (lambda: copy(65536, yd[1]), 65536, ()),
+        (lambda: copy(-32769, dh[1]), -32769, ()),
+        (lambda: fill(70000, dh.select(1, 1)), 70000, ()),
+        # A Fill into several YD is refused for the bank too.
+        (lambda: fill(70000, yd.select(1, 2)), 70000, (CLK_BANK_NOT_WRITABLE,)),
+    ],
+    ids=[
+        "copy-70000-into-DH",
+        "copy-65536-into-YD",
+        "copy-minus-32769-into-DH",
+        "fill-one-DH",
+        "fill-YD",
+    ],
+)
+def test_a_constant_past_16_bits_into_a_word_is_refused_even_when_allowed(write, constant, allow):
+    # Sam's ruling (2026-11-17), as for the hex Math: export once wrote 70000 as its low 16
+    # bits (1170h), a different number from the one the program reads.
+    assert CLK_COPY_WIDE_CONSTANT in _codes(write)
+    with pytest.raises(LadderExportError, match=f"Constant {constant} does not fit in 16 bits"):
+        pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_COPY_WIDE_CONSTANT, *allow))
+
+
+def test_a_constant_past_16_bits_into_a_word_mapped_to_dh_is_refused():
+    setpoint = Word("Setpoint")
+    prog = Program(strict=False)
+    with prog:
+        with Rung(x[1]):
+            copy(70000, setpoint)
+    tag_map = TagMap([setpoint.map_to(dh[5])])
+    report = validate_click_program(prog, tag_map, mode="strict")
+    assert CLK_COPY_WIDE_CONSTANT in {f.code for f in report.errors}
+    with pytest.raises(LadderExportError, match="Constant 70000 does not fit in 16 bits"):
+        pyrung_to_ladder(prog, tag_map, allow=(CLK_COPY_WIDE_CONSTANT,))
+
+
+@pytest.mark.parametrize("bank", [dh, yd], ids=lambda bank: bank.name)
+def test_a_fraction_into_a_word_is_left_to_the_export(bank):
+    # copy_single.answers.json: CLICK accepts copy(1.5, DH1), but what it stores there is
+    # unread.  Validation reports nothing, and the export refuses it.
+    write = lambda: copy(1.5, bank[1])  # noqa: E731
+    assert _codes(write) == set()
+    with pytest.raises(LadderExportError, match="is not an integer"):
+        pyrung_to_ladder(_program(write), TagMap())
+
+
+# --- CLICK's Copy answers ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "write, token",
+    [
+        (lambda: copy(ctd[1], df[1]), "copy(CTD1,DF1)"),
+        (lambda: copy(df[1], ctd[1]), "copy(DF1,CTD1)"),
+        (lambda: copy(1.5, dd[1]), "copy(1.5,DD1)"),
+        (lambda: copy(1.5, ctd[1]), "copy(1.5,CTD1)"),
+        (lambda: copy(32768, df[1]), "copy(32768,DF1)"),
+        (lambda: copy(65536, df[1]), "copy(65536,DF1)"),
+        (lambda: copy(df[ds[1]], dd[1]), "copy(DF[DS1],DD1)"),
+        (lambda: copy(dd[ds[1]], df[1]), "copy(DD[DS1],DF1)"),
+        (lambda: copy(ctd[ds[1]], df[1]), "copy(CTD[DS1],DF1)"),
+        (lambda: copy("é", txt[1]), 'copy("é",TXT1)'),
+        (lambda: copy("\t", txt[1]), 'copy("\t",TXT1)'),
+    ],
+    ids=[
+        "CTD-to-DF",
+        "DF-to-CTD",
+        "real-into-DD",
+        "real-into-CTD",
+        "32768-into-DF",
+        "65536-into-DF",
+        "DF-pointer",
+        "DD-pointer",
+        "CTD-pointer",
+        "e-acute-into-TXT",
+        "tab-into-TXT",
+    ],
+)
+def test_a_copy_click_accepts_exports_and_imports(write, token):
+    # RESULTS6.md rows 1c, 2 and 7, and copy-encodings RESULTS.md: CLICK accepts each of these Copies.
+    _exports_and_imports_as(write, token)

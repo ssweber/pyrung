@@ -54,14 +54,25 @@ def test_a_long_run_of_a_wide_rand_equals_stepping() -> None:
     ["faults/rand_unequal_bounds", "store_probe/rand_int_cuts", "store_probe/rand_other_stores"],
 )
 def test_a_wide_rand_case_equals_stepping_at_every_landing(label: str) -> None:
-    """The suite's RANDs past 16 bits, over 30 landings: one over 3 values can land by chance.
-
-    Only the hex Math in ``rand_other_stores`` cuts its bounds and draws from a second site.
-    """
+    """The suite's RANDs past 16 bits, over 30 landings, since one landing on a draw of 3
+    values can match by chance.  None of them cuts its bounds, because the export refuses a
+    hex Math constant past 16 bits.  The test below keeps a cut RAND."""
     group_name, _, case_id = label.partition("/")
     group = next(g for g in [*suite.ALL_GROUPS, *suite.APART_GROUPS] if g.name == group_name)
     case = next(c for c in group.cases if c.id == case_id)
     subject = loop_corpus.case_alone(group, case)
     with loop_corpus.fine_loop():
         plc = PLC(subject.program, dt=loop_corpus.DT)
+        loop_corpus.assert_equals_stepping(plc, lambda: plc.run_for(0.1), times=30)
+
+
+def test_a_narrow_cut_rand_equals_stepping_at_every_landing() -> None:
+    """A hex Math cuts the bounds of RAND ( 70000 , 70002 ) to 4464..4466.  The suite no
+    longer exports one, so a plain program checks it at 30 landings."""
+    word = Word("W")
+    with Program(strict=False) as program:
+        with Rung():
+            math(randint(70000, 70002), word)
+    with loop_corpus.fine_loop():
+        plc = PLC(program, dt=loop_corpus.DT)
         loop_corpus.assert_equals_stepping(plc, lambda: plc.run_for(0.1), times=30)

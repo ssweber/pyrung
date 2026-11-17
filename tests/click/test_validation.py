@@ -1796,6 +1796,15 @@ class TestForLoopCountAndRandBounds:
     def test_bool_constant_bound_is_refused(self):
         assert CLK_RAND_BOUND_TYPE in _finding_codes(self._rand(True, 9, []))
 
+    @pytest.mark.parametrize("block", [td, ctd, sd], ids=["TD", "CTD", "SD"])
+    def test_a_decimal_bound_outside_ds_and_dd_is_refused(self, block):
+        # math_decimal.answers.json: RAND(TD1,10), RAND(CTD1,10) and RAND(SD1,10) are
+        # refused (OBJ-1002).  Only DS and DD are accepted.
+        kind = TagType.DINT if block is ctd else TagType.INT
+        lo = Tag("Lo", kind)
+        report = self._rand(lo, 9, [lo.map_to(block[1])])
+        assert CLK_RAND_BOUND_TYPE in _finding_codes(report)
+
     def test_equal_constant_bounds_are_refused(self):
         report = self._rand(7, 7, [])
         assert [f.code for f in report.errors] == [CLK_RAND_EQUAL_BOUNDS]
@@ -1884,8 +1893,8 @@ class TestCalcPlainArguments:
 
 
 class TestCalcWideConstant:
-    """A decimal CLICK Math keeps each constant whole, and CLICK's editor refuses one
-    past a DD's range (2026-11-11).  A hex Math reads each constant as its low 16 bits."""
+    """CLICK's editor refuses a decimal Math constant past a DD's range (2026-11-11), and a
+    hex Math constant past FFFFh (laddercodec math_hex.answers.json, 2026-11-16)."""
 
     @staticmethod
     def _found(build, dest_type=TagType.DINT):
@@ -1930,15 +1939,16 @@ class TestCalcWideConstant:
         [
             (lambda n, w: w + 70000, TagType.WORD),
             (lambda n, w: randint(1, 70000), TagType.WORD),
-            (lambda n, w: w + -1, TagType.WORD),
+            (lambda n, w: w + -32769, TagType.WORD),
+            (lambda n, w: w + 1.5, TagType.WORD),
         ],
-        ids=["hex", "rand-into-word", "hex-negative"],
+        ids=["hex", "rand-into-word", "hex-negative", "hex-fraction"],
     )
     def test_a_hex_constant_past_16_bits_is_reported(self, build, dest_type):
         found = self._found(build, dest_type)
         assert len(found) == 1
         assert found[0].message.isascii()
-        assert "past 16 bits" in found[0].message
+        assert "not a whole 16-bit value" in found[0].message
 
     @pytest.mark.parametrize(
         "build, dest_type",
@@ -1950,6 +1960,8 @@ class TestCalcWideConstant:
             (lambda n, w: n * 2147483647 + -2147483648, TagType.DINT),
             (lambda n, w: n * 1.0e10, TagType.REAL),
             (lambda n, w: w + 0xFFFF, TagType.WORD),
+            (lambda n, w: w + -1, TagType.WORD),
+            (lambda n, w: w + -32768, TagType.WORD),
             (lambda n, w: randint(70000, 70002), TagType.INT),
             (lambda n, w: randint(70000, 70002), TagType.DINT),
             (lambda n, w: randint(70000, 70002) * 2, TagType.REAL),
@@ -1962,6 +1974,8 @@ class TestCalcWideConstant:
             "dint-edges",
             "float",
             "hex-edge",
+            "hex-minus-one",
+            "hex-negative-edge",
             "rand-into-int",
             "rand-into-dint",
             "rand-into-real",
@@ -1976,10 +1990,10 @@ class TestCalcWideConstant:
         assert "(3000000000, 4000000000)" in found[0].message
         assert "-2147483648..2147483647" in found[0].suggestion
 
-    def test_a_hex_math_reads_a_constant_unsigned(self):
-        (found,) = self._found(lambda n, w: w + -1 + 70000, TagType.WORD)
-        assert "(-1, 70000)" in found.message
-        assert "70000 reads 4464 and -1 reads 65535" in found.message
+    def test_a_hex_math_names_each_constant_it_cannot_write(self):
+        (found,) = self._found(lambda n, w: w + -40000 + 70000, TagType.WORD)
+        assert "(-40000, 70000)" in found.message
+        assert "0h..FFFFh" in found.message
         assert "0..65535" in found.suggestion
 
     def test_a_rand_site_number_is_not_a_constant(self):

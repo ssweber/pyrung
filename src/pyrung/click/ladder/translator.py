@@ -136,13 +136,16 @@ class _TranslatorMixin:
 
     _tag_map: TagMap
 
-    # How integer constants are spelled right now (see _hex_constants):
-    # None = decimal; "wrap" = hex, masked to 16 bits like the Word write it
-    # feeds; "exact" = hex, and a value outside 0..FFFFh is an export error.
-    _hex_constant_mode: Literal["wrap", "exact"] | None = None
+    # How integer constants are spelled right now (see _hex_constants).
+    # - None: decimal.
+    # - "word": hex, for a Copy, Fill or Math into a Word, with -32768..-1 written as its
+    #   16 bits.  Any other value outside 0..FFFFh is an export error, since no CLICK hex
+    #   constant holds it.
+    # - "exact": hex.  A value outside 0..FFFFh is an export error.
+    _hex_constant_mode: Literal["word", "exact"] | None = None
 
     @contextmanager
-    def _hex_constants(self, mode: Literal["wrap", "exact"] | None) -> Iterator[None]:
+    def _hex_constants(self, mode: Literal["word", "exact"] | None) -> Iterator[None]:
         """Spell integer constants rendered inside the block in CLICK hex.
 
         CLICK reads digits typed into a hex context as hex and appends ``h``
@@ -184,6 +187,15 @@ class _TranslatorMixin:
                     message=(
                         f"Constant {value} is outside 0..65535; CLICK hex constants "
                         "are 0h..FFFFh, so this compare cannot be written in CLICK."
+                    ),
+                    source=source,
+                )
+            if mode == "word" and not -0x8000 <= value <= 0xFFFF:
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"Constant {value} does not fit in 16 bits. A CLICK hex constant is "
+                        "0h..FFFFh, so this cannot be written in CLICK."
                     ),
                     source=source,
                 )
@@ -835,6 +847,9 @@ def click_real_literal(value: float) -> str | None:
     Magnitudes Python writes positionally stay positional (``3.14``,
     ``100.0``); the rest use CLICK's exponent form with a decimal point and
     uppercase ``E`` (``3.402823E+38``, ``1.0E-10``).
+
+    From 1e7 up CLICK saves the E form (12345678.0 saves as 1.234568E+07), which
+    this does not write yet. The roadmap holds that change.
     """
     if not math.isfinite(value):
         return None

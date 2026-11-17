@@ -53,15 +53,22 @@ class _ValidationMixin:
 
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
 
-    def _run_precheck(self, allow: Collection[str] = ()) -> None:
+    def _run_precheck(self, allow: Collection[str] = ()) -> list[str]:
+        """Refuse the export on any finding not allowed.
+
+        Returns the warnings to give once the export succeeds, so a store the render
+        then refuses gets no warning before its error.
+        """
         report = self._tag_map.validate(self._program, mode="strict")
         # We intentionally fail on warnings and hints to keep export deterministic.
         findings = [*report.errors, *report.warnings, *report.hints]
         # The step count is the whole project's, and an estimate: rows over the
-        # limit still render faithfully, so it warns instead of refusing.  So does
-        # a text past its bank or block, a store the CLICK editor takes.  A pointer that
-        # can run past its bank warns too, as the CLICK takes the write.  A rung whose contacts
-        # feed only a NOP warns too, because CLICK keeps it.
+        # limit still render faithfully, so it warns instead of refusing.  So does a
+        # text past its block, which a CLICK writes on into the bank.  A text past its
+        # bank warns too, unless it is a constant into TXT, which the render refuses.
+        # CLICK's Copy accepts a register source, which saves no end address.  A
+        # pointer that can run past its bank warns too, as the CLICK takes the write.
+        # A rung whose contacts feed only a NOP warns too, because CLICK keeps it.
         warn_only = (
             CLK_STEP_LIMIT,
             CLK_TEXT_PAST_BANK,
@@ -70,14 +77,12 @@ class _ValidationMixin:
             CLK_NOP_NO_COIL,
         )
         # The step limit warns whatever *allow* holds.
-        for finding in findings:
-            if finding.code in warn_only and (
-                finding.code == CLK_STEP_LIMIT or finding.code not in allow
-            ):
-                warnings.warn(
-                    f"{finding.code}: {finding.message} {finding.suggestion or ''}".rstrip(),
-                    stacklevel=5,
-                )
+        pending = [
+            f"{finding.code}: {finding.message} {finding.suggestion or ''}".rstrip()
+            for finding in findings
+            if finding.code in warn_only
+            and (finding.code == CLK_STEP_LIMIT or finding.code not in allow)
+        ]
         # A nested call is refused below, with its source location.
         findings = [f for f in findings if f.code not in (*warn_only, CLK_NESTED_CALL, *allow)]
         if findings:
@@ -100,6 +105,13 @@ class _ValidationMixin:
                     rung,
                     path=f"subroutine[{subroutine_name}].rung[{rung_index}]",
                 )
+        return pending
+
+    @staticmethod
+    def _give_precheck_warnings(pending: list[str]) -> None:
+        for message in pending:
+            # Five frames up is the user's pyrung_to_ladder() call.
+            warnings.warn(message, stacklevel=5)
 
     def _assert_no_nested_subroutine_calls(self, rung: Rung, *, path: str) -> None:
         for instruction_index, instruction in enumerate(rung._instructions):

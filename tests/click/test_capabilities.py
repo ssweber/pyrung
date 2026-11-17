@@ -96,7 +96,7 @@ def test_role_compatibility(role: InstructionRole, ok_bank: str, bad_bank: str):
         ("single", "DS", "TXT", True),
         ("single", "DS", "C", False),
         ("block", "TXT", "DS", True),
-        ("block", "TXT", "TXT", False),
+        ("block", "TXT", "TXT", True),
         ("fill", "TXT", "TXT", True),
         ("fill", "TXT", "DS", False),
         ("pack_bits", "X", "DS", True),
