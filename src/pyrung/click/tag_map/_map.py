@@ -48,6 +48,11 @@ _RESERVED_SYSTEM_HARDWARE_KEYS: frozenset[int] = frozenset(
 _BLOCK_SLOT_OWNER_RE = re.compile(r"^block slot (?P<block_name>.+)\[(?P<addr>[0-9]+)\]$")
 
 
+def unmapped_tag_text(name: str) -> str:
+    """Return the message for a tag that has no CLICK address."""
+    return f"Tag {name!r} is not mapped to a CLICK address. Map it in your TagMap."
+
+
 class TagMap:
     """Maps logical Tags and Blocks to Click hardware addresses.
 
@@ -177,9 +182,10 @@ class TagMap:
                 block_entry = self._build_block_entry(source, target)
                 if len(block_entry.logical_addresses) > len(block_entry.hardware_addresses):
                     raise ValueError(
-                        f"Block size mismatch: logical block {source.name!r} has "
-                        f"{len(block_entry.logical_addresses)} slots but hardware range has "
-                        f"{len(block_entry.hardware_addresses)} slots."
+                        f"Block {source.name!r} has {len(block_entry.logical_addresses)} "
+                        "slots, but the CLICK range it maps to has "
+                        f"{len(block_entry.hardware_addresses)}. Map it to a range with at least "
+                        f"{len(block_entry.logical_addresses)} addresses."
                     )
 
                 self._validate_block_mapping(block_entry)
@@ -214,7 +220,8 @@ class TagMap:
                 continue
 
             raise ValueError(
-                "Unsupported mapping pair. Supported mappings are Tag->Tag and Block->BlockRange."
+                f"Cannot map {type(source).__name__} to {type(target).__name__}. "
+                "Map a tag to a tag, or a block to a block range."
             )
 
         if self._include_system:
@@ -268,19 +275,23 @@ class TagMap:
         """Resolve a logical source to a hardware address string."""
         if isinstance(source, str):
             if index is not None:
-                raise TypeError("Standalone tag resolution does not accept index.")
+                raise TypeError(
+                    "resolve() takes no index for a single tag. Pass an index only with a Block."
+                )
             entry = self._tag_forward.get(source)
             if entry is None:
                 entry = self._system_tag_forward.get(source)
             if entry is None:
                 entry = self._system_alias_forward.get(source)
             if entry is None:
-                raise KeyError(f"No mapping for standalone tag {source!r}.")
+                raise KeyError(unmapped_tag_text(source))
             return self._hardware_address_name(entry.hardware)
 
         if isinstance(source, Tag):
             if index is not None:
-                raise TypeError("Standalone tag resolution does not accept index.")
+                raise TypeError(
+                    "resolve() takes no index for a single tag. Pass an index only with a Block."
+                )
             entry = self._tag_forward.get(source.name)
             if entry is None:
                 entry = self._system_tag_forward.get(source.name)
@@ -291,7 +302,7 @@ class TagMap:
                 hardware = self._block_slot_forward_by_name.get(source.name)
                 if hardware is not None:
                     return self._hardware_address_name(hardware)
-                raise KeyError(f"No mapping for standalone tag {source.name!r}.")
+                raise KeyError(unmapped_tag_text(source.name))
             return self._hardware_address_name(entry.hardware)
 
         if isinstance(source, Block):
@@ -694,23 +705,24 @@ class TagMap:
         expected_type = _tag_type_for_memory_type(memory_type)
         if logical.type != expected_type:
             raise ValueError(
-                f"Type mismatch for tag {logical.name!r}: logical {logical.type.name} "
-                f"cannot map to {memory_type} ({expected_type.name})."
+                f"Tag {logical.name!r} is {logical.type.name}, and {memory_type} holds "
+                f"{expected_type.name}. Map it to an address that holds {logical.type.name}."
             )
 
     @classmethod
     def _validate_block_mapping(cls, entry: _BlockEntry) -> None:
         if not entry.hardware_addresses:
             raise ValueError(
-                f"Block size mismatch: hardware range for {entry.logical.name!r} has no valid addresses."
+                f"The CLICK range for block {entry.logical.name!r} has no valid addresses."
             )
         sample_tag = entry.hardware.block._tag_at(entry.hardware_addresses[0])
         memory_type, _ = cls._parse_hardware_tag(sample_tag)
         expected_type = _tag_type_for_memory_type(memory_type)
         if entry.logical.type != expected_type:
             raise ValueError(
-                f"Type mismatch for block {entry.logical.name!r}: logical {entry.logical.type.name} "
-                f"cannot map to {memory_type} ({expected_type.name})."
+                f"Block {entry.logical.name!r} is {entry.logical.type.name}, and {memory_type} "
+                f"holds {expected_type.name}. Map it to a range that holds "
+                f"{entry.logical.type.name}."
             )
 
     @staticmethod
@@ -729,7 +741,7 @@ class TagMap:
                 existing_logical = used_hardware_logical[addr_key]
                 if existing_logical in compatible_logical_names:
                     return
-            raise ValueError(f"Hardware address conflict between {existing} and {owner}.")
+            raise ValueError(f"{existing} and {owner} map to the same CLICK address.")
         used_hardware[addr_key] = owner
         used_hardware_logical[addr_key] = logical_name
 
@@ -784,7 +796,10 @@ class TagMap:
                 return provenance
 
             if existing.kind != kind or existing.runtime is not runtime:
-                raise ValueError(f"Duplicate structured mapping name {name!r}.")
+                raise ValueError(
+                    f"Two structures have the name {name!r}. Give each udt or named_array its "
+                    "own name."
+                )
             return provenance
 
         def record_named_array_span(logical: Tag | Block, memory_type: str, address: int) -> None:
@@ -910,8 +925,7 @@ class TagMap:
                 name, owner=owner, existing_owner=existing_owner
             )
             raise ValueError(
-                f"Duplicate user logical tag name {name!r} (from {owner}; already used by "
-                f"{existing_owner}).{hint}"
+                f"Two tags have the name {name!r}. {owner} and {existing_owner} both use it.{hint}"
             )
         self._user_logical_name_owners[name] = owner
 
@@ -932,8 +946,8 @@ class TagMap:
                 existing = seen.get(nickname)
                 if existing is not None and existing is not slot:
                     raise ValueError(
-                        f"Effective nickname collision: {nickname!r} is used by "
-                        f"{existing.name!r} and {slot.name!r}."
+                        f"Two different tags have the name {nickname!r}. CLICK needs each "
+                        "nickname to be unique. Rename one of them."
                     )
                 seen[nickname] = slot
 

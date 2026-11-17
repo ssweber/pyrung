@@ -1101,11 +1101,12 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
 
     assert list(exc_info.value.issues) == [
         {
-            "path": "main.rung[0].instruction[0](CalcInstruction).instruction.expression",
+            "path": "main.rung[1].instruction[0](CalcInstruction).instruction.expression",
             "message": (
-                "CLK_MATH_MODE_MIXED: math() mixes WORD (hex-family) and non-WORD "
-                "(decimal-family) operands at "
-                "main.rung[0].instruction[0](CalcInstruction).instruction.expression."
+                "CLK_MATH_MODE_MIXED: math() at "
+                "main.rung[1].instruction[0](CalcInstruction).instruction.expression mixes "
+                "WORD operands with other operands. CLICK runs a Math in hex or in decimal, "
+                "not both."
             ),
             "source_file": None,
             "source_line": None,
@@ -1298,10 +1299,10 @@ def test_precheck_and_issue_payload():
 
     assert list(exc_info.value.issues) == [
         {
-            "path": "main.rung[0].instruction[0](CopyInstruction).instruction.source",
+            "path": "main.rung[1].instruction[0](CopyInstruction).instruction.source",
             "message": (
                 "CLK_EXPR_ONLY_IN_MATH: Expression used outside a math() instruction at "
-                "main.rung[0].instruction[0](CopyInstruction).instruction.source."
+                "main.rung[1].instruction[0](CopyInstruction).instruction.source."
             ),
             "source_file": None,
             "source_line": None,
@@ -1333,11 +1334,11 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
 
     assert list(exc_info.value.issues) == [
         {
-            "path": "main.rung[0].instruction[0](OutInstruction).instruction.target",
+            "path": "main.rung[1].instruction[0](OutInstruction).instruction.target",
             "message": (
-                "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS: Immediate coil range must map to "
-                "contiguous addresses at "
-                "main.rung[0].instruction[0](OutInstruction).instruction.target."
+                "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS: immediate() on a coil range at "
+                "main.rung[1].instruction[0](OutInstruction).instruction.target needs "
+                "consecutive Y addresses."
             ),
             "source_file": None,
             "source_line": None,
@@ -1360,7 +1361,7 @@ def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
 
     assert [issue["message"] for issue in exc_info.value.issues] == [
         "CLK_IMMEDIATE_CONTACT_MUST_BE_X: Immediate contact on Sensor (C1) at "
-        "main.rung[0].condition; an immediate contact must read an input mapped to X."
+        "main.rung[1].condition; an immediate contact must read an input mapped to X."
     ]
 
 
@@ -1386,10 +1387,11 @@ def test_immediate_in_copy_fails_with_context_diagnostic():
         pyrung_to_ladder(logic, mapping)
 
     assert exc_info.value.issues[0] == {
-        "path": "main.rung[0].instruction[0](CopyInstruction).instruction.source",
+        "path": "main.rung[1].instruction[0](CopyInstruction).instruction.source",
         "message": (
-            "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED: Immediate wrapper is not allowed at "
-            "main.rung[0].instruction[0](CopyInstruction).instruction.source."
+            "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED: immediate() is not allowed at "
+            "main.rung[1].instruction[0](CopyInstruction).instruction.source. CLICK accepts "
+            "immediate() only on a contact or a coil."
         ),
         "source_file": None,
         "source_line": None,
@@ -1418,8 +1420,11 @@ def test_nested_subroutine_call_issue_includes_source_location():
         pyrung_to_ladder(logic, mapping)
 
     issue = exc_info.value.issues[0]
-    assert issue["path"] == "subroutine[outer].rung[0].instruction[0](CallInstruction)"
-    assert issue["message"] == "Nested subroutine calls are not supported for Click export."
+    assert issue["path"] == "subroutine[outer].rung[1].instruction[0](CallInstruction)"
+    assert issue["message"] == (
+        "This call() is inside a subroutine. CLICK does not support nested "
+        "subroutine calls. Call both subroutines from the main program."
+    )
     assert isinstance(issue["source_file"], str)
     assert Path(issue["source_file"]).samefile(__file__)
     assert isinstance(issue["source_line"], int)
@@ -2357,11 +2362,12 @@ def test_to_text_exponential_from_an_integer_is_refused(source):
     )
     with pytest.raises(
         LadderExportError,
-        match=r"CLK_COPY_CONVERTER_INCOMPATIBLE.*needs a Real source \(DF or a Real constant\)",
+        match=r"CLK_COPY_CONVERTER_INCOMPATIBLE.*needs a Real source, such as a DF or a Real",
     ):
         pyrung_to_ladder(logic, mapping)
     with pytest.raises(
-        LadderExportError, match=rf"needs a Real source \(DF or a Real constant\), got {source}\."
+        LadderExportError,
+        match=rf"needs a Real source, such as a DF or a Real constant\. The source here is {source}\.",
     ):
         pyrung_to_ladder(logic, mapping, validate=False)
 
@@ -2555,8 +2561,11 @@ def test_branch_rendered_height_over_32_rows_raises_clear_error():
         pyrung_to_ladder(logic, TagMap(mapping, include_system=False))
 
     issue = exc_info.value.issues[0]
-    assert issue["path"] == "main.rung[0]"
-    assert issue["message"] == "Rendered rung exceeds Click's 32-row limit."
+    assert issue["path"] == "main.rung[1]"
+    assert re.fullmatch(
+        r"This rung draws \d+ rows, and CLICK allows 32\. Split it into smaller rungs\.",
+        str(issue["message"]),
+    )
     assert isinstance(issue["source_file"], str)
     assert Path(issue["source_file"]).samefile(__file__)
     assert isinstance(issue["source_line"], int)
@@ -2772,7 +2781,7 @@ def test_one_register_fill_exports_a_copy_of_the_same_value(build, token):
 def test_one_register_fill_into_text_from_a_number_register_is_still_refused():
     # A Fill accepts no number register into TXT. A one-register Fill must pass
     # the Fill table as well as the Copy table.
-    with pytest.raises(LadderExportError, match="Copy operation fill is incompatible"):
+    with pytest.raises(LadderExportError, match=r"CLICK cannot fill\(\) from DS to TXT"):
         _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5)))
 
 

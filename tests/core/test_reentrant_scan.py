@@ -33,7 +33,7 @@ from pyrung.core.runner import PLC, _may_be_called_again
 Cnt, X, Seen, Patched = Int("Cnt"), Int("X"), Int("Seen"), Int("Patched")
 NEVER = Bool("Never")
 
-REFUSAL = "run_function called step"
+REFUSAL = "run_function or run_enabled_function called step"
 
 SCANNERS: dict[str, Callable[[Any], Any]] = {
     "step": lambda plc: plc.step(),

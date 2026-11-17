@@ -26,7 +26,7 @@ def _contact_tag(value: Tag | ImmediateRef) -> Tag:
     if isinstance(value, ImmediateRef):
         if not isinstance(value.value, Tag):
             raise TypeError(
-                f"Immediate contact operand must wrap a Tag. Got {type(value.value).__name__}."
+                f"Immediate contact requires a Tag operand. Got {type(value.value).__name__}."
             )
         return value.value
     return value
@@ -445,8 +445,8 @@ def _as_condition(cond: object) -> Condition:
         if cond.type in (TagType.INT, TagType.DINT):
             return IntTruthyCondition(cond)
         raise TypeError(
-            f"Tag '{cond.name}' of type {cond.type.name} cannot be used directly as condition. "
-            "Use comparison operators: tag == value, tag > 0, etc."
+            f"Tag '{cond.name}' is {cond.type.name}, so it cannot be a condition by itself. "
+            "Compare it instead, as in tag == value or tag > 0."
         )
     if isinstance(cond, Condition):
         return cond

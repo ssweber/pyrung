@@ -1196,15 +1196,21 @@ def _out_target(target: Tag | ImmediateRef, func_name: str, *, immediate: bool) 
     return tag
 
 
-def _out_phase(phase: Any, func_name: str, side: str) -> tuple[Tag, Tag, Tag | int] | None:
-    """Unpack an ``(timer, preset)`` phase into its Done, Acc and preset."""
+def _out_phase(
+    phase: Any, func_name: str, side: str, *, preset_label: str | None = None
+) -> tuple[Tag, Tag, Tag | int] | None:
+    """Unpack an ``(timer, preset)`` phase into its Done, Acc and preset.
+
+    *preset_label* names the preset in an error when the caller's argument is not
+    called ``{side}=``.
+    """
     if phase is None:
         return None
     if not isinstance(phase, tuple) or len(phase) != 2:
         raise TypeError(f"{func_name}() {side}= takes (timer, preset), got {phase!r}.")
     timer, preset = phase
     done_bit, accumulator = _extract_done_acc(timer, func_name)
-    validate_preset(preset, label=f"{func_name}() {side} preset")
+    validate_preset(preset, label=preset_label or f"{func_name}() {side} preset")
     return done_bit, accumulator, preset
 
 
@@ -1358,7 +1364,7 @@ def timed(
         maintained: Keep the target on while the rung stays true after the on time.
     """
     _out_target(target, "timed", immediate=False)
-    phase = _out_phase((timer, preset), "timed", "on")
+    phase = _out_phase((timer, preset), "timed", "on", preset_label="timed() preset")
     assert phase is not None
     canonical_unit = normalize_unit(unit)
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("timed")

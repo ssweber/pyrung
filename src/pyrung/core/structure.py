@@ -196,7 +196,7 @@ class InstanceView:
             return cached
         block = self._owner._blocks.get(field_name)
         if block is None:
-            raise AttributeError(f"{type(self._owner).__name__!s} has no field {field_name!r}.")
+            raise AttributeError(f"{self._owner.name} has no field {field_name!r}.")
         tag = block[self._index]
         self._tag_cache[field_name] = tag
         return tag
@@ -384,15 +384,15 @@ class _StructRuntime:
 
     def __getitem__(self, index: int) -> InstanceView:
         if not isinstance(index, int):
-            raise TypeError(f"{type(self).__name__} index must be an int.")
+            raise TypeError(f"The index of {self.name} must be an int, got {type(index).__name__}.")
         if index < 1 or index > self.count:
-            raise IndexError(f"{type(self).__name__} index {index} out of range 1..{self.count}.")
+            raise IndexError(f"{self.name} has no instance {index}. Use 1..{self.count}.")
         return InstanceView(self, index)
 
     def __getattr__(self, field_name: str) -> Block | LiveTag:
         block = self._blocks.get(field_name)
         if block is None:
-            raise AttributeError(f"{type(self).__name__} has no field {field_name!r}.")
+            raise AttributeError(f"{self.name} has no field {field_name!r}.")
         if self.count == 1:
             return block[1]
         return block
@@ -435,7 +435,7 @@ class _DoneAccRuntime(_StructRuntime):
             unknown = set(retentive) - {"Done", "Acc"}
             if unknown:
                 fields = ", ".join(sorted(unknown))
-                raise ValueError(f"Unknown Timer/Counter retentive fields: {fields}.")
+                raise ValueError(f"You can set retentive only on Done and Acc, not on {fields}.")
             field_specs = tuple(
                 replace(spec, retentive=bool(retentive[spec.name]))
                 if spec.name in retentive
@@ -459,7 +459,7 @@ class _DoneAccRuntime(_StructRuntime):
             unknown = set(nicknames) - {"Done", "Acc"}
             if unknown:
                 fields = ", ".join(sorted(unknown))
-                raise ValueError(f"Unknown Timer/Counter nickname fields: {fields}.")
+                raise ValueError(f"You can set a nickname only on Done and Acc, not on {fields}.")
             for field_name, nickname in nicknames.items():
                 if not isinstance(nickname, str) or nickname == "":
                     raise ValueError(
@@ -472,7 +472,7 @@ class _DoneAccRuntime(_StructRuntime):
             unknown = set(comments) - {"Done", "Acc"}
             if unknown:
                 fields = ", ".join(sorted(unknown))
-                raise ValueError(f"Unknown Timer/Counter comment fields: {fields}.")
+                raise ValueError(f"You can set a comment only on Done and Acc, not on {fields}.")
             for field_name, comment in comments.items():
                 if not isinstance(comment, str):
                     raise ValueError(f"Timer/Counter comment for {field_name} must be a string.")
@@ -829,12 +829,13 @@ def _build_field_spec(
         if raw_default.type is not None and raw_default.type != type:
             if source == "named_array":
                 raise ValueError(
-                    f"named_array field {field_name!r} cannot declare type; "
-                    "use the decorator base_type."
+                    f"named_array field {field_name!r} declares type {raw_default.type.name}, "
+                    f"but the named_array holds {type.name}. Remove the type from Field(), "
+                    "or change base_type."
                 )
             raise ValueError(
-                f"udt field {field_name!r} type mismatch: annotation resolves to {type.name}, "
-                f"but Field.type is {raw_default.type.name}."
+                f"udt field {field_name!r} is annotated as {type.name}, but its Field() "
+                f"sets type {raw_default.type.name}. Make the two agree."
             )
         retentive = raw_default.retentive
         default_spec = raw_default.default
@@ -880,7 +881,10 @@ def _build_field_spec(
 
 
 def _resolve_annotation(annotation: object, field_name: str) -> TagType:
-    """Resolve an annotation/base type to TagType."""
+    """Resolve an annotation/base type to TagType.
+
+    *field_name* is ``"base_type"`` when ``named_array()`` passes its base type.
+    """
     if isinstance(annotation, TagType):
         return annotation
 
@@ -889,10 +893,7 @@ def _resolve_annotation(annotation: object, field_name: str) -> TagType:
         resolved = _STRING_TYPE_MAP.get(token.lower())
         if resolved is not None:
             return resolved
-        raise TypeError(
-            f"Field {field_name!r} annotation {annotation!r} is not supported. "
-            "Use Bool/Int/Dint/Real/Word/Char, bool/int/float/str, or IEC names."
-        )
+        raise TypeError(_unsupported_annotation(annotation, field_name))
 
     if isinstance(annotation, type) and issubclass(annotation, _TagTypeBase):
         return annotation._tag_type
@@ -901,9 +902,18 @@ def _resolve_annotation(annotation: object, field_name: str) -> TagType:
     if primitive is not None:
         return primitive
 
-    raise TypeError(
-        f"Field {field_name!r} annotation {annotation!r} is not supported. "
-        "Use Bool/Int/Dint/Real/Word/Char, bool/int/float/str, or IEC names."
+    raise TypeError(_unsupported_annotation(annotation, field_name))
+
+
+def _unsupported_annotation(annotation: object, field_name: str) -> str:
+    subject = (
+        f"named_array base_type {annotation!r}"
+        if field_name == "base_type"
+        else f"Field {field_name!r} annotation {annotation!r}"
+    )
+    return (
+        f"{subject} is not a tag type. "
+        "Use Bool, Int, Dint, Real, Word or Char, or bool, int, float or str."
     )
 
 
@@ -957,8 +967,8 @@ def _validate_field_names(field_names: Iterable[str]) -> None:
 def _validate_auto_default_allowed(field_name: str, default: object, type: TagType) -> None:
     if isinstance(default, AutoDefault) and type not in _NUMERIC_TYPES:
         raise ValueError(
-            f"Field {field_name!r} uses auto() but type {type.name} is not numeric. "
-            "Supported types: INT, DINT, WORD."
+            f"Field {field_name!r} uses auto(), but auto() works only on INT, DINT and "
+            f"WORD fields. This field is {type.name}."
         )
 
 
@@ -967,8 +977,8 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
     for spec in field_specs:
         if spec.physical is not None and spec.physical.kind != "delay" and spec.link is None:
             raise ValueError(
-                f"Field {spec.name!r}: physical {spec.physical.kind} requires link "
-                "(it answers a linked command)."
+                f"Field {spec.name!r}: physical {spec.physical.kind} requires link. "
+                "Set link= to the command that this feedback answers."
             )
         if spec.link is None:
             continue

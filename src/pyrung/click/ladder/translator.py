@@ -12,7 +12,25 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypeGuard
 from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import HEX_CONSTANT_BANKS
-from pyrung.click.validation.findings import _bank_pointer_advice
+from pyrung.click.tag_map._map import unmapped_tag_text
+from pyrung.click.validation.findings import (
+    CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+    CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
+    CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
+    CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
+    CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
+    CLK_PTR_EXPR_NOT_ALLOWED,
+    _bank_pointer_advice,
+    _build_suggestion,
+    immediate_coil_not_y_text,
+    immediate_coil_operand_text,
+    immediate_coil_range_gap_text,
+    immediate_edge_text,
+    immediate_misplaced_text,
+    pointer_block_range_text,
+    pointer_expression_text,
+    pointer_offset_text,
+)
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -135,6 +153,11 @@ _COMPARE_OPS: dict[type[Condition], str] = {
 class _TranslatorMixin:
     """Render contacts, operands, expressions, and condition fragments."""
 
+    def _with_advice(self, message: str, code: str) -> str:
+        """Return *message* followed by the advice that portability gives for *code*."""
+        advice = _build_suggestion(code, None, self._tag_map)
+        return f"{message} {advice}" if advice else message
+
     _tag_map: TagMap
 
     # How integer constants are spelled right now (see _hex_constants).
@@ -236,7 +259,9 @@ class _TranslatorMixin:
                 condition.tag,
                 path=f"{path}.tag",
                 source=condition,
-                message="Immediate edge contacts are not supported in Click ladder export.",
+                message=self._with_advice(
+                    immediate_edge_text(), CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED
+                ),
             )
             return self._fn(
                 "rise",
@@ -247,7 +272,9 @@ class _TranslatorMixin:
                 condition.tag,
                 path=f"{path}.tag",
                 source=condition,
-                message="Immediate edge contacts are not supported in Click ladder export.",
+                message=self._with_advice(
+                    immediate_edge_text(), CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED
+                ),
             )
             return self._fn(
                 "fall",
@@ -326,7 +353,10 @@ class _TranslatorMixin:
         if isinstance(value, Condition):
             self._raise_issue(
                 path=path,
-                message="Condition values are not supported in comparisons.",
+                message=(
+                    "One side of this comparison is a condition. Compare against a tag or a "
+                    "constant."
+                ),
                 source=source,
             )
         return self._render_operand(value, path=path, source=source)
@@ -344,7 +374,9 @@ class _TranslatorMixin:
             if not allow_immediate:
                 self._raise_issue(
                     path=path,
-                    message="Immediate wrapper is not supported in this Click export context.",
+                    message=self._with_advice(
+                        immediate_misplaced_text(), CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED
+                    ),
                     source=source,
                 )
             return self._render_immediate_operand(
@@ -362,19 +394,24 @@ class _TranslatorMixin:
         if isinstance(value, IndirectExprRef):
             self._raise_issue(
                 path=path,
-                message="Indirect expression pointers are not supported in Click ladder export.",
+                message=self._with_advice(pointer_expression_text(), CLK_PTR_EXPR_NOT_ALLOWED),
                 source=source,
             )
         if isinstance(value, IndirectBlockRange):
             self._raise_issue(
                 path=path,
-                message="Indirect block ranges are not supported in Click ladder export.",
+                message=self._with_advice(
+                    pointer_block_range_text(), CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED
+                ),
                 source=source,
             )
         if isinstance(value, CopyConverter):
             self._raise_issue(
                 path=path,
-                message="CopyConverter should not appear as a direct operand; use convert= keyword.",
+                message=(
+                    "A converter such as to_text() is an operand here. Pass it as the "
+                    "convert= argument of copy()."
+                ),
                 source=source,
             )
         if isinstance(value, Expression):
@@ -458,7 +495,10 @@ class _TranslatorMixin:
                 if parsed is None or parsed[0] != "Y":
                     self._raise_issue(
                         path=path,
-                        message="Immediate coil target must resolve to Y bank.",
+                        message=self._with_advice(
+                            immediate_coil_not_y_text(found=address),
+                            CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+                        ),
                         source=source,
                     )
                 return self._fn("immediate", address)
@@ -480,7 +520,10 @@ class _TranslatorMixin:
                     if parsed is None or parsed[0] != "Y":
                         self._raise_issue(
                             path=path,
-                            message="Immediate coil targets must resolve to Y bank.",
+                            message=self._with_advice(
+                                immediate_coil_not_y_text(found=address),
+                                CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+                            ),
                             source=source,
                         )
                 compact = _compact_contiguous_range(addresses)
@@ -489,19 +532,15 @@ class _TranslatorMixin:
                     compact,
                     path=path,
                     source=source,
-                    message=(
-                        "Immediate-wrapped coil ranges must map to contiguous "
-                        "addresses for Click export."
+                    message=self._with_advice(
+                        immediate_coil_range_gap_text(), CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS
                     ),
                 )
                 return self._fn("immediate", compact)
 
             self._raise_issue(
                 path=path,
-                message=(
-                    "Immediate coil operand must wrap Tag or BlockRange, "
-                    f"got {type(wrapped).__name__}."
-                ),
+                message=immediate_coil_operand_text(type(wrapped).__name__),
                 source=source,
             )
 
@@ -523,8 +562,9 @@ class _TranslatorMixin:
                 self._raise_issue(
                     path=path,
                     message=(
-                        "to_text(exponential=True) needs a Real source (DF or a Real "
-                        f"constant), got {source_text}. An integer source takes suppress_zero only."
+                        "to_text(exponential=True) needs a Real source, such as a DF or a "
+                        f"Real constant. The source here is {source_text}. Remove "
+                        "exponential=True, or use suppress_zero for an integer source."
                     ),
                     source=instruction,
                 )
@@ -725,8 +765,9 @@ class _TranslatorMixin:
                 self._raise_issue(
                     path=path,
                     message=(
-                        f"Indirect block {indirect.block.name!r} must have an affine mapping "
-                        "for Click ladder export."
+                        f"A pointer cannot address block {indirect.block.name!r} in CLICK, "
+                        "because its slots do not map to consecutive CLICK addresses. Map the "
+                        "block to one unbroken CLICK range."
                     ),
                     source=source,
                 )
@@ -748,7 +789,10 @@ class _TranslatorMixin:
             if indirect.block.name not in _CLICK_BANK_NAMES:
                 self._raise_issue(
                     path=path,
-                    message=f"Indirect block {indirect.block.name!r} is not mapped in TagMap.",
+                    message=(
+                        f"Block {indirect.block.name!r} has no CLICK address. Map it in your "
+                        "TagMap."
+                    ),
                     source=source,
                 )
             bank = indirect.block.name
@@ -756,7 +800,6 @@ class _TranslatorMixin:
 
         pointer = self._resolve_tag(indirect.pointer, path=f"{path}.pointer", source=source)
         if offset != 0:
-            sign = "+" if offset > 0 else "-"
             advice = _bank_pointer_advice(
                 indirect.block.name,
                 indirect.pointer.name,
@@ -766,8 +809,9 @@ class _TranslatorMixin:
             self._raise_issue(
                 path=path,
                 message=(
-                    f"CLK_PTR_BLOCK_OFFSET: CLICK takes only {bank}[pointer], not "
-                    f"{bank}[{pointer}{sign}{abs(offset)}]. {advice}"
+                    "CLK_PTR_BLOCK_OFFSET: "
+                    f"{pointer_offset_text(indirect.block.name, indirect.pointer.name, offset)} "
+                    f"{advice}"
                 ),
                 source=source,
             )
@@ -814,7 +858,7 @@ class _TranslatorMixin:
                 return tag.name
             self._raise_issue(
                 path=path,
-                message=f"Tag {tag.name!r} is not mapped in TagMap.",
+                message=unmapped_tag_text(tag.name),
                 source=source,
             )
 

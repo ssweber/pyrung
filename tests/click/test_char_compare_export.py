@@ -179,7 +179,7 @@ def test_a_window_in_a_branch_and_a_pin_is_checked_once_each():
         include_system=False,
     )
     found = _window_codes(prog, mapping)
-    assert [f.location for f in found] == ["main rung 0", "main rung 1"]
+    assert [f.location for f in found] == ["main rung 1", "main rung 2"]
 
 
 def test_a_compare_built_after_its_mapping_is_not_a_finding():
@@ -330,7 +330,7 @@ def test_a_window_on_a_box_rung_is_one_finding():
         include_system=False,
     )
     found = _window_codes(prog, mapping)
-    assert [f.location for f in found] == ["main rung 0", "main rung 1", "main rung 2"]
+    assert [f.location for f in found] == ["main rung 1", "main rung 2", "main rung 3"]
 
 
 def test_a_window_past_the_last_txt_says_so():

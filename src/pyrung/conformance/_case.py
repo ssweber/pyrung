@@ -123,12 +123,18 @@ class Group:
         if calls < 1:
             raise ValueError(f"Group {name!r}: calls must be >= 1, got {calls}")
         if in_main and calls != 1:
-            raise ValueError(f"Group {name!r}: an in_main group has no subroutine to call")
+            raise ValueError(
+                f"Group {name!r} has in_main=True and calls={calls}. An in_main group has no "
+                "subroutine to call. Leave calls at 1."
+            )
         cases = tuple(cases)
         seen: set[str] = set()
         for c in cases:
             if c.id in seen:
-                raise ValueError(f"Group {name!r} has two cases with id {c.id!r}; pass id=.")
+                raise ValueError(
+                    f"Group {name!r} has two cases with id {c.id!r}. "
+                    "Pass a different id= to case() for one of them."
+                )
             seen.add(c.id)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "cases", cases)
@@ -235,7 +241,10 @@ def case(
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:
-        raise ValueError(f"Unknown slot fields in expect: {bad}")
+        raise ValueError(
+            f"expect cannot name {', '.join(sorted(bad))}. A case can expect only "
+            f"{', '.join(RESULT_FIELDS)}."
+        )
     system_expect = dict(expect_system or {})
     for address in system_expect:
         if not _SC_ADDRESS.fullmatch(address) or address not in _system_bits():
@@ -253,8 +262,9 @@ def case(
     case_id = id if id is not None else _default_id(ladder)
     if not _CASE_ID.fullmatch(case_id):
         raise ValueError(
-            f"Case id {case_id!r} must be letters, digits, and '_' only "
-            f"(case {sentence!r}); pass id=."
+            f"Case {sentence!r} has the id {case_id!r}. An id may hold only letters, digits "
+            "and '_'. Without id=, the id is taken from the ladder function's name. Pass id= "
+            "to case()."
         )
     return Case(
         sentence=sentence,
@@ -320,7 +330,11 @@ def judge(
         return all(met) and clean, False, ""
     step = f"pending {c.pending} ({PENDING_STEPS[c.pending]})"
     if all(met):
-        return False, False, f"{step}, but pyrung now meets CLICK's expectation: remove pending="
+        return (
+            False,
+            False,
+            f"{step}, but pyrung now meets CLICK's expectation. Remove pending= from the case.",
+        )
     if any(met):
         return False, False, f"{step}, but some runs meet CLICK's expectation and some do not"
     return clean, clean, f"{step}: pyrung reads {dict(actual)}"

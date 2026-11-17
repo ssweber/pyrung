@@ -804,9 +804,9 @@ def _own_copies(binder: _Binder, rungs: Sequence[Rung]) -> None:
             continue
         if not isinstance(rungs, list):
             raise TypeError(
-                "these rungs hold another program's rungs or instructions; "
-                "pass them as a list so they can be copied, or copy them first "
-                "with pyrung.core.site_memory.copy_rungs()"
+                "The rungs you passed hold rungs or instructions that another program "
+                "already uses. Pass the rungs as a list so that pyrung can copy them, or "
+                "copy them first with pyrung.core.site_memory.copy_rungs()."
             )
         rungs[index] = _copy_rung(rung, memo)
 
@@ -1392,9 +1392,9 @@ def edge_memory_key(cond: Any) -> str:
     key = cond._site_key
     if key is None:
         raise RuntimeError(
-            f"{_edge_kind(cond)}({cond._resolved_tag.name}) has no site key: it was never "
-            "bound into a program. Build it inside `with Program():`, or bind overlay "
-            "rungs with pyrung.core.site_memory.bind_sites()."
+            f"{_edge_kind(cond)}({cond._resolved_tag.name}) is not part of a program, so it "
+            "has no edge memory. Build it inside `with Program():`, or bind overlay rungs "
+            "with pyrung.core.site_memory.bind_sites()."
         )
     return f"{EDGE_MEMORY}:{key}"
 

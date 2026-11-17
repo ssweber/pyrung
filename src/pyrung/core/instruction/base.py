@@ -128,8 +128,10 @@ class Instruction(ABC):
         """
         key = self._state_key
         if key is None:
+            from pyrung.core.rung import dsl_call
+
             raise RuntimeError(
-                f"{type(self).__name__} has no site key: it was never bound into a program. "
+                f"{dsl_call(self)} is not part of a program, so it has no memory of its own. "
                 "Build it inside `with Program():`, or bind overlay rungs with "
                 "pyrung.core.site_memory.bind_sites()."
             )

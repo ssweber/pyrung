@@ -113,7 +113,7 @@ def test_a_code_py_still_refuses_nop_and_raw(instruction) -> None:
     with Program(strict=False) as program:
         with Rung():
             instruction()
-    with pytest.raises(NotImplementedError, match="Unsupported instruction type"):
+    with pytest.raises(NotImplementedError, match="A code.py cannot run"):
         generate_circuitpy(program, hardware, target_scan_ms=10.0)
 
 

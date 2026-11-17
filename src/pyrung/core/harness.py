@@ -125,8 +125,9 @@ def _resolve_trigger_value(trigger_raw: str, en_tag: Any) -> int | str:
         return trigger_raw
     if choices is None:
         raise ValueError(
-            f"Trigger value {trigger_raw!r} is not an int literal and "
-            f"enable tag {en_tag.name!r} has no choices map."
+            f"Trigger value {trigger_raw!r} is not an int literal, and "
+            f"enable tag {en_tag.name!r} has no choices map. "
+            f"Write an int, or give {en_tag.name!r} choices=."
         )
     raise ValueError(
         f"Trigger label {trigger_raw!r} not found in choices for "
@@ -495,7 +496,10 @@ class Harness:
         """
         for fb_name, coupling in overrides.items():
             if coupling is not None and coupling.fb_name != fb_name:
-                raise ValueError(f"Override for {fb_name!r} drives {coupling.fb_name!r}.")
+                raise ValueError(
+                    f"The override under {fb_name!r} is a coupling for {coupling.fb_name!r}. "
+                    f"Put it under {coupling.fb_name!r}."
+                )
         self._overrides = dict(overrides)
         self._rebuild_couplings()
         if self._installed:

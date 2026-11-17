@@ -146,8 +146,8 @@ def _refuse_a_def_over_a_generated_name(source: str, function_sources: Mapping[s
     for name, count in defs.items():
         if name is not None and binds[name] > count:
             raise ValueError(
-                f"Callable name would shadow a name the generated code uses: {name!r}. "
-                "Rename the function."
+                f"The function {name!r} has the name of something that the generated code "
+                "uses. Rename the function."
             )
 
 

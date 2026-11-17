@@ -662,7 +662,7 @@ class TestRungComment:
 
         with Program():
             comment("first")
-            with pytest.raises(RuntimeError, match="already set"):
+            with pytest.raises(RuntimeError, match="called twice with no Rung between"):
                 comment("second")
 
     def test_comment_outside_program_raises(self):

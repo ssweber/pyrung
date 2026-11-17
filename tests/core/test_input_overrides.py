@@ -40,8 +40,11 @@ def test_patch_normalizes_tag_keys_and_rejects_read_only() -> None:
 def test_patch_rejects_non_string_non_tag_key() -> None:
     manager = _manager()
 
-    with pytest.raises(TypeError, match="patch\\(\\) keys must be str or Tag"):
+    with pytest.raises(TypeError, match="patch\\(\\) takes a tag name or a Tag"):
         manager.patch({1: True})
+
+    with pytest.raises(TypeError, match="force\\(\\) takes a tag name or a Tag"):
+        manager.add_force(1, True)  # type: ignore[arg-type]
 
 
 def test_force_lifecycle_add_remove_clear_and_read_only_guard() -> None:
@@ -57,7 +60,7 @@ def test_force_lifecycle_add_remove_clear_and_read_only_guard() -> None:
     manager.remove_force("Flag")
     assert manager.forces_mutable == {}
 
-    with pytest.raises(KeyError, match="Missing"):
+    with pytest.raises(KeyError, match="'Missing' is not forced"):
         manager.remove_force("Missing")
 
     manager.add_force("A", True)

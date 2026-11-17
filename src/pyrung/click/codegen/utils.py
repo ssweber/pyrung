@@ -322,8 +322,8 @@ def _check_to_text_source(source: str, convert: str) -> None:
         if not source.lstrip("+-").isdigit():
             return
     raise ValueError(
-        "to_text(exponential=True) needs a Real source (DF or a Real constant), "
-        f"got copy source {source}."
+        "to_text(exponential=True) needs a Real source, such as a DF or a Real constant. "
+        f"The source here is {source}. Remove exponential=True, or use suppress_zero for an integer source."
     )
 
 

@@ -293,5 +293,5 @@ def test_the_layout_refuses_two_items_on_the_rail_in_one_click_rung():
     exporter = _LadderExporter(tag_map=_tag_map(), program=_multi())
     with pytest.raises(_RenderError, match="two items on the rail"):
         exporter._render_network(
-            [], ["out(C1)", "out(C2)"], path="main.rung[0]", source=None, first_marker="R"
+            [], ["out(C1)", "out(C2)"], path="main.rung[1]", source=None, first_marker="R"
         )

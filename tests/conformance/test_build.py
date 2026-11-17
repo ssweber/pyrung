@@ -455,7 +455,7 @@ def test_case_id_defaults_to_the_ladder_name() -> None:
 
     assert case("x", ladder=prove_widgets, expect={}).id == "widgets"
     assert case("x", ladder=_prove_constant, expect={}).id == "constant"
-    with pytest.raises(ValueError, match="pass id="):
+    with pytest.raises(ValueError, match="Pass id= to case"):
         case("x", ladder=lambda slot: None, expect={})
 
 
@@ -643,7 +643,7 @@ def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:
     met = case("pyrung caught up", ladder=_prove_constant, expect={"Result1": 7}, pending="S2")
     (result,) = run(Group("g", [met]))
     assert not result.passed and not result.xfail
-    with pytest.raises(AssertionError, match="remove pending="):
+    with pytest.raises(AssertionError, match="Remove pending= from the case"):
         assert_all_passed([result])
 
 
@@ -690,7 +690,7 @@ def test_range_expectation_in_process() -> None:
 
 
 def test_case_rejects_bad_expectations() -> None:
-    with pytest.raises(ValueError, match="Unknown slot fields"):
+    with pytest.raises(ValueError, match="expect cannot name"):
         case("x", ladder=_prove_constant, expect={"Cmd": 1})
     with pytest.raises(TypeError, match="int or a range"):
         case("x", ladder=_prove_constant, expect={"Result1": 1.5})

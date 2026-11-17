@@ -405,9 +405,11 @@ def test_stale_group_is_reported_and_the_rest_run() -> None:
     alpha = [r for r in results if r.group == "alpha"]
     beta = [r for r in results if r.group == "beta"]
     assert [r.stale for r in alpha] == [True, True]
-    assert alpha[0].note.startswith("Conf_Alpha is stale: repush")
+    assert alpha[0].note.startswith("Conf_Alpha is stale. Copy this build's Conf_Alpha")
     assert [r.passed for r in beta] == [True]
-    with pytest.raises(AssertionError, match="STALE: Conf_Alpha is stale: repush") as excinfo:
+    with pytest.raises(
+        AssertionError, match="STALE: Conf_Alpha is stale. Copy this build's"
+    ) as excinfo:
         assert_all_passed(results)
     assert "Beta" not in str(excinfo.value)
     assert "STALE alpha/one" in format_report(results)

@@ -23,6 +23,7 @@ from pyrung.click.validation.findings import (
 from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.instruction import ForLoopInstruction
 from pyrung.core.rung import Rung
+from pyrung.core.validation._common import rung_path
 
 from ._loop_items import is_own_rung, loop_item_rung
 from .layout import _HEADER
@@ -103,7 +104,7 @@ class _ValidationMixin:
             for rung_index, rung in enumerate(self._program.subroutines[subroutine_name]):
                 self._assert_no_nested_subroutine_calls(
                     rung,
-                    path=f"subroutine[{subroutine_name}].rung[{rung_index}]",
+                    path=rung_path(subroutine_name, rung_index),
                 )
         return pending
 
@@ -138,7 +139,10 @@ class _ValidationMixin:
         if type(instruction).__name__ == "CallInstruction":
             self._raise_issue(
                 path=path,
-                message="Nested subroutine calls are not supported for Click export.",
+                message=(
+                    "This call() is inside a subroutine. CLICK does not support nested "
+                    "subroutine calls. Call both subroutines from the main program."
+                ),
                 source=instruction,
             )
 
@@ -287,11 +291,7 @@ class _RoundTripValidationMixin:
     ) -> list[_ScopeOutput]:
         outputs: list[_ScopeOutput] = []
         for rung_index, rung in enumerate(rungs):
-            base_path = (
-                f"subroutine[{subroutine_name}].rung[{rung_index}]"
-                if scope == "subroutine"
-                else f"main.rung[{rung_index}]"
-            )
+            base_path = rung_path(subroutine_name if scope == "subroutine" else None, rung_index)
             outputs.extend(self._expected_outputs_for_rung(rung, path=base_path))
         return outputs
 

@@ -46,13 +46,16 @@ class TeeSpec:
     def __post_init__(self) -> None:
         if self.bare:
             if self.after != 0:
-                raise ValueError(f"TeeSpec(bare=True, after={self.after}): a bare tee shares none")
+                raise ValueError(
+                    f"TeeSpec(bare=True, after={self.after}): a bare tee shares no contacts. "
+                    "Set after=0."
+                )
             return
         if self.after < 1:
             raise ValueError(
                 f"TeeSpec(after={self.after}): a tee needs at least one shared contact before "
-                "it; with after=0 it would sit in column A, the left power rail, where CLICK "
-                "rejects vertical tokens (draw the pins from the rail instead)"
+                "it. With after=0 the tee would sit in column A, the left power rail, and CLICK "
+                "rejects a vertical token there. Draw the pins from the rail instead."
             )
 
 
@@ -80,7 +83,10 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
         for n, label in enumerate(spec.pins):
             index = box_index + 1 + n
             if index >= len(out) or out[index][-1] != label or out[index][0] != "":
-                raise ValueError(f"Case {marker}: pin {label} is not under the box row, in order")
+                raise ValueError(
+                    f"Case {marker}: pin {label} is not under the box row in its place. The pins "
+                    "must be the first rows under the box row, in the order given."
+                )
         return tuple(out)
     box = list(out[box_index])
     shared = box[1 : 1 + spec.after]
@@ -94,15 +100,22 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
         index = box_index + 1 + n
         row = list(out[index]) if index < len(out) else []
         if not row or row[-1] != label or row[0] != "":
-            raise ValueError(f"Case {marker}: pin {label} is not under the box row, in order")
+            raise ValueError(
+                f"Case {marker}: pin {label} is not under the box row in its place. The pins "
+                "must be the first rows under the box row, in the order given."
+            )
         if row[1 : 1 + spec.after] != shared:
             raise ValueError(
-                f"Case {marker}: pin {label} does not start with the box row's {spec.after} "
-                f"shared contacts ({shared} vs {row[1 : 1 + spec.after]})"
+                f"Case {marker}: pin {label} starts with {row[1 : 1 + spec.after]}, but the "
+                f"box row starts with {shared}. A teed pin must start with the box row's "
+                f"{spec.after} shared contacts."
             )
         row[1 : 1 + spec.after] = [""] * spec.after
         if row[tee_col] not in ("-",) and _is_wire(row[tee_col]):
-            raise ValueError(f"Case {marker}: pin {label} has no wire or contact at the tee")
+            raise ValueError(
+                f"Case {marker}: pin {label} has {row[tee_col]!r} in the tee column. It needs a "
+                "'-' wire or a contact there."
+            )
         if n < len(spec.pins) - 1:
             # The bus continues down past this pin: a tee on its first cell.
             row[tee_col] = _tee_cell(row[tee_col], f"Case {marker}: pin {label}")
@@ -111,8 +124,9 @@ def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...
     if after_pins < len(out) and _is_pin_row(out[after_pins]):
         raise ValueError(
             f"Case {marker}: pin {out[after_pins][-1]} of the box would stay on the rail "
-            "beside teed pins; CLICK refuses that with error C000A (all inputs of the box "
-            "instruction must originate from the same branch). Tee every pin"
+            "beside teed pins. CLICK refuses that with error C000A, 'All inputs of the box "
+            "instruction must originate from the same branch'. Name every pin of the box in "
+            "pins=."
         )
     out[box_index] = tuple(box)
     return tuple(out)
@@ -130,7 +144,10 @@ def _tee_cell(cell: str, where: str) -> str:
     if cell == "-":
         return "T"
     if _is_wire(cell) or cell.startswith("T:"):
-        raise ValueError(f"{where} is {cell!r}: nothing to hang a tee on")
+        raise ValueError(
+            f"{where} is {cell!r}. A tee needs a plain '-' wire or a contact without a tee in "
+            "that cell."
+        )
     return f"T:{cell}"
 
 

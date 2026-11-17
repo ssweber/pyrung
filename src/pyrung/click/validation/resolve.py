@@ -10,6 +10,7 @@ from pyclickplc.addresses import parse_address
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.validation._common import rung_path
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import CLK_BANK_UNRESOLVED, ClickFinding, ValidationMode, _route_severity
@@ -130,10 +131,7 @@ class _ResolutionCache:
 
 def _format_location(loc: ProgramLocation) -> str:
     """Convert a ProgramLocation into a deterministic human-readable string."""
-    if loc.scope == "subroutine":
-        prefix = f"subroutine[{loc.subroutine}].rung[{loc.rung_index}]"
-    else:
-        prefix = f"main.rung[{loc.rung_index}]"
+    prefix = rung_path(loc.subroutine if loc.scope == "subroutine" else None, loc.rung_index)
 
     for branch_idx in loc.branch_path:
         prefix += f".branch[{branch_idx}]"
@@ -232,13 +230,28 @@ def _bank_label(slot: _ResolvedSlot) -> str:
     return f"{slot.memory_type}{slot.address}"
 
 
-def _unresolved_finding(
-    location: ProgramLocation, mode: ValidationMode, reason: str
-) -> ClickFinding:
+def _wrong_role_text(slot: _ResolvedSlot, what: str, location_text: str, choices: str) -> str:
+    """Return the message for an operand in a bank that CLICK refuses for its role.
+
+    *what* names the operand in plain words, such as ``"timer done bit"``.
+    """
+    return (
+        f"{_bank_label(slot)} at {location_text} cannot be the {what}. CLICK takes {choices} there."
+    )
+
+
+def _unresolved_finding(location: ProgramLocation, mode: ValidationMode, what: str) -> ClickFinding:
+    """Return the finding for an operand that maps to no single CLICK address.
+
+    *what* names the operand in plain words, such as ``"source"`` or ``"drum output"``.
+    """
     location_text = _format_location(location)
     return ClickFinding(
         code=CLK_BANK_UNRESOLVED,
         severity=_route_severity(CLK_BANK_UNRESOLVED, mode),
-        message=f"Bank resolution failed at {location_text}: {reason}.",
+        message=(
+            f"pyrung cannot find one CLICK address for the {what} at {location_text}. "
+            "Map it to one CLICK address in your TagMap."
+        ),
         location=location_text,
     )

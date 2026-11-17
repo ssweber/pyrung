@@ -176,7 +176,7 @@ def test_a_source_file_edited_after_the_import_is_not_embedded(tmp_path, monkeyp
     assert not is_the_function(embedded_source(module.edited), module.edited)
     assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == 1
-    with pytest.raises(ValueError, match="not the function"):
+    with pytest.raises(ValueError, match="does not match the function"):
         _from_code_py(module.edited, "edited")
 
 
@@ -189,7 +189,7 @@ def test_a_line_shift_after_the_import_is_not_embedded(tmp_path, monkeypatch):
     program = _program(module.shifted)
     assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == 1
-    with pytest.raises(ValueError, match="not the function"):
+    with pytest.raises(ValueError, match="does not match the function"):
         _from_code_py(module.shifted, "shifted")
 
 
@@ -199,7 +199,7 @@ def test_a_closure_is_refused_for_code_py():
     def closes_over(v):
         return {"out": v + base}
 
-    with pytest.raises(ValueError, match="not the function"):
+    with pytest.raises(ValueError, match="does not match the function"):
         _from_code_py(closes_over, "closes_over")
 
 
@@ -334,7 +334,7 @@ def test_a_kernel_calls_a_function_named_like_what_it_calls(tmp_path, monkeypatc
     assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == expected
     assert _seeks_as_it_ran(program, "C") == 5
-    with pytest.raises(ValueError, match="would shadow"):
+    with pytest.raises(ValueError, match="has the name of a builtin or of math"):
         _from_code_py(fn, name)
 
 
@@ -398,7 +398,7 @@ def test_a_code_py_refuses_a_function_named_like_its_other_code(
     module, _ = _import(tmp_path, monkeypatch, f"def {name}(v):\n    return {{'out': 99}}\n")
     program = _stores_two_ways(getattr(module, name))
 
-    with pytest.raises(ValueError, match="would shadow"):
+    with pytest.raises(ValueError, match="has the name of something that the generated code uses"):
         _generates(program, force_runtime=force_runtime)
 
 
@@ -407,7 +407,7 @@ def test_a_code_py_refuses_a_function_named_like_its_runtime_import(tmp_path, mo
     program = _stores_two_ways(module._rt)
 
     assert _generates(program, force_runtime=False).code
-    with pytest.raises(ValueError, match="would shadow"):
+    with pytest.raises(ValueError, match="has the name of something that the generated code uses"):
         _generates(program, force_runtime=True)
 
 
@@ -445,5 +445,5 @@ def test_a_name_only_code_py_binds_leaves_the_kernel_alone(tmp_path, monkeypatch
 
     assert _has_a_kernel(program)
     assert _seeks_as_it_ran(program) == 99
-    with pytest.raises(ValueError, match="would shadow"):
+    with pytest.raises(ValueError, match="has the name of something that the generated code uses"):
         _from_code_py(module.time, "time")

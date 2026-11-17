@@ -1155,8 +1155,9 @@ def test_raw_requests(
             found = await wire.click.ds[g.hash_register]
             if found != g.group_hash:
                 s.broken.append(
-                    f"{g.subroutine} is stale: repush (DS{g.hash_register} reads {found}, "
-                    f"this build writes {g.group_hash})"
+                    f"{g.subroutine} is stale. Copy this build's {g.subroutine} to CLICK "
+                    f"and write it to the PLC. DS{g.hash_register} reads {found}, and this "
+                    f"build writes {g.group_hash}."
                 )
             else:
                 await _probe_all(s)

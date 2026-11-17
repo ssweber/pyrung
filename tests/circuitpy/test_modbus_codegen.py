@@ -2005,7 +2005,7 @@ def test_raw_rtu_target_rejected():
 
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
-    with pytest.raises(ValueError, match="ModbusRtuTarget is not yet supported"):
+    with pytest.raises(ValueError, match="does not support a ModbusRtuTarget"):
         generate_circuitpy(
             prog,
             hw,
@@ -2015,6 +2015,30 @@ def test_raw_rtu_target_rejected():
             ),
             tag_map=TagMap(),
         )
+
+
+def test_a_missing_modbus_client_is_a_gap_the_runner_steps_past():
+    """A kernel for send() with no Modbus client fails to build, and the runner steps instead."""
+    from pyrung.circuitpy.codegen.compile._modbus import _modbus_client_spec_for_instruction
+    from pyrung.circuitpy.codegen.context import CodegenContext
+    from pyrung.core.runner import _looks_like_compiled_replay_gap
+
+    with Program(strict=False) as prog:
+        with Rung(Bool("Enable", default=True)):
+            send(
+                target=ModbusTcpTarget(name="meter", ip="192.168.1.99"),
+                remote_start=ModbusAddress(0x100),
+                source=Int("Source", default=1),
+                sending=Bool("Sending"),
+                success=Bool("Success"),
+                error=Bool("Error"),
+                exception_response=Int("ExCode"),
+            )
+
+    ctx = CodegenContext.for_kernel(prog)
+    with pytest.raises(ValueError, match="needs a Modbus client") as exc_info:
+        _modbus_client_spec_for_instruction(prog.rungs[0]._instructions[0], ctx)
+    assert _looks_like_compiled_replay_gap(exc_info.value)
 
 
 def test_raw_send_signed_int_negative(monkeypatch):

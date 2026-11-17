@@ -68,12 +68,14 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
             return
         if result is None:
             raise TypeError(
-                f"run_function: {_fn_name(self._fn)!r} returned None but outs were declared"
+                f"run_function: {_fn_name(self._fn)!r} returned None. "
+                "Return a dict with a key for each name in outs=."
             )
         for key, target in self._outs.items():
             if key not in result:
                 raise KeyError(
-                    f"run_function: {_fn_name(self._fn)!r} missing key {key!r}; got {sorted(result)}"
+                    f"run_function: {_fn_name(self._fn)!r} returned no {key!r} key. "
+                    f"It returned the keys {sorted(result)}."
                 )
             resolved = resolve_tag_ctx(target, ctx)
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
@@ -109,13 +111,15 @@ class EnabledFunctionCallInstruction(Instruction):
             return
         if result is None:
             raise TypeError(
-                f"run_enabled_function: {_fn_name(self._fn)!r} returned None but outs were declared"
+                f"run_enabled_function: {_fn_name(self._fn)!r} returned None. "
+                "Return a dict with a key for each name in outs=."
             )
         for key, target in self._outs.items():
             if key not in result:
                 raise KeyError(
                     "run_enabled_function: "
-                    f"{_fn_name(self._fn)!r} missing key {key!r}; got {sorted(result)}"
+                    f"{_fn_name(self._fn)!r} returned no {key!r} key. "
+                    f"It returned the keys {sorted(result)}."
                 )
             resolved = resolve_tag_ctx(target, ctx)
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))

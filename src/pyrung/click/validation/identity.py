@@ -83,13 +83,14 @@ def _evaluate_address_identity_conflicts(
                 code=CLK_ADDRESS_IDENTITY_CONFLICT,
                 severity=_route_severity(CLK_ADDRESS_IDENTITY_CONFLICT, mode),
                 message=(
-                    f"Click address {display_address} has multiple pyrung identities: "
-                    f"{quoted_names}. These are separate values in Python but one value on Click."
+                    f"The tags {quoted_names} all map to CLICK address {display_address}. "
+                    "pyrung keeps a separate value for each, but CLICK has one value there."
                 ),
                 location=location,
                 suggestion=(
-                    "Use one tag identity consistently. Prefer the configured Click block slot "
-                    "or map one semantic tag through TagMap; do not also construct the raw address."
+                    "Use one tag for each address, either the block slot such as x[1] or the "
+                    "tag your TagMap maps there. Do not also create a tag named after the raw "
+                    "address."
                 ),
             )
         )

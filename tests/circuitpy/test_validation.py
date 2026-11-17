@@ -310,7 +310,7 @@ class TestLocationFormatting:
         report = validate_circuitpy_program(prog, mode="warn")
         finding = [f for f in report.hints if f.code == CPY_FUNCTION_CALL_VERIFY][0]
 
-        assert finding.location.startswith("main.rung[0].")
+        assert finding.location.startswith("main.rung[1].")
         assert "instruction[1](FunctionCallInstruction)" in finding.location
 
     def test_location_is_stable_across_runs(self):
@@ -384,7 +384,7 @@ class TestSubroutines:
 
         report = validate_circuitpy_program(prog, mode="warn")
         finding = [f for f in report.hints if f.code == CPY_FUNCTION_CALL_VERIFY][0]
-        assert finding.location.startswith("subroutine[worker].rung[0].")
+        assert finding.location.startswith("subroutine[worker].rung[1].")
 
 
 class TestBranches:

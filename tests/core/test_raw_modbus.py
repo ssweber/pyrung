@@ -68,7 +68,7 @@ class TestModbusAddress:
         assert addr.register_type == RegisterType.DISCRETE_INPUT
 
     def test_984_register_type_conflict(self):
-        with pytest.raises(ValueError, match="implies HOLDING"):
+        with pytest.raises(ValueError, match="is a HOLDING address, but you passed"):
             ModbusAddress(400001, RegisterType.INPUT)
 
     def test_max_valid(self):
@@ -224,7 +224,9 @@ class TestCLICKV4TargetForms:
         with Program():
             with Rung():
                 send(target=target, remote_start=ModbusAddress(400001), source=Int("Out"))
-                with pytest.raises(ValueError, match="device_id 1..247 or a DS tag, not 0"):
+                with pytest.raises(
+                    ValueError, match="cannot read from device_id 0 on an RTU target"
+                ):
                     receive(target=target, remote_start=ModbusAddress(400001), dest=Int("In"))
 
 
@@ -470,7 +472,7 @@ class TestDslConstruction:
         Error = Bool("Error")
         ExCode = Int("ExCode")
 
-        with pytest.raises(ValueError, match="Cannot send"):
+        with pytest.raises(ValueError, match="cannot write to"):
             with Program():
                 with Rung(Enable):
                     mod.send(
@@ -493,7 +495,7 @@ class TestDslConstruction:
         Error = Bool("Error")
         ExCode = Int("ExCode")
 
-        with pytest.raises(ValueError, match="Cannot send"):
+        with pytest.raises(ValueError, match="cannot write to"):
             with Program():
                 with Rung(Enable):
                     mod.send(

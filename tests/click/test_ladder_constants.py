@@ -211,7 +211,7 @@ def test_unrepresentable_real_rejected(value: float):
     # exporter has no spelling for one either.
     with Program():
         with Rung():
-            with pytest.raises(ValueError, match="outside the REAL range"):
+            with pytest.raises(ValueError, match="outside the REAL range|is NaN. A REAL constant"):
                 copy(value, df[1])
     assert click_real_literal(value) is None
 

@@ -627,7 +627,10 @@ def _resolve_target(
         )
     if isinstance(target, str):
         if not target:
-            raise TypeError("target must be a non-empty string or ModbusTcpTarget/ModbusRtuTarget")
+            raise TypeError(
+                "target is an empty string. "
+                "Pass a target name, a ModbusTcpTarget or a ModbusRtuTarget."
+            )
         return (target, None, 502, 1, 1.0, None)
     raise TypeError(
         f"target must be str, ModbusTcpTarget, or ModbusRtuTarget, got {type(target).__name__}"
@@ -658,7 +661,10 @@ def _resolve_remote_start(
             RegisterType.INPUT,
             RegisterType.DISCRETE_INPUT,
         }:
-            raise ValueError(f"Cannot send (write) to {remote_start.register_type.name} registers")
+            raise ValueError(
+                f"send() cannot write to {remote_start.register_type.name} addresses, "
+                "because they are read-only. Use a HOLDING or COIL address."
+            )
         tag_types = _preview_operand_tag_types(operand, effective_count)
         register_count = _calculate_register_count(tag_types, remote_start.register_type)
         start_addr = remote_start.address
@@ -772,8 +778,10 @@ def receive(
 
     target_name, host, port, device_id, timeout_s, raw_target = _resolve_target(target)
     if isinstance(raw_target, ModbusRtuTarget) and isinstance(device_id, int) and device_id == 0:
-        # 0 is RTU's broadcast address, which no device answers.
-        raise ValueError("receive() from an RTU device takes device_id 1..247 or a DS tag, not 0")
+        raise ValueError(
+            "receive() cannot read from device_id 0 on an RTU target. 0 is the broadcast "
+            "address, and no device answers it. Use a device_id from 1 to 247, or a DS tag."
+        )
     bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
         remote_start, dest, count, target, is_send=False
     )

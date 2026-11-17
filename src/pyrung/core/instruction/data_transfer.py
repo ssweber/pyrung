@@ -375,7 +375,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
     ):
         if convert is not None and convert.mode not in {"value", "ascii"}:
             raise ValueError(
-                f"BlockCopy only supports 'value' and 'ascii' converters, got {convert.mode!r}"
+                "blockcopy() accepts only the to_value and to_ascii converters, "
+                f"got to_{convert.mode}."
             )
         OneShotMixin.__init__(self, oneshot)
         self.source = source
@@ -402,8 +403,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
 
         if len(src_tags) != len(dst_tags):
             raise ValueError(
-                f"BlockCopy length mismatch: source has {len(src_tags)} elements, "
-                f"dest has {len(dst_tags)} elements"
+                "blockcopy() needs ranges of the same length. "
+                f"The source has {len(src_tags)} tags, and the destination has {len(dst_tags)}."
             )
 
         updates = {}
@@ -424,8 +425,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
             return
         if len(src_tags) != len(dst_tags):
             raise ValueError(
-                f"BlockCopy length mismatch: source has {len(src_tags)} elements, "
-                f"dest has {len(dst_tags)} elements"
+                "blockcopy() needs ranges of the same length. "
+                f"The source has {len(src_tags)} tags, and the destination has {len(dst_tags)}."
             )
 
         # A character that does not convert leaves its own element unchanged and faults.

@@ -236,21 +236,21 @@ def test_len_counts_entries_not_slots():
 def test_type_mismatch_tag_raises():
     value = Tag("Value", TagType.INT)
 
-    with pytest.raises(ValueError, match="Type mismatch"):
+    with pytest.raises(ValueError, match="Tag 'Value' is INT, and C holds BOOL"):
         TagMap({value: c[1]})
 
 
 def test_type_mismatch_block_raises():
     values = Block("Values", TagType.INT, 1, 2)
 
-    with pytest.raises(ValueError, match="Type mismatch"):
+    with pytest.raises(ValueError, match="Block 'Values' is INT, and C holds BOOL"):
         TagMap({values: c.select(101, 102)})
 
 
 def test_block_size_mismatch_raises():
     alarms = Block("Alarm", TagType.BOOL, 1, 20)
 
-    with pytest.raises(ValueError, match="Block size mismatch"):
+    with pytest.raises(ValueError, match="has 20 slots, but the CLICK range it maps to has 17"):
         TagMap({alarms: x.select(1, 21)})
 
 
@@ -266,7 +266,7 @@ def test_address_conflict_tag_block_raises():
     valve = Bool("Valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 3)
 
-    with pytest.raises(ValueError, match="Hardware address conflict"):
+    with pytest.raises(ValueError, match="map to the same CLICK address"):
         TagMap({valve: c[101], alarms: c.select(100, 102)})
 
 
@@ -274,7 +274,7 @@ def test_address_conflict_block_block_raises():
     alarm_a = Block("AlarmA", TagType.BOOL, 1, 3)
     alarm_b = Block("AlarmB", TagType.BOOL, 1, 3)
 
-    with pytest.raises(ValueError, match="Hardware address conflict"):
+    with pytest.raises(ValueError, match="map to the same CLICK address"):
         TagMap({alarm_a: c.select(100, 102), alarm_b: c.select(102, 104)})
 
 
@@ -282,14 +282,14 @@ def test_name_conflict_standalone_tags_raises():
     first = Bool("Valve")
     second = Bool("Valve")
 
-    with pytest.raises(ValueError, match="Duplicate user logical tag name"):
+    with pytest.raises(ValueError, match="Two tags have the name"):
         TagMap([first.map_to(c[1]), second.map_to(c[2])])
 
 
 def test_name_conflict_standalone_and_block_slot_raises():
     valve = Bool("Alarm1")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    with pytest.raises(ValueError, match="Duplicate user logical tag name"):
+    with pytest.raises(ValueError, match="Two tags have the name"):
         TagMap({valve: c[1], alarms: c.select(101, 102)})
 
 
@@ -299,7 +299,7 @@ def test_name_conflict_across_blocks_raises():
     alarm_a.slot(1, name="Shared")
     alarm_b.slot(1, name="Shared")
 
-    with pytest.raises(ValueError, match="Duplicate user logical tag name"):
+    with pytest.raises(ValueError, match="Two tags have the name"):
         TagMap({alarm_a: c.select(101, 101), alarm_b: c.select(201, 201)})
 
 
@@ -478,17 +478,17 @@ def test_tag_meta_link_takes_a_normally_closed_enable():
 
 
 def test_tag_meta_link_rejects_normally_closed_with_a_trigger():
-    with pytest.raises(ValueError, match="Invalid TagMeta link value"):
+    with pytest.raises(ValueError, match="Invalid bracket metadata link value"):
         parse_tag_meta("[link=~State:A, on_delay=1s] Sorted")
 
 
 def test_tag_meta_link_rejects_a_second_trigger():
-    with pytest.raises(ValueError, match="Invalid TagMeta link value"):
+    with pytest.raises(ValueError, match="Invalid bracket metadata link value"):
         parse_tag_meta("[link=State:A:B, on_delay=1s] Sorted")
 
 
 def test_tag_meta_rejects_system_without_physical_details():
-    with pytest.raises(ValueError, match="system requires"):
+    with pytest.raises(ValueError, match="system= in bracket metadata needs a physical key"):
         parse_tag_meta("[system=Line1] Feedback")
 
 
@@ -1098,7 +1098,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp
     }
     pyclickplc.write_csv(path, records)
 
-    with pytest.raises(ValueError, match="UDT grouping failed for base 'Alarm'"):
+    with pytest.raises(ValueError, match="Cannot import the :udt fields of 'Alarm' as one udt"):
         TagMap.from_nickname_file(path, mode="strict")
 
 
@@ -1467,7 +1467,7 @@ def test_from_nickname_file_structured_identifier_policy_rejects_invalid_tokens(
     }
     pyclickplc.write_csv(path, records)
 
-    with pytest.raises(ValueError, match="Invalid UDT block tag"):
+    with pytest.raises(ValueError, match="Invalid udt marker"):
         TagMap.from_nickname_file(path)
 
 

@@ -209,7 +209,7 @@ class TestTagMetaParser:
     def test_unrecognized_token_still_raises(self):
         from pyrung.click.tag_map._parsers import parse_tag_meta
 
-        with pytest.raises(ValueError, match="Unsupported TagMeta token"):
+        with pytest.raises(ValueError, match="Unsupported bracket metadata token"):
             parse_tag_meta("[external, bogus]")
 
 

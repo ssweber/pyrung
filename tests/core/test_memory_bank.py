@@ -342,9 +342,9 @@ class TestBlock:
     def test_slot_reset_after_materialization_raises(self):
         DS = Block("DS", TagType.INT, 1, 10)
         _ = DS[2]
-        with pytest.raises(ValueError, match="materialization"):
+        with pytest.raises(ValueError, match="has already indexed or mapped it"):
             DS.slot(2).reset()
-        with pytest.raises(ValueError, match="materialization"):
+        with pytest.raises(ValueError, match="has already indexed or mapped it"):
             DS.slot(1, 3).reset()
 
     def test_block_reset_clears_cache_and_overrides(self):

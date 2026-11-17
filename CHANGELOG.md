@@ -81,6 +81,10 @@
   Test each property in pytest with `force()` and `run_for()`, and use `how()` to find a path to a state. Delete `pyrung lock --check` from CI and your `pyrung.lock` files.
 - Tags, blocks, `.slot()`, `Field()`, `@udt`, `@named_array` and `TagMeta` no longer take `lock=`. A nickname file that still holds `[lock]` loads. pyrung drops the flag when it writes the file.
   Delete `lock=True` from your tag declarations, or regenerate a `tags.py` that pyrung generated.
+- Error messages, warnings and CLICK findings say what went wrong and what to do. They name the call you wrote, such as `count_up()` (they named pyrung's classes, such as `CountUpInstruction`).
+  Update any test that matches the old text.
+- A ladder export issue's `path` and a CLICK finding's `location` count rungs from 1, so the first rung is `main.rung[1]` (it was `main.rung[0]`).
+  Add 1 to a rung index that you compare with a path.
 
 ### Fixes
 
