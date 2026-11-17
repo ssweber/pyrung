@@ -1,10 +1,10 @@
 """Over-approximate value sets of the tags pointers are built from.
 
-``_ValueSets`` bounds what each tag can hold from its default, its writers and
-the indirect writes that may reach its slot, as a least fixpoint, and from
-that the addresses an indexed access (``DS[Ptr]``, ``DS[Ptr * 10 + 2991]``)
-can resolve to.  It lives below the PDG so the PDG and the validators can both
-use it.
+``_ValueSets`` bounds what each tag can hold, as a least fixpoint.  It starts from the
+tag's default, its writers and the indirect writes that may reach its slot.  From those
+sets it works out the addresses that an indexed access (``DS[Ptr]``,
+``DS[Ptr * 10 + 2991]``) can resolve to.  It lives below the PDG so that the PDG and the
+validators can both use it.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ _INDIRECT = (IndirectRef, IndirectExprRef, IndirectBlockRange)
 
 
 def _scan(value: Any) -> tuple[set[str], list[Any]]:
-    """Tag names a value reads, and the indirect references inside it."""
+    """Return the tag names a value reads, and the indirect references inside it."""
     from pyrung.core.validation.walker import _condition_children
 
     names: set[str] = set()
@@ -117,36 +117,35 @@ def _is_plain_copy(instr: Any) -> bool:
 class _ValueSets:
     """Over-approximate value sets of the tags pointers are built from.
 
-    A tag's set holds its default, its initial value, every value a static
-    writer can store and every value an indirect write that may reach its
-    slot can store; ``None`` means unbounded.  Computed as a least fixpoint,
-    so a pointer whose slot an indirect write may hit picks up what it writes.
+    A tag's set holds its default, its initial value, every value a static writer can
+    store, and every value that an indirect write reaching its slot can store.  ``None``
+    means unbounded.  The sets are a least fixpoint.  So a pointer whose slot an indirect
+    write may hit picks up the values that the write stores.
 
-    With *follow_indirect_reads*, an indexed read on its own (``copy(DS[Idx],
-    T)``) takes the union of the sets of the elements its addresses reach, so
-    a state machine stepping through a jump table (``Idx = Requested + 150``,
-    ``Requested = T``) stays bounded.  With *declared_inputs*, an input with
-    declared ``choices`` or ``min``/``max`` holds those values (and its
-    default), as the verifier explores it, instead of any value.
+    With *follow_indirect_reads*, an indexed read on its own (``copy(DS[Idx], T)``)
+    takes the union of the sets of the elements that its addresses reach.  A state machine
+    that steps through a jump table (``Idx = Requested + 150``, ``Requested = T``) then
+    stays bounded.  With *declared_inputs*, an input with declared ``choices`` or
+    ``min``/``max`` holds those values and its default, as the verifier explores it.
+    Without *declared_inputs* it holds any value.
 
-    With *declared_if_unwritten* too, only an input no instruction writes holds its
-    declared values.  A ladder write past a declared bound stores, as on a CLICK, so an
-    input the ladder writes as well holds any value.
+    With *declared_if_unwritten* too, only an input that no instruction writes holds its
+    declared values.  A ladder write past a declared bound stores, as on a CLICK.  So an
+    input that the ladder also writes holds any value.
 
     *listed_reach* gives the addresses of some writes through a pointer, by ``id`` of
     the destination.  The PDG lists those addresses from the pointer's declared bounds,
     so these value sets reach the same elements.
 
-    *guards* (from :func:`rung_guards`) bounds the tags an instruction reads by its
-    rung's comparisons.  ``math(Cmd * 10 + 2999, Idx)`` under ``Cmd >= 1, Cmd <= 100``
+    *guards* (from :func:`rung_guards`) bound the tags that an instruction reads, using
+    its rung's comparisons.  ``math(Cmd * 10 + 2999, Idx)`` under ``Cmd >= 1, Cmd <= 100``
     stores only 3009..3999, even when ``Cmd`` alone could hold anything.
 
-    A tag in *written_first* is written, unconditionally, before anything
-    reads it by name (``ProgramGraph.unconditional_write_before_read``), so its
-    default never reaches those reads and its set holds only what its writers
-    store (``HistIdIdx = HistorianId * 10 + 2991``, never 0 where it indexes).
-    An index can read its slot at any point in the scan, so an indexed read
-    still takes its default.
+    A tag in *written_first* is written, unconditionally, before anything reads it by name
+    (``ProgramGraph.unconditional_write_before_read``).  Its default never reaches those
+    reads, so its set holds only what its writers store (``HistIdIdx = HistorianId * 10 +
+    2991``, never 0 where it indexes).  An index can read its slot at any point in the
+    scan, so an indexed read still takes its default.
     """
 
     def __init__(
@@ -188,7 +187,7 @@ class _ValueSets:
         self._values: dict[str, frozenset[Any] | None] | None = None
 
     def slots(self, block: Block, name: str) -> frozenset[int] | None:
-        """Addresses in *block* that name *name* (None: block too large to scan)."""
+        """Return the addresses in *block* that name *name*, or None if the block is too large."""
         key = id(block)
         if key not in self._slot_index:
             index: dict[str, set[int]] | None = None
@@ -205,7 +204,7 @@ class _ValueSets:
         return found.get(name, frozenset())
 
     def addresses(self, ref: Any, values=None) -> frozenset[int] | None:
-        """Every address a pointer or index expression can use, or None when unbounded.
+        """Return every address a pointer or index expression can use, or None if unbounded.
 
         With *values*, the sets come from that mapping of tag names, not the fixpoint.
         """
@@ -221,7 +220,7 @@ class _ValueSets:
         return None
 
     def write_addresses(self, instr: Any, ref: Any) -> frozenset[int] | None:
-        """Every address *instr* can write through *ref*, under its rung's guards."""
+        """Return every address *instr* can write through *ref*, under its rung's guards."""
         if self._values is None:
             self._values = self._fixpoint()
         values = self._guarded(instr, self._values)
@@ -230,7 +229,10 @@ class _ValueSets:
         return self.addresses(ref, values)
 
     def window(self, ref: IndirectBlockRange, values=None) -> frozenset[int] | None:
-        """Every address ``block.select(start, end)`` can cover: lowest start to highest end."""
+        """Return every address ``block.select(start, end)`` can cover.
+
+        That is the range from the lowest start to the highest end.
+        """
         starts = self.integers(ref.start_expr, values)
         ends = self.integers(ref.end_expr, values)
         if starts is None or ends is None:
@@ -243,7 +245,7 @@ class _ValueSets:
         return frozenset(range(lo, hi + 1))
 
     def integers(self, expr: Any, values=None) -> frozenset[int] | None:
-        """The integer values *expr* takes, or None when unbounded."""
+        """Return the integer values *expr* takes, or None if unbounded."""
         if values is None and self._values is None:
             self._values = self._fixpoint()
         out = self._evaluate(expr, values)
@@ -260,7 +262,7 @@ class _ValueSets:
         return self._values.get(name)
 
     def _evaluate(self, expr: Any, values: Mapping[str, frozenset[Any] | None] | None = None):
-        """Every value *expr* takes over the value sets of the tags it reads."""
+        """Return every value *expr* takes over the value sets of the tags it reads."""
         lookup = self._values if values is None else values
         if lookup is None:
             return None
@@ -290,7 +292,7 @@ class _ValueSets:
         return frozenset(out)
 
     def _indexed_values(self, ref: Any, lookup: Mapping[str, frozenset[Any] | None]):
-        """Every value an indexed read can return, from its elements' sets."""
+        """Return every value an indexed read can return, from its elements' sets."""
         addresses = self.addresses(ref, lookup)
         if addresses is None:
             return None
@@ -317,19 +319,19 @@ class _ValueSets:
         return frozenset(out)
 
     def _guarded(self, instr: Any, values):
-        """*values* as *instr* reads them, narrowed by its rung's guards."""
+        """Return *values* as *instr* reads them, narrowed by its rung's guards."""
         bounds = self._guards.get(id(instr))
         if not bounds or values is None:
             return values
         return _Guarded(values, bounds)
 
     def _store(self, instr: Any, dest: Tag, values) -> frozenset[Any] | None:
-        """Values *instr* stores into *dest*, given the current value sets."""
+        """Return the values *instr* stores into *dest*, given the current value sets."""
         values = self._guarded(instr, values)
         if isinstance(instr, CalcInstruction):
-            # As CalcInstruction.execute: a failing operation is 0 and the
-            # formula carries on (its flag noted, and dropped here); an Inf
-            # result stays Inf in a REAL, 0 in an integer register.
+            # This follows CalcInstruction.execute.  A failing operation gives 0 and the
+            # formula carries on.  Its flag is noted, and dropped here.  An Inf result
+            # stays Inf in a REAL and becomes 0 in an integer register.
             token = CALC_FAULTS.set([])
             try:
                 raw = self._evaluate(instr.expression, values)
@@ -376,7 +378,7 @@ class _ValueSets:
         return self._initial_values(tag)
 
     def _written_by_ladder(self, name: str) -> bool:
-        """Whether an instruction may write *name*, by name or through a pointer."""
+        """Return whether an instruction may write *name*, by name or through a pointer."""
         if name not in self._ladder_written:
             self._ladder_written[name] = name in self._static or any(
                 self.slots(ref.block, name) != frozenset() for _instr, ref in self._indirect
@@ -384,14 +386,14 @@ class _ValueSets:
         return self._ladder_written[name]
 
     def _initial_values(self, tag: Tag) -> frozenset[Any]:
-        """The values *tag* holds before anything writes it."""
+        """Return the values *tag* holds before anything writes it."""
         if tag.name in self._initial:
             return frozenset({tag.default, self._initial[tag.name]})
         return frozenset({tag.default})
 
     @staticmethod
     def declared(tag: Tag) -> frozenset[Any] | None:
-        """An input's declared values and its default, or None when undeclared."""
+        """Return an input's declared values and its default, or None if undeclared."""
         if tag.choices is not None:
             return frozenset({*tag.choices, tag.default})
         if type(tag.min) is int and type(tag.max) is int and tag.max - tag.min < _VALUE_CAP:
@@ -402,12 +404,12 @@ class _ValueSets:
         names = sorted(self._tags)
         values: dict[str, frozenset[Any] | None] = {name: frozenset() for name in names}
         growth = dict.fromkeys(names, 0)
-        # Each tag grows at most _MAX_GROWTH times before it is widened to
-        # unbounded (a self-feeding count), so the rounds are bounded.
+        # Each tag grows at most _MAX_GROWTH times before it widens to unbounded (a
+        # self-feeding count).  So the number of rounds is bounded.
         for _ in range((_MAX_GROWTH + 2) * (len(names) + 1)):
             changed = False
-            # Each indirect write's addresses, once a round.  The last round changes
-            # nothing, so its addresses are those of the result.
+            # Work out each indirect write's addresses once a round.  The last round changes
+            # nothing, so its addresses are the addresses of the result.
             self._round_reach: dict[tuple[int, int], frozenset[int] | None] = {}
             for name in names:
                 current = values[name]
@@ -455,8 +457,8 @@ class _ValueSets:
                 )
             addresses = self._round_reach[key]
             if isinstance(ref, IndirectBlockRange):
-                # Which element gets which source value is positional: unbounded,
-                # unless the window cannot reach this tag's slot at all.
+                # Which element gets which source value depends on position.  So the set is
+                # unbounded, unless the window cannot reach this tag's slot at all.
                 if addresses is not None and not (addresses & slots):
                     continue
                 return None
@@ -506,10 +508,10 @@ class _Guarded(Mapping[str, frozenset[Any] | None]):
 
 
 def _within(domain: frozenset[Any] | None, bound: _Bound) -> frozenset[Any] | None:
-    """Every value of a closed *bound*, else the values of *domain* inside it.
+    """Return every value of a closed *bound*, else the values of *domain* inside it.
 
     A closed bound gives its whole range, so the read stays the same set from round to
-    round.  A count that grows by one a round (a loop index) would else carry each tag
+    round.  Otherwise a count that grows by one a round (a loop index) would carry each tag
     it feeds to the growth limit.
     """
     lo, hi = bound
@@ -525,7 +527,7 @@ def _within(domain: frozenset[Any] | None, bound: _Bound) -> frozenset[Any] | No
 
 
 def rung_guards(program: Any) -> dict[int, dict[str, _Bound]]:
-    """The bounds each instruction's rung puts on the tags it reads, by ``id`` of the instruction.
+    """Return the bounds each instruction's rung puts on the tags it reads, by ``id``.
 
     An instruction that does nothing while its row has no power
     (``is_inert_when_disabled()``) writes only when the row's conditions hold.  So an
@@ -533,7 +535,7 @@ def rung_guards(program: Any) -> dict[int, dict[str, _Bound]]:
     writes.  An instruction that writes on a false rung too, such as
     ``run_enabled_function()`` or a timer, gets no bound.  An earlier write in the same
     rung drops the bound on the tag it writes.  A call, or a write through a pointer,
-    drops every bound after it.  An Or bounds nothing, and nor does a For loop.
+    drops every bound after it.  An Or bounds nothing, and neither does a For loop.
     """
     out: dict[int, dict[str, _Bound]] = {}
     for rungs in (program.rungs, *program.subroutines.values()):
@@ -547,8 +549,9 @@ def _visit_row(
 ) -> None:
     """Record the guards of each instruction in *row* and its branches, in run order.
 
-    A branch's conditions hold its parents' too.  *written* and *unknown* carry across the
-    whole rung, as a write in one branch comes before the instructions after it.
+    A branch's conditions hold its parents' conditions too.  *written* and *unknown* carry
+    across the whole rung, because a write in one branch comes before the instructions
+    after it.
     """
     from pyrung.core.rung import Rung
 
@@ -570,7 +573,7 @@ def _visit_row(
 
 
 def _written_by(instr: Any) -> frozenset[str] | None:
-    """The tags *instr* writes, or None when it may write any of them."""
+    """Return the tags *instr* writes, or None if it may write any of them."""
     from pyrung.core.analysis.write_sites import static_write_target_names
 
     if type(instr).__name__ in _CALLS:
@@ -585,7 +588,7 @@ def _written_by(instr: Any) -> frozenset[str] | None:
 
 
 def _condition_bounds(conditions: Iterable[Any]) -> dict[str, _Bound]:
-    """The bounds that And-ed comparisons of a tag with a constant put on that tag."""
+    """Return the bounds that And-ed comparisons of a tag with a constant put on that tag."""
     out: dict[str, _Bound] = {}
     for cond in conditions:
         if isinstance(cond, AllCondition):

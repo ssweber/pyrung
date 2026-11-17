@@ -1,10 +1,10 @@
 """Run generated P1AM-200 code on a desktop Python, no board attached.
 
 ``generate_circuitpy()`` writes a ``code.py`` (and ``pyrung_rt.py``) for a
-P1AM-200.  This module runs that same file under CPython: it installs stand-in
+P1AM-200.  This module runs that same file under CPython.  It installs stand-in
 modules for the board's hardware (``board``, ``digitalio``, ``busio``,
-``P1AM``, the SD card, ``microcontroller``, the WIZnet Ethernet stack) and
-then runs ``code.py`` unchanged, scan loop and all::
+``P1AM``, the SD card, ``microcontroller``, the WIZnet Ethernet stack).  Then it
+runs ``code.py`` unchanged, scan loop and all::
 
     python path/to/host.py DIR [--host 127.0.0.1] [--port 5020]
 
@@ -17,12 +17,12 @@ What the stand-ins do:
 - Every P1AM module input reads 0; outputs go nowhere.
 - There is no SD card, so retentive memory starts fresh on every run.
 
-It catches what the generated logic and the generated Modbus server do; it
-does not catch what only the board does (REAL math in single precision, the
+It finds bugs in what the generated logic and the generated Modbus server do.  It
+does not find bugs that only the board causes (REAL math in single precision, the
 CircuitPython language subset, scan timing, WIZnet quirks).
 
-Standard library only: run it by path (``python -I host.py``) so it starts
-without importing pyrung.
+It uses only the standard library.  Run it by path (``python -I host.py``) so that it
+starts without importing pyrung.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class _DigitalInOut:
         self.pin = pin
         self.direction = None
         self.pull = None
-        # The RUN/STOP switch is in RUN; every other pin reads low.
+        # The RUN/STOP switch is in RUN.  Every other pin reads low.
         self.value = getattr(pin, "name", None) == "SWITCH"
 
 
@@ -67,7 +67,10 @@ class _NeoPixel:
 
 
 class _P1AMBase:
-    """``P1AM.Base()``: no modules answer; every read is 0, every write is dropped."""
+    """Stand in for ``P1AM.Base()``.
+
+    No module answers.  Every read is 0 and every write is dropped.
+    """
 
     def __getattr__(self, name: str) -> Any:
         return lambda *_args, **_kwargs: 0
@@ -83,12 +86,12 @@ class _Wiznet5k:
 
 
 class HostSocket:
-    """A WIZnet socket, played by a CPython TCP socket.
+    """Play a WIZnet socket with a CPython TCP socket.
 
     Two differences matter to the generated server.  With timeout 0, a WIZnet
-    ``recv_into`` with nothing to read returns 0 where CPython raises
-    ``BlockingIOError`` (which the server would take as a dead client); and
-    the server asks ``_connected`` to tell an idle client from a closed one.
+    ``recv_into`` with nothing to read returns 0.  CPython raises ``BlockingIOError``
+    instead, which the server would take as a dead client.  So this class returns 0.
+    The server also asks ``_connected`` to tell an idle client from a closed one.
     """
 
     def __init__(

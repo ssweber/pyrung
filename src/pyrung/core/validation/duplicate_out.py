@@ -97,8 +97,8 @@ def _sites_mutually_exclusive(
     mutually-exclusive rung conditions do NOT help: both instructions still
     execute, and the disabled one can still write the target.  An out resets
     it every scan.  A drum writes less often, on a move or as its rung comes
-    back, but its reset turns its outputs off with the rung false, and each
-    drum's row overwrites the other's, so the two still contend.
+    back.  But its reset turns its outputs off when the rung is false, and each
+    drum's row overwrites the other's.  So the two still contend.
     """
     # An uncalled subroutine's instructions never execute — no conflict
     if (
