@@ -29,6 +29,12 @@ Command-line options
 ``--pyrung-whitelist=PATH``
     TOML whitelist file.  New findings not in the whitelist cause a test
     failure.  See :class:`Whitelist` for the file format.
+
+Recordings
+----------
+Every ``.rec`` file that pytest collects is a test.  It replays the recording
+on a fresh load of the program its ``# program:`` line names, and fails at the
+first command that fails, such as an ``assert``.
 """
 
 from __future__ import annotations
@@ -42,8 +48,53 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from pyrung.core.analysis.query import CoverageReport
     from pyrung.core.runner import PLC
+
+#: Kept equal to ``pyrung.dap.recording.RECORDING_SUFFIX``, which a test checks, so that
+#: loading this plugin does not import the debugger.
+_RECORDING_SUFFIX = ".rec"
+
+
+# ---------------------------------------------------------------------------
+# Recordings
+# ---------------------------------------------------------------------------
+
+
+def pytest_collect_file(parent: pytest.Collector, file_path: Path) -> pytest.Collector | None:
+    if file_path.suffix == _RECORDING_SUFFIX:
+        return RecordingFile.from_parent(parent, path=file_path)
+    return None
+
+
+class RecordingFile(pytest.File):
+    """A recording file, which holds one test."""
+
+    def collect(self) -> Iterator[pytest.Item]:
+        yield RecordingItem.from_parent(self, name=self.path.stem)
+
+
+class RecordingItem(pytest.Item):
+    """Replays one recording, and fails at its first failed line."""
+
+    def runtest(self) -> None:
+        from pyrung.dap.recording import replay_recording
+
+        replay_recording(self.path)
+
+    def repr_failure(self, excinfo: pytest.ExceptionInfo[BaseException], style: Any = None) -> Any:
+        from pyrung.dap.recording import ReplayFailed
+
+        failure = excinfo.value
+        if isinstance(failure, ReplayFailed):
+            where = self.path.name if failure.line is None else f"{self.path.name}:{failure.line}"
+            return f"{where}: {failure.reason}"
+        return super().repr_failure(excinfo, style=style)
+
+    def reportinfo(self) -> tuple[Path, int | None, str]:
+        return self.path, None, f"recording {self.name}"
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +171,9 @@ class CoverageCollector:
     def collect(self, plc: PLC) -> None:
         """Collect a coverage report from a PLC instance after a test run.
 
-        Coverage is of the whole run, however it ran, so the scans of a long compiled run
-        are stepped again here for their records even past the limit a single question has.
+        The report covers the whole run, however it ran. So this method steps the scans of a
+        long compiled run again to get their records, even past the limit that a single
+        question has.
         """
         plc._settle_compiled_ranges(at_any_cost=True)
         self._reports.append(plc.query.report())

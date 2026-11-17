@@ -74,7 +74,7 @@ def parse_duration(text: str) -> int:
 
 
 def parse_number(text: str) -> float:
-    """A rate as a comment writes it. Raises ``ValueError`` unless it is a finite number."""
+    """Parse a rate as a comment writes it. Raise ``ValueError`` unless it is a finite number."""
     try:
         value = float(text.strip())
     except ValueError:
@@ -85,7 +85,7 @@ def parse_number(text: str) -> float:
 
 
 def parse_number_or_tag(text: str) -> float | str:
-    """A target as a comment writes it. Numeric text is a number, and other text a tag name."""
+    """Parse a target as a comment writes it. Numeric text is a number, other text a tag name."""
     stripped = text.strip()
     if not stripped:
         raise ValueError("expected a number or a tag name, got nothing")
@@ -99,7 +99,7 @@ def parse_number_or_tag(text: str) -> float | str:
 
 
 def format_number(value: float) -> str:
-    """Comment text for a number. A whole number drops its ``.0``, and others keep every digit."""
+    """Return comment text for a number. A whole number drops its ``.0``."""
     if float(value).is_integer() and abs(value) < 1e15:
         return str(int(value))
     return repr(value)
@@ -135,12 +135,12 @@ class PhysicalKey:
 
     @property
     def dap_field(self) -> str:
-        """The ``pyrungLink`` request field for this key: ``flasher_on`` -> ``flasherOn``."""
+        """Return the ``pyrungLink`` request field for this key: ``flasher_on`` -> ``flasherOn``."""
         head, *rest = self.name.split("_")
         return head + "".join(part.title() for part in rest)
 
     def parse(self, text: str) -> Any:
-        """The Python value for comment text. Raises ``ValueError`` naming the key."""
+        """Return the Python value for comment text. Raise ``ValueError`` naming the key."""
         try:
             if self.value_type == "duration":
                 parse_duration(text)
@@ -154,7 +154,7 @@ class PhysicalKey:
         raise ValueError(f"{self.name} is a bare flag. Write {self.name} without a value.")
 
     def check(self, value: Any, *, owner: str) -> Any:
-        """The stored Python value for a keyword argument, or raise naming *owner* and the key."""
+        """Return the stored value for a keyword argument, or raise naming *owner* and the key."""
         where = f"Physical {owner!r}: {self.name}"
         if self.value_type == "flag":
             if not isinstance(value, bool):
@@ -191,7 +191,7 @@ class PhysicalKey:
         return float(value)
 
     def text(self, value: Any) -> str:
-        """Comment text for a stored value. A flag's text is its key."""
+        """Return comment text for a stored value. A flag's text is its key."""
         if self.value_type == "flag":
             return self.name
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -199,7 +199,7 @@ class PhysicalKey:
         return str(value)
 
     def token(self, value: Any) -> str:
-        """The comment token: ``key=text``, or the bare key for a flag."""
+        """Return the comment token: ``key=text``, or the bare key for a flag."""
         if self.value_type == "flag":
             return self.name
         return f"{self.name}={self.text(value)}"
@@ -230,7 +230,7 @@ class PhysicalKind:
         return tuple(key for key in self.keys if key.is_flag)
 
     def missing(self, given: Iterable[str]) -> tuple[str, ...]:
-        """The keys this kind still needs when *given* are set."""
+        """Return the keys this kind still needs when *given* are set."""
         present = set(given)
         if self.needs == "any":
             return () if present & set(self.key_names) else self.key_names
@@ -402,7 +402,7 @@ _KINDS_BY_NAME: dict[str, PhysicalKind] = {kind.name: kind for kind in PHYSICAL_
 
 
 def physical_kind(name: str) -> PhysicalKind:
-    """The kind called *name* (``"delay"``, ``"flasher"``, ...)."""
+    """Return the kind called *name* (``"delay"``, ``"flasher"``, ...)."""
     try:
         return _KINDS_BY_NAME[name]
     except KeyError:
@@ -416,7 +416,7 @@ def _kinds_hint() -> str:
 
 
 def kind_of_keys(keys: Iterable[str], *, owner: str | None = None) -> PhysicalKind | None:
-    """The kind the response keys *keys* belong to, or ``None`` for no keys.
+    """Return the kind that the response keys *keys* belong to, or ``None`` for no keys.
 
     Raises ``ValueError`` for a name that is no response key, for keys of two kinds, and for
     a kind missing a key it needs (``maintained`` without ``timed``).
@@ -608,12 +608,12 @@ class Physical:
 
     @property
     def kind_spec(self) -> PhysicalKind:
-        """The row of ``PHYSICAL_KINDS`` this feedback belongs to."""
+        """Return the row of ``PHYSICAL_KINDS`` that this feedback belongs to."""
         return _KINDS_BY_NAME[self.__dict__["_kind"]]
 
     @property
     def kind(self) -> str:
-        """``delay``, ``flasher``, ``timed``, ``toggle``, ``ramp`` or ``approach``."""
+        """Return ``delay``, ``flasher``, ``timed``, ``toggle``, ``ramp`` or ``approach``."""
         return self.kind_spec.name
 
     @property
@@ -621,7 +621,7 @@ class Physical:
         return self.kind_spec.feedback
 
     def keywords(self) -> dict[str, Any]:
-        """The response keywords set on this feedback, leaving out a key at its default.
+        """Return the response keywords set on this feedback, leaving out a key at its default.
 
         ``Physical(p.name, **p.keywords(), system=p.system) == p``.
         """
@@ -633,14 +633,14 @@ class Physical:
         return out
 
     def comment_text(self) -> dict[str, str | bool]:
-        """The response keys as a comment writes them, with a flag as ``True``."""
+        """Return the response keys as a comment writes them, with a flag as ``True``."""
         return {
             name: True if PHYSICAL_KEYS[name].is_flag else PHYSICAL_KEYS[name].text(value)
             for name, value in self.keywords().items()
         }
 
     def tokens(self) -> list[str]:
-        """The comment tokens for the response: ``["flasher_on=8ms", "flasher_off=8ms"]``."""
+        """Return the comment tokens for the response: ``["flasher_on=8ms", "flasher_off=8ms"]``."""
         return [PHYSICAL_KEYS[name].token(value) for name, value in self.keywords().items()]
 
     @property

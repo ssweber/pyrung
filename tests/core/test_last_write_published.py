@@ -1,8 +1,9 @@
 """A commit publishes what was written, exactly, and an equal value is still no change.
 
-``False`` over ``0`` and ``-0.0`` over ``0.0`` replace the object the state holds, so a
-state never depends on when it was last published.  Nothing that asks whether a tag
-changed may see them: they compare equal, and these tests say so one reader at a time.
+Writing ``False`` over ``0``, or ``-0.0`` over ``0.0``, replaces the object that the state
+holds. So a state never depends on when it was last published. No reader that asks whether a tag
+changed may see these writes as a change, because the values compare equal. These tests check
+that one reader at a time.
 """
 
 from __future__ import annotations

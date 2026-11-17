@@ -1,4 +1,4 @@
-"""A debounce's off TD while its coil is off: the ``deb_off`` group (part ``follow3_reset``).
+"""Read a debounce's off TD while its coil is off: the ``deb_off`` group (part ``follow3_reset``).
 
 ``off_td_with_coil_off``: debounce A has 300 ms on and 1000 ms off, and its coil never comes on.
 Debounce B is the control.  It has 0 ms on and 1000 ms off, so its coil comes on with the input.
@@ -137,7 +137,7 @@ def test_deb_off():
 
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
 def test_deb_off_at_any_scan(monkeypatch, dt):
-    """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""
+    """The CLICK scans in about 1 ms and the soft PLC in 10..40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     cases = [replace(c, scans=int(1.0 / dt)) for c in group.cases]
     assert_all_passed(run(Group("deb_off", cases)))

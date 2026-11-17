@@ -1,10 +1,12 @@
-"""TXT against a literal and TXT against TXT: the ``text_compare`` group (part ``text_flasher``).
+"""Compare TXT against a literal and TXT against TXT: the ``text_compare`` group.
 
-CLICK's Compare dialog takes ``TXT1 = "T"`` and ``TXT1 = TXT2`` and offers only = and not-equal
-on text; the exporter refuses an order compare (``CLK_TEXT_ORDER_COMPARE``), so none is asked.
-A TXT holds NUL until written (``text/null_ascii``, on hardware), but what = and not-equal make
-of a blank has not been read.  An expectation is pyrung's reading; a CLICK that reads otherwise
-prints what it read, and that is the answer.
+The group is in the part ``text_flasher``.
+
+CLICK's Compare dialog accepts ``TXT1 = "T"`` and ``TXT1 = TXT2``.  On text it offers only =
+and not-equal.  The exporter refuses an order compare (``CLK_TEXT_ORDER_COMPARE``), so no case
+asks for one.  A TXT holds NUL until written (``text/null_ascii``, on hardware).  What = and
+not-equal make of a blank has not been read.  An expectation is pyrung's reading.  A CLICK
+that reads otherwise prints what it read, and that is the answer.
 
 Each compare is a decimal digit, 1 where it passed power.  A pair is two digits, = then not-equal:
 10 reads equal, 1 unequal, and 11 or 0 says the two are not complements on that value.
@@ -18,9 +20,9 @@ Each compare is a decimal digit, 1 where it passed power.  A pair is two digits,
   something, from an earlier project, and the case reads that and not a blank.
 - ``cleared``: a TXT written "Q" and then the blank, the same four, with a never written one for
   the last: 1, 1, 10, 10, and its ASCII code 0.
-- ``blank_and_space``: a compare could read a blank as a space.  Never written and cleared against " " (Result1, Result2) and a TXT
-  holding " " (Result3, Result4): 1 where a blank is not a space, 10 where it is.  ErrorCode, a TXT
-  holding " " against " ": 10, the control.
+- ``blank_and_space``: a compare could read a blank as a space.  Never written and cleared
+  against " " (Result1, Result2) and a TXT holding " " (Result3, Result4): 1 where a blank is
+  not a space, 10 where it is.  ErrorCode, a TXT holding " " against " ": 10, the control.
 - ``blank_literal``: ``$00``, CLICK's ASCII-code constant for NUL, is how the exporter spells the
   blank (a quoted ``""`` writes no TXT).  Never written and cleared against it (Result1, Result2):
   10.  A TXT holding "T" against it (Result3): 1.  The editor may refuse the literal, which is an

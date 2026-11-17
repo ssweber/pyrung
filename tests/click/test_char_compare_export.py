@@ -78,7 +78,7 @@ def test_numeric_order_compare_is_not_flagged():
 
 @pytest.mark.parametrize("op", ["==", "!="])
 def test_a_txt_against_a_longer_literal_exports_as_written(op):
-    # pyrung compares it over TXT1 and TXT2, as a CLICK does; the ladder keeps the one compare.
+    # pyrung compares it over TXT1 and TXT2, as a CLICK does. The ladder keeps the one compare.
     hit, other = Bool("Hit"), Bool("Other")
     with Program(strict=False) as prog:
         with rung(other, _OPS[op](txt[1], "AB")):
@@ -96,8 +96,8 @@ def _window_codes(prog, mapping):
 
 
 def test_a_window_onto_a_named_array_gap_is_a_finding_and_refused():
-    # Padded1_b's next slot (TXT3) is no field's, so pyrung compares Padded1_b alone;
-    # a CLICK compares TXT2 and TXT3.
+    # Padded1_b's next slot (TXT3) is no field's, so pyrung compares Padded1_b alone.
+    # A CLICK compares TXT2 and TXT3.
     from pyrung.core import named_array
 
     @named_array(Char, count=2, stride=3)
@@ -141,7 +141,7 @@ def test_a_window_over_a_block_mapped_out_of_order_is_a_finding(op):
 
 
 def test_a_lone_char_against_a_longer_literal_is_a_finding():
-    # Built before the mapping, a Char of no block reads only itself; a CLICK
+    # Built before the mapping, a Char of no block reads only itself. A CLICK
     # reads TXT9 and TXT10.
     a, hit = Char("A"), Bool("Hit")
     with Program(strict=False) as prog:
@@ -252,7 +252,7 @@ def test_a_window_mapped_to_the_next_txts_is_not_a_finding():
 
 
 def test_a_pointer_compare_against_a_longer_literal_stays_refused_as_a_pointer():
-    # A CLICK contact takes no pointer, so the window question never reaches one.
+    # A CLICK contact accepts no pointer, so the window question never reaches one.
     from pyrung.click.validation import CLK_PTR_CONTEXT_ONLY_COPY
 
     hit = Bool("Hit")
@@ -297,7 +297,7 @@ def test_a_named_array_window_imports_back_comparing_the_same_txts(tmp_path):
 
 
 def test_a_window_on_a_box_rung_is_one_finding():
-    # A timer's or counter's enable holds the rung's conditions again; the
+    # A timer's or counter's enable repeats the rung's conditions. The
     # compare is still reported once, on the rung or the branch that has it.
     from pyrung.core import Block, Counter, TagType, Timer, branch, count_up, on_delay
 

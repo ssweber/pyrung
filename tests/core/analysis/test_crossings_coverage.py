@@ -146,8 +146,8 @@ _ALWAYS_FALLTHROUGH = (
 )
 
 
-# Modules skipped by the import walk: ``pyrung.zen`` prints on import and
-# ``__main__`` modules run an entry point.  Neither may define an instruction.
+# Modules that the import walk skips. ``pyrung.zen`` prints on import, and ``__main__``
+# modules run an entry point. Neither may define an instruction.
 _IMPORT_WALK_SKIP = frozenset({"pyrung.zen"})
 
 
@@ -164,7 +164,10 @@ def _import_all_pyrung_modules() -> None:
 
 
 def _registered_crossing_by_mro(cls: type) -> object | None:
-    """``crossing_for``'s lookup, at class level (it takes an instance)."""
+    """Return the crossing that ``crossing_for`` finds for the class *cls*.
+
+    ``crossing_for`` itself takes an instance.
+    """
     for base in cls.__mro__:
         crossing = crossings._REGISTRY.get(base)
         if crossing is not None:
@@ -211,7 +214,7 @@ def test_every_instruction_is_covered_or_exempt() -> None:
 @pytest.mark.parametrize("cls", sorted(EXEMPT, key=lambda c: c.__name__), ids=lambda c: c.__name__)
 def test_exempt_classes_resolve_no_crossing(cls: type) -> None:
     # An exempt subclass of a registered class would inherit the parent's
-    # crossing through the MRO walk; exempt must mean no crossing at runtime.
+    # crossing through the MRO walk. Exempt must mean no crossing at runtime.
     assert _registered_crossing_by_mro(cls) is None
 
 

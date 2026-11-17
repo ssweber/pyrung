@@ -329,7 +329,7 @@ def _admit_wait_read(
 
 
 def _consumer_already_reads_it(detail: TraceAction, plc: Any, snapshot: Any, ctx: Any) -> bool:
-    """Whether the rung that needs this value read it in the last scan, from a write in that scan.
+    """Return whether the rung that needs this value read it after a write in the last scan.
 
     The trace judges a need on the value the scan ended with.  A rung reads what is there when
     it runs: reset a bit at the top of the program and every rung below reads it off, whatever it
@@ -378,9 +378,10 @@ def _separate_prerequisites(
     instruction_boundary: ChannelHeading | None = None
     instruction_node: Any | None = None
     if is_coast:
-        # Two owners can be waiting at once, one on the other: a timer chain's second timer
-        # needs the first one's Done.  The wait belongs to the one the program is running now,
-        # which its own progress witness says; the stable sort leaves every other order alone.
+        # Two owners can be waiting at once, one on the other.  For example, a timer chain's
+        # second timer needs the first one's Done.  The wait belongs to the owner that the
+        # program is running now, and that owner's progress witness says which it is.  The
+        # sort is stable, so it leaves every other order alone.
         for node in sorted(
             frame.tree.leaves(),
             key=lambda leaf: (

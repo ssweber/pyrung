@@ -4,8 +4,8 @@ Export the CLICK project (ladder CSVs and nicknames, for Guided Paste) with::
 
     make conformance-export OUT=path/to/dir
 
-The whole suite is more than CLICK's 8000 steps, so a CLICK loads it as nine
-projects, one part each, named for what they cover (``PARTS``)::
+The whole suite is more than CLICK's 8000 steps, so CLICK loads it as nine projects.
+Each project is one part, named for what it covers (``PARTS``)::
 
     make conformance-export PART=coils OUT=path/to/coils
     make conformance-export PART=copy OUT=path/to/copy
@@ -15,13 +15,18 @@ projects, one part each, named for what they cover (``PARTS``)::
     make conformance-export PART=system OUT=path/to/system
     make conformance-export PART=boot OUT=path/to/boot
 
-Each part's main program writes its own layout hash to ``DS1``, and a run
-against a real PLC reads it to pick that part's groups (``build_for``).
+Each part's main program writes its own layout hash to ``DS1``. A run against a real PLC
+reads that hash to pick the part's groups (``build_for``).
 
 The parts ``units``, ``fixed_scan``, ``text_flasher``, ``follow_flags``, ``follow_values``,
 ``follow_timing``, ``follow_extra``, the ``follow2_*`` parts and ``modbus_raw`` have memory of
-their own (``APART_PARTS``), apart from the whole suite;
-``fixed_scan`` is run with CLICK's fixed scan on, and its export says how.
+their own (``APART_PARTS``), apart from the whole suite.
+You run ``fixed_scan`` with CLICK's fixed scan on, and its export says how.
+
+Picked cases load as one project with every case rung in main (``build_main``), for
+ClickNick's PLC queue.  Each keeps its slot and its hash::
+
+    make conformance-export CASES=word_store,drum/events_are_edges OUT=path/to/dir
 
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
 
@@ -149,13 +154,13 @@ READINGS_PATH = Path(__file__).with_name("readings.toml")
 #: The ClickNick workspace linked to the conformance CLICK project.
 WORKSPACE_PATH = Path(__file__).with_name("workspace")
 
-#: Every group in the suite.  A new case module adds its ``group`` here.
+#: Every group in the suite. A new case module adds its ``group`` here.
 ALL_GROUPS = [
-    # First, so its fault-flag cases read SC40/SC43/SC44 before any other
-    # group can raise them on the same scan.
+    # First, so its fault-flag cases read SC40/SC43/SC44 before any other group can raise
+    # them on the same scan.
     test_system.group,
-    # Right after system: its probes read SC40/SC43/SC44/SC46 after its own
-    # instructions, so only system's can raise them first on a scan.
+    # Right after system. Its probes read SC40/SC43/SC44/SC46 after their own instructions,
+    # so only system's cases can raise those flags first on a scan.
     test_faults.group,
     test_rung_semantics.group,
     test_math.group,
@@ -183,12 +188,13 @@ ALL_GROUPS = [
     test_cont_box.group,
     test_for_count.group,
     test_paste_risk.group,
-    # A drum in a For body may be refused at paste: after the groups CLICK has run.
+    # CLICK may refuse a drum in a For body at paste, so this group runs after the groups that
+    # CLICK has run.
     test_drum_idle.group,
-    # Last, so no other group's rung reads SC46 on a scan a Math error raised it.
+    # Last, so that no other group's rung reads SC46 on a scan where a Math error raised it.
     test_math_error.group,
-    # The grey-area probes (probe_kit.py): each reads a flag right after its own op, or
-    # waits for a scan it starts off (SC46), so nothing they raise reaches a group above.
+    # The grey-area probes (probe_kit.py). Each probe reads a flag right after its own op, or
+    # waits for a scan that it starts off (SC46). Nothing they raise reaches a group above.
     test_word_store.group,
     test_real_bits.group,
     test_real_sum.group,
@@ -209,26 +215,27 @@ ALL_GROUPS = [
     test_coil_range.group,
     test_compare.group,
     test_boot_read.flag_group,
-    # After every group: its probes raise SC43 and SC46 on purpose, and a flag
-    # stays up to the end of the scan, so any group after it that reads a flag
-    # would see them (text/to_binary read SC43 on a scan a store probe raised it).
+    # After every group. Its probes raise SC43 and SC46 on purpose, and a flag stays up to the
+    # end of the scan. Any group after it that reads a flag would see them. For example,
+    # text/to_binary read SC43 on a scan where a store probe raised it.
     test_store_probe.group,
-    # After the store probes too: they raise flags on purpose (and leave them up to
-    # the end of the scan), so no group that reads one may run after them.
+    # After the store probes too. These probes raise flags on purpose and leave them up to the
+    # end of the scan, so no group that reads a flag may run after them.
     test_flag_probe.group,
-    # The last group: it writes past the DD bank on a CLICK and may be left out.
+    # The last group. It writes past the DD bank on a CLICK, so you may leave it out.
     test_past_bank_write.group,
 ]
 
-#: Group names per CLICK project, by instruction chapter (``docs/instructions/``), split to
-#: keep each part under ``PART_STEP_BUDGET``.  Every group is in exactly one part.  The
-#: registers are the manifest's either way, so a group's subroutine is the same in its part as
-#: in the whole project, and moving a group between parts changes no case's hash.  Groups run
-#: in ``ALL_GROUPS`` order, so main calls them in that order, and a group a CLICK may refuse at
-#: paste comes last in its part, so its subroutine and call rung are the last to delete.
+#: Group names per CLICK project, by instruction chapter (``docs/instructions/``). The split
+#: keeps each part under ``PART_STEP_BUDGET``. Every group is in exactly one part.
+#: The registers come from the manifest either way. A group's subroutine is therefore the
+#: same in its part as in the whole project, and moving a group between parts changes no
+#: case's hash. Groups run in ``ALL_GROUPS`` order, so main calls them in that order.
+#: A group that CLICK may refuse at paste comes last in its part. Its subroutine and call
+#: rung are then the last to delete.
 PARTS: dict[str, tuple[str, ...]] = {
-    # Contacts, coils, timers and counters.  ``compare`` is last: the editor may refuse its
-    # 2-char literal.
+    # Contacts, coils, timers and counters. ``compare`` is last because the editor may refuse
+    # its 2-char literal.
     "coils": (
         "out",
         "coils",
@@ -238,8 +245,8 @@ PARTS: dict[str, tuple[str, ...]] = {
         "coil_range",
         "compare",
     ),
-    # ``past_write`` is last: it writes past the DD bank on a CLICK, so its subroutine and
-    # call rung can be left out.  Nothing depends on it.
+    # ``past_write`` is last. It writes past the DD bank on a CLICK, so you can leave out its
+    # subroutine and call rung. Nothing depends on it.
     "copy": (
         "text",
         "block",
@@ -249,7 +256,7 @@ PARTS: dict[str, tuple[str, ...]] = {
         "block_more",
         "past_write",
     ),
-    # ``store_probe`` is last: it raises fault flags no group below may read.
+    # ``store_probe`` is last. It raises fault flags, and no group after it may read them.
     "math": (
         "math",
         "numeric",
@@ -260,11 +267,11 @@ PARTS: dict[str, tuple[str, ...]] = {
         "agg_more",
         "store_probe",
     ),
-    # The drums are too many for one project.  ``drum_limits`` may be refused at paste.
+    # The drums are too many for one project. CLICK may refuse ``drum_limits`` at paste.
     "drum1": ("drum", "drum_trace", "drum_rule", "drum_jump", "drum_limits"),
     "drum2": ("drum_settle", "drum_close", "drum_idle", "drum_pins"),
     "drum3": ("shift", "search", "drum_branch"),
-    # How a rung is solved, and program control.  ``loop_call`` runs its rungs in main, after
+    # How a rung is solved, and program control. ``loop_call`` runs its rungs in main, after
     # every call rung.
     "control": (
         "rungs",
@@ -280,10 +287,10 @@ PARTS: dict[str, tuple[str, ...]] = {
         "for_more",
         "call_more",
     ),
-    # ``system`` runs first (see test_system.py), then what reads a fault flag after it.
+    # ``system`` runs first (see test_system.py). The groups that read a fault flag follow it.
     "system": ("system", "faults", "flag_probe"),
-    # Not by chapter: a person boots the PLC between its runs, ``rtc_set`` moves the clock and
-    # ``for_wide`` may make a scan of over a second, so it holds no wall-clock case.
+    # Not by chapter. A person boots the PLC between its runs, ``rtc_set`` moves the clock and
+    # ``for_wide`` may make a scan of over a second. So this part holds no wall-clock case.
     "boot": ("boot_read", "rtc_set", "for_wide", "flag_scan"),
 }
 
@@ -292,10 +299,10 @@ PARTS: dict[str, tuple[str, ...]] = {
 class ApartPart:
     """A CLICK project on memory of its own, outside the whole suite's layout.
 
-    Its groups' registers and raw memory are ``manifest_apart.toml`` and
-    ``memory.OWNED_APART``: they may repeat the suite's, so it never runs in one project
-    with them, and it changes no other part's hash however it grows.  With
-    *fixed_scan_ms* a person runs it with CLICK's fixed scan on, at that time.
+    Its groups' registers and raw memory come from ``manifest_apart.toml`` and
+    ``memory.OWNED_APART``. They may repeat the suite's, so it never runs in one project
+    with the suite's groups. It changes no other part's hash, however much it grows.
+    If *fixed_scan_ms* is set, a person runs it with CLICK's fixed scan on, at that time.
     """
 
     groups: tuple[str, ...]
@@ -305,7 +312,7 @@ class ApartPart:
 #: Every group on memory of its own, in the order main calls them.
 APART_GROUPS = [
     test_unit_pairs.group,
-    # Left out with ``GROUP=unit_pairs``: a minute's wait.
+    # ``GROUP=unit_pairs`` leaves this group out, because it waits a minute.
     test_unit_minute.group,
     test_fixed_scan.group,
     test_text_compare.group,
@@ -316,7 +323,7 @@ APART_GROUPS = [
     test_math_terms.group,
     test_search_more.group,
     test_real_text.group,
-    # Writes past the DD bank: deletable, last but one of its part.
+    # Writes past the DD bank, so you can delete it. It is last but one in its part.
     test_past_clean.group,
     test_for_dd_minus.group,
     test_bad_jump.group,
@@ -330,7 +337,8 @@ APART_GROUPS = [
     # The follow2_* parts.
     test_flag_steps.flag_steps,
     test_flag_steps.flag_reads,
-    # Alone in its part: its op is the scan's last Math, its reads the next scan's first rungs.
+    # Alone in its part. Its op is the scan's last Math, and its reads are the next scan's
+    # first rungs.
     test_flag_carry.group,
     test_term_zero.group,
     test_pack_point.group,
@@ -339,7 +347,7 @@ APART_GROUPS = [
     test_coil_phase.deb_fall,
     test_coil_phase.flash_zero,
     test_tof_rewrite.group,
-    # Stops the PLC on a 200 ms watchdog: run alone, with the watchdog at 10000 ms.
+    # Stops the PLC on a 200 ms watchdog. Run it alone, with the watchdog at 10000 ms.
     test_for_signed.group,
     # A reset held on while its rung is on.
     test_reset_pins.group,
@@ -350,75 +358,108 @@ APART_GROUPS = [
 ]
 
 APART_PARTS: dict[str, ApartPart] = {
-    # Timers in different units with one delay, Done on one scan: the relation, which
-    # holds or not whatever a scan takes.
+    # Timers in different units with one delay, and Done on one scan. The test is the relation
+    # between them, which holds or fails whatever time a scan takes.
     "units": ApartPart(("unit_pairs", "unit_minute")),
-    # The scan a CLICK counts, for curiosity: only fixed scan mode makes that a number.
+    # The scan that CLICK counts, for curiosity. Only fixed scan mode makes that a number.
     "fixed_scan": ApartPart(("fixed_scan",), fixed_scan_ms=100),
-    # What = and not-equal make of a TXT, a blank above all: a project of its own, since no
-    # block of the suite has a slot left, and a blank needs TXT that no project has written.
-    # And what a flasher's frozen off TD does when a lowered preset ends its on phase.
+    # What = and not-equal do with a TXT, above all a blank. It is a project of its own
+    # because no block of the suite has a slot left, and a blank needs a TXT that no project
+    # has written. It also asks what a flasher's frozen off TD does when a lowered preset ends
+    # its on phase.
     "text_flasher": ApartPart(("text_compare", "flasher_td")),
-    # The follow-up cases are in parts, since CLICK's editor freezes on a paste much over 150
-    # rungs.  This part asks what SC43 and SC44 follow.
+    # The follow-up cases are in several parts, because CLICK's editor freezes on a paste of
+    # much over 150 rungs. This part asks what SC43 and SC44 follow.
     "follow_flags": ApartPart(("flag_boxes", "flag_halves")),
     # This part asks about values.
     "follow_values": ApartPart(
         ("math_terms", "search_more", "real_text", "past_clean", "for_dd_minus")
     ),
-    # This part asks about timing.  It covers a drum's jump to a bad step, when a drum reads a
-    # step's preset, a debounce's off side and a flasher's on phase of 0.  For room it also holds
-    # a Word store below -32768.
+    # This part asks about timing. It covers a drum's jump to a bad step, when a drum reads a
+    # step's preset, a debounce's off side and a flasher's on phase of 0. It also holds a Word
+    # store below -32768, because there was room.
     "follow_timing": ApartPart(
         ("bad_jump", "drum_preset", "deb_zero", "coil_timing", "word_floor")
     ),
-    # A fourth, of what the others left: a flasher's off phase of 0 or below, a TD written
-    # into a running debounce and flasher, and a Real's text running past TXT1000.
+    # A fourth part for what the others left. It covers a flasher's off phase of 0 or below,
+    # a TD written into a running debounce and flasher, and a Real's text running past TXT1000.
     "follow_extra": ApartPart(("flasher_off", "td_write", "txt_end")),
-    # What leaves a fault flag on, each flag read by a coil right after its step;
+    # Which steps leave a fault flag on. A coil reads each flag right after its step.
     "follow2_flags": ApartPart(("flag_steps",)),
-    # a flag after a box that did not run, a quiet math error's 0 in a larger formula, and a
-    # decimal point packed into a DD;
+    # A flag after a box that did not run, a quiet math error's 0 in a larger formula, and a
+    # decimal point packed into a DD.
     "follow2_values": ApartPart(("flag_reads", "term_zero", "pack_point")),
-    # SC40 and SC46 across a scan boundary, alone so nothing runs between the op and the reads;
+    # SC40 and SC46 across a scan boundary. It is alone, so nothing runs between the op and
+    # the reads.
     "follow2_carry": ApartPart(("flag_carry",)),
-    # a DS drum preset held from the reset, and a bad jump on the drum rung's return;
+    # A DS drum preset held from the reset, and a bad jump on the drum rung's return.
     "follow2_drums": ApartPart(("drum_ds", "jump_return")),
-    # a debounce's off count at its fall, flashers on presets of 0, a TOF's TD written to 0.
+    # A debounce's off count at its fall, flashers on presets of 0, and a TOF's TD written to 0.
     "follow2_coils": ApartPart(("deb_fall", "flash_zero", "tof_rewrite")),
-    # For counts whose runs stop the PLC on a 200 ms watchdog, alone.
+    # For counts whose runs stop the PLC on a 200 ms watchdog. It is alone in its part.
     "follow2_for": ApartPart(("for_signed",)),
-    # A down counter's and an RTON's reset held on while its rung is on,
-    # and a debounce's off TD while its coil is off.
+    # A down counter's reset and an RTON's reset held on while the rung is on, and a debounce's
+    # off TD while its coil is off.
     "follow3_reset": ApartPart(("reset_pins", "deb_off")),
-    # Values staged for raw Modbus reads, and the echo of raw writes, for test_raw_requests.
+    # Values staged for raw Modbus reads, and the echo of raw writes. test_raw_requests uses
+    # them.
     "modbus_raw": ApartPart(("modbus_raw",)),
 }
 
 #: The longest scan (ms) a part's cases assume, unless ``PART_SCAN_LIMITS_MS`` names the part.
-#: Main keeps the longest SD10 in DS2.  On a real PLC a longest scan past the limit voids the run.
+#: Main keeps the longest SD10 in DS2. On a real PLC, a longest scan past the limit voids the
+#: run.
 SCAN_LIMIT_MS = 50
 PART_SCAN_LIMITS_MS: dict[str, int] = {
     # ``for_wide`` runs two For loops of 65536 and 65537 runs on one scan, about 2.2 s.
     "boot": 3000,
-    # CLICK's fixed scan of 100 ms, and a margin.
+    # CLICK's fixed scan of 100 ms, plus a margin.
     "fixed_scan": 150,
-    # ``for_signed``'s run on a CLICK takes 1287 ms, its longest scan in SD12.
+    # ``for_signed`` takes 1287 ms on a CLICK. That is its longest scan, shown in SD12.
     "follow2_for": 2000,
 }
 
-#: Estimated CLICK steps a part may take (``estimate_steps``): CLICK's 8000,
-#: less a margin for the estimate's error and the instructions it has not
+#: Estimated CLICK steps a part may take (``estimate_steps``). This is CLICK's 8000 steps,
+#: less a margin for the error in the estimate and for the instructions that it has not
 #: measured.
 PART_STEP_BUDGET = 7500
 
-#: Rungs a ``follow_*`` or ``follow2_*`` part may export (``R,`` rows of the CSVs): CLICK's
-#: editor freezes on a larger paste.  ``test_build.py`` holds each part to it.
+#: Rungs that a ``follow_*`` or ``follow2_*`` part may export (``R,`` rows of the CSVs).
+#: CLICK's editor freezes on a larger paste. ``test_build.py`` holds each part to this limit.
 FOLLOW_RUNG_LIMIT = 150
 
 
+_PAST_BANK = (
+    "it writes past the DD bank. A run cut off can leave DD1531 holding 5, and a later "
+    "faults/pointer_past_bank_lands then fails"
+)
+
+#: Groups whose cases cannot be picked to run in main (``build_main``), and why.  A group
+#: that main calls more than once a scan, and a case that runs in-process only, are refused
+#: without an entry here.
+MAIN_REFUSED: dict[str, str] = {
+    "ret_branch": "its Return must end a subroutine, and main has none to end",
+    "boot_read": "a person boots the PLC between its runs",
+    "rtc_set": "it moves the PLC's clock, and a run cut off leaves it moved for a person to set",
+    "flag_scan": (
+        "it reads fault flags across a scan, so its reading depends on the rungs of part "
+        "boot around it (flag_carry asks the same alone)"
+    ),
+    "fixed_scan": "a person turns on CLICK's fixed scan before it runs",
+    "for_signed": "it stops the PLC on its watchdog unless a person sets that to 10000 ms",
+    "modbus_raw": "test_raw_requests drives it, and it writes outside its own memory",
+    "past_write": _PAST_BANK,
+    "past_clean": _PAST_BANK,
+}
+
+#: Groups whose cases can be picked only with no case of another group, and why.
+MAIN_ALONE: dict[str, str] = {
+    "for_wide": "its scans of over a second are past the 50 ms every other case assumes",
+}
+
+
 def groups(part: str | None = None) -> list[Group]:
-    """Every group of *part* (``None``: the whole suite), in ``ALL_GROUPS`` order."""
+    """Return every group of *part* (``None`` is the whole suite), in ``ALL_GROUPS`` order."""
     if part is None:
         return list(ALL_GROUPS)
     if part in APART_PARTS:
@@ -430,10 +471,10 @@ def groups(part: str | None = None) -> list[Group]:
 
 
 def scan_limit_ms(part: str | None = None) -> int:
-    """The longest scan, in ms, *part*'s cases assume.
+    """Return the longest scan, in ms, that the cases of *part* assume.
 
-    The whole suite (``None``) runs only on a local target, and takes the largest of
-    its parts' limits.
+    The whole suite (``None``) runs only on a local target. Its limit is the largest of its
+    parts' limits.
     """
     if part is None:
         return max(scan_limit_ms(p) for p in PARTS)
@@ -441,7 +482,7 @@ def scan_limit_ms(part: str | None = None) -> int:
 
 
 def build(part: str | None = None) -> ConformanceProgram:
-    """The program for *part* (``None``: the whole suite) on its manifest."""
+    """Return the program for *part* (``None`` is the whole suite) on its manifest."""
     manifest = APART_MANIFEST_PATH if part in APART_PARTS else MANIFEST_PATH
     return build_program(
         groups(part), load_manifest(manifest), part=part, scan_limit_ms=scan_limit_ms(part)
@@ -449,20 +490,24 @@ def build(part: str | None = None) -> ConformanceProgram:
 
 
 def build_apart() -> ConformanceProgram:
-    """Every group on memory of its own, as one program, for a local target."""
+    """Return every group on memory of its own, as one program, for a local target."""
     limit = max(scan_limit_ms(p) for p in APART_PARTS)
     return build_program(APART_GROUPS, load_manifest(APART_MANIFEST_PATH), scan_limit_ms=limit)
 
 
 def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> ConformanceProgram:
-    """The build loaded at *endpoint*: the part, or the whole suite, whose layout
-    hash is in its ``DS1``.  A local target (``None``) runs the whole suite, or the
-    groups on memory of their own when *names* asks for those, in their own part when
-    one part holds them all.
+    """Return the build that is loaded at *endpoint*.
+
+    That build is the part, or the whole suite, whose layout hash is in the ``DS1`` of the
+    endpoint. A local target (``None``) runs the whole suite. If *names* asks only for groups
+    on memory of their own, a local target runs those groups instead. It runs them in their
+    own part if one part holds them all. Otherwise it runs every group on memory of its own,
+    as one program.
 
     Raises:
-        BuildMismatchError: ``DS1`` holds no build of the suite's layout hash, or *names* is not all in the part that matches.
-        ValueError: *names* holds a group no part has.
+        BuildMismatchError: ``DS1`` holds no layout hash of a build of the suite, or *names*
+            are not all in the part that matches.
+        ValueError: *names* includes a group that no part has.
     """
     if endpoint is None:
         apart = {g.name for g in APART_GROUPS}
@@ -492,7 +537,8 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
         where = " or ".join(f"part {p}" for p in candidates)
         raise BuildMismatchError(
             f"{endpoint} runs program layout {found}; {asked} {are} in {layouts}. "
-            f"Load {where} (make conformance-export PART={'|'.join(map(str, candidates))})."
+            f"Load {where} (make conformance-export PART={'|'.join(map(str, candidates))}). "
+            f"{_PICK_HINT}"
         )
     known: list[str] = []
     for part in [*PARTS, *APART_PARTS, None]:
@@ -503,12 +549,171 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
     raise BuildMismatchError(
         f"{endpoint} runs program layout {found}; the suite is layout {', '.join(known)}. "
         f"Export the part again (make conformance-export "
-        f"PART={'|'.join([*PARTS, *APART_PARTS])}) and load it."
+        f"PART={'|'.join([*PARTS, *APART_PARTS])}) and load it. {_PICK_HINT}"
     )
 
 
+def parse_picks(text: str) -> list[str]:
+    """The entries of a pick: ``group`` or ``group/id``, split at commas.
+
+    An entry ``@path`` reads more entries from that file, one or more a line, with ``#``
+    starting a comment.
+
+    Raises:
+        ValueError: A pick file cannot be read.
+    """
+    entries: list[str] = []
+    for raw in text.split(","):
+        entry = raw.strip()
+        if entry.startswith("@"):
+            path = Path(entry[1:])
+            try:
+                text_of_file = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"Cannot read the pick file {path}: {exc.strerror}") from None
+            for line in text_of_file.splitlines():
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    entries.extend(parse_picks(line))
+        elif entry:
+            entries.append(entry)
+    return entries
+
+
+def main_refusal(group: Group, case_id: str | None = None) -> str | None:
+    """Why *group*, or its case *case_id*, cannot be picked to run in main, or ``None`` when it can."""
+    if group.name in MAIN_REFUSED:
+        return MAIN_REFUSED[group.name]
+    if group.calls != 1:
+        return (
+            f"main calls {group.subroutine} {group.calls} times a scan, and its cases count calls"
+        )
+    if all(c.in_process_only is not None for c in group.cases):
+        return "it runs in-process only"
+    if case_id is not None:
+        c = next(c for c in group.cases if c.id == case_id)
+        if c.in_process_only is not None:
+            return f"it runs in-process only: {c.in_process_only}"
+    return None
+
+
+def main_refusals() -> dict[str, str]:
+    """Every case that cannot be picked to run in main, as ``group/id``, and why."""
+    return {
+        f"{g.name}/{c.id}": reason
+        for g in (*ALL_GROUPS, *APART_GROUPS)
+        for c in g.cases
+        if (reason := main_refusal(g, c.id)) is not None
+    }
+
+
+def pick(entries: list[str]) -> tuple[list[Group], dict[str, frozenset[str]]]:
+    """The groups of a pick, in the order main runs them, and the ids picked in each.
+
+    An entry is ``group/id`` for one case or ``group`` for every case of the group (its
+    in-process-only cases are reported skipped, as in a part).  A group picked whole has no
+    entry in the ids.  Groups run in ``ALL_GROUPS`` (or ``APART_GROUPS``) order and cases in
+    group order, whatever the order of *entries*.
+
+    Raises:
+        ValueError: An entry names no group or case, a case cannot run in main
+            (``main_refusal``), groups of the whole suite are mixed with groups on memory of
+            their own, groups of two parts apart are mixed, or a group that must run alone
+            (``MAIN_ALONE``) has company.
+    """
+    known = {g.name: g for g in (*ALL_GROUPS, *APART_GROUPS)}
+    # Group name -> picked case ids, or None for every case.
+    chosen: dict[str, set[str] | None] = {}
+    unknown: list[str] = []
+    for entry in entries:
+        name, _, case_id = entry.partition("/")
+        group = known.get(name)
+        if group is None or (case_id and all(c.id != case_id for c in group.cases)):
+            unknown.append(entry)
+        elif not case_id:
+            chosen[name] = None
+        elif name not in chosen:
+            chosen[name] = {case_id}
+        elif (ids := chosen[name]) is not None:
+            ids.add(case_id)
+    if unknown:
+        raise ValueError(f"No conformance group or case {', '.join(unknown)}")
+    if not chosen:
+        raise ValueError("Pick at least one case, as group/id or as a group for all its cases.")
+
+    refused: list[str] = []
+    for name, ids in chosen.items():
+        for case_id in sorted(ids) if ids is not None else [None]:
+            reason = main_refusal(known[name], case_id)
+            if reason is not None:
+                label = f"{name}/{case_id}" if case_id else name
+                refused.append(f"{label}: {reason}")
+    if refused:
+        raise ValueError("These cannot run in main:\n  " + "\n  ".join(refused))
+
+    apart_names = {g.name for g in APART_GROUPS}
+    apart = sorted(name for name in chosen if name in apart_names)
+    if apart and len(apart) != len(chosen):
+        own = "are on memory of their own" if len(apart) > 1 else "is on memory of its own"
+        raise ValueError(
+            f"{', '.join(apart)} {own}, "
+            "apart from the whole suite. Pick them in a project of their own."
+        )
+    parts = sorted({p for p, held in APART_PARTS.items() if set(apart) & set(held.groups)})
+    if len(parts) > 1:
+        raise ValueError(
+            f"Cases of parts {', '.join(parts)} are picked together. Each part on memory of "
+            "its own was read on a CLICK alone, and a case may need its part's company. "
+            "Pick from one of them at a time."
+        )
+    for name, reason in MAIN_ALONE.items():
+        if name in chosen and len(chosen) > 1:
+            raise ValueError(f"Pick {name} alone, since {reason}.")
+
+    order = APART_GROUPS if apart else ALL_GROUPS
+    picked = [g for g in order if g.name in chosen]
+    return picked, {name: frozenset(ids) for name, ids in chosen.items() if ids is not None}
+
+
+def build_main(entries: list[str]) -> ConformanceProgram:
+    """The picked cases (``pick``) as one project whose case rungs all run in main.
+
+    Each case keeps its manifest slot, so its registers, and the hash a CLICK confirms,
+    are those of its part.
+
+    Raises:
+        ValueError: The pick is refused (``pick``), or it takes more than
+            ``PART_STEP_BUDGET`` CLICK steps.
+    """
+    from pyrung.click.ladder import estimate_steps, pyrung_to_ladder
+
+    picked, only = pick(entries)
+    names = {g.name for g in picked}
+    apart = bool(names & {g.name for g in APART_GROUPS})
+    owners = {**PARTS, **{p: a.groups for p, a in APART_PARTS.items()}}
+    limit = max(scan_limit_ms(p) for p, held in owners.items() if names & set(held))
+    program = build_program(
+        picked,
+        load_manifest(APART_MANIFEST_PATH if apart else MANIFEST_PATH),
+        scan_limit_ms=limit,
+        main=True,
+        only=only,
+    )
+    steps = estimate_steps(pyrung_to_ladder(program.program, program.tag_map, validate=False))
+    if steps.total > PART_STEP_BUDGET:
+        raise ValueError(
+            f"The pick takes about {steps.total} CLICK steps, over the {PART_STEP_BUDGET} a "
+            "project may take. Pick fewer cases."
+        )
+    return program
+
+
+#: What a run that finds a project of picked cases needs.
+_PICK_HINT = "A project of picked cases runs with the same pick in CASES=, not GROUP=."
+
+
 def _holding(names: list[str]) -> list[str | None]:
-    """The parts that hold every group of *names*, or the whole suite (``None``) if none does."""
+    """Return the parts that hold every group in *names*, or ``None`` (the whole suite) if none."""
     wanted = set(names)
     every = {g.name for g in (*ALL_GROUPS, *APART_GROUPS)}
     if unknown := sorted(wanted - every):
@@ -519,7 +724,7 @@ def _holding(names: list[str]) -> list[str | None]:
 
 
 def fixed_scan_note(part: str | None) -> str | None:
-    """What a person sets in CLICK before running *part*; ``None`` when it needs nothing."""
+    """Return what a person sets in CLICK before running *part*, or ``None`` if nothing."""
     ms = APART_PARTS[part].fixed_scan_ms if part in APART_PARTS else None
     if ms is None:
         return None
@@ -539,6 +744,26 @@ def _print_layout(program: ConformanceProgram) -> None:
         )
 
 
+def _export_main(program: ConformanceProgram, out_dir: str, spec: str) -> int:
+    from pyrung.click.ladder import estimate_steps, pyrung_to_ladder
+
+    out = program.export(out_dir)
+    bundle = pyrung_to_ladder(program.program, program.tag_map, validate=False)
+    steps = estimate_steps(bundle).total
+    rungs = sum(row[0] == "R" for row in bundle.main_rows)
+    print(
+        f"Wrote {out} (cases in main, layout {program.program_hash} in DS1, scans of at most "
+        f"{program.scan_limit_ms} ms, about {steps} steps, {rungs} rungs in main)"
+    )
+    for g in program.groups:
+        ids = ", ".join(c.id for _, c in g.cases)
+        print(f"  {g.name}: hash {g.group_hash} in DS{g.hash_register}, {ids}")
+    for name, c in program.skipped:
+        print(f"  {name}/{c.id}: in-process only, left out")
+    print(f"Run it with the same pick: make test-conformance PLC=... CASES={spec}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m tests.conformance.suite",
@@ -554,12 +779,28 @@ def main(argv: list[str]) -> int:
         metavar="DIR",
         help=f"replace DIR/src/plc (default {WORKSPACE_PATH})",
     )
-    parser.add_argument(
+    chosen = parser.add_mutually_exclusive_group()
+    chosen.add_argument(
         "--part",
         choices=sorted([*PARTS, *APART_PARTS]),
         help="only that part's groups, as its own CLICK project (default: the whole suite)",
     )
+    chosen.add_argument(
+        "--cases",
+        metavar="PICK",
+        help="only these cases, every rung in main: group/id or group, comma-separated, "
+        "@file for a file of them",
+    )
     args = parser.parse_args(argv)
+    if args.cases is not None:
+        if args.workspace is not None:
+            parser.error("--cases writes a project of its own. Give an out_dir, not --workspace.")
+        try:
+            program = build_main(parse_picks(args.cases))
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        return _export_main(program, args.out_dir, args.cases)
     program = build(args.part)
     label = f"part {args.part}, layout" if args.part else "layout"
     note = fixed_scan_note(args.part)

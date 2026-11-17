@@ -1,4 +1,4 @@
-"""``snapshot_dict``: whole-map read recording and the plain-mapping fallback."""
+"""Test ``snapshot_dict``: it records whole-map reads and falls back to a plain mapping."""
 
 from __future__ import annotations
 

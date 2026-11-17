@@ -2689,9 +2689,9 @@ def test_from_nickname_file_names_an_address_link_by_its_nickname(tmp_path):
 
 
 def test_tag_named_after_its_address_exports_without_a_nickname(tmp_path):
-    """Nothing to say about T7/TD7 beyond the address, so no nickname is written;
-    a tag named after its address that carries metadata keeps the name so the
-    row reads back as that tag."""
+    """A tag with nothing to say beyond its address, such as T7 or TD7, gets no nickname. A tag
+    that is named after its address but carries metadata keeps the name, so the row reads back
+    as that tag."""
     from pyrung import Int, Timer
 
     timer = Timer.clone("T7", nicknames={"Done": "T7", "Acc": "TD7"})

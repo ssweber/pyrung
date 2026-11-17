@@ -1,9 +1,9 @@
-"""Tests for edge-source tags leaving PILOT's world key.
+"""Check that edge-source tags can leave PILOT's world key.
 
 A tag in rise()/fall() whose exit value is scan-local need not be tracked.
 Retained state and inputs decide that value, not the tag's own entry value.
 Each edge contact keeps the bit it last saw in its own site memory
-(``_edge:e{N}``), which the world key carries.
+(``_edge:e{N}``).  The world key carries that memory.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from pyrung.core import (
 
 
 class TestDemotedEdgeReplay:
-    """A how() plan through an edge on a tag left out of the key replays."""
+    """Checks that a how() plan through an edge on a tag left out of the key replays."""
 
     def test_how_replay_with_demoted_fall(self):
         """how() path through fall() on a demoted tag must replay correctly."""

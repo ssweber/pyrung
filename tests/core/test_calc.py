@@ -55,9 +55,11 @@ class TestCalcInstruction:
         assert runner.current_state.tags["fault.division_error"] is True
 
     def test_a_decimal_math_keeps_its_constants_whole(self, runner_factory):
-        """A decimal Math keeps each constant whole whatever the destination, as a
-        CLICK does (2026-11-11).  -2147483648 / 65536 is -32768 by the constant and
-        by a Dint holding 65536, and a constant past a Dint is cut to 32 bits."""
+        """A decimal Math keeps each constant whole, whatever the destination.
+
+        A CLICK does the same (2026-11-11).  -2147483648 / 65536 is -32768, whether 65536 is a
+        constant or sits in a Dint.  A constant past a Dint is cut to 32 bits.
+        """
         Enable = Bool("Enable")
         Num = Dint("Num")
         Den = Dint("Den")

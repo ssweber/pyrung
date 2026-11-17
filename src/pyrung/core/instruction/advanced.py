@@ -119,7 +119,7 @@ class SearchInstruction(OneShotMixin, Instruction):
         self.value = comparison.value
         self.search_range = comparison.search_range
         if isinstance(self.search_range, IndirectBlockRange) or reads_indexed_element(self.value):
-            # A window out of its block, or a value read below it, sets SC44: the
+            # A window out of its block, or a value read below it, sets SC44.  The
             # analyses (PDG, static facts) see the flag written where it can be.
             self._fault_writes = ("fault.address_error",)
         self.result = result
@@ -195,9 +195,9 @@ class SearchInstruction(OneShotMixin, Instruction):
         if current_result == -1:
             return None
 
-        # CLICK: an old result inside the search range resumes after it; any other
+        # CLICK: an old result inside the search range resumes after it.  Any other
         # value (below, above, negative) is a miss.  A result on the last address
-        # has nothing after it, which is a miss too.
+        # has nothing after it, so that is a miss too.
         for idx, addr in enumerate(addresses):
             if addr == current_result:
                 return idx + 1 if idx + 1 < len(addresses) else None

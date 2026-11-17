@@ -116,10 +116,11 @@ def _row_label(row: AddressRecord) -> str:
 
 
 def _refuse_names_that_differ_in_case(rows: Iterable[AddressRecord], path: str | Path) -> None:
-    """CLICK compares nicknames ignoring case, so ``Pump`` and ``pump`` are one name to it.
+    """Raise ValueError when nicknames differ only in case, or a row repeats an SC or SD nickname.
 
+    CLICK compares nicknames ignoring case, so ``Pump`` and ``pump`` are one name to it.
     CLICK fills in the SC and SD nicknames itself and may repeat one, so an SC or SD row is
-    never refused. Another row that repeats an SC or SD nickname is.
+    never refused. Another row that repeats an SC or SD nickname is refused.
     """
     seen: dict[str, AddressRecord] = {}
     for row in rows:
@@ -285,10 +286,10 @@ def tag_map_from_nickname_file(
     nicknames = frozenset(nickname_at.values())
 
     def link_for_meta(tag_meta: TagMeta | None) -> str | None:
-        """The meta's ``link=``, with a Click-address enable named by its nickname.
+        """Return the meta's ``link=``, with a Click-address enable named by its nickname.
 
-        ``link=Y001`` reads as the nickname at Y001.  Nicknames win, so one that
-        looks like an address is kept; an address with no nickname keeps its
+        ``link=Y001`` reads as the nickname at Y001.  A nickname wins, so one that
+        looks like an address is kept.  An address with no nickname keeps its
         display form, which is the name codegen gives that slot.
         """
         if tag_meta is None or tag_meta.link is None:
@@ -985,8 +986,8 @@ def nickname_records(
         )
         comment = _compose_address_comment(entry.logical.comment, tag_meta=tag_meta)
         # A tag named after its own address (``T101`` at T101) and carrying no
-        # metadata has no nickname; its comment, default and retentive flag still
-        # round-trip as the row's.  One with metadata keeps the name, since a row
+        # metadata gets no nickname.  Its comment, default and retentive flag still
+        # round-trip as the row's.  A tag with metadata keeps its name, because a row
         # without a nickname is read back as no tag.
         nickname = entry.logical.name
         if tag_meta is None and nickname == self._hardware_address_name(entry.hardware):

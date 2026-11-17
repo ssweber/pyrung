@@ -33,8 +33,8 @@ class ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
     #: Extra fields for the evaluate response body, for clients that read data.
     body: dict[str, Any] = field(default_factory=dict)
-    #: True when a breakpoint ended the command early. ``replay`` stops on it. Every step
-    #: sends a "stopped" event, so the event alone can't tell a breakpoint apart.
+    #: True when a breakpoint ended the command early.  ``replay`` stops when it is True.
+    #: Every step sends a "stopped" event, so the event alone cannot show a breakpoint.
     hit_breakpoint: bool = False
 
 
@@ -344,7 +344,7 @@ def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     "run",
     usage="run <N | duration> | run until <expression> within <N | duration>",
     group="execution",
-    # Declared: the derived grammar would keep only the first form.
+    # Declare the slots, because the derived grammar would keep only the first form.
     slots=(
         Slot(kind="text", label="N | duration", required=False),
         Slot(kind="expression", label="expression", required=False, keyword="until"),
@@ -370,7 +370,7 @@ def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
 
 
 def _run_limit(adapter: Any, tokens: list[str]) -> tuple[int | None, float]:
-    """Read ``10``, ``500ms`` or ``2 s`` as a scan count or a number of seconds."""
+    """Parse ``10``, ``500ms`` or ``2 s`` as a scan count or a number of seconds."""
     spec = _run_spec(tokens)
     try:
         return int(spec), 0.0
@@ -442,9 +442,9 @@ def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
 
 
 def queue_stop_for_error(adapter: Any, error: Any) -> None:
-    """Queue a "stopped" event for the scans a failing command ran.
+    """Queue a "stopped" event for the scans that a failing command ran.
 
-    The mark on *error* stops a surrounding ``replay`` from queuing a second one.
+    This sets a mark on *error*, so a surrounding ``replay`` does not queue a second event.
     """
     if getattr(error, "stop_queued", False):
         return
@@ -453,9 +453,11 @@ def queue_stop_for_error(adapter: Any, error: Any) -> None:
 
 
 def scan_mark(adapter: Any) -> tuple[Any, int | None]:
-    """Record the last finished scan, so a caller can later tell whether any scan has run since.
+    """Return a mark of the last finished scan.
 
-    The runner is part of the mark because a ``reload`` replaces it and may restart the count.
+    A caller later passes the mark to ``scans_ran_since`` to tell whether any scan has run
+    since the mark was taken.  The mark includes the runner, because a ``reload`` replaces
+    the runner and may restart the count.
     """
     runner = adapter._runner
     return runner, None if runner is None else runner.current_state.scan_id
@@ -470,7 +472,7 @@ def scans_ran_since(adapter: Any, mark: tuple[Any, int | None]) -> bool:
 def stop_if_scans_ran(adapter: Any) -> Iterator[None]:
     """Queue a stop when a command fails after it ran scans.
 
-    An error answer carries no events, so without the stop the client's view stays on the
+    An error answer carries no events.  Without the stop, the client's view stays on the
     old scan.
     """
     mark = scan_mark(adapter)
@@ -743,7 +745,7 @@ class _PilotProgressFormatter:
         return corrections
 
     def _render_rungs(self, rungs: Any) -> list[str]:
-        """The temporary logic built as the plan text builds it, one line per rung."""
+        """Return the temporary logic as the plan text builds it, with one line per rung."""
         from pyrung.core.analysis.graph import rules_logic
         from pyrung.core.analysis.pilot.world_key import _rung_identity
 
@@ -751,7 +753,7 @@ class _PilotProgressFormatter:
         compact: list[str] = []
         for line in rules_logic(tuple(unique)):
             if line.startswith("comment("):
-                # One line per rung leaves no room for its comment.  The plan text prints it.
+                # There is no room for a rung's comment on its one line.  The plan text prints it.
                 continue
             if line.startswith("  ") and compact and compact[-1].startswith("with rung("):
                 compact[-1] = (

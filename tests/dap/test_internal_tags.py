@@ -1,4 +1,4 @@
-"""The DAP leaves out the tags pyrung adds itself, and only those."""
+"""Show that the DAP leaves out the tags that pyrung adds itself, and only those."""
 
 from __future__ import annotations
 

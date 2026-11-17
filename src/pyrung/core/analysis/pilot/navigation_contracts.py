@@ -144,7 +144,8 @@ class TargetSpec:
 
         if not targets:
             raise ValueError("pilot: a goal requires at least one target")
-        # Compare rather than hash, since a target value may be an expression with no hash.
+        # Compare targets instead of hashing them, because a target value may be an
+        # expression that has no hash.
         unique: list[TargetSpec] = []
         for target in targets:
             if not any(target is kept or _same_target(target, kept) for kept in unique):

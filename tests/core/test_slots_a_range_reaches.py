@@ -1,8 +1,8 @@
 """A slot a range reaches is the program's, whatever else has asked for it.
 
-What a reset keeps, whose limits count and which plants are declared come from what the
-rungs reach, not from which slots happen to have been asked for, so the same program
-behaves the same on either engine and on any runner of it.
+Three things come from what the rungs reach, not from which slots happen to have been asked
+for: what a reset keeps, whose limits count and which plants are declared. So the same
+program behaves the same on either engine and on any runner of it.
 """
 
 from __future__ import annotations
@@ -181,8 +181,9 @@ def test_one_program_means_the_same_on_each_runner_of_it(engine, reset) -> None:
 
 
 def test_what_a_run_asked_of_a_program_is_not_what_its_rungs_say() -> None:
-    # What the runner knows can grow with what has been asked, as a block's cache does.  What
-    # the rungs reach, which a reset, the limits and the plants go by, cannot.
+    # What the runner knows can grow with what has been asked, as a block's cache does. What
+    # the rungs reach cannot grow that way. A reset, the limits and the plants go by what the
+    # rungs reach.
     def reach(plc) -> tuple[set[str], set[str]]:
         named = {tag.name for tag in plc._tags_rungs_reach.walk().named}
         return named, plc._tags_rungs_reach.names()
@@ -198,8 +199,8 @@ def test_what_a_run_asked_of_a_program_is_not_what_its_rungs_say() -> None:
 
 
 def test_a_programs_analysis_caches_add_no_known_tag() -> None:
-    # how() keeps its prover facts on the program.  A tag only they hold is not one the
-    # runner knows.
+    # how() keeps its prover facts on the program. A tag that only they hold is not one that
+    # the runner knows.
     a, b = Bool("A", external=True), Bool("B")
     with Program(strict=False) as program:
         with Rung(a):
@@ -239,7 +240,7 @@ def test_a_reset_leaves_the_engines_holding_the_same_names(reset) -> None:
 @ON_EITHER_ENGINE
 @RESETS
 def test_a_slot_nothing_wrote_stays_out_of_the_state(engine, reset) -> None:
-    # CLICK's ds is 4500 slots: a reset must not seed them all to carry the three it holds.
+    # CLICK's ds has 4500 slots. A reset must not seed all of them to carry the three it holds.
     ds = ClickBlocks().ds
     sink = Block("Sink", TagType.INT, 1, 5)
     plc = engine(_through_a_range(ds, sink), dt=0.01)
@@ -312,7 +313,7 @@ def test_a_limit_holds_on_a_fork_too() -> None:
 
 
 def test_compiled_plc_has_no_limits_or_plants_to_ask_about() -> None:
-    # The bounds and harness rows here are PLC's: if this changes, they need CompiledPLC's too.
+    # The bounds and harness rows here are PLC's. If this changes, they need CompiledPLC's too.
     rc, sink = _blocks()
     plc = CompiledPLC(_through_a_range(rc, sink), dt=0.01)
     assert not hasattr(plc, "bounds_violations")
@@ -329,7 +330,7 @@ def test_plc_tags_holds_a_slot_a_range_reaches(named) -> None:
     plc = PLC(_through_a_range(rc, sink), dt=0.01)
     assert plc.tags["Rc2"] is rc[2]
     assert "Rc5" not in plc.tags
-    # A slot something named before the runner was built starts in the state, as ever.
+    # A slot that something named before the runner was built starts in the state, as always.
     assert ("Rc2" in plc.current_state.tags) is named
     plc.step()
     assert ("Rc2" in plc.current_state.tags) is named

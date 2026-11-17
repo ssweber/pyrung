@@ -538,7 +538,8 @@ def test_aggregate_sum_decomposition():
     """math(block.sum(), dest): trace decomposes to non-zero elements.
 
     Tracing Total=0 when the sum is 2 asks "how do I make the sum zero?"
-    — each non-zero element (DS2, DS4) must be cleared.
+    To make the sum zero, each non-zero element must be cleared.  The trace has a child
+    for each one, DS2 and DS4.
     """
     x_Go = Bool("x_Go", external=True)
     x_Alarm = Bool("x_Alarm", external=True)
@@ -863,9 +864,9 @@ def _program_advance_counter():
 def test_counter_done_program_owned_held_input_is_released_first():
     """A counter whose program-owned input is already on is not counting.
 
-    The counter counts rising edges of ``Running``, so a held ``Running`` adds
-    nothing: coasting would wait forever.  The Done trace's frontier is the
-    release of the input (``x_Run`` off, so ``Running`` falls), with no
+    The counter counts rising edges of ``Running``. A held ``Running`` adds
+    nothing, so coasting would wait forever. The Done trace's frontier is the
+    release of the input (``x_Run`` off, so ``Running`` falls). It has no
     counter coast leaf and no counter lifetime on the action.
     """
     logic = _program_advance_counter()
@@ -1296,9 +1297,9 @@ def test_indirect_copy_lookup_table():
       math(StateRequested + 10, idx)   -- compute pointer
       copy(ds[idx], JumpTarget)        -- read lookup table
 
-    The table at ds[10+N] holds the next-state for StateRequested=N.
-    Trace for JumpTarget=6 should invert the table: find which
-    StateRequested values produce 6, and trace back to StateRequested.
+    ds[10+N] stores the next state for StateRequested=N. The trace for
+    JumpTarget=6 should invert the table. It finds which StateRequested
+    values produce 6 and traces back to StateRequested.
     """
     ds = Block("DS", TagType.INT, 1, 20)
     StateRequested = Int("StateRequested")
@@ -1361,11 +1362,11 @@ def test_reference_constants_via_func_dep_chain():
       math(StateRequested + 10, Idx)              -- func dep: Idx depends on StateRequested
       copy(ds[Idx], JumpTarget)                   -- Idx is the indirect pointer
 
-    STATE_STARTING_REF is never written, used as a copy source into
-    StateRequested, and StateRequested is the representative of the
-    indirect-copy pointer (via the calc hop).  All three conditions hold.
+    STATE_STARTING_REF is never written. It is the source of a copy into
+    StateRequested, and StateRequested represents the indirect-copy pointer
+    through the calc hop. So all three conditions hold.
 
-    Similarly for CMD_REF feeding CtrlCmd which drives a separate
+    CMD_REF works the same way: it feeds CtrlCmd, which drives a separate
     lookup table pointer.
     """
     ds = Block("DS", TagType.INT, 1, 30)
@@ -1483,11 +1484,11 @@ def test_reference_constants_via_indirect_read_slots():
 
 
 def test_external_command_indexing_a_table_stays_steerable():
-    """Condition 4 preserved: an external command feeding a table pointer is a lever.
+    """Condition 4 holds: an external command that feeds a table pointer is a lever.
 
-    ``ToolReqCmd`` (external) is copied into ``ToolReq``, the representative of a
-    lookup-table pointer via ``math(ToolReq + 20, Idx)``.  The operator chooses
-    the value, so it must remain steerable and out of the reference-constant set.
+    ``ToolReqCmd`` (external) is copied into ``ToolReq``, which represents a
+    lookup-table pointer through ``math(ToolReq + 20, Idx)``. The operator chooses
+    the value, so it must stay steerable and out of the reference-constant set.
     """
     dh = Block("DH", TagType.INT, 1, 40)
     ToolReqCmd = Int("ToolReqCmd", external=True)
@@ -1521,9 +1522,9 @@ def test_external_command_indexing_a_table_stays_steerable():
 def _curstep_engine():
     """Minimal Blower SFC step engine (blower.py R8/R15/R16/R17).
 
-    Two ``math(CurStep + 1, CurStep)`` writers produce ``CurStep + 1``:
-    R16 is gated on parity (``valstepisodd != 1``, derived from CurStep), R17
-    on a transition flag (``Trans == 1``).
+    Two ``math(CurStep + 1, CurStep)`` writers produce ``CurStep + 1``.
+    R16 is gated on parity (``valstepisodd != 1``, derived from CurStep).
+    R17 is gated on a transition flag (``Trans == 1``).
     """
     x_TimerDone = Bool("x_TimerDone", external=True)
     x_FB = Bool("x_FB", external=True)
@@ -1705,7 +1706,7 @@ def test_counter_int_advance_resolves_steerable_value():
     )
     action = next(action for action in tree.ordered_action_details() if action.tag == "Sel")
     assert action.pair == ("Sel", 3)
-    # The counter counts rising edges of ``Sel == 3``: the value is pulsed.
+    # The counter counts rising edges of ``Sel == 3``, so the drive pulses that value.
     assert action.pulse
 
 
@@ -1717,8 +1718,8 @@ def test_counter_int_advance_pulses_the_value():
 
 
 def test_counter_int_advance_alternates_inside_the_declared_choices():
-    """``Sel`` already at 3 with no 0 among its choices: the counter needs
-    fresh rises of ``Sel == 3``, so ``Sel`` alternates with 1, never 0."""
+    """``Sel`` is already 3 and 0 is not among its choices. The counter needs
+    fresh rises of ``Sel == 3``, so ``Sel`` alternates with 1 and never uses 0."""
     Sel = Int("Sel", choices={1: "WARM", 3: "GO"}, default=3, external=True)
     plan = PLC(_int_advance_counter(Sel)).how(Bool("Done"))
     assert plan.status.name == "REACHED"
@@ -1743,8 +1744,8 @@ def test_counter_driver_away_value_stays_in_the_domain(tag, value, resting, away
 
 
 def test_counter_with_its_input_held_on_is_pulsed_again():
-    """A counter counted its held input once; reaching its preset needs that
-    input off and on again, not a hold the trace sees as already met."""
+    """A counter counted its held input once. Reaching its preset needs that
+    input off and on again. A hold does not do it, though the trace sees it as met."""
     Btn = Bool("Btn", external=True)
     C = Counter.clone("HeldC")
     with Program() as logic:
@@ -1757,9 +1758,9 @@ def test_counter_with_its_input_held_on_is_pulsed_again():
     assert plc.how(C.Done).status.name == "REACHED"
 
 
-# These drives take well under a second.  A drive that cycles a counter's
-# input without ever counting spins until the search budget runs out (minutes),
-# so a wall-clock bound turns that regression into a loud failure.
+# These drives take well under a second. A drive that cycles a counter's
+# input without ever counting spins until the search budget runs out (minutes).
+# A wall-clock bound turns that regression into a loud failure.
 _COUNTER_DRIVE_SECONDS = 20.0
 
 
@@ -1805,8 +1806,8 @@ def _latched_counter(name, *, reset_pin=None, gate=None):
 
 @pytest.mark.parametrize("run_on", [False, True])
 def test_counter_reset_pin_held_is_released_before_cycling_a_latch(run_on):
-    """A held level reset pin wins over every count: it is released (in the
-    same act as the input's first transition), then the latch is cycled."""
+    """A held level reset pin wins over every count. The drive releases it in the
+    same act as the input's first transition, then cycles the latch."""
     R = Bool("HeldResetR", external=True)
     logic, Start, Run, C = _latched_counter("HeldReset", reset_pin=R)
     plc = PLC(logic)
@@ -1853,7 +1854,7 @@ def test_counter_fed_by_a_held_coil_with_its_reset_pin_held():
 
 
 def test_counter_reset_held_by_unsteerable_logic_declines_without_spinning():
-    """Nothing steerable clears the reset: cycling the input would count
+    """Nothing steerable clears the reset. Cycling the input would count
     nothing forever, so the drive stops promptly instead."""
     Btn = Bool("StuckResetBtn", external=True)
     Y = Bool("StuckResetY")
@@ -1884,7 +1885,7 @@ def _selector_counter(name, reset_pin):
     """``Sel`` latches ``Run``, ``Stop`` resets it, ``Run`` counts to 3.
 
     *reset_pin* builds the counter's reset from ``(Sel, M, Rc)``, where ``M``
-    is another external input and ``Rc`` a coil ``Sel`` and ``M`` energize.
+    is another external input and ``Rc`` is a coil that ``Sel`` and ``M`` energize.
     """
     Sel = Bool(f"{name}Sel", external=True)
     Stop = Bool(f"{name}Stop", external=True)
@@ -1916,8 +1917,8 @@ def _selector_counter(name, reset_pin):
 )
 def test_counter_reset_the_latching_button_turns_on_is_cleared_through_another_leaf(reset_pin):
     """Pressing ``Sel`` to latch the input also turns the reset on while ``M``
-    is held, so that count would be lost; ``M`` is cleared first, then the
-    latch is cycled with ``Stop`` and ``Sel``."""
+    is held, so that count would be lost. The drive clears ``M`` first, then
+    cycles the latch with ``Stop`` and ``Sel``."""
     plc, M, C = _selector_counter("SelClear", reset_pin)
     plan = _reached_by_replay(plc, C.Done)
     assert plan.ordered_steps[0][1].get(M.name) is False
@@ -1931,8 +1932,8 @@ def test_counter_reset_the_latching_button_turns_on_is_cleared_through_another_l
     ],
 )
 def test_counter_reset_every_latching_press_turns_on_stops_promptly(reset_pin):
-    """Every ``Sel`` press that latches the input also resets the counter:
-    no count can land, so the drive says so instead of cycling forever."""
+    """Every ``Sel`` press that latches the input also resets the counter, so
+    no count can land. The drive says so instead of cycling forever."""
     plc, _M, C = _selector_counter("SelStuck", reset_pin)
     _stops_promptly(plc, C.Done)
 
@@ -1965,7 +1966,7 @@ def _held_coil_counter(name, build):
 )
 def test_counter_whose_input_cycle_cannot_count_stops_promptly(build):
     """A reset that is on in one phase of the input's cycle, or a down input
-    that rises with it, takes back every count: pulsing the input is futile."""
+    that rises with it, takes back every count. Pulsing the input is futile."""
     plc, C = _held_coil_counter("Futile", build)
     _stops_promptly(plc, C.Done)
 
@@ -1978,9 +1979,10 @@ def test_counter_whose_input_cycle_cannot_count_stops_promptly(build):
     ],
 )
 def test_counter_input_step_that_loses_its_count_is_rejected(monkeypatch, reset_pin):
-    """The read's phase check is static; verification is the backstop.  With
-    the check blinded, the latching press that the reset swallows is rejected
-    as soon as it lands, not accepted and cycled until the budget runs out."""
+    """The read's phase check is static, and verification is the backstop. With
+    the check blinded, the drive rejects the latching press that the reset
+    swallows as soon as it lands. It does not accept the press and cycle until
+    the budget runs out."""
     import pyrung.core.analysis.pilot.trace as trace_module
 
     monkeypatch.setattr(trace_module, "_counter_phase_blockers", lambda *args, **kwargs: [])
@@ -2005,7 +2007,7 @@ def test_counter_edge_loses_a_count_only_when_the_input_rises_without_it():
 
 def test_counter_fed_by_a_held_coil_is_cycled_through_its_button():
     """``Btn -> Y -> count_up``: with ``Btn`` held the counter counted once and
-    ``Y`` is on; each further count needs ``Btn`` off and on again."""
+    ``Y`` is on. Each further count needs ``Btn`` off and on again."""
     Btn = Bool("CoilBtn", external=True)
     Y = Bool("CoilY")
     C = Counter.clone("CoilC")
@@ -2024,8 +2026,8 @@ def test_counter_fed_by_a_held_coil_is_cycled_through_its_button():
 
 @pytest.mark.parametrize("down", [False, True])
 def test_counter_fed_by_a_latched_bit_is_cycled_stop_then_start(down):
-    """A latched ``Run`` already on counts once; each further count is a
-    ``Stop`` (release) then a ``Start`` (establish), never a hold until Done."""
+    """A latched ``Run`` that is already on counts once. Each further count needs a
+    ``Stop`` (release) and then a ``Start`` (establish). A hold until Done never counts."""
     Start = Bool("LatchStart", external=True)
     Stop = Bool("LatchStop", external=True)
     Run = Bool("LatchRun")
@@ -2064,8 +2066,8 @@ def test_counter_fed_by_a_latched_bit_from_off():
 
 @pytest.mark.parametrize("sealed", [False, True])
 def test_counter_fed_by_a_seal_in_pulses_start_against_a_held_stop(sealed):
-    """``Or(Start, Run), ~Stop -> Run``: ``Start`` pulses while ``Stop``, already
-    off, holds; pulsing both in their own phases would never seal ``Run``."""
+    """``Or(Start, Run), ~Stop -> Run``: ``Start`` pulses, and ``Stop`` stays held off.
+    Pulsing both in their own phases would never seal ``Run``."""
     Start = Bool("SealStart", external=True)
     Stop = Bool("SealStop", external=True)
     Run = Bool("SealRun")
@@ -2100,8 +2102,9 @@ def test_counter_rise_of_a_held_coil_is_released_first():
 
 
 def test_counter_fed_by_timer_laps_holds_the_timer_enable():
-    """A self-restarting timer makes the counter's edges itself: its enable is
-    a hold, never pulsed (a pulsed enable would restart the timer forever)."""
+    """A self-restarting timer makes the counter's edges itself. The drive holds
+    its enable and never pulses it, because a pulsed enable would restart the
+    timer forever."""
     En = Bool("LapEn", external=True)
     T = Timer.clone("LapT")
     C = Counter.clone("LapC")

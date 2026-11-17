@@ -1,12 +1,12 @@
-"""The facts of each idiom in the corpus hold on every scan of its runs.
+"""Check that the facts of each idiom in the corpus hold on every scan of its runs.
 
-``tests/facts/check.py`` says what each fact claims and how a run checks it.  A fact a run
-refutes is a soundness bug.  :data:`KNOWN` lists the ones not fixed yet.  Each has a strict
-xfail, so the test fails once the bug is fixed, and the entry has to go.
+``tests/facts/check.py`` says what each fact claims and how a run checks it. A fact that a
+run refutes is a soundness bug. :data:`KNOWN` lists the ones that are not fixed yet. Each
+has a strict xfail, so the test fails once the bug is fixed, and then the entry has to go.
 
-A fact the runs never reach passes unchecked.  So each kind of fact an idiom has must be
-judged in some scan, and each Done must turn both on and off.  :data:`UNJUDGED` lists the
-ones the runs cannot reach, and why.
+A fact that the runs never reach passes unchecked. So each kind of fact that an idiom has
+must be judged in some scan, and each Done must turn both on and off. :data:`UNJUDGED`
+lists the facts that the runs cannot reach, and why.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from tests.facts.corpus import CORPUS, OPENING, PREPARE
 # recipe_mode_compared_with_a_table_entry stores values past RecipeMode's choices on purpose.
 pytestmark = pytest.mark.filterwarnings("ignore:BoundsViolation. RecipeMode=:UserWarning")
 
-#: Seeds of the random runs, one run each.
+#: The seeds of the random runs, one run for each.
 SEEDS = (1, 2)
 
 #: Scans of each random walk, as ``check_program`` runs by default.
@@ -35,7 +35,7 @@ Driver = Callable[[PLC, Step, RandomInputs], None]
 #: The tally of a domain swap that crossed a comparison.
 _CROSSED = "domain swap crossed a comparison, not judged"
 
-#: Facts the runs refute, by idiom: ``(fact, tag)`` -> the first scan that refutes it.
+#: The facts that the runs refute, by idiom: ``(fact, tag)`` -> the first scan that refutes it.
 KNOWN: dict[str, dict[tuple[str, str], str]] = {
     "funcdep_follows_its_source": {
         ("functional dep", "PosOffset"): (
@@ -82,7 +82,8 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
     },
 }
 
-#: Facts the runs cannot reach, by idiom.  Each maps a kind of fact, or ``"<Done> on"``, to why.
+#: The facts that the runs cannot reach, by idiom. Each maps a kind of fact, or ``"<Done> on"``,
+#: to why.
 UNJUDGED: dict[str, dict[str, str]] = {
     "retentive_timer_with_reset": {
         "absorbed value": (
@@ -98,8 +99,8 @@ UNJUDGED: dict[str, dict[str, str]] = {
 }
 
 
-#: Instruction classes that write nothing in an idiom's runs, by idiom, with why.  Any other
-#: class that writes nothing is one the check can't see write.
+#: Instruction classes that write nothing in an idiom's runs, by idiom, with why. Any other
+#: class that writes nothing is one that the check cannot see write.
 SILENT: dict[str, dict[str, str]] = {
     "received_value_the_ladder_clears": {
         "ModbusReceiveInstruction": "no peer answers in a run, so the run sets the payload",
@@ -144,12 +145,12 @@ def test_facts_hold(name: str) -> None:
     known = KNOWN.get(name, {})
     new = [str(v) for v in report.violations if (v.fact, v.key) not in known]
     assert not new, "\n".join(new)
-    # A swap that crosses a comparison judges nothing.  A domain that grew too coarse would
+    # A swap that crosses a comparison judges nothing. A domain that grew too coarse would
     # excuse more and more swaps that way.
     judged = report.tally.judged
     swapped = sum(count for kind, count in judged.items() if kind.endswith(", swapped"))
     assert judged.get(_CROSSED, 0) * 10 <= swapped
-    # The runs move every stepping tag, so they reach the values its writes produce.
+    # The runs move every stepping tag, so they reach the values that its writes produce.
     assert not report.unmoved
     assert sorted(report.unjudged) == sorted(UNJUDGED.get(name, {}))
     assert report.silent_writers == sorted(SILENT.get(name, {}))

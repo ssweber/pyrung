@@ -123,7 +123,7 @@ class TestIntractableHints:
 
 
 class TestThresholdBlockerHints:
-    """Threshold tags are bounded by what writes them; hints name the rest."""
+    """Threshold tags are bounded by what writes them. Hints name the rest."""
 
     def test_shared_threshold_blocks_absorption(self):
         """One threshold shared across progress sources stays explicit."""

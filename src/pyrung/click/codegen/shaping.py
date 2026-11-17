@@ -1,21 +1,22 @@
 """Rung shaping: analyzed rung -> ``with rung`` / ``with branch`` blocks.
 
-The emitter renders exactly the blocks built here, so the logic check below
-can compare what the generated code will say against what the source rows
-said without rendering or executing anything.
+The emitter renders exactly the blocks that this module builds.  So the logic check
+below can compare what the generated code will say with what the source rows said,
+without rendering or executing anything.
 
-The check compares the drawing, row for row.  Each output is reduced to its
-AF token, its full condition (rung contacts and enclosing branch contacts,
-with nested AND/OR flattened) and its pins, every contact named by its grid
-cell, and outputs are grouped by the wire they sit on: each wire of a CLICK
-rung is one pyrung rung, ``.continued()`` after the first.  A contact that
-goes missing fails it, and so does a contact read from another cell (two
-cells with one label folded into one ``with branch(...)``) or an output on
-another wire.
+The check compares the drawing, row for row.  It reduces each output to three things.
+The first is its AF token.  The second is its full condition, which is the rung contacts
+and the enclosing branch contacts with nested AND/OR flattened.  The third is its pins.
+Every contact is named by its grid cell.  The check groups outputs by the wire they sit
+on.  Each wire of a CLICK rung is one pyrung rung, and each rung after the first uses
+``.continued()``.  The check fails on any difference.  For example, it fails when a
+contact goes missing, or when an output is on another wire.  It also fails when a contact
+is read from another cell, as when two cells with one label are folded into one
+``with branch(...)``.
 
-Outputs share a ``with rung(...)`` or ``with branch(...)`` only where the
-drawing has one cell, teed off to each of them: the cell is read once, where
-the group starts, in pyrung as on a CLICK.
+Outputs share a ``with rung(...)`` or ``with branch(...)`` only where the drawing has one
+cell that is teed off to each of them.  pyrung reads that cell once, where the group
+starts, as a CLICK does.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ NOP = "NOP"
 
 @dataclass
 class _BranchBlock:
-    """``with branch(tree):`` holding instructions and nested branches."""
+    """A ``with branch(tree):`` block that holds instructions and nested branches."""
 
     tree: SPNode
     items: list[_BlockItem]
@@ -48,7 +49,7 @@ _BlockItem = _InstructionInfo | _BranchBlock
 
 
 def series_tree(*parts: SPNode | None) -> SPNode | None:
-    """AND the non-empty *parts* together (``None`` when all are empty)."""
+    """AND the non-empty *parts* together.  Return ``None`` when all are empty."""
     present = [part for part in parts if part is not None]
     if not present:
         return None
@@ -56,10 +57,10 @@ def series_tree(*parts: SPNode | None) -> SPNode | None:
 
 
 def keeps_nop(rung: _AnalyzedRung, instr: _InstructionInfo) -> bool:
-    """Whether *instr* is a NOP the import writes as ``nop()`` in a branch.
+    """Return whether *instr* is a NOP that the import writes as ``nop()`` in a branch.
 
-    A NOP with a contact of its own is a leg that CLICK keeps (its Syntax Check reports
-    C0003).  A NOP on the rung's own net, or alone, is a bare ``pass`` rung.
+    A NOP with a contact of its own is a leg that CLICK keeps.  Its Syntax Check reports
+    C0003.  A NOP on the rung's own net, or alone, is a bare ``pass`` rung.
     """
     return instr.af_token == NOP and instr.branch_tree is not None
 
@@ -67,18 +68,16 @@ def keeps_nop(rung: _AnalyzedRung, instr: _InstructionInfo) -> bool:
 def rung_blocks(rung: _AnalyzedRung) -> tuple[SPNode | None, list[_BlockItem]]:
     """Shape *rung* for emission: the ``with rung(...)`` condition and its body.
 
-    A NOP with no contact of its own is dropped here (it is a whole empty rung).  A NOP
-    leg with a contact of its own beside another output stays, as a ``nop()`` in a
-    branch.  A lone remaining output keeps its branch contacts by moving them onto the
-    rung condition.
+    This function drops a NOP with no contact of its own, because it is a whole empty
+    rung.  A NOP leg with a contact of its own beside another output stays, as a ``nop()``
+    in a branch.  If one output remains, its branch contacts move onto the rung condition.
 
-    That is the one pyrung drawing that does not round-trip as written: CLICK draws
-    ``with rung(A): with branch(B): out(Y)`` as A then B in series on one row,
-    the same cells as ``with rung(A, B): out(Y)``.  The rows hold no mark of
-    where the rung's contacts end and the branch's begin, so the plain rung is
-    the one read back.  (The other way, a CLICK pin teed off the box's input
-    wire comes back with the shared contacts in its condition and re-exports
-    from the rail.)
+    That is the one pyrung drawing that does not round-trip as written.  CLICK draws
+    ``with rung(A): with branch(B): out(Y)`` as A then B in series on one row.  Those are
+    the same cells as ``with rung(A, B): out(Y)``.  The rows hold no mark of where the
+    rung's contacts end and the branch's begin, so the import reads back the plain rung.
+    The other direction also changes.  A CLICK pin that is teed off the box's input wire
+    comes back with the shared contacts in its condition, and it re-exports from the rail.
     """
     real = [instr for instr in rung.instructions if instr.af_token != NOP or keeps_nop(rung, instr)]
     condition = rung.condition_tree
@@ -88,12 +87,12 @@ def rung_blocks(rung: _AnalyzedRung) -> tuple[SPNode | None, list[_BlockItem]]:
 
 
 def _shared_count(group: list[tuple[SPNode | None, _InstructionInfo]]) -> int:
-    """How many leading contact cells *group* shares, teed off to each."""
+    """Return how many leading contact cells *group* shares, teed off to each output."""
     return len(factor_outputs([tree for tree, _instr in group], cells=True).shared)
 
 
 def _group_blocks(outputs: list[tuple[SPNode | None, _InstructionInfo]]) -> list[_BlockItem]:
-    """Recursive shared-prefix factoring of consecutive outputs into branches."""
+    """Factor the shared prefixes of consecutive outputs into branches, recursively."""
     items: list[_BlockItem] = []
     index = 0
     while index < len(outputs):
@@ -136,10 +135,10 @@ _Placed = tuple[tuple[int, int], _OutputKey]
 
 
 def _tree_key(tree: SPNode | None, *, cells: bool = True) -> _TreeKey:
-    """Canonical form of *tree*, nested AND/OR flattened.
+    """Return the canonical form of *tree*, with nested AND/OR flattened.
 
-    Each contact is its cell, or with *cells* False its label alone (logic,
-    not drawing: two drawings that read the same contacts give one key).
+    Each contact is its cell.  If *cells* is False, each contact is its label alone.  That
+    compares logic and not drawing, so two drawings that read the same contacts give one key.
     """
     if tree is None:
         return None
@@ -189,15 +188,15 @@ def _describe(key: _OutputKey) -> str:
 
 
 def _source_outputs(rungs: list[_AnalyzedRung], *, nops: bool = False) -> list[_Placed]:
-    """Every output of the source rows, placed on its raw rung and wire.
+    """Return every output of the source rows, placed on its raw rung and wire.
 
-    With *nops*, only the NOPs that have a contact in front of them.
+    If *nops* is true, return only the NOPs that have a contact in front of them.
     """
     placed: list[_Placed] = []
     for number, rung in enumerate(rungs):
         if rung.source_outputs is None:
             continue
-        # A For body rung has no .continued(): its wires stay one rung.
+        # A For body rung has no .continued().  Its wires stay one rung.
         one_rung = rung.role is not RungRole.NORMAL
         placed.extend(
             ((number, 0 if one_rung else out.wire), _output_key(out.af_token, out.tree, out.pins))
@@ -214,18 +213,18 @@ def _walk_blocks(
         if isinstance(item, _BranchBlock):
             _walk_blocks(item.items, series_tree(context, item.tree), out, nops=nops)
         elif (item.af_token == NOP) == nops and (not nops or context is not None):
-            # The emitter renders an instruction under its enclosing blocks
-            # only; an instruction's own branch_tree is not rendered.
+            # The emitter renders an instruction under its enclosing blocks only.  It does
+            # not render the instruction's own branch_tree.
             out.append(_output_key(item.af_token, context, item.pins))
 
 
 def _rung_outputs(rung: _AnalyzedRung, *, nops: bool = False) -> list[_OutputKey]:
-    """One pyrung rung's outputs as the emitter renders it."""
+    """Return one pyrung rung's outputs as the emitter renders it."""
     if nops:
         out: list[_OutputKey] = []
         condition, items = rung_blocks(rung)
         _walk_blocks(items, condition, out, nops=True)
-        # A NOP written as a bare ``pass`` rung keeps the rung's condition.
+        # A NOP that is written as a bare ``pass`` rung keeps the rung's condition.
         for instr in rung.instructions:
             if instr.af_token == NOP and not keeps_nop(rung, instr) and rung.condition_tree:
                 out.append(_output_key(NOP, rung.condition_tree, ()))
@@ -236,7 +235,7 @@ def _rung_outputs(rung: _AnalyzedRung, *, nops: bool = False) -> list[_OutputKey
             return []
         return [_output_key(rung.instructions[0].af_token, rung.condition_tree, ())]
     if rung.role is RungRole.FORLOOP_NEXT:
-        # next() is implied by the end of the forloop block.
+        # The end of the forloop block implies next().
         if not rung.instructions:
             return []
         return [_output_key(rung.instructions[0].af_token, None, ())]
@@ -247,9 +246,9 @@ def _rung_outputs(rung: _AnalyzedRung, *, nops: bool = False) -> list[_OutputKey
 
 
 def _emitted_outputs(rungs: list[_AnalyzedRung], *, nops: bool = False) -> list[_Placed]:
-    """Every output as the emitter renders *rungs*, placed on its CLICK rung and wire.
+    """Return every output as the emitter renders *rungs*, placed on its CLICK rung and wire.
 
-    A rung starts a CLICK rung; each ``.continued()`` rung is its next wire.
+    A rung starts a CLICK rung.  Each ``.continued()`` rung is the next wire of that rung.
     """
     placed: list[_Placed] = []
     number, wire = -1, 0
@@ -263,7 +262,7 @@ def _emitted_outputs(rungs: list[_AnalyzedRung], *, nops: bool = False) -> list[
 
 
 def _renumber(placed: list[_Placed]) -> list[_Placed]:
-    """Number the CLICK rungs that hold outputs 0, 1, ..., and each one's wires the same way."""
+    """Number the CLICK rungs that hold outputs 0, 1, ...  Number each rung's wires the same way."""
     rungs: dict[int, int] = {}
     wires: dict[tuple[int, int], int] = {}
     out: list[_Placed] = []
@@ -278,9 +277,9 @@ def _renumber(placed: list[_Placed]) -> list[_Placed]:
 def emitted_logic_mismatch(rungs: list[_AnalyzedRung]) -> str | None:
     """Describe the first difference between the source rows and the emitted code.
 
-    Returns ``None`` when every non-NOP output keeps its AF token, its full
+    Return ``None`` when every non-NOP output keeps its AF token, its full
     condition (each contact from its own cell), its pins, its CLICK rung and
-    its wire in it.
+    its wire in that rung.
     """
     expected = _source_outputs(rungs)
     actual = _emitted_outputs(rungs)
@@ -302,7 +301,7 @@ def emitted_logic_mismatch(rungs: list[_AnalyzedRung]) -> str | None:
     if len(actual) > len(expected):
         extra = actual[len(expected)][1]
         return f"generated code adds output {_describe(extra)}"
-    # Same outputs, placed on other rungs or wires.
+    # The outputs are the same, but they sit on other rungs or wires.
     for index, (exp, act) in enumerate(zip(expected, actual, strict=True)):
         if exp[0][0] != act[0][0]:
             return (
@@ -318,7 +317,7 @@ def emitted_logic_mismatch(rungs: list[_AnalyzedRung]) -> str | None:
 
 
 def _nop_mismatch(rungs: list[_AnalyzedRung]) -> str | None:
-    """A NOP with its own contact that the generated code loses, or ``None``."""
+    """Describe a NOP with its own contact that the generated code loses, or return ``None``."""
     expected = sorted(repr(key) for _place, key in _source_outputs(rungs, nops=True))
     actual = sorted(repr(key) for _place, key in _emitted_outputs(rungs, nops=True))
     if expected == actual:

@@ -13,19 +13,21 @@ lands on a whole number or by a compare (Result = 1 when equal).  A result a
 model could leave unwritten is preset first, so "the instruction skipped the
 write" does not read as 0.
 
-A fault flag is read by a contact on the rung after the faulting one, on the
-same scan.  A flag that is on shows only that some instruction on that scan
-set it, so each flag is read by the first case to fault on its scan:
-``int_calc_wraps`` is the group's first case and sets SC43; ``div_by_zero``
-is the first to set SC40 on the firing scan; ``real_div_by_zero`` and
-``real_overflow_stays_finite`` count their own scans (``scans.py``) and fault
-on their third, after the others have fired (one sets SC40, the other SC43).  That holds in-process, where every case fires on the same scan; over
-the wire the cases fire when their ``Cmd`` lands, and another group's fault
-on the same scan would also read as on.
+A contact on the rung after the faulting one reads a fault flag on the same scan.
+A flag that is on shows only that some instruction on that scan set it. So the first
+case to fault on its scan is the one that reads each flag. ``int_calc_wraps`` is the
+group's first case and sets SC43. ``div_by_zero`` is the first to set SC40 on the
+firing scan. ``real_div_by_zero`` and ``real_overflow_stays_finite`` count their own
+scans (``scans.py``) and fault on their third, after the others have fired. One sets
+SC40 and the other sets SC43.
 
-The expectations are what a CLICK does, and the likeliest answer of an open probe
-otherwise.  Where a CLICK
-could plausibly differ, these cases tell the models apart:
+That holds in-process, where every case fires on the same scan. Over the wire the
+cases fire when their ``Cmd`` lands, and another group's fault on the same scan would
+also read as on.
+
+The expectations are what a CLICK does. Where no CLICK reading exists, an expectation
+is the likeliest answer for an open probe. Where a CLICK could plausibly differ, these
+cases tell the models apart:
 
 - ``int_calc_wraps``, ``dint_calc_wraps``, ``word_calc_wraps``: Math wraps at
   each width.  Saturating Math reads Result1/Result2 = 32767/32766 (Int),
@@ -44,7 +46,8 @@ could plausibly differ, these cases tell the models apart:
 - ``int_math_wide_constant`` (probe): what else an Int Math does with its
   constants.  Preset to 99, 65536 staged in DD171 is divided by the constant
   40000 (Result1) and by -40000 (Result3), and 10 in DD172 is multiplied by
-  the constant 1.5 (Result2).  Kept whole: 1, 15, -1, which a CLICK reads.  Cut to its low 16 bits, signed: 40000 is -25536 and -40000
+  the constant 1.5 (Result2).  Kept whole: 1, 15, -1, which a CLICK reads.
+  Cut to its low 16 bits, signed: 40000 is -25536 and -40000
   is 25536, so -2, 15, 2.  Clamped to the Int range: 2 (/ 32767), 15, -2
   (/ -32768).  Refused by the Math (the write skipped): 99 for Result1 and
   Result3.  A float constant cut to an integer reads Result2 = 10 (1) or 20
@@ -54,14 +57,14 @@ could plausibly differ, these cases tell the models apart:
   candidates are: bounds kept whole: 35000, which wraps to -30536
   (Result1); bounds cut to 16 bits, signed, like the other constants: 70000 is
   4464, so 2232; clamped to 32767: 16383; CLICK refusing the bounds at paste:
-  never fires.  A CLICK reads 0, none of them,
-  so the Math writes 0, as a Math error does.  Which flag, if
-  any, comes with it is
-  ``faults/rand_wide_bounds_flags``, which finds equal bounds the likely cause.
+  never fires.  A CLICK reads 0, which is none of them, so the Math writes 0, as a
+  Math error does.  The case ``faults/rand_wide_bounds_flags`` reads which flag,
+  if any, comes with it.  That case finds that the equal bounds are the likely cause.
   CLICK's editor refuses them typed in; a paste gets them through.
 - ``int_math_real_operand_constant`` (probe): a wide constant when the other
   operand is a REAL.  DF141 = 0.25 is multiplied by the constant 100000 into
-  an Int, preset 99 (Result1).  Kept whole: 25000, which a CLICK reads.  Cut to its low 16 bits, signed: 100000 is -31072, so -7768.
+  an Int, preset 99 (Result1).  Kept whole: 25000, which a CLICK reads.
+  Cut to its low 16 bits, signed: 100000 is -31072, so -7768.
   Cut to unsigned 16 bits: 100000 is 34464, so 8616.  Clamped
   to the Int range, 32767: 8191.  Refused by the Math (write skipped): 99.
   A REAL operand turning the Math into floating point and the constant kept

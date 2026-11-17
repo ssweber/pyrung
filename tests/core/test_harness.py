@@ -129,10 +129,10 @@ class TestBoolAutoharness:
         plc.run_for(0.050)
         assert _fb(plc, dev[1].Fb) is True
 
-        # Drop En — off_delay=10ms, dt=10ms → 1 dt of dwell.  The pre-logic plant
-        # reads the *previous* commit's En, so the scan En falls the plant still
-        # sees it high (Fb holds).  It sees the drop next scan, where the debounce's
-        # off side counts but compares nothing, and clears Fb the scan after.
+        # Drop En. off_delay=10ms and dt=10ms, so the dwell is 1 dt. The pre-logic plant
+        # reads the *previous* commit's En. On the scan where En falls, the plant still
+        # sees it high and Fb holds. The plant sees the drop on the next scan, when the
+        # debounce's off side counts but compares nothing. It clears Fb on the scan after.
         plc.patch({Cmd: False})
         plc.step()  # En falls (committed); plant still saw it high → Fb holds
         assert _fb(plc, dev[1].En) is False
@@ -461,8 +461,8 @@ class TestDelaysPastTheMillisecondRange:
         physical = Physical("Slow", on_delay=delay)
         plc, Cmd, Fb = _long_delay_plc(physical, dt=0.25)
         plc.patch({Cmd: True})
-        # One scan to command the enable, then ceil(delay / dt) held scans: the count
-        # a millisecond timer gives a delay it can hold (30 s here).
+        # The first scan commands the enable. Fb then rises after ceil(delay / dt) held
+        # scans. That is the count a millisecond timer gives a delay it can hold (30 s).
         on_delay_ms = physical.on_delay_ms
         assert on_delay_ms is not None
         expected = on_delay_ms // 250 + 1
@@ -496,8 +496,8 @@ class TestDelaysPastTheMillisecondRange:
                 last = value
         assert [value for _scan, value in flips][:4] == [True, False, True, False]
         gaps = [later - earlier for (earlier, _), (later, _) in zip(flips, flips[1:], strict=False)]
-        # 60 s high and 40 s low at 4 scans a second, give or take the scan a pair of
-        # timers takes to hand over.
+        # The flasher is high for 60 s and low for 40 s, at 4 scans a second. Allow a
+        # scan or two for one timer to hand over to the other.
         assert gaps[0] == pytest.approx(240, abs=2)
         assert gaps[1] == pytest.approx(160, abs=2)
 
@@ -524,8 +524,8 @@ class TestDelaysPastTheMillisecondRange:
         harness = plc._harness
         plc.patch({Cmd: True})
         plc.run(5)
-        # One scan to command the enable, then each held scan counts a quarter second,
-        # most of which sits in the timer's fraction, not its whole seconds.
+        # One scan commands the enable. Each held scan after it counts a quarter second.
+        # Most of that count is in the timer's fraction, not in its whole seconds.
         assert harness.pending_ms()[Fb.name] == 60_000 - 4 * 250
         plc.run(40)
         assert harness.pending_ms()[Fb.name] == 60_000 - 44 * 250
@@ -605,7 +605,7 @@ class TestDelaysPastTheMillisecondRange:
 
 
 class TestALinkChangedAcrossUnits:
-    """A link changed mid-run keeps the time counted, whatever unit either delay counts in."""
+    """Changing a link mid-run keeps the time already counted, whatever unit either delay uses."""
 
     @staticmethod
     def _linked(on_delay: str, *, dt: float = 0.25, default: bool = False):
@@ -673,7 +673,7 @@ class TestALinkChangedAcrossUnits:
         assert _fb(plc, Fb) is True
 
     def test_a_fresh_harness_given_the_same_links_keeps_an_off_delay_counting(self):
-        """How how()'s fork rebuilds the plant: an empty old accumulator gives nothing."""
+        """A fork in how() rebuilds the plant this way. An empty old accumulator adds nothing."""
         plc, En, Fb = self._linked("0ms")
         plc.patch({En: True})
         plc.run(3)
@@ -791,7 +791,7 @@ class TestALinkChangedAcrossUnits:
         plc, En, Fb = self._linked(first)
         plc.patch({En: True})
         plc.run(12)
-        before = plc.current_state.scan_id - 1  # the tip itself takes the change
+        before = plc.current_state.scan_id - 1  # the change lands on the tip itself
         self._relink(plc, on_delay=then)
         plc.run(5)
 
@@ -927,7 +927,7 @@ class TestALinkChangedAcrossUnits:
         return logic, En, Fb
 
     def _after_a_reload_to(self, off_delay: str, then: str) -> tuple:
-        """A new program and runner on the old state, as a reload is: enable off 2 s."""
+        """Return a new program and runner on the old state, as a reload does. En was off 2 s."""
         logic, En, _Fb = self._off_delaying(off_delay)
         old = PLC(logic, dt=0.25)
         Harness(old).install()
@@ -960,7 +960,7 @@ class TestALinkChangedAcrossUnits:
 
 
 class TestHowAroundALinkChange:
-    """how() and the replay it reads take the scans before a change as they ran."""
+    """how() and the replay it reads use the scans before a change exactly as they ran."""
 
     @staticmethod
     def _program(on_delay: str):
@@ -1036,7 +1036,7 @@ class TestHowAroundALinkChange:
 
 
 class TestHowFromASessionMidCount:
-    """A plan starts from the session's own counts: stepping the session is the truth."""
+    """A plan starts from the session's own counts, so it must match stepping the session."""
 
     @staticmethod
     def _program(on_delay, *, default=False):
@@ -1051,7 +1051,7 @@ class TestHowFromASessionMidCount:
         return program, En, Fb, Lost
 
     def _counting(self, on_delay, scans):
-        """A session with its harness on and the enable held for *scans* scans."""
+        """Return a session with its harness on and the enable held for *scans* scans."""
         program, En, _Fb, Lost = self._program(on_delay)
         plc = PLC(program, dt=0.25)
         Harness(plc).install()
@@ -1166,7 +1166,7 @@ class TestHowFromASessionMidCount:
 
 
 class TestADirectInstallSettles:
-    """``Harness(plc).install()`` takes a held enable as long since settled."""
+    """``Harness(plc).install()`` treats a held enable as one that settled long ago."""
 
     @staticmethod
     def _program(*, default):
@@ -1274,7 +1274,7 @@ class TestPlantOnASlotOnlyAPointerReaches:
 
     @staticmethod
     def _ambient_program():
-        """A setpoint no rung names: an ambient temperature a test may patch."""
+        """Build a program with a setpoint that no rung names, an ambient temperature to patch."""
         En = Bool("En")
         Temp = Real(
             "Temp",
@@ -1290,7 +1290,8 @@ class TestPlantOnASlotOnlyAPointerReaches:
                 out(Bool("Seen"))
         return logic, En, Lamp
 
-    # Temp after 500 scans of dt 0.01 toward a setpoint, from 20.0: it moves on 499.
+    # Temp after 500 scans of dt 0.01 toward a setpoint, starting from 20.0. Temp moves on
+    # 499 of those scans.
     @staticmethod
     def _temp_toward(setpoint: float) -> float:
         return setpoint - (setpoint - 20.0) * (1 - 0.3 * 0.01) ** 499

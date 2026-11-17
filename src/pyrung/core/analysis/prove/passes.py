@@ -234,7 +234,7 @@ def _writers_all_unconditional(
     graph: Any,
     program: Any,
 ) -> bool:
-    """Every writer of Y is an unconditional top-level rung in one scope.
+    """Return True when every writer of Y is an unconditional top-level rung in one scope.
 
     The gate for ND-input-sourced functional deps: with no X writers the
     ``x_writers <= y_writers`` containment is vacuous, so this is what
@@ -271,7 +271,7 @@ def _writers_all_unconditional(
 
 
 def _instructions_write(instructions: Iterable[Any], name: str) -> bool:
-    """Whether any of *instructions*, forloop bodies included, writes *name*."""
+    """Return whether any of *instructions*, forloop bodies included, writes *name*."""
     from pyrung.core.instruction.control import ForLoopInstruction
 
     from .absorb import _all_write_targets
@@ -285,11 +285,11 @@ def _instructions_write(instructions: Iterable[Any], name: str) -> bool:
 
 
 def _writes_run_when_powered(instructions: Iterable[Any], name: str) -> bool:
-    """Every write of *name* among *instructions* runs on each scan their rung is on.
+    """Return True when every write of *name* among *instructions* runs whenever its rung is on.
 
     A rung's contacts are not all that decide whether a write on it runs.  A
     oneshot write runs only on the rung's rising edge.  A forloop body runs only
-    when its loop does: a oneshot For only on the rung's rising edge, and a For
+    when its loop does.  A oneshot For runs only on the rung's rising edge.  A For
     whose count is not a literal of at least one iteration may run none (a tag
     count of 0, :func:`for_loop_iterations`).  A body rung's contacts gate its
     writes, and a ``break_loop()`` / ``continue_loop()`` in one gates the rest
@@ -547,7 +547,7 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
 
 
 def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
-    """The PILOT world key's Done specs (absorb.py)."""
+    """Build the PILOT world key's Done specs (absorb.py)."""
     assert ctx.stateful_names is not None
     ctx.state_key_done_specs = _prior_key_done_specs(
         ctx.stateful_names, ctx.done_acc or {}, ctx.done_kinds or {}
@@ -557,7 +557,7 @@ def _pass_build_prior_key_specs(ctx: _PassContext) -> None:
 def _get_structural_domain_info(
     ctx: _PassContext,
 ) -> tuple[dict[str, tuple[Any, ...]], frozenset[str]]:
-    """Structural domains and reverse blockers, computed once per pipeline run.
+    """Compute the structural domains and reverse blockers once per pipeline run.
 
     The fixpoint over ``(program, graph, all_exprs)`` takes most of the build
     time, so *ctx* keeps it.  REAL gap points stay off so how() keeps its
@@ -577,7 +577,7 @@ def _get_structural_domain_info(
 
 
 def _for_iterations_intractable(exc: ForIterationsBeyondCap, dimensions: int) -> Intractable:
-    """The refusal of a For the kernel stopped past ``PROVE_FOR_ITERATION_CAP``."""
+    """Return the refusal for a For that the kernel stopped past ``PROVE_FOR_ITERATION_CAP``."""
     return Intractable(
         reason=(
             f"forloop({exc.count}) at {exc.where} can run {exc.iterations} times in one"

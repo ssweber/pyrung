@@ -425,9 +425,9 @@ class _DoneAccRuntime(_StructRuntime):
     ) -> _DoneAccRuntime:
         """Copy this Timer/Counter under *name*.
 
-        ``nicknames`` renames the ``Done``/``Acc`` tags (``count=1`` only);
-        ``retentive`` overrides either field's retentive policy, for example
-        ``retentive={"Acc": True}`` for a timer whose time survives STOP -> RUN;
+        ``nicknames`` renames the ``Done``/``Acc`` tags (``count=1`` only).
+        ``retentive`` overrides either field's retentive policy.  For example,
+        ``retentive={"Acc": True}`` makes a timer's time survive STOP -> RUN.
         ``comments`` sets either field's comment (``count=1`` only).
         """
         field_specs = self._original_field_specs

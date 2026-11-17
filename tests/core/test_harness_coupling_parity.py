@@ -194,6 +194,6 @@ def test_bool_dwell_matches_stepping() -> None:
     stepped.force("Enable", True)
     stepped.run_until(lambda s: s.tags.get("Stage") == 1, max_cycles=5000, jit=False)
 
-    # Same scan the program latched the feedback.
+    # Both runs end on the same scan, the one where the program latched the feedback.
     assert folded.state.scan_id == stepped.state.scan_id
     assert folded.state.tags["Stage"] == stepped.state.tags["Stage"] == 1

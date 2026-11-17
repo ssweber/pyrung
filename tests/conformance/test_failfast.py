@@ -13,7 +13,8 @@ pytestmark = pytest.mark.conformance
 
 
 def test_a_group_the_loaded_part_lacks_fails_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GROUP= names another part than the PLC runs: one message, no wait, one build."""
+    """GROUP= names a part other than the one the PLC runs.  The call raises one message, waits for
+    nothing and builds once."""
     built: list[str | None] = []
     real = suite.build
 
@@ -29,7 +30,7 @@ def test_a_group_the_loaded_part_lacks_fails_at_once(monkeypatch: pytest.MonkeyP
         with pytest.raises(BuildMismatchError) as caught:
             suite.build_for(sim.endpoint, ["system", "faults", "flag_probe"])
         took = time.monotonic() - started
-        # The SD9 wrap alone takes minutes; the check waits for nothing.
+        # The SD9 wrap alone takes minutes.  The check waits for none of that.
         assert took < 30.0
         assert built == ["system"]
         # A group the loaded part holds still returns that part, built alone.

@@ -257,8 +257,8 @@ def test_late_program_guard_rebases_to_its_pre_bootstrap_writer() -> None:
     assert plan.state.tags[poisoned.name] == 0
     assert plan.replay().state.tags[state.name] == target
 
-    # ClickNick's generated run.py executes one scan before DAP discovers the runner.  That
-    # scan poisoned the machine and no plan can un-run it, so how() says what a restart needs.
+    # ClickNick's generated run.py executes one scan before DAP discovers the runner. That
+    # scan poisoned the machine. No plan can un-run it, so how() says what a restart needs.
     warmed = PLC(logic)
     warmed.step()
     assert warmed.state.tags[poisoned.name] == 1

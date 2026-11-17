@@ -1,4 +1,4 @@
-"""A captured scan's rung views keep reading the state the scan started from."""
+"""Check that the rung views of a captured scan keep reading the state the scan started from."""
 
 from __future__ import annotations
 

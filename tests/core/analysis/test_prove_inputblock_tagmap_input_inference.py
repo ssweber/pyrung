@@ -194,8 +194,8 @@ class TestPointerDomainInference:
         assert stateful["Idx"] == tuple(range(0, 11))
 
     def test_unconditioned_pointer_not_silently_dropped(self):
-        """Pointer used only in instructions (no conditions) must still
-        surface as intractable — not be silently dropped because it has
+        """A pointer used only in instructions (no conditions) must still
+        surface as intractable.  It must not be silently dropped because it has
         no comparison atoms."""
         blk = Block("DS", TagType.INT, 1, 2000)
         idx = Int("Idx", external=True)

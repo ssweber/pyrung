@@ -1,7 +1,7 @@
-"""Classification regressions from the PackML diagnostic bench.
+"""Regression tests for classification, taken from the PackML diagnostic bench.
 
-An external tag the program also writes is an input only while some read
-can see a value the program did not write.
+An external tag that the program also writes counts as an input only while some read can
+see a value that the program did not write.
 """
 
 from __future__ import annotations

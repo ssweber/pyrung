@@ -1,15 +1,16 @@
-"""What how() tries when it is about to stop: releasing forces, then restarting the program.
+"""Try releasing forces and then restarting the program when how() is about to stop.
 
-A session is a machine that already ran, with whatever its person forced, and a plan starts
-from there.  When nothing works from there, the machine may only want what a tech would try
-next: release the force, or STOP -> RUN.  Those leave the session, so they are never ordinary
-steps.  They run on a fork, only when how() was about to stop, and a plan that needs one says
-so as its first step.
+A session is a machine that has already run, with whatever the user forced.  A plan starts
+from there.  When nothing works from there, the machine may only need what a technician
+would try next: release the force, or switch STOP -> RUN.  Those actions leave the session,
+so they are never ordinary steps.  They run on a fork, and only when how() was about to
+stop.  A plan that needs one says so in its first step.
 
-A restart that falls short is still worth reporting.  Retentive tags keep their values through
-STOP -> RUN, which is often why.  The scans decide which of them matter: each is written back
-to its default while stopped, how() is asked again, and the smallest set found goes in the
-report.  Writing tags by hand is advice to the person, never a step of a plan.
+A restart that falls short is still worth reporting.  Retentive tags keep their values
+through STOP -> RUN, which is often the reason.  The scans decide which of those tags matter.
+Each one is written back to its default while the PLC is stopped, and how() is asked again.
+The smallest set that works goes in the report.  Writing tags by hand is advice to the user.
+It is never a step of a plan.
 """
 
 from __future__ import annotations
@@ -24,8 +25,9 @@ from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.query import _rung_label
 from pyrung.core.scan_trace import SYSTEM_TAGS_BY_NAME
 
-# Within what is left of how()'s own limit.  A plan from a restart is worth a search of its own;
-# the report behind it is not, though the route programs need 13 s for theirs.
+# Each time limit here is capped by what is left of how()'s own limit.  A plan from a restart
+# is worth a search of its own.  The report behind it is not, though the route programs need
+# 13 s for theirs.
 _RESTART_WALL_S = 30.0
 _CLEAR_WALL_S = 20.0
 _RELEASE_WALL_S = 20.0
@@ -65,7 +67,7 @@ class RestartReport:
     clear_untried: bool = False
 
     def step_line(self, number: int = 1) -> str:
-        """The first step of a plan that needed the restart."""
+        """Return the first step of a plan that needed the restart."""
         line = f"{number}. Stop the program and go back to RUN."
         if self.released_forces:
             line += f" This releases the force on {', '.join(self.released_forces)}."
@@ -75,7 +77,7 @@ class RestartReport:
         return f"{line}\n   how() found no way from where the session is: {reason.rstrip('.')}."
 
     def lines(self) -> list[str]:
-        """The report as text, for a plan that stopped."""
+        """Return the report as text, for a plan that stopped."""
         if self.avoided:
             return [
                 f"Restart: not tried, the state after it is avoided ({', '.join(self.avoided)})."
@@ -138,13 +140,15 @@ def try_release(
     plc: Any,
     ask: Callable[[Any, float], tuple[Any, bool]],
 ) -> tuple[Any | None, bool]:
-    """A plan with the forces it must release off, and whether a search with all of them off ended.
+    """Return a plan that releases the forces it must, and whether the search ended.
 
-    The plan is None if releasing them does not help.  The search having ended, with no plan,
-    means it found nothing left to do rather than running out of time or work.
+    The search is the one with all forces off.
 
-    Forces are the person's own, so as many as can stay on do.  how() has its answer here,
-    so a check that raises on a scan of a try costs that try and not the answer.
+    The plan is None if releasing the forces does not help.  If the search ended and there
+    is no plan, the search found nothing left to do.  It did not run out of time or work.
+
+    Forces belong to the user, so as many as possible stay on.  how() already has its answer
+    here.  So a check that raises on a scan of a try costs only that try, not the answer.
     """
     forces = tuple(sorted(plc._forces))
     if not forces:
@@ -178,7 +182,7 @@ def try_release(
 
 
 def _restarted(plc: Any, writes: Mapping[str, Any] | None = None) -> Any:
-    """A fork of *plc* after STOP -> RUN, with *writes* made while stopped."""
+    """Return a fork of *plc* after STOP -> RUN, with *writes* made while stopped."""
     fork = fork_with_pilot_rungs(plc, (), keep_overrides=False)
     fork.stop()
     if writes:
@@ -188,7 +192,7 @@ def _restarted(plc: Any, writes: Mapping[str, Any] | None = None) -> Any:
 
 
 def _survivors(plc: Any, steerable: frozenset[str]) -> dict[str, tuple[Any, Any]]:
-    """Program tags a restart leaves at something other than their default."""
+    """Return the program tags that a restart leaves at a value other than their default."""
     tags = plc.state.tags
     found: dict[str, tuple[Any, Any]] = {}
     for name in sorted(tags):
@@ -215,11 +219,12 @@ def try_restart(
     avoid_pred: Any,
     ask: Callable[[Any, float], tuple[Any, bool]],
 ) -> Any:
-    """The plan to return in place of *stopped*.
+    """Return the plan to give in place of *stopped*.
 
-    ``ask(fork, wall_s)`` runs how() on a restarted fork, with no restart of its own, and
-    returns its plan and whether it ran out of time or work.  how() already has an answer
-    here, so a check that raises on a scan of a try costs that try and not the answer.
+    ``ask(fork, wall_s)`` runs how() on a restarted fork, with no restart of its own.  It
+    returns the plan and whether the run ran out of time or work.  how() already has an
+    answer here.  So a check that raises on a scan of a try costs only that try, not the
+    answer.
     """
     session_tags = dict(plc.state.tags)
     fork = _restarted(plc)
@@ -227,9 +232,9 @@ def try_restart(
     if plc.state.scan_id == 0 and start_tags == session_tags:
         return stopped  # The session is already what a restart would give.
 
-    # The state a restart lands on has run no scan, and a system tag is not in it yet, so a
-    # check may have no answer for it; the scans judge it from there.  A check that does
-    # answer, and says this state is one to avoid, rules a restart out.
+    # The state that a restart lands on has run no scan, and a system tag is not in it yet.
+    # So a check may have no answer for it, and the scans judge it from there.  A check that
+    # does answer, and says this state is one to avoid, rules a restart out.
     avoided = _avoid_weighed_names(avoid_pred, start_tags)
     if avoided:
         return replace(stopped, restart=RestartReport(reached=False, survivors={}, avoided=avoided))
@@ -274,9 +279,10 @@ def _smallest_clear(
     survivors: Mapping[str, tuple[Any, Any]],
     ask: Callable[[Any, float], tuple[Any, bool]],
 ) -> tuple[dict[str, Any] | None, int | None, bool]:
-    """Which survivors must go back to their defaults for a restart to reach the goal.
+    """Return which survivors must go back to their defaults for a restart to reach the goal.
 
-    Returns them, the scans from the restart, and whether time ran out with some still untried.
+    The result is those tags, the scans from the restart, and whether time ran out with
+    some still untried.
     """
     if not survivors or len(survivors) > _MAX_SURVIVORS:
         return None, None, False
@@ -285,7 +291,7 @@ def _smallest_clear(
     def reaches(writes: dict[str, Any]) -> tuple[int | None, bool]:
         wall_s = _CLEAR_WALL_S if clock is None else clock.left()
         # These writes are advice, and how() has its answer already.  A check that raises on
-        # a scan of this try is no reason to lose that answer: the try just has no plan.
+        # a scan of this try is no reason to lose that answer.  The try just has no plan.
         try:
             plan, cut_short = ask(_restarted(plc, writes), wall_s)
         except _AvoidCheckRaised:
@@ -296,8 +302,8 @@ def _smallest_clear(
     scans, _cut_short = reaches(clear)
     if scans is None:
         return None, None, False
-    # Whatever can be left out, is.  Each answer here came from scans, and a search that ran
-    # out of time said nothing about the tag it left in.
+    # Leave out every tag that can be left out.  Each answer here came from scans.  A search
+    # that ran out of time said nothing about the tag it left in.
     for tag in list(clear):
         without = {name: value for name, value in clear.items() if name != tag}
         if not without:

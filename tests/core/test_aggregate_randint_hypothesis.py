@@ -1,16 +1,20 @@
 """Property tests: range aggregates and ``randint()``.
 
-Aggregates (``sum``/``max``/``min``/``median``/``mean`` over a block range) are
-checked against exact ``Fraction`` arithmetic, including how each destination
-type stores the result (the docs' "calc wraps" and "an Int truncates toward
-zero"), the CLICK rule for an even-count integer median (hardware-recorded in
-``tests/conformance/math/test_math.py``) and the division rules (a zero divisor
-stores 0 and sets ``division_error``).  Both backends must match the model.
+The aggregate tests compare aggregates (``sum``/``max``/``min``/``median``/``mean`` over a
+block range) with exact ``Fraction`` arithmetic. The checks cover three things:
 
-``randint()`` draws stay inside the inclusive bounds (reversed bounds are
-swapped), are the same for the same site and scan on any runner, whether
-stepped, run in a long stretch or replayed from history, and a ``patch()``
-of the site's tag picks the draw.
+- How each destination type stores the result. The docs say "calc wraps" and
+  "an Int truncates toward zero".
+- The CLICK rule for an even-count integer median, which was recorded on hardware in
+  ``tests/conformance/math/test_math.py``.
+- The division rules. A zero divisor stores 0 and sets ``division_error``.
+
+Both backends must match the model.
+
+``randint()`` draws must stay inside the inclusive bounds, and reversed bounds are
+swapped. The same site and scan must give the same draw on any runner, whether it
+was stepped, run in a long stretch or replayed from history. A ``patch()`` of the
+site's tag picks the draw.
 """
 
 from __future__ import annotations
@@ -63,7 +67,7 @@ def _wrap(value: int, bits: int, signed: bool) -> int:
 
 
 def aggregate(kind: str, values: list, *, integer: bool) -> Fraction:
-    """The exact value of an aggregate (calc stores it per destination)."""
+    """Return the exact value of an aggregate. Calc stores it per destination."""
     exact = [Fraction(v) for v in values]
     if kind == "sum":
         return sum(exact, Fraction(0))
@@ -78,8 +82,8 @@ def aggregate(kind: str, values: list, *, integer: bool) -> Fraction:
     if len(ordered) % 2:
         return ordered[mid]
     pair = ordered[mid - 1] + ordered[mid]
-    # CLICK: MDN over integers is an integer, the middle two's mean truncated
-    # toward zero; over Reals it keeps the fraction.
+    # CLICK: MDN over integers is an integer, the mean of the middle two truncated
+    # toward zero. Over Reals it keeps the fraction.
     return Fraction(_trunc(pair / 2)) if integer else pair / 2
 
 
@@ -96,7 +100,7 @@ DEST_TYPES = {"int": Int, "dint": Dint, "word": Word, "real": Real}
 
 
 def _dest_names(src: str) -> list[tuple[str, str, tuple[int, int], str]]:
-    """(source, kind, range, dest type) for every calc in the aggregate program."""
+    """Return (source, kind, range, dest type) for every calc in the aggregate program."""
     out = []
     for kind in KINDS:
         if src == "bool" and kind != "sum":
@@ -150,7 +154,7 @@ def _values(draw):
         elif src == "bool":
             elems = st.booleans()
         else:
-            # Mostly small values, sometimes the extremes: sums must wrap.
+            # Use mostly small values and sometimes the extremes, so that sums wrap.
             elems = st.one_of(
                 st.integers(lo, hi),
                 st.sampled_from([lo, hi, 0, 1, -1 if lo < 0 else 2]),
@@ -162,7 +166,7 @@ def _values(draw):
 
 @functools.cache
 def _agg_runners() -> tuple[PLC, CompiledPLC]:
-    # Built once: every example patches every source, so state left over is harmless.
+    # Build once. Every example patches every source, so state left over is harmless.
     return PLC(AGG_PROGRAM), CompiledPLC(AGG_PROGRAM)
 
 
@@ -267,9 +271,9 @@ bound_st = st.integers(-1000, 1000)
 
 @st.composite
 def bounds_st(draw):
-    """(lo, hi), often within a few of each other and sometimes reversed."""
+    """Draw (lo, hi), often within a few of each other and sometimes reversed."""
     lo = draw(bound_st)
-    # Never equal: equal constants are a math error, tested on their own below.
+    # Never equal. Equal constants are a math error, and a test below covers them.
     return lo, lo + draw(
         st.one_of(st.integers(-3, 3), st.integers(-1000, 1000)).filter(lambda d: d != 0)
     )
@@ -285,7 +289,7 @@ def test_randint_stays_in_range_inclusive_and_is_the_same_on_every_runner(bounds
     assert all(low <= v <= high for v in stepped)
     assert _draws(CompiledPLC(logic), 60) == stepped
     if high - low <= 3:
-        # Deterministic stream: 150 more draws reach every value of a tiny span.
+        # The stream is deterministic, so 150 more draws reach every value of a tiny span.
         more = _draws(PLC(logic), 200)
         assert set(more) == set(range(low, high + 1))
 
@@ -333,7 +337,7 @@ def test_randint_tag_bounds_are_read_each_scan(lo, hi, scans):
 @given(lo=bound_st)
 @SETTINGS
 def test_randint_equal_bounds_are_a_math_error(lo):
-    """Equal integer constants: the draw is 0 and SC46 is set, on every runner."""
+    """With equal integer constants, the draw is 0 and SC46 is set, on every runner."""
     logic, _expr = _randint_program(lo, lo)
     for runner in (PLC(logic), CompiledPLC(logic)):
         runner.patch({"AgGo": True})
@@ -378,9 +382,9 @@ def test_real_sum_is_the_same_on_both_backends():
 
 
 def test_real_sum_adds_plain_left_to_right_not_compensated():
-    # Stored values are 64-bit floats here; 1e8, 1, -1e8 is exact at that width
-    # (and loses the 1 at a CLICK's 32-bit Real), so the separating case is 1e16:
-    # builtin sum() on Python 3.12+ compensates and gives 2.0, plain adds give 0.0.
+    # Stored values are 64-bit floats here. 1e8, 1, -1e8 is exact at that width, though it
+    # loses the 1 at a CLICK's 32-bit Real. The case that separates the two is 1e16:
+    # builtin sum() on Python 3.12+ compensates and gives 2.0, and plain adds give 0.0.
     for values in ([1e16, 1.0, 1.0, -1e16], [1e8, 1.0, -1e8]):
         got = _real_sum_on_each_backend(values)
         plain = values[0]

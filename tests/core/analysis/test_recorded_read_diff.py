@@ -95,7 +95,7 @@ def test_read_diff_names_changed_and_nonzero_operand() -> None:
 
 
 def test_read_diff_is_the_same_on_a_plc_built_before_the_program_graph() -> None:
-    # The state lacks a slot no scan has written, so the diff reads that slot's default.
+    # No scan has written this slot, so the state lacks it and the diff reads its default.
     prog = _sum_program()
     plc = PLC(prog, dt=0.010)
     node = _writer_node(prog)

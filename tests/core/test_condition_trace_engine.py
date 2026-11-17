@@ -190,7 +190,7 @@ def test_condition_trace_engine_unknown_condition_uses_fallbacks() -> None:
 
 
 def test_a_text_window_traces_as_the_compare_written() -> None:
-    # ``Txt[1] == "AB"`` runs as the And of one compare per character; the trace
+    # ``Txt[1] == "AB"`` runs as the And of one compare per character. The trace
     # shows the one compare, the characters it reads, and its truth.
     engine = ConditionTraceEngine(formatter=TraceFormatter())
     txt = Block("TXT", TagType.CHAR, 1, 10)

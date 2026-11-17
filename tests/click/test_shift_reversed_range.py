@@ -1,8 +1,8 @@
 """A reversed shift range exports as CLICK's descending range (A4).
 
-CLICK stores a shift register's start and end as separate fields; an ending
-address below the starting one shifts from start down to end.  pyrung spells
-that ``c.select(1011, 1018).reverse()``.
+CLICK stores a shift register's start and end as separate fields. If the ending
+address is below the starting one, the register shifts from start down to end.
+In pyrung you write that as ``c.select(1011, 1018).reverse()``.
 """
 
 from __future__ import annotations

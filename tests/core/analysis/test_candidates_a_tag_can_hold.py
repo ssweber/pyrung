@@ -2,7 +2,7 @@
 
 A literal comes off a rung as written.  ``C == "AB"`` compares a CHAR to two characters, so
 no scan can see it true, and a patch refuses "AB".  A candidate value is what the tag's store
-makes of it, or nothing: a run neither raises on it nor reports a state no scan can reach.
+makes of it, or nothing.  A run neither raises on it nor reports a state that no scan can reach.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _how(program: Program):
 
 
 def _held_at_the_goal(program: Program, name: str, default=None):
-    """What *name* holds on the scan how() reaches Y."""
+    """Return what *name* holds on the scan where how() reaches Y."""
     plan = _how(program)
     assert plan.reachable is True
     assert plan.fork.current_state.tags["Y"] is True
@@ -158,7 +158,7 @@ def _fill_into(words) -> None:
     ids=["copy", "calc", "fill"],
 )
 def test_how_sets_a_source_what_it_can_hold_to_reach_a_wrapped_value(writes, needs) -> None:
-    """65535 on an INT source would clamp: the way to a WORD's 65535 is -1."""
+    """An INT source would clamp 65535.  The way to a WORD's 65535 is -1."""
     words = Block("WW", TagType.WORD, 1, 2)
     with Program(strict=False) as program:
         with Rung():

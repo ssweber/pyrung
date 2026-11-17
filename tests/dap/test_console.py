@@ -619,7 +619,7 @@ class TestCausalVerbs:
         assert "Reached" in result or "Cannot reach" in result or "Stopped" in result
 
     def test_how_reports_an_avoid_check_that_raises(self, tmp_path: Path, monkeypatch):
-        """A console condition cannot raise on demand, so the planner's error is staged."""
+        """A console condition cannot raise on demand, so the test stages the planner's error."""
         adapter, out = _setup_how(tmp_path)
 
         def raises(*_args, **_kwargs):

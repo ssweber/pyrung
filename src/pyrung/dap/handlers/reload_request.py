@@ -1,7 +1,7 @@
-"""The pyrungReload custom request, a reload that applies the caller's plan.
+"""Handle the pyrungReload custom request, a reload that applies the caller's plan.
 
 A plain ``reload`` moves each force and bench change by its tag name.  A client
-that knows the new program's tag map (ClickNick) sends a plan instead.  It says
+that knows the new program's tag map (ClickNick) sends a plan instead.  The plan says
 where each force, bench change and declared link goes, keyed by the old tag name
 (see ``pyrung.dap.reload_console.ReloadPlan``).  The response body holds the console
 reload's ``result`` text and ``carried``.
@@ -26,7 +26,7 @@ class _ReloadRequestArgs:
 
 
 def _plan_table(adapter: Any, raw: Any, field: str) -> dict[str, Any]:
-    """The plan's *field*, keyed by tag name.  A bad entry is reported, not refused."""
+    """Return the plan's *field*, keyed by tag name.  A bad entry is reported, not refused."""
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -46,7 +46,7 @@ def on_pyrung_reload(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     )
     with adapter._state_lock:
         adapter._require_runner_locked()
-    # As with the console's reload, a running continue pauses first, so the last command wins.
+    # As with the console's reload, pause a running continue first, so the last command wins.
     pause_executor(adapter)
     with adapter._state_lock:
         summary, events, carried = _reload_locked(adapter, plan)

@@ -1,4 +1,4 @@
-"""A Math error is its operation's alone: that operation is 0, the formula carries on.
+"""A Math error belongs to its own operation. That operation is 0 and the formula carries on.
 
 Read on a CLICK (2026-11-06, conformance ``math_terms``): ``7 / 0 + 5`` and
 ``(7 / 0 + 1) * 5`` are 5 with SC40, ``SQRT(-4.0) + 5`` is 5 with SC46, into a DF
@@ -68,7 +68,10 @@ DINT_TOP = Dint("DintTop")
 
 
 def _past_doubles() -> Any:
-    """34 factors of 2 ** 31 - 1: a double past 2 ** 53, then Inf past 2 ** 1024."""
+    """Return the product of 34 factors of 2 ** 31 - 1.
+
+    As the product grows, it becomes a double past 2 ** 53 and then Inf past 2 ** 1024.
+    """
     return reduce(mul, [DINT_TOP] * 34)
 
 
@@ -87,16 +90,16 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "fractional_power": (lambda: MINUS_EIGHT**0.5 + 2, Real, 2.0, {46}),
     "mod_zero": (lambda: SEVEN_INT % ZERO_INT + 5, Int, 5, set()),
     "zero_to_zero": (lambda: ZERO**ZERO + 5, Dint, 5, set()),
-    # 0 to a negative power is +Inf, not an error, so the formula is +Inf: 0 into
-    # an integer register with SC43, +Inf into a Real (read 2026-11-10).
+    # 0 to a negative power is +Inf, not an error, so the formula is +Inf. An integer
+    # register stores 0 and a Real stores +Inf. Both set SC43 (read 2026-11-10).
     "zero_to_minus_one": (lambda: ZERO**-1 + 5, Dint, 0, {43}),
     "zero_to_minus_one_real": (lambda: ZERO**-1 + 5, Real, float("inf"), {43}),
     "abs_int_bottom": (lambda: abs(INT_BOTTOM) + 1, Int, 1, {43}),
     "abs_dint_bottom": (lambda: abs(DINT_BOTTOM) + 1, Dint, 1, {43}),
     "negative_shift": (lambda: lsh(SEVEN_INT, NEGATIVE) + 1, Int, 1, {43}),
     "inf_into_and": (lambda: ((BIG**9) & 1) + 2, Int, 2, {43}),
-    # A calc's integer step past 2 ** 53 is a double, Inf past 2 ** 1024
-    # (lsh(1, 2000)): a bit operation on Inf is 0 with SC43, as on a Real's.
+    # An integer step in a calc becomes a double past 2 ** 53 and Inf past 2 ** 1024
+    # (lsh(1, 2000)). A bit operation on Inf is 0 with SC43, as it is on a Real.
     "stepped_inf_into_and": (lambda: (lsh(ONE, FAR) & 1) + 2, Int, 2, {43}),
     "stepped_inf_into_and_real": (lambda: (lsh(ONE, FAR) & 1) + 2, Real, 2.0, {43}),
     "stepped_inf_into_or": (lambda: ((ONE << FAR) | 0) + 2, Int, 2, {43}),
@@ -108,8 +111,8 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "stepped_inf_rotated_left": (lambda: lro(lsh(ONE, FAR), 1) + 2, Int, 2, {43}),
     "stepped_inf_rotated_right": (lambda: rro(lsh(ONE, FAR), 1) + 2, Int, 2, {43}),
     "product_past_doubles_into_and": (lambda: (_past_doubles() & 1) + 2, Int, 2, {43}),
-    # A finite double to an integer power past the float range is Inf, as a
-    # Real's is: no term error, Inf into an integer register is 0 with SC43.
+    # A finite double raised to an integer power past the float range is Inf, as it is
+    # for a Real. There is no term error. An integer register stores Inf as 0 with SC43.
     "stepped_double_squared": (lambda: lsh(ONE, THOUSAND) ** 2 + 2, Int, 0, {43}),
     "stepped_double_cubed_real": (lambda: lsh(ONE, THOUSAND) ** 3 + 2, Real, float("inf"), {43}),
     "stepped_double_negative_cubed": (
@@ -160,7 +163,7 @@ class _StubBase:
 
 
 def _program(name: str) -> tuple[Program, dict[str, Any]]:
-    """*name*'s formula into its destination, then a coil per flag it may raise."""
+    """Return a program and its tags: *name*'s formula into a destination, a coil per flag."""
     build, dest_type, _stored, _flags = FORMULAS[name]
     dest = dest_type("Dest")
     seen = {code: Bool(f"Saw{code}") for code in FLAGS}
@@ -178,7 +181,7 @@ def _program(name: str) -> tuple[Program, dict[str, Any]]:
 
 
 def _first_scan(prog: Program, engine: str, tags: dict[str, Any], monkeypatch) -> dict[str, Any]:
-    """The named tags after one scan of *prog* on *engine*."""
+    """Return the named tags after one scan of *prog* on *engine*."""
     if engine in ("interpreted", "compiled"):
         runner = (PLC if engine == "interpreted" else CompiledPLC)(prog, dt=0.010)
         runner.step()
@@ -215,9 +218,9 @@ def test_a_failing_operation_is_zero_and_the_formula_carries_on(
 
 TABLE = Block("Table", TagType.INT, 1, 10)
 
-#: A pointer whose address is a calc's double past the integer range: Inf
-#: (``lsh(1, 2000)``) or NaN (Inf - Inf), each alone and after a division by 0;
-#: and ``~`` of Inf, 0 with SC43: below the block.
+#: Pointers whose address is a calc's double past the integer range. The address is
+#: Inf (``lsh(1, 2000)``) or NaN (Inf - Inf), each alone and after a division by 0.
+#: The last is ``~`` of Inf, which is 0 with SC43, below the block.
 POINTERS: dict[str, tuple[Callable[[], Any], set[int]]] = {
     "shift_to_inf": (lambda: TABLE[lsh(ONE, FAR)], set()),
     "inf_minus_inf": (lambda: TABLE[lsh(ONE, FAR) - lsh(ONE, FAR) + 3], set()),
@@ -231,9 +234,9 @@ POINTERS: dict[str, tuple[Callable[[], Any], set[int]]] = {
 def test_a_pointer_with_no_integer_address_is_an_address_error(
     name: str, engine: str, monkeypatch
 ) -> None:
-    # Inf or NaN is no address: nothing written, the address error, and the
-    # flags of the address's failing operations, as for an address below the
-    # block.
+    # Inf or NaN is not an address. The Math writes nothing and sets the address error.
+    # It also sets the flags of the address's failing operations, as for an address
+    # below the block.
     build, flags = POINTERS[name]
     dest, address = Int("Dest"), Bool("SawAddress")
     seen = {code: Bool(f"Saw{code}") for code in FLAGS}
@@ -258,8 +261,8 @@ def test_a_pointer_with_no_integer_address_is_an_address_error(
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_a_raw_mod_by_zero_in_a_pointer_is_its_term_with_sc40(engine: str, monkeypatch) -> None:
-    # A pointer keeps Python's % (calc_form leaves it): by 0 a division error,
-    # 0 for the term, so Table[0 + 3] is read.
+    # A pointer keeps Python's % (calc_form leaves it alone). A % by 0 is a division
+    # error and gives 0 for the term, so Table[0 + 3] is read.
     dest = Int("Dest")
     seen = {code: Bool(f"Saw{code}") for code in FLAGS}
     with Program(strict=False) as prog:
@@ -291,7 +294,7 @@ def _threshold_program(threshold: int) -> tuple[Program, Bool]:
 
 
 def _latches_on_some_input(logic: Program) -> bool:
-    """Step every PN and PZ the tags allow, and say whether PBad latched."""
+    """Step every PN and PZ that the tags allow. Return whether PBad latched."""
     plc = PLC(logic, dt=0.010)
     for numerator in range(8):
         for divisor in range(2):

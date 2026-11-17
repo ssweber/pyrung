@@ -1,8 +1,8 @@
 """A timed-out TOF whose TD the ladder writes to 0: the ``tof_rewrite`` group (part ``follow2_coils``).
 
-``done_after_td_zeroed`` (T1): a TOF of 200 ms, in steps that ``Scratch`` holds.  Each step moves on
-from the TOF's own Done and TD, so no reading depends on the scan time.  A step's rungs come below
-the TOF in reverse order, so each new step starts on the next scan.
+``done_after_td_zeroed`` (T1) runs a TOF of 200 ms through steps that ``Scratch`` holds.  Each
+step moves on from the TOF's own Done and TD, so no reading depends on the scan time.  A step's
+rungs come below the TOF in reverse order, so each new step starts on the next scan.
 
 - Step 0: the TOF's rung is true.  The step ends once Done is on.
 - Step 1: the rung is false from here on.  The step ends on the scan the TD first reads 300 or
@@ -13,24 +13,22 @@ the TOF in reverse order, so each new step starts on the next scan.
 - Step 4: the step ends on the first scan Done is off again.  Result4 is 1 if the TD is then at the
   preset or past it, 2 if it is under it.
 
-T292, a TON on from ``Cmd``, times the case out at the step it is on after 1500 ms
-(``scans.deadline``).  A TD that stops at the preset never ends step 1, for one.
+T292, a TON that ``Cmd`` turns on, times the case out after 1500 ms and records the step the
+case is on (``scans.deadline``).  A TD that stops at the preset never ends step 1, for one.
 
-On a CLICK Done comes back on and the TD counts from 0.  A TOF that has been enabled judges
+On a CLICK, Done comes back on and the TD counts from 0.  A TOF that has been enabled judges
 ``TD < preset`` on every scan its rung is false.  A TD written to 0 starts its delay again
-(``OffDelayInstruction``).  A TOF never enabled still rests at Done off, TD 0
+(``OffDelayInstruction``).  A TOF that was never enabled still rests at Done off, TD 0
 (``timers/tof_never_enabled``).  A TOF kept at rest after its TD reads 0 would read Result2 = 0
-and Result4 = 2 here.  Done comes back one scan after the write.  The preset is 200 ms, five
-times the soft PLC's longest scan, so one tick cannot reach it.
- a TD written to 0 starts its delay again (``OffDelayInstruction``).  A TOF never
-enabled still rests at Done off, TD 0 (``timers/tof_never_enabled``).  A TOF kept at rest after its
-TD reads 0 would read Result2 = 0 and Result4 = 2 here.  Done comes back one scan after the
-write, and at the soft PLC's 20 ms scan that one tick would reach a 20 ms preset.  The preset
-here is 200 ms, five times the soft PLC's longest scan.
+and Result4 = 2 here.
 
-The case's reset depends on nothing the TOF does: its rung is false through the reset, and its
-Done and TD are kept (a TOF times on, and its Done may come back on, after the case).  The case owns
-what ``memory.OWNED_APART`` lists under this group.
+Done comes back one scan after the write.  At the soft PLC's 20 ms scan, that one tick would
+reach a 20 ms preset.  The preset here is 200 ms, five times the soft PLC's longest scan, so
+one tick cannot reach it.
+
+The case's reset does not depend on anything the TOF does.  Its rung is false through the reset,
+and its Done and TD are kept, because a TOF times on after the case and its Done may come back
+on.  The case owns what ``memory.OWNED_APART`` lists under this group.
 """
 
 from __future__ import annotations
@@ -108,6 +106,6 @@ def test_tof_rewrite():
 
 @pytest.mark.parametrize("dt", [0.001, 0.020, 0.023, 0.030, 0.040])
 def test_tof_rewrite_at_any_scan(monkeypatch, dt):
-    """The CLICK scans in about 1 ms, the soft PLC in 20..40 ms under load."""
+    """Run at a CLICK scan time (about 1 ms) and a soft PLC scan time (20..40 ms under load)."""
     monkeypatch.setattr(runner_module, "DT", dt)
     assert_all_passed(run(Group("tof_rewrite", [replace(group.cases[0], scans=int(0.7 / dt))])))

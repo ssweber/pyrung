@@ -1,15 +1,17 @@
-"""A write past the DD bank, cleared first: the ``past_clean`` group (part ``follow_values``).
+"""Write to DD1531, past the DD bank, after clearing it.
 
-**It writes into a real CLICK's memory past the DD bank, at DD1531.**  Do not run it on a CLICK
-whose memory matters; delete its call rung in main to leave it out.  It ends by writing 0 there
-again, which ``faults/pointer_past_bank_lands`` (part ``system``) expects to read.  The simulator
+This is the ``past_clean`` group, in the part ``follow_values``.
+
+**It writes into a real CLICK's memory past the DD bank, at DD1531.** Do not run it on a CLICK
+whose memory matters. To leave it out, delete its call rung in main. It ends by writing 0 there
+again, which ``faults/pointer_past_bank_lands`` (part ``system``) expects to read. The simulator
 and the P1AM code have no memory there.
 
-``past_write/past_bank_write`` skips its write when DD1531 already holds 5.  This case writes
-whatever is there.
+``past_write/past_bank_write`` skips its write when DD1531 already holds 5. This case writes
+no matter what DD1531 holds.
 
-``clear_then_write``, through the pointer DS4226 = 1531 (``past_write``'s), each read into a field
-preset to -7 on its scan, so -7 is a read that left its destination alone:
+``clear_then_write`` goes through the pointer DS4226 = 1531 (``past_write``'s). It reads each
+value into a field preset to -7 on its scan, so -7 means the read left its destination alone:
 
 - ErrorCode: DD1531 before anything is written, as found.
 - Result1: after a Copy of 0 into it.
@@ -17,9 +19,9 @@ preset to -7 on its scan, so -7 is a read that left its destination alone:
 - Result3: after a Copy of 0 again: 0 where it lands, 1234 where only the first write landed.
 - Result4: SC43 (bit 1) and SC44 (bit 2) right after the write of 1234, latched by coils.
 
-A CLICK reads 0, 1234, 0, 0 and 0.  Each write lands, and no write
-raises either flag.  pyrung drops the writes and reads 0, 0, 0, 0 and 0, so the case is pending
-``PASTBANK``.  ErrorCode expects 0, what this case and ``modbus_raw`` leave there.
+A CLICK reads 0, 1234, 0, 0 and 0. Each write lands, and no write
+raises either flag. pyrung drops the writes and reads 0, 0, 0, 0 and 0, so the case is pending
+``PASTBANK``. ErrorCode expects 0, which is what this case and ``modbus_raw`` leave there.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

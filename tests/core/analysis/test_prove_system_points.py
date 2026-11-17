@@ -188,7 +188,7 @@ class TestNotAConstant:
         assert _stable_int_tag_value("Fed", graph, {}) is None
 
     def test_reference_constants(self):
-        # copy(Ref, State) and State == Ref is the named-state idiom of a reference constant.
+        # The named-state idiom of a reference constant: copy(Ref, State), then State == Ref.
         state = Int("State")
         ref = Int("Ref", default=3)
         lamp, clock_lamp = Bool("Lamp"), Bool("ClockLamp")

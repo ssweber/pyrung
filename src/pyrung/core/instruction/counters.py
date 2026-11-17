@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 
-from .advance import AdvanceProfile, ConditionDemand, monotone_profile
+from .advance import (
+    AdvanceProfile,
+    ConditionDemand,
+    monotone_profile,
+    recorded_completion_controls,
+)
 from .base import Instruction
 from .conversions import (
     _clamp_dint,
@@ -30,14 +35,14 @@ COUNT_DOWN_MEMORY = "_cd"
 
 
 def count_edge(ctx: ScanContext, key: str, now: bool) -> bool:
-    """Whether a count input rose since this counter last ran; remember it.
+    """Return True if a count input rose since this counter last ran, and remember it.
 
     A CLICK counter counts the rising edges of its count inputs, with a memory
-    of its own for each: the input as this instruction saw it the last time it
-    was scanned.  The memory is written on every scan the instruction runs,
-    reset scans included, so an input held on through a reset does not count
-    again.  It starts off (absent), so an input already on at the first scan
-    counts.
+    of its own for each.  The memory is the input as this instruction saw it
+    the last time it was scanned.  It is written on every scan the instruction
+    runs, reset scans included, so an input held on through a reset does not
+    count again.  It starts off (absent), so an input already on at the first
+    scan counts.
     """
     before = bool(ctx.get_memory(key, False))
     ctx.set_memory(key, now)
@@ -47,14 +52,14 @@ def count_edge(ctx: ScanContext, key: str, now: bool) -> bool:
 class CountUpInstruction(Instruction):
     """Count-Up (CTU) — and optionally bidirectional — counter.
 
-    Counts the rising edges of its rung: the accumulator goes up by one on
-    each scan the rung is True after a scan it was False (or on the first
-    scan).  Optionally counts down on the rising edges of a separate down
-    condition (bidirectional counter); an up and a down edge on the same scan
-    cancel.
+    The counter counts the rising edges of its rung.  The accumulator goes up
+    by one on each scan where the rung is True after a scan where it was False,
+    or on the first scan.  A separate down condition makes the counter
+    bidirectional: it counts down on that condition's rising edges.  An up edge
+    and a down edge on the same scan cancel.
 
     The counter keeps its own memory of each count input (``_cu:i{N}``,
-    ``_cd:i{N}``), updated on every scan it runs, reset scans included: an
+    ``_cd:i{N}``), updated on every scan it runs, reset scans included.  An
     input held on through a reset does not count again.
 
     - Accumulator type: DINT (32-bit signed, clamps at ±2 147 483 647).
@@ -168,17 +173,18 @@ class CountUpInstruction(Instruction):
             restore_is_pulse=isinstance(
                 self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
             ),
+            completion_controls=recorded_completion_controls(self),
         )
 
 
 class CountDownInstruction(Instruction):
     """Count-Down (CTD) counter.
 
-    Counts the rising edges of its rung, down by one each.  The accumulator
-    starts at 0 and counts negative; done = True when acc ≤ preset, so a down
-    counter with a positive preset is done from its first scan, as on a
-    CLICK.  Its memory of the rung (``_cd:i{N}``) is updated on every scan it
-    runs, reset scans included.
+    The counter counts the rising edges of its rung, down by one each.  The
+    accumulator starts at 0 and counts negative.  Done is True when
+    acc ≤ preset, so a down counter with a positive preset is done from its
+    first scan, as on a CLICK.  Its memory of the rung (``_cd:i{N}``) is
+    updated on every scan it runs, reset scans included.
 
     - Accumulator type: DINT (32-bit signed, clamps at ±2 147 483 647).
     - Done bit: recomputed every scan it runs.
@@ -187,7 +193,7 @@ class CountDownInstruction(Instruction):
     Args:
         done_bit: BOOL tag set when acc ≤ preset.
         accumulator: DINT tag storing the current (negative) count.
-        preset: Done threshold (constant or DINT tag): done while acc ≤ preset.
+        preset: Done threshold (constant or DINT tag).  The counter is done while acc ≤ preset.
         down_condition: Rung power condition (injected automatically by DSL).
         reset_condition: Tag or condition that resets acc and done.
     """
@@ -280,4 +286,5 @@ class CountDownInstruction(Instruction):
             restore_is_pulse=isinstance(
                 self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
             ),
+            completion_controls=recorded_completion_controls(self),
         )

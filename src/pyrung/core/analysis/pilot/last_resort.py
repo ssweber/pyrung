@@ -1,12 +1,13 @@
-"""What how() tries when it has no reason left to try anything: a wait, or one input.
+"""Try one last move when how() has no reason left to try anything: a wait, or one input.
 
-The pilot moves for a reason the trace gives it.  Here, only when it was about to stop, one
-move may run with no reason at all, on a fork, and only the result keeps it: how(), asked again
-from where the move landed, gets there.
+The pilot normally moves only for a reason that the trace gives it.  When it is about to
+stop, it may instead run one move with no reason at all, on a fork.  Then how() is asked
+again from where the move landed.  The pilot keeps the move only if that answer reaches the
+goal.
 
-A plan that needed this says so, as a step of its own.  The answer is as real as any other,
-since the scans ran, but it means the trace missed something, and that is worth knowing: each
-one names a gap in how the pilot reads a program.
+A plan that needed this move says so, as a step of its own.  The answer is as real as any
+other, because the scans ran.  But it also means that the trace missed something, and that
+is worth knowing.  Each such plan names a gap in how the pilot reads a program.
 """
 
 from __future__ import annotations
@@ -22,15 +23,15 @@ from pyrung.core.analysis.pilot.physical import upstream_through_plant
 from pyrung.core.scan_trace import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 
-# Within what is left of how()'s own limit.  One ask gets far less than the whole, because the
-# moves that fail are most of them.
+# These stay within what is left of how()'s own limit.  One ask gets far less than the whole,
+# because most moves fail.
 _WALL_S = 5.0
 _ASK_WALL_S = 2.0
 _WAIT_SCANS = 40000
 _FIRST_WAIT = 200
 _VALUES_PER_TAG = 8
-# A failing ask costs about what the search that stopped did, and a move that helps has been
-# among the first few.  Each rescue seen so far took at most four of these.
+# A failing ask costs about as much as the search that stopped.  So far, a move that helps has
+# been among the first few.  Each rescue seen so far took at most four asks.
 _MAX_ASKS = 5
 
 
@@ -38,14 +39,14 @@ _MAX_ASKS = 5
 class LastResort:
     """The one move a plan rests on, which nothing in the trace pointed to."""
 
-    # The input it set, or None for a wait.
+    # The input that the move set, or None for a wait.
     tag: str | None
     value: Any
-    # Scans the move took, before how() was asked again.
+    # The scans that the move took before how() was asked again.
     scans: int
     # What how() said before the move.
     session_reason: str | None = None
-    # How many tries it took, this one included.
+    # The number of tries it took, including this one.
     tries: int = 1
 
     def step_line(self, number: int = 1) -> str:
@@ -74,7 +75,7 @@ def _input_values(setup: Any, name: str, current: Any) -> tuple[Any, ...]:
 
 
 def _inputs_to_try(stopped: Any, setup: Any, tags: Any) -> list[tuple[str, Any]]:
-    """Every value an input that can reach the goal might take, with nothing to rank them by."""
+    """Return every value that an input able to reach the goal might take, in no ranked order."""
     goals = stopped.targets or ((stopped.target_tag, stopped.target_value),)
     if stopped.target_predicate is not None and not stopped.targets:
         upstream = frozenset(setup.steerable)
@@ -93,7 +94,7 @@ def _program_tags(state: Any) -> dict[str, Any]:
 
 
 def _where(fork: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The state a wait can change, a timer's fraction of a unit included."""
+    """Return the state that a wait can change, including a timer's fraction of a unit."""
     return _program_tags(fork.state), dict(fork.state.memory)
 
 
@@ -105,9 +106,9 @@ def _waited(
     scans: int,
     bits: dict[str, bool] | None = None,
 ) -> bool:
-    """Run *fork* until the goal, a bit leaves *bits*, or nothing is moving.
+    """Run *fork* until the goal holds, a bit leaves *bits*, or nothing is moving.
 
-    False if it hit a state to avoid.
+    Return False if the fork hit a state to avoid.
     """
     tripped = False
 
@@ -143,7 +144,7 @@ def try_moves(
     ask: Callable[[Any, float], tuple[Any, bool]],
     max_scans: int,
 ) -> Any | None:
-    """A plan that rests on one move from the session, or None if no move helps."""
+    """Return a plan that rests on one move from the session, or None if no move helps."""
     clock = WallClock.starting_now(_WALL_S)
 
     def left() -> float:
@@ -172,8 +173,8 @@ def try_moves(
         )
 
     idle = start()
-    # The program stopped itself on the scan that applied the waiting overrides.  Any move
-    # from there starts with a restart, and how() does not plan across one.
+    # The program stopped itself on the scan that applied the waiting overrides.  Any move from
+    # there starts with a restart, and how() does not plan across a restart.
     if not idle._running:
         return None
     tags_at_start = idle.state.tags
@@ -181,14 +182,15 @@ def try_moves(
     idle.step()
     idle_tags = _program_tags(idle.state)
 
-    # how() has its answer here, so a check that raises on a scan of a try costs that try.
+    # how() has its answer here, so a check that raises on a scan of a try ends only that try.
     try:
         fork = start()
-        # A wait's scans are charged a hundredth of a unit each, as the search's own are.
+        # A wait's scans are charged a hundredth of a unit each, as the search's own scans are.
         wait = min(_WAIT_SCANS, max_scans * 100)
         bits = {name: value for name, value in idle_tags.items() if isinstance(value, bool)}
-        # Asked where a bit first moves, or a count that runs on would have it wait out the whole
-        # limit, and then where it settles.  One that ends where an idle scan did shows nothing new.
+        # Ask where a bit first moves.  Otherwise a count that runs on would make the wait last
+        # the whole limit.  Then ask where the state settles.  A wait that ends where an idle
+        # scan did shows nothing new, so skip it.
         seen = [began, _where(idle)]
         for stop_at in (bits, None):
             scans = wait - (fork.state.scan_id - start_scan)
@@ -208,7 +210,7 @@ def try_moves(
         tags = _program_tags(fork.state)
         return {**tags, name: None} != {**idle_tags, name: None}
 
-    # One scan tells which moves did anything, and those get their asks first.
+    # One scan tells which moves did anything.  Those moves get their asks first.
     moved: list[tuple[str, Any, Any]] = []
     for name, value in _inputs_to_try(stopped, setup, tags_at_start):
         try:

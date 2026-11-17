@@ -1,8 +1,8 @@
-"""Under xdist the check still judges the whole session, and a bad run still fails.
+"""Test that under xdist the fold check still judges the whole session, and a bad run still fails.
 
-Real sessions in a subprocess, on tests/conftest.py's own hooks: only the controller sets
-the exit code, and it has run nothing itself, so whatever it doesn't get from a worker is
-silently a pass.
+These tests run real sessions in a subprocess, on the hooks in tests/conftest.py. Only the
+controller sets the exit code, and it has run nothing itself. Anything that a worker does not
+report to it therefore counts as a pass without any warning.
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ from tests import fold_check
 
 REPO = Path(__file__).resolve().parent.parent
 PASSES = "def test_passes():\n    pass\n"
-# Too late for the fixture that fails the test that met a mismatch; only the session sees it.
+# The mismatch comes too late for the fixture that fails the test that met it. Only the session
+# sees it.
 MISMATCH_AFTER_THE_TEST = """
 import pytest
 from tests import fold_check
@@ -77,7 +78,10 @@ def test_counts_from_every_worker_add_up_in_the_summary(tmp_path: Path) -> None:
 
 
 def test_a_session_vacuous_only_taken_together_fails(tmp_path: Path) -> None:
-    """Each file is too small to judge, as a single worker's share may be."""
+    """Check that the session fails when each file is too small to judge.
+
+    A single worker's share may be that small.
+    """
     add = _adds_to_stats("compiled runs long enough for the loop", fold_check.MIN_RUNS_TO_JUDGE - 1)
     result = _session(tmp_path, "--fold-check", test_one=add, test_two=add)
     assert result.returncode == 1, result.stdout
@@ -88,13 +92,16 @@ def test_a_session_vacuous_only_taken_together_fails(tmp_path: Path) -> None:
 def test_a_mismatch_met_on_a_worker_fails_the_session(
     tmp_path: Path, options: tuple[str, ...]
 ) -> None:
-    """Plain too: there only the worker has imported fold_check."""
+    """Check the plain run too, where only the worker has imported fold_check."""
     result = _session(tmp_path, *options, test_one=MISMATCH_AFTER_THE_TEST, test_two=PASSES)
     assert result.returncode == 1, result.stdout
 
 
 def test_a_worker_killed_by_the_memory_cap_fails_and_names_the_test(tmp_path: Path) -> None:
-    """The cap's os._exit, once, and the line mergeq's failure parser reads from it."""
+    """Check that the cap's os._exit is reported once.
+
+    The report is the line that mergeq's failure parser reads.
+    """
     dies = "import os\n\ndef test_dies():\n    os._exit(99)\n"
     result = _session(tmp_path, test_one=dies, test_two=PASSES)
     assert result.returncode == 1, result.stdout

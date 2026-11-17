@@ -36,7 +36,7 @@ from pyrung.core.site_memory import _first_tag_name, instruction_memory
 def _pair(
     physical: Physical, coil: Any, on_ms: int, off_ms: int, dt: float = 0.010
 ) -> tuple[PLC, Bool]:
-    """A harness feedback ``Fb`` and the literal two-timer coil ``Coil``."""
+    """Return a harness feedback ``Fb`` and the literal two-timer coil ``Coil``."""
     on_timer, off_timer = Timer.clone("CoilOn"), Timer.clone("CoilOff")
     return _pair_with(
         physical, lambda target: coil(target, on=(on_timer, on_ms), off=(off_timer, off_ms)), dt
@@ -44,7 +44,7 @@ def _pair(
 
 
 def _pair_with(physical: Physical, write: Any, dt: float = 0.010) -> tuple[PLC, Bool]:
-    """A harness feedback ``Fb`` and the literal coil ``Coil`` that *write* puts in a rung.
+    """Return a harness feedback ``Fb`` and the literal coil ``Coil`` that *write* puts in a rung.
 
     Both are driven by ``Cmd``.  The coil's rung comes first, so it reads ``Cmd`` as the
     last scan left it, as the plant does.
@@ -94,14 +94,15 @@ class TestBoolFeedbackIsADebounce:
         """on=100 ms and off=50 ms at 10 ms scans: an on-delay feeding an off-delay dropped it."""
         plc, btn = _pair(Physical("Dev", on_delay="100ms", off_delay="50ms"), debounce, 100, 50)
         fb, _coil = _drive(plc, btn, [True] * 20 + [False] * dip + [True] * 25)
-        # On after 10 held scans and the scan the plant reads the command a scan late.
+        # The plant reads Cmd a scan late, on scan 2.  The on side reaches 100 ms on scan 11,
+        # so Fb is off for the first 10 scans.
         assert _bits(fb) == "." * 10 + "#" * (35 + dip)
 
     def test_a_dip_as_long_as_the_off_delay_drops_it(self) -> None:
         plc, btn = _pair(Physical("Dev", on_delay="100ms", off_delay="50ms"), debounce, 100, 50)
         fb, _coil = _drive(plc, btn, [True] * 20 + [False] * 6 + [True] * 25)
-        # The off side reaches 50 ms on the fifth scan the plant sees the dip and
-        # turns Fb off on the sixth.  The on side then counts 100 ms again.
+        # The off side reaches 50 ms on the fifth scan in which the plant sees the dip.
+        # Fb turns off on the sixth.  The on side then counts 100 ms again.
         assert _bits(fb) == "." * 10 + "#" * 16 + "." * 10 + "#" * 15
 
     def test_a_clean_command_turns_it_off_a_scan_after_its_off_delay(self) -> None:
@@ -217,7 +218,7 @@ def _profile_for(plc: PLC, fb: str, value: bool) -> Any:
 
 
 def _hold_until(plc: PLC, step: Any, fb: str, value: bool, budget: int = 200) -> int | None:
-    """Step under the plan's holds and count the scans until ``fb`` has *value* (``None`` if never)."""
+    """Step under the plan's holds, and return the scans until ``fb`` has *value* (or ``None``)."""
     (demand,) = step.holds
     en = demand.condition.tag.name
     for scans in range(1, budget + 1):

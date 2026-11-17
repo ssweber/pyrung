@@ -1,20 +1,18 @@
-"""A box reads its enable and every pin at one moment, before it executes.
+"""Test that a box reads its enable and every pin at one moment, before it executes.
 
-pyrung's adopted model, pending hardware (conformance probes
-``counters/pins_read_before_count`` and ``drum/pins_read_before_step_fix``):
-CLICK gives a box with pins its own rung (C000A: all pins start from the same
-branch), so a pin's wire either runs from the rail with all its own contacts
-(rail form) or tees off the box's input wire after some shared contacts
-(shared-parent form).  The two shapes must solve the same: the box takes its
-enable and every pin in one reading, before any write of its own.
+This is the model that pyrung has adopted, pending hardware. The conformance probes are
+``counters/pins_read_before_count`` and ``drum/pins_read_before_step_fix``. CLICK gives a box
+with pins its own rung (C000A: all pins start from the same branch). A pin's wire therefore
+either runs from the rail with all its own contacts (rail form), or tees off the box's input
+wire after some shared contacts (shared-parent form). The two shapes must give the same result.
+The box reads its enable and every pin in one reading, before any write of its own.
 
-Each box kind runs twice here.  Program A writes the pins as ``And(parent, own)``
-with one shared parent; program B copies the parent's contacts into every
-pin.  Parents read the box's own state (counter Done/Acc, timer Done/Acc, shift
-bits, drum step and completion flag) and carry rise()/fall().  A and B must
-agree scan by scan, on every backend: the interpreter, the compiled kernel and
-the generated CircuitPython.  The invalid-step cases pin the value a drum pin
-sees when the drum corrects the step to 1 as it runs.
+Each box kind runs twice here. Program A writes the pins as ``And(parent, own)`` with one
+shared parent. Program B copies the parent's contacts into every pin. The parents read the
+box's own state (counter Done/Acc, timer Done/Acc, shift bits, drum step and completion flag),
+and they carry rise() and fall(). A and B must agree scan by scan on every backend: the
+interpreter, the compiled kernel and the generated CircuitPython. The invalid-step cases pin the
+value that a drum pin sees when the drum corrects the step to 1 as it runs.
 """
 
 from __future__ import annotations
@@ -80,7 +78,7 @@ ALL_INPUTS = (*BOOL_INPUTS, Stage)
 
 
 class Wire:
-    """How a box's pins take the shared parent: one object, or copied contacts."""
+    """Describes how a box's pins get the shared parent, as one object or as copied contacts."""
 
     def __init__(self, shared: bool, parent: Callable[[], list], drop: str | None = None):
         self.shared = shared
@@ -573,8 +571,11 @@ _ALL_DRUMS = [_event_drum_box, _time_drum_box, _time_event_drum_box]
 
 
 def test_first_scan_times_alike_given_the_same_time(monkeypatch) -> None:
-    """A plain timer shows the rule: the board times boot to scan, so a first scan
-    with a scan's time before it adds what core's fixed dt adds."""
+    """Check the rule with a plain timer.
+
+    The board times boot to scan, so a first scan with a scan's time before it adds what core's
+    fixed dt adds.
+    """
     timer = Timer.clone("BootTimer")
     with Program(strict=False) as logic:
         with Rung(En):

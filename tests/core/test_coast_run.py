@@ -73,7 +73,7 @@ Bank = Block("AdvBank", TagType.INT, 1, 8)
 
 @case
 def moved_write_overwritten_later():
-    # A rung attempts a moving value; a later rung overwrites it. Committed never moves.
+    # A rung attempts a moving value, and a later rung overwrites it. Committed never moves.
     with Rung():
         on_delay(T, 30000)
     with Rung():
@@ -830,7 +830,7 @@ def test_a_tag_that_moves_without_a_write_keeps_the_coast_interpreted() -> None:
 
 
 def test_a_saturated_timer_is_a_path_of_its_own() -> None:
-    """The source is the same before and after the limit; what it moves is not."""
+    """The source is the same before and after the limit. What it moves is not."""
 
     def saturates() -> None:
         T = Timer.clone("SatT")
@@ -1384,7 +1384,7 @@ def test_tags_that_take_turns_go_in_as_runs_and_read_back_as_stepping(
 
 
 def _cycles_in_walked_from_each_first(segments: list[Any]) -> list[tuple[int, int, int]]:
-    """``_cycles_in`` as it was, walking the keys again from each first segment."""
+    """Reproduce ``_cycles_in`` as it was, walking the keys again from each first segment."""
     found: list[tuple[int, int, int]] = []
     count = len(segments)
     keys = [(id(segment.path), segment.count) for segment in segments]

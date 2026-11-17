@@ -1,7 +1,7 @@
-"""System points in the generated scan loop: faults, scan counter, clocks, mode bits, RTC.
+"""Test the system points in the generated scan loop: faults, scan counter, clocks, mode bits, RTC.
 
-Each test runs the generated ``code.py`` for a few scans and checks what the
-ladder read, against core's system-point runtime (``core/system_points.py``).
+Each test runs the generated ``code.py`` for a few scans and compares what the
+ladder read with core's system-point runtime (``core/system_points.py``).
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def _divide_by_zero():
 
 
 def _overflow():
-    # Two in-range constants: an Int destination cuts a constant past 16 bits.
+    # Each constant is in range on its own.  An Int destination cuts a constant past 16 bits.
     math(Zero + 32767 + 1, Sink)
 
 
@@ -85,9 +85,9 @@ def _bad_pointer():
     ids=["SC40", "SC43", "SC44"],
 )
 def test_fault_flag_set_by_instruction_and_cleared_at_next_scan_start(monkeypatch, flag, fault):
-    # Scan 0 faults; scan 1 does not.  The first rung counts the scans the flag
-    # reads on before any instruction ran, the third the scans it reads on
-    # after the faulting rung.
+    # Scan 0 faults and scan 1 does not.  The first rung counts the scans on which the flag
+    # reads on before any instruction ran.  The third rung counts the scans on which it
+    # reads on after the faulting rung.
     with Program(strict=False) as prog:
         with Rung(flag):
             math(SeenAtTop + 1, SeenAtTop)
@@ -113,8 +113,8 @@ DivFlagAfterConstant = Bool("DivFlagAfterConstant", retentive=False)
 
 
 def test_calc_into_int_keeps_its_constants_whole(monkeypatch):
-    # As core (and a CLICK): 65536 in an Int's Math divides as written, as the
-    # same 65536 read from a Dint does.
+    # Core and a CLICK do the same: a 65536 in an Int's Math divides as written, the same
+    # as a 65536 read from a Dint.
     with Program(strict=False) as prog:
         with Rung():
             math(Num / 65536, ByConstant)
@@ -153,7 +153,7 @@ def test_scan_counter_steps_and_scan_clock_follows_its_parity(monkeypatch):
 
     _code, read = _run(prog, monkeypatch, scans=5)
 
-    # Core: SD9 = scan_id (0 on the first scan), SC3 = SD9 is even (as a CLICK has it).
+    # Core sets SD9 to scan_id (0 on the first scan) and SC3 to "SD9 is even", as a CLICK does.
     assert read(ScanCount) == 4
     assert read(EvenScans) == 3
     assert read(ClockMismatch) == 0
@@ -308,9 +308,9 @@ def test_unreferenced_system_points_emit_nothing(monkeypatch):
         assert marker not in code
 
 
-# A math error (SC46) does not stop the code, as it does not stop a CLICK or
-# core: the Math writes 0, SC46 is on for the rest of that scan, the next scan
-# starts with it off, and every scan runs (core/system_points.py).
+# A math error (SC46) does not stop the code, the same as it does not stop a CLICK or
+# core.  The Math writes 0 and SC46 is on for the rest of that scan.  The next scan
+# starts with SC46 off, and every scan runs (core/system_points.py).
 Operand = Real("Operand", retentive=False)
 Root = Real("Root", retentive=False)
 SawMathError = Int("SawMathError", retentive=False)

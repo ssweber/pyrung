@@ -1,6 +1,6 @@
-"""Rung semantics: the ``rungs`` group (subroutine ``Conf_Rungs``).
+"""Check rung semantics: the ``rungs`` group (subroutine ``Conf_Rungs``).
 
-What a rung reads, when, and in what order.  What a CLICK does (CLICK manual ch. 1,
+The group asks what a rung reads, when, and in what order.  What a CLICK does (CLICK manual ch. 1,
 "Program Execution"):
 
 - A rung is solved row by row, top to bottom.  Each contact is read once,

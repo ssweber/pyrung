@@ -49,9 +49,9 @@ class Instruction(ABC):
     _site_program_owned: bool = False
     # The binding that stamped ``_state_key`` (see ``Condition._site_owner``).
     _site_owner: object | None = None
-    # Edge sites this instruction's helper legs hold (``(memory key, tag)``
-    # pairs), stamped by ``site_memory.build_edge_frames``; the box scans them
-    # as it reads its pins (``utils.instruction_condition_view``).
+    # The edge sites of this instruction's helper legs, as ``(memory key, tag)`` pairs.
+    # ``site_memory.build_edge_frames`` stamps them. The box scans them as it reads its
+    # pins (``utils.instruction_condition_view``).
     _edge_frame: tuple[tuple[str, str], ...] | None = None
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
@@ -60,17 +60,16 @@ class Instruction(ABC):
     _conditions: tuple[str, ...] = ()
     _structural_fields: tuple[str, ...] = ()
     _exclusive_fields: tuple[str, ...] = ()
-    # System fault flags (``fault.*`` tag names) the instruction can set or
+    # The system fault flags (``fault.*`` tag names) that the instruction can set or
     # clear while executing, beyond its declared destinations.
     _fault_writes: tuple[str, ...] = ()
-    # The flags that follow this instruction: each scan it runs it clears them
-    # as it starts, before it reads, and sets each it raises
-    # (``guard_oneshot_execution``).  A flag carries from scan to scan until an
-    # instruction that follows it clears it.
-    # Every name here is in ``_fault_writes`` too.
+    # The flags that follow this instruction. On each scan that it runs, it clears them
+    # as it starts, before it reads, and then sets each flag that it raises
+    # (``guard_oneshot_execution``). A flag stays set from scan to scan until an
+    # instruction that follows it clears it. Every name here is in ``_fault_writes`` too.
     _fault_follows: tuple[str, ...] = ()
-    # Whether it clears those flags on a scan it is reached but does not run
-    # (its rung false, or a one-shot that does not fire), as a CLICK Math does.
+    # Whether it clears those flags on a scan where it is reached but does not run, as a
+    # CLICK Math does. That happens when its rung is false or a one-shot does not fire.
     _fault_settles_idle: bool = False
     _executor_kind: int = _EXECUTOR_INSTRUCTION
 
@@ -123,7 +122,10 @@ class Instruction(ABC):
 
     @property
     def state_key(self) -> str:
-        """The site key ``bind_sites`` assigned (``i{N}``); see :mod:`pyrung.core.site_memory`."""
+        """Return the site key that ``bind_sites`` assigned (``i{N}``).
+
+        See :mod:`pyrung.core.site_memory`.
+        """
         key = self._state_key
         if key is None:
             raise RuntimeError(
@@ -137,9 +139,9 @@ class Instruction(ABC):
         return f"{prefix}:{self.state_key}"
 
     def has_pins(self) -> bool:
-        """Whether this is a box with pins (``.reset()``, ``.down()``, ``.clock()``, ...).
+        """Return True if this is a box with pins (``.reset()``, ``.down()``, ``.clock()``, ...).
 
-        A box with pins ends its rung: nothing else shares its wire tree.
+        A box with pins ends its rung. Nothing else shares its wire tree.
         """
         return False
 

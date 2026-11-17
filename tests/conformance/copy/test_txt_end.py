@@ -1,13 +1,14 @@
-"""A Real copied as text where its digits run past TXT1000: the ``txt_end`` group (part
-``follow_extra``).
+"""Check a Real copied as text where its digits run past TXT1000: the ``txt_end`` group.
+
+This is part ``follow_extra``.
 
 On a CLICK, 1.5 copied as text (Copy Option 4c) writes
 "1.5000000", nine characters.  Started at TXT995 only six of them fit before the bank ends.
 
-``by_pointer`` stages TXT994..TXT1000 to 'Z' on scan 1, copies the DF 1.5 as text through a DS
-pointer of 995 on scan 2, and reads TXT995..TXT1000 as pairs of codes, ``128 * first + second``: Result1 TXT995-996,
-Result2 TXT997-998, Result3 TXT999-1000.  "ZZ" is 11610, a pair the Copy left alone.  The digits
-up to TXT1000 read 6318 ("1."), 6832 ("50"), 6192 ("00"); a NUL is 0.
+``by_pointer`` stages TXT994..TXT1000 to 'Z' on scan 1.  On scan 2 it copies the DF 1.5 as text
+through a DS pointer of 995.  It then reads TXT995..TXT1000 as pairs of codes,
+``128 * first + second``.  Result1 is TXT995-996, Result2 is TXT997-998 and Result3 is
+TXT999-1000.  "ZZ" is 11610, a pair the Copy left alone.  The digits up to TXT1000 read 6318 ("1."), 6832 ("50") and 6192 ("00").  A NUL is 0.
 
 - The Copy writes what fits and stops (pyrung, no flag): 6318, 6832, 6192.
 - It writes nothing, all or nothing: 11610, 11610, 11610.
@@ -22,8 +23,8 @@ should.  The bits are 1 SC43 and 2 SC44 after the Copy, 4 and 8 the controls.
 A CLICK reads 6318, 6832, 6192, 12 and 90.  The Copy writes what fits and stops,
 raises no flag, and leaves TXT994 alone.
 
-CLICK's editor takes this Copy into a TXT by pointer (``to_text_real`` pastes the form by address).
-A case by address would need the same TXT, which no two cases may share.
+CLICK's editor accepts this Copy into a TXT by pointer (``to_text_real`` pastes the form by
+address).  A case by address would need the same TXT, and no two cases may share a TXT.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """

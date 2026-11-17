@@ -79,11 +79,11 @@ def _avoid_names_after_clear(
     start: dict[str, Any],
     observed: dict[str, Any],
 ) -> tuple[str, ...]:
-    """Avoid members clear at *start* that fire on *observed*, a scan the trial ran.
+    """Return the avoid members that are clear at *start* and fire on *observed*, a trial scan.
 
-    Compiled unions own the per-member distinction. A bare callable has only
-    aggregate identity, so starting true exempts its later snapshots.  The start
-    may be the state behind how()'s start, so it is only weighed.
+    Compiled unions keep the per-member distinction.  A bare callable has only an
+    aggregate identity, so if it starts true, its later snapshots are exempt.  The start
+    may be the state behind how()'s start, so the check only weighs it.
     """
 
     violated_after_clear = getattr(avoid, "violated_after_clear", None)

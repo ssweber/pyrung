@@ -45,8 +45,8 @@ def _program() -> Program:
         with Rung(Go):
             math(Count + 1, Count)
         with Rung():
-            # It changes on every scan, so the records stop keeping its values after 1,000
-            # changes.
+            # It changes on every scan, so the records stop keeping its values after
+            # 1,000 changes.
             math((Noisy * 75 + 74) % 30011, Noisy)
         with Rung(Go):
             math(Ramp + 0.1, Ramp)
@@ -56,7 +56,10 @@ def _program() -> Program:
 
 
 def _replayed(plc: PLC, tag: str, start: int, end: int) -> int | None:
-    """The old answer.  It replays the window and compares each state with the one before."""
+    """Return the old answer.
+
+    It replays the window and compares each state with the one before it.
+    """
     states = plc.history.range(start, end + 1)
     last = None
     for previous, current in zip(states, states[1:], strict=False):
@@ -150,8 +153,8 @@ NAN_TAGS = ("Source", "Copied", "Scaled", "Steps")
 def _nan_program() -> Program:
     with Program(strict=False) as program:
         with Rung():
-            # copy() keeps the NaN it copies.  math() makes a new one each scan, which is no
-            # change.
+            # copy() keeps the NaN that it copies.  math() makes a new NaN each scan, and that
+            # is not a change.
             copy(Source, Copied)
             math(Source * 1.0, Scaled)
             math(Steps + 1, Steps)
@@ -188,7 +191,7 @@ def test_a_nan_that_stays_agrees(coast: bool, first: float, copied_changed: int)
     plc.patch({"Source": first})
     plc.step()
     _run(plc, 600, coast)
-    # A new NaN reaches Copied on scan 602.  Over a NaN it is no change.
+    # A new NaN reaches Copied on scan 602.  Replacing a NaN with a NaN is not a change.
     plc.patch({"Source": float("nan")})
     _run(plc, 600, coast)
     assert _recorded_window(plc)
@@ -220,8 +223,8 @@ def test_a_nan_computed_until_its_rung_stops_agrees() -> None:
         _run(plc, 300, coast)
         plc.patch({"Source": 1.0})
         _run(plc, 300, coast)
-    # History serves some scans from its cache and replays others from a checkpoint.  The two
-    # hold different NaN objects, which is no change.
+    # History serves some scans from its cache and replays others from a checkpoint.  The
+    # two hold different NaN objects, and that is not a change.
     assert _changes(runs[True], "Scaled") == [1]
     edges = (0, 1, 2, 199, 200, 201, 298, 299, 300, 301, 302, 306, 307, 308, 599, 600)
     _assert_agree_against_stepping(runs, edges)
@@ -272,7 +275,7 @@ def test_a_harness_installed_mid_run_agrees() -> None:
     plc.patch({"Enable": True})
     for _ in range(50):
         plc.step()
-    # The install seeds Feedback True, since its link has been on for longer than the delay.
+    # The install seeds Feedback True, because its link has been on for longer than the delay.
     Harness(plc).install()
     for _ in range(20):
         plc.step()
@@ -286,7 +289,7 @@ def test_a_fork_edited_before_its_first_scan_agrees() -> None:
     child: Any = parent.fork()
     child._edit_tip_tags({"Count": 4, "NeverWritten": 4})
     _stepped(child, 100)
-    # History shows the parent's state at scan 50, so the edit shows on the fork's first scan.
+    # History shows the parent's state at scan 50, so the edit appears on the fork's first scan.
     assert _last_transition_scan(child, "NeverWritten", 40, 60) == 51
     _assert_agree(child)
     grandchild: Any = child.fork()

@@ -1,16 +1,16 @@
-"""The program set for devtools/how_compare.py: how() on programs that can show a regression.
+"""Define the programs that devtools/how_compare.py runs how() on to show a regression.
 
-Each case is a builder returning a dict:
+Each case is a builder that returns a dict:
 
-    plc      the session how() is asked from (already stepped / patched / harnessed)
+    plc      the session that how() is asked from (already stepped, patched or harnessed)
     targets  what to pass to plc.how(*targets)
-    goal     goal(tags: dict) -> bool, the target as plain Python, or None.  It is the oracle
-             the tool uses to ask "does stepping the session itself reach the target, and when"
-             independent of the plan.
+    goal     goal(tags: dict) -> bool, the target as plain Python, or None.  The tool uses it
+             to ask whether stepping the session itself reaches the target, and when.  The
+             answer does not depend on the plan.
     avoid    avoid= for how() (optional)
     kwargs   extra how() keywords (optional)
 
-Groups (the brief for this tool, written after two branches regressed how() unseen):
+Groups (this is the brief for the tool, written after two branches regressed how() unseen):
 
     midcount   a timer mid-count under a held enable, with and without an installed harness,
                and with the bench link changed after the harness settled
@@ -29,17 +29,19 @@ Groups (the brief for this tool, written after two branches regressed how() unse
                shows as the same answer with no last_resort on the row
     forloop    a For calling a subroutine over Int and Dint counts (declared 0..5, choices, a
                body-rung contact the body writes), and a producer in a subroutine the For calls
-    system     a copy of a system tag the runtime writes (the scan counter, an RTC field),
-               compared with a value the runtime gives it
+    system     a copy of a system tag that the runtime writes (the scan counter, an RTC field),
+               compared with a value that the runtime gives it
     preset     a negative preset, written as a literal and as a tag: a counter held in
                reset, the same counter staged below its preset, an on-delay
     accs       a count a copy stages past its preset, counts compared with each other
                (directly and with a constant added), a tag its copies leave at 0 or 10
                compared with an input, an input compared with an unbounded input, and an
                input compared with a set point plus 2
+    relations  facts read from the generated code: an off delay asked for Acc from power-up,
+               before its enable was ever on, and a counter whose reset is latched on
 
-Cases marked fast=False only run with --full.  The case name is its key: name a new case once
-and never reuse it, because two runs are compared by name.
+Cases marked fast=False only run with --full.  The case name is its key.  The tool compares
+two runs by name, so give a new case a name that no case has used, and never rename a case.
 """
 
 from __future__ import annotations
@@ -88,7 +90,7 @@ from pyrung.core.harness import Coupling  # noqa: E402
 
 
 def _flasher(name, on, off):
-    """A flasher Physical, in the old ``Pulse`` form on a base from before the flat keywords."""
+    """Return a flasher Physical, using the old ``Pulse`` form on a base without flat keywords."""
     try:
         return Physical(name, flasher_on=on, flasher_off=off)
     except TypeError:
@@ -186,7 +188,8 @@ def mid_plain(on_s, scans, dt=0.25):
 
 
 def mid_harness(on, scans, *, bench=None, dt=0.25, bench_scans=None):
-    """A harness on-delay feedback, enable held; optionally the bench link changes mid-count."""
+    """Build a harness on-delay feedback with the enable held, and optionally change the bench
+    link mid-count."""
 
     def build():
         p, En, Lost = _bench_program(on)
@@ -205,7 +208,8 @@ def mid_harness(on, scans, *, bench=None, dt=0.25, bench_scans=None):
 
 
 def mid_alarm(declared, bench, scans, dt=0.25):
-    """The settled-then-falls shape: the link changed under a held enable, target the alarm."""
+    """Build a program whose feedback settles and then falls. Hold the enable, change the
+    link's on-delay, and target the alarm."""
 
     def build():
         p, En, Alarm = _alarm_program(declared)
@@ -255,10 +259,10 @@ _add("midcount", "mid/alarm settled 60s->5s", mid_alarm("60s", "5s", 40), fast=F
 
 
 def bench_dip(dip_scans, dt=0.1):
-    """A settled feedback under a bench link of on 1 s / off 500 ms, then a command dip.
+    """Settle a feedback under a bench link of on 1 s / off 500 ms, then dip the command.
 
-    A dip shorter than the off delay keeps the feedback on, so the alarm on its drop still
-    needs a real drop of the enable.
+    A dip shorter than the off delay keeps the feedback on. The alarm on its drop still needs
+    a real drop of the enable.
     """
 
     def build():
@@ -358,7 +362,11 @@ def _two_ways():
 
 
 def _dwell(limit=0):
-    """Sensor held on or off for 30 ms, watchdogs at 70 ms, run 250 ms: State 6 -> 7 (or 8)."""
+    """Build a program whose stable timers need the sensor held on or off for 30 ms.
+
+    Its watchdogs finish at 70 ms and its run timer at 250 ms. State goes from 6 to 7, or
+    to 8 if a watchdog finishes first.
+    """
     sensor = Bool("HoldSensor", external=True)
     stable_on, stable_off = Timer.clone("HoldStableOn"), Timer.clone("HoldStableOff")
     on_wd, off_wd, run = Timer.clone("HoldOnWD"), Timer.clone("HoldOffWD"), Timer.clone("HoldRun")
@@ -416,7 +424,7 @@ def _armed(release_needed):
 
 
 def _timer_hold(lo=None, hi=None):
-    """Speed above 3 must be applied for the 1 s run timer; Lim is program-owned."""
+    """Build a program in which the 1 s run timer needs Speed above 3.  The program owns Lim."""
     speed, run = Int("Speed", external=True), Timer.clone("Rn")
     lim, target = Int("Lim", default=100), Bool("Target")
     with Program(strict=False) as prog:
@@ -436,7 +444,10 @@ def _timer_hold(lo=None, hi=None):
 
 
 def _two_routes(minutes):
-    """Fast passes Danger on a long timer; Slow goes round on another."""
+    """Build a program in which Fast reaches Target through Danger on a long timer.
+
+    Slow reaches Target around Danger, on a timer twice as long.
+    """
     fast, slow = Bool("Fast", external=True), Bool("Slow", external=True)
     danger, target = Bool("Danger"), Bool("Target")
     t1, t2 = Timer.clone("LwT1"), Timer.clone("LwT2")
@@ -518,7 +529,7 @@ def _off_wait(minutes):
 
 
 def _harness_delay(on, off=None):
-    """The program waits on a harness coupling with a long delay."""
+    """Make the program wait on a harness coupling that has a long delay."""
     physical = (
         Physical("Slow", on_delay=on, off_delay=off) if off else Physical("Slow", on_delay=on)
     )
@@ -579,7 +590,7 @@ def _drum(first, second, unit="s", steps=2):
 
 
 def _plain(make, target_key="target", *, dt=0.01, warm=0, harness=False, patch=None, goal=None):
-    """Build a case from a (program, tags) maker: step *warm* scans, ask for tags[target_key]."""
+    """Build a case from a (program, tags) maker, step *warm* scans and ask for tags[target_key]."""
 
     def build():
         prog, t = make()
@@ -607,7 +618,7 @@ _OPS = {
 
 
 def _auto_goal(target):
-    """A plain-Python goal from a Bool tag or a `tag <op> literal` condition; None otherwise."""
+    """Return a plain-Python goal for a Bool tag or a `tag <op> literal` condition, else None."""
     op = _OPS.get(type(target).__name__)
     if op is None:
         return _tag_goal(target) if hasattr(target, "name") else None
@@ -1109,8 +1120,11 @@ _add("drums", "drums/mid-step start held step 2", _drum_mid("step"))
 
 
 def _drum_zero_step(tagged, target):
-    """A 3-step time drum, 2 s / 0 / 2 s, with a jog.  A 0 preset ends step 2 at once, constant
-    or tag (``drum_preset/literal_zero``, ``drum_limits/preset_from_ds``)."""
+    """Build a 3-step time drum, 2 s / 0 / 2 s, with a jog.
+
+    A 0 preset ends step 2 at once, whether it is a constant or a tag
+    (``drum_preset/literal_zero``, ``drum_limits/preset_from_ds``).
+    """
 
     def build():
         done, start = Bool("LzDone"), Bool("LzStart", external=True)
@@ -1284,7 +1298,7 @@ _add("composite", "composite/dwell multi sensor", _comp_dwell_multi, fast=False)
 
 # --------------------------------------------------------------------------- truth rows
 # A held enable with a long wait: the plan is what the session does by itself, so stepping can
-# say when the goal holds.  Both decline on dev today; the rows pin that a decline stays a decline
+# say when the goal holds.  Both decline on dev today.  The rows pin that a decline stays a decline
 # or turns into a correct REACHED (a REACHED plan is checked against stepping).
 
 
@@ -1360,7 +1374,10 @@ def _pulse_other_contact(*, held):
 
 
 def _enable_moved_mid_scan():
-    """Off when the rung reads it, on when the plant does: the dwell the link was said to end."""
+    """Move the enable mid-scan: the rung reads it off and the plant reads it on.
+
+    This is the dwell that the link was said to end.
+    """
     go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
     watch = Timer.clone("W")
@@ -1382,7 +1399,10 @@ def _enable_moved_mid_scan():
 
 
 def _second_route_over_the_cap():
-    """``C[Idx*2-1]`` is in no element list of a block this big, and lands on C1 at once."""
+    """Write ``C[Idx*2-1]``, which is in no element list of a block this big.
+
+    It lands on C1 at once.
+    """
     go, enable, hit = Bool("Go", external=True), Bool("En", external=True), Bool("Hit")
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms"), link="En")
     bits, index = Block("C", TagType.BOOL, 1, 2000), Int("Idx", default=1)
@@ -1526,7 +1546,10 @@ def _rescue_wait_on_a_bit():
 
 
 def _rescue_at_the_rung():
-    """truth/enable moved mid-scan before Go is pressed: the plan has to press it."""
+    """Build the program of the case ``truth/enable moved mid-scan``, but leave Go unpressed.
+
+    The plan has to press Go.
+    """
     go, enable, hit = Bool("Go", external=True), Bool("En"), Bool("Hit")
     feedback = Bool("Fb", physical=Physical("Fb", on_delay="100ms", off_delay="100ms"), link="En")
     watch = Timer.clone("W")
@@ -1546,8 +1569,10 @@ def _rescue_at_the_rung():
 
 
 def _rescue_reconnect(cut):
-    """The field-order reconnect from a retained step 98: the pilot holds NetworkAvailable only
-    as an exploratory hypothesis and stops."""
+    """Reconnect in field order from a retained step 98.
+
+    The pilot holds NetworkAvailable only as an exploratory hypothesis, and stops.
+    """
 
     def build():
         if ROOT not in sys.path:
@@ -1681,7 +1706,7 @@ _add(
 def _copied_system_tag(source, at_least, rtc=None):
     """Go latches Hit once a copy of *source* is at least *at_least*.
 
-    The runtime writes *source*, so the copy holds values no rung writes.
+    The runtime writes *source*, so the copy can hold values that no rung writes.
     """
 
     def build():
@@ -1716,7 +1741,7 @@ _add(
 
 
 def _negative_preset_counter(literal, *, stage):
-    """A counter with a preset of -5 is done at Acc 0, as soon as its reset lets go.
+    """Build a counter with a preset of -5.  It is done at Acc 0 as soon as its reset releases.
 
     With *stage* a rung first copies -10 into the Acc, so five counts are needed.
     """
@@ -1777,7 +1802,7 @@ for _kind, _literal in (("literal", True), ("tag", False)):
 
 
 def _accs_staged():
-    """Load copies 6 into the count, and one more pulse takes it to 7, past its preset of 3."""
+    """Load copies 6 into the count.  One more pulse takes it to 7, past its preset of 3."""
     load, pulse = Bool("Load", external=True), Bool("Pulse", external=True)
     count, hit = Counter.clone("Cnt"), Bool("Hit")
     with Program(strict=False) as prog:
@@ -1810,7 +1835,10 @@ def _accs_pair(offset):
 
 
 def _accs_written_above_an_input():
-    """Level's copies leave it at 0 or 10, and Hit needs it above the input Limit."""
+    """Build a program whose copies leave Level at 0 or 10.
+
+    Hit needs Level above the input Limit, and Limit at 5 or more.
+    """
     level, limit, hit = Int("Level"), Int("Limit", external=True, min=0, max=9), Bool("Hit")
     with Program(strict=False) as prog:
         with Rung(Bool("Fill", external=True)):
@@ -1823,7 +1851,7 @@ def _accs_written_above_an_input():
 
 
 def _accs_level_and_hmi():
-    """Level is compared with 10 and with an HMI value that has no bounds, so it has no domain."""
+    """Compare Level with 10 and with an HMI value that has no bounds, so Level has no domain."""
     level, hit = Int("Level", external=True), Bool("Hit")
     with Program(strict=False) as prog:
         with Rung(level == Int("HmiLevel", external=True)):
@@ -1841,7 +1869,10 @@ _add("accs", "accs/an input compared with 10 and with an unbounded input", _accs
 
 
 def _accs_level_above_a_set_point():
-    """No Level gives ``Level == Sp + 2`` while Sp is 30.  SetSp copies 1 into Sp, and Level 3 then does."""
+    """No Level satisfies ``Level == Sp + 2`` while Sp is 30.
+
+    SetSp copies 1 into Sp, and Level 3 then satisfies it.
+    """
     level, setpoint, hit = (
         Int("Level", external=True, min=0, max=5),
         Int("Sp", default=30),
@@ -1856,3 +1887,51 @@ def _accs_level_above_a_set_point():
 
 
 _add("accs", "accs/an input equal to a set point plus 2", _accs_level_above_a_set_point)
+
+
+# --------------------------------------------------------------------------- relations
+
+
+def _off_delay_never_armed():
+    """An off delay times only after its enable has been on once, and a fresh PLC has not.
+
+    From power-up, Acc >= 2 needs Go on for a scan, then Go off for two seconds.  The off
+    delay's profile plans that first scan, but how() stops here today ("No productive next
+    action was found"), because the trace does not follow the profile's first step yet.  That
+    stop is the expected answer until the trace does.
+    """
+    go, timer = Bool("Go", external=True), Timer.clone("Tof")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            off_delay(timer, 3, "s")
+    target = timer.Acc >= 2
+    return dict(plc=PLC(prog, dt=0.01), targets=(target,), goal=_auto_goal(target))
+
+
+def _counter_held_in_reset():
+    """A counter's Done needs its reset off, and the latched Hold has it on at entry.
+
+    Release unlatches Hold.  Then two rises of Pulse reach the preset of 2.
+    """
+    pulse, arm, release = (
+        Bool("Pulse", external=True),
+        Bool("Arm", external=True),
+        Bool("Release", external=True),
+    )
+    hold, count = Bool("Hold"), Counter.clone("HeldCtr")
+    with Program(strict=False) as prog:
+        with Rung(arm):
+            latch(hold)
+        with Rung(release):
+            reset(hold)
+        with Rung(pulse):
+            count_up(count, 2).reset(hold)
+    plc = PLC(prog, dt=0.01)
+    plc.patch({"Arm": True})
+    plc.step()
+    plc.step()
+    return dict(plc=plc, targets=(count.Done,), goal=_tag_goal(count.Done))
+
+
+_add("relations", "relations/off delay Acc from power-up, never enabled", _off_delay_never_armed)
+_add("relations", "relations/counter Done with its reset latched on", _counter_held_in_reset)

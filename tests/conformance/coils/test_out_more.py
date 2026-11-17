@@ -342,7 +342,7 @@ STEPPED = {"toggle_and_timed": 1.0, "timed_maintained": 1.0, "preset_mid_phase":
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.020, 0.025, 0.030, 0.035, 0.040, 0.050])
 @pytest.mark.parametrize("case_id", STEPPED)
 def test_out_more_at_any_scan(monkeypatch, dt, case_id):
-    """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""
+    """A CLICK scans in about 1 ms.  The soft PLC scans in 10 to 40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     stepped = next(c for c in group.cases if c.id == case_id)
     scans = int(STEPPED[case_id] / dt) + 9
@@ -350,7 +350,7 @@ def test_out_more_at_any_scan(monkeypatch, dt, case_id):
 
 
 def test_debounce_of_zero_goes_off_a_scan_after_its_rung():
-    """``zero_and_below`` Result2 takes 6 or 7; pyrung reads 7, as a CLICK does."""
+    """``zero_and_below`` Result2 is 6 or 7.  pyrung reads 7, as a CLICK does."""
     zero = next(c for c in group.cases if c.id == "zero_and_below")
     (result,) = run(Group("out_more", [zero]))
     assert result.actual["Result2"] == 7

@@ -51,10 +51,10 @@ past the off preset, once the off TD reads 150 or more with the coil off.
 - Result3, at a clock of 50: 1 if the on TD is above 0 and under 200 (an on phase from 0 since
   the write), 2 if it is 200 or more (held from the last on phase).  0 is a cleared TD.
 
-Every expectation here is 1.  A flasher keeps its phase as hidden state (``FlasherInstruction``).  A TD ends its phase
-only while that phase runs.  The 600..650 bounds hold for any scan up to 50 ms.  They start at
-600 because a scan under 1 ms adds nothing to the written TD.  The cases own what
-``memory.OWNED_APART`` lists under this group.
+Every expectation here is 1.  A flasher keeps its phase as hidden state (``FlasherInstruction``).
+A TD ends its phase only while that phase runs.  The 600..650 bounds hold for any scan up to
+50 ms.  They start at 600 because a scan under 1 ms adds nothing to the written TD.  The cases
+own what ``memory.OWNED_APART`` lists under this group.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 
 def _zero(*tds: Any) -> Any:
-    """An init that writes 0 to *tds*."""
+    """Return an init that writes 0 to *tds*."""
 
     def init(slot: Any) -> None:
         for tag in tds:
@@ -85,7 +85,7 @@ def _zero(*tds: Any) -> Any:
 
 
 def _clock(slot: Any, n: int) -> Any:
-    """A TON of *n* that times from the scan after step 0's write: its TD in ms."""
+    """Add a TON of *n* that times from the scan after step 0's write, and return its TD in ms."""
     with Rung(slot.Cmd != 0, slot.Scratch >= 1):
         on_delay(ClickTimer(n), 5000)
     return td[n]
@@ -239,7 +239,7 @@ def test_td_write():
 
 @pytest.mark.parametrize("dt", [0.0004, 0.001, 0.010, 0.025, 0.040])
 def test_td_write_at_any_scan(monkeypatch, dt):
-    """The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms."""
+    """The CLICK scans in about 1 ms or less, and the soft PLC scans in 10 to 40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     cases = [replace(c, scans=int(1.0 / dt)) for c in group.cases]
     assert_all_passed(run(Group("td_write", cases)))

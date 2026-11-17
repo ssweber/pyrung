@@ -178,8 +178,8 @@ def test_stuck_bits_accepts_a_loop_coil_on_an_unconditional_loop():
 
 @pytest.mark.parametrize("body_rung", [False, True])
 def test_stuck_bits_reports_a_loop_coil_on_an_unconditional_oneshot_loop(body_rung: bool):
-    # A oneshot loop runs its body on the rung's rising edge only: on a
-    # contactless rung, the first scan.  Y is evaluated then, and holds after.
+    # A oneshot loop runs its body only on the rung's rising edge.  On a
+    # contactless rung, that is the first scan.  Y is evaluated then, and holds after.
     with Program(strict=False) as logic:
         with Rung():
             with forloop(2, oneshot=True):

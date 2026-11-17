@@ -1,10 +1,9 @@
-"""A subroutine called twice a scan: the ``call_twice`` group (subroutine ``Conf_CallTwice``).
+"""Check a subroutine called twice a scan: the ``call_twice`` group (``Conf_CallTwice``).
 
-The main program calls ``Conf_CallTwice`` twice every scan (``Group(calls=2)``),
-two call rungs one after the other, so every rung of the group runs twice a
-scan.  CLICK has no nested calls, so this is the only way a case can run a
-subroutine more than once in a scan.  The cases own C701..C750
-(``memory.OWNED``).
+The main program calls ``Conf_CallTwice`` twice every scan (``Group(calls=2)``), with two
+call rungs one after the other.  So every rung of the group runs twice a scan.  CLICK has no
+nested calls, so this is the only way a case can run a subroutine more than once in a scan.
+The cases own C701..C750 (``memory.OWNED``).
 
 A case counts calls, not scans: ``count_scans`` adds 1 to ``Scratch`` on each
 call, so call 2k-1 and call 2k are the two calls of scan k.  The window is 9

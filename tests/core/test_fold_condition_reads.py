@@ -1,10 +1,10 @@
-"""A run_until condition's reads, and the landing on the first scan it can flip.
+"""Test the reads of a ``run_until`` condition and the landing on the first scan it can flip.
 
-``_extract_condition_reads(condition)`` collects every tag a ``run_until`` condition reads
-(bare contacts, edges, both sides of a comparison).  Past that, every program here is run
-twice from the same fork, in the guarded loop and stepped, and must land on the same scan
-with the same tags: a tag only the condition reads, a system clock no rung reads, a signal
-that changes every scan.
+``_extract_condition_reads(condition)`` collects every tag that a ``run_until`` condition
+reads (bare contacts, edges and both sides of a comparison).  Beyond that, every program
+here runs twice from the same fork, in the guarded loop and stepped.  Both runs must land on
+the same scan with the same tags.  The programs include a tag that only the condition reads,
+a system clock that no rung reads and a signal that changes every scan.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def _resolved(plc: PLC, name: str) -> object:
 
 
 def _assert_landing_parity(folded: PLC, stepped: PLC) -> None:
-    """The loop and stepping landed on the same scan with identical tag values."""
+    """Assert that the loop and stepping landed on the same scan with identical tag values."""
     assert folded.state.scan_id == stepped.state.scan_id
     assert dict(folded.state.tags) == dict(stepped.state.tags)
     assert folded.state.timestamp == stepped.state.timestamp
@@ -226,8 +226,10 @@ def _churn_plus_timer_program(preset_ms: int = 100_000) -> Program:
 
 
 class TestChurnedTagInTheCondition:
-    """A tag changing every scan, read by the run_until condition: the run must stop on the
-    first scan it crosses, not at the timer preset."""
+    """A tag that changes every scan, and that the run_until condition reads.
+
+    The run must stop on the first scan the tag crosses, not at the timer preset.
+    """
 
     def test_run_until_lands_on_exact_first_crossing(self) -> None:
         prog = _churn_plus_timer_program()
@@ -294,8 +296,10 @@ def _timer_no_clock_program(preset_ms: int = 5_000) -> Program:
 
 
 class TestConditionReadSystemClock:
-    """A system clock read only by the run_until condition: the run stops on its edge, though
-    the program's rungs never read it."""
+    """A system clock that only the run_until condition reads.
+
+    The run stops on the clock's edge, though the program's rungs never read it.
+    """
 
     def test_condition_clock_lands_same_scan_as_nofold(self) -> None:
         prog = _timer_no_clock_program()

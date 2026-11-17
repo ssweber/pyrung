@@ -89,14 +89,14 @@ LADDER_WRITABLE_SD: frozenset[int] = frozenset(
 )
 
 # CLICK's Out coil takes more SC than the other write fields (its Address Picker, CLICK v4,
-# 2026-11-16).  Set and Reset were not asked, so they keep LADDER_WRITABLE_SC.
+# 2026-11-16). Nobody asked CLICK about Set and Reset, so they keep LADDER_WRITABLE_SC.
 OUT_COIL_WRITABLE_SC: frozenset[int] = LADDER_WRITABLE_SC | frozenset(
     {162, 165, 168, 171, 303, 304, 305, 306, 323, 324, 325, 326}
 )
 
-# Write fields that take more of a bank than LADDER_BANK_CAPABILITIES allows.  Each maps
+# Write fields that take more of a bank than LADDER_BANK_CAPABILITIES allows. Each maps
 # (instruction, field) -> {bank: the addresses it takes, or None for all of them}.
-# CLICK's Copy and its hex Math write YD, and its Block copy and Fill do not.
+# CLICK's Copy and its hex Math write YD. Its Block copy and Fill do not.
 FIELD_WRITABLE: dict[tuple[str, str], dict[str, frozenset[int] | None]] = {
     ("OutInstruction", "target"): {"SC": OUT_COIL_WRITABLE_SC},
     ("CopyInstruction", "target"): {"YD": None},
@@ -248,18 +248,18 @@ COMPARE_CONSTANT_COMPATIBILITY: dict[str, frozenset[CompareConstantKind]] = {
     "TXT": _constant_kinds("text"),
 }
 
-# Banks whose constants CLICK writes in hex (``FFh``): compares against them,
-# and copy/fill/search constants that land in them.
+# Banks whose constants CLICK writes in hex (``FFh``). The same applies to compares against
+# those banks, and to copy/fill/search constants that land in them.
 HEX_CONSTANT_BANKS: frozenset[str] = frozenset(
     bank for bank, kinds in COMPARE_CONSTANT_COMPATIBILITY.items() if kinds == {"hex"}
 )
 
 
 def single_register_fill_dest(dest: Any) -> Any | None:
-    """The one tag a ``fill()`` destination covers, or ``None``.
+    """Return the one tag that a ``fill()`` destination covers, or ``None``.
 
     CLICK's Fill dialog needs at least two registers, so a Fill of one register
-    exports as a Copy.  Only a range known when the program is written counts. A
+    exports as a Copy. Only a range that is known when the program is written counts. A
     pointer range can be one register long at run time, and it stays a Fill.
     """
     from pyrung.core.memory_block import BlockRange
@@ -288,7 +288,7 @@ class ClickHardwareProfile:
     def field_writable(
         self, instruction_type: str, field_name: str, memory_type: str, address: int | None
     ) -> bool:
-        """True when *field_name* of *instruction_type* may write this address."""
+        """Return True if *field_name* of *instruction_type* may write this address."""
         if self.is_writable(memory_type, address):
             return True
         extra = FIELD_WRITABLE.get((instruction_type, field_name), {})

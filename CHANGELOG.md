@@ -15,8 +15,11 @@
 
 ### What's new
 
-#### Check a recording
+#### Record a session and replay it as a test
 
+- The console's `record save [file]` writes the recording to a file, `<action>.rec` next to the program by default.
+- A recording names its program, scan time and harness setting. `replay` uses the recorded scan time and harness.
+- With `pyrung.pytest_plugin`, each `.rec` file that pytest collects is a test. It replays the recording and fails at the first failed line.
 - The console's `assert Tag == value` checks one tag. A replay stops at the first failed check.
 - The console's `run until <condition> within <N | duration>` runs scans until the condition holds. It fails if the limit comes first.
 
@@ -46,6 +49,8 @@
 
 ### Behaviour changes
 
+- The console's `replay` reads a relative path from the program's folder (it read it from the debugger's working folder).
+  Give an absolute path to replay a file from somewhere else.
 - `ModbusRtuTarget` refuses a `device_id` above 247, the last Modbus RTU device address (it took up to 255).
   Use 0..247.
 - `receive()` from an RTU device refuses `device_id=0`, the broadcast address no device answers (it took 0).
@@ -117,6 +122,7 @@
 - `program.check()` now reports a write by any instruction to a `readonly=True` tag, and a second writer of a `final=True` tag (it saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`).
 - `run_for()` and `run_until()` now raise when an instruction such as `math()` stores into a read-only system point, as stepping does (they stored the value and went on).
 - A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
+- `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
 
 ## v0.16.0 (2026-11-14)
 

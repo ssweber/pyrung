@@ -267,7 +267,7 @@ class _DrumBaseInstruction(Instruction):
         ctx.set_tags({tag.name: bool(row[idx]) for idx, tag in enumerate(self.outputs)})
 
     def _apply_reset(self, ctx: ScanContext) -> None:
-        """Reset is a level that wins: step 1, completion flag off, every output off."""
+        """Apply a reset, a level that wins: step 1, completion flag off, every output off."""
         ctx.set_tags(
             {
                 self.current_step.name: 1,
@@ -278,7 +278,7 @@ class _DrumBaseInstruction(Instruction):
         self._clear_time(ctx)
 
     def _complete(self, ctx: ScanContext) -> None:
-        """Completion flag on, every output off; the step and Acc stay."""
+        """Set the completion flag and turn every output off.  The step and Acc stay."""
         ctx.set_tags(
             {
                 self.completion_flag.name: True,
@@ -294,7 +294,7 @@ class _DrumBaseInstruction(Instruction):
         self._clear_time(ctx)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        """One scan, for every kind of drum, as a CLICK runs it: one action, by priority.
+        """Run one scan for every kind of drum, as a CLICK runs it: one action, by priority.
 
         The pins are read first, before the drum writes anything, and act with
         the rung true or not.  The first that applies takes the scan:
@@ -352,7 +352,10 @@ class _DrumBaseInstruction(Instruction):
             ctx.set_memory(self.memory_key("_drum_jog_prev"), jog_curr)
 
     def _jog(self, ctx: ScanContext, enabled: bool, step: int) -> int:
-        """A jog edge on a valid step: forward with its row, or complete on the last step."""
+        """Handle a jog edge on a valid step.
+
+        Go forward to the next step and its row. On the last step, complete the drum.
+        """
         if step < self.step_count:
             step += 1
             self._move(ctx, step)
@@ -370,7 +373,7 @@ class _DrumBaseInstruction(Instruction):
         register: int,
         step: int,
     ) -> int:
-        """A scan no pin took: the correction, then the drum's own time or event."""
+        """Handle a scan that no pin took: the correction, then the drum's own time or event."""
         if not enabled:
             return step
         if step != register:
@@ -394,20 +397,24 @@ class _DrumBaseInstruction(Instruction):
     def _step_end_met(
         self, ctx: ScanContext, condition_view: Any, step: int, register: int, acc: int
     ) -> bool:
-        """Whether *step* ends on this scan.  *register* is the step as the scan found it."""
+        """Return whether *step* ends on this scan.  *register* is the step as the scan found it."""
 
     def _tick(self, ctx: ScanContext, step: int) -> int:
         """Time *step*, if it has a time, and return Acc."""
         return 0
 
     def _clear_time(self, ctx: ScanContext) -> None:
-        """Acc 0, for a move or a reset."""
+        """Set Acc to 0, for a move or a reset."""
 
     def _finish_scan(self, ctx: ScanContext, condition_view: Any, step: int) -> None:
-        """Whatever the kind remembers of every scan, *step* the one it ends on."""
+        """Record whatever the kind remembers from each scan.  *step* is where the scan ends."""
 
     def _plan_past_flag(self, constraint: Eq | Cmp, snapshot: Snapshot) -> AdvanceStep | None:
-        """The flag on stops own logic: anything but the flag waits for the reset that frees it."""
+        """Plan past a completion flag that is on.
+
+        While the flag is on, the drum skips its own time and event logic. So a target other
+        than the flag waits for the reset that clears the flag.
+        """
         flag = self.completion_flag
         if constraint.tag == flag.name or not snapshot.get(flag.name, flag.default):
             return None
@@ -416,7 +423,7 @@ class _DrumBaseInstruction(Instruction):
     def _read_pins(
         self, ctx: ScanContext, condition_view: Any
     ) -> tuple[bool, bool, bool, bool, bool, int | None]:
-        """``(jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target)``.
+        """Return ``(jump_curr, jump_edge, jog_curr, jog_edge, reset_active, jump_target)``.
 
         A box reads its pins before its own writes, as the compiled kernel's
         helper legs do: each drum reads them, and the jump step's value, before
@@ -522,7 +529,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
     def _step_end_met(
         self, ctx: ScanContext, condition_view: Any, step: int, register: int, acc: int
     ) -> bool:
-        """A rising edge of the step's event.
+        """Return whether the step's event has a rising edge.
 
         A step reached by a write to the register, or by a correction, has
         spent its edge: the last scan's level was another step's event.
@@ -658,7 +665,7 @@ class TimeDrumInstruction(_TimedDrumInstruction):
     def _step_end_met(
         self, ctx: ScanContext, condition_view: Any, step: int, register: int, acc: int
     ) -> bool:
-        """The step's time is up, against its preset as this scan reads it."""
+        """Return whether the step's time is up, against its preset as this scan reads it."""
         return acc >= _resolve_preset_value(self.presets[step - 1], ctx)
 
     def advance_profile(self) -> AdvanceProfile:
@@ -822,7 +829,7 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
     def _step_end_met(
         self, ctx: ScanContext, condition_view: Any, step: int, register: int, acc: int
     ) -> bool:
-        """The step's time is up, if it has one, and its event is on, if it has one."""
+        """Return whether the step's time is up and its event is on, for each that it has."""
         preset = self.presets[step - 1]
         if preset is not None and acc < _resolve_preset_value(preset, ctx):
             return False

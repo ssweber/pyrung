@@ -33,18 +33,18 @@ def prove_effective_preset_key(done_name: str) -> str:
     return f"{PROVE_EFFECTIVE_PRESET_PREFIX}{done_name}"
 
 
-#: The most iterations the verifier's kernel runs one For for in one scan.  A
-#: 16-bit count runs at most 65535, under it; a Dint count is read whole and
-#: signed (``control.for_loop_iterations``), so a positive one can run up to
-#: 2147483647 and the search would not return.
+#: The most iterations that the verifier's kernel runs one For for in one scan.  A
+#: 16-bit count runs at most 65535, which is under the cap.  A Dint count is read
+#: whole and signed (``control.for_loop_iterations``).  So a positive Dint count can
+#: run up to 2147483647 iterations, and the search would not return.
 PROVE_FOR_ITERATION_CAP = 1_000_000
 
 
 class ForIterationsBeyondCap(Exception):
-    """A For in the verifier's kernel was about to run past ``PROVE_FOR_ITERATION_CAP``.
+    """Raised when a For in the verifier's kernel is about to run past ``PROVE_FOR_ITERATION_CAP``.
 
-    Raised by the kernel ``compile_kernel(proof_metadata=True)`` builds, only
-    for a For whose count is read 32-bit; the verifier answers ``Intractable``.
+    The kernel that ``compile_kernel(proof_metadata=True)`` builds raises it, and only for a
+    For whose count is read as 32-bit.  The verifier then answers ``Intractable``.
     """
 
     def __init__(self, where: str, count: str, tags: tuple[str, ...], iterations: int) -> None:
@@ -171,13 +171,13 @@ class CompiledKernel:
     # Shares the runtime kernel's tags/blocks/memory with ``step_fn`` — same
     # signature — because both are compiled from one program (union templates).
     pre_step_fn: Callable[..., None] | None = None
-    # Whether its passes can call a ``run_function`` body, which could ask for a scan.
+    # Whether its passes can call a ``run_function`` body.  Such a body could ask for a scan.
     calls_functions: bool = True
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict
     )
     materialized_tag_names: frozenset[str] = field(default_factory=frozenset)
-    # Nanoseconds to a unit, per accumulator whose ``_frac:`` carry the kernel ticks.
+    # Nanoseconds per unit, for each accumulator whose ``_frac:`` carry the kernel ticks.
     timer_unit_ns: dict[str, int] = field(default_factory=dict)
     _tag_template: dict[str, bool | int | float | str] = field(
         init=False, repr=False, default_factory=dict
@@ -188,7 +188,8 @@ class CompiledKernel:
     _prev_template: dict[str, bool | int | float | str] = field(
         init=False, repr=False, default_factory=dict
     )
-    # The scalars ``compiled_plc.absent_scalars`` may add, at the default the kernel holds.
+    # The scalars that ``compiled_plc.absent_scalars`` may add, at the default that the
+    # kernel holds.
     _scalar_defaults: tuple[tuple[str, Any], ...] = field(
         init=False, repr=False, compare=False, default=()
     )

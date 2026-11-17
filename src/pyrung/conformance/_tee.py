@@ -1,15 +1,16 @@
-"""Pins drawn teeing off the box's input wire, for cases that ask about that drawing.
+"""Redraw box pins as tees off the box's input wire, for cases that ask about that drawing.
 
 pyrung's exporter writes every pin of a box from the rail, with the shared
-contacts copied into each pin's row.  CLICK also lets a pin's wire tee off the
-box's input wire after some shared contacts and add its own.  CLICK refuses a box
+contacts copied into each pin's row. CLICK also lets a pin's wire tee off the
+box's input wire after some shared contacts and add its own. CLICK refuses a box
 whose pins start from different places (error C000A, "All inputs of the box
-instruction must originate from the same branch"): the pins either all start at the
-rail, or all tee off one common node of the box's input wire, never a mix.  A case with a :class:`TeeSpec` is the
-tee-drawn twin of a rail-drawn case: it runs the same pyrung rungs everywhere, and
-the CLICK export redraws the named pins as tees.  Nothing else in the rung moves,
-so what the twin runs in-process is what the drawing imports to (a test imports
-the drawing and compares).
+instruction must originate from the same branch"). The pins must either all start at the
+rail, or all tee off one common node of the box's input wire. They never mix.
+
+A case with a :class:`TeeSpec` is the tee-drawn twin of a rail-drawn case. It runs the
+same pyrung rungs everywhere, and the CLICK export redraws the named pins as tees.
+Nothing else in the rung moves. So what the twin runs in-process is what the drawing
+imports to (a test imports the drawing and compares).
 """
 
 from __future__ import annotations
@@ -24,16 +25,16 @@ Row = tuple[str, ...]
 class TeeSpec:
     """Draw the first pins of a box as tees off its input wire.
 
-    ``box`` is the start of the box row's instruction token (``"count_up("``);
-    ``pins`` the pin labels to tee (``(".down()",)``), which must be the first
-    pin rows under the box row; ``after`` how many contacts at the start of the
-    box row are shared (each teed pin's row begins with exactly those contacts
-    in its rail form).  The pins named must be every pin of the box: a pin left on
-    the rail beside teed ones is the mixed drawing CLICK refuses with C000A, so
-    :func:`draw_tees` raises rather than draw it.
+    ``box`` is the start of the box row's instruction token (``"count_up("``).
+    ``pins`` are the pin labels to tee (``(".down()",)``). They must be the first
+    pin rows under the box row. ``after`` is how many contacts at the start of the
+    box row are shared. Each teed pin's row begins with exactly those contacts
+    in its rail form. The pins named must be every pin of the box. A pin left on
+    the rail beside teed ones is the mixed drawing that CLICK refuses with C000A, so
+    :func:`draw_tees` raises instead of drawing it.
 
-    ``bare=True`` (with ``after=0``) is the box rung that has no contact in front
-    of its own.  Its export keeps the rail drawing.  CLICK's syntax check redraws a
+    ``bare=True`` (with ``after=0``) marks a box rung that has no contact in front
+    of its own. Its export keeps the rail drawing. CLICK's syntax check redraws a
     tee off a bare wire (``R,-,T`` over ``,,-``) as pins from the rail.
     """
 
@@ -56,7 +57,7 @@ class TeeSpec:
 
 
 def draw_tees(rows: Sequence[Row], marker: str, spec: TeeSpec) -> tuple[Row, ...]:
-    """*rows* with the pins of the case marked ``Case <marker>`` redrawn as tees.
+    """Return *rows* with the pins of the case marked ``Case <marker>`` redrawn as tees.
 
     Raises:
         ValueError: The case's box rung is not the rail drawing the spec expects, or
@@ -122,7 +123,10 @@ def _is_pin_row(row: Row) -> bool:
 
 
 def _tee_cell(cell: str, where: str) -> str:
-    """*cell* with the bus running down its left side: a wire becomes ``T``, a contact ``T:``."""
+    """Return *cell* with the bus running down its left side.
+
+    A wire becomes ``T``, and a contact becomes ``T:``.
+    """
     if cell == "-":
         return "T"
     if _is_wire(cell) or cell.startswith("T:"):

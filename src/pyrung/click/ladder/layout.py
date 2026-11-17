@@ -1,19 +1,19 @@
-"""Ladder row layout.  Each rung is drawn from a graph of its electrical nodes.
+"""Lay out ladder rows. Each rung is drawn from a graph of its electrical nodes.
 
-CLICK's syntax check redraws a pasted rung into one standard form, so the export draws that form
-and a pasted rung survives the check unchanged.  The rung is a series-parallel network from the
-left rail to the outputs.  Each electrical node (net) between contacts is drawn as one vertical on
-one column edge.
+CLICK's syntax check redraws a pasted rung into one standard form. The export draws that form,
+so a pasted rung survives the check unchanged. The rung is a series-parallel network from the
+left rail to the outputs. The layout draws each electrical node (net) between contacts as one
+vertical on one column edge.
 
-- A net sits in the column of its longest contact path from the rail.  A contact sits in the cell
-  right after its start net, and a shorter path gets wire up to its end net.
-- The alternatives of an Or, and the outputs and branches under a net, stack downward in source
-  order.  Elements in series all start on the same top row.
-- A net's vertical runs from the topmost to the bottommost row that touches it.  The rail draws no
+- A net sits in the column of its longest contact path from the rail. A contact sits in the cell
+  right after its start net. A shorter path gets wire up to its end net.
+- The alternatives of an Or stack downward in source order. So do the outputs and branches under
+  a net. Elements in series all start on the same top row.
+- A net's vertical runs from the topmost to the bottommost row that touches it. The rail draws no
   vertical.
 
-Each cell (r, c) then says two things.  One is whether a vertical runs down the left edge of
-column c from row r to row r+1.  The other is what lies across the cell:
+Each cell (r, c) then says two things. One is whether a vertical runs down the left edge of
+column c from row r to row r+1. The other is what lies across the cell:
 
 =====  ========  =======
 Cell   Vertical  Across
@@ -54,7 +54,7 @@ _WIRE = "-"
 # ---- Net graph ----
 @dataclass
 class _Net:
-    """One electrical node.  ``col`` is the column whose left edge carries its vertical.
+    """One electrical node. ``col`` is the column whose left edge carries its vertical.
 
     *path* and *source* name what made the node, so an error about its vertical points there.
     """
@@ -72,7 +72,7 @@ class _Net:
 
 @dataclass(frozen=True)
 class _Contact:
-    """A contact from net *src* to net *dst* on *row*.  The ``-`` token is a plain wire."""
+    """A contact from net *src* to net *dst* on *row*. The ``-`` token is a plain wire."""
 
     src: int
     dst: int
@@ -95,13 +95,16 @@ class _Sink:
 
 @dataclass
 class _Branch:
-    """Conditions and the items under them in source order.  An item is an AF token or a branch."""
+    """Conditions and the items under them in source order.
+
+    An item is an AF token or a branch.
+    """
 
     conditions: list[Condition]
     items: list[str | _Branch]
     path: str
     source: Any
-    # Beside each item, the instructions whose pin rows it draws, with their paths.
+    # Beside each item, the instructions whose pin rows the item draws, with their paths.
     pins: list[list[tuple[Any, str]]] = field(default_factory=list)
 
 
@@ -140,7 +143,7 @@ class _LayoutMixin:
         source: Any,
         first_marker: str,
     ) -> list[tuple[str, ...]]:
-        """Rows ``(marker, A..AE, AF)`` for *conditions* feeding *items*."""
+        """Return the rows ``(marker, A..AE, AF)`` for *conditions* feeding *items*."""
         network = _Network([_Net(path, source)])
         root = _Branch(list(conditions), items, path, source)
         self._place_branch(network, root, _RAIL, 0)
@@ -150,7 +153,10 @@ class _LayoutMixin:
         ]
 
     def _render_rung_items(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
-        """The CLICK rungs of a rung's conditions and items, each followed by its pin rows."""
+        """Return the CLICK rungs for a rung's conditions and items.
+
+        Each rung is followed by its pin rows.
+        """
         rows: list[tuple[str, ...]] = []
         tree = self._branch_tree(rung, path=path, conditions=list(rung._conditions))
         if not tree.items:
@@ -171,7 +177,7 @@ class _LayoutMixin:
         return rows
 
     def _branch_tree(self, rung: Rung, *, path: str, conditions: list[Condition]) -> _Branch:
-        """*rung* as a :class:`_Branch`.  A branch that holds no output draws no rows."""
+        """Convert *rung* to a :class:`_Branch`. A branch that holds no output draws no rows."""
         instruction_index_by_id = {id(item): idx for idx, item in enumerate(rung._instructions)}
         branch_index_by_id = {id(item): idx for idx, item in enumerate(rung._branches)}
         items: list[str | _Branch] = []
@@ -221,7 +227,7 @@ class _LayoutMixin:
 
     # ---- Placement ----
     def _place_branch(self, network: _Network, branch: _Branch, start: int, top: int) -> int:
-        """Place *branch* from net *start* with its top on row *top*.  Returns its height."""
+        """Place *branch* from net *start* with its top on row *top*. Return its height."""
         net, condition_height = self._place_series(
             network,
             branch.conditions,
@@ -232,7 +238,7 @@ class _LayoutMixin:
             source=branch.source,
         )
         if net == _RAIL and len(branch.items) > 1:
-            # Column A is the rail and takes no vertical.  _click_rungs gives each item on the
+            # Column A is the rail and takes no vertical. _click_rungs gives each item on the
             # rail a CLICK rung of its own.
             self._raise_issue(
                 path=branch.path,
@@ -260,9 +266,9 @@ class _LayoutMixin:
         path: str,
         source: Any,
     ) -> tuple[int, int]:
-        """Place *terms* in series from *start*, all from row *top*.  Returns (end net, height).
+        """Place *terms* in series from *start*, all from row *top*. Return (end net, height).
 
-        The last term ends on *end* when one is given, so an Or that ends an alternative of another
+        If *end* is given, the last term ends on it. So an Or that ends an alternative of another
         Or shares that Or's merge net.
         """
         flat = _series_terms(terms)
@@ -295,7 +301,7 @@ class _LayoutMixin:
         if isinstance(condition, AnyCondition):
             if not condition.conditions:
                 self._raise_issue(path=path, message="Or() cannot be empty.", source=condition)
-            # Every alternative ends on one merge net, so an Or nested in an Or draws as one Or.
+            # Every alternative ends on one merge net. So an Or nested in an Or draws as one Or.
             merge = network.new_net(path, condition) if end is None else end
             row = top
             for alternative in condition.conditions:
@@ -316,8 +322,8 @@ class _LayoutMixin:
         network.contacts.append(_Contact(src, dst, row, token, path, source))
         network.nets[src].touch(row)
         network.nets[dst].touch(row)
-        # Contacts are made in source order.  So every contact into a net comes before any contact
-        # out of it, and one pass finds each net's longest path.
+        # The layout makes contacts in source order. So every contact into a net comes before
+        # any contact out of it, and one pass finds each net's longest path.
         network.nets[dst].col = max(network.nets[dst].col, network.nets[src].col + 1)
 
     # ---- Painting ----
@@ -331,8 +337,8 @@ class _LayoutMixin:
         across: list[list[str | None]] = [[None] * _CONDITION_COLS for _ in range(height)]
         vertical: list[list[bool]] = [[False] * _CONDITION_COLS for _ in range(height)]
         af: list[str] = [""] * height
-        # The net at each point (row, left edge of column).  Two nets on one point would be a
-        # short, which a series-parallel rung cannot produce.
+        # The net at each point (row, left edge of column). Two nets on one point would be a
+        # short. A series-parallel rung cannot produce one.
         points: dict[tuple[int, int], int] = {}
 
         def claim(row: int, col: int, net: int, *, where: str, src: Any) -> None:
@@ -409,9 +415,9 @@ class _LayoutMixin:
 
 
 def _click_rungs(tree: _Branch) -> list[_Branch]:
-    """*tree* split into the rungs CLICK draws it as.
+    """Split *tree* into the rungs that CLICK draws it as.
 
-    Items that hang straight from the rail are separate wires.  CLICK's syntax check makes each
+    Items that hang straight from the rail are separate wires. CLICK's syntax check makes each
     of them a rung of its own, so the export draws them that way.
     """
     if _series_terms(tree.conditions) or len(tree.items) < 2:
@@ -425,10 +431,11 @@ def _click_rungs(tree: _Branch) -> list[_Branch]:
 
 
 def _series_terms(terms: list[Condition]) -> list[Condition]:
-    """*terms* with each And opened up into its own terms."""
+    """Return *terms* with each And opened up into its own terms."""
     flat: list[Condition] = []
     for term in terms:
-        # A TXT compare against a longer literal is an Or underneath but one compare as written.
+        # A TXT compare against a longer literal is an Or underneath, but it is one compare as
+        # written.
         term = text_window_of(term)
         if isinstance(term, AllCondition):
             flat.extend(_series_terms(list(term.conditions)))

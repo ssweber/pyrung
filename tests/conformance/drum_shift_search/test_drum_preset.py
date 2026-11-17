@@ -1,4 +1,6 @@
-"""When a time drum reads a step's preset: the ``drum_preset`` group (part ``follow_timing``).
+"""Check when a time drum reads a step's preset: the ``drum_preset`` group.
+
+This is part ``follow_timing``.
 
 A time drum reads a DS step preset on every scan the step times, as it reads a constant.  Each
 field is a drum's step.  Every drum has 3 steps, step 1 and 3 30 s long.  The case's init zeroes
@@ -6,7 +8,7 @@ the DS presets while the drums are reset.
 
 Each case reads its steps once 50 ms of timing has passed, and raises ``Fired`` then.  A 1 ms step
 has ended by then at any scan length.  ``literal_zero`` waits on its control drum, 50 ms into
-step 2.  ``entry_or_first_timing_scan`` takes a TON started on scan 5, its last write, as its
+step 2.  ``entry_or_first_timing_scan`` uses a TON started on scan 5, its last write, as its
 clock.
 
 ``literal_zero``: a step preset written as the constant 0, not from a DS.  Result1 has presets
@@ -67,7 +69,7 @@ def _sides(bits: range, steps: range, tds: range) -> list[Side]:
 
 
 def _read(slot: Any, sides: list[Side], *when: Any) -> None:
-    """Each side's step into Result1.., and ``Fired``, on the first scan *when* holds."""
+    """Copy each side's step into Result1.., and ``Fired``, on the first scan *when* holds."""
     fields = (slot.Result1, slot.Result2, slot.Result3)
     with Rung(slot.Cmd != 0, slot.Fired == 0, *when):
         for side, field in zip(sides, fields[: len(sides)], strict=True):

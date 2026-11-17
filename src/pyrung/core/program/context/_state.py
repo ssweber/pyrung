@@ -46,7 +46,7 @@ def _require_rung_context(func_name: str) -> Rung:
 
 
 def _current_forloop_body() -> ForLoop | None:
-    """The forloop whose body is the current capture scope, if any.
+    """Return the forloop whose body is the current capture scope, if any.
 
     Inside ``with forloop(...)`` the current rung context is the loop's
     capture context until a body ``Rung`` (or a nested loop) opens.

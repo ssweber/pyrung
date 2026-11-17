@@ -159,7 +159,7 @@ class ScanRungWriteProjection:
         return self._writes_by_run.get(order, ()) if order is not None else ()
 
     def reads_of(self, tag_name: str) -> tuple[RungRead, ...]:
-        """Exact reads of one tag, in execution order."""
+        """Return the exact reads of one tag, in execution order."""
         return self._reads_by_tag.get(tag_name, ())
 
     def reads_for_run(self, run: RungRun) -> tuple[RungRead, ...]:
@@ -740,7 +740,7 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
     This function deliberately never rereads a live view's tag or memory maps:
     the runner may already have updated its fast-read cache during commit.
     Each row (a rung, a branch, a For-body rung) has a view of its own, taken
-    as the solve reached it; a view is compacted once from the union of all
+    as the solve reached it. The function compacts a view once, from the union of all
     its direct condition reads.
 
     Raises ``ValueError`` when one view cannot represent its recorded

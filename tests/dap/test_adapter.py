@@ -879,7 +879,7 @@ def test_launch_with_snapshot_rejects_file_without_plc_data(tmp_path: Path, monk
 def test_launch_with_snapshot_reports_a_malformed_row_as_a_launch_error(
     tmp_path: Path, monkeypatch: Any
 ):
-    """A row the reader rejects fails the launch with the reader's message."""
+    """Fail the launch with the reader's message when the reader rejects a row."""
 
     def reject(path: Any, **kw: Any) -> Any:
         raise ValueError("row 7: expected 4 cells, found 5")
@@ -3866,7 +3866,7 @@ def test_live_trace_body_includes_tag_hints(tmp_path: Path):
     assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
 
 
-#: Tags pyrung adds itself (a bracket's rule bit, a harness coupling's timer)
+#: Tags that pyrung adds itself (a bracket's rule bit, a harness coupling's timer)
 #: and user tags that only look like them.
 _INTERNAL_TAGS = ("__on1__N", "__cpl_ond__Fb")
 _LOOKALIKE_TAGS = ("N", "__Mine", "__a__b", "__spare__1", "__init__")
@@ -3950,7 +3950,7 @@ def test_variables_and_changes_leave_out_internal_tags(tmp_path: Path):
     for entry in entries:
         _assert_only_program_tags(entry["changes"])
 
-    # The changes a scan frame carries during Continue.
+    # Check the changes that a scan frame carries during Continue.
     _send_request(adapter, out_stream, seq=7, command="continue")
     _drain_messages(out_stream)
     time.sleep(0.05)
@@ -4222,7 +4222,7 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     assert response["success"] is True
     assert adapter._runner.forces["Counter"] == 99
 
-    # Force with float: Counter is an Int, so it holds what a copy() of 3.14 stores
+    # Force with a float. Counter is an Int, so it stores what a copy() of 3.14 would store
     messages = _send_request(
         adapter,
         out_stream,
@@ -4235,7 +4235,7 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     assert adapter._runner.forces["Counter"] == 3
     assert type(adapter._runner.forces["Counter"]) is int
 
-    # A word is nothing an Int can hold, and the session says so
+    # An Int cannot hold text, and the session says so
     for seq, command in ((6, "pyrungForce"), (7, "pyrungPatch")):
         messages = _send_request(
             adapter,
@@ -4249,7 +4249,7 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
         assert "INT holds a number" in response["message"]
     assert adapter._runner.forces["Counter"] == 3
 
-    # The console's patch and force take the same road, zero of another type included
+    # The console's patch and force follow the same path, including a zero of another type
     for seq, line in ((8, "patch Counter 0.0"), (9, "force Counter 0.0")):
         messages = _send_request(
             adapter, out_stream, seq=seq, command="evaluate", arguments={"expression": line}
@@ -4616,8 +4616,10 @@ def test_pyrung_causal_recorded_effect(tmp_path: Path):
 
 
 def test_pyrung_causal_branch_reads_trunk_contact_on_trunk_row(tmp_path: Path):
-    """A trunk contact written above a branch: the branch held the trunk's power,
-    so cause() names the trunk contact as the trigger it read, not its reset."""
+    """cause() names the contact A as a trigger of Y, not the reset of A.
+
+    The rung resets A above its branch.  The branch still has the power that A gave the trunk.
+    """
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(

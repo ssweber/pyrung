@@ -1,4 +1,4 @@
-"""A box on a continued wire: the ``cont_box`` group (subroutine ``Conf_ContBox``).
+"""Check a box on a continued wire: the ``cont_box`` group (subroutine ``Conf_ContBox``).
 
 Can a box sit on a continued wire of the rung above, and do its enable and its
 pins see that wire's writes?  Each case is

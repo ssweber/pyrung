@@ -1,14 +1,16 @@
 """The importer reads each contact where the CLICK rung does, row for row.
 
-CLICK solves a rung row by row: a contact cell is read on the row of the first
-output its wire runs through, and two cells with the same label are two reads.
-The importer groups outputs under one ``with rung(...)`` or ``with branch(...)``
-only where the drawing has one cell teed off to them, and gives each further
-wire of a CLICK rung back as a ``.continued()`` rung, so the generated code
-draws as the rows do and reads each contact where they do.  The exporter's
-label factoring keeps a written contact out of a shared node.  Each case pins
-the generated shape and runs it against a hand-written program with the CLICK
-rung's meaning.
+CLICK solves a rung row by row. It reads a contact cell on the row of the first output
+that the cell's wire runs through. Two cells with the same label are two reads.
+
+The importer groups outputs under one ``with rung(...)`` or ``with branch(...)`` only where
+the drawing has one cell teed off to them. It gives each further wire of a CLICK rung back
+as a ``.continued()`` rung. So the generated code draws as the rows do and reads each
+contact where they do. The exporter's label factoring keeps a written contact out of a
+shared node.
+
+Each case pins the generated shape and runs it against a hand-written program with the
+CLICK rung's meaning.
 """
 
 from __future__ import annotations
@@ -122,8 +124,8 @@ CASES: dict[str, tuple[list[list[str]], Callable[[], None], str]] = {
         _coil_writes_trunk_contact,
         "with rung(C1, X002).continued():",
     ),
-    # Y001 hangs off the C5 cell the reset reads, so it reads C5 as the rung
-    # started; only the rail row below reads C5 again, after the reset.
+    # Y001 hangs off the C5 cell that the reset reads, so it reads C5 as the rung started.
+    # Only the rail row below reads C5 again, after the reset.
     "teed_cell_then_rail_row": (
         [
             _row("R", ["C5", "T"], "reset(C5)"),
@@ -245,7 +247,11 @@ WRITTEN: dict[str, Callable[[], None]] = {
 
 @pytest.mark.parametrize("name", list(WRITTEN))
 def test_round_trip_gives_back_the_code_written(name: str):
-    """pyrung -> CLICK -> pyrung -> CLICK: the rungs as the export draws them, and the same rows."""
+    """Round-trip pyrung -> CLICK -> pyrung -> CLICK.
+
+    The imported rungs match the export's drawing of the written rungs.  The second export
+    writes the same rows as the first.
+    """
     with Program() as logic:
         WRITTEN[name]()
     bundle = pyrung_to_ladder(logic, TagMap(include_system=False))

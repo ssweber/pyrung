@@ -1,4 +1,4 @@
-"""Tests for ckp_check.py's legacy_encodings.json handling, on a fake CLICK temp dir.
+"""Test how ckp_check.py handles legacy_encodings.json, on a fake CLICK temp dir.
 
 Run: timeout 120 uv run pytest devtools/test_ckp_check.py -q
 """

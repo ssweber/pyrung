@@ -1,4 +1,4 @@
-"""Intra-rung order dependence: rows that read a tag an earlier row wrote.
+"""Find rows that read a tag that an earlier row of the same rung wrote.
 
 On a CLICK and in pyrung, each instruction solves only the path from the rail
 to it (hardware rounds 1 and 2):
@@ -12,31 +12,35 @@ to it (hardware rounds 1 and 2):
 * A box reads its legs (reset, jump, ...) when the solve reaches the box.
 
 Earlier pyrung releases read all of these against a snapshot taken at rung
-entry.  A row that reads a tag written by an earlier row of the same rung, or of
-the same chain of continued rungs, now reads the new value (it read the old
-one).  Its result depends on the order of the rows.
+entry.  Now a row that reads a tag written by an earlier row of the same rung,
+or of the same chain of continued rungs, reads the new value.  Earlier releases
+gave it the old one.  Its result depends on the order of the rows.
 
 Two layers:
 
-* :func:`reads_after_write` is the predicate: given rows in solve order, every
-  read of a tag that some earlier row wrote.  Rows are plain read/write sets, so
-  export, import and ClickNick can ask it about the rows they build.
+* :func:`reads_after_write` is the predicate.  Given rows in solve order, it
+  returns every read of a tag that some earlier row wrote.  Rows are plain
+  read/write sets, so export, import and ClickNick can pass it the rows they
+  build.
 * :func:`validate_order_dependence` builds the rows of every rung of a program
   and reports ``RUNG_ORDER_DEPENDENT`` for each row that reads a tag written
   above it.
 
-What counts as a row's read: the contacts the row adds (a top-level or
-continued rung's conditions, a branch's local conditions) and a box's helper
-legs.  Instruction operands are read live in both models, and a box's enable is
-the power held from its rung, so neither counts.  What counts as a write: an
-instruction's declared targets and status fields, the fault flags it can set,
-everything a ``call()`` can write (transitively) and everything a For body can
-write.  A For body rung reads its contacts when it runs in pyrung too, so it
-starts a sequence of its own: only a box leg inside it can read an earlier body
-row's write.  Tags are the statically known ones; an indirect write is widened
-the way the program graph widens it, and an index no declared range bounds
-(``DS[P]`` with ``P`` unbounded) reads or writes any element of its bank, so it
-meets a write to, or a read of, any of the bank's tags.
+A row reads the contacts it adds (a top-level or continued rung's conditions, a
+branch's local conditions) and a box's helper legs.  Instruction operands are
+read live in both models, and a box's enable is the power held from its rung, so
+neither counts as a read.  A row writes an instruction's declared targets and
+status fields, the fault flags it can set, everything a ``call()`` can write
+(transitively) and everything a For body can write.
+
+A For body rung reads its contacts when it runs in pyrung too, so it starts a
+sequence of its own.  Only a box leg inside it can read an earlier body row's
+write.
+
+Tags are the statically known ones.  An indirect write is widened the way the
+program graph widens it.  An index that no declared range bounds (``DS[P]`` with
+``P`` unbounded) reads or writes any element of its bank, so it meets a write
+to, or a read of, any of the bank's tags.
 """
 
 from __future__ import annotations
@@ -65,12 +69,12 @@ RUNG_ORDER_DEPENDENT = "RUNG_ORDER_DEPENDENT"
 
 @dataclass(frozen=True)
 class SolveRow:
-    """One row of a rung, as the solve reaches it: it reads, then it writes.
+    """One row of a rung, as the solve reaches it.  A row reads first, then writes.
 
     Nothing writes within one row between its reads, so a row's own writes
     never reach its own reads.  *indexed_reads* and *indexed_writes* name the
-    banks the row reads or writes through an index no declared range bounds:
-    any element of the bank.
+    banks that the row reads or writes through an index that no declared range
+    bounds.  Such an access can reach any element of the bank.
     """
 
     reads: frozenset[str] = frozenset()
@@ -102,12 +106,12 @@ def reads_after_write(
     shared_reads: Iterable[str] = (),
     bank_of: Mapping[str, str] | None = None,
 ) -> tuple[ReadAfterWrite, ...]:
-    """Every read, in solve order, of a tag that an earlier row wrote.
+    """Return every read, in solve order, of a tag that an earlier row wrote.
 
-    *rows* are in solve order.  *shared_reads* are tags every row re-reads on
-    top of its own (a path a split repeats on each CLICK rung it makes).
+    *rows* are in solve order.  *shared_reads* are tags that every row re-reads
+    on top of its own (a path that a split repeats on each CLICK rung it makes).
     *bank_of* names the bank of each tag, so that an indexed access to a bank
-    meets a named access to one of its tags; without it indexed accesses meet
+    meets a named access to one of its tags.  Without it, indexed accesses meet
     only each other.  Each hit names the reading row, the tag (the bank, for an
     indexed read) and the latest earlier row that wrote it.  Hits come in row
     order, then name order.
@@ -189,7 +193,7 @@ def _merge(parts: Iterable[_Writes]) -> _Writes:
 
 
 def _is_unbounded(ref: Any) -> bool:
-    """Whether *ref* is an index that no declared pointer range bounds."""
+    """Return True if *ref* is an index that no declared pointer range bounds."""
     from pyrung.core.analysis.pdg import _indirect_expr_tags, _indirect_ref_tags
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
@@ -211,7 +215,7 @@ class _RowBuilder:
     # -- reads -------------------------------------------------------------
 
     def condition_reads(self, conditions: Iterable[Any]) -> SolveRow:
-        """The reads of *conditions*: named tags, and banks read through an index."""
+        """Return the reads of *conditions*: named tags, and banks read through an index."""
         from pyrung.core.analysis.pdg import _extract_reads_from_condition, _visit_indirect_refs
 
         reads: set[str] = set()
@@ -235,10 +239,10 @@ class _RowBuilder:
         return block.name
 
     def bank_of(self, *, every_bank: bool = False) -> dict[str, str]:
-        """The bank of every tag seen so far that sits in a bank something indexes.
+        """Return the bank of every tag seen so far that sits in a bank something indexes.
 
-        With *every_bank*, of every tag seen in any bank: a finding's display
-        needs it to find ``DS3`` in ``DS[PB]``, a bounded index.
+        With *every_bank*, return the bank of every tag seen in any bank.  A finding's
+        display needs that to find ``DS3`` in ``DS[PB]``, a bounded index.
         """
         out: dict[str, str] = {}
         blocks = dict(self._indexed_blocks)
@@ -255,7 +259,7 @@ class _RowBuilder:
 
     @staticmethod
     def helper_legs(instr: Any) -> tuple[tuple[str, Any], ...]:
-        """A box's helper legs (not the fields that carry its rung's power)."""
+        """Return a box's helper legs, which are not the fields that carry its rung's power."""
         from pyrung.core.site_memory import _is_power_field
 
         legs: list[tuple[str, Any]] = []
@@ -272,7 +276,7 @@ class _RowBuilder:
     # -- writes ------------------------------------------------------------
 
     def instr_writes(self, instr: Any) -> _Writes:
-        """``(named tags, banks written through an index)`` that *instr* can write."""
+        """Return ``(named tags, banks written through an index)`` that *instr* can write."""
         memo = self._instr_writes_memo.get(id(instr))
         if memo is not None:
             return memo
@@ -325,8 +329,10 @@ class _RowBuilder:
     def scope_sequences(
         self, rungs: Sequence[Any], scope: FactScope, subroutine: str | None
     ) -> list[_Sequence]:
-        """The row sequences of one scope: one per chain of continued rungs, then
-        one per For body rung inside them."""
+        """Return the row sequences of one scope.
+
+        There is one per chain of continued rungs, then one per For body rung inside them.
+        """
         from pyrung.core.rung import Rung as RungLogic
 
         sequences: list[_Sequence] = []
@@ -364,8 +370,8 @@ class _RowBuilder:
                     )
                 )
                 self._walk_body_rung(body_rung, location, number, body, loops)
-            # Bare body instructions read their legs at their own row: nothing
-            # changes for them.
+            # A bare body instruction reads its legs at its own row, so it needs no sequence
+            # of its own.  Note the instruction only if it is itself a For loop.
             for item in loop.body:
                 if not isinstance(item, RungLogic):
                     self._note_loop(item, location, loops)
@@ -453,7 +459,7 @@ class _RowBuilder:
 
 
 def _token_span(line: str, token: str) -> tuple[int, int] | None:
-    """``(start, length)`` of *token* in *line* as a whole name, else its first match.
+    """Return ``(start, length)`` of *token* in *line* as a whole name, else its first match.
 
     An indexed token (``DS[...]``) matches its bank's name where it is indexed.
     """
@@ -471,7 +477,7 @@ def _token_span(line: str, token: str) -> tuple[int, int] | None:
 
 
 def _tag_span(line: str, tag: str, banks: Mapping[str, str]) -> tuple[int, int] | None:
-    """Where *line* names *tag*, or else indexes the bank *tag* belongs to.
+    """Return where *line* names *tag*, or else indexes the bank that *tag* belongs to.
 
     A bounded index (``DS[PB]``, ``PB`` in 2..4) reads or writes its elements by
     name, but the code spells the index, not ``DS3``.
@@ -509,7 +515,7 @@ def _reader_lines(
 def _caret(
     lines: tuple[str, ...], tag: str, banks: Mapping[str, str]
 ) -> tuple[int, int, int] | None:
-    # A box's own line comes first; its legs (where the read is) below it.
+    # A box's own line comes first, and its legs, where the read is, come below it.
     order = range(len(lines)) if len(lines) == 1 else range(1, len(lines))
     for index in order:
         span = _tag_span(lines[index], tag, banks)
@@ -634,8 +640,8 @@ def validate_order_dependence(
 ) -> OrderDependenceReport:
     """Report every row that reads a tag an earlier row of the same rung wrote.
 
-    One ``RUNG_ORDER_DEPENDENT`` finding per reading row (a branch, a continued
-    rung, or a box's helper legs), naming every such tag it reads.
+    Each reading row (a branch, a continued rung, or a box's helper legs) gets one
+    ``RUNG_ORDER_DEPENDENT`` finding that names every such tag it reads.
     """
     builder = _RowBuilder(program)
     sequences = builder.scope_sequences(program.rungs, "main", None)

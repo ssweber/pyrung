@@ -252,7 +252,7 @@ def test_for_more():
 
 @pytest.mark.parametrize("dt", [0.0004, 0.001, 0.010, 0.025, 0.040])
 def test_timers_at_limits_at_any_scan(monkeypatch, dt):
-    """The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms."""
+    """A CLICK scans in about 1 ms or less.  The soft PLC scans in 10..40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     limits = next(c for c in group.cases if c.id == "timers_at_limits")
     assert_all_passed(run(Group("for_more", [replace(limits, scans=int(0.8 / dt))])))

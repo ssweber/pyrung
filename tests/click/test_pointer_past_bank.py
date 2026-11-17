@@ -1,7 +1,7 @@
-"""CLK_PTR_PAST_BANK: a pointer whose known values can run past the end of its bank.
+"""Test CLK_PTR_PAST_BANK, which flags a pointer whose known values can run past its bank.
 
-A CLICK writes into the memory past the bank and pyrung drops the write, so the finding
-warns.  A pointer with no known bound is never reported.
+A CLICK writes into the memory past the bank, and pyrung drops the write, so the finding
+warns. The check never reports a pointer with no known bound.
 """
 
 from __future__ import annotations
@@ -218,7 +218,7 @@ def test_a_for_loop_index_with_a_constant_count_is_bounded_by_the_count():
     assert report(1000) == []
     (finding,) = report(1100)
     assert "can reach DD1001" in finding.message
-    # The index's values stop at 65535, so the largest count builds no 2 ** 31 of them.
+    # The index's values stop at 65535, so the largest count does not build 2 ** 31 of them.
     (finding,) = report(2**31 - 1)
     assert "can reach DD1001" in finding.message
 
@@ -260,8 +260,8 @@ def test_a_range_wider_than_the_value_cap_still_reports_its_end():
 
 
 def test_a_pointer_write_into_its_bank_keeps_the_declared_range():
-    # copy(0, DS[At]) may store into Ptr's slot DS1.  Ptr then holds its declared 1..1010
-    # and the 0 that write stores, so it still reaches past DD1000.
+    # copy(0, DS[At]) may store into Ptr's slot DS1. Ptr then holds its declared 1..1010
+    # plus the 0 that the write stores, so it still reaches past DD1000.
     ptr = Int("Ptr", min=1, max=1010)
     at = Int("At", external=True)
     out = Int("Out")

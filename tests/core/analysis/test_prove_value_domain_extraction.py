@@ -1,4 +1,4 @@
-"""Tests for the static facts that how() steers with."""
+"""Test the static facts that how() steers with."""
 
 from __future__ import annotations
 
@@ -37,8 +37,10 @@ class TestValueDomainExtraction:
         assert nd["Flag"] == (False, True)
 
     def test_a_mod_of_a_whole_number_formula_lists_its_remainders(self):
-        """(Step + 1) % 6 is a whole number: its remainders are -5..5 (an Int may be
-        negative, and MOD takes the dividend's sign)."""
+        """List the remainders of (Step + 1) % 6, which is a whole number, as -5..5.
+
+        An Int may be negative, and MOD takes the dividend's sign.
+        """
         step = Int("Step")
         with Program(strict=False) as logic:
             with Rung(step == 3):
@@ -85,7 +87,7 @@ class TestValueDomainExtraction:
         assert set(nd["Mode"]) == {0, 1, 2}
 
     def test_eq_ne_only_input_gets_literal_plus_other_domain(self):
-        """Pure-switch eq/ne inputs collapse to {literals..., one other value}."""
+        """Collapse the domain of a pure-switch eq/ne input to {literals..., one other value}."""
         mode = Int("Mode", external=True)
         light = Bool("Light")
         alarm = Bool("Alarm")
@@ -106,7 +108,7 @@ class TestValueDomainExtraction:
         assert 0 in nd["Mode"]
 
     def test_eq_ne_other_value_skips_literals_and_bounds(self):
-        """When the default is a literal, the other value is the nearest unused one."""
+        """Use the nearest unused value as the other value when the default is a literal."""
         mode = Int("Mode", external=True, min=0)
         light = Bool("Light")
 
@@ -428,7 +430,10 @@ class TestValueDomainExtraction:
 
 
 def test_literal_domain_counts_a_write_past_the_block_cap():
-    """``copy(Val, DS[WPtr])`` can land on DS7, so DS7's writes are not all literals."""
+    """Count ``copy(Val, DS[WPtr])`` as a write that can land on DS7.
+
+    DS7's writes are then not all literals.
+    """
     from pyrung.core import Block, TagType
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.prove.classify import (

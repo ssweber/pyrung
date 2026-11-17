@@ -374,8 +374,8 @@ class TestExclusiveInputsCrossScan:
 # OTE inside ForLoop
 #
 # As on CLICK, a false loop rung skips the body, so an out() there holds
-# its value, and a count tag that resolves to 0 runs no iteration (the
-# coil holds then too).  Such a coil is stateful, not combinational.
+# its value.  A count tag that resolves to 0 runs no iteration, so the
+# coil holds then too.  Such a coil is stateful, not combinational.
 # ===================================================================
 
 

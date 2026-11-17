@@ -1,6 +1,6 @@
-"""Differential check of the long runs: every run in the guarded loop against a stepped twin.
+"""Check every long run in the guarded loop against a stepped twin.
 
-Enabled by ``--fold-check`` (``make test-fold``).  The entry points
+You enable the check with ``--fold-check`` (``make test-fold``).  The entry points
 (``compiled_run.run_scans``, ``coast_run.coast_until``) are wrapped.  Before a run starts, a
 twin is built from the same tip state, forces, pending patches and synthesis overlay; after
 the run, the twin steps the same number of scans one by one, and every state the run itself
@@ -37,9 +37,10 @@ A coast is compared like a compiled run: exactly, and with the runner around the
 since both run real scans and the loop.  Its stretches fire finely here too.  It keeps its
 production constants, except ``TRACE_ROOM``.  Its checkpoints and their force records are
 some of stepping's, equal at each.  What it leaves in the firing indexes must match what
-stepping leaves (:func:`compare_records`), scans it left out being stepped again to compare, where a stretch
-is allowed one thing: a value column may say ``Unknown``, and a column that does may say a
-tag varied where it did not.  how()'s clock, memory cap and ledger are no scan's doing, so a
+stepping leaves (:func:`compare_records`), and the scans it left out are stepped again to
+compare. A stretch is allowed one difference. A value column may say ``Unknown``, and a
+column that does may say a tag varied where it did not.  how()'s clock, memory cap and ledger
+are no scan's doing, so a
 coast they stop isn't held to the scans asked or to a true predicate, and all else is
 compared at the landing it reached.
 
@@ -133,10 +134,11 @@ def _open_deliberate_blocks() -> list[list[int]]:
 
 @contextmanager
 def deliberate() -> Iterator[None]:
-    """One mismatch in this block is the test's point, so it fails nothing by itself.
+    """Mark a block whose one mismatch is the test's point, so the mismatch fails nothing by itself.
 
-    Exactly one, on this thread: a block that saw none proves nothing, and a second
-    mismatch or another thread's is a real one the first must not hide.
+    The block must see exactly one mismatch, on this thread. A block that saw none proves
+    nothing. A second mismatch, or one from another thread, is a real one that the first must
+    not hide.
     """
     blocks = _open_deliberate_blocks()
     block = [0]
@@ -166,7 +168,7 @@ def _declares_this_mismatch() -> bool:
 
 @dataclass
 class _OwnTwin:
-    """One own_twin() block: where its run landed, and the scan its last compare was of."""
+    """Records one own_twin() block: where its run landed, and the scan its last compare was of."""
 
     plc: Any
     start: int
@@ -191,14 +193,15 @@ class _OwnTwin:
 
 @contextmanager
 def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
-    """A run with no twin here: its function keeps state a twin in this process would share.
+    """Run a block with no twin made here.
 
-    The twin would go on from the run's count, so the test clears that state, steps its
-    own runner and hands it to the compare this yields.  The block's last compare must be
-    of where its run got to, even if the block raises, and of another runner: state,
-    scan and runner are compared as a twin's would be.  Only *plc* is let off, and only
-    the twin: it still lands on the scans asked of it, and other runners in the block stay
-    checked.  tests/test_fold_check_stop.py pins the tests using this, and the summary
+    The block's function keeps state that a twin in this process would share.
+    The twin would go on from the run's count. The test therefore clears that state, steps its
+    own runner and passes it to the compare function that this yields. The block's last compare
+    must be of where its run got to, even if the block raises, and it must be of another
+    runner. State, scan and runner are compared as a twin's would be. Only *plc* is let off, and
+    only the twin. *plc* still lands on the scans asked of it, and other runners in the block
+    stay checked.  tests/test_fold_check_stop.py pins the tests using this, and the summary
     lists them.
     """
     start = plc._state.scan_id
@@ -237,7 +240,7 @@ def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
 
 
 def undeclared() -> list[tuple[str, str]]:
-    """The mismatches of the session nothing declared: any of them is a failure."""
+    """Return the mismatches of the session that no test declared. Any of them is a failure."""
     return [*MISMATCHES, *SELF_CHECK_MISMATCHES]
 
 

@@ -95,6 +95,7 @@ from .absorb import (
     _find_redundant_acc_absorptions,
     _find_threshold_absorptions,
     _has_forbidden_data_read,
+    _leg_reads,
     _merge_threshold_absorptions,
     _owner_reset_condition_refs,
     _threshold_atom_for_progress,
@@ -207,9 +208,9 @@ def _collect_all_exprs(
         return sorted(seen)
 
     sites = _collect_write_sites(program, target_extractor=_write_targets_with_faults)
-    # Whether a subroutine's writes happen at all is decided by every call on
-    # a path into it: a call in a forloop body, or one from another
-    # subroutine (whose own callers then gate it too).
+    # Every call on a path into a subroutine decides whether its writes happen at all.
+    # That includes a call in a forloop body and a call from another subroutine,
+    # whose own callers then gate it too.
     caller_map = _build_caller_map(program)
     gated_subs: set[str] = set()
     for site in sites:
@@ -224,9 +225,9 @@ def _collect_all_exprs(
                 for cond in caller_chain:
                     exprs.append(_condition_to_expr(cond))
 
-    # A return guard that can skip a write, or a call (whose callee's writes
-    # it skips too), decides which inputs are live.  ``include_current`` adds
-    # a return earlier in the node's own rung (a branch's).
+    # A return guard that can skip a write decides which inputs are live.  So does a
+    # guard that can skip a call, because it skips the callee's writes too.
+    # ``include_current`` adds a return earlier in the node's own rung (a branch's).
     for node in graph.rung_nodes:
         node_writes = graph.node_writes(node)
         if not node.guard_reads or not (node_writes or node.calls):
@@ -327,13 +328,14 @@ _NO_LITERAL_WRITE = object()
 
 
 def _eq_ne_other_value(tag: Tag, literals: set[Any]) -> Any:
-    """A value of *tag* that no literal in *literals* names.
+    """Return a value of *tag* that no literal in *literals* names.
 
     An input read only through ``==``/``!=`` against literals needs one more
     value standing for all the others.  It is a real value of the tag's type,
     so rungs outside the property's cone (which may compare it with ``>``)
     and a replayed counterexample both get something the PLC can hold.  The
-    power-on default is preferred; otherwise the nearest unused value.
+    power-on default is the first choice.  Otherwise the function returns the nearest
+    unused value.
     """
     from pyrung.core.analysis.crossings._ranges import type_bounds
 
@@ -462,9 +464,9 @@ def _comparison_influencing_tags(
                 source_name, _ = edge
                 target_to_sources.setdefault(target_name, set()).add(source_name)
         elif isinstance(instr, ForLoopInstruction):
-            # How many times the body runs is the count's value, as if compared
-            # (``_tag_compared_names``).  An indexed count's slots stay constant
-            # storage, as above; its index does not.
+            # The body runs as many times as the count's value, so the count is read as
+            # a comparison reads it (``_tag_compared_names``).  The slots of an indexed
+            # count stay constant storage, as above.  Its index does not.
             count_index: set[str] = set()
             count_names = _compared_value_names(instr.count, graph, count_index)
             if not isinstance(instr.count, (IndirectRef, IndirectExprRef)):
@@ -486,12 +488,12 @@ def _comparison_influencing_tags(
 def _compared_value_names(
     value: Any, graph: ProgramGraph, index_out: set[str] | None = None
 ) -> set[str]:
-    """Names of the tags whose *values* a comparison operand reads.
+    """Return the names of the tags whose *values* a comparison operand reads.
 
     A literal or a readonly tag (a constant) reads none.  An indirect access
-    reads the block elements it can reach; the tags its index reads (the
-    pointer picks the element) go to *index_out*, or are returned with the
-    elements when it is None.
+    reads the block elements it can reach.  The tags its index reads (the
+    pointer picks the element) go to *index_out*.  When *index_out* is None,
+    they are returned with the elements.
     """
     from enum import Enum
 
@@ -643,7 +645,7 @@ def _collect_literal_write_domains(
 
 
 def _expr_reads_tag(expr: Any, tag_name: str) -> bool:
-    """True when *expr* references *tag_name* anywhere in the tree.
+    """Return True when *expr* references *tag_name* anywhere in the tree.
 
     Uses the PDG's own read walker, so every expression shape (range sums and
     aggregates, math and shift functions, indirect refs) counts exactly as the
@@ -695,7 +697,7 @@ def _indirect_constant_table_index(
     writer_instrs: dict[str, list[Any]],
     literal_values: dict[str, set[Any]],
 ) -> str | None:
-    """Index register a ``copy(block[index], dest)`` couples its dest's stepping to.
+    """Return the index register that a ``copy(block[index], dest)`` couples its dest to.
 
     Returns the (root) index tag when *source* is an ``IndirectRef`` whose read
     slots are never written **over the index's reachable address region**, else
@@ -987,8 +989,8 @@ def _domain_from_copy_like_value(
 
     source_tag_name = _tag_name_from_value(raw_value)
     if source_tag_name is not None:
-        # An input Real keeps its input domain, so a store of it into another type takes
-        # that domain plus what a NaN or an Inf stores (0, or the end of the type).
+        # An input Real has its input domain.  Storing it into another type gives that
+        # domain plus the values that a NaN or an Inf stores: 0, or the end of the type.
         stores_input = (
             source_tag_name in non_finite
             and source_tag_name not in graph.writers_of
@@ -1031,7 +1033,7 @@ def _domain_from_copy_like_value(
 def _stored_domain(
     domain: tuple[Any, ...], source: Any, target: Tag, calc_mode: str | None = None
 ) -> tuple[Any, ...] | None:
-    """The values a Copy from a *source* with *domain* stores in *target*.
+    """Return the values that a Copy from a *source* with *domain* stores in *target*.
 
     A Copy converts as it stores, so a DD 40000 copied into a DS stores 32767.  *source*
     is :func:`~pyrung.core.instruction.conversions.copy_source_kind` of the source.  With
@@ -1047,12 +1049,14 @@ def _stored_domain(
         storage = copy_store_transform(target.type, source)
     else:
         storage = calc_store_transform(target.type, calc_mode)
-    # A dict keeps the first of equal values in order, and a domain can hold thousands.
+    # dict.fromkeys removes duplicates and keeps the order.  Of equal values, such as 1 and
+    # 1.0, it keeps the first.  It runs in linear time, which matters because a domain can
+    # hold thousands of values.
     if storage is None:
         return tuple(dict.fromkeys(domain))
     low, high = storage.lower, storage.upper
     if storage.kind in ("clamp", "wrap", "word") and low is not None and high is not None:
-        # Each of these stores a whole number already in its range as it is.
+        # Each of these kinds stores a whole number that is in its range unchanged.
         if all(type(v) is int and low <= v <= high for v in domain):
             return tuple(dict.fromkeys(domain))
     return tuple(dict.fromkeys(store_value(value, storage) for value in domain))
@@ -1113,9 +1117,10 @@ def _interval_bounds(
         return None
 
     if node.symbol == "%":
-        # Not monotone, so not from the corners.  Below the divisor's size: a
-        # calc's MOD truncates, with the dividend's sign (0 for a MOD by 0);
-        # Python's % (outside calc) floors, with the divisor's.
+        # A modulo is not monotone, so the corners do not bound it.  The result is
+        # smaller than the divisor in size.  A calc's MOD truncates, so the result has
+        # the dividend's sign (0 for a MOD by 0).  Python's % outside calc floors, so
+        # the result has the divisor's sign.
         size = max(abs(b_lo), abs(b_hi))
         if node.op is operator.mod:
             return (-size if b_lo < 0 else 0, size if b_hi > 0 else 0)
@@ -1125,8 +1130,8 @@ def _interval_bounds(
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
     except (ArithmeticError, ValueError):
         return None
-    # A corner that is +Inf or NaN (a calc's 0 ** -1) stores 0 into an integer,
-    # which the corners do not bound.
+    # A corner can be +Inf or NaN, for example from a calc's 0 ** -1.  An integer stores 0
+    # for it, and the corners do not bound 0.
     if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
         return None
     return (min(corners), max(corners))
@@ -1168,8 +1173,8 @@ def _domain_from_calc_expression(
     ):
         modulus = _literal_value_from_value(expression.right)
         if isinstance(modulus, int) and not isinstance(modulus, bool) and 0 < modulus <= 1000:
-            # A calc's MOD truncates: a dividend that may be negative reaches
-            # -(modulus - 1), which the destination stores as it does (a Word
+            # A calc's MOD truncates, so a dividend that may be negative reaches
+            # -(modulus - 1).  The destination stores that value like any other (a Word
             # holds -1 as 65535).  Python's % floors into 0..modulus - 1.
             dividend = _interval_bounds(
                 expression.left, graph, all_exprs, known_domains, atom_index
@@ -1195,7 +1200,7 @@ def _domain_from_calc_expression(
         return None
     if isinstance(expression, RangeAggregateExpr) and (lo_t != int(lo) or hi_t != int(hi)):
         # The destination wraps part of the member hull (e.g. a DD range into
-        # an INT); the stored values are no longer the interval lo..hi.
+        # an INT), so the stored values are no longer the interval lo..hi.
         return None
     if isinstance(lo_t, int) and isinstance(hi_t, int):
         # Listing a wide interval runs out of memory.  A store that wraps part
@@ -1213,11 +1218,11 @@ _WHOLE_UNARY_SYMBOLS = frozenset({"-", "+", "~", "abs"})
 
 
 def _integer_dividend(value: Any) -> bool:
-    """Whether *value* is a whole number, so its MOD by n is one of n integers.
+    """Return True when *value* is a whole number, so its MOD by n is one of n integers.
 
     Built from integer tags and constants by operations that keep whole numbers
     whole (``(CurStep + 1) % 6``).  A Real dividend has a fractional remainder
-    (``2.5 % 3`` is 2.5), and so may a ``/``, a ``**`` or a ``mean()``: the
+    (``2.5 % 3`` is 2.5), and so may a ``/``, a ``**`` or a ``mean()``.  The
     interval bounds cover those instead.
     """
     from pyrung.core.expression import (
@@ -1413,7 +1418,7 @@ def _domain_from_write_instruction(
 
 
 def _is_monotone_self_feed_calc(instr: Any, target_name: str) -> bool:
-    """True for direct non-oneshot ``math(T +/- k, T)`` progress writes."""
+    """Return True for direct non-oneshot ``math(T +/- k, T)`` progress writes."""
     from pyrung.core.instruction.calc import CalcInstruction
 
     if not isinstance(instr, CalcInstruction):
@@ -1643,8 +1648,8 @@ def _collect_structural_domain_info(
         atom_idx,
         real_gap_points=real_gap_points,
     )
-    # Carrying a comparison back can give a source a domain, which a write through a
-    # pointer that lists no targets voids.
+    # Carrying a comparison back can give a source a domain.  A write through a pointer
+    # that lists no targets voids that domain.
     for name in unlisted & known_domains.keys():
         del known_domains[name]
     if profile:
@@ -1686,7 +1691,7 @@ def collect_produced_value_domains(
     program: Program,
     graph: ProgramGraph,
 ) -> dict[str, tuple[Any, ...]]:
-    """Finite values justified solely by program producers.
+    """Return the finite values that only program producers justify.
 
     Unlike :func:`_collect_structural_domains`, this deliberately does not use
     comparison boundaries to construct a search domain.  It is therefore safe
@@ -1718,9 +1723,10 @@ def collect_produced_value_domains(
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
 
-    # A write through a pointer may store into a tag unlisted, so that tag has no
-    # complete set of writers.  The remote device decides what a receive() stores in
-    # its payload, so a payload has none either, even without ``external``.
+    # A write through a pointer may store into a tag without being listed as one of the
+    # tag's writers. So such a tag has no complete set of writers.  The remote device
+    # decides what a receive() stores in its payload, so a payload has none either, even
+    # without ``external``.
     incomplete_targets = (
         graph.unlisted_written()
         | _collect_receive_dest_names(program)
@@ -1953,9 +1959,9 @@ def _is_number(value: Any) -> bool:
 
 
 class _Hop(NamedTuple):
-    values: tuple[Any, ...]  # What the source has to try, before the ones next door.
-    complete: bool  # Those are all the places a comparison on the target can change.
-    alone: bool = False  # Complete only with no other hop on the way to the comparison.
+    values: tuple[Any, ...]  # The values the source must try, before the values beside them.
+    complete: bool  # Those are all the places where a comparison on the target can change.
+    alone: bool = False  # Complete only when no other hop is on the way to the comparison.
 
 
 def _is_whole(value: Any) -> bool:
@@ -1968,7 +1974,7 @@ def _through_the_store(
     store: StoreTransform | None,
     source_tag: Tag,
 ) -> _Hop:
-    """Where a comparison of a target with *target_values* can change, on a source.
+    """Return the source values where a comparison of a target with *target_values* changes.
 
     An expression's inverse knows nothing of the store.  A clamp or a REAL has one way to
     any value, so the inverse is the answer.  A wrap has one way for each turn, and it
@@ -1989,7 +1995,8 @@ def _through_the_store(
     answered = len(inverse) == len(raws)
 
     # A Word's store from a DINT or REAL clamps above and wraps below, and a bit is on for
-    # every nonzero number: more than one way to a value, not worked out.
+    # every nonzero number.  Each has more than one way to a value, and this does not work
+    # those out.
     if store is not None and store.kind in ("word", "bool") and source_tag.type != TagType.BOOL:
         return _Hop(inverse, False)
     if store is None or store.kind != "wrap":
@@ -2136,14 +2143,16 @@ def _backward_propagate_comparison_boundaries(
                 store_cannot_invert[feeder] = target
                 feeders.extend(src for src, _inv, _mode in target_to_sources.get(feeder, ()))
 
-    # The sources a hop gave a domain: it answers for that hop, and no other way there.
+    # The sources that a hop gave a domain.  The domain answers for that hop and for no
+    # other way there.
     carried_back: set[str] = set()
 
     if reverse_edges:
-        # A REAL's split points over every hop: the cells between two of them need a value,
-        # whichever comparison each came from.
+        # Take a REAL's split points over every hop.  The cells between two of them need a
+        # value, whichever comparison each came from.
         real_splits: dict[str, set[Any]] = {}
-        # What reaches each source, and the REAL sources that reach a target through a step.
+        # Record what reaches each source, and which REAL sources reach a target through
+        # a step.
         hops_to: dict[str, set[tuple[str, _InvertFn, frozenset[Any]]]] = {}
         stepped_reals: dict[str, str] = {}
 
@@ -2242,8 +2251,9 @@ def _backward_propagate_comparison_boundaries(
                 for next_src, next_inv, next_mode in target_to_sources.get(source_name, []):
                     queue.append((next_src, next_inv, next_mode, source_name, hop.values))
 
-        # A step holds a whole cell on one side of a comparison: 5.7 copied to an INT is 5.
-        # Only that cell tells apart ``R > 5.5, D == 5``, and it has no value of its own.
+        # A step puts a whole cell on one side of a comparison.  For example, 5.7 copied to
+        # an INT is 5.  Only that cell tells ``R > 5.5, D == 5`` apart, and it has no value
+        # of its own.
         for source_name, target_name in stepped_reals.items():
             if comp_boundaries.get(source_name) or len(hops_to[source_name]) > 1:
                 no_complete_answer(source_name, target_name)
@@ -2288,7 +2298,7 @@ def _backward_propagate_comparison_boundaries(
         if source_tag is None:
             continue
         declared = _declared_domain(source_tag)
-        # A declared REAL's domain is the whole numbers of its range: not every value.
+        # A declared REAL's domain is the whole numbers of its range, not every value.
         if declared is not None and source_tag.type != TagType.REAL:
             known_domains[source_name] = declared
 
@@ -2458,18 +2468,19 @@ def _extract_value_domain(
 
 
 def _char_cuts(literal: str) -> set[str]:
-    """The characters that stand for every other around *literal*, for a CHAR.
+    """Return the characters that stand for every other around *literal*, for a CHAR.
 
-    The ``point - 1`` and ``point + 1`` of a number.  A character below the literal's
-    first compares below the literal and one above compares above, however long it
-    is, so the first character and its neighbours cover what ``C > "AB"`` can see.
+    These do for a character what ``point - 1`` and ``point + 1`` do for a number.  A
+    character below the literal's first compares below the literal and one above compares
+    above, however long it is.  So the first character and its neighbours cover what
+    ``C > "AB"`` can see.
     """
     code = ord(literal[:1] or BLANK_CHAR)
     return {chr(point) for point in (code - 1, code, code + 1) if 0 <= point <= sys.maxunicode}
 
 
 def _neighbours(value: Any, tag_type: TagType | None) -> tuple[Any, ...]:
-    """A value just below *value* and one just above, standing for the cells beside it.
+    """Return a value just below *value* and one just above, standing for the cells beside it.
 
     ``value - 1`` and ``value + 1``, in *value*'s own type (an int literal on a REAL
     keeps int neighbours).  On a REAL past 2**53 those round back to *value*
@@ -2491,7 +2502,7 @@ def _neighbours(value: Any, tag_type: TagType | None) -> tuple[Any, ...]:
 
 
 def _real_gap_points(points: Iterable[Any]) -> set[float]:
-    """Midpoints between split points at most 1 apart, for a REAL.
+    """Return the midpoints between split points at most 1 apart, for a REAL.
 
     The partition stands for the values between two split points with
     ``point + 1`` and ``point - 1``.  A REAL also takes the values between
@@ -2745,7 +2756,10 @@ def _close_tag_comparisons(
 
 
 def _accumulator_names(program: Program) -> set[str]:
-    """The tags an instruction times or counts in, which move on from any value stored there."""
+    """Return the tags that an instruction times or counts in.
+
+    The instruction moves such a tag on from whatever value is stored in it.
+    """
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
 
@@ -2850,7 +2864,7 @@ def _lowest_held(
     atom_index: dict[str, list[Atom]],
     non_finite: frozenset[str],
 ) -> Any:
-    """The lowest value *name* can hold.
+    """Return the lowest value *name* can hold.
 
     That is its type's lowest value, or 0 for an Acc that only counts up from values no lower
     than 0.  It is None for a type with no lowest value.
@@ -2875,7 +2889,7 @@ def _lowest_held(
 
 
 def _crossing_points(preset: int, starts: _AccStarts) -> set[int]:
-    """The values beside *preset* that an Acc counting both ways needs.
+    """Return the values beside *preset* that an Acc counting both ways needs.
 
     A count up from preset - 1 turns the Done on, and a count down from the preset turns
     it off.  The value preset - 2 stands for every value below those, and preset + 1 for
@@ -2890,7 +2904,7 @@ def _with_acc_starts(
     preset: int | None,
     starts: _AccStarts,
 ) -> tuple[Any, ...]:
-    """*domain* with the values the Acc starts from and, counting both ways, its crossings."""
+    """Return *domain* plus the Acc's start values, and its crossings if it counts both ways."""
     added = set(starts.values)
     if preset is not None:
         added |= _crossing_points(preset, starts)
@@ -2908,7 +2922,7 @@ def _done_acc_concrete_domain(
     done_acc_info: Any,
     starts: _AccStarts,
 ) -> tuple[Any, ...] | None:
-    """Every value a Done/Acc accumulator takes from *starts* until it reaches its preset.
+    """Return every value a Done/Acc accumulator takes from *starts* until it reaches its preset.
 
     Past the preset, the preset stands for every value, since the Done stays on.
     """
@@ -2951,7 +2965,7 @@ def _compressed_acc_boundary_domain(
     atom_index: dict[str, list[Atom]],
     starts: _AccStarts,
 ) -> tuple[Any, ...] | None:
-    """Boundary-compressed domain for a consumed accumulator.
+    """Return the boundary-compressed domain for a consumed accumulator.
 
     When all comparison atoms for the accumulator can be normalized and
     the accumulator has no forbidden data reads, the domain can be
@@ -3018,7 +3032,7 @@ def _expand_consumed_accs_for_reset_timing(
             kind = done_acc_info.kinds.get(done_name)
             if kind is None:
                 continue
-            reset_refs.update(_owner_reset_condition_refs(program, acc_name, kind))
+            reset_refs.update(_owner_reset_condition_refs(program, acc_name))
         if not reset_refs:
             return
 
@@ -3033,7 +3047,7 @@ def _expand_consumed_accs_for_reset_timing(
 
 
 def _is_ote_only(tag_name: str, graph: ProgramGraph) -> bool:
-    """True if every writer of *tag_name* uses OutInstruction."""
+    """Return True if every writer of *tag_name* uses OutInstruction."""
     writer_indices = graph.writers_of.get(tag_name, frozenset())
     if not writer_indices:
         return False
@@ -3044,7 +3058,7 @@ def _is_ote_unconditionally_reachable(
     tag_name: str,
     graph: ProgramGraph,
 ) -> bool:
-    """True if every OTE writer rung for *tag_name* executes every scan.
+    """Return True if every OTE writer rung for *tag_name* executes every scan.
 
     An OTE in the main program always executes.  An OTE inside a subroutine
     only executes when every call site for that subroutine is itself in an
@@ -3076,7 +3090,7 @@ def _is_self_referencing_ote(
     tag_name: str,
     graph: ProgramGraph,
 ) -> bool:
-    """True if any OTE writer rung for *tag_name* reads the tag in its condition."""
+    """Return True if any OTE writer rung for *tag_name* reads the tag in its condition."""
     writer_indices = graph.writers_of.get(tag_name, frozenset())
     for ni in writer_indices:
         if tag_name in graph.rung_nodes[ni].ote_writes:
@@ -3086,7 +3100,7 @@ def _is_self_referencing_ote(
 
 
 def _reads_scan_entry_value(tag_name: str, graph: ProgramGraph) -> bool:
-    """True if a read of *tag_name* comes before its first write in scan order.
+    """Return True if a read of *tag_name* comes before its first write in scan order.
 
     Such a read sees the value the tag ended the previous scan with, so the
     tag carries state across the scan boundary even when every writer is an
@@ -3097,7 +3111,7 @@ def _reads_scan_entry_value(tag_name: str, graph: ProgramGraph) -> bool:
 
 
 def _has_instruction_snapshot_reader(program: Program, tag_name: str) -> bool:
-    """True when a timer or counter helper leg (reset, down) reads *tag_name*.
+    """Return True when a timer or counter helper leg (reset, down) reads *tag_name*.
 
     The legs read live, at the instruction's position in the solve, and the
     def-use chains order those reads like any other.  This stays a
@@ -3106,30 +3120,14 @@ def _has_instruction_snapshot_reader(program: Program, tag_name: str) -> bool:
     prior's view of them exact.  Drum and shift legs are not absorbed and are
     ordered by the def-use chains alone.
     """
-    from pyrung.core.analysis.pdg import _extract_tag_names
-    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.timers import OnDelayInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    for instr in walk_instructions(program):
-        conditions: list[Any] = []
-        if isinstance(instr, OnDelayInstruction):
-            conditions.append(instr.reset_condition)
-        elif isinstance(instr, CountUpInstruction):
-            conditions.extend((instr.reset_condition, instr.down_condition))
-        elif isinstance(instr, CountDownInstruction):
-            conditions.append(instr.reset_condition)
-        for condition in conditions:
-            if condition is not None and tag_name in _extract_tag_names(condition, {}):
-                return True
-    return False
+    return tag_name in _leg_reads(program).snapshot
 
 
 def _has_same_rung_branch_reader(
     tag_name: str,
     graph: ProgramGraph,
 ) -> bool:
-    """True if another node of the writer's own rung reads what an OTE wrote.
+    """Return True if another node of the writer's own rung reads what an OTE wrote.
 
     Rows solve in order, so such a reader sits below the writer and reads the
     value it just wrote.  A reader above the first write sees the scan-entry
@@ -3180,7 +3178,7 @@ _KIND_LABELS: dict[str, str] = {
 
 
 def _unmodeled_accumulators(program: Program) -> dict[str, str]:
-    """Accumulators of instructions the facts have no exact model for, by verb."""
+    """Return the accumulators of instructions the facts have no exact model for, by verb."""
     from pyrung.core.instruction.drums import TimeDrumInstruction, TimeEventDrumInstruction
     from pyrung.core.instruction.out_variants import (
         DebounceInstruction,
@@ -3272,7 +3270,7 @@ def _build_infeasible_hints(
 
 
 def _pointer_span(graph: ProgramGraph, name: str, start: int, end: int) -> tuple[int, int]:
-    """The pointer values of *name*'s first use that land in ``start..end``."""
+    """Return the pointer values of *name*'s first use that land in ``start..end``."""
     for use in graph.pointer_uses:
         if use.pointer == name:
             return use.pointer_span()
@@ -3619,17 +3617,17 @@ def _classify_dimensions_from_graph(
             continue
 
         if tag_name in unmodeled_accs:
-            # Its timing is not modeled: the carry (``_frac:``) is in no state
-            # key, so even a declared domain must not let PILOT track it as
-            # plain state.  It times whether or not anything reads it.
+            # The facts do not model its timing.  The carry (``_frac:``) is in no state
+            # key, so even a declared domain must not let PILOT track it as plain
+            # state.  It times whether or not anything reads it.
             if unclassified is not None:
                 unclassified.add(tag_name)
             else:
                 infeasible_tags.append(tag_name)
             continue
 
-        # An accumulator its own instruction reads back (a time & event drum's)
-        # carries across scans; only the paired ones above are absorbed.
+        # An accumulator that its own instruction reads back (a time & event drum's)
+        # carries across scans.  Only the paired ones above are absorbed.
         self_read = tag_name in graph.all_readers_of and tag_name not in done_by_acc
         if tag_name not in graph.readers_of and not self_read:
             # Read by nothing: no other tag's value depends on it.

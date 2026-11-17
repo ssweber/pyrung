@@ -1,10 +1,10 @@
-"""Writes through a pointer that list no targets, and the checks that read "no writer".
+"""Cover writes through a pointer that list no targets, and the checks that read "no writer".
 
 A write through a pointer with no declared bounds, into a block of more than 1000 elements
 (``_INDIRECT_BLOCK_CAP`` in pdg.py), names none of its targets.  ``writers_of`` leaves it
 out.  ``ProgramGraph.unlisted_writers_of`` names it for every element the pointer can
-reach, so no check reads such an element as a constant or an input.  The pointer reaches
-its power-on value and what its writers store, under their rungs' comparisons.
+reach, so no check reads such an element as a constant or an input.  A pointer can reach
+its power-on value and the values its writers store, under their rungs' comparisons.
 """
 
 from __future__ import annotations
@@ -158,7 +158,7 @@ def test_a_fill_window_reaches_every_element() -> None:
 
 
 def _acknowledge(read_at: int, *conditions: Any, pointer: Any = None) -> Program:
-    """The tumbler's write: ``math(Cmd * 10 + 2999, At)``, then a copy through ``At``."""
+    """Return a program with the tumbler's write: ``math(Cmd * 10 + 2999, At)``, then a copy."""
     big = Block("Ack", TagType.INT, 1, 4500)
     cmd = Int("Cmd", external=True)
     at = pointer if pointer is not None else Int("AckAt")
@@ -239,8 +239,8 @@ def test_a_branch_keeps_the_bounds_of_its_rung() -> None:
 
 def test_a_ladder_write_past_a_declared_bound_still_counts() -> None:
     # A CLICK stores 50 in At, past its max of 10.  pyrung stores it too and only reports it.
-    # A plain big[At] lists 0..10 by the declared bounds (_indirect_ref_tags), so this
-    # writes through an index expression, which lists no targets.
+    # A plain big[At] lists 0..10 from the declared bounds (_indirect_ref_tags). So
+    # this test writes through an index expression, which lists no targets.
     big = Block("Big", TagType.INT, 1, 2000)
     at = Int("BoundedAt", min=0, max=10)
     with Program(strict=False) as prog:
@@ -276,8 +276,9 @@ def _stamp(enabled: bool) -> dict[str, int]:
 
 
 def test_a_write_on_a_false_rung_gets_no_bound() -> None:
-    # run_enabled_function() writes its outs on every scan, its rung false or not.  So
-    # P >= 1, P <= 10 does not bound P when it writes, and P 500 stores into Big500.
+    # run_enabled_function() writes its outs on every scan, whether its rung is true or
+    # false.  So P >= 1, P <= 10 does not bound P when it writes.  P can be 500, and then
+    # it stores into Big500.
     big = Block("Big", TagType.INT, 1, 2000)
     p = Int("P", default=1)
     with Program(strict=False) as prog:

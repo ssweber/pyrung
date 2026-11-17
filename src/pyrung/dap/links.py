@@ -106,8 +106,10 @@ def build_coupling_locked(
 
 
 def same_wiring(a: Coupling, b: Coupling) -> bool:
-    """True when two couplings drive the same feedback the same way (names of the
-    physical device aside)."""
+    """Return True when two couplings drive the same feedback the same way.
+
+    The names of the physical device do not count.
+    """
     pa, pb = a.physical, b.physical
     return (
         a.en_name == b.en_name
@@ -118,7 +120,10 @@ def same_wiring(a: Coupling, b: Coupling) -> bool:
 
 
 def _response(physical: Physical) -> tuple[Any, ...]:
-    """The kind and its values, a time in ms, so ``1s`` matches ``1000ms`` and a missing delay 0."""
+    """Return the kind and its values, with each time in ms.
+
+    So ``1s`` matches ``1000ms``.  A missing time becomes 0, so it matches a time of 0.
+    """
     values: list[Any] = [physical.kind]
     for key in physical.kind_spec.keys:
         value = getattr(physical, key.name)
@@ -134,14 +139,14 @@ def _is_bit(adapter: Any, tag_name: str) -> bool:
 
 
 def enable_text(adapter: Any, coupling: Coupling) -> str:
-    """The enable as a ``link=`` value: ``Tag``, ``Tag:trigger`` or ``~Tag``."""
+    """Return the enable as a ``link=`` value: ``Tag``, ``Tag:trigger`` or ``~Tag``."""
     return format_link_spec(
         coupling.en_name, coupling.trigger_value, bit=_is_bit(adapter, coupling.en_name)
     )
 
 
 def physical_tokens(coupling: Coupling) -> list[str]:
-    """The ``LINK_KEYS`` tokens that describe *coupling*'s response."""
+    """Return the ``LINK_KEYS`` tokens that describe *coupling*'s response."""
     physical = coupling.physical
     tokens = physical.tokens()
     if physical.name != coupling.fb_name:
@@ -152,7 +157,7 @@ def physical_tokens(coupling: Coupling) -> list[str]:
 
 
 def link_command(adapter: Any, coupling: Coupling) -> str:
-    """The console command that creates *coupling* as a bench link."""
+    """Return the console command that creates *coupling* as a bench link."""
     return " ".join(
         ["link", coupling.fb_name, enable_text(adapter, coupling), *physical_tokens(coupling)]
     )
@@ -164,12 +169,14 @@ def link_command(adapter: Any, coupling: Coupling) -> str:
 
 
 def active_overrides(adapter: Any) -> dict[str, Coupling | None]:
-    """The bench entries the harness should run now."""
+    """Return the bench entries the harness should run now."""
     return _active(adapter._bench_links, adapter._bench_links_on)
 
 
 def bench_active(entry: BenchLink, bench_on: bool) -> bool:
-    """Whether the harness runs *entry*.  A disabled entry, or any entry with bench off, waits."""
+    """Return whether the harness runs *entry*.  A disabled entry waits, and so does any entry
+    while bench is off.
+    """
     return bench_on and entry.enabled
 
 
@@ -218,10 +225,11 @@ def fit_bench_links(
 ) -> tuple[dict[str, BenchLink], list[str]]:
     """Fit *bench_links* to a harness freshly installed on *runner* (launch, reload, replay).
 
-    Drops a bench link the program now declares the same way (it reached the
-    project), a cut whose declared link is gone, and a link that no longer
-    validates against the reloaded program.  Returns the bench links kept and a note
-    per dropped entry.  Each drop is also appended to *drops* (see :data:`BenchDrop`).
+    The function drops three kinds of bench link.  One is a link that the program now
+    declares the same way, because it reached the project.  Another is a cut whose declared
+    link is gone.  The last is a link that no longer validates against the reloaded
+    program.  It returns the bench links kept and a note per dropped entry.  It also
+    appends each drop to *drops* (see :data:`BenchDrop`).
     The adapter is not touched, so a reload can stage the fit and still back out.
     """
     declared = {c.fb_name: c for c in harness.declared()}
@@ -336,9 +344,9 @@ def _coupling_fields(coupling: Coupling) -> dict[str, Any]:
 
 
 def link_rows_locked(adapter: Any) -> list[dict[str, Any]]:
-    """Every program link and bench change, with whether it runs right now.
+    """Return every program link and bench change, with whether it runs right now.
 
-    Program rows have ``source="project"``; ``active`` is false while a bench
+    Program rows have ``source="project"``.  Their ``active`` flag is false while a bench
     change replaces or cuts them.  Bench rows have ``source="bench"``, their
     ``enabled`` flag, and ``cut=True`` for a cut (no enable or response).
     """

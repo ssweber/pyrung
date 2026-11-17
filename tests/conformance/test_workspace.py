@@ -1,9 +1,9 @@
-"""The ClickNick workspace export: unchanged rungs must not show up in Preview Changes.
+"""Check the ClickNick workspace export: unchanged rungs must not show up in Preview Changes.
 
-ClickNick diffs CLICK's ladder snapshot (``csv/``) against what the workspace's
-``src/plc/`` exports to.  So the source ``make conformance-workspace`` writes
-has to export back to the very CSVs the suite exports, byte for byte, or every
-rung would look changed.  No network.
+ClickNick compares CLICK's ladder snapshot (``csv/``) with the CSVs that the workspace's
+``src/plc/`` exports to. So the source that ``make conformance-workspace`` writes has to
+export back to the very CSVs that the suite exports, byte for byte. Otherwise every rung
+would look changed. The test needs no network.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from tests.conformance import suite
 
 
 def _load_plc_package(source: Path, name: str):
-    """Import a generated ``src/plc`` package under a unique *name*; return (main, tags)."""
+    """Import a generated ``src/plc`` package under a unique *name* and return (main, tags)."""
     spec = importlib.util.spec_from_file_location(
         name, source / "__init__.py", submodule_search_locations=[str(source)]
     )
@@ -35,7 +35,7 @@ def _load_plc_package(source: Path, name: str):
 
 @pytest.fixture
 def plc_package():
-    """Load generated packages, dropping them from ``sys.modules`` afterwards."""
+    """Provide a function that loads generated packages, then drop them from ``sys.modules``."""
     names: list[str] = []
 
     def load(source: Path):
@@ -63,9 +63,9 @@ def test_workspace_source_exports_byte_identical_ladder(tmp_path: Path, plc_pack
     source = program.export_workspace(workspace)
     main, tags = plc_package(source)
 
-    # The round trip of ClickNick's project_to_csv.py, except that it passes allow=:
-    # the script validates without it and refuses the suite's RAND probes.  The generated
-    # source reads SC40 in flag_probe through the raw sc block, a second identity for it.
+    # This is the round trip of ClickNick's project_to_csv.py, except that it passes allow=.
+    # The script validates without it and rejects the RAND probes of the suite. The generated
+    # source reads SC40 in flag_probe through the raw sc block, which is a second identity for it.
     out = tmp_path / "roundtrip"
     pyrung_to_ladder(
         main.logic, tags.mapping, allow=(*PASTE_PROBE_FINDINGS, "CLK_ADDRESS_IDENTITY_CONFLICT")

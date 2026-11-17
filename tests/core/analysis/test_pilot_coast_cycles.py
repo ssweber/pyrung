@@ -1,4 +1,4 @@
-"""A coast under an oscillation, a read clock or a pilot hold, against stepping."""
+"""Check that a coast matches stepping under an oscillation, a read clock or a pilot hold."""
 
 from __future__ import annotations
 
@@ -36,9 +36,9 @@ def _active_hold_soak(soak_ms: int = 5000, wd_ms: int = 200) -> Program:
 
     ``Soak`` ramps unconditionally to ``soak_ms`` and sets ``Done``.  ``WD`` is an
     RTON watchdog that counts whenever ``Osc`` is False and resets when ``Osc`` is
-    True — so it only stays reset (never trips) if ``Osc`` keeps oscillating.  That
-    is the active-hold soak: a long dwell whose health depends on a sub-cycle that
-    must run every scan, exactly the burner rotate case in miniature.
+    True.  So ``WD`` stays reset and never trips only if ``Osc`` keeps oscillating.
+    This is the active-hold soak: a long dwell that stays healthy only if a sub-cycle
+    runs every scan.  It is the burner rotate case in miniature.
     """
     Osc = Bool("Osc")
     Soak = Timer.clone("Soak")
@@ -115,7 +115,7 @@ class TestBitEqual:
         assert folded.state.tags == ref.state.tags
 
     def test_a_self_calc_soak_lands_as_stepped(self) -> None:
-        # A per-scan soak: a self-calc (a counter counts edges, not scans).
+        # The soak is a per-scan self-calc, because a counter counts edges, not scans.
         Soak = Dint("LayeredReceipt")
         SoakDone = Bool("LayeredReceiptDone")
         with Program() as program:
@@ -138,13 +138,13 @@ class TestBitEqual:
         assert plc.state.tags == ref.state.tags
 
     def test_landing_is_bit_equal_to_scan_by_scan(self) -> None:
-        # Reference: pure scan-by-scan (jit=False), oscillation running.
+        # Reference run: pure scan-by-scan (jit=False) with the oscillation running.
         ref = PLC(_active_hold_soak())
         ref.step()
         ref.run_until(lambda s: s.tags.get("Done") is True, max_cycles=20000, jit=False)
         assert ref.state.tags.get("Done") is True
 
-        # In the loop, from the same setup.
+        # Run the loop from the same setup.
         cf = PLC(_active_hold_soak())
         cf.step()
         stats: dict[str, int] = {}
@@ -156,22 +156,22 @@ class TestBitEqual:
         )
 
         assert reached is True
-        # Bit-equal final state: every tag, the scan id, and the timestamp.
+        # The final state must be bit-equal: every tag, the scan id and the timestamp.
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
         assert cf.state.timestamp == ref.state.timestamp
-        # And it got there in the loop, in a tiny fraction of the interpreted scans.
+        # The loop must also get there in a tiny fraction of the interpreted scans.
         assert stats["stretches"] >= 1
         assert stats["kernel_scans"] < ref.state.scan_id // 10
         assert stats["logical_scans"] == cf.state.scan_id - 1
         assert stats["stretched_scans"] == stats["logical_scans"] - stats["kernel_scans"]
 
     def test_watchdog_never_trips_in_the_loop(self) -> None:
-        # The loop must NOT let the kept-reset watchdog accumulate.
+        # The loop must not let the watchdog accumulate while it is being kept reset.
         cf = PLC(_active_hold_soak(soak_ms=5000, wd_ms=200))
         cf.step()
         coast_until(cf, lambda s: s.tags.get("Done") is True, budget=20000)
-        # WD stayed reset throughout (acc never approached its 200 ms preset).
+        # WD stayed reset throughout. Its acc never approached its 200 ms preset.
         assert cf.state.tags.get("WD") in (None, False)
 
     def test_subtick_timer_progress_lands_as_stepped(self) -> None:
@@ -247,8 +247,11 @@ class TestBitEqual:
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
     def test_drum_reading_another_step_than_the_boundary_shows(self, kind: str) -> None:
-        """Writers above and below have the drum time step 2's 500 ms while every
-        boundary shows step 3's 200 ms, which it is already past."""
+        """Check a drum that times step 2's preset while every scan boundary shows step 3.
+
+        A rung above the drum writes 2 to its step, and a rung below writes 3.  Step 2's preset
+        is 500 ms.  The drum's accumulator is already past step 3's 200 ms preset.
+        """
         Long = Timer.clone("Long")
         Step = Int("DrumStep")
         Acc = Int("DrumAcc")
@@ -346,10 +349,10 @@ class TestBitEqual:
 def _oscillation_fed_counter(
     preset: int, *, read_above: bool = False, with_clock: bool = False, period3: bool = False
 ) -> tuple[Program, Counter]:
-    """A counter counting the rising edges of a free-running oscillation.
+    """Build a counter that counts the rising edges of a free-running oscillation.
 
-    Each rise is one count, one count a period.  A watchdog reset by the oscillation keeps
-    a timer moving beside it.
+    Each rise is one count, so the counter adds one count a period.  A watchdog that the
+    oscillation resets keeps a timer moving beside the counter.
     """
     Osc, A = Bool("Osc"), Bool("A")
     C = Counter.clone("CfC")
@@ -359,7 +362,7 @@ def _oscillation_fed_counter(
             with Rung(C.Acc >= preset - 3):
                 latch(Bool("Hit"))
         if period3:
-            # On one scan in three.
+            # The pulse is on for one scan in three.
             with Rung(~Osc, ~A):
                 out(A)
             with Rung(A):
@@ -378,8 +381,11 @@ def _oscillation_fed_counter(
 
 
 class TestEdgeCounter:
-    """A counter counts the rises of its input: under an oscillation it moves
-    one count a period, and a coast lands it where stepping does."""
+    """Checks a counter under an oscillation.
+
+    The counter counts the rises of its input, so it moves one count a period.  A coast
+    lands it where stepping does.
+    """
 
     @pytest.mark.parametrize(
         ("preset", "kw"),
@@ -410,11 +416,11 @@ class TestEdgeCounter:
 
 
 def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
-    """An active-hold soak whose period is forced wide by a read system clock.
+    """Build an active-hold soak whose period a read system clock forces wide.
 
-    The soak is a self-calc (``+1``/scan) so it can reach long dwells
-    without the 32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``
-    (full period 1 s = 100 scans at the default dt).
+    The soak is a self-calc (``+1``/scan), so it can reach long dwells without the
+    32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``, whose full period
+    is 1 s, or 100 scans at the default dt.
     """
     Osc = Bool("Osc")
     Ctr = Dint("Ctr")
@@ -449,14 +455,14 @@ class TestAcrossClocks:
         reached = coast_until(cf, lambda s: s.tags.get("Done") is True, budget=200000, stats=stats)
 
         assert reached is True
-        # Bit-equal across the clock — including Blink (clock phase preserved).
+        # The state must be bit-equal across the clock, including Blink and its clock phase.
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
         assert cf.state.tags.get("Blink") == ref.state.tags.get("Blink")
         assert stats["stretches"] >= 1
 
     def test_value_scales_with_soak_length(self) -> None:
-        # A 10x longer soak costs roughly the same interpreted scans.
+        # A 10x longer soak must cost roughly the same number of interpreted scans.
         def run(soak_counts: int) -> int:
             cf = PLC(_clocked_active_hold_soak(soak_counts=soak_counts))
             cf.step()
@@ -472,8 +478,10 @@ class TestAcrossClocks:
 
 
 def _rtc_reader_cycle_program() -> Program:
-    """A period-2 oscillation beside an unconditional reader of the RTC second
-    and a rung that latches on its value: a coast must not miss a tick."""
+    """Build a period-2 oscillation beside an unconditional reader of the RTC second.
+
+    A rung latches on the value of that second.  A coast must not miss a tick.
+    """
     from pyrung import copy, latch, math
 
     Sec = Int("RcSec")
@@ -519,7 +527,7 @@ class TestRtcTicks:
         assert folded.state.tags == ref.state.tags
 
     def test_cause_answers_a_loop_scan_as_stepping_does(self) -> None:
-        """A question about a scan inside a stretch answers as stepping does."""
+        """Check that a question about a scan inside a stretch gets the answer stepping gives."""
         stepped = self._plc()
         for _ in range(6_000):
             stepped.step()
@@ -535,15 +543,17 @@ class TestRtcTicks:
 def _clock_mirror_cycle_program(
     *, live_stamp: bool = False, continued: bool = False, continued_live: bool = False
 ) -> Program:
-    """A period-2 oscillation, a ``clock_1s`` contact (so a cycle spans whole
-    seconds and every observed window holds an RTC tick), clock mirrors with an
-    off history logger, and a 20 s timer.
+    """Build a program with a period-2 oscillation, a ``clock_1s`` contact and a 20 s timer.
 
-    *live_stamp* adds a reader of the half-minute while ``CmStopped``;
-    *continued* adds a branch on a ``continued()`` rung that reads a mirror
-    behind ``X == 0``, written 1 on the rung above.  A continued rung reads
-    live, so the branch is off where it stands (it was on when it read the
-    earlier rung's snapshot); *continued_live* makes it ``X == 1``, on there.
+    The ``clock_1s`` contact makes a cycle span whole seconds, so every observed window
+    holds an RTC tick.  The program also has clock mirrors with an off history logger.
+
+    *live_stamp* adds a reader of the half-minute while ``CmStopped``.
+
+    *continued* adds a branch on a ``continued()`` rung.  The branch reads a mirror
+    behind ``X == 0``, which the rung above writes as 1.  A continued rung reads live,
+    so the branch is off.  It was on when it read the earlier rung's snapshot.
+    *continued_live* makes the branch ``X == 1``, which is on.
     """
     from pyrung import Or, branch, copy, math
 
@@ -595,7 +605,7 @@ def _clock_mirror_cycle_program(
 
 
 def _assert_history_matches(folded: PLC, ref: PLC) -> None:
-    """Every scan the folded run's history serves equals the stepped run's."""
+    """Check that each scan the folded run's history serves equals the stepped run's."""
     served = sorted(sid for sid in folded._recent_state_cache if sid <= folded.state.scan_id)
     assert served
     for sid in served:
@@ -605,7 +615,7 @@ def _assert_history_matches(folded: PLC, ref: PLC) -> None:
 
 
 class TestClockMirrors:
-    """Clock mirrors, with their readers on and off: a coast must never leave one stale."""
+    """Checks clock mirrors with readers on and off.  A coast must never leave one stale."""
 
     @staticmethod
     def _plc(prog: Program, **patch: object) -> PLC:
@@ -682,10 +692,12 @@ class TestClockMirrors:
 
     @pytest.mark.parametrize("budget", [400, 1_500, 3_000])
     def test_continued_branch_off_where_it_stands(self, budget: int) -> None:
-        """A continued rung reads live (the row solve), so a branch behind
-        ``X == 0`` under ``copy(1, X)`` never runs, though it was on when a
-        continued rung read the earlier rung's snapshot.  Its mirror reader is
-        dead, and the coast equals stepping, history included."""
+        """Check a branch behind ``X == 0`` under ``copy(1, X)``.
+
+        A continued rung reads live (the row solve), so the branch never runs.  It was on
+        when a continued rung read the earlier rung's snapshot.  Its mirror reader is
+        dead, and the coast equals stepping, history included.
+        """
         ref = self._stepped(_clock_mirror_cycle_program(continued=True), budget)
         plc = self._plc(_clock_mirror_cycle_program(continued=True))
         stats: dict[str, int] = {}
@@ -723,7 +735,7 @@ class TestClockMirrors:
     def test_predicate_that_may_read_a_copy_keeps_ticks_hard(
         self, declared: frozenset[str] | None
     ) -> None:
-        """A predicate reading a clock copy must see every second it shows."""
+        """Check that a predicate reading a clock copy sees every second the copy shows."""
 
         def stop(s: Any) -> bool:
             return s.tags.get("CmSec") == 55
@@ -741,7 +753,7 @@ class TestClockMirrors:
 
 
 class TestAcrossAClamp:
-    """A coast across a timer's clamp lands on the tip where stepping does."""
+    """Checks that a coast across a timer's clamp lands on the same tip as stepping."""
 
     @pytest.mark.parametrize("unit", ["s", "ms"])
     def test_budget_end_matches_stepping(self, unit: str) -> None:
@@ -773,10 +785,11 @@ class TestAcrossAClamp:
 
 
 class TestReadsTheIntegerAccumulator:
-    """A rung reads a timer's integer accumulator, not its fractional progress:
-    a seconds timer at 2.07 s reads 2, so ``Acc > 2`` is still ahead of it and
-    must end the stretch (the tumbler's rotate step transition went 11 scans late
-    when it did not)."""
+    """Checks that a rung reads a timer's integer accumulator, not its fractional progress.
+
+    A seconds timer at 2.07 s reads 2.  So ``Acc > 2`` is still ahead of it and must end
+    the stretch.  Without that, the tumbler's rotate step transition came 11 scans late.
+    """
 
     @pytest.mark.parametrize(("form", "k"), [("gt", 2), ("ge", 3), ("eq", 3)])
     def test_comparison_on_a_seconds_timer_flips_where_stepping_does(
@@ -822,7 +835,7 @@ def _coast_and_step(
     force: tuple[str, Any] | None = None,
     react: Any = None,
 ) -> tuple[PLC, PLC, dict[str, int]]:
-    """The same run in a coast and stepped; a ``react`` runs every scan."""
+    """Run the same program in a coast and stepped.  A ``react`` runs every scan."""
 
     def make() -> PLC:
         plc = PLC(build(), dt=0.010)
@@ -850,8 +863,10 @@ def _assert_same_tags(plc: PLC, ref: PLC) -> None:
 
 
 class TestDrumStep:
-    """A drum reads its preset from the step it sees, which may not be the step a scan
-    boundary shows."""
+    """Checks a drum that reads its preset from the step it sees.
+
+    That step may not be the step a scan boundary shows.
+    """
 
     @staticmethod
     def _program(
@@ -950,8 +965,10 @@ class TestDrumStep:
 
 
 class TestWrittenInputs:
-    """The same read, with the tag written around it: a scan boundary shows one value, and
-    the reader reads another."""
+    """Checks the same read with the tag written around it.
+
+    A scan boundary shows one value, and the reader reads another.
+    """
 
     @staticmethod
     def _timer(above: int | None, below: int | None, comparison: bool = False) -> Any:
@@ -1011,7 +1028,11 @@ class TestWrittenInputs:
 
     @pytest.mark.parametrize("first", [(200, 5000), (5000, 200)], ids=["low", "high"])
     def test_an_operand_that_alternates_through_the_period(self, first: tuple[int, int]) -> None:
-        """Two writers, one per phase of the cycle: every boundary but one phase lies."""
+        """Check two writers of the preset, one for each phase of the cycle.
+
+        The preset that a scan boundary shows is not the preset that the timer reads on the
+        next scan.
+        """
 
         def build() -> Program:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
@@ -1066,8 +1087,10 @@ class TestWrittenInputs:
 
 
 class TestInputWrites:
-    """A tag a rung may read between writes, written directly, through a pointer, or only
-    on some scans of an oscillation."""
+    """Checks a tag that a rung may read between writes.
+
+    The tag is written directly, through a pointer, or only on some scans of an oscillation.
+    """
 
     BIG = Block("CwBig", TagType.INT, 1, 2000)
 
@@ -1077,7 +1100,10 @@ class TestInputWrites:
         below: int | None = None,
         writer_on: bool = False,
     ) -> Any:
-        """A 2-scan cycle with a preset in a block a rung writes through a pointer."""
+        """Return a builder for a 2-scan cycle that reads a timer preset from a block.
+
+        A rung writes that block through a pointer.
+        """
 
         def build() -> Program:
             Big = TestInputWrites.BIG
@@ -1150,7 +1176,7 @@ class TestInputWrites:
 
     @staticmethod
     def _gated(above: str, below: str) -> Any:
-        """A cycle with writers around the reader, on the toggle's phases."""
+        """Return a builder for a cycle with writers around the reader, on the toggle's phases."""
 
         def build() -> Program:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
@@ -1210,8 +1236,10 @@ class TestInputWrites:
 
     @staticmethod
     def _mirror_program() -> Program:
-        """Clock mirrors, an indirect writer that stores one when asked, and a preset
-        in the block it writes: the writer's cone reaches the mirrors."""
+        """Build clock mirrors, an indirect writer and a preset in the block that it writes.
+
+        The indirect writer stores a mirror when asked.  The writer's cone reaches the mirrors.
+        """
         Big = TestInputWrites.BIG
         Tog, T, Hit = Bool("Tog"), Timer.clone("T"), Bool("Hit")
         Sec, Blink, Cmd, Ptr = Int("CwSec"), Bool("Blink"), Bool("Cmd"), Int("Ptr")

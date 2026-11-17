@@ -1,4 +1,4 @@
-"""Counters over the jit, for finding where a long run's scans go.
+"""Count what the jit does, to find where a long run's scans go.
 
     from pyrung.core import jit_stats
 
@@ -6,11 +6,11 @@
         plc.run_for(60)
     print(stats.report())
 
-They count where the scans ran and why a run stayed out of the guarded loop.  They also count
-which guard sent the run out of the loop, and what compiling, tracing and the loop itself cost.
-A stretch is a run of scans in the loop with no other scan between them.  Nothing is counted
-until something asks, and then only per run, per stretch, per call of the loop and per trace,
-never per scan.
+The counters record where the scans ran and why a run stayed out of the guarded loop. They
+also record which guard sent the run out of the loop, and what compiling, tracing and the
+loop itself cost. A stretch is a run of scans in the loop with no other scan between them.
+Nothing is counted until you ask. Then the counters count only per run, per stretch, per
+call of the loop and per trace, and never per scan.
 
 Set ``PYRUNG_JIT_STATS`` to a file name to count over a whole process, such as a script or a
 pytest run.  The process appends the report to that file when it exits.  ``-`` writes it to
@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-#: The collectors counting now.  The jit asks this before it counts anything.
+#: The collectors that are counting now. The jit checks this before it counts anything.
 ACTIVE: list[JitStats] = []
 
 
@@ -37,9 +37,9 @@ class JitStats:
     def __init__(self) -> None:
         # Calls of run_for()/run_until() and coast_until(), by kind.
         self.calls: Counter[str] = Counter()
-        # Scans by where they ran.  "self check" counts the compiled scans that check a new
-        # trace, which are work and not committed scans.  "undone" counts the scans a compiled
-        # run took back when a scan raised or left its bounds.
+        # Scans by where they ran. "self check" counts the compiled scans that check a new
+        # trace. Those are work and not committed scans. "undone" counts the scans that a
+        # compiled run took back when a scan raised or left its bounds.
         self.scans: Counter[str] = Counter()
         # Each reason a run, an attempt or a trace stayed out of the loop.
         self.declines: Counter[str] = Counter()
@@ -74,7 +74,7 @@ class JitStats:
         entry[2] += could
 
     def as_dict(self) -> dict[str, Any]:
-        """The counts in plain types, to compare or to store."""
+        """Return the counts in plain types, to compare or to store."""
         return {
             "calls": dict(self.calls),
             "scans": dict(self.scans),
@@ -89,7 +89,10 @@ class JitStats:
         }
 
     def report(self) -> str:
-        """The counts as text, ASCII except for tag names in kernel source lines."""
+        """Return the counts as text.
+
+        The text is ASCII except for tag names in kernel source lines.
+        """
         lines = ["jit counters"]
         if self.calls:
             lines.append(
@@ -187,9 +190,9 @@ def add_cost(name: str, seconds: float) -> None:
 class Run:
     """One call's stretches.
 
-    A stretch could have run on to the call's next failed guard or to the call's end.  Each
-    stretch waits for one of them.  The collectors get the stretches when the call ends, so a
-    scan the call takes back is not counted.
+    A stretch could have run on to the next failed guard of the call or to the end of the
+    call. Each stretch waits for one of them. The collectors receive the stretches when
+    the call ends, so a scan that the call takes back is not counted.
     """
 
     def __init__(self, kind: str) -> None:
@@ -200,15 +203,21 @@ class Run:
             stats.calls[kind] += 1
 
     def stretch(self, first: int, used: int, left_by: str, *, guard_failed: bool) -> None:
-        """A stretch ran *used* scans from scan *first*.  *guard_failed* says the next scan
-        took another path, so no stretch before it could have run past it."""
+        """Record a stretch that ran *used* scans from scan *first*.
+
+        *guard_failed* is True when the next scan took another path. Then no stretch
+        before it could have run past it.
+        """
         self.loop_scans += used
         self._stretches.append([first, used, left_by, None])
         if guard_failed:
             self._settle(first + used)
 
     def undo(self, last: int) -> None:
-        """The call took back every scan after scan *last*, to run them again interpreted."""
+        """Record that the call took back every scan after scan *last*.
+
+        The call runs those scans again, interpreted.
+        """
         kept = []
         for stretch in self._stretches:
             first, used = stretch[0], stretch[1]
@@ -223,7 +232,7 @@ class Run:
         self._stretches = kept
 
     def end(self, next_scan: int) -> None:
-        """The call ended before scan *next_scan*."""
+        """Record that the call ended before scan *next_scan*."""
         self._settle(next_scan)
         if self.loop_scans:
             add_scans("loop", self.loop_scans)

@@ -1,4 +1,5 @@
-"""What the debugger knows of a slot a range reaches, named outside the rungs.
+"""Check what the debugger knows of a slot that a range reaches and that the user names
+outside the rungs.
 
 The adapter's readers know a slot the rungs reach, whether or not the user's code names it.
 """

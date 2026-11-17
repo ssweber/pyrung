@@ -1,4 +1,4 @@
-"""A comparison goal on a tag the program writes: how() looks at what its writers write."""
+"""Check that how() looks at what the writers of a tag write, for a comparison goal on that tag."""
 
 from __future__ import annotations
 
@@ -116,7 +116,8 @@ def test_a_threshold_on_a_count_is_reached_by_counting(
     assert plan.status is PlanStatus.REACHED, plan.reason
     assert plan.fork.state.tags["Go"] is True
     assert compare(plan.replay().state.tags["Count"], bound)
-    # The trace names Go for every comparison.  An == goal still reaches only through the last resort.
+    # The trace names Go for every comparison.  An == goal still reaches only through the last
+    # resort.
     if compare is not operator.eq:
         assert plan.last_resort is None
 

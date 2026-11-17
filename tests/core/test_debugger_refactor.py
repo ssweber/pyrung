@@ -120,8 +120,8 @@ def test_forloop_handler_emits_nested_child_instruction_steps() -> None:
 
 
 def test_forloop_handler_runs_no_iteration_for_a_non_finite_count() -> None:
-    """A REAL count holding Inf runs no iteration and sets SC43 when stepped
-    through the debugger, as in a plain scan."""
+    """A REAL count that holds Inf runs no iteration and sets SC43 when stepped through the
+    debugger, as in a plain scan."""
     pulse = Bool("Pulse")
     count = Real("Count")
 
@@ -165,9 +165,9 @@ def _rise_x_shown(events: Any) -> list[tuple[str, Any]]:
 
 
 def test_forloop_handler_shows_a_bare_body_edge_leg_as_the_engine_scans_it() -> None:
-    """A bare body instruction with an edge leg is a row of its own: the debugger
-    traces its helper leg on that row's view, so rise() shows true on the first
-    iteration only, as the engine fires it."""
+    """A bare body instruction with an edge leg is a row of its own.  The debugger traces
+    the helper leg on that row's view, so rise() shows true on the first iteration only,
+    as the engine fires it."""
     logic = _bare_body_edge_reset_program()
 
     def staged() -> PLC:

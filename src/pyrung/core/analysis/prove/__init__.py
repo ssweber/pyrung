@@ -1,9 +1,9 @@
 """Static facts about a pyrung program, for how() and the validators.
 
-``_build_prior_facts`` classifies each tag as state, input or neither, gives it
-the values it can take, and names what PILOT's world key tracks.  It runs no
-search and proves nothing.  PILOT steers with the facts, and each plan it
-returns is checked by running the PLC.
+``_build_prior_facts`` classifies each tag as state, input or neither. It gives each tag
+the values it can take, and it names what PILOT's world key tracks. It runs no
+search and proves nothing. PILOT steers with the facts, and running the PLC checks each
+plan that PILOT returns.
 """
 
 from __future__ import annotations
@@ -27,5 +27,5 @@ def _build_prior_facts(
     dt: float = 0.010,
     compiled: CompiledKernel | None = None,
 ) -> _PriorFacts | Intractable:
-    """Build the value domains and state names how() steers with."""
+    """Build the value domains and state names that how() steers with."""
     return _run_prior_pipeline(_PassContext(program=program, dt=dt, compiled=compiled))

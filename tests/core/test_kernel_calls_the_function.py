@@ -1,4 +1,4 @@
-"""An in-process kernel calls the ``run_function`` itself: nothing is copied, so nothing differs."""
+"""An in-process kernel calls the ``run_function`` itself. Nothing is copied, so nothing differs."""
 
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def _hand_set_defaults():
     def d(v, a=1, b=2):
         return {"out": a * 10 + b}
 
-    d.__defaults__ = (1,)  # Now a is required, b is 1: the text says otherwise.
+    d.__defaults__ = (1,)  # Now a is required and b is 1, though the source says otherwise.
     return d
 
 

@@ -1,9 +1,9 @@
 """What a stop predicate reads.
 
-A coast may run scans without judging its predicate only while nothing the
-predicate read changes, so it has to know what that is.  A condition says
-(:func:`_extract_condition_reads`).  A callable is judged once on a state whose
-field and tag reads are recorded (:func:`_traced_call`).
+A coast may run scans without judging its predicate only while nothing that the
+predicate read changes, so the coast has to know what the predicate reads.  A condition
+says so itself (:func:`_extract_condition_reads`).  For a callable, the coast judges it
+once on a state that records the field and tag reads (:func:`_traced_call`).
 """
 
 from __future__ import annotations
@@ -22,14 +22,16 @@ if TYPE_CHECKING:
 
 
 def _extract_condition_reads(condition: Any) -> frozenset[str]:
-    """Every tag name a ``run_until`` condition reads, regardless of form.
+    """Return every tag name that a ``run_until`` condition reads, whatever its form.
 
-    Bare contacts and bare tags, ``rise``/``fall`` edges, comparison left sides, tag
-    operands on comparison right sides, and both legs of ``ArithAtom`` compounds.  A
-    junk name (a Char *value* operand that happens to be a string) is harmless: it
-    only makes a caller watch one name more.  A condition this cannot see into (an
-    indirect or expression comparison) gives a junk name in place of what it reads:
-    a caller that relies on the set being whole asks :func:`_exact_condition_reads`.
+    The names come from bare contacts and bare tags, ``rise``/``fall`` edges, the left side
+    of a comparison, tag operands on the right side of a comparison, and both legs of
+    ``ArithAtom`` compounds.  A junk name, such as a Char *value* operand that happens to be
+    a string, is harmless.  It only makes a caller watch one name more.
+
+    This function cannot see into an indirect or expression comparison.  For one, it returns
+    a junk name in place of what the comparison reads.  A caller that needs the whole set
+    of reads calls :func:`_exact_condition_reads`.
     """
     from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Or, _condition_to_expr
     from pyrung.core.condition import _as_condition
@@ -63,12 +65,12 @@ def _extract_condition_reads(condition: Any) -> frozenset[str]:
 
 
 def _exact_condition_reads(condition: Any) -> frozenset[str] | None:
-    """The tags a condition reads, or None if it reads anything it does not name.
+    """Return the tags that a condition reads, or None if it reads anything it does not name.
 
     A coast runs on while what its predicate reads holds still, so a read missing here
-    runs it past the stop.  An indirect comparison reads a pointer and the slot it
-    selects, and an expression reads its terms; None sends the caller to
-    :func:`_traced_call`, which records them.
+    runs the coast past the stop.  An indirect comparison reads a pointer and the slot that
+    it selects.  An expression reads its terms.  When this function returns None, the caller
+    uses :func:`_traced_call`, which records those reads.
     """
     return _extract_condition_reads(condition) if _names_every_read(condition) else None
 
@@ -101,7 +103,7 @@ def _names_every_read(condition: Any) -> bool:
     if isinstance(condition, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
         value = condition.value
         if isinstance(value, Tag):
-            return not value.readonly  # lowers to its default, dropping the name
+            return not value.readonly  # a read-only tag lowers to its default, dropping the name
         return value is None or isinstance(value, (bool, int, float, str))
     return False
 
@@ -109,10 +111,10 @@ def _names_every_read(condition: Any) -> bool:
 class _Traces(threading.local):
     """The reads of each stop predicate being judged, a stack for each thread.
 
-    A run judges a predicate it can't see into on a state that records each field
-    and tag read.  The run may skip judging it only while nothing the predicate read
-    changes.  Each thread has its own stack, so one thread's predicate never records
-    another thread's reads.
+    A run judges a predicate that it cannot see into on a state that records each field
+    and tag read.  The run may skip judging the predicate only while nothing that the
+    predicate read changes.  Each thread has its own stack, so one thread's predicate never
+    records another thread's reads.
     """
 
     def __init__(self) -> None:
@@ -125,7 +127,7 @@ _FIELD_READ = ":"  # prefix of a state field read (scan_id, timestamp, memory)
 
 
 def _whole_map_read(name: str) -> Any:
-    """A property for what every read of a map goes through: reading it is a read of all of it."""
+    """Return a property that records a read of the whole map whenever the map is read."""
 
     def get(self: Any) -> Any:
         if traces := _TRACES.stack:
@@ -136,18 +138,19 @@ def _whole_map_read(name: str) -> Any:
 
 
 def _key_read(key: Any) -> Any:
-    """The name a key reads, whatever a ``str`` subclass says it is when printed."""
+    """Return the name that a key reads, whatever a ``str`` subclass prints for it."""
     return str.__str__(key) if isinstance(key, str) else key
 
 
 class _TracedTags(PMap):
     """A tag map that records which keys are read while a trace is active.
 
-    A key read through the two methods here is recorded as that key.  Anything else that
-    reads the map (iterating, counting, comparing, hashing, evolving, ``PMap.__getitem__``
-    named directly, ``_buckets`` by name) goes through the two properties below, and that
-    is a read of the whole map.  ``PMap``'s own slots stay empty, so a read past the
-    properties raises, and a predicate that lets the raise out keeps the coast interpreted.
+    A read through the two methods here is recorded as a read of that key.  Anything else
+    that reads the map goes through the two properties below, and that counts as a read of
+    the whole map.  Examples are iterating, counting, comparing, hashing, evolving, naming
+    ``PMap.__getitem__`` directly and naming ``_buckets``.  ``PMap``'s own slots stay empty,
+    so a read that gets past the properties raises an error.  If a predicate lets the error
+    out, the coast stays interpreted.
     """
 
     __slots__ = ("_untraced",)
@@ -171,7 +174,7 @@ _TracedTags.__name__ = _TracedTags.__qualname__ = PMap.__name__
 
 
 def _recorded_field(name: str) -> Any:
-    """A property that records each read of a field of the state being traced."""
+    """Return a property that records each read of a field of the state being traced."""
     read = _FIELD_READ + name
 
     def get(self: Any) -> Any:
@@ -185,22 +188,23 @@ def _recorded_field(name: str) -> Any:
 class _TracedState(SystemState):
     """A SystemState whose field reads (and tag reads) are recorded.
 
-    Every read through the state and map API is recorded: attributes, subscripts,
-    ``items()``, equality, hashing, ``repr``, copying and evolving all come through these
-    properties or the recording tag map in the ``tags`` slot.  The ``scan_id``,
-    ``timestamp`` and ``memory`` slots stay empty, so a read past the properties raises,
-    and a predicate that lets the raise out keeps the coast interpreted.
+    The state API and the map API both record every read.  Attributes, subscripts,
+    ``items()``, equality, hashing, ``repr``, copying and evolving all go through these
+    properties or through the recording tag map in the ``tags`` slot.  The ``scan_id``,
+    ``timestamp`` and ``memory`` slots stay empty, so a read that gets past the properties
+    raises an error.  If a predicate lets the error out, the coast stays interpreted.
 
-    The state and map answer ``__class__`` and ``__name__`` as the real ones do.
+    The state and the map answer ``__class__`` and ``__name__`` as the real ones do.
 
-    An accepted limit: a predicate can overshoot a coast if it branches on the exact type or
-    identity of the state or map (``type(s) is SystemState``), names the trace's own
-    ``_untraced``, or catches the AttributeError of a slot descriptor.  The trace does not see
-    what these read on a real state.  Lockstep catches them under ``--fold-check``.
+    There are two limits that the trace accepts.  First, a predicate can overshoot a coast
+    in three cases.  It branches on the exact type or identity of the state or map
+    (``type(s) is SystemState``).  It names the trace's own ``_untraced``.  It catches the
+    AttributeError of a slot descriptor.  The trace does not see what these read on a real
+    state.  Lockstep catches them under ``--fold-check``.
 
-    A second accepted limit, which lockstep does not catch: a predicate reading ``plc.playhead``
-    can overshoot too.  It moves with the scans and is no read of a state, and a twin asked the
-    same predicate reads the real runner's playhead where the run landed.
+    Second, a predicate that reads ``plc.playhead`` can also overshoot, and lockstep does not
+    catch it.  The playhead moves with the scans and is not a read of a state.  A twin that
+    is asked the same predicate reads the real runner's playhead, where the run landed.
     """
 
     __slots__ = ("_untraced",)
@@ -211,12 +215,13 @@ class _TracedState(SystemState):
     memory = _recorded_field("memory")
 
     def __new__(cls, **fields: Any) -> Any:
-        # What ``copy`` and ``type(s)(...)`` make: a plain state, from fields they read.
+        # ``copy`` and ``type(s)(...)`` call this.  They make a plain state from fields that
+        # they have read.
         return SystemState(**fields)
 
     def scanned(self, scan_id: int, timestamp: float, tags: PMap, memory: PMap) -> SystemState:
-        # The same check as the base, then a plain state: these comparisons record the
-        # fields, and a read of the result is a read of values already recorded.
+        # Make the same check as the base class, then return a plain state.  These comparisons
+        # record the fields, so a read of the result reads values that are already recorded.
         if (
             scan_id is self.scan_id
             and timestamp is self.timestamp
@@ -234,7 +239,7 @@ _put_untraced_map: Any = cast(Any, _TracedTags)._untraced.__set__
 
 
 def _traced_state(state: SystemState) -> _TracedState:
-    """A state answering as *state* does, recording what is read of it."""
+    """Return a state that answers as *state* does and records what is read from it."""
     tags = object.__new__(_TracedTags)
     _put_untraced_map(tags, state.tags)
     traced = object.__new__(_TracedState)
@@ -247,9 +252,9 @@ def _traced_state(state: SystemState) -> _TracedState:
 def _reads_untraced() -> Iterator[None]:
     """Keep the reads inside the block out of the active trace.
 
-    For a predicate whose contract is to be judged only on the scans a coast
-    really executes (PILOT's opaque ``avoid=`` callables): its reads must not
-    bound the windows that skip the others.
+    Use this for a predicate that a coast judges only on the scans it really executes.
+    PILOT's opaque ``avoid=`` callables are like this.  Their reads must not bound the
+    windows that skip the other scans.
     """
     _TRACES.stack.append(set())
     try:
@@ -261,10 +266,10 @@ def _reads_untraced() -> Iterator[None]:
 def _traced_call(
     predicate: Callable[[SystemState], bool], runner: PLC
 ) -> tuple[bool, frozenset[str]]:
-    """``predicate(runner.state)`` and every tag (or state field) it read.
+    """Return ``predicate(runner.state)`` and every tag or state field that it read.
 
-    The tip itself is swapped for the traced state during the call, so a
-    predicate that reads ``plc.state`` instead of its argument is traced too.
+    During the call, the runner's tip is swapped for the traced state.  So the trace also
+    covers a predicate that reads ``plc.state`` instead of its argument.
     """
     state = runner._state
     traced = _traced_state(state)

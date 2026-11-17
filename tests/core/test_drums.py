@@ -131,15 +131,15 @@ def test_event_drum_paused_takes_jump_jog_and_reset_without_writing_outputs(
     assert runner.current_state.tags["Y1"] is False
     assert runner.current_state.tags["Y2"] is True
 
-    # Paused: the jump and jog still act on their edges, jump last (to step 1),
-    # and the paused drum leaves its outputs as they are.
+    # While paused, the jump and jog still act on their edges, and the jump acts last (to step 1).
+    # The paused drum leaves its outputs as they are.
     runner.patch({"Enable": False, "Jump": True, "Jog": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Y1"] is False
     assert runner.current_state.tags["Y2"] is True
 
-    # Reset is a level that wins, paused or not: every output off.
+    # Reset is a level and wins, paused or not. It turns every output off.
     runner.patch({"Reset": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
@@ -147,7 +147,7 @@ def test_event_drum_paused_takes_jump_jog_and_reset_without_writing_outputs(
     assert runner.current_state.tags["Y1"] is False
     assert runner.current_state.tags["Y2"] is False
 
-    # Step 1's output comes on once the reset ends and the rung is true.
+    # Step 1's output comes on when the reset ends and the rung is true.
     runner.patch({"Reset": False, "Enable": True})
     runner.step()
     assert runner.current_state.tags["Y1"] is True
@@ -203,7 +203,7 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry(runner_facto
 
 
 def test_event_drum_events_read_at_box_entry(runner_factory) -> None:
-    """An event latched on the wire above the drum steps it on the same scan."""
+    """An event latched on the wire above the drum steps the drum on the same scan."""
     enable = Bool("Enable")
     reset = Bool("Reset")
     go = Bool("Go")
@@ -271,7 +271,7 @@ def test_time_drum_reset_wins_then_jump_beats_jog(runner_factory) -> None:
     runner.patch({"Enable": False, "Reset": False, "Jump": False, "Jog": False})
     runner.step()
 
-    # Reset wins and drops the scan's jump and jog: step 1, every output off.
+    # Reset wins and drops the scan's jump and jog. The drum is on step 1 with every output off.
     runner.patch({"Enable": True, "Reset": True, "Jump": True, "Jog": True})
     runner.step()
 
@@ -279,20 +279,20 @@ def test_time_drum_reset_wins_then_jump_beats_jog(runner_factory) -> None:
     assert runner.current_state.tags["Acc"] == 0
     assert not any(runner.current_state.tags[f"Y{i}"] for i in range(1, 5))
 
-    # The dropped edges are spent: held through the reset's end they do nothing.
-    # The reset's end is a return scan: it writes step 1's row and does not move.
+    # The dropped edges are spent, so holding them through the end of the reset does nothing.
+    # The scan where the reset ends is a return scan. It writes step 1's row and does not move.
     runner.patch({"Reset": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Y1"] is True
 
-    # Step 1's 1 ms preset is up on the next scan.
+    # Step 1's 1 ms preset runs out on the next scan.
     runner.patch({"Jump": False, "Jog": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 2
     assert runner.current_state.tags["Y2"] is True
 
-    # Jump and jog on one scan: the jump (to 3) wins.
+    # When the jump and jog come on one scan, the jump (to step 3) wins.
     runner.patch({"Jump": True, "Jog": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 3
@@ -316,7 +316,7 @@ def test_time_drum_completion_outputs_stay_off_through_a_jump_until_a_jog(
 
     runner = runner_factory(logic, dt=0.010)
     runner.patch({"Enable": True})
-    for _ in range(3):  # the first scan's dt is 0
+    for _ in range(3):  # the first scan has dt 0
         runner.step()
     assert runner.current_state.tags["Step"] == 2
     assert runner.current_state.tags["Y2"] is True
@@ -329,7 +329,7 @@ def test_time_drum_completion_outputs_stay_off_through_a_jump_until_a_jog(
     runner.step()
     assert runner.current_state.tags["Y2"] is False
 
-    # A jump moves the step and clears its time, but the outputs stay off.
+    # A jump moves the step and clears its time. The outputs stay off.
     runner.patch({"Jump": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
@@ -337,7 +337,7 @@ def test_time_drum_completion_outputs_stay_off_through_a_jump_until_a_jog(
     assert runner.current_state.tags["Done"] is True
     assert runner.current_state.tags["Y1"] is False
 
-    # A jog brings them back: step 2's output on, the flag still on.
+    # A jog turns the outputs back on. Step 2's output is on and the flag is still on.
     runner.patch({"Jump": False, "Jog": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 2
@@ -347,8 +347,9 @@ def test_time_drum_completion_outputs_stay_off_through_a_jump_until_a_jog(
 
 
 def test_event_drum_own_end_does_nothing_under_the_flag(runner_factory) -> None:
-    """A jump leaves a completed drum's flag on, and the flag stops its own logic:
-    the step's event does nothing (``drum_settle/event_drum_after_completion``)."""
+    """A jump leaves a completed drum's flag on, and the flag stops the drum's own logic.
+
+    The step's event does nothing (``drum_settle/event_drum_after_completion``)."""
     with Program() as logic:
         with Rung(Bool("Enable")):
             event_drum(
@@ -383,7 +384,7 @@ def test_event_drum_own_end_does_nothing_under_the_flag(runner_factory) -> None:
 
 
 def test_time_drum_jump_reads_at_box_entry(runner_factory) -> None:
-    """A jump latched on the wire above the drum takes it on the same scan."""
+    """A jump latched on the wire above the drum moves the drum on the same scan."""
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -475,7 +476,7 @@ def test_event_drum_completion_sticky_until_reset(runner_factory) -> None:
     runner.step()
     assert runner.current_state.tags["Done"] is True
 
-    # Completion turns every output off, and they stay off.
+    # Completion turns every output off, and the outputs stay off.
     assert runner.current_state.tags["Y1"] is False
     assert runner.current_state.tags["Y2"] is False
 
@@ -608,7 +609,7 @@ def test_time_event_drum_timed_step_waits_for_its_event_while_acc_counts(runner_
 
     for _ in range(8):
         runner.step()
-    # Time is up at 50 ms; the step waits for E1 and Acc keeps counting.
+    # The step's time runs out at 50 ms. The step waits for E1 while Acc keeps counting.
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Acc"] == 70
 
@@ -640,9 +641,9 @@ def test_time_event_drum_event_only_steps_follow_the_level(runner_factory) -> No
     runner.step()
     runner.step()
     assert runner.current_state.tags["Step"] == 1
-    assert runner.current_state.tags["Acc"] == 0  # a step with no preset does not time
+    assert runner.current_state.tags["Acc"] == 0  # a step with no preset does not run a timer
 
-    # A level held across two event-only steps ends one per scan.
+    # A level held across two event-only steps ends one step per scan.
     runner.patch({"E1": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 2
@@ -680,7 +681,7 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
 
     runner = runner_factory(logic, dt=0.010)
     runner.patch({"Enable": True, "E1": True})
-    runner.step()  # the first scan is a return scan: step 1's row, no move
+    runner.step()  # the first scan is a return scan: it writes step 1's row and does not move
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Y1"] is True
     runner.step()
@@ -692,25 +693,25 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
     assert runner.current_state.tags["Done"] is True
     assert runner.current_state.tags["Y2"] is False
 
-    # The last event is a level; it going off does not bring the outputs back.
+    # The last event is a level. When it goes off, the outputs do not come back.
     runner.patch({"E2": False})
     runner.step()
     assert runner.current_state.tags["Y2"] is False
 
-    # Paused: a jump still acts, but only the enabled drum writes its outputs.
+    # While paused, a jump still acts. Only an enabled drum writes its outputs.
     runner.patch({"Enable": False, "E1": False, "Jump": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Y1"] is False
 
-    # Back on, the drum is still complete: the jump left its outputs off.
+    # When enabled again, the drum is still complete, because the jump left its outputs off.
     runner.patch({"Enable": True, "Jump": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Done"] is True
     assert runner.current_state.tags["Y1"] is False
 
-    # A jog brings them back.
+    # A jog turns them back on.
     runner.patch({"Jog": True})
     runner.step()
     assert runner.current_state.tags["Step"] == 2
@@ -719,7 +720,7 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
 
 
 def test_time_event_drum_events_read_at_box_entry(runner_factory) -> None:
-    """An event latched on the wire above the drum steps it on the same scan."""
+    """An event latched on the wire above the drum steps the drum on the same scan."""
     event = Bool("E1")
     runner = runner_factory(
         _time_event_drum_program([None, 100], [event, None], latch_event=event), dt=0.010
@@ -820,10 +821,10 @@ def test_time_drums_complete_pause_and_reset_over_long_runs(kind: str) -> None:
     plc.patch({"Enable": True, "E3": True})
     plc.run_for(0.4)
     plc.patch({"E2": True})
-    plc.run_for(3.0)  # completes; outputs off; clamped timing past completion
+    plc.run_for(3.0)  # The drum completes, outputs off, timing clamped.
     assert plc.current_state.tags["Done"] is True
     assert plc.current_state.tags["Y3"] is False
-    # Paused: jog/jump still act.
+    # While paused, jog and jump still act.
     plc.patch({"Enable": False, "Jump": True})
     plc.run_for(0.5)
     assert plc.current_state.tags["Step"] == 2
@@ -852,7 +853,7 @@ def test_event_drum_completes_pauses_and_resets_over_long_runs() -> None:
     plc.patch({"Enable": True, "Jump": False})
     plc.run_for(0.5)
     assert plc.current_state.tags["Step"] == 1
-    assert plc.current_state.tags["Y1"] is False  # a jump leaves a completed drum off
+    assert plc.current_state.tags["Y1"] is False  # a jump leaves a completed drum's outputs off
     plc.patch({"Jog": True})
     plc.run_for(0.5)
     assert plc.current_state.tags["Step"] == 2
@@ -865,9 +866,9 @@ def test_event_drum_completes_pauses_and_resets_over_long_runs() -> None:
 
 @pytest.mark.parametrize("kind", ["event", "time", "time_event"])
 def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str) -> None:
-    """A box reads its pins before any write of its own (the live row solve's order).
+    """Check that a box reads its pins before it writes anything (the live row solve's order).
 
-    A jump pin keyed on the uncorrected step must see it.
+    A jump pin keyed on the uncorrected step must see that step.
     """
     step = Int("Step")
     builder_args = {
@@ -894,7 +895,7 @@ def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str) -> No
     plc = PLC(logic)
     plc.patch({"Step": 7})
     plc.step()
-    assert plc.current_state.tags["Step"] == 7  # paused, no jump: nothing corrected
+    assert plc.current_state.tags["Step"] == 7  # paused with no jump: nothing is corrected
     plc.patch({"Enable": True, "Go": True})
     plc.step()
     assert plc.current_state.tags["Step"] == 3
@@ -903,10 +904,10 @@ def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str) -> No
 @pytest.mark.parametrize("backend", [PLC, CompiledPLC], ids=["interpreted", "compiled"])
 @pytest.mark.parametrize("kind", ["event", "time", "time_event"])
 def test_drum_reads_its_jump_step_before_it_moves(kind: str, backend) -> None:
-    """The jump step's value is read with the pins, before the drum writes.
+    """Check that the jump step's value is read with the pins, before the drum writes.
 
-    Here the jump step is the drum's own step register: the step advances and
-    the jump on the same scan takes the drum to the step it read on entry.
+    Here the jump step is the drum's own step register. The step advances, and the jump
+    on the same scan takes the drum to the step it read on entry.
     """
     step = Int("Step")
     builder_args = {
@@ -946,8 +947,10 @@ BACKENDS = [PLC, CompiledPLC]
 
 
 def _two_step_drum(kind: str, jump_step: Any = 1) -> Program:
-    """A 2-step drum (A on step 1, B on step 2) under ``Enable``, whose outputs a
-    rung above can reset; its steps end only by a jog here (or a jump, or E1/E2)."""
+    """Build a 2-step drum (A on step 1, B on step 2) under ``Enable``.
+
+    A rung above the drum can reset its outputs. Its steps end only by a jog here, or by a
+    jump or E1/E2."""
     args = {
         "outputs": [Bool("A"), Bool("B")],
         "pattern": [[1, 0], [0, 1]],
@@ -1040,7 +1043,7 @@ def test_step_written_while_running_is_no_move(kind: str, backend: type) -> None
     assert _snapshot(plc) == (1, False, True, False)
     plc.step()
     assert _snapshot(plc) == (1, False, True, False)
-    # The next move goes on from the step the register holds.
+    # The next move starts from the step that the register holds.
     plc.patch({"Jog": True})
     plc.step()
     assert _snapshot(plc) == (2, False, True, False)
@@ -1066,7 +1069,7 @@ def test_jog_on_a_bad_step_leaves_that_scan_alone(kind: str, backend: type) -> N
     assert plc.current_state.tags.get("Acc", 0) == acc_before
     plc.step()
     assert _snapshot(plc) == (1, False, True, False)
-    # The correction keeps Acc and times on; the frozen scan did not.
+    # The correction keeps Acc and keeps timing. The frozen scan did not.
     if kind != "event":
         assert plc.current_state.tags["Acc"] == acc_before + 10
     plc.step()
@@ -1082,7 +1085,7 @@ def test_jog_on_a_bad_step_of_a_paused_drum_does_nothing(kind: str, backend: typ
     assert _snapshot(plc) == (5, False, True, False)
     plc.step()
     assert _snapshot(plc) == (5, False, True, False)
-    # The rung coming back corrects the step and writes step 1's row.
+    # When the rung comes back, the drum corrects the step and writes step 1's row.
     plc.patch({"Enable": True})
     plc.step()
     assert _snapshot(plc) == (1, True, False, False)
@@ -1100,8 +1103,8 @@ def test_jump_acts_on_a_bad_step_under_a_jog(kind: str, backend: type) -> None:
 # -- a jump to a step the drum does not have takes the scan ----------------------
 #
 # Read on a CLICK (``bad_jump/bad_target_takes_the_scan``, 2026-11-06, and
-# ``drum_branch/jump_to_bad_step`` Result3): no jog, no correction, no own time or
-# event that scan; the next scan runs as if nothing happened.
+# ``drum_branch/jump_to_bad_step`` Result3): that scan has no jog, no correction and no
+# time or event of the drum's own. The next scan runs as if nothing happened.
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -1112,7 +1115,7 @@ def test_a_jump_to_a_bad_step_drops_the_scans_jog(kind: str, backend: type, targ
     plc.patch({"Jog": True, "Go": True})
     plc.step()
     assert _snapshot(plc) == (2, False, True, False)
-    # The jog's edge is spent.
+    # The jog's edge has been used up.
     plc.step()
     assert _snapshot(plc) == (2, False, True, False)
 
@@ -1125,7 +1128,7 @@ def test_a_jump_to_a_bad_step_drops_the_scans_time(kind: str, backend: type) -> 
     plc.step()
     assert _snapshot(plc) == (2, False, True, False)
     assert plc.current_state.tags["Acc"] == 30_000
-    # The next scan the time is up: the last step completes.
+    # On the next scan the time is up and the last step completes.
     plc.step()
     assert _snapshot(plc) == (2, False, False, True)
 
@@ -1149,13 +1152,13 @@ def test_jog_on_the_last_step_completes(kind: str, backend: type) -> None:
     plc.patch({"Jog": True})
     plc.step()
     assert _snapshot(plc) == (2, False, False, True)
-    # It stays on the step, and a timed step keeps its time, ticking no more.
+    # The drum stays on the step. A timed step keeps its time and stops counting.
     if kind != "event":
         assert plc.current_state.tags["Acc"] == acc_before
     plc.patch({"Jog": False})
     plc.step()
     assert _snapshot(plc) == (2, False, False, True)
-    # A further jog does nothing, and a value another writer left stays.
+    # A further jog does nothing. A value that another writer left stays.
     plc.patch({"B": True, "Jog": True})
     plc.step()
     assert _snapshot(plc) == (2, False, True, True)
@@ -1185,8 +1188,9 @@ def test_jump_beats_a_jog_on_the_last_step(kind: str, backend: type) -> None:
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
 def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
-    """The time on a completed last step stays up scan after scan; only the scan
-    that completes the drum turns its outputs off."""
+    """The time on a completed last step stays up scan after scan.
+
+    Only the scan that completes the drum turns its outputs off."""
     plc = _on_step_two(kind, backend)
     plc.patch({"Acc": 30_000})
     plc.step()
@@ -1199,12 +1203,12 @@ def test_timed_completion_writes_all_off_once(kind: str, backend: type) -> None:
 # -- a step's preset: read on every scan the step times --------------------------
 #
 # Read on a CLICK (``drum_limits/preset_from_ds``, ``drum_ds/ds_preset_ends``,
-# 2026-11-12): a DS preset lowered under Acc mid-step ends the step, and one of 0
+# 2026-11-12): lowering a DS preset below Acc mid-step ends the step, and a preset of 0
 # or below ends it at once.
 
 
 def _preset_drum(kind: str, presets: list[Any]) -> Program:
-    """A 2-step timed drum under ``Enable`` with *presets*; ``Go`` jumps to step 1."""
+    """Build a 2-step timed drum under ``Enable`` with *presets*. ``Go`` jumps to step 1."""
     args = {
         "outputs": [Bool("A"), Bool("B")],
         "pattern": [[1, 0], [0, 1]],
@@ -1266,7 +1270,7 @@ def test_a_tag_preset_of_zero_or_below_ends_step_one_at_once(
     assert _snapshot(plc) == (1, True, False, False)
     plc.step()
     assert _snapshot(plc) == (2, False, True, False)
-    # After a reset, step 1 ends on its first timing scan again.
+    # After a reset, step 1 ends again on its first timing scan.
     plc.patch({"Reset": True})
     plc.step()
     assert _snapshot(plc) == (1, False, False, False)
@@ -1288,7 +1292,7 @@ def test_a_tag_preset_of_zero_or_below_ends_a_step_entered_by_a_move(
     plc.step()
     plc.step()
     assert _snapshot(plc) == (2, False, True, False)
-    # Step 2, the last, ends on its first timing scan: the drum completes.
+    # Step 2 is the last step. It ends on its first timing scan, and the drum completes.
     plc.step()
     assert _snapshot(plc) == (2, False, False, True)
 
@@ -1296,7 +1300,7 @@ def test_a_tag_preset_of_zero_or_below_ends_a_step_entered_by_a_move(
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("kind", ["time", "time_event"])
 def test_a_step_written_to_the_register_ends_on_its_own_preset(kind: str, backend: type) -> None:
-    """A write to the step register is not a move: Acc carries over to the step written."""
+    """A write to the step register is not a move, so Acc carries over to the step written."""
     plc = backend(_preset_drum(kind, [Int("P"), Int("Q")]), dt=0.01)
     plc.patch({"Enable": True, "P": 1000, "Q": 20})
     for _ in range(4):
@@ -1314,9 +1318,10 @@ def test_a_step_written_to_the_register_ends_on_its_own_preset(kind: str, backen
 def test_a_constant_preset_of_zero_or_below_ends_its_step_at_once(
     kind: str, backend: type, beside_a_tag: bool, preset: int
 ) -> None:
-    """``drum_preset/literal_zero``: the first scan the step times ends it.
+    """``drum_preset/literal_zero``: the first scan on which the step times ends it.
 
-    A CLICK read the constant 0; -5 ending at once too is pyrung's choice, unread.
+    A CLICK ended the step at once for the constant 0. pyrung also ends it at once for -5.
+    That choice was not read on a CLICK.
     """
     second = Int("P") if beside_a_tag else 30_000
     plc = backend(_preset_drum(kind, [preset, second]), dt=0.01)
@@ -1331,11 +1336,11 @@ def test_a_constant_preset_of_zero_or_below_ends_its_step_at_once(
 # -- a pin and the step's own end on one scan ------------------------------------
 #
 # Measured on a CLICK (``drum_pins``, 2026-11-05): a pin's move takes the scan.
-# Own logic running before the pins would read step 3 and a completed flag.
+# If the drum's own logic ran before the pins, it would read step 3 and a completed flag.
 
 
 def _three_step_drum_with_events(kind: str) -> Program:
-    """A 3-step drum whose steps end by E1, E2, E3; a jump goes to step 1."""
+    """Build a 3-step drum whose steps end by E1, E2 and E3. A jump goes to step 1."""
     args = {
         "outputs": [Bool("A"), Bool("B")],
         "pattern": [[1, 0], [0, 1], [1, 1]],
@@ -1391,9 +1396,9 @@ def test_a_jump_and_a_last_step_event_on_one_scan_do_not_complete(kind: str, bac
 
 
 def _busy_drum(kind: str, zero: bool = False) -> Program:
-    """A 3-step drum with every pin and short times, so its own ends come often.
+    """Build a 3-step drum with every pin and short times, so its own ends come often.
 
-    *zero*: step 2 of a timed drum has the constant preset 0, which ends it at once.
+    With *zero*, step 2 of a timed drum has the constant preset 0, which ends it at once.
     """
     args = {
         "outputs": [Bool("A"), Bool("B")],
@@ -1425,7 +1430,7 @@ def _busy_drum(kind: str, zero: bool = False) -> Program:
 
 
 def _random_patch(rng: random.Random) -> dict[str, bool | int]:
-    """What one scan finds changed: pins, events, and writes to what the drum owns."""
+    """Return what one scan finds changed: pins, events, and writes to what the drum owns."""
     patch: dict[str, bool | int] = {}
     for name, odds in (
         ("Enable", 0.9),
@@ -1453,7 +1458,7 @@ def _random_patch(rng: random.Random) -> dict[str, bool | int]:
 
 
 def _drum_view(plc: PLC | CompiledPLC) -> dict[str, object]:
-    """The drum's tags and memory, an absent entry reading as its default."""
+    """Return the drum's tags and memory. An absent entry reads as its default."""
     state = plc.current_state
     view: dict[str, object] = {
         name: state.tags.get(name, default)
@@ -1476,7 +1481,7 @@ def _drum_view(plc: PLC | CompiledPLC) -> dict[str, object]:
 @pytest.mark.parametrize("seed", range(6))
 @pytest.mark.parametrize("kind", [*DRUM_KINDS, "time zero", "time_event zero"])
 def test_backends_agree_scan_by_scan(kind: str, seed: int) -> None:
-    """Whatever a scan finds, both backends end it the same, down to the drum's memory."""
+    """Whatever a scan finds, both backends end the scan the same, down to the drum's memory."""
     rng = random.Random(f"{kind}{seed}")
     base, _, zero = kind.partition(" ")
     interpreted = PLC(_busy_drum(base, bool(zero)), dt=0.01)
@@ -1491,7 +1496,7 @@ def test_backends_agree_scan_by_scan(kind: str, seed: int) -> None:
 
 
 def _waiting_drum(kind: str, rung_above: Callable[[], None], enable: Bool) -> Program:
-    """A 2-step drum whose steps take 50 s, so a long run holds it, with a rung above it."""
+    """Build a 2-step drum with a rung above it. Its steps take 50 s, so a long run holds it."""
     args = {
         "outputs": [Bool("A"), Bool("B")],
         "pattern": [[1, 0], [0, 1]],
@@ -1519,7 +1524,7 @@ def _waiting_drum(kind: str, rung_above: Callable[[], None], enable: Bool) -> Pr
 def _equal_stepping(
     build: Callable[[], Program], segments: list[tuple[dict[str, bool | int], int]]
 ) -> PLC:
-    """Each segment's patch, then its scans, in the loop and stepped: equal at each end."""
+    """Apply each segment's patch and then its scans, in the loop and stepped. The ends match."""
     looped = PLC(build(), dt=0.01)
     stepped = PLC(build(), dt=0.01)
     before = scan_trace.TOTALS["loop scans"]
@@ -1561,7 +1566,7 @@ def test_long_runs_through_what_a_drum_answers_to_equal_stepping(kind: str) -> N
 @pytest.mark.usefixtures("loop_from_first_scan")
 @pytest.mark.parametrize("kind", DRUM_KINDS)
 def test_a_rung_returning_inside_a_long_run_writes_the_row_on_that_scan(kind: str) -> None:
-    """The timer's Done brings the rung back inside the run: the loop must leave its hold."""
+    """The timer's Done brings the rung back inside the run, so the loop must leave its hold."""
     late = Timer.clone("Late")
 
     def above() -> None:
@@ -1578,7 +1583,7 @@ def test_a_rung_returning_inside_a_long_run_writes_the_row_on_that_scan(kind: st
 @pytest.mark.usefixtures("loop_from_first_scan")
 @pytest.mark.parametrize("kind", DRUM_KINDS)
 def test_a_flag_cleared_inside_a_long_run_frees_the_drum_on_that_scan(kind: str) -> None:
-    """A completed drum holds with nothing moving, until a rung clears its flag mid-run."""
+    """A completed drum holds with nothing moving until a rung clears its flag mid-run."""
     late = Timer.clone("Late")
 
     def above() -> None:
@@ -1604,7 +1609,7 @@ def test_a_flag_cleared_inside_a_long_run_frees_the_drum_on_that_scan(kind: str)
 @pytest.mark.usefixtures("loop_from_first_scan")
 @pytest.mark.parametrize("kind", ["time", "time_event"])
 def test_a_tag_preset_lowered_inside_a_long_run_holds_until_the_step_changes(kind: str) -> None:
-    """The step keeps the preset it read; a jump reads the new one, mid-run."""
+    """The step keeps the preset it read. A jump mid-run reads the new one."""
     plc = _equal_stepping(
         lambda: _preset_drum(kind, [Int("P"), Int("P")]),
         [

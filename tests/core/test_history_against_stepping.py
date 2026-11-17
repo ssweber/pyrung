@@ -1,9 +1,9 @@
-"""History rebuilds the scans as they ran.
+"""Test that History rebuilds the scans as they ran.
 
-A seek re-executes from a checkpoint and the scan log, on a kernel or interpreted.  Each
-test here holds what a seek returns against states kept as they were stepped, on the
-runner that stepped them as well as on one that ran the same scans compiled: a seek that
-is wrong by itself must not pass by agreeing with itself.
+A seek re-executes from a checkpoint and the scan log, on a kernel or interpreted. Each test
+here compares what a seek returns with states that were kept as they were stepped. It does so
+on the runner that stepped them and on one that ran the same scans compiled. A seek that is
+wrong by itself must not pass by agreeing with itself.
 """
 
 from __future__ import annotations
@@ -53,14 +53,14 @@ def fine_loop(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(params=["compiled", "interpreted"])
 def replay_path(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Seek on the kernel, or with none: both paths have to rebuild the same scans."""
+    """Seek on the kernel or without it. Both paths have to rebuild the same scans."""
     if request.param == "interpreted":
         monkeypatch.setattr(PLC, "_compiled_replay_supported_kernel", lambda _self: None)
     return request.param
 
 
 def _scan(plc: PLC, scans: int, keep: dict[int, Any]) -> None:
-    """One run: a stop a rung asks for inside it takes effect at the next call."""
+    """Scan *scans* times in one run. A stop that a rung asks for takes effect at the next call."""
     plc._ensure_running()
     for _ in range(scans):
         plc._run_single_scan(consume_pause_request=False)
@@ -136,7 +136,7 @@ def test_a_stop_inside_a_compiled_range_seeks_like_stepping(fine_loop: None) -> 
 
 
 def _forces_in_effect(plc: PLC) -> dict[int, dict[str, Any]]:
-    """The forces in effect at each scan, read from the scan log's force records."""
+    """Return the forces in effect at each scan, read from the force records of the scan log."""
     records = plc._scan_log.snapshot().force_changes_by_scan
     forces: dict[str, Any] = {}
     in_effect: dict[int, dict[str, Any]] = {}
@@ -156,7 +156,7 @@ def _lamp_follows_run() -> Program:
 def test_a_compiled_run_logs_the_forces_stepping_logs(
     fine_loop: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A checkpoint repeats the forces in effect, so the two runs may keep different records.
+    """The two runs may keep different records, because a checkpoint repeats the forces in effect.
 
     What the records say about each scan has to agree, and so does each scan they rebuild.
     """
@@ -559,7 +559,7 @@ def _lockstep_function(fn: Callable[..., Any]) -> tuple[PLC, PLC, dict]:
 def test_a_function_that_could_keep_something_runs_itself(
     fn: Callable[..., Any], fine_loop: None
 ) -> None:
-    """An undone batch calls it again, so a run steps it: these scans are the real ones."""
+    """An undone batch calls it again, so a run steps it. These scans are the real ones."""
     plc, _twin, _truth = _lockstep_function(fn)
     assert plc._compiled_replay_supported_kernel() is None
 

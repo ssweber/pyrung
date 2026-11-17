@@ -30,13 +30,13 @@ def pyrung_to_ladder(
         index: When True, number rung markers sequentially (R1, R2, ...)
             instead of bare ``R``.  Counter restarts per program scope.
         validate: When True (default), run pre-export checks and round-trip
-            verification: the rows must analyze back to the program's outputs,
-            and importing them (``ladder_to_pyrung``) must keep each output's
-            condition, pins and CLICK rung.  Set to False to skip
+            verification. The rows must analyze back to the program's outputs.
+            Importing them (``ladder_to_pyrung``) must keep each output's
+            condition, pins and CLICK rung. Set to False to skip
             validation for speed.
-        allow: Finding codes the precheck lets through, for an export that
+        allow: Finding codes that the precheck lets through, for an export that
             knowingly carries what the CLICK editor refuses (the conformance
-            suite's paste probes).  Other findings still refuse the export.
+            suite's paste probes). The precheck still refuses the export for other findings.
 
     Returns:
         A LadderBundle containing main and subroutine row matrices.

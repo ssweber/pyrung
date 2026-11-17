@@ -60,9 +60,9 @@ class DriveSetup:
     configured_inputs: frozenset[str]
     # Forced or patched on the PLC how() was asked of.  The fork has them too.
     session_overrides: frozenset[str] = frozenset()
-    # The session's own forces and pending patches, which are not the plan's steps.
+    # The session's own forces and pending patches.  They are not steps of the plan.
     session_inputs: Mapping[str, Any] = field(default_factory=dict)
-    # Those of them a scan still had to apply, which the drive's first scan did.
+    # The ones of those that no scan had applied yet.  The drive's first scan applies them.
     waiting_overrides: tuple[str, ...] = ()
 
 
@@ -176,7 +176,7 @@ def prepare_drive(
     *,
     unlink: list[str] | None,
 ) -> DriveSetup:
-    """Build the shared program/runtime analysis for one public drive."""
+    """Build the program and runtime analysis that one public drive shares."""
 
     from pyrung.core.analysis.pdg import build_program_graph
 
@@ -185,8 +185,8 @@ def prepare_drive(
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
-    # What the session already has waiting decides the next scan.  Until a scan applies it the
-    # tags say nothing of it, so that scan comes before anything reads them.
+    # What the session already has waiting decides the next scan.  Until a scan applies it,
+    # the tags do not show it, so run that scan before anything reads the tags.
     waiting = _waiting_overrides(plc)
     if waiting:
         work.step()
@@ -222,19 +222,19 @@ def prepare_drive(
 
 
 def start_fork(plc: PLC) -> PLC:
-    """The unstepped fork how() starts from, with the defaults of the slots the rungs reach."""
+    """Return the unstepped fork that how() starts from, with defaults seeded for reached slots."""
     work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
-    # Seed before the first scan. A seed after it adds an edit checkpoint to every how().
+    # Seed before the first scan.  A seed after it would add an edit checkpoint to every how().
     _seed_reached_slots(work)
     return work
 
 
 def _seed_reached_slots(work: PLC) -> None:
-    """Give each slot the rungs reach that the start state lacks its default.
+    """Seed the default of each slot that the rungs reach and the start state lacks.
 
     A state holds a slot only once a scan writes it or the user's code indexes it.
     Seeding the rest here gives how() the same snapshot on every PLC of the program.
-    A slot read with no value reads its default, so no scan sees a difference.
+    A slot with no value reads as its default, so no scan sees a difference.
     """
     reach = work._tags_rungs_reach
     missing = reach.names() - set(work.state.tags) - reach.refused()
@@ -248,9 +248,9 @@ def _seed_reached_slots(work: PLC) -> None:
 
 
 def modbus_levers(program: Any) -> frozenset[str] | None:
-    """The tags a Modbus device supplies, or None when *program* has no send() or receive().
+    """Return the tags a Modbus device supplies, or None if *program* has no send() or receive().
 
-    how() does no Modbus I/O, so it sets these like inputs.  A receive() reads its
+    how() does no Modbus I/O, so it sets these tags like inputs.  A receive() reads its
     destination from the device, and the device's answer sets success or error.
     """
     from pyrung.core.instruction.send_receive._core import (
@@ -272,7 +272,7 @@ def modbus_levers(program: Any) -> frozenset[str] | None:
 
 
 def _waiting_overrides(plc: PLC) -> tuple[str, ...]:
-    """Tags whose pending patch or force no scan has applied, in the order a person set them."""
+    """Return the tags whose pending patch or force no scan has applied, in the order set."""
     tags = plc.state.tags
     names = dict.fromkeys(plc._pending_patches)
     for name, value in plc._forces.items():
@@ -295,7 +295,7 @@ def prepare_target_context(
     work: PLC | None = None,
     start_had_a_scan: bool = True,
 ) -> tuple[_PilotContext, RouteTaken | None]:
-    """Bind one target and its initial route report to a prepared drive."""
+    """Bind one target and its initial route report to a prepared drive, and return both."""
 
     target_work = setup.work if work is None else work
     # The state how() starts from is real, and it may be the one state the search never asks
@@ -379,12 +379,12 @@ def _build_static_transition_graphs(
 def build_prover_context(program: Any) -> ProverContext:
     """Build prover context for value domains and state key projection.
 
-    Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
+    Fields are ``None`` on failure.  Then PILOT falls back to Bool-only probing,
     pivot-tag state keys, and local static evidence.
 
-    The answer comes from the program and its tags' settings.
-    A Program keeps the answer until its graph cache is dropped.
-    A change to a tag's settings drops that cache too, so each how() on an unchanged program skips the prover's passes.
+    The answer comes from the program and its tags' settings.  A Program keeps the
+    answer until its graph cache is dropped.  A change to a tag's settings drops that
+    cache too.  So each how() on an unchanged program skips the prover's passes.
     """
     from pyrung.core.tag import metadata_edits
 
@@ -404,7 +404,7 @@ def build_prover_context(program: Any) -> ProverContext:
 
 
 def _copy_prover_context(context: ProverContext) -> ProverContext:
-    """A copy whose dicts a caller may change without changing the cached one."""
+    """Return a copy whose dicts a caller may change without changing the cached one."""
     from dataclasses import replace
 
     return replace(
@@ -417,7 +417,7 @@ def _copy_prover_context(context: ProverContext) -> ProverContext:
 
 
 def _compute_prover_context(program: Any) -> ProverContext | None:
-    """The prover's facts for *program*, or ``None`` when building them raised."""
+    """Return the prover's facts for *program*, or ``None`` when building them raised."""
     try:
         from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
         from pyrung.core.analysis.pilot.evidence import build_transition_evidence

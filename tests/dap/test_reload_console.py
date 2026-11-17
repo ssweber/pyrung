@@ -225,7 +225,7 @@ def _coil_script(horn: str) -> str:
 def _coil_run(
     tmp_path: Path, script: str, link: str, before: int, *, reload: bool
 ) -> list[tuple[Any, ...]]:
-    """Each scan's Spare, Horn and timer counts, after *before* scans with Motor on."""
+    """Return each scan's Spare, Horn and timer counts after *before* scans with Motor on."""
     tmp_path.mkdir()
     adapter, out, _script_path = _setup(tmp_path, script)
     if link:
@@ -288,7 +288,10 @@ def test_a_reload_leaves_a_plant_coil_as_it_was(
     first: tuple[bool, bool],
     last: tuple[bool, bool],
 ):
-    """A reload with the enable on neither fires a toggle or timed coil nor cuts its count short."""
+    """A reload with the enable on does not fire a toggle or timed coil.
+
+    It does not cut the coil's count short either.
+    """
     script = _coil_script(horn)
     reloaded = _coil_run(tmp_path / "reloaded", script, link, before, reload=True)
     assert reloaded == _coil_run(tmp_path / "stepped", script, link, before, reload=False)
@@ -315,7 +318,7 @@ def _horn_bits(adapter: DAPAdapter, fb: str, scans: int) -> str:
     ids=["toggle", "timed", "timed-maintained", "on-delay"],
 )
 def test_a_harness_install_after_remove_settles(tmp_path: Path, physical: str, settled: str):
-    """An enable turned on while the harness was off is held, not a rise."""
+    """An enable that turned on while the harness was off counts as held, not as a rise."""
     horn = f"Bool('Horn', physical=Physical('H', {physical}), link='Motor')"
     adapter, out, _script_path = _setup(tmp_path, _coil_script(horn))
     _repl(adapter, out, "step 5", seq=10)
@@ -336,7 +339,7 @@ def test_a_harness_install_after_remove_settles(tmp_path: Path, physical: str, s
 def test_a_harness_install_after_remove_settles_a_bench_link(
     tmp_path: Path, link: str, settled: str
 ):
-    """The bench links the install puts back settle too, so a held Motor fires none of them."""
+    """The install also settles the bench links it restores, so a held Motor fires none of them."""
     adapter, out, _script_path = _setup(tmp_path, _coil_script("Bool('Horn')"))
     resp, _ = _repl(adapter, out, link, seq=10)
     assert resp["success"] is True
@@ -354,10 +357,10 @@ def test_a_harness_install_after_remove_settles_a_bench_link(
 def test_a_bench_link_over_a_declared_coupling_settles_as_the_bench_link(
     tmp_path: Path, link: str, how: str
 ):
-    """The install settles the coil that runs, not the declared on-delay the link replaces.
+    """The install settles the coil that runs, not the declared on-delay that the link replaces.
 
-    Motor goes on, off and on, so the link leaves Horn off with Motor on.  Seeded for the
-    on-delay, Horn would turn on at install and stay on under the new coil.
+    Motor goes on, off and on, so the link leaves Horn off with Motor on.  If the install
+    seeded the on-delay, Horn would turn on at install and stay on under the new coil.
     """
     horn = "Bool('Horn', physical=Physical('H', on_delay='20ms'), link='Motor')"
     adapter, out, _script_path = _setup(tmp_path, _coil_script(horn))
@@ -396,7 +399,7 @@ def _relink_script(enable: str) -> str:
 
 
 def test_a_reload_that_links_a_coil_to_another_enable_settles_it(tmp_path: Path):
-    """Fb's coil saw Motor off.  Pump is on, so carrying that memory on would flip Fb."""
+    """Fb's coil saw Motor off.  Pump is on, so if the reload kept that memory, Fb would flip."""
     adapter, out, script_path = _setup(tmp_path, _relink_script("Motor"))
     _repl(adapter, out, "step 5", seq=10)
     script_path.write_text(_relink_script("Pump"), encoding="utf-8")
@@ -433,11 +436,11 @@ def _feedback_script(fb: str, physical: str) -> str:
 def test_a_reload_back_to_a_coil_settles_it(
     tmp_path: Path, middle: tuple[str, str], last: tuple[str, str], settled: str
 ):
-    """A coil whose memory went stale on the way does not read it after a reload back.
+    """A coil whose memory went stale does not read that memory after a reload back.
 
     The first program runs with Motor off, so its coil remembers its rung as off.
-    Motor turns on under the program between.  Read back, the stale memory would turn
-    that held Motor into a rise.
+    Motor turns on under the program between.  If the coil read the stale memory after the
+    reload, the held Motor would look like a rise.
     """
     first = ("Fb", last[1])
     adapter, out, script_path = _setup(tmp_path, _feedback_script(*first))
@@ -717,7 +720,7 @@ class TestReloadRungMemory:
 
         _repl(adapter, out, "step 2", seq=13)
         tags = adapter._runner.current_state.tags
-        # The held rung is no new edge: no second pulse, and the on side runs on.
+        # The held rung is not a new edge. There is no second pulse, and the on side keeps running.
         assert tags["Horn"] is False
         assert tags["Ot1_Acc"] == 30
         assert tags["Tank"] is True
@@ -738,7 +741,7 @@ class TestReloadRungMemory:
         assert "reset: _timed_rung:i1" in result
 
         _repl(adapter, out, "step 1", seq=13)
-        # Another coil: the held rung is its first edge.
+        # This is another coil, so the held rung is its first edge.
         assert adapter._runner.current_state.tags["Siren"] is True
 
 
@@ -819,7 +822,7 @@ DRUM_SCRIPT = (
 
 
 class TestReloadInputMemory:
-    """An edit to what an instruction reads keeps its inputs as it last saw them."""
+    """After an edit to what an instruction reads, the instruction keeps its last-seen inputs."""
 
     def test_an_edited_counter_preset_does_not_count_a_held_input_again(self, tmp_path: Path):
         script = COUNTER_SCRIPT.format(preset=10, down="Bool('Dn')", reset="Bool('Clear')")
@@ -880,7 +883,7 @@ class TestReloadInputMemory:
         assert "1 site memory value(s) had no matching site" in result
         assert "reset: _cd:i1" in result
 
-        # The new leg, held, is its first edge.
+        # The new leg is held, so its first scan is a rising edge.
         _repl(adapter, out, "force Dn2 true", seq=14)
         _repl(adapter, out, "step 1", seq=15)
         assert adapter._runner.current_state.tags["Parts_Acc"] == -2
@@ -893,8 +896,8 @@ class TestReloadInputMemory:
         )
         resp, _ = _repl(adapter, out, "reload", seq=13)
         assert resp["success"] is True
-        # A helper leg is no part of the counter's identity: the site matches as it
-        # is, and the new leg's first scan compares with the old leg's last value.
+        # A helper leg is not part of the counter's identity, so the site still matches.
+        # The new leg's first scan compares with the old leg's last value.
         assert "site memory" not in resp["body"]["result"]
         assert adapter._runner.current_state.memory["_cd:i1"] is True
 
@@ -918,7 +921,7 @@ class TestReloadInputMemory:
 
         _repl(adapter, out, "step 1", seq=13)
         tags = adapter._runner.current_state.tags
-        # No restart from 0: the on phase runs on to the new preset.
+        # The timer does not restart from 0. The on phase runs on to the new preset.
         assert tags["Fl1_Acc"] == on_acc + 10
         assert tags["Beacon"] is True
 
@@ -954,7 +957,7 @@ class TestReloadInputMemory:
 
         _repl(adapter, out, "step 1", seq=13)
         tags = adapter._runner.current_state.tags
-        # Another coil: the held rung is its first edge.  The old target keeps its value.
+        # This is another coil, so the held rung is its first edge.  The old target keeps its value.
         assert tags["Lamp2"] is True
         assert tags["Lamp"] is True
 
@@ -1274,7 +1277,7 @@ def _rewrite(script_path: Path, **kwargs: str) -> None:
 
 
 def _int_a_script() -> str:
-    """A is an Int now, so a force or a bench link on it no longer fits."""
+    """Return the program where A is an Int, so a force or bench link on it no longer fits."""
     return _carry_script(a_type="Int", a_addr="ds[1]").replace("Rung(a)", "Rung(a > 0)")
 
 
@@ -1986,7 +1989,7 @@ TWO_SCRIPT = (
 
 
 def _two(a: str = "Bool('A')", b: str = "Bool('B')", a_read: str = "a") -> str:
-    """A program with two feedbacks, ``a`` and ``b``, and two enables, Cmd and Go."""
+    """Return a program with two feedbacks, ``a`` and ``b``, and two enables, Cmd and Go."""
     return TWO_SCRIPT.format(a=a, b=b, a_read=a_read)
 
 
@@ -1995,7 +1998,7 @@ def _timed(name: str, enable: str = "Cmd", ms: int = 100) -> str:
 
 
 def _three(a: str = "Bool('A')") -> str:
-    """The two-feedback program with a third feedback, C."""
+    """Return the two-feedback program with a third feedback, C."""
     rung_c = "    with Rung(Bool('C')):\n        out(Bool('Sink3'))\n"
     return _two(a=a).replace("    with Rung(b):\n", rung_c + "    with Rung(b):\n")
 

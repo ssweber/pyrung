@@ -1,6 +1,6 @@
-"""Out, Set, Reset and Search over a range: what nothing else reads.
+"""Check Out, Set, Reset and Search over a range, which no other group reads.
 
-An expectation is pyrung's reading today; a CLICK that reads otherwise prints what it read.
+Each expectation is what pyrung reads today.  A CLICK that reads otherwise prints what it read.
 
 ``coil_range``:
 

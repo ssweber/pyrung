@@ -119,7 +119,7 @@ KIND: dict[type, str] = {
 
 
 def _named_in_function(fn: Callable) -> frozenset[str]:
-    """The instruction classes a function names, as strings or imports."""
+    """Return the instruction classes that a function names, as strings or imports."""
     code = fn.__code__
     found: set[str] = set(code.co_names)
     for const in code.co_consts:
@@ -196,8 +196,8 @@ TABLES = [
 
 _WRITERS = frozenset(cls.__name__ for cls in KIND if cls._writes)
 
-# Conditions that an exported instruction carries as a pin of its own, not as the
-# rung it sits on.  A class declaring one that _pin_specs misses loses it on export.
+# These conditions are exported as a pin on the instruction itself, not as part of the
+# rung it sits on.  If a class declares one and _pin_specs misses it, the export drops it.
 _PIN_CONDITIONS = frozenset(
     {"reset_condition", "clock_condition", "down_condition", "jump_condition", "jog_condition"}
 )
@@ -281,7 +281,7 @@ def test_every_writer_is_labelled() -> None:
 
 
 def test_every_writer_has_a_verb() -> None:
-    # Render falls back to verb(target), and to the class name without a verb.
+    # Render falls back to verb(target), or to the class name if there is no verb.
     assert frozenset(_VERB) == _WRITERS
 
 
@@ -304,8 +304,8 @@ def test_every_pin_is_exported() -> None:
 
 @pytest.mark.parametrize("cls,field", _writes_to_check())
 def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None:
-    # Timers, counters and drums reach this through a role, Send and Receive through
-    # the banks CLICK's help pages list for them.
+    # Timers, counters and drums reach this check through a role.  Send and Receive reach
+    # it through the banks that CLICK's help pages list for them.
     name = cls.__name__
     checked = (
         hardware._WRITE_TARGET_FIELDS
@@ -320,7 +320,7 @@ def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None
 
 @pytest.mark.parametrize("name,field", _hardware_fields(), ids=lambda v: v)
 def test_hardware_tables_name_real_fields(name: str, field: str) -> None:
-    # Some of these lookups read getattr(instruction, field, None): a wrong name is a
-    # check that never runs.
+    # Some of these lookups read getattr(instruction, field, None), so a wrong name gives
+    # a check that never runs.
     cls = next(c for c in KIND if c.__name__ == name)
     assert field in _assigned_fields(cls), f"{name} has no field {field}"

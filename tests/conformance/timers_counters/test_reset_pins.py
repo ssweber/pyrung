@@ -2,11 +2,11 @@
 
 Each case holds the reset on while the rung stays on, then drops it with the rung still on.
 
-``down_reset_positive`` (CT11, preset 3) and ``down_reset_negative`` (CT12, preset -3, Acc
-staged at -2 on scan 1).  The count input is on for scans 1..8 and the reset for scans 3 and 4.
-Result1 is Acc at the end.  Result2 lists the scans 3..6 where Done is off, as digits (34 is
-scans 3 and 4).  Result3 is Acc on scan 3, the first reset scan.  Result4 is Acc on scan 5, the
-first scan after the reset.
+Two cases cover the down counter: ``down_reset_positive`` (CT11, preset 3) and
+``down_reset_negative`` (CT12, preset -3, Acc staged at -2 on scan 1). The count input is on
+for scans 1..8, and the reset is on for scans 3 and 4. Result1 is Acc at the end. Result2
+lists the scans 3..6 where Done is off, as digits (34 is scans 3 and 4). Result3 is Acc on
+scan 3, the first reset scan. Result4 is Acc on scan 5, the first scan after the reset.
 
 - Reset clears Acc and Done, nothing counts the held input again, and Done is judged again once
   the reset is off.  pyrung reads Result2 = 34 for preset 3 (0 <= 3 is true on scan 5) and 3456
@@ -16,11 +16,11 @@ first scan after the reset.
 - Reset loads the preset into the down counter.  Result3 = 3 (preset 3) or -3 (preset -3).
   Done is on on every scan for preset 3 (Result2 = 0).
 
-``rton_reset_held`` (T301 clock, T302 RTON) and ``rton_reset_after`` (T303 clock, T304 RTON).
-The RTON has 200 ms and its rung is always on.  Each case runs in steps that ``Scratch`` holds.
-Step 0 ends on the scan the RTON's Acc first reads its 200 ms preset or more.  Its reset
-(C701, C703) is then on until the clock reads 200 ms.  The clock times from the reset's first
-scan.
+Two cases cover the RTON: ``rton_reset_held`` (T301 clock, T302 RTON) and
+``rton_reset_after`` (T303 clock, T304 RTON). The RTON has a 200 ms preset and its rung is
+always on. Each case runs in steps that ``Scratch`` holds. Step 0 ends on the scan where the
+RTON's Acc first reads its 200 ms preset or more. Its reset (C701, C703) is then on until
+the clock reads 200 ms. The clock times from the reset's first scan.
 Each step's rungs come below the RTON in reverse order, so each new step starts on the next
 scan.
 
@@ -42,8 +42,8 @@ scan.
   Result3 is 1 if Done is on once the clock reads 500 ms.  A reset that holds until the rung
   falls reads Result1 = 0, Result3 = 0, Result4 = 1.
 
-No CLICK has read these two cases.  Every expectation is pyrung's.  The group owns what
-``memory.OWNED_APART`` lists under it.  The two RTON cases raise ``Fired`` in their last step.
+No CLICK has run these two cases, so every expectation is pyrung's. The group owns what
+``memory.OWNED_APART`` lists under it. The two RTON cases raise ``Fired`` in their last step.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 
 def _rton(slot: Any, rton: ClickTimer, holding: Any) -> None:
-    # The RTON's rung is always on.  Its reset is on while *holding* is.
+    # The RTON's rung is always on. Its reset is on while *holding* is.
     with Rung(slot.Cmd != 0):
         on_delay(rton, 200).reset(Or(slot.Cmd == 0, holding))
 
@@ -227,7 +227,10 @@ def test_reset_pins():
 
 @pytest.mark.parametrize("dt", [0.0004, 0.001, 0.010, 0.025, 0.040])
 def test_rton_resets_at_any_scan(monkeypatch, dt):
-    """The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms."""
+    """Run the RTON cases at many scan times.
+
+    The CLICK scans in about 1 ms or less, the soft PLC in 10..40 ms.
+    """
     monkeypatch.setattr(runner_module, "DT", dt)
     rtons = [replace(c, scans=int(1.0 / dt)) for c in group.cases if c.id.startswith("rton_")]
     assert_all_passed(run(Group("reset_pins", rtons)))

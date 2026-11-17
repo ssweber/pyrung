@@ -295,14 +295,15 @@ def read_frontier_motion(
     avoid_pred: Any = None,
     scans: int = 4,
 ) -> tuple[str, Any, Any] | None:
-    """A frontier value the unchanged program closes on by itself, as a projection shows.
+    """Return a frontier value that the unchanged program closes on by itself.
 
-    No instruction need own the motion: a calc fed its own result moves a tag as a timer
-    does.  Only a numeric frontier counts, and only one whose distance to its wanted value
-    never grows over the projected scans and ends smaller; a wrap or a step away is no
-    reading.  A value that moves every other scan is why it is more than one scan.
+    No instruction needs to own the motion.  A calc that is fed its own result moves a tag as
+    a timer does.  Only a numeric frontier counts.  Its distance to its wanted value must
+    never grow over the projected scans, and it must end smaller.  A wrap or a step away
+    does not count.  Some values move only every other scan, so the projection runs more
+    than one scan.
 
-    Returns ``(tag, before, after)``, or None.  Nothing is installed on *plc*.
+    Return ``(tag, before, after)``, or None.  Nothing is installed on *plc*.
     """
     wanted = [(tag, value) for tag, value in frontier if _numeric(value)]
     if not wanted:

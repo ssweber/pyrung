@@ -355,7 +355,7 @@ def _compile_shift_instruction(
     reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
         instr.reset_condition, ctx
     )
-    # A dynamic window wholly in a sparse block's gap: refused every scan, clock or not.
+    # A dynamic window wholly in a sparse block's gap is refused every scan, clock or not.
     empty_check = (
         [
             f"if not {range_indices}:",
@@ -397,10 +397,10 @@ def _compile_drum_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    """One scan of a drum, the routine of ``_DrumBaseInstruction.execute`` for every kind.
+    """Generate one scan of a drum, the routine of ``_DrumBaseInstruction.execute`` for every kind.
 
     A kind supplies its step's end (``_drum_end_lines``) and what it remembers
-    of every scan; a pin a drum does not have generates nothing.
+    of every scan.  A pin a drum does not have generates nothing.
     """
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
@@ -471,7 +471,8 @@ def _compile_drum_instruction(
     move = [f"{step_write} = _step", *clear_time]
     not_last = emit_cmp("_step", "<", str(step_count), paren=False)
 
-    # One action a scan, by priority: reset (a level), a jump edge, a jog edge, own logic.
+    # Each scan takes one action, chosen by priority: reset (a level), a jump edge, a jog
+    # edge, own logic.
     lines.extend(
         [
             "if _reset_active:",
@@ -483,7 +484,7 @@ def _compile_drum_instruction(
         ]
     )
     if has_jump:
-        # A step the drum does not have: nothing at all, and the scan is taken.
+        # A jump to a step the drum does not have does nothing, and the scan is taken.
         lines.extend(
             [
                 "elif _jump_edge:",
@@ -509,8 +510,9 @@ def _compile_drum_instruction(
                 *_indent_body(complete, 12),
             ]
         )
-    # Own logic, rung true: a correction (no row; it takes no scan), then with the
-    # flag off the return scan's row, or the step's time or event.
+    # Own logic with the rung true: a correction comes first (no row, and it takes no
+    # scan).  Then, with the flag off, comes the return scan's row, or the step's time
+    # or event.
     lines.extend(
         [
             "elif _enabled:",
@@ -552,13 +554,14 @@ def _drum_end_lines(
     instr: EventDrumInstruction | TimeDrumInstruction | TimeEventDrumInstruction,
     ctx: CodegenContext,
 ) -> list[str]:
-    """Own logic off the return scan: tick if the step has a time, and set ``_end_met``."""
+    """Generate own logic off the return scan: tick if the step has a time, and set ``_end_met``."""
     if isinstance(instr, EventDrumInstruction):
         key_base = ctx.state_key_for(instr)
         last_step = f"int({emit_mem_get(f'_drum_last_step:{key_base}', '0', quote='repr')})"
         return [
             *emit_choose("_step", "_event_curr", _event_drum_event_exprs(instr, ctx)),
-            # A step reached by a write to the register or a correction has spent its edge.
+            # A step reached by a write to the register, or by a correction, has spent its
+            # edge.
             f"_end_met = _event_curr and {emit_cmp('_step_raw', '==', last_step)}"
             f" and (not {emit_prev(f'_drum_event_prev:{key_base}')})",
         ]
@@ -627,9 +630,9 @@ def _time_event_end_exprs(
     instr: TimeEventDrumInstruction,
     ctx: CodegenContext,
 ) -> list[str]:
-    """Per step: its time is up (if it has a preset) and its event is on (if it has one)."""
+    """Return, per step, whether its time is up (if it has a preset) and its event is on."""
     snap_events = ctx._helper_condition_snapshots.get(id(instr), {}).get("events")
-    # Snapshots exist for the steps that have an event, in step order.
+    # Snapshots exist only for the steps that have an event, in step order.
     snapshots = iter(snap_events) if isinstance(snap_events, list) else None
     exprs: list[str] = []
     for preset, event in zip(instr.presets, instr.events, strict=True):

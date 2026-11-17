@@ -51,9 +51,8 @@ class GenericInstructionDebugHandler:
         )
         debug_substeps = getattr(instruction, "debug_substeps", None)
         if debug_substeps:
-            # A box reads its pins at one moment, as it starts (before any
-            # write of its own): the substeps trace a view taken here, the
-            # values the box will read.
+            # A box reads its pins once, as it starts and before any write of its own.  The
+            # substeps trace a view taken here, which holds the values the box will read.
             pin_view = execution.ctx._new_condition_view()
             for substep in debug_substeps:
                 substep_span = debugger._resolve_location(
@@ -199,8 +198,8 @@ class ForLoopInstructionDebugHandler:
             try:
                 for child in instruction.body:
                     if isinstance(child, Instruction):
-                        # A bare body box is a row of its own; it reads its
-                        # pins as it starts (the substeps trace that view).
+                        # A bare body box is a row of its own.  It reads its pins as it
+                        # starts, and the substeps trace that view.
                         yield from debugger._iter_instruction_steps(
                             debugger._make_instruction_state(
                                 execution=child_execution,

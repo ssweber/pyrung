@@ -430,7 +430,10 @@ class TestWriteBeforeRead:
         assert "Intermediate" not in root_tags
 
     def test_a_tag_its_instruction_reads_back_is_walked(self) -> None:
-        """An Acc or a continuous search's result carries over, so it is not scan-local."""
+        """Check that an Acc or the result of a continuous search is not scan-local.
+
+        Both carry over from one scan to the next.
+        """
         timer = Timer.clone("W")
         table = Block("Table", TagType.INT, 1, 20)
         result = Int("Result")
@@ -796,8 +799,11 @@ class TestForced:
         assert "is forced" not in text
 
     def test_the_force_on_a_contact_explains_a_rung_that_disagrees_with_it(self) -> None:
-        """Relay's rung writes it True mid-scan, the next rung reads that, then
-        the force puts it back: Motor is True beside a Relay that reads False."""
+        """Check a force that puts Relay back after a rung read it.
+
+        Relay's rung writes it True mid-scan, and the next rung reads that value.  Then the
+        force puts it back.  So Motor is True beside a Relay that reads False.
+        """
         plc = self._plc()
         plc.force("Go", True)
         plc.force("Relay", False)

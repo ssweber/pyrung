@@ -1,8 +1,9 @@
-"""Simulator control for DAP: RUN/STOP mode, pacing speed, state frames, Modbus.
+"""Handle the DAP requests that control the simulator.
 
-Owns pyrungSetMode, pyrungSetSpeed, and pyrungModbusInfo custom requests,
-Click address resolution for force/patch targets, and the
-``pyrungScanFrame`` bodies emitted after state changes outside continue.
+These cover RUN/STOP mode, pacing speed, state frames and Modbus.  This module
+handles the pyrungSetMode, pyrungSetSpeed and pyrungModbusInfo custom requests.
+It also resolves Click addresses for force and patch targets.  It builds the
+``pyrungScanFrame`` bodies that go out after state changes outside continue.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ class _SetSpeedRequestArgs:
 
 
 #: Requests answered without the state lock.  They must not wait behind a
-#: long command holding it, so no state frame check runs around them.
+#: long command that holds it, so no state frame check runs around them.
 LOCK_FREE_COMMANDS = frozenset(
     {
         "initialize",
@@ -67,9 +68,9 @@ def enter_stop_locked(adapter: Any) -> None:
 def request_stop_locked(adapter: Any) -> None:
     """Enter STOP now, or ask a running continue worker to do it as it pauses.
 
-    Entering STOP under a running worker would be undone by its next scan
-    (every scan starts with a STOP -> RUN transition), so the worker performs
-    the stop itself once it has stopped scanning.
+    A STOP entered under a running worker would be undone by the worker's next
+    scan, because every scan starts with a STOP -> RUN transition.  So the
+    worker enters STOP itself once it has stopped scanning.
     """
     if adapter._thread_running_locked():
         adapter._pending_stop = True
@@ -87,9 +88,10 @@ def set_mode_locked(
 ) -> None:
     """Change PLC mode, then apply *forces* and *patches* (targets already resolved).
 
-    ``run`` from STOP performs the STOP -> RUN transition (non-retentive
-    reset, forces and patches cleared) without executing a scan, so the
-    first scan sees the overrides given here.
+    Setting ``run`` while in STOP performs the STOP -> RUN transition without
+    executing a scan.  The transition resets non-retentive values and clears
+    forces and patches.  The overrides given here are applied after the
+    transition and before any scan, so the first scan sees them.
     """
     runner = adapter._require_runner_locked()
     if mode == "stop":
@@ -125,10 +127,10 @@ PAUSE_FIRST_VERBS = frozenset({"step", "run", "reload"})
 
 
 def pause_before_console_command(adapter: Any, expression: str) -> None:
-    """Pause a running continue worker if *expression* runs scans or swaps the runner (no lock held).
+    """Pause a running continue worker if *expression* runs scans or swaps the runner.
 
-    Anyone can drive and the last command wins: a ``step``, ``run`` or ``reload`` sent
-    while continue runs pauses it and then executes.
+    Call this without the state lock.  Anyone can drive, and the last command wins.  A
+    ``step``, ``run`` or ``reload`` sent while continue runs pauses it and then executes.
     """
     parts = expression.strip().split(None, 1)
     if parts and parts[0].lower() in PAUSE_FIRST_VERBS:
@@ -240,11 +242,12 @@ def on_pyrung_modbus_info(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 def resolve_target_locked(adapter: Any, target: str) -> str:
     """Return the tag name for *target*, a tag name or a Click address.
 
-    Tag names win, so tags named like addresses (codegen names un-nicknamed
-    operands ``X003``) keep working.  A Click address ("X001", "ds10")
-    resolves through the session TagMap and the project's Click bank blocks.
-    Anything else is an unknown target: forcing or patching it would only
-    create a tag the program never reads.
+    A tag name wins over an address, so tags named like addresses keep working
+    (codegen names un-nicknamed operands ``X003``).  A Click address ("X001",
+    "ds10") resolves through the session TagMap and the project's Click bank
+    blocks.  The function raises ``DAPAdapterError`` for any other target.  It
+    refuses the target because forcing or patching it would only create a tag
+    that the program never reads.
     """
     runner = adapter._require_runner_locked()
     if (
@@ -285,8 +288,8 @@ def resolve_target_locked(adapter: Any, target: str) -> str:
 def state_fingerprint_locked(adapter: Any) -> tuple[Any, ...] | None:
     """Return a cheap value that changes whenever a state frame is due.
 
-    While continue runs, committed scans are reported by the worker's own
-    frames, so the committed state is left out of the fingerprint.
+    While continue runs, the worker's own frames report committed scans, so the
+    fingerprint leaves out the committed state.
     """
     runner = adapter._runner
     if runner is None:
@@ -344,11 +347,14 @@ def frame_body_locked(
 
 
 def state_frame_body_locked(adapter: Any, source: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Frame for a state change outside the continue worker's own cadence."""
+    """Return a frame body for a state change outside the continue worker's own cadence.
+
+    Return None if there is no runner or configuration is not done.
+    """
     if adapter._runner is None or not adapter._configuration_done:
         return None
-    # After a step, carry the same trace that step's ``pyrungTrace`` did, so
-    # editor decorations keep showing it rather than a merged scan.
+    # After a step, carry the same trace that the step's ``pyrungTrace`` did.  Editor
+    # decorations then keep showing it rather than a merged scan.
     trace_body = None
     if adapter._last_trace_was_step and not adapter._thread_running_locked():
         trace_body = adapter._current_trace_body_locked()
@@ -361,7 +367,7 @@ def state_frame_body_locked(adapter: Any, source: dict[str, Any] | None) -> dict
 
 
 def request_source(command: str, args: Any) -> dict[str, Any]:
-    """``source`` of a frame caused by a DAP request."""
+    """Return the ``source`` of a frame caused by a DAP request."""
     if command == "evaluate" and isinstance(args, dict):
         expression = args.get("expression")
         if isinstance(expression, str) and expression.strip():

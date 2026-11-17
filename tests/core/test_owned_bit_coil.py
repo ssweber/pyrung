@@ -1,4 +1,4 @@
-"""Coils on a bit a timer or counter owns are refused when the Program closes."""
+"""When a Program closes, it rejects a coil on a bit that a timer or counter owns."""
 
 from types import SimpleNamespace
 

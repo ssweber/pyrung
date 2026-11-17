@@ -53,8 +53,8 @@ class TestAnnotatedFunctionOutput:
 
 
 def test_to_ascii_target_domain_covers_every_byte():
-    """A TXT is a whole byte: copy(chr(200), DS, to_ascii) writes 200, so the
-    inferred domain of the target must reach 255, not stop at 127."""
+    """A TXT is a whole byte.  copy(chr(200), DS, to_ascii) writes 200, so the
+    inferred domain of the target must reach 255 and not stop at 127."""
     from pyrung.core import Block, Int, TagType
     from pyrung.core.analysis.prove.classify import _domain_from_copy_convert
     from pyrung.core.copy_converters import to_ascii

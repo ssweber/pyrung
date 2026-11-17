@@ -3,11 +3,11 @@
 ``toggle``, ``debounce``, ``flasher`` and ``timed`` are driven by a random rung
 sequence, one level per scan.  Each is checked against a small model written
 from the documented behaviour (``docs`` and the hardware-recorded
-``tests/conformance/coils/test_out.py`` cases), and every scan the interpreter and
+``tests/conformance/coils/test_out.py`` cases).  On every scan the interpreter and
 the compiled kernel must hold identical state.
 
 Scan periods are binary fractions of a second (62.5 ms and up), so a unit
-count is exact and the models can use ``Fraction`` arithmetic: the timers
+count is exact and the models can use ``Fraction`` arithmetic.  The timers
 accumulate ``floor(n * units_per_scan)`` over ``n`` steady scans.
 """
 
@@ -50,12 +50,12 @@ def _per_scan(dt: float, unit: str) -> Fraction:
 
 
 def _acc(scans: int, per_scan: Fraction) -> int:
-    """A timer's accumulator after *scans* uninterrupted scans of timing."""
+    """Return a timer's accumulator after *scans* uninterrupted scans of timing."""
     return min(math.floor(scans * per_scan), _ACC_MAX)
 
 
 def _ticks_to_reach(preset: int, per_scan: Fraction) -> int:
-    """Scans of timing until the accumulator reaches *preset* (at least one)."""
+    """Return the scans of timing until the accumulator reaches *preset* (at least one)."""
     scans = 1
     while _acc(scans, per_scan) < preset:
         scans += 1
@@ -72,7 +72,7 @@ def _build(coil_factory) -> Program:
 def _drive(logic: Program, dt: float, levels: list[bool]) -> list[dict]:
     """Step both backends over *levels*; return the interpreter's tags per scan.
 
-    Fails if the compiled kernel ever holds different tags or memory.
+    Fail if the compiled kernel ever holds different tags or memory.
     """
     plc = PLC(logic, dt=dt)
     kernel = CompiledPLC(logic, dt=dt)
@@ -102,7 +102,7 @@ unit_st = st.sampled_from(UNITS)
 
 
 def toggle_model(levels: list[bool]) -> list[bool]:
-    """Inverts on each OFF->ON edge (the rung counts as OFF before scan 1)."""
+    """Invert on each OFF->ON edge.  The rung counts as OFF before scan 1."""
     state, prev, out = False, False, []
     for level in levels:
         if level and not prev:
@@ -126,14 +126,16 @@ def test_toggle_flips_once_per_rising_edge(levels):
 def debounce_model(
     levels: list[bool], per_scan: Fraction, on_preset: int, off_preset: int
 ) -> list[tuple[bool, int, int]]:
-    """(coil, on TD, off TD) per scan: the coil follows the input once it has
-    held steady for the side's time, and holds in between.  The on TD starts
-    from 0 when the input rises and is kept after it falls (hardware,
-    2026-11-05); the off TD is 0 while the input is on and counts from the
-    fall's scan, but the off side compares the TD as the scan before left it,
-    and not on the fall's scan (hardware, 2026-11-06).  The off TD counts only
-    while the coil is on, and holds with it off (hardware, 2026-11-12).  The
-    input counts as off before scan 1."""
+    """Return (coil, on TD, off TD) per scan.
+
+    The coil follows the input once it has held steady for the side's time, and holds
+    in between.  The on TD starts from 0 when the input rises and is kept after it
+    falls (hardware, 2026-11-05).  The off TD is 0 while the input is on and counts
+    from the fall's scan.  The off side compares the TD as the scan before left it,
+    not as it is on the fall's scan (hardware, 2026-11-06).  The off TD counts only
+    while the coil is on, and holds with it off (hardware, 2026-11-12).  The input
+    counts as off before scan 1.
+    """
     coil, run_len, prev, out = False, 0, False, []
     on_td = off_td = 0
     for level in levels:
@@ -186,13 +188,15 @@ def test_debounce_follows_a_steady_input(levels, dt, unit, on_preset, off_preset
 def flasher_model(
     levels: list[bool], per_scan: Fraction, on_preset: int, off_preset: int
 ) -> list[bool]:
-    """The coil per scan.  Each time the rung goes true a run starts at scan 1,
-    always in an on phase, both TDs from 0 (hardware, probe O4 and 2026-11-05).
-    A phase ends on the scan its timer reaches the preset, and that scan still
-    shows it (hardware, ``flash_zero/short_first_phase``), so from scan 1 on
-    and off phases run ``ka`` and ``kb`` scans.  An on or off time of 0 or
-    below holds it dark (hardware, ``out_more/zero_and_below`` and
-    ``flasher_off``)."""
+    """Return the coil per scan.
+
+    Each time the rung goes true a run starts at scan 1, always in an on phase, with
+    both TDs from 0 (hardware, probe O4 and 2026-11-05).  A phase ends on the scan its
+    timer reaches the preset, and that scan still shows it (hardware,
+    ``flash_zero/short_first_phase``).  So from scan 1, the on and off phases run ``ka``
+    and ``kb`` scans.  An on or off time of 0 or below holds the coil dark (hardware,
+    ``out_more/zero_and_below`` and ``flasher_off``).
+    """
     ka = _ticks_to_reach(on_preset, per_scan)
     kb = _ticks_to_reach(off_preset, per_scan)
     out, n = [], 0
@@ -237,12 +241,15 @@ def test_flasher_alternates_and_restarts_with_an_on_phase(levels, dt, unit, on_p
 def timed_model(
     levels: list[bool], per_scan: Fraction, preset: int, maintained: bool
 ) -> list[bool]:
-    """(coil, TD) per scan.  A rising edge outside a pulse starts one, the TD
-    from 0, that runs out whatever the rung does; the edge's scan is a tick, as
-    on_delay's first scan is, so a preset of a scan or less gives no pulse.
-    Not maintained, the coil is off after the pulse; maintained, it follows
-    the rung.  The TD holds after the pulse, the rung false included
-    (hardware, 2026-11-05).  The rung counts as off before scan 1."""
+    """Return (coil, TD) per scan.
+
+    A rising edge outside a pulse starts one, with the TD from 0, and it runs out
+    whatever the rung does.  The edge's scan is a tick, as on_delay's first scan is,
+    so a preset of a scan or less gives no pulse.  If the coil is not maintained, it
+    is off after the pulse.  If it is maintained, it follows the rung.  The TD holds
+    after the pulse, the rung false included (hardware, 2026-11-05).  The rung counts
+    as off before scan 1.
+    """
     timing, prev, ticks, td, out = False, False, 0, 0, []
     for level in levels:
         if level and not prev and not timing:

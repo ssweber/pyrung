@@ -1,4 +1,4 @@
-"""What a how() may spend: the ledger in work units and the clock behind it."""
+"""Test the limits on what a how() may spend: the ledger in work units and the clock behind it."""
 
 from __future__ import annotations
 
@@ -102,17 +102,17 @@ class TestTheLedger:
         assert ledger.spent == 3 + 1
 
     def test_a_how_cannot_run_free_in_the_loop(self) -> None:
-        # Its 2,000,000 loop scans would be 20,000 units.  The seek's own budget is logical,
-        # so what ends it is a search that has spent its work.
+        # Its 2,000,000 loop scans would be 20,000 units. The seek's own budget is logical,
+        # so the search ends when it has spent its work.
         plan = _slow_lamp(2_000_000).how(Lamp, max_scans=200)
         assert plan.status is PlanStatus.STOPPED
         assert plan.reason.startswith("budget exhausted")
 
 
 class TestTheLoopDoesNotMoveTheLedger:
-    # A wait's scans are priced by where they fall, so a search spends the same whichever
-    # scans the loop runs.  With no trace allowed the loop never runs, and every scan is
-    # interpreted.
+    # A wait's scans are priced by where they fall, so a search spends the same amount
+    # whichever scans the loop runs. With no trace allowed the loop never runs, and every
+    # scan is interpreted.
 
     @pytest.mark.parametrize(
         ("preset", "max_scans", "status"),
@@ -151,10 +151,11 @@ class _Stateful:
 
 @pytest.fixture
 def most_calls(request: pytest.FixtureRequest) -> int:
-    """What a search over 3000 scans may call the function, a scan being one call.
+    """Return how many calls a search over 3000 scans may make to the function, one per scan.
 
-    Under lockstep every coast's twin calls it too, and so do the windows stepped again to
-    compare (21002 calls, measured), still far under a seek that ignores the ledger (120000).
+    Under lockstep, every coast's twin calls the function too, and so do the windows that are
+    stepped again to compare. That came to 21002 calls when measured. It is still far under the
+    120000 calls of a seek that ignores the ledger.
     """
     return 3200 * (10 if request.config.getoption("fold_check", default=False) else 1)
 
@@ -174,7 +175,7 @@ def _no_loop(preset_scans: int) -> tuple[PLC, _Stateful]:
 
 
 class TestASearchWithNoLoop:
-    # Every scan is interpreted, and max_scans is how many of them it may run.
+    # Every scan is interpreted. max_scans is the number of scans that the search may run.
 
     def test_a_long_timer_stops_at_the_ledger(self, most_calls: int) -> None:
         plc, function = _no_loop(120_000)
@@ -184,7 +185,7 @@ class TestASearchWithNoLoop:
         assert function.calls < most_calls
 
     def test_it_stops_at_what_it_may_hold(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # The bound on memory, for when max_scans is no bound at all.
+        # This bounds memory, for when max_scans is no bound at all.
         monkeypatch.setattr(budget, "MAX_SEARCH_BLOCKS", 1_000)
         monkeypatch.setattr(budget, "_MOST_POLLS_PER_COUNT", 1)
         plc, _function = _no_loop(1_000_000)
@@ -230,8 +231,8 @@ def _writes_a_read_only_system_tag() -> None:
 
 
 class TestAWaitNoLoopMayRun:
-    # Each scan of it costs a unit, so the ledger stops a target it cannot reach.  At a
-    # hundredth a scan, how() would run on until its clock.
+    # Each scan of it costs a unit, so the ledger stops a search for a target it cannot
+    # reach. At a hundredth of a unit per scan, how() would run on until its clock ended it.
 
     @pytest.mark.parametrize(
         "rung",
@@ -289,8 +290,8 @@ class TestAWaitNoLoopMayRun:
     def test_a_stop_predicate_that_comes_to_read_what_the_loop_cannot_watch(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # It reads only Lamp until Lamp turns on, and then a tag that moves on every scan.  The
-        # scans from there cost a unit each, and the loop runs the scans before.
+        # It reads only Lamp until Lamp turns on, and then reads a tag that moves on every
+        # scan. Each scan from there costs a unit, and the loop runs the scans before.
         counter = system.sys.scan_counter.name
 
         def predicate(state: Any) -> bool:
@@ -331,7 +332,7 @@ class TestAWaitNoLoopMayRun:
                     on_kernel_scan=executed.add,
                     loop_scans_per_unit=100,
                 )
-            # The scans the ledger charges a unit each.
+            # The ledger charges a unit for each of these scans.
             return plc.state.scan_id, sorted(executed - plc._loop_priced_scans)
 
         loop_scans = scan_trace.TOTALS["loop scans"]
@@ -354,7 +355,7 @@ def _linked_motor() -> PLC:
 
 
 class TestAStopIsNotAVerdict:
-    # A physical link that the search has not got past yet is not one it cannot get past.
+    # If the search has not yet got past a physical link, that does not mean it cannot.
 
     def test_the_program_reaches_its_target(self) -> None:
         plan = _linked_motor().how(y_Done, wall_clock_s=None)
@@ -376,7 +377,7 @@ class TestAStopIsNotAVerdict:
 
 class TestTheMemoryPoll:
     def _polls_until_it_raises(self, monkeypatch: pytest.MonkeyPatch, rate: int) -> tuple[int, int]:
-        """The polls and the blocks held when a search adding *rate* blocks a poll is stopped."""
+        """Return the polls and blocks held when a search that adds *rate* blocks per poll stops."""
         monkeypatch.setattr(budget, "MAX_SEARCH_BLOCKS", 1_000_000)
         counts = 0
         held = 0
@@ -406,7 +407,7 @@ class TestTheMemoryPoll:
         counts, held = self._polls_until_it_raises(monkeypatch, 23)
         assert held <= 1_000_000 + 23
         polls = held // 23
-        # Every 64th poll, and every poll only for the last stretch before the cap.
+        # It counts every 64th poll, and counts every poll only in the last stretch before the cap.
         assert counts < polls / 50
 
     def test_a_rate_that_jumps_shows_within_the_most_polls(
@@ -427,7 +428,8 @@ class TestTheMemoryPoll:
 
 
 class TestATerminal:
-    # What a terminal reads is no search's: a limit there would end the search a second time.
+    # What a terminal reads does not belong to any search. A limit there would end the
+    # search a second time.
 
     @pytest.mark.parametrize(
         ("max_scans", "reason"),
@@ -466,11 +468,12 @@ class TestATerminal:
 
 
 class TestARefusedQuestion:
-    # Scans the search cannot afford to read are not evidence that nothing happened in them.
+    # If the search cannot afford to read some scans, that is not evidence that nothing
+    # happened in them.
 
     @pytest.fixture
     def unrecorded(self, monkeypatch: pytest.MonkeyPatch) -> PLC:
-        """A fork in a search, whose scans have no records and may not get them."""
+        """Return a fork in a search. Its scans have no records and may not get any."""
         monkeypatch.setattr(coast_run, "MAX_RECORD_RUNS", 0)
         monkeypatch.setattr(runner, "SETTLE_SCAN_LIMIT", 0)
         plc = _slow_lamp(100_000).fork()
@@ -509,7 +512,7 @@ class TestARefusedQuestion:
         assert "physical link" not in plan.reason
 
     def test_what_the_terminal_reads_cannot_end_a_search_again(self, monkeypatch) -> None:
-        # The clock is out, and a BaseException out of how() would reach the caller raw.
+        # The clock has run out. A BaseException out of how() would reach the caller raw.
         monkeypatch.setattr(budget, "WALL_CLOCK_ENABLED", True)
         terminal_polled = []
         real = pilot_module._stopped_events
@@ -551,7 +554,7 @@ class TestTheClock:
         assert budget.WallClock.starting_now(budget.DEFAULT_WALL_CLOCK_S) is None
 
     def test_a_loop_stretch_stops_for_the_clock(self, monkeypatch) -> None:
-        # The clock runs out once the search is in the loop, with scans behind it.
+        # The clock runs out after the search is in the loop and has scans behind it.
         from pyrung.core import coast_run
 
         real = coast_run._try_stretch

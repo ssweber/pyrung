@@ -233,7 +233,7 @@ class TestEquality:
         assert state != 3
 
     def test_hash_is_the_hash_of_a_map_of_its_fields(self):
-        # What a key built from a state was worth before it stopped being a map.
+        # A state hashes like a map of its fields, as it did when a state was a map.
         state = _full_state()
         assert hash(state) == hash(pmap(_fields_of(state)))
 
@@ -380,7 +380,7 @@ class TestMappingSurface:
             _ = state.nope
 
     def test_the_map_methods_gone_with_the_map(self):
-        # Reported in the CHANGELOG: a state reads as a mapping, it no longer is a PMap.
+        # Reported in the CHANGELOG: a state reads as a mapping but is no longer a PMap.
         state = _full_state()
         assert not isinstance(state, PMap)
         for name in (
@@ -437,8 +437,8 @@ class TestCopying:
         assert hash(loaded) == hash(state)
 
     def test_reduces_to_what_the_map_form_reduced_to(self):
-        # The format a state pickled in when it was a PRecord, both ways: an old pickle
-        # still loads, and a new one loads on an older pyrung.
+        # A state pickles in the format it had when it was a PRecord.  An old pickle still
+        # loads, and a new one loads on an older pyrung.
         from pyrung.core import SystemState
 
         state = _full_state()

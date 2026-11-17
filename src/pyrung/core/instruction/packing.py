@@ -35,13 +35,16 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
 
 
-# Pack and Unpack are Copy tabs on a CLICK: their flags follow them as Copy's do.
+# Pack and Unpack are Copy tabs on a CLICK, so their flags follow them as Copy's flags do.
 _COPY_FAULTS = ("fault.address_error", "fault.out_of_range")
 
 
 def _skip_on_bad_pointer(func: Callable[..., None]) -> Callable[..., None]:
-    """A pointer below its bank sets the address-error flag and skips the
-    instruction; one past its bank drops the write with no flag."""
+    """Wrap an instruction's execute method to handle a pointer outside its bank.
+
+    If the pointer is below its bank, set the address-error flag and skip the instruction.
+    If the pointer is past its bank, drop the write and set no flag.
+    """
 
     @wraps(func)
     def wrapper(self: Any, ctx: ScanContext, enabled: bool) -> None:
@@ -187,7 +190,7 @@ class PackTextInstruction(OneShotMixin, Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         from pyrung.core.tag import TagType
 
-        # The type only: a pointer in the destination counts once the text parses.
+        # Take only the type here.  A pointer in the destination counts once the text parses.
         dest_type = (
             self.dest.block._get_tag(self.dest.block.start)
             if isinstance(self.dest, (IndirectRef, IndirectExprRef))
