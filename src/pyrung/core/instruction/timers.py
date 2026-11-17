@@ -8,7 +8,13 @@ from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import _parse_time_unit
 
-from .advance import AdvanceProfile, ConditionDemand, monotone_profile
+from .advance import (
+    AdvanceProfile,
+    ConditionDemand,
+    monotone_profile,
+    recorded_completion_controls,
+    recorded_prepare,
+)
 from .base import Instruction
 from .utils import (
     elapsed_units,
@@ -175,14 +181,7 @@ class OnDelayInstruction(Instruction):
             restore_is_pulse=isinstance(
                 self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
             ),
-            completion_controls=(
-                ConditionDemand(self.enable_condition, True),
-                *(
-                    (ConditionDemand(self.reset_condition, False),)
-                    if self.reset_condition is not None
-                    else ()
-                ),
-            ),
+            completion_controls=recorded_completion_controls(self),
         )
 
 
@@ -315,4 +314,5 @@ class OffDelayInstruction(Instruction):
             advance=ConditionDemand(self.enable_condition, False),
             done_at_boundary=False,
             restore=ConditionDemand(self.enable_condition, True),
+            prepare=recorded_prepare(self),
         )
