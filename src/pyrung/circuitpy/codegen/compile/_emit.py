@@ -27,7 +27,7 @@ def _key_literal(key: str, quote: Quote) -> str:
     return repr(key) if quote == "repr" else f'"{key}"'
 
 
-def emit_mem_get(key: str, default: str, *, quote: Quote = "repr") -> str:
+def emit_mem_get(key: str, default: str, *, quote: Quote = "double") -> str:
     """The instruction memory cell *key*, or *default* while it is unwritten."""
     return f"_mem.get({_key_literal(key, quote)}, {default})"
 
@@ -42,32 +42,27 @@ def _frac_key(acc: Tag) -> str:
     return f"_frac:{acc.name}"
 
 
-def emit_frac_get(acc: Tag, *, quote: Quote = "repr") -> str:
-    return emit_mem_get(_frac_key(acc), "0", quote=quote)
+def _frac_get(acc: Tag) -> str:
+    return emit_mem_get(_frac_key(acc), "0")
 
 
-def emit_frac(acc: Tag, value: str, *, quote: Quote = "repr") -> str:
+def emit_frac(acc: Tag, value: str, *, quote: Quote = "double") -> str:
     return emit_mem_set(_frac_key(acc), value, quote=quote)
 
 
 def emit_frac_keep(acc: Tag) -> str:
     """A store of *acc*'s fraction back into its cell, so a scan that does not tick writes it."""
-    return emit_frac(acc, emit_frac_get(acc, quote="double"), quote="double")
+    return emit_frac(acc, _frac_get(acc))
 
 
 def emit_prev(key: str, *, cast: bool = True) -> str:
-    """A bit as the instruction memory *key* last stored it.  It reads off until the first store.
+    """A bit as the instruction memory *key* last stored it.  It reads False until the first store.
 
     Edge contacts and counter inputs read the cell without ``bool()`` (``cast=False``).
     Every other emitter wraps it.
     """
-    read = emit_mem_get(key, "False")
+    read = emit_mem_get(key, "False", quote="repr")
     return f"bool({read})" if cast else read
-
-
-def emit_prev_store(key: str, now: str) -> str:
-    """A store of this scan's bit *now* into *key*, for the next scan's :func:`emit_prev`."""
-    return emit_mem_set(key, now)
 
 
 def emit_rise(now: str, key: str, *, cast: bool = True, paren: bool = False) -> str:
@@ -87,33 +82,31 @@ def _indented(lines: Sequence[str]) -> list[str]:
 
 def emit_oneshot(
     key: str,
-    enabled: str | bool,
+    enabled: str,
     *,
     fire: Sequence[str],
     off: Sequence[str],
     held: Sequence[str] = (),
     before: Sequence[str] = (),
 ) -> list[str]:
-    """A one-shot that runs *fire* on the first enabled scan, at no indent.
+    """A one-shot that runs *fire* on the first scan the rung test *enabled* is on.
 
     *off* runs while the rung is off, and *held* runs on each later enabled scan.  *before*
-    runs on every enabled scan ahead of the test.  A literal *enabled* (``True`` or
-    ``False``) leaves the rung test out.
+    runs on every enabled scan ahead of the test.  A literal ``True`` enable leaves the rung
+    test out.  The lines have no indent.
     """
-    if enabled is False:
-        return [emit_prev_store(key, "False"), *off]
-    fired = [f"if not {emit_prev(key)}:", *_indented([*fire, emit_prev_store(key, "True")])]
+    fired = [f"if not {emit_prev(key)}:", *_indented([*fire, emit_mem_set(key, "True")])]
     if held:
         fired += ["else:", *_indented(held)]
-    if enabled is True:
+    if _bool_literal(enabled) is True:
         return [*before, *fired]
-    lines = [f"if not ({enabled}):", *_indented([emit_prev_store(key, "False"), *off])]
+    lines = [f"if not ({enabled}):", *_indented([emit_mem_set(key, "False"), *off])]
     if before:
         return [*lines, "else:", *_indented([*before, *fired])]
     return [*lines, f"el{fired[0]}", *fired[1:]]
 
 
-def emit_saturate(value: str, high: int, low: int | None = None) -> str:
+def _saturate(value: str, high: int, low: int | None = None) -> str:
     """*value* held at or below *high*, and at or above *low* when it is given.
 
     The timers write ``min(value, high)``, and the counters write
@@ -132,11 +125,11 @@ def _carry_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext) -> list[str]:
     """
     ctx.timer_unit_ns[acc.name] = unit.ns
     if ctx.kernel_runtime:
-        dt_ns = f"_dt_to_ns({emit_mem_get('_dt', '0.0', quote='double')})"
+        dt_ns = f"_dt_to_ns({emit_mem_get('_dt', '0.0')})"
     else:
-        dt_ns = emit_mem_get("_dt_ns", "0", quote="double")
+        dt_ns = emit_mem_get("_dt_ns", "0")
     return [
-        f"_carry = {emit_frac_get(acc, quote='double')} + {dt_ns}",
+        f"_carry = {_frac_get(acc)} + {dt_ns}",
         f"_int_units = _carry // {unit.ns}",
         f"_new_frac = _carry % {unit.ns}",
     ]
@@ -147,24 +140,23 @@ def emit_tick(
     unit: TimeUnit,
     ctx: CodegenContext,
     *,
-    read: Literal["local", "inline", "caller"],
-    acc_read: str = "",
+    acc_read: str | None,
+    inline: bool = False,
     max_acc: int = _INT_MAX,
     frac_first: bool = False,
 ) -> list[str]:
     """Lines that add this scan's time to *acc* in ``_acc``, held at *max_acc*.
 
     The rest of a unit is left in ``_new_frac`` for the caller to store.  The drum stores it
-    before the add (``frac_first``).  *read* says where Acc comes from.  ``"local"`` reads
-    *acc_read* into ``_acc`` first, ``"inline"`` reads it inside the add, and ``"caller"``
-    adds to an ``_acc`` the caller has read.
+    before the add (``frac_first``).  The tick reads Acc with *acc_read* into ``_acc`` first,
+    or inside the add with *inline*.  With no *acc_read*, the caller has read ``_acc``.
     """
-    lines = [f"_acc = int({acc_read})"] if read == "local" else []
+    lines = [f"_acc = int({acc_read})"] if acc_read is not None and not inline else []
     lines += _carry_lines(acc, unit, ctx)
     if frac_first:
-        lines.append(emit_frac(acc, "_new_frac"))
-    start = f"int({acc_read})" if read == "inline" else "_acc"
-    lines.append(f"_acc = {emit_saturate(f'{start} + _int_units', max_acc)}")
+        lines.append(emit_frac(acc, "_new_frac", quote="repr"))
+    start = f"int({acc_read})" if inline else "_acc"
+    lines.append(f"_acc = {_saturate(f'{start} + _int_units', max_acc)}")
     return lines
 
 
@@ -176,17 +168,12 @@ def emit_count(acc_read: str, *, up: str | None, down: str | None) -> list[str]:
     """
     lines = [f"_acc = int({acc_read})"]
     if up is None:
-        return [
-            *lines,
-            f"if {down}:",
-            "    _acc -= 1",
-            f"_acc = {emit_saturate('_acc', _DINT_MAX, _DINT_MIN)}",
-        ]
+        lines += [f"if {down}:", "    _acc -= 1"]
+        return [*lines, f"_acc = {_saturate('_acc', _DINT_MAX, _DINT_MIN)}"]
     lines += ["_delta = 0", f"if {up}:", "    _delta += 1"]
     if down is not None:
         lines += [f"if {down}:", "    _delta -= 1"]
-    lines.append(f"_acc = {emit_saturate('_acc + _delta', _DINT_MAX, _DINT_MIN)}")
-    return lines
+    return [*lines, f"_acc = {_saturate('_acc + _delta', _DINT_MAX, _DINT_MIN)}"]
 
 
 def emit_done(
@@ -196,41 +183,40 @@ def emit_done(
     preset: str,
     *,
     preset_key: str | None,
+    frac: Tag | None = None,
     paren: bool = True,
-    then: Sequence[str] = (),
 ) -> list[str]:
     """Lines that read *preset*, set *done* from ``_acc`` *op* the preset, and store ``_acc``.
 
     *done* and *acc* are the write targets.  A *preset_key* also stores the preset for the
-    prover.  *then* runs just before the compare, where a timer stores its fraction.  The
-    off delay writes the compare without brackets (``paren=False``).
+    prover.  A timer passes its Acc as *frac*, which stores the fraction before the compare.
+    The off delay writes the compare without brackets (``paren=False``).
     """
     lines = [f"_preset = int({preset})"]
     if preset_key is not None:
         lines.append(emit_mem_set(preset_key, "_preset", quote="double"))
-    lines.extend(then)
-    lines.append(f"{done} = {emit_cmp('_acc', op, '_preset', paren=paren)}")
-    lines.append(f"{acc} = _acc")
-    return lines
+    if frac is not None:
+        lines.append(emit_frac(frac, "_new_frac"))
+    return [*lines, f"{done} = {emit_cmp('_acc', op, '_preset', paren=paren)}", f"{acc} = _acc"]
 
 
-def emit_timer_clear(
-    done: str, acc: str, *, frac: Tag | None = None, done_value: str = "False"
-) -> list[str]:
-    """Lines that set *done* to *done_value* and *acc* to 0, and clear *frac*'s fraction."""
-    lines = [emit_frac(frac, "0", quote="double")] if frac is not None else []
-    return [*lines, f"{done} = {done_value}", f"{acc} = 0"]
-
-
-_COMPARE_OPS = ("==", "!=", "<", "<=", ">", ">=")
+def emit_acc_rest(done: str, acc: str, *, frac: Tag | None = None) -> list[str]:
+    """Lines that set *done* to False and *acc* to 0, and clear *frac*'s fraction."""
+    lines = [emit_frac(frac, "0")] if frac is not None else []
+    return [*lines, f"{done} = False", f"{acc} = 0"]
 
 
 def emit_cmp(left: str, op: str, right: str, *, paren: bool = True) -> str:
     """The compare *left* *op* *right*, in brackets unless ``paren=False``."""
-    if op not in _COMPARE_OPS:
+    if op not in ("==", "!=", "<", "<=", ">", ">="):
         raise ValueError(f"Unsupported comparison: {op!r}")
     compare = f"{left} {op} {right}"
     return f"({compare})" if paren else compare
+
+
+def emit_reached(acc: str, preset: str) -> str:
+    """True once a timer's *acc* has reached *preset*."""
+    return emit_cmp(acc, ">=", preset, paren=False)
 
 
 def emit_truth(value: str, *, as_int: bool = False, negate: bool = False) -> str:
@@ -261,15 +247,11 @@ def emit_if_enabled(
 ) -> list[str]:
     """*body* under the rung test *enabled*, and *otherwise* under its ``else``.
 
-    With *fold*, a literal ``True`` or ``False`` enable leaves the test out and keeps only
-    the branch that runs.  The timers and the latch and reset coils write ``if True:``
-    (``fold=False``).
+    With *fold*, a literal ``True`` enable leaves the test out and keeps only *body*.  The
+    timers and the latch and reset coils write ``if True:`` (``fold=False``).
     """
-    literal = _bool_literal(enabled) if fold else None
-    if literal is True:
+    if fold and _bool_literal(enabled) is True:
         return list(body)
-    if literal is False:
-        return list(otherwise)
     lines = [f"if {enabled}:", *_indented(body)]
     if otherwise:
         lines += ["else:", *_indented(otherwise)]

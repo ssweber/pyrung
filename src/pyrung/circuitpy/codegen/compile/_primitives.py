@@ -17,7 +17,6 @@ from pyrung.circuitpy.codegen._constants import (
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
-    _bool_literal,
     _indent_body,
 )
 from pyrung.circuitpy.codegen.context import (
@@ -1001,7 +1000,6 @@ def _compile_guarded_instruction(
     disabled_body: list[str] | None = None,
 ) -> list[str]:
     sp = " " * indent
-    lines: list[str] = []
     settle = _fault_follow_lines(instr, ctx)
     # A Math clears its flags on every path, so the lines go ahead of the
     # one-shot test.  Any other instruction clears them only as its body runs.
@@ -1015,23 +1013,15 @@ def _compile_guarded_instruction(
             "    pass",
         ]
     disabled = [*idle, *(disabled_body or ())]
-    enabled_literal = _bool_literal(enabled_expr)
     if getattr(instr, "oneshot", False):
         key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
-        enabled = enabled_expr if enabled_literal is None else enabled_literal
-        oneshot = emit_oneshot(
-            key, enabled, fire=[*run_settle, *enabled_body], off=disabled, before=idle
-        )
-        lines.extend(f"{sp}{line}" for line in oneshot)
-        return lines
-
-    enabled_body = [*settle, *enabled_body]
-    lines.extend(
-        f"{sp}{line}" for line in emit_if_enabled(enabled_expr, enabled_body, otherwise=disabled)
-    )
-    return lines
+        fire = [*run_settle, *enabled_body]
+        oneshot = emit_oneshot(key, enabled_expr, fire=fire, off=disabled, before=idle)
+        return [f"{sp}{line}" for line in oneshot]
+    body = emit_if_enabled(enabled_expr, [*settle, *enabled_body], otherwise=disabled)
+    return [f"{sp}{line}" for line in body]
 
 
 def _compile_assignment_lines(

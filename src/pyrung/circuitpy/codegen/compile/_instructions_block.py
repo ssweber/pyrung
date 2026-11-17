@@ -39,7 +39,7 @@ from ._emit import (
     emit_mem_get,
     emit_mem_set,
     emit_prev,
-    emit_prev_store,
+    emit_reached,
     emit_rise,
     emit_tick,
 )
@@ -377,7 +377,7 @@ def _compile_shift_instruction(
         f"if {reset_expr}:",
         f"    for _idx in {range_indices}:",
         f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
-        emit_prev_store(key, "_clock_curr"),
+        emit_mem_set(key, "_clock_curr"),
     ]
     range_flush = _compile_range_flush(instr.bit_range, range_symbol, ctx)
     if range_flush:
@@ -420,7 +420,7 @@ def _compile_drum_instruction(
     if not isinstance(instr, EventDrumInstruction):
         clear_time = [
             f"{_compile_lvalue(instr.accumulator, ctx)} = 0",
-            emit_frac(instr.accumulator, "0"),
+            emit_frac(instr.accumulator, "0", quote="repr"),
         ]
     complete = [f"{flag_write} = True", *(f"{symbol} = False" for symbol in output_symbols)]
 
@@ -537,15 +537,15 @@ def _compile_drum_instruction(
                     "_event_curr",
                     _event_drum_event_exprs(instr, ctx),
                 ),
-                emit_prev_store(f"_drum_event_prev:{key_base}", "_event_curr"),
+                emit_mem_set(f"_drum_event_prev:{key_base}", "_event_curr"),
                 emit_mem_set(f"_drum_last_step:{key_base}", "_step"),
             ]
         )
-    lines.append(emit_prev_store(rung_prev_key, "_enabled and (not _reset_active)"))
+    lines.append(emit_mem_set(rung_prev_key, "_enabled and (not _reset_active)"))
     if has_jump:
-        lines.append(emit_prev_store(jump_prev_key, "_jump_curr"))
+        lines.append(emit_mem_set(jump_prev_key, "_jump_curr"))
     if has_jog:
-        lines.append(emit_prev_store(jog_prev_key, "_jog_curr"))
+        lines.append(emit_mem_set(jog_prev_key, "_jog_curr"))
 
     return [" " * indent + line for line in lines]
 
@@ -557,7 +557,7 @@ def _drum_end_lines(
     """Own logic off the return scan: tick if the step has a time, and set ``_end_met``."""
     if isinstance(instr, EventDrumInstruction):
         key_base = ctx.state_key_for(instr)
-        last_step = f"int({emit_mem_get(f'_drum_last_step:{key_base}', '0')})"
+        last_step = f"int({emit_mem_get(f'_drum_last_step:{key_base}', '0', quote='repr')})"
         return [
             *emit_choose(
                 "_step",
@@ -582,7 +582,7 @@ def _drum_end_lines(
         if ctx.proof_metadata:
             preset_key = prove_effective_preset_key(instr.completion_flag.name)
             lines.append(emit_mem_set(preset_key, "_limit"))
-        lines.append(f"_end_met = {_TIME_UP}")
+        lines.append(f"_end_met = {emit_reached('_acc', '_limit')}")
         return lines
 
     lines = []
@@ -615,10 +615,6 @@ def _drum_end_lines(
     return lines
 
 
-#: A timed step ends once its Acc reaches the preset this scan reads.
-_TIME_UP = emit_cmp("_acc", ">=", "_limit", paren=False)
-
-
 def _drum_tick_lines(
     instr: TimeDrumInstruction | TimeEventDrumInstruction, ctx: CodegenContext
 ) -> list[str]:
@@ -627,13 +623,7 @@ def _drum_tick_lines(
     acc_read = _compile_value(instr.accumulator, ctx)
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
     tick = emit_tick(
-        instr.accumulator,
-        instr.unit,
-        ctx,
-        read="local",
-        acc_read=acc_read,
-        max_acc=max_acc,
-        frac_first=True,
+        instr.accumulator, instr.unit, ctx, acc_read=acc_read, max_acc=max_acc, frac_first=True
     )
     return [*tick, f"{acc_write} = _acc"]
 
@@ -658,7 +648,7 @@ def _time_event_end_exprs(
     for preset, event in zip(instr.presets, instr.events, strict=True):
         parts: list[str] = []
         if preset is not None:
-            parts.append(f"({_TIME_UP})")
+            parts.append(f"({emit_reached('_acc', '_limit')})")
         if event is not None:
             if snapshots is not None:
                 parts.append(f"bool({next(snapshots)})")

@@ -92,7 +92,7 @@ from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 
-from ._emit import emit_cmp, emit_if_enabled, emit_prev, emit_prev_store, emit_truth
+from ._emit import emit_cmp, emit_if_enabled, emit_mem_set, emit_prev, emit_truth
 from ._primitives import (
     CALC_FLAGS,
     _appends_flags,
@@ -133,7 +133,7 @@ def _compile_edge_row(row: Any, ctx: CodegenContext, indent: int) -> list[str]:
         # Stored only when it changes: an unwritten memory reads off, as in
         # the interpreter, whose state holds no entry until a contact sees on.
         lines.append(f"{sp}if {now} != {was}:")
-        lines.append(f"{sp}    {emit_prev_store(key, now)}")
+        lines.append(f"{sp}    {emit_mem_set(key, now)}")
     return lines
 
 

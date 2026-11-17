@@ -31,7 +31,7 @@ from ._emit import (
     emit_mem_get,
     emit_mem_set,
     emit_prev,
-    emit_prev_store,
+    emit_reached,
     emit_rise,
     emit_tick,
 )
@@ -49,13 +49,8 @@ def _use_memory(ctx: CodegenContext) -> None:
 
 def _tick_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -> list[str]:
     """Advance *acc* by this scan's dt into ``_acc``; leave the remainder in ``_new_frac``."""
-    tick = emit_tick(acc, unit, ctx, read="inline", acc_read=_compile_value(acc, ctx))
+    tick = emit_tick(acc, unit, ctx, acc_read=_compile_value(acc, ctx), inline=True)
     return [f"{sp}{line}" for line in tick]
-
-
-def _reached(acc: str, preset: str) -> str:
-    """True once *acc* has reached *preset*."""
-    return emit_cmp(acc, ">=", preset, paren=False)
 
 
 def _compile_toggle_instruction(
@@ -78,7 +73,7 @@ def _compile_toggle_instruction(
             instr.target, f"not bool({_compile_value(target, ctx)})", ctx, indent + 4
         )
     )
-    lines.append(f"{sp}{emit_prev_store(key, '_en')}")
+    lines.append(f"{sp}{emit_mem_set(key, '_en')}")
     return lines
 
 
@@ -100,18 +95,18 @@ def _compile_debounce_instruction(
     return [
         f"{sp}_en = bool({enabled_expr})",
         f"{sp}_was = {emit_prev(rung_key)}",
-        f"{sp}{emit_prev_store(rung_key, '_en')}",
+        f"{sp}{emit_mem_set(rung_key, '_en')}",
         f"{sp}if _en:",
         f"{sp4}if not _was:",
         # A rise starts the on side from 0.
         f"{sp8}{on_write} = 0",
-        f"{sp8}{emit_frac(instr.on_acc, '0', quote='double')}",
+        f"{sp8}{emit_frac(instr.on_acc, '0')}",
         *_tick_lines(instr.on_acc, instr.unit, ctx, sp4),
-        f"{sp4}{emit_frac(instr.on_acc, '_new_frac', quote='double')}",
-        f"{sp4}{emit_frac(instr.off_acc, '0', quote='double')}",
+        f"{sp4}{emit_frac(instr.on_acc, '_new_frac')}",
+        f"{sp4}{emit_frac(instr.off_acc, '0')}",
         f"{sp4}{on_write} = _acc",
         f"{sp4}{off_write} = 0",
-        f"{sp4}if {_reached('_acc', f'int({_compile_value(instr.on_preset, ctx)})')}:",
+        f"{sp4}if {emit_reached('_acc', f'int({_compile_value(instr.on_preset, ctx)})')}:",
         f"{sp8}{target_write} = True",
         f"{sp}else:",
         f"{sp4}{emit_frac_keep(instr.on_acc)}",
@@ -121,12 +116,12 @@ def _compile_debounce_instruction(
         f"{sp4}else:",
         # The off side compares what it had reached before this scan, and not on the fall.
         f"{sp8}_timed_out = not _was and "
-        + _reached(
+        + emit_reached(
             f"int({_compile_value(instr.off_acc, ctx)})",
             f"int({_compile_value(instr.off_preset, ctx)})",
         ),
         *_tick_lines(instr.off_acc, instr.unit, ctx, sp8),
-        f"{sp8}{emit_frac(instr.off_acc, '_new_frac', quote='double')}",
+        f"{sp8}{emit_frac(instr.off_acc, '_new_frac')}",
         f"{sp8}{off_write} = _acc",
         f"{sp8}if _timed_out:",
         f"{sp12}{target_write} = False",
@@ -158,12 +153,12 @@ def _compile_flasher_phase(
     return [
         *_tick_lines(acc, instr.unit, ctx, sp),
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
-        f"{sp}if {_reached('_acc', limit)}:",
+        f"{sp}if {emit_reached('_acc', limit)}:",
         f"{sp4}_phase = {other_phase}",
-        f"{sp4}{emit_frac(instr.on_acc, '0', quote='double')}",
-        f"{sp4}{emit_frac(instr.off_acc, '0', quote='double')}",
+        f"{sp4}{emit_frac(instr.on_acc, '0')}",
+        f"{sp4}{emit_frac(instr.off_acc, '0')}",
         f"{sp}else:",
-        f"{sp4}{emit_frac(acc, '_new_frac', quote='double')}",
+        f"{sp4}{emit_frac(acc, '_new_frac')}",
         f"{sp4}{emit_frac_keep(other)}",
     ]
 
@@ -195,22 +190,22 @@ def _compile_flasher_instruction(
         f"{sp8}{emit_mem_set(phase_key, str(_FLASH_IDLE), quote='double')}",
         f"{sp8}{target_write} = False",
         f"{sp4}else:",
-        f"{sp8}_phase = {emit_mem_get(phase_key, str(_FLASH_IDLE), quote='double')}",
+        f"{sp8}_phase = {emit_mem_get(phase_key, str(_FLASH_IDLE))}",
         f"{sp8}if _phase == {_FLASH_IDLE}:",
         f"{sp12}_phase = {_FLASH_ON}",
         f"{sp12}{on_write} = 0",
         f"{sp12}{off_write} = 0",
-        f"{sp12}{emit_frac(instr.on_acc, '0', quote='double')}",
-        f"{sp12}{emit_frac(instr.off_acc, '0', quote='double')}",
+        f"{sp12}{emit_frac(instr.on_acc, '0')}",
+        f"{sp12}{emit_frac(instr.off_acc, '0')}",
         # The phase that starts now runs from 0, and the other's accumulator holds.
         f"{sp8}elif _phase == {_FLASH_ON_NEXT}:",
         f"{sp12}_phase = {_FLASH_ON}",
         f"{sp12}{on_write} = 0",
-        f"{sp12}{emit_frac(instr.on_acc, '0', quote='double')}",
+        f"{sp12}{emit_frac(instr.on_acc, '0')}",
         f"{sp8}elif _phase == {_FLASH_OFF_NEXT}:",
         f"{sp12}_phase = {_FLASH_OFF}",
         f"{sp12}{off_write} = 0",
-        f"{sp12}{emit_frac(instr.off_acc, '0', quote='double')}",
+        f"{sp12}{emit_frac(instr.off_acc, '0')}",
         # The coil shows the phase that runs this scan, even one that ends on it.
         f"{sp8}{target_write} = _phase == {_FLASH_ON}",
         f"{sp8}if _phase == {_FLASH_ON}:",
@@ -239,7 +234,7 @@ def _compile_timed_instruction(
     return [
         f"{sp}_en = bool({enabled_expr})",
         f"{sp}_rose = {emit_rise('_en', rung_key)}",
-        f"{sp}{emit_prev_store(rung_key, '_en')}",
+        f"{sp}{emit_mem_set(rung_key, '_en')}",
         f"{sp}_t_preset = int({_compile_value(instr.on_preset, ctx)})",
         f"{sp}_timing = bool({_compile_value(instr.target, ctx)}) and (",
         f"{sp4}{emit_cmp(f'int({_compile_value(instr.timer_acc, ctx)})', '<', '_t_preset', paren=False)}",
@@ -247,10 +242,10 @@ def _compile_timed_instruction(
         f"{sp}if _rose and not _timing:",
         f"{sp4}_timing = True",
         f"{sp4}{acc_write} = 0",
-        f"{sp4}{emit_frac(instr.timer_acc, '0', quote='double')}",
+        f"{sp4}{emit_frac(instr.timer_acc, '0')}",
         f"{sp}if _timing:",
         *_tick_lines(instr.timer_acc, instr.unit, ctx, sp4),
-        f"{sp4}{emit_frac(instr.timer_acc, '_new_frac', quote='double')}",
+        f"{sp4}{emit_frac(instr.timer_acc, '_new_frac')}",
         f"{sp4}{target_write} = {timing_target}",
         f"{sp4}{acc_write} = _acc",
         f"{sp}else:",
