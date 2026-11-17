@@ -256,8 +256,8 @@ def _evaluate_role_assignments(
     return findings
 
 
-# Coil instructions -> (pyrung verb, CLICK coil name).  Their target must be
-# bit memory; toggle() and the Out variants already take only a Bool tag.
+# Maps each coil instruction to its pyrung verb and CLICK coil name. The target must be
+# bit memory. toggle() and the Out variants already accept only a Bool tag.
 _COIL_TARGET_INSTRUCTIONS: dict[str, tuple[str, str]] = {
     "OutInstruction": ("out", "Out"),
     "LatchInstruction": ("latch", "Set"),
@@ -312,8 +312,10 @@ def _constant_into_bit(
     dest_location: ProgramLocation,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
-    """CLK_COPY_CONSTANT_INTO_BIT: CLICK's Copy and Fill dialogs refuse a constant
-    into bit memory (checked in the v4 editor, 2026-11-06)."""
+    """Report CLK_COPY_CONSTANT_INTO_BIT, a constant copied or filled into bit memory.
+
+    CLICK's Copy and Fill dialogs refuse it (checked in the v4 editor, 2026-11-06).
+    """
     bits = [memory_type for memory_type in dest_memory_types if memory_type in _BIT_BANKS]
     if not bits:
         return []
@@ -346,10 +348,11 @@ def _exponential_from_an_integer(
     source_location: ProgramLocation,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
-    """CLICK offers Exponential Numbering only for a Real source.
+    """Report Exponential Numbering on a Copy whose source is not a Real.
 
-    A DF, a DF pointer and a Real constant are Real sources.  This check runs before the
-    early return for a constant, so an integer constant is refused too.
+    CLICK offers Exponential Numbering only for a Real source. A DF, a DF pointer and a
+    Real constant are Real sources. This check runs before the early return for a
+    constant, so it also refuses an integer constant.
     """
     converter = getattr(instruction, "authored_convert", getattr(instruction, "convert", None))
     if not (
@@ -390,8 +393,11 @@ def _wide_constant_into_hex(
     dest_location: ProgramLocation,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
-    """CLK_COPY_WIDE_CONSTANT: a CLICK hex constant is 0h..FFFFh, so the export refuses a
-    constant into DH, XD or YD outside -32768..65535 (it writes -32768..-1 as its 16 bits)."""
+    """Report CLK_COPY_WIDE_CONSTANT, a constant too wide for a hex register.
+
+    A CLICK hex constant is 0h..FFFFh. The export refuses a constant into DH, XD or YD
+    outside -32768..65535. It writes -32768..-1 as its 16 bits.
+    """
     if isinstance(value, ImmediateRef):
         value = value.value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -437,8 +443,8 @@ def _evaluate_copy_compatibility(
         return findings
 
     operation, source_field, dest_field = mapping
-    # CLICK has no Fill of one register, so the export is a Copy. It must pass
-    # the Fill table too, so nothing a Fill refused becomes accepted.
+    # CLICK has no Fill of one register, so the export is a Copy. It must also pass the
+    # Fill table, so a Fill that CLICK refuses is never accepted this way.
     operations = (operation,)
     if operation == "fill" and single_register_fill_dest(instruction.dest) is not None:
         operations = ("fill", "single")
@@ -598,7 +604,7 @@ def _evaluate_pack_text(
     return findings
 
 
-# What CLICK v4's Search dialog takes (checked in the editor, 2026-11-06).
+# The banks that CLICK v4's Search dialog accepts (checked in the editor, 2026-11-06).
 _SEARCH_RANGE_BANKS = ("DS", "DD", "DH", "DF", "TD", "CTD", "TXT")
 _SEARCH_RESULT_BANKS = ("DS",)
 
@@ -609,9 +615,12 @@ def _evaluate_search_banks(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """CLK_SEARCH_RANGE_BANK and CLK_SEARCH_RESULT_NOT_DS: a Search range in a bank
-    CLICK's Search does not take, or a Result that is not a DS.  An unresolved
-    operand is reported by the write-target and bank checks."""
+    """Report CLK_SEARCH_RANGE_BANK and CLK_SEARCH_RESULT_NOT_DS.
+
+    The first is a Search range in a bank that CLICK's Search does not accept. The second
+    is a Result that is not a DS. The write-target and bank checks report an unresolved
+    operand.
+    """
     if type(instruction).__name__ != "SearchInstruction":
         return []
     findings: list[ClickFinding] = []
@@ -652,10 +661,10 @@ def _evaluate_search_banks(
     return findings
 
 
-# The banks CLICK v4's Math dialog takes as its Result (its Address Picker, 2026-11-16).
-# A decimal Math takes DS, DD, DF, TD, CTD and the writable SD.  A hex Math takes DH and YD.
-# The table needs no mode, because a Result in the other mode's bank makes a mixed Math.
-# CLK_MATH_MODE_MIXED flags that (``infer_calc_mode`` in calc.py).
+# The banks that CLICK v4's Math dialog accepts as its Result (its Address Picker,
+# 2026-11-16). A decimal Math accepts DS, DD, DF, TD, CTD and the writable SD. A hex Math
+# accepts DH and YD. The table needs no mode. A Result in the other mode's bank makes a
+# mixed Math, and CLK_MATH_MODE_MIXED flags that (``infer_calc_mode`` in calc.py).
 _MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "SD", "DH", "YD")
 
 
@@ -665,9 +674,11 @@ def _evaluate_math_dest_bank(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """CLK_MATH_DEST_BANK: a math() into a bank CLICK's Math Result does not take
-    (a bit, XD, TXT).  An unresolved destination, and an SD CLICK does not let a
-    program write, are reported by the write-target check."""
+    """Report CLK_MATH_DEST_BANK, a math() into a bank that CLICK's Math Result rejects.
+
+    Those banks are bit memory, XD and TXT. The write-target check reports an unresolved
+    destination and an SD that CLICK does not let a program write.
+    """
     if type(instruction).__name__ != "CalcInstruction":
         return []
     resolution = resolver.resolve_operand_slots(instruction.dest)
@@ -693,11 +704,11 @@ def _evaluate_math_dest_bank(
     ]
 
 
-# The fewest characters ``to_text()`` writes of a tag of each type, and whether that
-# is every value's length: zero suppressed, one or more; else an Int's five digits
-# (six with a sign), a Dint's ten (eleven), a Word's four hex digits.  A finite Real
-# has seven decimals, "0.0000000" or "0.0000000E+00" in exponential form, the
-# shortest; NaN and infinity are "nan", "inf" and "-inf".
+# The fewest characters that ``to_text()`` writes for a tag of each type, and whether
+# that is the length of every value. With zero suppressed the count is one or more.
+# Otherwise an Int is five digits (six with a sign), a Dint ten (eleven) and a Word four
+# hex digits. A finite Real has seven decimals. Its shortest form is "0.0000000", or
+# "0.0000000E+00" in exponential form. NaN and infinity are "nan", "inf" and "-inf".
 _FIXED_TEXT_WIDTH = {TagType.INT: (5, False), TagType.DINT: (10, False), TagType.WORD: (4, True)}
 _REAL_TEXT_WIDTH = 9
 _REAL_EXPONENTIAL_TEXT_WIDTH = 13
@@ -705,10 +716,10 @@ _REAL_EXPONENTIAL_TEXT_WIDTH = 13
 
 @dataclass(frozen=True)
 class _Written:
-    """How many elements a Copy writes from its destination on.
+    """Hold how many elements a Copy writes from its destination on.
 
-    *count* is every value's length when *exact*, else the fewest, for a finite
-    value only when *finite_only*.
+    *count* is the length of every value when *exact*, and the fewest otherwise. It
+    applies to a finite value only when *finite_only*.
     """
 
     count: int
@@ -722,7 +733,7 @@ class _Written:
         return f"{self.count} {what} or more{finite}"
 
     def dropped(self, room: int) -> str:
-        """What a store with *room* elements left drops."""
+        """Describe what a store with *room* elements left drops."""
         if self.exact:
             lost = self.count - room
             return "the last one" if lost == 1 else f"the last {lost}"
@@ -736,7 +747,10 @@ class _Written:
 
 
 def _fewest_elements_written(instruction: Any) -> _Written | None:
-    """How many elements a Copy writes from its destination on, or ``None`` for one."""
+    """Return how many elements a Copy writes from its destination on.
+
+    Return ``None`` when it writes one.
+    """
     source = instruction.source
     converter = instruction.convert
     if converter is None:
@@ -770,18 +784,18 @@ def _fewest_elements_written(instruction: Any) -> _Written | None:
 
 
 def _saved_constant_length(value: Any) -> int | None:
-    """How many characters CLICK saves for a Copy's constant, outer quotes left out.
+    """Return how many characters CLICK saves for a Copy's constant, without outer quotes.
 
     CLICK sets a text Copy's end address from this length, not from the text it writes
-    (1.5 into TXT1 ends at TXT3).  Text and a whole number count in the export's
-    spelling, which is CLICK's saved form.  A doubled quote counts twice, so "A""B"
-    ends at TXT4 (clicknick ``buildbot/jobs/lc-diff-click/RESULTS9-10.md``).
+    (1.5 into TXT1 ends at TXT3). Text and a whole number count in the export's spelling,
+    which is CLICK's saved form. A doubled quote counts twice, so "A""B" ends at TXT4
+    (clicknick ``buildbot/jobs/lc-diff-click/RESULTS9-10.md``).
 
-    A Real keeps at most 7 digits, so 3.4028235E+38 saves as 3.402823E+38.  From 1e7
-    up CLICK saves a Real in E form, 123456789.0 as 1.234568E+08 and 1e10 as 1E+10
-    (RESULTS9-10).  The export still spells those positionally, so this counts
-    CLICK's E form.  No CLICK answer covers a smaller Real's E form, so a smaller Real
-    counts in the export's spelling.
+    A Real keeps at most 7 digits, so 3.4028235E+38 saves as 3.402823E+38. From 1e7 up,
+    CLICK saves a Real in E form: 123456789.0 as 1.234568E+08 and 1e10 as 1E+10
+    (RESULTS9-10). The export still spells those positionally, so this function counts
+    CLICK's E form. No CLICK result covers the E form of a smaller Real, so a smaller
+    Real counts in the export's spelling.
     """
     from pyrung.click.ladder.translator import _float32, click_real_literal
 
@@ -805,11 +819,11 @@ def _saved_constant_length(value: Any) -> int | None:
 
 
 def constant_text_past_txt(instruction: Any, address: int) -> int | None:
-    """How many characters CLICK saves for a text Copy's constant into TXT *address*,
-    when they run past TXT1000, else ``None``.
+    """Return how many characters CLICK saves for a text Copy's constant into TXT *address*.
 
-    CLICK's Copy dialog refuses that store (OBJ-003).  CLICK's Copy accepts a register
-    source, which saves no end address, so a register source is not judged here.
+    Return ``None`` unless those characters run past TXT1000. CLICK's Copy dialog refuses
+    that store (OBJ-003). CLICK's Copy accepts a register source, which saves no end
+    address, so this function does not judge a register source.
     """
     if copy_source_kind(instruction.source) != LITERAL:
         return None
@@ -827,15 +841,17 @@ def _evaluate_text_past_bank(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """CLK_TEXT_PAST_BANK and CLK_TEXT_PAST_BLOCK: a Copy by address whose text runs
-    past the end of its bank, or of its own block while the bank goes on.
+    """Report CLK_TEXT_PAST_BANK and CLK_TEXT_PAST_BLOCK.
 
-    pyrung writes the elements its block holds and drops the rest.  A constant into TXT
-    that runs past the bank as written is refused, since CLICK's Copy refuses it
-    (OBJ-003).  Any other store past the bank warns.  CLICK's Copy accepts a register
-    source, which saves no end address.  Past a block mapped inside a bank it warns that
-    a CLICK writes on into the bank where pyrung stops.  Only a store whose shortest
-    text runs past is reported.
+    Each is a Copy by address whose text runs past the end of its bank, or past the end
+    of its own block while the bank goes on.
+
+    pyrung writes the elements that its block holds and drops the rest. A constant into
+    TXT that runs past the bank as written is refused, because CLICK's Copy refuses it
+    (OBJ-003). Any other store past the bank warns. CLICK's Copy accepts a register
+    source, which saves no end address. A store past a block that is mapped inside a bank
+    warns that CLICK writes on into the bank, where pyrung stops. Only a store whose
+    shortest text runs past the end is reported.
     """
     if type(instruction).__name__ != "CopyInstruction":
         return []
@@ -1116,9 +1132,9 @@ def _evaluate_timer_preset_overflow(
     return findings
 
 
-# The least constant preset CLICK v4's dialogs take (checked in the editor, 2026-11-06):
-# a flasher or a timed coil refuses 0, a debounce and a drum step take 0 and refuse
-# a negative one.  A register preset takes any value.
+# The least constant preset that CLICK v4's dialogs accept (checked in the editor,
+# 2026-11-06). A flasher or a timed coil refuses 0. A debounce and a drum step accept 0
+# and refuse a negative one. A register preset accepts any value.
 _CONSTANT_PRESET_FLOORS: dict[str, tuple[str, int, tuple[str, ...]]] = {
     "DebounceInstruction": ("debounce", 0, ("on_preset", "off_preset")),
     "FlasherInstruction": ("flasher", 1, ("on_preset", "off_preset")),
@@ -1133,7 +1149,7 @@ def _evaluate_timer_preset_floor(
     base_location: ProgramLocation,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
-    """CLK_TIMER_PRESET_TOO_LOW: a constant preset below what CLICK's dialog takes."""
+    """Report CLK_TIMER_PRESET_TOO_LOW, a constant preset below what CLICK accepts."""
     spec = _CONSTANT_PRESET_FLOORS.get(type(instruction).__name__)
     if spec is None:
         return []
@@ -1169,8 +1185,8 @@ def _evaluate_timer_preset_floor(
     return findings
 
 
-# A CLICK timer or counter is one number: its instruction names T<n> (or CT<n>)
-# and the accumulator TD<n> (CTD<n>) comes with it.  The Out coils name only TD<n>.
+# A CLICK timer or counter is one number. Its instruction names T<n> (or CT<n>), and the
+# accumulator TD<n> (CTD<n>) comes with it. The Out coils name only TD<n>.
 _TIMER_PAIR_FIELDS: dict[str, tuple[tuple[str, str], ...]] = {
     "OnDelayInstruction": (("done_bit", "accumulator"),),
     "OffDelayInstruction": (("done_bit", "accumulator"),),
@@ -1220,7 +1236,7 @@ def _evaluate_timer_pairs(
     return findings
 
 
-# CLICK v4's Out dialog offers fewer units than its timers do.
+# CLICK v4's Out dialog offers fewer time units than its timers do.
 _OUT_VARIANT_UNITS: dict[str, tuple[str, frozenset[TimeUnit]]] = {
     "DebounceInstruction": ("debounce", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
     "FlasherInstruction": ("flasher", frozenset({TimeUnit.Tms, TimeUnit.Ts})),
@@ -1263,10 +1279,10 @@ def _evaluate_out_variant_unit(
     ]
 
 
-# The banks each Send or Receive operand takes, from CLICK's help pages for them (the MODBUS
-# TCP and RTU pages agree).  Not probed on hardware: no conformance case runs them.
-# SD is a Receive destination there whole, so this does not apply copy()'s writable
-# SD subset.
+# The banks that each Send or Receive operand accepts, from CLICK's help pages for them
+# (the MODBUS TCP and RTU pages agree). No conformance case runs them, so they are not
+# probed on hardware. The help pages accept the whole SD bank as a Receive destination,
+# so this does not apply copy()'s writable SD subset.
 _MODBUS_FLAG_BANKS = frozenset({"C"})
 _MODBUS_EXCEPTION_BANKS = frozenset({"DS", "DD"})
 _MODBUS_DEVICE_ID_BANKS = frozenset({"DS"})
@@ -1283,7 +1299,7 @@ _MODBUS_BANKS: dict[tuple[str, str], frozenset[str]] = {
     ("ModbusSendInstruction", "success"): _MODBUS_FLAG_BANKS,
     ("ModbusSendInstruction", "error"): _MODBUS_FLAG_BANKS,
     ("ModbusSendInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
-    # CLICK's Slave ID box takes a number or a DS address.
+    # CLICK's Slave ID box accepts a number or a DS address.
     ("ModbusReceiveInstruction", "device_id"): _MODBUS_DEVICE_ID_BANKS,
     ("ModbusSendInstruction", "device_id"): _MODBUS_DEVICE_ID_BANKS,
 }
@@ -1303,7 +1319,8 @@ def _evaluate_modbus_banks(
             continue
 
         value = getattr(instruction, field_name)
-        # A status bit left off is a hidden tag that never reaches the CLICK project.
+        # A status bit that the program leaves off is a hidden tag. It never reaches the
+        # CLICK project.
         if isinstance(value, Tag) and is_modbus_status_tag(value.name):
             continue
         # A numeric device ID has no bank.

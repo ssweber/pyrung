@@ -1,4 +1,4 @@
-"""Expression helpers for the static facts and PILOT."""
+"""Provide expression helpers for the static facts and PILOT."""
 
 from __future__ import annotations
 
@@ -72,8 +72,9 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
 
     eval_atom = atom
     if atom.operand_is_tag:
-        # An operand tag the state lacks leaves the atom undecided, as a missing left-hand tag
-        # does.  Comparing with the operand's name would give a wrong answer or raise TypeError.
+        # An operand tag that the state lacks leaves the atom undecided, as a missing
+        # left-hand tag does. Comparing with the operand's name would give a wrong answer
+        # or raise TypeError.
         if atom.operand not in state:
             return None
         try:
@@ -94,7 +95,7 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
 
 
 class _StateView:
-    """Lets an expression read its tags from a mapping, as it reads them in a scan."""
+    """Let an expression read its tags from a mapping, as it reads them in a scan."""
 
     __slots__ = ("_state",)
 
@@ -109,7 +110,7 @@ class _StateView:
 
 
 def _expression_value(expr: Expression, state: Mapping[str, Any]) -> int | float | None:
-    """What *expr* gives on *state*, or None when *state* lacks a tag it reads."""
+    """Return the value of *expr* on *state*, or None when *state* lacks a tag it reads."""
     from pyrung.core.analysis.sp_values import _expr_tag_names
 
     names = _expr_tag_names(expr)
@@ -185,12 +186,13 @@ def _eval_expr_from_state(expr: Expr | ArithAtom, state: Mapping[str, Any]) -> b
 
 
 def _atom_reads(atom: Atom) -> frozenset[str] | None:
-    """The tags :func:`_eval_atom_from_state` reads to decide *atom*.
+    """Return the tags that :func:`_eval_atom_from_state` reads to decide *atom*.
 
-    A reader that pins or enumerates an atom's tags needs all of them.  A tag it misses
-    is read at its value now, as if it could not change.  So an arithmetic operand gives
-    the tags it reads.  None means the atom reads a tag it cannot name, such as a pointer
-    element.  No domain lists that tag, so no reader may decide the atom.
+    A reader that pins or enumerates the tags of an atom needs all of them. If it misses
+    a tag, it reads that tag at its value now, as if it could not change. So an
+    arithmetic operand returns the tags that it reads. Return None when the atom reads a
+    tag that it cannot name, such as a pointer element. No domain lists that tag, so no
+    reader may decide the atom.
     """
     if atom.unsupported is not None or atom.indirect_ref is not None:
         return None
@@ -208,7 +210,10 @@ def _atom_reads(atom: Atom) -> frozenset[str] | None:
 
 
 def _referenced_tags(expr: Expr | ArithAtom) -> frozenset[str] | None:
-    """The tags :func:`_eval_expr_from_state` reads, or None when one atom reads a tag it cannot name."""
+    """Return the tags that :func:`_eval_expr_from_state` reads.
+
+    Return None when one atom reads a tag that it cannot name.
+    """
     if isinstance(expr, Atom):
         return _atom_reads(expr)
     if isinstance(expr, Const):

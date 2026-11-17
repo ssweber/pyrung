@@ -36,17 +36,17 @@ from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import dt_to_ns
 
-# Code objects by kernel source, least recently used first.  A code object is immutable.
+# Code objects by kernel source, least recently used first. A code object is immutable.
 # Each kernel runs the shared code in a namespace of its own, so kernels share no state
-# through it.  Runners on one program compile the same source, and so do how() forks with
-# the same synthesis.
+# through it. Runners on one program compile the same source, and so do how() forks with
+# the same synthesis. That is why the cache is worth having.
 MAX_CACHED_CODE = 4
 _CODE_BY_SOURCE: dict[str, CodeType] = {}
 _CODE_LOCK = threading.Lock()
 
 
 def _code_of(source: str) -> tuple[CodeType, bool]:
-    """The kernel source's code object, and whether an earlier compile made it."""
+    """Return the code object of the kernel source, and whether an earlier compile made it."""
     with _CODE_LOCK:
         code = _CODE_BY_SOURCE.pop(source, None)
         if code is not None:
@@ -60,7 +60,8 @@ def _code_of(source: str) -> tuple[CodeType, bool]:
     return code, False
 
 
-# What the materialized-tag walk does with an object, by its type (see ``_kind_of``).
+# Maps the type of an object to what the materialized-tag walk does with it (see
+# ``_kind_of``).
 _SKIP, _TAG, _RANGE, _DICT, _MAPPING, _ITEMS, _OBJECT = range(7)
 # Exact types the walk never looks inside.
 _PLAIN_TYPES = frozenset({type(None), str, bytes, bytearray, int, float, bool})
@@ -70,9 +71,10 @@ _OBJECT_CLASS = object.__dict__["__class__"]
 
 
 def _kind_is_per_type(cls: type) -> bool:
-    """Whether every instance of *cls* answers ``__class__`` and isinstance() alike.
+    """Return True if every instance of *cls* answers ``__class__`` and isinstance() alike.
 
-    A proxy, or a class that overrides attribute lookup, may answer per instance.
+    A proxy, or a class that overrides attribute lookup, may answer differently for each
+    instance.
     """
     if cls.__getattribute__ is not object.__getattribute__:
         return False
@@ -113,12 +115,12 @@ def _collect_materialized_tag_names(
     whether compilation has already expanded static ranges.  For state seeding,
     only concrete ``Tag`` objects that appear in the program graph should count.
 
-    A rung points back to the program that bound it (``_site_owner``).  The walk stops
-    there, so the names do not depend on which analyses of the program have run.  The
-    rungs and subroutines it starts from are the program's own.
+    A rung points back to the program that bound it (``_site_owner``). The walk stops
+    there, so the names do not depend on which analyses of the program have run. The
+    rungs and subroutines that it starts from are the program's own.
 
-    The walk asks what each type is once, and skips a container of plain values without
-    queueing them.  The walk finds the same names as a walk that queues every item.
+    The walk asks what each type is once. It skips a container of plain values without
+    queueing the values. It finds the same names as a walk that queues every item.
     """
 
     found: set[str] = set()
@@ -130,8 +132,8 @@ def _collect_materialized_tag_names(
     kinds: dict[type, int] = dict.fromkeys(_PLAIN_TYPES, _SKIP)
 
     def push(items: Any) -> None:
-        # push() reads the items twice, so it takes only a container that gives the same items
-        # each time.
+        # push() reads the items twice, so it accepts only a container that returns the
+        # same items each time.
         if type(items) not in _SEQUENCE_TYPES:
             queue.extend(items)
         elif not _PLAIN_TYPES.issuperset(map(type, items)):
@@ -206,7 +208,7 @@ def compile_kernel(
     *between* the two passes (the plant reads the previous commit, the input-read
     phase).  ``None`` ⇒ a single ``step_fn`` for the whole program.
 
-    The jit counters pass ``timings`` to get the seconds each step took.
+    The jit counters pass ``timings`` to receive the seconds that each step took.
     """
     clock = time.perf_counter if timings is not None else _no_clock
     started = clock()
@@ -223,7 +225,7 @@ def compile_kernel(
         **ctx.function_objects,
         **ctx.function_constants,
         "_dt_to_ns": dt_to_ns,
-        # A proof_metadata kernel's For past the facts' iteration cap raises it.
+        # A proof_metadata kernel raises this when a For runs past the facts' iteration cap.
         "_ForIterationsBeyondCap": ForIterationsBeyondCap,
         "_for_cap_sites": tuple(ctx.for_cap_sites),
     }
@@ -259,8 +261,8 @@ def compile_kernel(
         calls_functions=bool(ctx.function_objects),
         referenced_tags=dict(ctx.referenced_tags),
         block_specs=block_specs,
-        # Edge contacts keep their memory per site in ``memory``
-        # (``_edge:e{N}``); nothing reads a previous-scan tag copy.
+        # Edge contacts keep their memory per site in ``memory`` (``_edge:e{N}``).
+        # Nothing reads a previous-scan tag copy.
         edge_tags=set(),
         source=source,
         blockless=blockless,
@@ -307,7 +309,10 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
 
 
 def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None) -> str:
-    """The source a kernel runs.  A kernel calls each function itself, so its text isn't run."""
+    """Return the source that a kernel runs.
+
+    A kernel calls each function itself, so the function's text is not run.
+    """
     sub_fn_lines = _compile_subroutines(ctx)
     rungs = ctx.program.rungs
     if split_after is None:

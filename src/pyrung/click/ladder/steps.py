@@ -1,9 +1,9 @@
-"""Program-step estimate for an exported CLICK ladder.
+"""Estimate the program steps of an exported CLICK ladder.
 
 CLICK caps a project at 8000 program steps and does not document what each
-element costs.  The costs here were measured on CLICK Programming Software
+element costs. The costs here were measured on CLICK Programming Software
 (2026-10-29): a probe project with one element per rung, deleted rung by rung,
-the step count read after each deletion.  The estimate walks the exported CSV
+the step count read after each deletion. The estimate walks the exported CSV
 rows, so it sees exactly what CLICK is given.
 
 Measured:
@@ -18,12 +18,15 @@ Measured:
 - For and Next rungs together are 5 with no contacts (``for`` 2, ``next`` 1,
   a rail each); ``break`` and ``continue`` are 1.
 
-Fits with too few points to be exact, rounded up: math (``2 + operands +
-operators``, one over on a formula with REAL constants), drums (one 2x3 drum
-measured at 14; scaling with pattern size is a guess), the split of For/Next's
-3 between For and Next, and legs whose first leg has a contact of its own.
-Checked against a whole project: conformance part A (layout 28574) estimated
-6067 with break/continue unmeasured, CLICK reported 6088.
+Four costs come from fits with too few points to be exact, and each is rounded up:
+
+- Math is ``2 + operands + operators``, and one over on a formula with REAL constants.
+- Drums: one 2x3 drum measured at 14. How the cost scales with pattern size is a guess.
+- The split of For/Next's 3 between For and Next.
+- Legs whose first leg has a contact of its own.
+
+The estimate was checked against a whole project. For conformance part A (layout
+28574), it gave 6067 with break/continue unmeasured, and CLICK reported 6088.
 An instruction never measured costs :data:`UNMEASURED_COST` and is listed in
 :attr:`StepEstimate.unmeasured`.
 """
@@ -46,10 +49,10 @@ SUBROUTINE_BASE = 4
 RAIL = 1
 CONTACT = 1
 COMPARE_CONTACT = 3
-#: Cost of an instruction no probe has measured: high on purpose.
+#: The cost of an instruction that no probe has measured. It is high on purpose.
 UNMEASURED_COST = 8
 
-#: Measured cost of each AF token, by function name, contacts excluded.
+#: The measured cost of each AF token, by function name, without its contacts.
 INSTRUCTION_COSTS: dict[str, int] = {
     "out": 1,
     "latch": 1,
@@ -85,11 +88,11 @@ _FORMULA_TOKEN = re.compile(r"[A-Za-z_]+\d*(?::[A-Z]+\d+)?|\d+(?:\.\d+)?|\*\*|[^
 
 @dataclass(frozen=True)
 class StepEstimate:
-    """Estimated CLICK program steps of one exported project."""
+    """Hold the estimated CLICK program steps of one exported project."""
 
     main: int
     subroutines: dict[str, int] = field(default_factory=dict)
-    #: Function names costed at :data:`UNMEASURED_COST`, sorted.
+    #: The function names that are costed at :data:`UNMEASURED_COST`, sorted.
     unmeasured: tuple[str, ...] = ()
 
     @property
@@ -133,7 +136,10 @@ def _rungs(rows: Iterable[Sequence[str]]) -> Iterable[list[Sequence[str]]]:
 
 
 def _is_free_tail(rung: list[Sequence[str]]) -> bool:
-    """END and a closing unconditional RET are in the base costs."""
+    """Return True for a rung of only END or a closing unconditional RET.
+
+    The base costs already include both.
+    """
     if len(rung) != 1:
         return False
     row = rung[0]

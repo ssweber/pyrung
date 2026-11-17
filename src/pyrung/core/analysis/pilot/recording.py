@@ -418,11 +418,12 @@ def _build_plan_journal(
 
 
 def with_logic(fork: Any, step: PlanStep) -> PlanStep:
-    """*step* with the temporary logic it put in or took out, printed from the rung that ran.
+    """Return *step* with the temporary logic it put in or took out, printed from the rung.
 
-    An install prints the logic from its own scan on.  A removal prints the logic it ended, and
-    the logic from its scan on, which is not empty when some of a tag's rules stay in.  Only the
-    rows writing the step's inputs print, with the rule bits they read.
+    An install prints the logic from its own scan on. A removal prints two things: the
+    logic that it ended, and the logic from its own scan on. The second is not empty when
+    some of a tag's rules stay in. Only the rows that write the inputs of the step print,
+    with the rule bits that they read.
     """
     from pyrung.core.synthesis import bracket_lines
 
