@@ -233,7 +233,7 @@ class TestEquality:
         assert state != 3
 
     def test_hash_is_the_hash_of_a_map_of_its_fields(self):
-        # The hash of a state stays what a key built from it had before it stopped being a map.
+        # A state hashes like a map of its fields, as it did when a state was a map.
         state = _full_state()
         assert hash(state) == hash(pmap(_fields_of(state)))
 

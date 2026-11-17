@@ -373,13 +373,13 @@ def prove_unpowered_division(slot: Any) -> None:
     zero, clean = ds[3979], ds[3980]
     never = slot.Scratch == NEVER
     count_scans(slot)
-    # Scan 3: a clean Math settles SC40, then the division runs on a false rung.
+    # Scan 3: a clean Math settles SC40.  Then a division sits on a false rung.
     with Rung(slot.Cmd != 0, slot.Scratch == 3):
         math(slot.Scratch + 1, clean)
     with Rung(never):
         math(1 / zero, dd[111])
     _read(slot, SC40, clean_coil)
-    # Scan 4: a true division raises SC40, then the division runs on a false rung.
+    # Scan 4: a true division raises SC40.  Then a division sits on a false rung.
     with Rung(slot.Cmd != 0, slot.Scratch == 4):
         math(1 / zero, dd[112])
     with Rung(never):

@@ -182,7 +182,8 @@ def test_pacer_keeps_sim_time_at_wall_time_times_speed():
     assert pacer.delay(2.0, 0.010) == pytest.approx(0.005)
     clock.now += 0.005
     assert pacer.delay(2.0, 0.020) == pytest.approx(0.005)
-    # The scan runs late but within the lag bound. It does not wait and does not reset the baseline.
+    # The scan runs late but within the lag bound. The pacer returns no wait and keeps its
+    # baseline.
     clock.now += 0.020
     assert pacer.delay(2.0, 0.030) == 0.0
     assert pacer.delay(2.0, 0.040) == pytest.approx(0.0)
@@ -264,7 +265,10 @@ runner = PLC(prog, dt=0.010)
 
 
 def test_frames_show_no_change_when_an_equal_value_is_written(tmp_path: Path):
-    """Writing ``False`` over ``0``, or ``-0.0`` over ``0.0``, is not a change in the frame."""
+    """Writing ``False`` over ``0``, or ``-0.0`` over ``0.0``, replaces the stored value.
+
+    The frame shows no change.
+    """
     source = """from pyrung.core import Bool, Int, PLC, Program, Real, Rung, math, out
 
 Coiled = Int("Coiled")

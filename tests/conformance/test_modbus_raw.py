@@ -413,7 +413,7 @@ def _failed(answer: Any) -> bool:
 def _disagreement(bank: str, raw: Any, decoded: Any) -> str | None:
     """Return how pyclickplc's value differs from the raw bits as CLICK stores them.
 
-    A read both refuse agrees.  A read only one refuses does not.
+    Return None if the two agree.  A read both refuse agrees.  A read only one refuses does not.
     """
     if _failed(raw) and _failed(decoded):
         return None

@@ -234,6 +234,8 @@ DOUBLE_WRITERS_ON_PURPOSE = {"rungs/last_rung_wins_shared_coil"}
 def test_one_always_writing_instruction_to_a_bit() -> None:
     """Check that no case writes one bit with two always-writing instructions.
 
+    The cases in ``DOUBLE_WRITERS_ON_PURPOSE`` are left out.
+
     A second Out rung turns the bit off on the first's scans.  Every target agrees on that,
     so nothing else fails.  ``coils/edge_behind_open_contact`` could not tell its answers
     apart this way.  CLICK warns (C1001) at paste, which is too late.

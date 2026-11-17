@@ -1,4 +1,7 @@
-"""A ``run_function`` receives and returns the same values as stepping does, on every path."""
+"""On every path, a ``run_function`` receives the same arguments as when you step the PLC.
+
+Its results are stored the same way as when you step the PLC.
+"""
 
 from __future__ import annotations
 

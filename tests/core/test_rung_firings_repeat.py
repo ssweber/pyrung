@@ -149,7 +149,10 @@ def _assert_same(stepped: RungFiringTimelines, repeated: RungFiringTimelines, la
 
 @pytest.fixture
 def small_limit(monkeypatch: pytest.MonkeyPatch) -> int:
-    """Lower the entry limit to 100, so a column turns Unknown on its hundredth change."""
+    """Lower the entry limit to 100 so that a short run reaches it.
+
+    A column then turns Unknown on its hundredth change.
+    """
     monkeypatch.setattr(rung_firings, "_ENTRY_LIMIT", 100)
     return 100
 
