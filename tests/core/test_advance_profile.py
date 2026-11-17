@@ -127,8 +127,8 @@ def test_edge_counter_requests_a_pulse_and_keeps_one_bounded_frontier() -> None:
 
 
 def test_level_counter_requests_a_pulse() -> None:
-    # A counter counts the rising edges of its rung (as a CLICK does), so a
-    # plain contact must be pulsed too: holding it counts once.
+    # A counter counts the rising edges of its rung, as a CLICK does.  A plain
+    # contact must be pulsed too, because holding it counts only once.
     reset = Bool("reset", external=True)
     clock = Bool("clock", external=True)
     with Program() as program:

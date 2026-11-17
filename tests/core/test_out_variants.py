@@ -4,9 +4,9 @@ Hardware round 1 (2026-10-29) confirmed O1, O2, O3 and O5 and answered O6: an
 Out coil never sets its Timer's done bit T<n>
 (``tests/conformance/coils/test_out.py``).  Round 2 (2026-10-30) read O4: a
 flasher with its rung false keeps both TDs frozen, then restarts with an on
-phase.  The round of 2026-11-05 read the TDs after the rung falls: a timed
-coil's and a debounce's on side are kept, a flasher's restart clears its off
-TD, and a preset of 0 or below gives a flasher or a timed coil no pulse
+phase.  The round of 2026-11-05 read the TDs after the rung falls.  A timed
+coil's and a debounce's on side are kept.  A flasher's restart clears its off
+TD.  A preset of 0 or below gives a flasher or a timed coil no pulse
 (``tests/conformance/coils/test_out_more.py``, ``test_flasher_td.py``).
 """
 
@@ -62,7 +62,7 @@ class TestToggle:
         ]
 
     def test_rung_true_on_first_scan_toggles(self, runner_factory):
-        """O1, pyrung's answer: the previous rung state starts false."""
+        """O1, pyrung's answer: the previous state of the rung starts false."""
         Light = Bool("Light")
         with Program() as logic:
             with Rung(In):
@@ -135,7 +135,7 @@ class TestDebounce:
         ]
 
     def test_off_td_is_0_while_the_rung_is_true(self, runner_factory):
-        """``coil_timing/off_td_held``: the rise clears the off TD, a TD written stays 0."""
+        """``coil_timing/off_td_held``: the rise clears the off TD, and a write to it reads 0."""
         Valve = Bool("Valve")
         with Program() as logic:
             with Rung(In):
@@ -149,7 +149,7 @@ class TestDebounce:
         assert _trace(runner, [1], "Valve", "OT2_Acc") == [(True, 0)]
 
     def test_zero_presets_filter_a_one_scan_dropout(self, runner_factory):
-        """``deb_zero/off_side_lag``: the off side drops the coil a scan after the fall."""
+        """``deb_zero/off_side_lag``: the off side turns the coil off a scan after the fall."""
         Valve = Bool("Valve")
         with Program() as logic:
             with Rung(In):
@@ -160,7 +160,7 @@ class TestDebounce:
         assert [r[0] for r in rows] == [True, True, True, True, True, False, True]
 
     def test_off_side_from_power_up(self, runner_factory):
-        """A coil on at power-up counts its off side with no rise or fall, and holds once off."""
+        """A coil that is on at power-up counts its off side with no rise or fall, then holds."""
         Valve = Bool("Valve", default=True)
         with Program() as logic:
             with Rung(In):
@@ -171,7 +171,7 @@ class TestDebounce:
         assert rows == [(True, 10), (True, 20), (False, 30), (False, 30)]
 
     def test_off_td_holds_a_write_while_the_coil_is_off(self, runner_factory):
-        """``deb_off/off_td_with_coil_off``: a CLICK kept the 50 the ladder wrote."""
+        """``deb_off/off_td_with_coil_off``: a CLICK kept the 50 that the ladder wrote."""
         Valve = Bool("Valve")
         with Program() as logic:
             with Rung(In):
@@ -218,7 +218,7 @@ class TestDebounce:
         ]
 
     def test_both_sides_a_bounce_resets_the_side_timing(self, runner_factory):
-        """O3, pyrung's answer: the side that was timing starts over."""
+        """O3, pyrung's answer: a bounce restarts the side that was timing."""
         Valve = Bool("Valve")
         with Program() as logic:
             with Rung(In):
@@ -305,7 +305,7 @@ class TestFlasher:
         ]
 
     def test_a_td_written_past_its_preset_ends_its_phase(self, runner_factory):
-        """``td_write``: the running phase ends on its next tick; the other TD holds."""
+        """``td_write``: the running phase ends on its next tick. The other TD holds."""
         Beacon = Bool("Beacon")
         with Program() as logic:
             with Rung(In):
@@ -322,15 +322,18 @@ class TestFlasher:
 
     @staticmethod
     def _assert_other_td_holds(rows, preset):
-        """After the first on phase, the TD of the phase not shown is at its preset or past it."""
+        """After the first on phase, the TD of the phase not showing is at its preset or more."""
         first_off = next(i for i, (lit, _on, _off) in enumerate(rows) if not lit)
         for lit, on_td, off_td in rows[first_off:]:
             assert (off_td if lit else on_td) >= preset, rows
 
     @pytest.mark.parametrize("dt", [0.020, 0.030, 0.035, 0.040])
     def test_the_other_td_holds_through_the_scan_a_phase_ends(self, runner_factory, dt):
-        """``out_more/preset_mid_phase`` reads the off TD on the on phase.  At scans of 20..40 ms
-        a 100 ms phase ends on its third to fifth scan, and the off TD must hold on that scan."""
+        """``out_more/preset_mid_phase`` reads the off TD during the on phase.
+
+        At scans of 20 to 40 ms, a 100 ms phase ends on its third to fifth scan.
+        The off TD must hold on that scan.
+        """
         Beacon = Bool("Beacon")
         with Program() as logic:
             with Rung(In):
@@ -340,7 +343,7 @@ class TestFlasher:
         self._assert_other_td_holds(_trace(runner, [1] * 40, "Beacon", "OT3_Acc", "OT4_Acc"), 100)
 
     def test_the_other_td_holds_at_uneven_scans(self):
-        """The soft PLC's scans vary from scan to scan (``SimServer``)."""
+        """The scan time of the soft PLC (``SimServer``) varies from scan to scan."""
         Beacon = Bool("Beacon")
         with Program() as logic:
             with Rung(In):
@@ -359,7 +362,7 @@ class TestFlasher:
 
     @pytest.mark.parametrize("off_preset", [0, -5])
     def test_off_preset_of_0_or_below_holds_it_reset(self, runner_factory, off_preset):
-        """``flash_zero``: the flasher is dark with both TDs frozen.
+        """``flash_zero``: the flasher stays dark and both TDs stay frozen.
 
         A positive preset starts an on phase.
         """
@@ -396,10 +399,13 @@ class TestFlasher:
 
 
 class TestShortPhases:
-    """A ``timed`` pulse counts the rung's first scan, as on_delay does, so one no longer than
-    a scan does not show.  A flasher phase shows through the scan it ends on, so one no
-    longer than a scan shows for that scan (hardware, ``flash_zero/short_first_phase``).
-    A preset of 0 or below gives no pulse (hardware, ``out_more/zero_and_below``)."""
+    """A ``timed`` pulse counts the rung's first scan, the same as on_delay does.
+
+    A pulse no longer than a scan therefore does not show.  A flasher phase shows through the
+    scan it ends on, so a phase no longer than a scan shows for that scan (hardware,
+    ``flash_zero/short_first_phase``).  A preset of 0 or below gives no pulse (hardware,
+    ``out_more/zero_and_below``).
+    """
 
     def test_flasher_shows_an_on_time_under_a_scan_for_one_scan(self, runner_factory):
         Beacon = Bool("Beacon")
@@ -434,7 +440,7 @@ class TestShortPhases:
 
         runner = runner_factory(logic, dt=0.010)
         rows = _trace(runner, [1, 0, 0, 1, 1], "Horn", "OT5_Acc", "OT5_Done")
-        # Maintained, it follows the rung once its (spent) on time is up.
+        # With maintained, the coil follows the rung once its spent on time is up.
         assert rows == [
             (maintained, 10, False),
             (False, 10, False),
@@ -482,7 +488,7 @@ class TestTimed:
 
         runner = runner_factory(logic, dt=0.010)
         rows = _trace(runner, [1, 1, 1, 1, 0, 1], "Horn", "OT5_Acc", "OT5_Done")
-        # The TD holds at the preset while the rung stays true: that is the
+        # The TD holds at the preset while the rung stays true.  That is the
         # timed-out state, not the Done bit.
         assert rows == [
             (True, 10, False),

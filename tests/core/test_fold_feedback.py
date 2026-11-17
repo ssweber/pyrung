@@ -1,10 +1,10 @@
-"""Long runs over harness analog feedback, and over slots a run touches late.
+"""Test long runs over harness analog feedback, and over slots that a run first touches late.
 
-A ``ramp_on`` or ``approach_to`` plant moves its value every scan, so the loop must stop where a
-rung would read that value crossed, with the value where stepping leaves it.  A value
-nothing can see, or one that has settled, keeps the run in the loop.
+A ``ramp_on`` or ``approach_to`` plant moves its value every scan. The run must stop at the scan
+where a rung would read that value as crossed, and the value must be the one that stepping
+leaves. If no rung can see the value, or the value has settled, the run stays in the loop.
 
-A slot absent from the state when a run starts joins it on the first scan that touches it.
+A slot that is absent from the state when a run starts joins it on the first scan that touches it.
 """
 
 from __future__ import annotations
@@ -89,7 +89,10 @@ def _plant(
     enable: Callable[[], None] | None = None,
     far_s: int = 40,
 ) -> PLC:
-    """A harness plant, *reader*'s rungs, and a far timer that opens a long window."""
+    """Build a PLC with a harness plant, the rungs of *reader* and a far timer.
+
+    The far timer opens a long window for the run to cover.
+    """
     Temp = _temp(profile)
     with Program(strict=False) as prog:
         if toggle:
@@ -156,7 +159,7 @@ def _hit(state: Any) -> bool:
 
 
 class TestRunOverAnalogFeedback:
-    """A rung comparing the feedback bounds the window; the landing is the stepped value."""
+    """A rung comparing the feedback bounds the window, and the run lands on the stepped value."""
 
     @pytest.mark.parametrize(("profile", "threshold"), PROFILES)
     def test_run_until_lands_on_the_crossing(self, profile: Any, threshold: float) -> None:
@@ -168,7 +171,7 @@ class TestRunOverAnalogFeedback:
         plc.run_until(Hit, max_cycles=3_000)
         assert plc.state.scan_id == expected
         _assert_exact(plc, make)
-        assert counter["n"] < expected / 5  # it stays in the loop up to the crossing
+        assert counter["n"] < expected / 5  # the run stays in the loop up to the crossing
 
     @pytest.mark.parametrize(("profile", "threshold"), PROFILES)
     def test_run_for_is_exact_past_the_crossing(self, profile: Any, threshold: float) -> None:
@@ -270,7 +273,7 @@ class TestRunOverAnalogFeedback:
 
 
 class TestFeedbackStaysInTheLoop:
-    """A settled plant, or one no reader can see cross, is not a reason to step."""
+    """A settled plant, or one that no reader can see cross, does not make the run step."""
 
     @staticmethod
     def _copy_reader(temp: Real) -> None:
@@ -284,7 +287,7 @@ class TestFeedbackStaysInTheLoop:
             return _plant(_approach(100.0, 5.0), self._copy_reader, far_s=800)
 
         plc = make()
-        plc.run_for(40.0)  # moving, and a rung reads every value: this stretch steps
+        plc.run_for(40.0)  # the plant is moving and a rung reads every value, so this stretch steps
         assert plc.state.tags["Temp"] < 100.0
         _assert_exact(plc, make)
         while plc.state.tags["Temp"] != plc.state.tags["Shown"] or plc.state.scan_id < 12_000:
@@ -295,9 +298,9 @@ class TestFeedbackStaysInTheLoop:
         assert plc.state.tags["Temp"] == pytest.approx(100.0)
 
     def test_a_replay_steps_on_as_its_source_did(self) -> None:
-        """A replay runs its plant on every scan, as the source's harness ran it.
+        """A replay runs its plant on every scan, the same as the harness of the source run.
 
-        A single scan's step is under half an ulp here, so Temp has stopped, and must stay.
+        A single scan's step is under half an ulp here, so Temp has stopped and must stay stopped.
         """
         plc = _plant(_approach(100.0, 5.0), self._copy_reader, far_s=800)
         ran = {}
@@ -386,7 +389,7 @@ class TestFeedbackStaysInTheLoop:
 
 
 class TestCoastOverAMovingPlant:
-    """A plant still moving, under a cycle: the coast lands where stepping does."""
+    """A plant that is still moving, under a cycle, lands the coast where stepping lands."""
 
     @pytest.mark.parametrize(("profile", "threshold"), PROFILES)
     def test_coast_lands_on_the_crossing(self, profile: Any, threshold: float) -> None:
@@ -487,7 +490,7 @@ def _on_an_accumulator(
     *,
     mirrored: bool = False,
 ) -> Callable[[], PLC]:
-    """A plant writing an accumulator under a cycle the toggle keeps repeating."""
+    """Build a PLC whose plant writes an accumulator, under a cycle that the toggle repeats."""
 
     def make() -> PLC:
         with Program(strict=False) as prog:
@@ -530,7 +533,7 @@ ACCUMULATOR_PLANTS = [
 
 
 class TestPlantOnAnAccumulator:
-    """A plant on an accumulator is no constant rate, so nothing extrapolates it."""
+    """A plant on an accumulator has no constant rate, so the run never extrapolates it."""
 
     @pytest.mark.parametrize(("source", "feedback", "profile", "threshold"), ACCUMULATOR_PLANTS)
     def test_a_coast_reaches_the_crossing(
@@ -576,7 +579,7 @@ class TestPlantOnAnAccumulator:
 
 
 class TestAPlantLinkedToAnAccumulator:
-    """A plant at rest repeats, and its link on an accumulator ends the stretch."""
+    """A plant at rest repeats, and a link to an accumulator ends the stretch."""
 
     @staticmethod
     def _make(link: str, source: Callable[[], Any], threshold: float) -> Callable[[], PLC]:
@@ -627,7 +630,7 @@ class TestAPlantLinkedToAnAccumulator:
 
 
 class TestDeclaredPredicateOnTheFeedback:
-    """A declared read of a plant with no comparison leaves only its value to go by."""
+    """A declared read of a plant, with no comparison, gives the run only the value to go by."""
 
     @staticmethod
     def _past_five(state: Any) -> bool:
@@ -673,10 +676,10 @@ def _banked(
     profile: Any = RAMP,
     enable: bool = True,
 ) -> Callable[[], PLC]:
-    """A plant in a block slot, *reader*'s rungs, and a far timer.
+    """Build a PLC with a plant in a block slot, the rungs of *reader* and a far timer.
 
-    With *named* a far comparison names the slot, which is what declares the
-    plant; otherwise an override adds it and no rung names the slot.
+    If *named* is true, a far comparison names the slot, and that declares the plant.
+    Otherwise an override adds the plant and no rung names the slot.
     """
 
     def make() -> PLC:
@@ -766,7 +769,7 @@ POINTER_READERS = [
 
 
 class TestPlantReadThroughAPointer:
-    """``B[Idx]`` names no slot, so the read goes by the block the plant lives in."""
+    """``B[Idx]`` names no slot, so the read goes by the block that holds the plant."""
 
     @pytest.mark.parametrize("reader", POINTER_READERS)
     def test_run_until_lands_on_the_read(self, reader: Any) -> None:
@@ -877,7 +880,7 @@ class TestPlantReadThroughAPointer:
 
 
 class TestPointerReadsStayInTheLoop:
-    """A pointer that cannot show a moving plant is not a reason to step."""
+    """A pointer that cannot show a moving plant does not make the run step."""
 
     @staticmethod
     def _folds(make: Callable[[], PLC]) -> None:
@@ -929,7 +932,7 @@ def _behind_a_pointer(
     plant: bool = True,
     kind: TagType = TagType.REAL,
 ) -> Callable[[], PLC]:
-    """*writer* fills ``Cb[3]`` and rungs read that slot as ``Cb[Jx]``."""
+    """Build a PLC where *writer* fills ``Cb[3]`` and rungs read that slot as ``Cb[Jx]``."""
 
     def make() -> PLC:
         slots = Block("Cb", kind, 1, 8)
@@ -998,7 +1001,7 @@ REBUILT_THROUGH_A_POINTER = [
 
 
 class TestOutputReadThroughAPointer:
-    """A slot a pointer can reach has a reader, whatever writes it and however."""
+    """A slot that a pointer can reach has a reader, whatever writes the slot and however."""
 
     @pytest.mark.parametrize(("writer", "plant", "kind"), REBUILT_THROUGH_A_POINTER)
     def test_run_until_stops_on_the_crossing(self, writer: Any, plant: bool, kind: TagType) -> None:
@@ -1049,7 +1052,7 @@ class TestOutputReadThroughAPointer:
         _assert_exact(plc, make)
 
     def test_copies_a_value_walks_through(self) -> None:
-        """Each copy reads the slot the next one writes, so a value takes scans to arrive."""
+        """Each copy reads the slot that the next copy writes, so a value takes scans to arrive."""
 
         def make() -> PLC:
             slots = Block("Cb", TagType.INT, 1, 8)
@@ -1103,7 +1106,10 @@ class TestOutputReadThroughAPointer:
 
 
 def _readout_behind_a_pointer(*, cycle: bool, gated: bool, through_copy: bool) -> Callable[[], PLC]:
-    """``math(Total - Timer.Acc, Cb[3])`` read as ``Cb[Jx]``: a display of a slow timer."""
+    """Build a PLC that displays a slow timer.
+
+    It runs ``math(Total - Timer.Acc, Cb[3])`` and reads the result as ``Cb[Jx]``.
+    """
 
     def make() -> PLC:
         slots = Block("Cb", TagType.INT, 1, 8)
@@ -1137,7 +1143,7 @@ def _readout_behind_a_pointer(*, cycle: bool, gated: bool, through_copy: bool) -
 
 
 class TestAReadoutThroughAPointer:
-    """Its value holds longer than a cycle's ring is long, so only the reader can stop a stretch."""
+    """The value stays longer than a cycle's ring is long, so only the reader can stop a stretch."""
 
     @pytest.mark.parametrize("cycle", [False, True], ids=["plain", "cycling"])
     @pytest.mark.parametrize("gated", [False, True], ids=["always", "gated"])
@@ -1165,7 +1171,7 @@ SECOND = system.rtc.second
 
 
 def _mapped_slot(slots: Any) -> Int:
-    """A name on ``Cb[3]``, which carries the name and not the block."""
+    """Return a name mapped to ``Cb[3]``. The name is on the slot, but not on the block."""
     name = Int("Cp")
     name.map_to(slots[3])
     return name
@@ -1266,7 +1272,7 @@ def _clock_behind_a_pointer(body: Callable[[Any, Int], None], *, cycle: bool) ->
 
 
 class TestAClockCopyThroughAPointer:
-    """A mirror of the clock on a mapped name has a reader only the block can show."""
+    """A mirror of the clock on a mapped name has a reader that only the block can show."""
 
     @pytest.mark.parametrize("body", CLOCK_ON_A_MAPPED_NAME)
     def test_run_until_stops_on_the_crossing(self, body: Any) -> None:
@@ -1297,7 +1303,7 @@ class TestAClockCopyThroughAPointer:
         _assert_exact(plc, make)
 
     def test_a_declared_index_keeps_the_mirror(self) -> None:
-        """Bounded, the graph lists the reader and the run stays in the loop."""
+        """With a bounded index, the graph lists the reader and the run stays in the loop."""
 
         def make() -> PLC:
             slots = Block("Cb", TagType.INT, 1, 8)
@@ -1319,7 +1325,7 @@ class TestAClockCopyThroughAPointer:
 
 
 class TestOutputsThatStayUnread:
-    """A pointer that cannot show the output is not a reason to step."""
+    """A pointer that cannot show the output does not make the run step."""
 
     @staticmethod
     def _folds(reader: Callable[[Any], None]) -> None:
@@ -1362,7 +1368,7 @@ class TestOutputsThatStayUnread:
 
 
 class TestBoolFeedbackUnderACoast:
-    """A bool plant runs on real timers, so a cold start must watch them as they appear."""
+    """A bool plant runs on real timers, so a cold start must watch the timers as they appear."""
 
     @staticmethod
     def _bool_plant(physical: Physical, reader: Callable[[Bool], None]) -> PLC:
@@ -1397,8 +1403,8 @@ class TestBoolFeedbackUnderACoast:
         with Rung(count == 3):
             latch(Hit)
 
-    # A plain contact sees the flasher on at its first scan, so it leaves nothing to wait
-    # for.  The first fall comes a whole on phase later.
+    # A plain contact sees the flasher on at its first scan, so there is nothing to wait for.
+    # The first fall comes a whole on phase later.
     @pytest.mark.parametrize("reader", ["_first_fall", "_third_rise"])
     def test_a_pulse_from_a_cold_start_lands_on_the_reader(self, reader: str) -> None:
         physical = Physical("Sensor", flasher_on="2s", flasher_off="3s")
@@ -1438,13 +1444,13 @@ class TestApproachToAKnownTag:
 
 
 class TestSlotFirstTouchedInsideTheRun:
-    """A slot absent when a run starts is watched from the scan that adds it."""
+    """A slot that is absent when a run starts is watched from the scan that adds it."""
 
     @staticmethod
     def _run(
         body: Callable[[Any, Timer, Bool], None], watched: int, first: dict[str, Any] | None = None
     ) -> None:
-        # A fresh block, in the loop first: an earlier PLC on it would seed the slot.
+        # Use a fresh block, and start in the loop. An earlier PLC on the block would seed the slot.
         bank = Block(f"FreshBank{next(_FRESH)}", TagType.INT, 1, 400)
         Delay = Timer.clone("Delay")
 
@@ -1470,7 +1476,7 @@ class TestSlotFirstTouchedInsideTheRun:
         assert bank[watched].name not in present_at_start
         assert reached
         assert plc.state.scan_id == expected
-        # The block now holds a slot per use, so a later PLC starts with them all.
+        # The block now has a slot for each use, so a later PLC starts with all of them.
         ref = _stepped(make, plc.state.scan_id)
         fresh = {k: v for k, v in _tags(ref).items() if k not in plc.state.tags}
         assert not any(fresh.values())

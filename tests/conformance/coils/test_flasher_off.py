@@ -33,10 +33,11 @@ under the same condition: about 10, at least 1, so the DS off preset, the window
 work.
 
 A CLICK reads 0, 0, 59, 10, 0 for 0 and 0, 0, 60, 10, 0 for -5.  The flasher is dark and both
-TDs are at 0, so a preset of 0 or below holds the flasher reset (``FlasherInstruction``).  Whether its first on phase shows
-before the reset takes hold has no reading: the window starts well after it.  Over the wire the
-scan counts follow the target's scan, so Result3 and Result4 are ranges; pyrung's in-process
-readings (0, 0, 10, 5, 0) are pinned in ``test_pyrung_holds_the_flasher_reset``.
+TDs are at 0, so a preset of 0 or below holds the flasher reset (``FlasherInstruction``).
+Whether its first on phase shows before the reset takes hold has no reading, because the window
+starts well after it.  Over the wire the scan counts follow the target's scan, so Result3 and
+Result4 are ranges.  pyrung's in-process readings (0, 0, 10, 5, 0) are pinned in
+``test_pyrung_holds_the_flasher_reset``.
 
 - ``ds_zero``: the DS holds 0.
 - ``ds_minus_five``: the DS holds -5.
@@ -150,7 +151,7 @@ def test_flasher_off():
 
 
 def test_pyrung_holds_the_flasher_reset():
-    """What pyrung reads at the in-process 10 ms scan."""
+    """Pin what pyrung reads at the in-process 10 ms scan."""
     for result in run(group):
         assert result.actual == {
             "Result1": 0,
