@@ -75,9 +75,9 @@ def _avoid_weighed_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
     return tuple(
         member.name
         for member in members
-        # A member that reads a tag it cannot name has no answer on a weighed state, so it
-        # never trips one.  A condition reads a tag it cannot see as violated, where a
-        # callable raises.  Both are a check with no answer for this state.
+        # A member that reads a tag it cannot name never trips a weighed state.  A condition
+        # would read a tag the state lacks as violated, and a callable would raise.  So a
+        # member trips only when the state has every tag it reads and its check says yes.
         if member.tags is not None
         and all(tag in snap for tag in member.tags)
         and _member_weighed(member.pred, snap)
