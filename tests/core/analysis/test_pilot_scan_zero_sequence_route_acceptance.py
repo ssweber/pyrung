@@ -338,7 +338,7 @@ def _assert_reconnect_overwritten_on_its_scan(plan: Any, events: list[Any]) -> N
     # so the search runs out of budget.
     assert _reconnect_overwrites(events) == {((98, 10), (10, 94), True)}
     assert not plan.reachable
-    assert plan.reason.startswith("budget exhausted")
+    assert plan.reason.startswith("how() used up max_scans")
     assert "RouteSequenceStep=10 (have 98)" in plan.reason
 
 

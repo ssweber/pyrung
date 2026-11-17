@@ -44,7 +44,7 @@ def test_a_scan_already_past_the_entry_stops_with_a_reason() -> None:
     plan = plc.how(guard.SequenceState == guard.TARGET, **BOUND)
 
     assert plan.status is PlanStatus.STOPPED
-    assert (plan.reason or "").startswith("No productive next action was found")
+    assert (plan.reason or "").startswith("how() found no next step that makes progress")
     assert plan.restart.clear == {guard.SequenceState.name: 0}
 
 
@@ -298,7 +298,7 @@ class TestTargetForms:
 
     def test_or_is_a_clear_error(self) -> None:
         program, watch, _other, hit = self._program()
-        with pytest.raises(ValueError, match="no either-or target"):
+        with pytest.raises(ValueError, match="does not accept an either-or target"):
             PLC(program, dt=0.01).how(Or(hit, watch.Done), **BOUND)
 
 

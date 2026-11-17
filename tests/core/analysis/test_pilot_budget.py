@@ -106,7 +106,7 @@ class TestTheLedger:
         # so the search ends when it has spent its work.
         plan = _slow_lamp(2_000_000).how(Lamp, max_scans=200)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("budget exhausted")
+        assert plan.reason.startswith("how() used up max_scans")
 
 
 class TestTheLoopDoesNotMoveTheLedger:
@@ -181,7 +181,7 @@ class TestASearchWithNoLoop:
         plc, function = _no_loop(120_000)
         plan = plc.how(Lamp, max_scans=3000, wall_clock_s=None)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("budget exhausted")
+        assert plan.reason.startswith("how() used up max_scans")
         assert function.calls < most_calls
 
     def test_it_stops_at_what_it_may_hold(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,7 +191,7 @@ class TestASearchWithNoLoop:
         plc, _function = _no_loop(1_000_000)
         plan = plc.how(Lamp, max_scans=10**9, wall_clock_s=None)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("memory budget exhausted")
+        assert plan.reason.startswith("how() stopped because its search held about 1 GB")
         assert "physical link" not in plan.reason
 
     def test_the_ledger_does_not_stop_what_it_can_pay_for(self, most_calls: int) -> None:
@@ -243,7 +243,7 @@ class TestAWaitNoLoopMayRun:
         assert _unreachable(rung)._compiled_replay_supported_kernel() is None
         plan = _unreachable(rung).how(Lamp, max_scans=300, wall_clock_s=60)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("budget exhausted")
+        assert plan.reason.startswith("how() used up max_scans")
 
     @pytest.mark.parametrize(
         "error", [NotImplementedError("a gap"), RuntimeError("a bug")], ids=["gap", "raise"]
@@ -259,7 +259,7 @@ class TestAWaitNoLoopMayRun:
             warnings.simplefilter("ignore", RuntimeWarning)
             plan = _unreachable().how(Lamp, max_scans=300, wall_clock_s=60)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("budget exhausted")
+        assert plan.reason.startswith("how() used up max_scans")
 
     def _out_of_work(self, plc: PLC, predicate: Any = None) -> dict[str, int]:
         coast_run.memo_of(plc).work_left = lambda: 5
@@ -365,13 +365,13 @@ class TestAStopIsNotAVerdict:
         monkeypatch.setattr(budget, "WALL_CLOCK_ENABLED", True)
         plan = _linked_motor().how(y_Done, wall_clock_s=0.0)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("wall-clock budget exhausted")
+        assert plan.reason.startswith("how() ran out of time")
         assert "physical link" not in plan.reason
 
     def test_out_of_work_says_so_and_nothing_about_a_link(self) -> None:
         plan = _linked_motor().how(y_Done, max_scans=0, wall_clock_s=None)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("budget exhausted")
+        assert plan.reason.startswith("how() used up max_scans")
         assert "physical link" not in plan.reason
 
 
@@ -433,7 +433,7 @@ class TestATerminal:
 
     @pytest.mark.parametrize(
         ("max_scans", "reason"),
-        [(0, "budget exhausted"), (3000, None)],
+        [(0, "how() used up max_scans"), (3000, None)],
         ids=["the budget's terminal", "reaching the target"],
     )
     def test_a_limit_cannot_fire_inside_one(
@@ -508,7 +508,10 @@ class TestARefusedQuestion:
         monkeypatch.setattr(pilot_coast, "coast_until", then_ask)
         plan = _slow_lamp(30_000).how(Lamp, wall_clock_s=None)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("a question was refused: scans 1..2 include")
+        assert plan.reason.startswith(
+            "how() stopped because it would have to step 3 scans again to read what happened in "
+            "scans 1..2, more than the limit of 250000"
+        )
         assert "physical link" not in plan.reason
 
     def test_what_the_terminal_reads_cannot_end_a_search_again(self, monkeypatch) -> None:
@@ -535,7 +538,7 @@ class TestTheClock:
     def test_out_of_time_is_its_own_terminal(self) -> None:
         plan = _slow_lamp(30_000).how(Lamp, wall_clock_s=0.0)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("wall-clock budget exhausted (0 s)")
+        assert plan.reason.startswith("how() ran out of time after 0 s.")
         assert plan.reason.isascii()
 
     def test_none_turns_it_off(self) -> None:
@@ -573,7 +576,7 @@ class TestTheClock:
         monkeypatch.setattr(budget.WallClock, "check", check)
         plan = _slow_lamp(30_000).how(Lamp, wall_clock_s=1.0)
         assert plan.status is PlanStatus.STOPPED
-        assert plan.reason.startswith("wall-clock budget exhausted (1 s)")
+        assert plan.reason.startswith("how() ran out of time after 1 s.")
 
     def test_a_theory_can_end_by_the_clock(self) -> None:
         assert TheoryTermination.WALL_CLOCK.value == "wall-clock"

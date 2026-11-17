@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.causal._rung_writes import OrderedEffectObservation
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.effects import EffectExpectation, EffectObligation
@@ -203,13 +204,15 @@ class _BootstrapExecution:
 
     def __post_init__(self) -> None:
         if self.execution.source_scan is None:
-            raise ValueError("bootstrap execution receipt has no source scan")
+            raise ValueError(internal_error("bootstrap execution receipt has no source scan"))
         if self.scan_after != self.scan_before + 1:
-            raise ValueError("bootstrap execution must contain exactly one scan")
+            raise ValueError(internal_error("bootstrap execution must contain exactly one scan"))
         if self.projection.scan_id != self.scan_after:
-            raise ValueError("bootstrap projection does not match its landing scan")
+            raise ValueError(internal_error("bootstrap projection does not match its landing scan"))
         if self.execution.kernel_scan_ids != (self.scan_after,):
-            raise ValueError("bootstrap execution receipt must own its landing scan")
+            raise ValueError(
+                internal_error("bootstrap execution receipt must own its landing scan")
+            )
 
     @property
     def scan_before(self) -> int:

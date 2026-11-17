@@ -1877,7 +1877,8 @@ def _stops_promptly(plc, target):
     """how(*target*) declines, and says so before spending its search budget."""
     plan = _timed_how(plc, target)
     assert plan.status.name != "REACHED"
-    assert "budget exhausted" not in plan.reason, plan.reason
+    limits = ("how() used up max_scans", "how() ran out of time", "held about 1 GB")
+    assert not any(limit in plan.reason for limit in limits), plan.reason
     return plan
 
 

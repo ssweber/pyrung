@@ -221,9 +221,9 @@ def _unrecorded() -> UnrecordedScansError:
 @pytest.mark.parametrize(
     ("stop", "said"),
     [
-        (SearchOutOfTime, "wall-clock"),
+        (SearchOutOfTime, "ran out of time"),
         (SearchOutOfMemory, "memory"),
-        (lambda: SearchQuestionRefused(_unrecorded()), "refused"),
+        (lambda: SearchQuestionRefused(_unrecorded()), "would have to step 2 scans again"),
     ],
     ids=["time", "memory", "refused"],
 )
@@ -1302,7 +1302,7 @@ def test_a_raise_on_a_scan_after_the_restart_costs_the_restart_and_not_the_stop(
 
     assert plan.status is PlanStatus.STOPPED
     assert plan.restart.lines() == [
-        "Restart: no answer, on a scan after it avoid check 'avoid' raised "
+        "Restart: no answer. On a scan after the restart, the avoid check 'avoid' raised "
         "ZeroDivisionError: division by zero."
     ]
 

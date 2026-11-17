@@ -14,6 +14,7 @@ from itertools import count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.runner import PLC, Epoch, EpochQuery
 
@@ -97,10 +98,10 @@ class ScanEntryConfiguration:
     def __post_init__(self) -> None:
         assignments = tuple(self.assignments)
         if not assignments:
-            raise ValueError("scan-entry configuration cannot be empty")
+            raise ValueError(internal_error("scan-entry configuration cannot be empty"))
         names = tuple(tag for tag, _value in assignments)
         if len(set(names)) != len(names):
-            raise ValueError("scan-entry configuration cannot assign one tag twice")
+            raise ValueError(internal_error("scan-entry configuration cannot assign one tag twice"))
         object.__setattr__(self, "assignments", assignments)
 
     @property
@@ -163,7 +164,9 @@ class StopCondition:
 
     def __post_init__(self) -> None:
         if (self.horizon is PulseHorizon.CONSUMER_BOUNDARY) != (self.consumer_boundary is not None):
-            raise ValueError("consumer-bound stop condition requires one exact boundary")
+            raise ValueError(
+                internal_error("consumer-bound stop condition requires one exact boundary")
+            )
 
 
 @dataclass(frozen=True)
@@ -196,12 +199,12 @@ class ExecutionSpan:
     def __post_init__(self) -> None:
         scans = tuple(self.kernel_scan_ids)
         if not scans:
-            raise ValueError("an execution span must own at least one kernel scan")
+            raise ValueError(internal_error("an execution span must own at least one kernel scan"))
         if any(later <= earlier for earlier, later in zip(scans, scans[1:], strict=False)):
-            raise ValueError("execution span scans must be strictly increasing")
+            raise ValueError(internal_error("execution span scans must be strictly increasing"))
         epoch = self.owner.epoch
         if any(scan < epoch.first_scan or scan > epoch.last_scan for scan in scans):
-            raise ValueError("execution span scan lies outside its Epoch")
+            raise ValueError(internal_error("execution span scan lies outside its Epoch"))
         object.__setattr__(self, "kernel_scan_ids", scans)
 
     @property
@@ -227,7 +230,7 @@ def capture_execution_spans(
     if not scans:
         return ()
     if any(later <= earlier for earlier, later in zip(scans, scans[1:], strict=False)):
-        raise ValueError("execution scan stream must be strictly increasing")
+        raise ValueError(internal_error("execution scan stream must be strictly increasing"))
 
     lineage = fork._causal_lineage
     priced = getattr(fork, "_loop_priced_scans", frozenset())
@@ -243,7 +246,7 @@ def capture_execution_spans(
                 )
             )
     if tuple(scan for span in spans for scan in span.kernel_scan_ids) != scans:
-        raise ValueError("execution scan stream has no complete Epoch ownership")
+        raise ValueError(internal_error("execution scan stream has no complete Epoch ownership"))
     return tuple(spans)
 
 
@@ -286,7 +289,7 @@ class ExecutionReceipt:
         object.__setattr__(self, "applied_configurations", tuple(self.applied_configurations))
         scans = self.kernel_scan_ids
         if scans and self.source_scan is not None and scans[0] <= self.source_scan:
-            raise ValueError("execution receipt scans must follow their source")
+            raise ValueError(internal_error("execution receipt scans must follow their source"))
 
     @property
     def kernel_scan_ids(self) -> tuple[int, ...]:
@@ -296,7 +299,9 @@ class ExecutionReceipt:
     def epoch_ref(self) -> Any:
         references = tuple(dict.fromkeys(span.epoch.reference for span in self.spans))
         if len(references) != 1:
-            raise ValueError("execution receipt does not have exactly one Epoch reference")
+            raise ValueError(
+                internal_error("execution receipt does not have exactly one Epoch reference")
+            )
         return references[0]
 
     @property
@@ -328,7 +333,7 @@ class ExecutionPoint:
 
     def __post_init__(self) -> None:
         if self.execution.owner_at(self.scan_id) is not self.owner:
-            raise ValueError("execution point owner does not own its scan")
+            raise ValueError(internal_error("execution point owner does not own its scan"))
 
     @property
     def epoch_ref(self) -> Any:

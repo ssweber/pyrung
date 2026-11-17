@@ -25,6 +25,9 @@ _SLOW_UNDER_FOLD = pytest.mark.skipif(
     "config.getoption('fold_check', default=False)", reason="too slow under the fold check"
 )
 
+# The stop reasons of how()'s three limits: max_scans, wall_clock_s and memory.
+_LIMIT_STOPS = ("how() used up max_scans", "how() ran out of time", "held about 1 GB")
+
 
 def _chain(first: int, second: int, unit: str) -> tuple[Program, Bool]:
     go = Bool("LwGo")
@@ -244,7 +247,7 @@ def test_a_small_ledger_is_not_spent_on_one_wait() -> None:
     assert finished["cut_short"] is False
 
     path = plc.how(goal, wall_clock_s=60.0, max_scans=400)
-    assert "budget exhausted" not in str(path)
+    assert not any(stop in str(path) for stop in _LIMIT_STOPS)
     assert path.reachable
     assert path.last_resort.tag == "LwGo"
     assert path.replay().state.tags == path.fork.state.tags
@@ -282,7 +285,7 @@ def test_a_wait_under_a_hold_that_never_ends_stops_at_the_ledger() -> None:
             latch(lamp)
     path = _how(prog, lamp)
     assert not path.reachable
-    assert "budget exhausted" in str(path)
+    assert "how() used up max_scans" in str(path)
 
 
 def _timer_program() -> Program:

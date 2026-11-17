@@ -103,7 +103,7 @@ def test_rejected_entry_observation_stops_instead_of_retrying_scan_zero() -> Non
     assert [event.kind for event in events].count("bearing_coast_rejected") == 1
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is False
-    assert "avoid excludes ~RejectedEntry_Start" in events[-1].data["reason"]
+    assert "The avoid= condition ~RejectedEntry_Start blocked how()" in events[-1].data["reason"]
 
 
 def test_cold_start_retains_boundary_zero_and_exact_bootstrap_execution() -> None:

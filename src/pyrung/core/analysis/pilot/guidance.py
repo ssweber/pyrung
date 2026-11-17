@@ -11,6 +11,7 @@ import itertools
 from dataclasses import dataclass
 from typing import Any
 
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.pilot.compass import CompassObservation
 from pyrung.core.analysis.pilot.physical import upstream_through_plant
 from pyrung.core.analysis.pilot.skiff import _declared_domain, _skiff_expectation, run_pinned_scan
@@ -68,7 +69,9 @@ def survey_current_inputs(world: Any, *, max_evaluations: int = 64) -> SurveyRes
     work = state.work
     frame = world.frame
     if ReadIdentity.capture(work, ctx.compass.knowledge) != world.read_identity:
-        raise StaleBearingError("cannot survey inputs from a stale current-world read")
+        raise StaleBearingError(
+            internal_error("cannot survey inputs from a stale current-world read")
+        )
     relevant = frozenset(
         node.tag
         for node in frame.tree.iter_nodes()

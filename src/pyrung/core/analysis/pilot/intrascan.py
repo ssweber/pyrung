@@ -20,6 +20,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot.advance import AdvanceIndex
 from pyrung.core.analysis.pilot.effects import (
@@ -127,7 +128,7 @@ class IntrascanFinding:
             checkpoint_ref,
             CheckpointRef,
         ):
-            raise ValueError("intrascan finding has no typed execution source")
+            raise ValueError(internal_error("intrascan finding has no typed execution source"))
         return IntrascanFindingSnapshot(
             observation=self.observation.diagnostic_snapshot(),
             explanation=self.derivation.explanation,
@@ -310,7 +311,7 @@ def _derive_observation(
         )
 
     if advance_index is None:
-        raise AssertionError("advance index is required for overwrite derivation")
+        raise AssertionError(internal_error("advance index is required for overwrite derivation"))
     operand_authorities = (
         question.operand_authorities_at(projection)
         if question.operand_authorities_at is not None

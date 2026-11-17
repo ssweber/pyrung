@@ -253,7 +253,7 @@ def test_a_force_that_only_ran_the_budget_out_still_gets_the_try_without_it() ->
 
     assert plan.status is PlanStatus.REACHED
     assert plan.released.forces == ("En",)
-    assert "budget exhausted" in str(plan)
+    assert "how() used up max_scans" in str(plan)
     # This plan holds En with temporary logic, which _follow does not install.
     assert plan.fork.forces == {}
     assert plan.fork.state.tags["Hit"] is True

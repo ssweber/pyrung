@@ -240,20 +240,23 @@ def test_an_opaque_avoid_true_at_the_start_of_a_dwell_stops_naming_it(check) -> 
 
     assert plan.status is PlanStatus.STOPPED
     assert plan.total_scans == 0
-    assert plan.reason.startswith("The setup this route needs was rejected: avoid excludes")
+    assert plan.reason.startswith("The setup this route needs was rejected. The avoid= condition")
 
 
 @pytest.mark.parametrize(
     ("check", "reason"),
     [
-        (lambda s: s["DwellPilotRotateSensor"] is True, "No productive next action was found;"),
+        (
+            lambda s: s["DwellPilotRotateSensor"] is True,
+            "how() found no next step that makes progress;",
+        ),
         (
             lambda s: s["DwellPilotRotateSensor"] is False,
-            "No productive next action was found: avoid excludes",
+            "how() found no next step that makes progress. The avoid= condition",
         ),
         (
             lambda s: s["DwellPilotRotateState"] == 8,
-            "No productive next action was found: avoid excludes",
+            "how() found no next step that makes progress. The avoid= condition",
         ),
     ],
     ids=["sensor-on", "sensor-off", "other-leg"],

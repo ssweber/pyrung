@@ -417,7 +417,7 @@ def test_avoid_union_no_clean_lever_declines_naming_it() -> None:
     path = plc.how(target, avoid=(tags["A"], tags["B"]), max_scans=800)
     assert not path.reachable
     reason = path.reason or ""
-    assert "avoid excludes" in reason, reason
+    assert "blocked how() while it was trying to" in reason, reason
     assert ("A" in reason) or ("B" in reason), reason
 
 

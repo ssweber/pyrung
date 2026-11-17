@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.pilot.avoid import _member_on_scan, _member_weighed
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
 from pyrung.core.analysis.sp_values import _values_match
@@ -231,9 +232,9 @@ class CoastSession:
         if exact_scan in self._kernel_scan_seen:
             return
         if exact_scan < 1 or exact_scan > self.plc.state.scan_id:
-            raise ValueError("kernel scan ID lies outside the executed fork")
+            raise ValueError(internal_error("kernel scan ID lies outside the executed fork"))
         if self._kernel_scan_ids and exact_scan <= self._kernel_scan_ids[-1]:
-            raise ValueError("kernel scan IDs must be strictly increasing")
+            raise ValueError(internal_error("kernel scan IDs must be strictly increasing"))
         self._kernel_scan_seen.add(exact_scan)
         self._kernel_scan_ids.append(exact_scan)
 
@@ -388,7 +389,7 @@ class CoastSession:
         plc = self.plc
         armed: list[CoastTrigger] = [*triggers, *self._avoid_triggers]
         if not armed:
-            raise ValueError("seek() requires at least one coast trigger")
+            raise ValueError(internal_error("seek() requires at least one coast trigger"))
         if self.pens:
             armed.append(self._pen_trigger())
         start_scan = plc.state.scan_id

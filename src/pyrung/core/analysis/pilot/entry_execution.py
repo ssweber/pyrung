@@ -14,6 +14,7 @@ from dataclasses import replace
 from typing import Any
 
 import pyrung.core.analysis.pilot.theory_recording as _theory_recording
+from pyrung.core.analysis._internal_error import internal_error
 from pyrung.core.analysis.pilot.bootstrap import (
     _BootstrapExecution,
     bind_observed_route_designations,
@@ -53,7 +54,7 @@ def entry_execution_receipt(
 
     projection = execution._replay_rung_write_projection_at(scan_after)
     if projection is None:
-        raise RuntimeError("entry observation has no exact execution projection")
+        raise RuntimeError(internal_error("entry observation has no exact execution projection"))
     scan_before = scan_after - 1
     execution_receipt = existing or ExecutionReceipt(
         before_snap=projection.entry_tags,
@@ -83,7 +84,7 @@ def retain_entry_bearing_execution(
 
     execution = executed.execution
     if execution is None:
-        raise RuntimeError("entry observation lost its immutable execution receipt")
+        raise RuntimeError(internal_error("entry observation lost its immutable execution receipt"))
     scan_after = executed.pulse.fork.state.scan_id
     receipt = entry_execution_receipt(
         checkpoint,

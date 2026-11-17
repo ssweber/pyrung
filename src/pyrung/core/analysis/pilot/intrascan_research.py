@@ -829,7 +829,9 @@ def research_intrascan_boundary_realization(
                 None,
                 None,
                 consumer_assignments=assignments,
-                detail=f"direct boundary realization was unavailable: {type(exc).__name__}",
+                detail=(
+                    f"direct boundary realization was unavailable: {type(exc).__name__}: {exc}"
+                ),
             )
         return IntrascanBoundaryRealization(
             None,
@@ -1194,7 +1196,7 @@ def research_intrascan_traceback(
             source_scan=source_scan,
             assertion_scan=None,
             applied_exactly_once=False,
-            detail=f"counterfactual execution was unavailable: {type(exc).__name__}",
+            detail=f"counterfactual execution was unavailable: {type(exc).__name__}: {exc}",
         )
 
     applications = receipt.applications_for(request.patch)
