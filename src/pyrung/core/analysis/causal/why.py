@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pdg import continuous_search_results, resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.state import value_changed
 
@@ -131,14 +131,9 @@ def why_cause(
         # from scan to scan, because their instruction reads them back before writing.
         # The def-use chains miss that read, so skipping these tags would drop a later
         # rung that writes them.
-        from pyrung.core.instruction.advanced import SearchInstruction
-        from pyrung.core.validation._common import walk_instructions
-
-        read_back = frozenset().union(*(node.exclusive_reads for node in pdg.rung_nodes)) | {
-            instr.result.name
-            for instr in walk_instructions(program)
-            if isinstance(instr, SearchInstruction) and instr.continuous
-        }
+        read_back = frozenset().union(
+            *(node.exclusive_reads for node in pdg.rung_nodes)
+        ) | continuous_search_results(program)
         wbr: set[str] = set()
         for t in cone:
             if t not in tags and t not in read_back and pdg.unconditional_write_before_read(t):
