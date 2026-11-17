@@ -14,7 +14,47 @@ permissions:
   contents: read
 
 jobs:
+  # A PR that changes only Markdown outside the code skips the test jobs. Any .py file counts
+  # as code, because pyrung reads its own source text and line numbers. So does anything under
+  # src/ (it holds Markdown package data), tests/ and .github/. docs/guides/console.md counts
+  # as code too, because tests/dap/test_console.py compares it with the console's help text.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout (official GitHub action)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify the changed files
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          docs_only=false
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(git diff --name-only --no-renames "$BASE_SHA" HEAD)
+            docs_only=true
+            [ -n "$files" ] || docs_only=false
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                docs/guides/console.md) docs_only=false ;;
+                docs/*.md) ;;
+                src/*|tests/*|docs/*|.github/*) docs_only=false ;;
+                *.md) ;;
+                *) docs_only=false ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       matrix:
         # Update this as needed:
@@ -74,6 +114,8 @@ jobs:
   # Python release, so the tests of that code also run on the versions between the oldest and
   # the newest.
   bytecode:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       matrix:
         python-version: ["3.12", "3.13"]
@@ -102,12 +144,25 @@ jobs:
         run: make test-bytecode
 
   # main requires only this check, so the matrix can change without editing branch protection.
-  # Without always(), a failed build would skip this job. A skipped required check counts
-  # as passing. A new test job must go into needs and into the test below, or ci passes
-  # without it.
+  # Without always(), a failed job would skip this job, and a skipped required check counts
+  # as passing. This job passes when build and bytecode both succeeded. It also passes when
+  # changes reported a docs-only PR and both test jobs were skipped. Every other result fails,
+  # including a failed changes job. A new test job must go into needs and into the test below,
+  # or ci passes without it.
   ci:
     if: always()
-    needs: [build, bytecode]
+    needs: [changes, build, bytecode]
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.build.result }}" = "success" && test "${{ needs.bytecode.result }}" = "success"
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          BUILD: ${{ needs.build.result }}
+          BYTECODE: ${{ needs.bytecode.result }}
+        run: |
+          test "$CHANGES" = "success" || exit 1
+          if [ "$DOCS_ONLY" = "true" ]; then
+            test "$BUILD" = "skipped" && test "$BYTECODE" = "skipped"
+          else
+            test "$BUILD" = "success" && test "$BYTECODE" = "success"
+          fi

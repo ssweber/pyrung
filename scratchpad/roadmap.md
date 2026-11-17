@@ -33,6 +33,9 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
   on an inner function. What is left checks `PLC` against `CompiledPLC` and the fold check. Decide whether a gate
   runs it. [Sam]
 
+- **Comments still say `calc`.** Many docstrings and comments still say `calc` where the code now says `math`.
+  The comment rewrite (#85) kept the old word, because the rename changes a fact. Rename them in one pass.
+
 ## 1. The deletions release
 
 Plan items 3 (public surface) and 6 (search removal). All [nothing]. The record machinery (plan item 1.1) is gone.
@@ -118,6 +121,12 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
       (requirement_derivation.py:211) refuses them. The records would give "reset False", and for CTU the down input.
     - The TOF profile ignores the armed memory (timers.py:301). The kernel times a TOF only while it is armed or done
       or has a nonzero Acc. So PILOT may wait on a TOF that was never armed, with Done False and Acc 0, and it never moves.
+- **Two write questions left by bob/validator-writes.** [nothing]
+  - COIL_CONFLICTING_OUTPUT keeps its own list, `_common._instruction_write_targets`. `write_sites` also reports
+    `receive()`'s destination and `run_enabled_function()`'s outputs on a scan with the rung off, because both write
+    then. If COIL_CONFLICTING_OUTPUT switched to `write_sites`, this error-level check would report those writes too. Run each one first to confirm what it writes with the rung off.
+  - The choices, readonly and final checks skip a write through a pointer that may reach a flagged slot. Decide
+    what severity a write that only might land gets.
 - **Other validators read tag flags from `_build_tag_map`, which lists only contacts, `.target` and `.source`.**
   readonly-writes moved the readonly and final checks to the tags write_sites reports. A follow-up branch does the
   same for the rest. [nothing]
@@ -191,7 +200,10 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
 
 - **No watchdog stop for now** (Sam, 2026-11-17). A cheap CLICK validation finding could estimate a For loop's work
   (iterations x body) and warn past a threshold. [nothing]
-- **The hardware round at the end of this step.** [PLC]
+- **The hardware round at the end of this step.** [PLC] It goes through clicknick's PLC queue (Sam,
+  2026-11-17). bob/main-runner exports conformance groups as main-only projects for it. Only items that need
+  wiring, input override, a power cycle or a person stay for Sam. clicknick has answered the stores of NaN and
+  +/-Inf, the pack_text of text past the Real range, and the TD write (`jobs/plc-answers/NOTES.md`).
   - modbus_raw probes, with no ladder change. FC15 across the Y gap (Y115..Y202) skips reserved coils and stores named
     ones. FC05 to a reserved coil (Y117) answers 02. A read past XD8/YD8 answers 02. A read in an X gap (units 17..32)
     reads 0. FC05/FC15 to X001, T1 and CT1 answer 02. How Data View shows TXT byte 200, by eye.
@@ -231,14 +243,16 @@ All [nothing].
   that is gone becomes whatever now names its old address. Recordings hold names: the nickname, or the display
   address where there is none.
 - Declining ClickNick's setup prompt means no recording.
+- **A reload drops the scan-1 stop event.** `src/pyrung/dap/reload_console.py:773-774` calls `reloaded.stop()` before
+  `_set_time_mode`, which starts a new scan log, so history never records that stop. Found by bob/record-save's review. [nothing]
 
-## 4. One door
+## 4. Console commands for every change
 
 Plan item 1.3. Every action that changes state is a console command, so a recording holds everything a user did.
 The old structured requests for those actions are deleted, not wrapped. Reads stay as requests. pyrung, ClickNick and
 the VS Code extension release together. [nothing, with a joint release]
 
-- **Through the door.**
+- **Requests that become console commands.**
   - From the VS Code extension: pyrungForce, pyrungUnforce and pyrungPatch. The panel sends a dict of tags, and
     `patch` takes one tag today.
   - From ClickNick (dap_service.py:611-758): SetMode, SetSpeed, Force, Patch, Unforce, ClearForces, the five Link
@@ -291,7 +305,8 @@ planner, which is fixed in the planner. The last resort is not widened into a se
    - The three pilot `lru_cache`s ignore `_invalidate_graph_cache`. [nothing]
 7. **Speculative narrowing for steering.** Sam asked for it on 2026-11-16. `how()` may guess a tighter range for a tag than the facts allow, and use the guess to order its candidates and routes. The guess reads declared `min`/`max`/`choices`, even on a tag the ladder also writes. Each guess is checked by running the plan. A failed run drops the guess and falls back to the sound facts. A guess never feeds `static_proofs`, a stop reason or any other claim. So a "can't reach" or a "never changes" rests only on the sound facts. [nothing]
 
-The list to sort:
+The list to sort. Each entry names the mechanism behind the gap. Group them by cause before fixing any, and
+look for the one change that closes a group, as the codegen records closed the hand-kept timer and counter lists.
 - The last resort can't see inputs through plant links.
 - Wider input domains cost the last resort and the skiff. Tags a rung compares with each other share their values, so some domains grew (tumbler `Ref_Cmd_Stop` from 6 values to 19).
   - The last resort tries the first 8 values of an input's domain in sorted order (last_resort.py:72). It no longer tries 7, 8 and 9 for `Ref_Cmd_Stop`.
@@ -301,6 +316,9 @@ The list to sort:
 - A comparison with a pointer element stops, as in `Rung(Lvl == Tb[P], Lvl > 5)`. how() has no lever that sets Lvl to the value `Tb[P]` reads. `test_pilot_answers_not_errors.py`, `test_a_tag_compared_with_a_pointer_element` is a strict xfail.
 - A comparison with arithmetic stops, as in `A.Acc == B.Acc + 2` and `A.Acc - B.Acc == 2`. So does `A.Acc > B.Acc` on two counters. The trace has no lever for them.
 - The planner's guesses read `writers_of` alone, so they miss a write through a pointer that lists no targets. These are tide_tables.py:518 and :645, static_expressions.py:302, trace_constraints.py:235, options.py:150 and :155, and guidance.py:75. A run checks each plan, so none of them makes a false claim. [nothing]
+- An off-delay that was never switched on still stops `how()`. The off-delay's profile now plans "switch it on
+  until Done, then off" (bob/bindings-timers). The trace does not follow a timer's enable through the
+  accumulator, so PILOT never starts the plan. An on-delay there is reached only through the last resort. [nothing]
 - Chains past the trace depth of 15 reach only through the last resort.
 - An En misread. It reads the scan end where it should read at the rung.
 - Fold the frontier projection into `read_program_step`.
@@ -336,6 +354,9 @@ The list to sort:
 - `how(Y, avoid=Alarm)` stops on a For-called subroutine where one scan reaches Y without Alarm.
 - A how() `wall_clock_s` overrun on a For over an open external Dint count.
 - In STOP, `pilot_events`' `started` data has placeholder `steerable_count`, `route` and `pipeline_roles`.
+- **No how_compare program reaches a timer's or counter's completion branch.** `_completion_branch_error`
+  (requirement_derivation.py:211) has 0 calls across the set, so a change to `completion_controls` shows in unit
+  tests only. The counter-held-in-reset row reaches through the last resort and never asks it (bob/bindings-timers r3).
 
 ## Tests
 
@@ -385,6 +406,21 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **Two drum cases flake on the local soft PLC.** `drum/pins_read_before_step_fix` and its tee twin sometimes
+  read Result4 = 3, depending on scan speed. `drum_idle` reads Result2 = 1022 when the soft PLC scans fast. Each
+  fails the same way when run as a part and when run as a pick (bob/main-runner found them). A case must not depend on how fast
+  the host scans, so each needs to step on its own Acc or Done.
+- **Two dap tests read the wall clock and fail under load.**
+  `tests/dap/test_tag_changes_long_run.py::test_loading_a_window_reaches_the_stepped_entries` failed on a loaded
+  machine twice on 2026-11-17, and passes alone. Its handler stops at a `history_seek` deadline.
+  `tests/dap/test_live.py::TestListSessions` fails when two workers write the same port file
+  (`%TEMP%/pyrung/pyrung-logic.port` in the failing run). Neither may depend on
+  machine speed or on another worker.
+- **`CompiledPLC` leaves out a block slot that no rung uses.** When the program text writes `DS[1]` and no rung
+  reads or writes it, `PLC`'s state holds `DS1: 0` and `CompiledPLC`'s state has no `DS1`. The two engines must
+  hold the same tags, so `CompiledPLC` should carry the slot. The fuzz suite found it
+  (`tests/fuzz/reproducers/parity_20261117_indexed_unused_slot.py`, strict xfail
+  `test_unused_indexed_slot_parity`).
 - **Breakpoint conditions share no rule with the Watch.** `compile_condition_for_breakpoint` resolves no choice labels
   or `Pump.State` aliases, and a condition on an unknown tag never fires. Its users are breakpoint conditions,
   logpoint conditions and data-breakpoint conditions (monitor_data_breakpoints.py:169). They should share the Watch's
