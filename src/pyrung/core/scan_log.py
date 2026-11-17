@@ -101,7 +101,7 @@ class ScanLogSnapshot:
     rtc_origin: tuple[datetime, float] | None = None
 
     def rtc_base_at(self, scan_id: int) -> tuple[datetime, float] | None:
-        """The RTC base in effect at ``scan_id``, as :meth:`ScanLog.rtc_base_at`."""
+        """Return the RTC base in effect at ``scan_id``, as :meth:`ScanLog.rtc_base_at` does."""
         return _rtc_base_at(self.rtc_base_changes, self.rtc_origin, scan_id)
 
 
@@ -124,8 +124,8 @@ class ScanLog:
         self._patches_by_scan: dict[int, dict[str, Any]] = {}
         self._force_changes_by_scan: dict[int, dict[str, Any]] = {}
         self._rtc_base_changes: dict[int, tuple[datetime, float]] = {}
-        # The base in effect before the first change kept above; None while nothing
-        # has changed, when the runner's current base is the answer for every scan.
+        # The base in effect before the first change in the dict above.  It is None while
+        # nothing has changed. The runner's current base is then the answer for every scan.
         self._rtc_origin: tuple[datetime, float] | None = None
         self._dts: array.array[float] | None = (
             array.array("d") if time_mode == _TimeMode.REALTIME else None
@@ -160,11 +160,11 @@ class ScanLog:
         self._effective_input_cache.clear()
 
     def drop_force_records_unchanged_at(self, scan_ids: Collection[int]) -> None:
-        """Forget the records at *scan_ids* that repeat the record before them."""
+        """Drop the records at *scan_ids* that repeat the record before them."""
         records = self._force_changes_by_scan
         previous: str | None = None
         for scan_id in sorted(records):
-            # By repr, so a force from True to 1 still counts as a change.
+            # Compare by repr, so a force from True to 1 still counts as a change.
             current = repr(records[scan_id])
             if scan_id in scan_ids and current == previous:
                 del records[scan_id]
@@ -178,19 +178,20 @@ class ScanLog:
         *,
         previous: tuple[datetime, float],
     ) -> None:
-        """Record an RTC base update taking effect at ``scan_id``.
+        """Record an RTC base update that takes effect at ``scan_id``.
 
-        *previous* is the base it replaces: scans before the first change still ran
-        on it, and a replay anchored there has to know.
+        *previous* is the base that the update replaces.  Scans before the first change
+        still ran on it, and a replay anchored there has to know it.
         """
         if self._rtc_origin is None and not self._rtc_base_changes:
             self._rtc_origin = (previous[0], float(previous[1]))
         self._rtc_base_changes[scan_id] = (base, float(base_sim_time))
 
     def rtc_base_at(self, scan_id: int) -> tuple[datetime, float] | None:
-        """The ``(base, base sim time)`` in effect at ``scan_id``.
+        """Return the ``(base, base sim time)`` in effect at ``scan_id``.
 
-        None when no change has been recorded: the runner's current base holds.
+        Return None when no change has been recorded.  The runner's current base then
+        applies.
         """
         return _rtc_base_at(self._rtc_base_changes, self._rtc_origin, scan_id)
 
@@ -392,7 +393,7 @@ class ScanLog:
         """
         if scan_id <= self._base_scan:
             return
-        # The clock at the horizon outlives the change that set it.
+        # The clock at the horizon stays in effect after the change that set it is dropped.
         self._rtc_origin = self.rtc_base_at(scan_id - 1)
         for d in (
             self._patches_by_scan,

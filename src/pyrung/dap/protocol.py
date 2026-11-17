@@ -47,11 +47,10 @@ def read_message(stream: BinaryIO) -> dict[str, Any] | None:
 
 
 def _finite_json(value: Any) -> Any:
-    """*value* with every Inf or NaN float as its repr (``"inf"``, ``"nan"``).
+    """Return *value* with every Inf or NaN float replaced by its repr (``"inf"``, ``"nan"``).
 
-    A REAL can hold +/-Inf or NaN (a Math overflow stores Inf); JSON has no
-    such number, and ``json.dumps`` would write ``Infinity``, which a DAP
-    client's JSON parser refuses.
+    A REAL can hold +/-Inf or NaN.  A Math overflow stores Inf.  JSON has no such number.
+    ``json.dumps`` would write ``Infinity``, which a DAP client's JSON parser refuses.
     """
     if isinstance(value, float):
         return value if math.isfinite(value) else repr(value)

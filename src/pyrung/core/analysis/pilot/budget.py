@@ -6,32 +6,37 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-# The ledger, in units.  A scan the search steps is a unit.  So are the first two scans and the
-# last scan of each wait.  The other scans of a wait are a hundredth of a unit each, whether the
-# loop ran them or not.  So a change to the loop cannot change what a search may spend.  A wait
-# no loop may run is a unit a scan (``coast_run.UNIT_SCANS_AT_START``).  A trace and a kernel
-# compile are not charged.  A search has few of them, and a small max_scans cannot pay for even
-# one.  Nothing measured them against an answer.  The wall clock is what bounds that time.
+# The ledger counts work in units.  A scan that the search steps costs one unit.  So do the
+# first two scans and the last scan of each wait.  The other scans of a wait cost a hundredth
+# of a unit each, whether or not the loop ran them.  A change to the loop therefore cannot
+# change what a search may spend.  A wait that no loop may run costs one unit a scan
+# (``coast_run.UNIT_SCANS_AT_START``).  A trace and a kernel compile are not charged.  A
+# search has few of them, and a small max_scans cannot pay for even one.  Nothing measured
+# them against an answer.  The wall clock bounds that time.
 STRETCH_SCANS_PER_UNIT = 100
 
-# how()'s backstop on a real clock, in seconds.  The ledger is the bound on scans; most of a
-# search's time is its cause and replay work, which the ledger does not charge.
+# how()'s backstop on a real clock, in seconds.  The ledger bounds the scans.  Most of a
+# search's time goes to its cause and replay work, which the ledger does not charge.
 DEFAULT_WALL_CLOCK_S = 300.0
 
 # A clock makes an answer depend on the machine, so a test that asserts answers turns it off.
 WALL_CLOCK_ENABLED = True
-# What one search may add to the heap, in the allocator's blocks: about 1 GB.  A search keeps
-# every state it scans, on purpose (``cause()`` reads them without a replay), and how much one
-# holds depends on how many tags change per scan, so scans would not bound it: 23 blocks and
-# 1.6 KB a scan on a small program with no loop, much more when more changes.
+# The most that one search may add to the heap, in the allocator's blocks.  It is about 1 GB.
+# A search keeps every state it scans, on purpose, because ``cause()`` reads them without a
+# replay.  How much one scan holds depends on how many tags change in it, so a scan count
+# would not bound the heap.  A small program with no loop uses 23 blocks and 1.6 KB a scan,
+# and more when more tags change.
 MAX_SEARCH_BLOCKS = 16_000_000
-# The count walks the allocator's pools: 14 us at 1M blocks, 322 us at 16M, on a scan of about
-# 200 us at the least.  So it runs every few polls, sooner as what is held nears the cap.
+# Counting the blocks walks the allocator's pools.  It takes 14 us at 1M blocks and 322 us at
+# 16M, on a scan of about 200 us at the least.  So the search counts only every few polls, and
+# more often as the memory it holds nears the cap.
 _MOST_POLLS_PER_COUNT = 64
 
 
 class SearchOutOfTime(BaseException):
-    """A how() ran out of its wall clock.  The search ends with a terminal saying so.
+    """Raised when a how() runs out of its wall clock.
+
+    The search ends with a terminal that says so.
 
     A BaseException, as ``asyncio.CancelledError`` is: the search reads its causes under
     many ``except Exception`` that mean "no evidence", and a clock that runs out while one
@@ -40,12 +45,15 @@ class SearchOutOfTime(BaseException):
 
 
 class SearchOutOfMemory(BaseException):
-    """A how() holds all a search may.  The search ends with a terminal saying so."""
+    """Raised when a how() holds all the memory that a search may.
+
+    The search ends with a terminal that says so.
+    """
 
 
 @dataclass(frozen=True)
 class WallClock:
-    """When a how() has to stop, however far it got."""
+    """Hold the time at which a how() has to stop, however far it got."""
 
     limit_s: float
     stop_at: float
@@ -65,7 +73,11 @@ class WallClock:
 
 
 def search_limits(clock: WallClock | None) -> Callable[[], None]:
-    """What a running search polls: its clock, and what it holds since this call."""
+    """Return the function that a running search polls.
+
+    The function checks the search's clock and the memory that the search has held since
+    this call.
+    """
     start = sys.getallocatedblocks()
     held = 0
     polls = 0
@@ -81,7 +93,8 @@ def search_limits(clock: WallClock | None) -> Callable[[], None]:
         now = sys.getallocatedblocks() - start
         if now > MAX_SEARCH_BLOCKS:
             raise SearchOutOfMemory
-        # At this rate, half way to the cap; a rate that jumps has up to the most polls to show.
+        # Count again when, at this growth rate, the heap would be half way to the cap.  If
+        # the rate jumps, it has at most _MOST_POLLS_PER_COUNT polls to show it.
         grown = max(1, now - held) / polls
         next_count = max(
             1, min(_MOST_POLLS_PER_COUNT, int((MAX_SEARCH_BLOCKS - now) / (2 * grown)))
@@ -94,11 +107,11 @@ def search_limits(clock: WallClock | None) -> Callable[[], None]:
 
 @dataclass
 class SearchBudget:
-    """Spent search work and productive simulated dwell are separate quantities.
+    """Track spent search work and productive simulated dwell as separate quantities.
 
-    Charge completed attempts before adoption. A checkpoint or a discarded
-    experiment has no authority to refund this ledger. Research dispatches
-    consume at least one unit even when they produce no executable scan.
+    Callers charge completed attempts before adoption. A checkpoint or a discarded
+    experiment cannot refund this ledger. Research dispatches consume at least one
+    unit even when they produce no executable scan.
     """
 
     spent: int = 0

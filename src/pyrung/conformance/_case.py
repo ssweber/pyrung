@@ -15,8 +15,8 @@ from pyrung.core.tag import Tag
 #: Use a range for anything wall-clock dependent over the wire (timer Acc).
 Expectation = int | range
 
-#: What a case writes to ``Fired``, plus the step it was on, when a wait runs past its
-#: deadline.  The harness then reports the case timed out at that step.
+#: The value a case writes to ``Fired`` when a wait runs past its deadline.  The case adds
+#: the step it was on.  The harness then reports that the case timed out at that step.
 TIMED_OUT = 200
 
 #: Slot fields a case may expect: the harness owns ``Cmd`` and the reset owns ``Ready``.
@@ -26,9 +26,9 @@ _CASE_ID = re.compile(r"[A-Za-z0-9_]+")
 _SC_ADDRESS = re.compile(r"SC[1-9][0-9]*")
 _GROUP_NAME = re.compile(r"[a-z][a-z0-9]*(_[a-z0-9]+)*")
 
-#: The fix steps a ``pending`` case can wait on, each a change that brings
-#: pyrung to what a CLICK does.  The tag names the step whose landing closes
-#: the gap, so its fixer finds every case it must flip.
+#: The fix steps that a ``pending`` case can wait on.  Each step is a change that brings
+#: pyrung to what a CLICK does.  The case's tag names the step whose landing closes the
+#: gap, so the person who fixes that step finds every case to flip.
 PENDING_STEPS: Mapping[str, str] = {
     "S2": "counters count edges of their inputs",
     "S3": "edge contacts keep per-contact memory",
@@ -95,15 +95,16 @@ class Group:
     The subroutine is ``Conf_<Name>`` (``math`` -> ``Conf_Math``,
     ``rung_order`` -> ``Conf_RungOrder``), and slot nicknames start with
     ``<Name>``.  Case ids must be unique within the group.  The main program
-    calls the subroutine *calls* times a scan (one call rung each), so a group
-    can ask what a subroutine called more than once in a scan does.
+    calls the subroutine *calls* times a scan, with one call rung for each call.
+    A group can therefore ask what a subroutine does when it is called more than
+    once in a scan.
 
-    With ``in_main=True`` the cases' rungs run in the main program instead, so
-    a case can ``call()`` a subroutine it defines itself (CLICK has no nested
-    calls, so a call has to start in main): the case ladder opens
-    ``with subroutine("Conf_<Name>...")`` for the helper.  The group then has
-    no ``Conf_<Name>`` subroutine of its own, so it goes in a part of its own
-    and its rungs are re-pasted into main, not into a subroutine.
+    Pass ``in_main=True`` to run the cases' rungs in the main program instead.  A
+    case can then ``call()`` a subroutine that it defines itself.  CLICK has no
+    nested calls, so a call has to start in main.  The case ladder opens
+    ``with subroutine("Conf_<Name>...")`` for the helper.  The group has no
+    ``Conf_<Name>`` subroutine of its own. It goes in a part of its own, and its
+    rungs are re-pasted into main, not into a subroutine.
     """
 
     name: str
@@ -208,29 +209,29 @@ def case(
             across the reset.  The in-process leak check skips them; the case
             must still pass on every repeat.
         expect_system: CLICK system bit (``"SC11"``) -> expected value (0/1 or
-            a ``range``), read by the harness after the case has run, not by
-            the ladder: what a case that puts the PLC in STOP leaves behind
-            (``SC11`` is off in STOP, and a stopped PLC runs no ladder).
+            a ``range``).  The harness reads these after the case has run, and the
+            ladder does not.  Use it for what a case that puts the PLC in STOP leaves
+            behind.  ``SC11`` is off in STOP, and a stopped PLC runs no ladder.
         pending: The fix step (a key of :data:`PENDING_STEPS`) that brings
-            pyrung to *expect*, which is what a CLICK does.  Until it lands,
+            pyrung to *expect*, which is what a CLICK does.  Until that step lands,
             a run on pyrung's own targets (in-process, the local sim, the
             generated P1AM code) passes the case only if it does NOT meet
-            *expect*: a strict xfail, so the case fails once pyrung starts
-            matching and the fixer removes the marker.  A run against a real
+            *expect*.  This is a strict xfail. The case fails once pyrung starts
+            matching, and the fixer then removes the marker.  A run against a real
             CLICK judges *expect* as usual.
         probe: The open hardware question the case asks, in a few words.
-            *expect* is the answer pyrung would adopt; the case's module
+            *expect* is the answer pyrung would adopt.  The case's module
             docstring says which reading means which answer, so a failure on
             a CLICK is an answer, not a bug.
-        tee: Makes the case the tee-drawn twin of a rail-drawn one: the CLICK
+        tee: Makes the case the tee-drawn twin of a rail-drawn one.  The CLICK
             export draws the named pins teeing off the box's input wire after
             its shared contacts, instead of from the rail with those contacts
             copied.  The pyrung rungs are the same, so every target runs them
-            as before, and a test imports the drawing and compares.
+            as before.  A test imports the drawing and compares.
         fires_within: For a case that raises ``Fired`` only when its answer is in, and
-            may take longer than the harness's usual wait: the seconds it may take over
-            the wire.  Nothing moves after ``Fired``, so *scans* adds no settle time; it
-            stays the in-process scan count.
+            may take longer than the harness's usual wait.  It is the number of seconds
+            the case may take over the wire.  Nothing moves after ``Fired``, so *scans*
+            adds no settle time. It stays the in-process scan count.
     """
     bad = set(expect) - set(RESULT_FIELDS)
     if bad:
@@ -291,7 +292,7 @@ def _default_id(ladder: Callable[[Any], None]) -> str:
 
 
 def expectation_met(expect: Mapping[str, Expectation], actual: Mapping[str, int]) -> bool:
-    """True when every expected field in *actual* equals or falls in its expectation."""
+    """Return True when every expected field in *actual* equals or falls in its expectation."""
     for field_name, wanted in expect.items():
         got = actual.get(field_name)
         if got is None:
@@ -307,13 +308,13 @@ def expectation_met(expect: Mapping[str, Expectation], actual: Mapping[str, int]
 def judge(
     c: Case, met: Sequence[bool], clean: bool, actual: Mapping[str, int], *, pending: bool
 ) -> tuple[bool, bool, str]:
-    """``(passed, xfail, note)`` for case *c*.
+    """Return ``(passed, xfail, note)`` for case *c*.
 
-    *met* says, per run, whether the case fired and met its expectation;
-    *clean* whether every reset completed and left nothing behind.  With
-    *pending* on (a run on one of pyrung's own targets) a case marked
-    ``pending`` passes only if no run met its expectation: one that does
-    fails, so its marker comes off when its fix lands.
+    *met* says, for each run, whether the case fired and met its expectation.
+    *clean* says whether every reset completed and left nothing behind.  When
+    *pending* is on, which is a run on one of pyrung's own targets, a case marked
+    ``pending`` passes only if no run met its expectation.  If a run does meet it,
+    the case fails, so its marker comes off when its fix lands.
     """
     if not pending or c.pending is None:
         return all(met) and clean, False, ""
@@ -326,7 +327,10 @@ def judge(
 
 
 def timed_out_step(fired: int) -> int | None:
-    """The step a case timed out at, from what it wrote to ``Fired`` (``None``: it did not)."""
+    """Return the step a case timed out at, from what it wrote to ``Fired``.
+
+    Return ``None`` if the case did not time out.
+    """
     return fired - TIMED_OUT if fired >= TIMED_OUT else None
 
 

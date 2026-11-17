@@ -107,20 +107,21 @@ from ._primitives import (
 
 
 def _edge_locals(memory_key: str) -> tuple[str, str]:
-    """The locals holding an edge site's bit this row and its memory before it."""
+    """Return the names of two locals: the edge site's bit in this row, and its memory before it."""
     base = "_" + "".join(ch if ch.isalnum() else "_" for ch in memory_key.lstrip("_"))
     return f"{base}_now", f"{base}_was"
 
 
 def _compile_edge_row(row: Any, ctx: CodegenContext, indent: int) -> list[str]:
-    """Scan the edge sites of one row where the solve reaches it: read each
-    memory, then store the bit seen.
+    """Scan the edge sites of one row where the solve reaches it.
 
-    Every edge contact in the row stores the bit it sees whether or not power
-    reaches it (CLICK updates an edge contact's memory whenever it is scanned),
-    and compares against the memory as it was before the row: the row's edge
-    expressions read the ``_was`` locals.  The bit is read live, so it sees
-    the writes of the rows above.
+    For each site, read the memory first, then store the bit that the contact sees.
+
+    Every edge contact in the row stores the bit it sees, whether or not power reaches
+    it. A CLICK updates an edge contact's memory whenever it scans the contact.  The
+    contact compares against the memory as it was before the row, so the row's edge
+    expressions read the ``_was`` locals.  The bit is read live, so it includes the
+    writes of the rows above.
     """
     sites = ctx._edge_rows.get(id(row), ())
     sp = " " * indent
@@ -130,18 +131,18 @@ def _compile_edge_row(row: Any, ctx: CodegenContext, indent: int) -> list[str]:
         tag_expr = _snapshot_tag_symbol(edge.tag, ctx)
         lines.append(f"{sp}{now} = {emit_truth(tag_expr)}")
         lines.append(f"{sp}{was} = {emit_prev(key, cast=False)}")
-        # Stored only when it changes: an unwritten memory reads off, as in
-        # the interpreter, whose state holds no entry until a contact sees on.
+        # Store the bit only when it changes. An unwritten memory reads off, as it does in
+        # the interpreter, whose state has no entry until a contact sees the bit on.
         lines.append(f"{sp}if {now} != {was}:")
         lines.append(f"{sp}    {emit_mem_set(key, now)}")
     return lines
 
 
 def _box_helper_conditions(item: Any) -> list[tuple[Any, str, Any]]:
-    """The helper legs (pins) of one instruction box, in the order its compiler reads them.
+    """Return the helper legs (pins) of one instruction box, in the order its compiler reads them.
 
-    Returns (instruction, field_name, condition) tuples; empty for a box
-    without legs.
+    Each leg is an ``(instruction, field_name, condition)`` tuple.  A box without legs
+    returns an empty list.
     """
     result: list[tuple[Any, str, Any]] = []
     if isinstance(item, OnDelayInstruction):
@@ -173,7 +174,7 @@ def _box_helper_conditions(item: Any) -> list[tuple[Any, str, Any]]:
         if item.jog_condition is not None:
             result.append((item, "jog_condition", item.jog_condition))
         if isinstance(item, TimeEventDrumInstruction):
-            # Only the steps that have an event; the compiler reads them in order.
+            # Take only the steps that have an event. The compiler reads them in order.
             for i, cond in enumerate(item.events):
                 if cond is not None:
                     result.append((item, f"events[{i}]", cond))
@@ -187,11 +188,10 @@ def _bind_helper_legs(
 ) -> list[str]:
     """Compile one box's helper legs into ``_{prefix}_snap_K`` locals.
 
-    Returns the binding lines (unindented).  The caller emits them just
-    before the box's code, so the box reads all its pins at one moment, as it
-    starts and before any write of its own (the interpreter's
-    ``instruction_condition_view``); the box compilers find the locals via
-    ``_get_condition_snapshot``.
+    Return the binding lines, unindented.  The caller emits them just before the box's
+    code. The box then reads all its pins at one moment, as it starts and before any
+    write of its own.  The interpreter does the same in ``instruction_condition_view``.
+    The box compilers find the locals through ``_get_condition_snapshot``.
     """
     lines: list[str] = []
     for snap_idx, (instr, field_name, condition) in enumerate(helpers):
@@ -210,10 +210,10 @@ def _bind_helper_legs(
 def _compile_box(item: Any, enabled_expr: str, ctx: CodegenContext, indent: int) -> list[str]:
     """Compile one box where the solve reaches it.
 
-    A box with helper legs (pins) reads them all as it starts, enabled or
-    not and before any write of its own: its edge pins scan there and its
-    legs bind to locals just before its code, as the interpreter's
-    ``instruction_condition_view`` does.
+    A box with helper legs (pins) reads them all as it starts, whether or not it is
+    enabled and before any write of its own.  Its edge pins scan at that point, and its
+    legs bind to locals just before its code.  The interpreter's
+    ``instruction_condition_view`` does the same.
     """
     helpers = _box_helper_conditions(item)
     if not helpers:
@@ -244,8 +244,8 @@ _COMPARES = (
 def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
     """Return a Python boolean expression string.
 
-    Contacts read the tags live: a row's contacts are compiled where the
-    solve reaches the row, so they see the writes of the rows above it.
+    Contacts read the tags live. The compiler compiles a row's contacts where the solve
+    reaches the row, so they see the writes of the rows above it.
     """
 
     if isinstance(cond, BitCondition):
@@ -290,8 +290,8 @@ def compile_expression(
 ) -> str:
     """Return a Python expression string with explicit parentheses.
 
-    *strict* for calc's expression, which raises on a math error; anywhere
-    else an operation that can raise gives 0 instead (permissive).
+    Pass *strict* for a calc expression, which raises on a math error.  Everywhere
+    else, an operation that can raise returns 0 instead.
     """
     return _compile_expression_impl(expr, ctx, strict=strict)
 
@@ -438,11 +438,11 @@ def compile_rung(
 ) -> list[str]:
     """Compile one rung into Python source lines, in instruction order.
 
-    The trunk's contacts are read once, as the rung starts; each branch's own
-    contacts are read where the solve reaches the branch (after the writes of
-    the rows above it), and each box reads its pins as it starts.
-    ``local_conditions`` compiles only the rung's own contacts (a forloop body
-    rung, whose inherited loop-rung contacts are already true).
+    The rung reads the trunk's contacts once, as it starts.  It reads each branch's own
+    contacts where the solve reaches the branch, after the writes of the rows above it.
+    Each box reads its pins as it starts.
+    With ``local_conditions``, the rung compiles only its own contacts. This is for a For
+    loop body rung, whose inherited loop-rung contacts are already true.
     """
     previous = ctx._current_function
     ctx.set_current_function(fn_name)
@@ -480,9 +480,9 @@ def _compile_rung_items(
 ) -> list[str]:
     """Compile a rung's items in solve order.
 
-    A branch is solved where it sits: its edge sites scan and its own
-    contacts are read there, under *enabled_expr* (the power of the row it
-    hangs from), then its items follow.
+    A branch is solved where it sits.  Its edge sites scan there, and its own contacts
+    are read there, under *enabled_expr*, which is the power of the row it hangs from.
+    Its items follow.
     """
     lines: list[str] = []
     sp = " " * indent
@@ -569,8 +569,8 @@ def _compile_calc_instruction(
     zero_store_expr = _calc_store_expr("0", instr.dest.type.name, instr.mode, ctx)
     out_of_range_body = _compile_set_out_of_range_fault_body(ctx)
     math_err = ctx.symbol_if_referenced(_FAULT_MATH_OPERATION_ERROR_TAG)
-    # A failing operation is 0 and appends its flag's code to _calc_flags: the
-    # rest of the formula runs (core CALC_FAULTS), and its flags are set after.
+    # A failing operation evaluates to 0 and appends its flag's code to _calc_flags.
+    # The rest of the formula still runs (core CALC_FAULTS), and the flags are set after.
     flagged = _appends_flags(value_expr)
     enabled_body = [f"{CALC_FLAGS} = []"] if flagged else []
     set_flags: list[str] = []
@@ -583,11 +583,11 @@ def _compile_calc_instruction(
             set_flags.append(f"    if 43 in {CALC_FLAGS}:")
             set_flags.extend(f"        {line}" for line in out_of_range_body)
         if set_flags:
-            # One test on the path with no error.
+            # This is one test on the path with no error.
             set_flags.insert(0, f"if {CALC_FLAGS}:")
     if set_flags and isinstance(instr.expression, (IndirectRef, IndirectExprRef)):
-        # An address below its block raises IndexError (nothing written, the
-        # guard's address-error flag): the flags of its failing operations first.
+        # An address below its block raises IndexError. Nothing is written, and the
+        # guard sets the address-error flag. The flags of the failing operations are set first.
         enabled_body += ["try:", f"    _calc_value = {value_expr}", "finally:"]
         enabled_body.extend(f"    {line}" for line in set_flags)
     else:
@@ -596,8 +596,8 @@ def _compile_calc_instruction(
     dest_type = instr.dest.type.name
     range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
     if dest_type == "REAL" and instr.mode != "hex":
-        # Past CLICK's REAL range the result is +/-Inf, with the out-of-range
-        # flag, as a float32 Math stores it; NaN is kept, with no flag.
+        # Past CLICK's REAL range, the result is +/-Inf with the out-of-range flag, as a
+        # float32 Math stores it. NaN is kept, with no flag.
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body if line != "pass")
         enabled_body += [
@@ -608,8 +608,8 @@ def _compile_calc_instruction(
         ]
         range_cond = None
     else:
-        # An Inf or NaN result (from an Inf or NaN operand) stores 0; into an
-        # integer register +/-Inf sets the out-of-range flag, and NaN does not.
+        # An Inf or NaN result, from an Inf or NaN operand, stores 0. Into an integer
+        # register, +/-Inf sets the out-of-range flag and NaN does not.
         flags_non_finite = range_cond is not None and out_of_range_body != ["pass"]
         enabled_body.append("if isinstance(_calc_value, float) and not math.isfinite(_calc_value):")
         if flags_non_finite:
@@ -628,21 +628,22 @@ def _compile_calc_instruction(
 
 
 def _in_quotes(text: str) -> str:
-    """*text* as the inside of a generated double-quoted string."""
+    """Escape *text* for use inside a generated double-quoted string."""
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _in_f_string(text: str) -> str:
-    """*text* as the inside of a generated double-quoted f-string."""
+    """Escape *text* for use inside a generated double-quoted f-string."""
     return _in_quotes(text).replace("{", "{{").replace("}", "}}")
 
 
 def _compile_function_kwargs(ins: dict[str, Any], ctx: CodegenContext) -> str:
-    """A function call's keyword arguments, in the order stepping passes them.
+    """Return a function call's keyword arguments, in the order that stepping passes them.
 
-    A name that is no Python keyword argument (``class``, ``a b``, ``__debug__``, the one
-    identifier the compiler won't take as a keyword and ``iskeyword`` doesn't list) goes
-    through ``**``, and so does one outside ASCII, which the compiler would normalize.
+    Some names cannot be written as Python keyword arguments. Examples are ``class``,
+    ``a b`` and ``__debug__``.  The compiler does not accept ``__debug__`` as a keyword,
+    and ``iskeyword`` does not list it.  Such a name goes through ``**``. So does a name
+    outside ASCII, because the compiler would normalize it.
     """
     compiled = [(name, _compile_function_arg(value, ctx)) for name, value in ins.items()]
     if all(
@@ -654,7 +655,10 @@ def _compile_function_kwargs(ins: dict[str, Any], ctx: CodegenContext) -> str:
 
 
 def _call_result_var(ctx: CodegenContext) -> str:
-    """A local for what a call returned, in no namespace a function's symbol (``_fn_*``) is."""
+    """Return a local name for what a call returned.
+
+    The name is outside the namespace of a function's symbol (``_fn_*``).
+    """
     return f"_{ctx.next_name('call_result')}"
 
 
@@ -752,12 +756,12 @@ def _compile_for_loop_instruction(
         children = _compile_loop_body(instr, ctx)
     finally:
         ctx._for_loop_depth = depth
-    # CLICK reads a Dint count or a constant whole and signed, so a negative one
-    # runs none.  It reads any other count as unsigned 16-bit.  A count of 0 runs
+    # CLICK reads a Dint count, or a constant, whole and signed, so a negative one runs
+    # none.  It reads any other count as unsigned 16-bit.  A count of 0 runs
     # FOR_ZERO_COUNT_ITERATIONS (control.for_loop_iterations).
     mask = control.for_count_mask(instr.count)
     if isinstance(instr.count, int) and not isinstance(instr.count, bool):
-        # A constant's iterations are known now.
+        # The iterations of a constant count are known at compile time.
         runs = control.for_loop_iterations(instr.count, mask)
         iterations_lines = [f"{iterations_var} = {runs}"]
         capped = runs > PROVE_FOR_ITERATION_CAP
@@ -765,9 +769,9 @@ def _compile_for_loop_instruction(
         iterations_lines = _for_count_lines(instr, count_expr, iterations_var, mask, ctx)
         capped = mask > control.FOR_COUNT_MASK_16
     if ctx.proof_metadata and capped:
-        # The static facts' kernel stops a 32-bit count past its cap rather than
-        # run it (a Dint up to 2147483647 runs that many iterations).  The source
-        # names the loop by index, not by its file and line.
+        # The static facts' kernel stops a 32-bit count past its cap instead of running
+        # it. A Dint up to 2147483647 runs that many iterations.  The source names the loop
+        # by its index, not by its file and line.
         site = len(ctx.for_cap_sites)
         ctx.for_cap_sites.append(_for_count_site(instr))
         iterations_lines += [
@@ -780,7 +784,7 @@ def _compile_for_loop_instruction(
         *_indent_body(_compile_assignment_lines(instr.idx_tag, index_var, ctx, indent=0), 4),
         *_indent_body(children, 4),
     ]
-    # A false For rung skips its body: only the For's own one-shot re-arms.
+    # A false For rung skips its body. Only the For's own one-shot re-arms.
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, body)
 
 
@@ -791,17 +795,17 @@ def _for_count_lines(
     mask: int,
     ctx: CodegenContext,
 ) -> list[str]:
-    """The lines that read a For's count register into *iterations_var*."""
+    """Return the lines that read a For's count register into *iterations_var*."""
     non_finite = "fault.out_of_range" in instr._fault_writes
     if non_finite:
-        # A REAL count holding Inf or NaN runs no iteration and sets SC43
-        # (ForLoopInstruction.iterations); _bit_int turns NaN into OverflowError.
+        # A REAL count that holds Inf or NaN runs no iteration and sets SC43
+        # (ForLoopInstruction.iterations).  _bit_int raises OverflowError for NaN.
         ctx.mark_helper("_bit_int")
         count_expr = f"_bit_int({count_expr})"
     lines = [f"{iterations_var} = int({count_expr}) & 0x{mask:X}"]
     zero_runs = int(control.FOR_ZERO_COUNT_ITERATIONS)
     if mask == control.FOR_COUNT_MASK_32:
-        # Past FOR_COUNT_MAX_32 the bits are a negative count: none.
+        # Past FOR_COUNT_MAX_32 the bits are a negative count, which runs no iterations.
         kept = f"({iterations_var} or {zero_runs})" if zero_runs else iterations_var
         lines.append(
             f"{iterations_var} = 0 if {iterations_var} > 0x{control.FOR_COUNT_MAX_32:X} else {kept}"
@@ -820,7 +824,10 @@ def _for_count_lines(
 
 
 def _for_count_site(instr: ForLoopInstruction) -> tuple[str, str, tuple[str, ...]]:
-    """Where a For is, how its count reads, and the tags it reads (for a refusal)."""
+    """Return where a For is, how its count reads, and the tags it reads.
+
+    A refusal uses this.
+    """
     count = instr.count
     if isinstance(count, Tag):
         return _source_location(instr), count.name, (count.name,)
@@ -843,12 +850,12 @@ def _compile_loop_body(
     lines: list[str] = []
     for item in instr.body:
         if not isinstance(item, LogicRung):
-            # A bare body box is a row of its own: on every iteration it reads
-            # its pins as it starts, before it writes (``_compile_box``).
+            # A bare body box is a row of its own. On every iteration it reads its pins
+            # as it starts, before it writes (``_compile_box``).
             lines.extend(_compile_box(item, "True", ctx, 0))
         else:
-            # A body rung reads live tags: its contacts are evaluated afresh
-            # on every iteration, as a rung of its own.
+            # A body rung reads live tags. Each iteration evaluates its contacts afresh,
+            # as it would for a rung of its own.
             fn_name = ctx._current_function
             assert fn_name is not None
             lines.extend(compile_rung(item, fn_name, ctx, indent=0, local_conditions=True))
