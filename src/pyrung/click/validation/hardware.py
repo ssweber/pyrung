@@ -1319,8 +1319,8 @@ def _evaluate_modbus_banks(
             continue
 
         value = getattr(instruction, field_name)
-        # A status bit that the program leaves off is a hidden tag. It never reaches the
-        # CLICK project.
+        # If the caller did not pass a status bit, pyrung gives it a hidden tag.  That tag
+        # never reaches the CLICK project.
         if isinstance(value, Tag) and is_modbus_status_tag(value.name):
             continue
         # A numeric device ID has no bank.

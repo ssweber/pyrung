@@ -3,9 +3,9 @@
 Every scan runs, in order, so a coast cannot land anywhere that stepping would not.
 The coast runs one interpreted scan, then asks the loop to repeat scans it has seen
 before. If no known path covers the next scan, the coast traces that scan so the loop
-can repeat it next time, and then runs it interpreted. The scans that need watching
-are the interpreted ones. The loop leaves before those scans, so nothing has to check
-inside it:
+can repeat it next time, and then runs it interpreted. Whatever must watch the scans
+watches only the interpreted ones. The loop exits before a scan that needs watching, so
+that scan runs interpreted. Only a declared stop predicate is asked inside the loop:
 
 * A stop predicate that declares its reads is asked after each loop scan, on the
   values the loop has just committed. The answer only ends the stretch. The coast asks
@@ -42,8 +42,10 @@ path's own interpreted scan. That scan is the one right after the trace, from th
 the trace was made on. A path fires only once it has that capture.
 
 What a rung attempted also comes from the capture. The exception is a rung that stored
-a moving value. A tag stored once moves as the tag does. Otherwise that column says
-``Unknown`` for that range, which readers treat as "ask a replay".
+a moving value. If the rung stored the tag once and the path moves or holds the tag, the
+rung's column moves as the tag does. Otherwise, for example when the rung stored the tag
+more than once, the column says ``Unknown`` for that range. Readers treat ``Unknown`` as
+"ask a replay".
 
 Committed values come from the moves. A tag changes only by a checked delta, an exact
 flip or a float ramp, and a ramp's values say ``Unknown``.
@@ -101,9 +103,9 @@ STRETCH_CHECKPOINT_INTERVALS = 10
 # that call a coast limit its scans.  This limits the checkpoints those scans leave, however
 # long the seek was allowed to be.
 MAX_CHECKPOINTS = 512
-# Record runs a runner holds.  Past this, a stretch leaves its scans unrecorded and settles
-# them only when asked.  A rung that fires every other scan costs one run each time, about 140
-# bytes.  The longest route in the tumbler reaches 78,000.
+# Record runs a runner holds.  Past this, a stretch leaves its scans unrecorded.  A question
+# that reaches those scans settles them.  A rung that fires every other scan costs one run
+# each time, about 140 bytes.  The longest route in the tumbler reaches 78,000.
 MAX_RECORD_RUNS = 1_000_000
 # Kernels a memo keeps with their paths.  It drops the least recently asked for first.  Each
 # kernel is a compiled module and a parsed source, about 23 MB on a large program.  A limit of
@@ -201,8 +203,8 @@ class _Recording:
     # What every scan of the path says.  A tag that no single capture can speak for reads
     # Unknown.
     settled: dict[str, Any]
-    # The segment's end says the rest.  Each entry is (tag, how far it moves a scan or None if
-    # held, varied).
+    # The values of the other tags come from the segment's end.  Each entry is (tag, how far it
+    # moves a scan or None if held, varied).
     from_ends: tuple[tuple[str, int | None, bool], ...]
     varied: frozenset[str]
     # What a rung's column has to change when it comes here from another recording of it.
@@ -221,7 +223,10 @@ class _Capture:
 
 @dataclass(eq=False)
 class _Path:
-    """A trace that a coast may fire, the tags it writes, and the paths that tend to follow."""
+    """A trace that a coast may fire, with the loops written from that trace.
+
+    A path also lists the paths that tend to follow it.
+    """
 
     trace: ScanTrace
     # Every tag its scans write, moving or not.  A block cell rewritten with its own value
@@ -657,8 +662,8 @@ def _stepping_end(segments: list[_Segment], first: int, length: int, stop: int) 
 def _end_steps(one: _Segment, other: _Segment) -> tuple[int, ...] | None:
     """Return how far each whole number moved from *one* to *other*.
 
-    Return None if the paths or counts differ, or if a value that is not a whole number
-    changed.
+    Return None if the paths or counts differ, or if any end value changed other than by a
+    whole-number step.
     """
     if one.path is not other.path or one.count != other.count:
         return None
@@ -1012,7 +1017,7 @@ class _CycleWatch:
         self.phase = -1  # segments of the cycle since it last began, or -1 when it is lost
         self.prediction: cycle_jump.Prediction | None = None
         self.start_scan = 0
-        # The timestamp that the scans since the prediction have reached, and the scan it is at.
+        # Pairs a scan since the prediction with the timestamp that the scans had reached by then.
         self.time_mark = (0, 0.0)
         self.ends: dict[int, int] = {}  # maps scans into a cycle to the segment that ends there
         self.wait_until = 0
@@ -1113,11 +1118,12 @@ class _SeenState:
 
 
 def _moves_a_watched_tag(path: _Path, watched: frozenset[str]) -> bool:
-    """Return whether this path's records say that a scan moves a tag that its watched loop holds.
+    """Return whether this path's records say that a scan moves one of the *watched* tags.
 
-    The loop for a watched tag leaves before the tag changes, so every scan it runs holds the
-    tag.  The path's records (``path.moves``, the capture) are of a scan that moved the tag.
-    A path of a scan that holds the tag covers those scans, and records them as they ran.
+    The loop for a watched tag leaves before the tag changes, so every scan that the loop runs
+    keeps the tag unchanged.  The path's records (``path.moves``, the capture) are of a scan
+    that moved the tag.  A path of a scan that keeps the tag unchanged covers those scans, and
+    records them as they ran.
     """
     if not watched:
         return False

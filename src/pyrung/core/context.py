@@ -503,8 +503,9 @@ class ScanContext:
                 summary[0] = value
 
     def call_user_function(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-        """Call a ``run_function`` body, and refuse what only fits between scans while it runs.
+        """Call a ``run_function`` body.
 
+        While the body runs, this scan's PLC refuses what only fits between scans.
         The refusal lasts only for the call.  A paused ``scan_steps`` generator sits between
         prepare and commit with no user code running, and stepping beside it is legal.  The
         PLC keeps a count of running calls, because a body can resume a paused scan of its

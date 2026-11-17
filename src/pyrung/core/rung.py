@@ -231,7 +231,8 @@ class Rung:
         """Return a condition view for this rung's own row (its trunk, or a branch's
         local contacts).
 
-        Take the view as the solve reaches the row, with the row's edge sites scanned.
+        The view is taken as the solve reaches the row, and the row's edge sites are
+        scanned into it.
         A *live* view reads the pending writes directly and is only good for
         evaluating the row at once.  A frozen view (the default) may be kept and
         re-read later (observers, the debugger).

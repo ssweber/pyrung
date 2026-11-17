@@ -229,7 +229,7 @@ class CompiledPLC:
         self._running = True
         # True while a kernel pass that can call a ``run_function`` body is running.  That
         # body may not scan, stop or reboot this PLC or set its battery.  Nothing here can
-        # pause inside a scan, so this flag covers exactly that pass.
+        # pause inside a scan, so a flag that covers the whole pass is narrow enough.
         self._kernel_pass_open = False
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)

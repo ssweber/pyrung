@@ -116,7 +116,7 @@ def _row_label(row: AddressRecord) -> str:
 
 
 def _refuse_names_that_differ_in_case(rows: Iterable[AddressRecord], path: str | Path) -> None:
-    """Raise ValueError when two rows have nicknames that differ only in letter case.
+    """Raise ValueError when nicknames differ only in case, or a row repeats an SC or SD nickname.
 
     CLICK compares nicknames ignoring case, so ``Pump`` and ``pump`` are one name to it.
     CLICK fills in the SC and SD nicknames itself and may repeat one, so an SC or SD row is

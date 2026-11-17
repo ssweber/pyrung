@@ -183,9 +183,10 @@ def safe_goal(goal, tags):
 
 
 def stepped_replay_final(fork):
-    """Return the hash of the fork's recording replayed scan by scan from its anchor.
+    """Return the hash of the final tags after a scan-by-scan replay of the fork's recording.
 
-    The replay uses no loop and no checkpoint.
+    The replay starts from the fork's anchor and uses no loop and no checkpoint.  If the
+    replay raises, return ``"n/a:"`` followed by the name of the error.
     """
     try:
         replay, log, anchor, lifecycle = fork._build_replay_fork(None)
