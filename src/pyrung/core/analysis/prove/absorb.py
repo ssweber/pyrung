@@ -205,7 +205,7 @@ _TIMER_DELAY_KINDS = frozenset((_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY, _DONE
 
 @dataclass(frozen=True)
 class _StateKeyDoneSpec:
-    """Describe one Done bit of the how() prior's world key, projected by ``_done_acc_state``."""
+    """One Done bit of the how() prior's world key, projected by ``_done_acc_state``."""
 
     index: int
     acc_name: str

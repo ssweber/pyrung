@@ -236,7 +236,7 @@ class _WriteBeforeReadContext(ScanContext):
 
 
 class _EntryRead:
-    """Stand in for one instruction's ``execute`` while the check's scans run.
+    """Stands in for one instruction's ``execute`` while the check's scans run.
 
     Before the instruction runs, this counts it as reading each tag that its state-decided
     fields name.  So the check sees a read that the instruction's own memory would cause on

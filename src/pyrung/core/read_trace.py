@@ -109,7 +109,7 @@ def _names_every_read(condition: Any) -> bool:
 
 
 class _Traces(threading.local):
-    """Hold the reads of each stop predicate being judged, as a stack for each thread.
+    """The reads of each stop predicate being judged, a stack for each thread.
 
     A run judges a predicate that it cannot see into on a state that records each field
     and tag read.  The run may skip judging the predicate only while nothing that the
@@ -143,7 +143,7 @@ def _key_read(key: Any) -> Any:
 
 
 class _TracedTags(PMap):
-    """Record which keys are read from a tag map while a trace is active.
+    """A tag map that records which keys are read while a trace is active.
 
     A read through the two methods here is recorded as a read of that key.  Anything else
     that reads the map goes through the two properties below, and that counts as a read of
@@ -186,7 +186,7 @@ def _recorded_field(name: str) -> Any:
 
 
 class _TracedState(SystemState):
-    """Record the field reads and tag reads of a SystemState.
+    """A SystemState whose field reads (and tag reads) are recorded.
 
     The state API and the map API both record every read.  Attributes, subscripts,
     ``items()``, equality, hashing, ``repr``, copying and evolving all go through these

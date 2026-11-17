@@ -60,7 +60,7 @@ def _addresses(tag_map: Any) -> dict[str, str] | None:
 
 @dataclass(frozen=True)
 class ReloadPlan:
-    """Say where a reload moves each force, bench change and declared link, by old tag name.
+    """Where a reload puts each force, bench change and declared link, by old tag name.
 
     ``forces`` maps a forced tag to the tag it moves to, or to ``None`` to release
     it.  ``links`` maps a bench change's feedback to ``{"en": enable, "fb": feedback}``,
@@ -78,7 +78,7 @@ class ReloadPlan:
 
 @dataclass(eq=False)
 class _Carry:
-    """Record one force, bench change or declared link in a reload, and what became of it."""
+    """One force, bench change or declared link in a reload, with what became of it."""
 
     #: The old name of the forced tag, or of the link's feedback.
     tag: str
@@ -577,7 +577,7 @@ def _plan_report(
 
 @dataclass(frozen=True)
 class _StagedReload:
-    """Hold a reload whose objects the adapter has not taken yet."""
+    """A reload built on objects the adapter does not hold yet."""
 
     runner: PLC
     breakpoints: BreakpointManager

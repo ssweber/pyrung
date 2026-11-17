@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class _Building(threading.local):
-    """Hold the open scopes of what this thread is building, innermost last.
+    """The open scopes of what this thread is building, innermost last.
 
     Each thread has its own, so two threads can build programs at once.
     """

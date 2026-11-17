@@ -248,7 +248,7 @@ def why_cause(
 
 
 class _PointerWriters:
-    """Find the writes through a pointer listing no targets that write a tag.
+    """Finds the writes through a pointer listing no targets that write a tag.
 
     Each write comes back as ``(node, uncertain)``.
 
@@ -312,7 +312,7 @@ class _PointerWriters:
 
 @dataclass
 class _Aims:
-    """Record where one run of a rung's writes through a pointer aims."""
+    """Where one run of a rung's writes through a pointer aims."""
 
     #: Each tag a write aims at, with the tags its pointer reads.
     hits: dict[str, frozenset[str]] = field(default_factory=dict)
@@ -409,7 +409,7 @@ def _rung_aims(rung: Rung, nodes: Mapping[tuple[int, ...], int], view: Any) -> d
 
 
 class _Trial:
-    """Answer questions about the writes through a pointer, using a trial run of the next scan.
+    """Answers questions about the writes through a pointer, using a trial run of the next scan.
 
     The trial runs at most once per ``why()``, and only when a question needs it.
     """

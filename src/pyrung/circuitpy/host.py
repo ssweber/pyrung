@@ -67,7 +67,7 @@ class _NeoPixel:
 
 
 class _P1AMBase:
-    """Stand in for ``P1AM.Base()``.
+    """Stands in for ``P1AM.Base()``.
 
     No module answers.  Every read is 0 and every write is dropped.
     """
@@ -86,7 +86,7 @@ class _Wiznet5k:
 
 
 class HostSocket:
-    """Play a WIZnet socket with a CPython TCP socket.
+    """A WIZnet socket, played by a CPython TCP socket.
 
     Two differences matter to the generated server.  With timeout 0, a WIZnet
     ``recv_into`` with nothing to read returns 0.  CPython raises ``BlockingIOError``

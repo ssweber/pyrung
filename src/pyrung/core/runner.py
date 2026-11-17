@@ -207,7 +207,7 @@ _RUN_FOR_MAX_COUNTED_SCANS = 500_000_000
 
 
 class _ConditionPredicate:
-    """Judge a ``run_until()`` / ``when()`` condition that has no edges. It keeps no state."""
+    """A ``run_until()`` / ``when()`` condition that has no edges. It keeps no state."""
 
     __slots__ = ("_condition", "_context")
 
@@ -230,7 +230,7 @@ class _ConditionPredicate:
 
 
 class _EdgePredicate:
-    """Judge a ``run_until()`` / ``when()`` condition that contains ``rise()`` or ``fall()``.
+    """A ``run_until()`` / ``when()`` condition that contains ``rise()`` or ``fall()``.
 
     Each edge compares its bit against the value it had when this predicate last judged it.
     The predicate is armed from the runner's current state. A breakpoint registers its own
@@ -991,7 +991,7 @@ _EpochCacheEvent = Literal[
 
 
 class EpochCaches:
-    """Register which events invalidate the history-derived epoch caches.
+    """Invalidation registry for history-derived epoch caches.
 
     The matrix deliberately preserves the lifecycle asymmetry.  Trimming
     prunes surviving recent states separately.  A runtime-scope reset and a
@@ -1064,7 +1064,7 @@ def _new_epoch_ref() -> EpochRef:
 
 
 class AvoidCheckError(Exception):
-    """Report that an ``avoid=`` check raised on a real state.
+    """Raised when an ``avoid=`` check raises on a real state.
 
     A real state is the one where how() starts, or a scan that a trial ran. A check that
     raised did not say the state is clear, so how() does not go through that state. The
@@ -1087,7 +1087,7 @@ class AvoidCheckError(Exception):
 
 
 class SearchStopped(Exception):
-    """Signal that a how() world stopped itself, so its next scan would restart it.
+    """Raised when a how() world stops itself, so its next scan would restart it.
 
     A restart starts a new recording with scan ids from 0.  A plan is scans of one
     recording, so how() ends the search here rather than step over the restart.

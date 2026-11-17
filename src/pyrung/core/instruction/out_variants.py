@@ -76,7 +76,7 @@ def _target_plan(
 
 
 class ToggleInstruction(Instruction):
-    """Model a toggle coil, which inverts the target on each OFF->ON transition of the rung.
+    """Toggle coil: inverts the target on each OFF->ON transition of the rung.
 
     The target keeps its value while the rung is false.  The rung's previous
     state is memory, so a rung that is already true on the first scan toggles.
@@ -113,7 +113,7 @@ class ToggleInstruction(Instruction):
 
 
 class DebounceInstruction(Instruction):
-    """Model a debounce coil, where the target follows the rung once it has held steady.
+    """Debounce coil: the target follows the rung once it has held steady.
 
     The coil has two accumulators, one for each side (hardware readings of 2026-11-06).
     The on side counts while the rung is true.  It counts from 0 at a rise and holds at
@@ -216,7 +216,7 @@ class DebounceInstruction(Instruction):
 
 
 class FlasherInstruction(Instruction):
-    """Model a flasher coil, which alternates on and off phases while the rung is true.
+    """Flasher coil: alternates on and off phases while the rung is true.
 
     The phase is hidden state in a memory cell (hardware readings of 2026-11-06).  Its
     values are 0 idle, 1 on, 2 off, 3 on from the next scan, and 4 off from the next scan.
@@ -334,7 +334,7 @@ class FlasherInstruction(Instruction):
 
 
 class TimedInstruction(Instruction):
-    """Model a timed coil, where a rung edge turns the target on for a set time.
+    """Timed coil: a rung edge turns the target on for a set time.
 
     Not maintained, the target is on for exactly the preset and then off, even
     if the rung is still true.  Another pulse needs the rung to go false and

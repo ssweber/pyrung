@@ -716,7 +716,7 @@ _REAL_EXPONENTIAL_TEXT_WIDTH = 13
 
 @dataclass(frozen=True)
 class _Written:
-    """Hold how many elements a Copy writes from its destination on.
+    """How many elements a Copy writes from its destination on.
 
     *count* is the length of every value when *exact*, and the fewest otherwise. It
     applies to a finite value only when *finite_only*.

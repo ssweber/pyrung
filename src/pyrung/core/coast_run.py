@@ -259,7 +259,7 @@ class _KernelPaths:
 
 @dataclass(eq=False)
 class CoastMemo:
-    """Hold what a coast keeps for later coasts.  A search has one, and its forks inherit it."""
+    """Holds what a coast keeps for later coasts.  A search has one, and its forks inherit it."""
 
     # Each value also holds the program and the overlay rungs, so their ids cannot be reused
     # while the entry exists.  A kernel of None means the program has no kernel, so that each
@@ -321,7 +321,7 @@ def _paths_for(memo: CoastMemo, kernel: CompiledKernel) -> _KernelPaths:
 
 
 class _CoastLoop(ScanLoop):
-    """Enter a stretch, trace new paths and run the self check, using one kernel's paths."""
+    """One stretch's use of a kernel's paths: entry, tracing and the self check."""
 
     _keep_plans = True
     _real_scans_are = "self check"
@@ -705,7 +705,7 @@ def _record_scan_by_scan(plc: PLC, segments: list[_Segment], kernel_paths: _Kern
 
 
 class _ColumnRuns:
-    """Track one rung's column while a stretch goes in: when it has fired, and each tag's run."""
+    """One rung's column while a stretch goes in: when it has fired, and each tag's run."""
 
     __slots__ = ("first", "last", "recording", "runs", "turns")
 
@@ -973,7 +973,7 @@ def _note_successor(first: _Path, then: _Path) -> None:
 
 @dataclass(eq=False, slots=True)
 class _Segment:
-    """Hold the scans of one path in a stretch, and where they left the tags it moves."""
+    """Scans of one path in a stretch, and where they left the tags it moves."""
 
     path: _Path
     first: int
@@ -1000,11 +1000,11 @@ def _set_cell(kernel: Any, key: tuple[Any, ...], value: Any) -> None:
 
 
 class CycleMismatch(scan_trace.SelfCheckMismatch):
-    """Raise when the scans that the loop ran disagree with a prediction of their cycle."""
+    """Raised when the scans that the loop ran disagree with a prediction of their cycle."""
 
 
 class _CycleWatch:
-    """Follow the loop's segments through the cycle that they repeat, and its prediction."""
+    """Follows the loop's segments through the cycle that they repeat, and its prediction."""
 
     def __init__(self) -> None:
         self.keys: list[tuple[_Path, int]] = []
@@ -1063,7 +1063,7 @@ class _NotDeclared(Exception):
 
 
 class _Seen(dict[str, Any]):
-    """Hold the committed tags that a declared predicate reads, as a loop stretch moves them.
+    """The committed tags a declared predicate reads, as a loop stretch moves them.
 
     Reading anything else raises an error.  That ends the stretch, and the real state answers.
     """
@@ -1104,7 +1104,7 @@ class _Seen(dict[str, Any]):
 
 
 class _SeenState:
-    """Hand a declared predicate the tags in a loop, and nothing else."""
+    """What a declared predicate is handed in a loop: the tags and nothing else."""
 
     __slots__ = ("tags",)
 

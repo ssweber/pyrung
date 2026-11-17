@@ -32,7 +32,7 @@ ACTIVE: list[JitStats] = []
 
 
 class JitStats:
-    """Hold the counts of what the jit did while this collector was on."""
+    """What the jit did while this collector was on."""
 
     def __init__(self) -> None:
         # Calls of run_for()/run_until() and coast_until(), by kind.
@@ -188,7 +188,7 @@ def add_cost(name: str, seconds: float) -> None:
 
 
 class Run:
-    """Track the stretches of one call.
+    """One call's stretches.
 
     A stretch could have run on to the next failed guard of the call or to the end of the
     call. Each stretch waits for one of them. The collectors receive the stretches when

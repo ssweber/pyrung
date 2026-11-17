@@ -376,9 +376,9 @@ _PYRUNG_MATH_NAMES = {
 
 
 class _MathInstruction:
-    """Add CLICK's Math instruction to the rung.
+    """Math instruction (CLICK's Math).
 
-    Evaluate an expression and store the result in dest, truncated to the
+    Evaluates an expression and stores the result in dest, truncated to the
     destination tag's bit width (modular wrapping).
 
     Key differences from copy():

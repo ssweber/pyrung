@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class DriveSetup:
-    """Hold the static and runtime preparation that every target driven on one PLC shares."""
+    """Static/runtime preparation shared by every target driven on one PLC."""
 
     work: PLC
     program: Any
@@ -68,7 +68,7 @@ class DriveSetup:
 
 @dataclass(frozen=True)
 class ProverContext:
-    """Hold the best-effort static evidence that drive setup and target context share."""
+    """Best-effort static evidence shared by drive setup and target context."""
 
     nd_domains: dict[str, tuple[Any, ...]] | None = None
     stateful_domains: dict[str, tuple[Any, ...]] | None = None

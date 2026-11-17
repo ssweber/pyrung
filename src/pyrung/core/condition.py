@@ -269,7 +269,7 @@ class NormallyClosedCondition(Condition):
 
 
 class _EdgeCondition(Condition):
-    """Represent an edge contact, a site with memory of its own (``_edge:e{N}``).
+    """An edge contact: a site with memory of its own (``_edge:e{N}``).
 
     The memory holds the bit as this contact last saw it.  The row stores it whenever the
     contact's row is scanned, powered or not.  The memory is off at RUN, as in CLICK.  Two

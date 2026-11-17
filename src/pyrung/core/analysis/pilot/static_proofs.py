@@ -91,7 +91,7 @@ _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REA
 
 @dataclass(frozen=True)
 class ProofFacts:
-    """Hold what the proofs read about one how(): the state it starts from and who else writes."""
+    """What the proofs read about one how(): the state it starts from and who else writes."""
 
     snapshot: dict[str, Any]
     pdg: ProgramGraph
@@ -232,7 +232,10 @@ def _plant_delays_ms(physical: Any) -> tuple[int, int]:
 
 
 class _LinkProof:
-    """Walk back from a target.  A result is the set of links used, or ``None`` when not proved."""
+    """One walk back from a target.
+
+    A result is the set of links used, or ``None`` when not proved.
+    """
 
     def __init__(self, facts: ProofFacts) -> None:
         self.facts = facts

@@ -131,7 +131,7 @@ def _int32(value: int) -> int:
 
 @dataclass(frozen=True)
 class _CalcForm:
-    """Hold the settings for how :func:`calc_form` rewrites a formula.  See there."""
+    """How :func:`calc_form` rewrites a formula: see there."""
 
     unsigned: bool = False
     abs_ops: bool = False

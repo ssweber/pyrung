@@ -76,7 +76,7 @@ class SessionDataProvider:
 
 
 class ModbusSimServer:
-    """Hold a ``ClickServer`` and the event-loop thread that it runs on."""
+    """Owns a ``ClickServer`` and the event-loop thread it runs on."""
 
     def __init__(self, adapter: Any, config: ModbusConfig) -> None:
         self.config = config

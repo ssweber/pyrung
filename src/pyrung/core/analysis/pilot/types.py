@@ -88,7 +88,7 @@ class RevisitCredential:
 
 @dataclass(frozen=True)
 class _AvoidMember:
-    """Hold one avoided snapshot condition and, when it has one, its runtime Condition."""
+    """One avoided snapshot condition and, when it has one, its runtime Condition."""
 
     name: str
     pred: Callable[[dict[str, Any]], bool]

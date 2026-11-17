@@ -61,7 +61,7 @@ class IndirectWriteRef:
 
 @dataclass(frozen=True)
 class PointerUse:
-    """Record one indexed access ``block[scale * pointer + offset]``.
+    """One indexed access ``block[scale * pointer + offset]``.
 
     ``DS[Ptr]`` is ``scale=1, offset=0``; ``DS[Ptr + 2]`` and ``DS[4 - Ptr]``
     are the affine forms ``_indirect_affine`` accepts.
@@ -2245,7 +2245,7 @@ _UnlistedWrite = tuple[int, Any, Any]
 
 
 class _UnlistedReach:
-    """Compute the addresses a write through a pointer can reach from what the program stores in it.
+    """The addresses a write through a pointer can reach, from what the program stores in it.
 
     A pointer holds its power-on value and what its writers store.  A writer stores under
     its own rung's comparisons, so ``math(Cmd * 10 + 2999, Idx)`` under ``Cmd >= 1, Cmd <=

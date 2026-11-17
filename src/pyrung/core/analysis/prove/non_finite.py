@@ -163,7 +163,7 @@ def _size(bounds: Bounds) -> float:
 
 
 class _Bounds:
-    """Bound the values an operand, a formula or a write can give, as an interval.
+    """The values an operand, a formula or a write can give, as an interval.
 
     ``None`` means it may be NaN or Inf, or this class cannot bound it.
     """

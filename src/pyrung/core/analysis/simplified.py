@@ -74,7 +74,7 @@ class Atom:
 
 
 class _ByIdentity:
-    """Wrap an operand so that it equals only itself.
+    """An operand that equals only itself.
 
     An expression or a pointer element answers ``==`` with a condition, and an
     expression has no hash.  So an atom compares and hashes such an operand by identity.
@@ -416,7 +416,7 @@ def _build_rung_map(program: Program) -> dict[int, Rung]:
 
 @dataclass(frozen=True)
 class _SolveOrder:
-    """Record where each graph node reads and writes in one scan's solve order.
+    """Where each graph node reads and writes in one scan's solve order.
 
     Each instruction reads its conditions when the scan reaches it.  A branch's own contacts
     see what earlier instructions wrote.  The conditions that it shares with them (its

@@ -41,7 +41,7 @@ class Coupling:
 
 @dataclass
 class _BoolCoupling:
-    """Describe a bool feedback that runs as a debounce coil under its enable.
+    """A bool feedback that runs as a debounce coil under its enable.
 
     The coil itself lives in the runner's synthesis overlay
     (``plc._synthesis.plant``).  This record keeps the names of the coil's
@@ -62,7 +62,7 @@ class _BoolCoupling:
 
 @dataclass
 class _ProfileCoupling:
-    """Describe a flasher, timed, toggle, ramp or approach feedback, lowered to plant rungs.
+    """A flasher, timed, toggle, ramp or approach feedback, lowered to plant rungs.
 
     A timed or toggle coil keeps its memory of the rung under ``rung_memory_key``,
     and a timed coil counts in ``acc_name``.  Seeding a settled plant reads both.
@@ -294,7 +294,7 @@ def _program_writer(plc: PLC, tag_name: str) -> str | None:
 
 @dataclass
 class Harness:
-    """Synthesize feedback automatically from Physical + link= declarations.
+    """Automatic feedback harness driven by Physical + link= declarations.
 
     Walks all known tags to find link= couplings and lowers each to plant rungs
     scanned pre-logic (the input-read phase): an ``on_delay``/``off_delay``

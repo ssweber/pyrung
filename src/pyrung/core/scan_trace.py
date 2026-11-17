@@ -233,15 +233,15 @@ SELF_CHECK_OBSERVERS: list[Callable[[str], None]] = []
 
 
 class Decline(Exception):
-    """Signal that the tracer met something it does not positively understand."""
+    """Raised when the tracer meets something it does not positively understand."""
 
 
 class SelfCheckMismatch(AssertionError):
-    """Signal that a trace's first iteration disagreed with the real scan it stands for."""
+    """Raised when a trace's first iteration disagrees with the real scan it stands for."""
 
 
 class _Missing:
-    """Mark a key that is absent from its dict. It differs from every value, ``None`` too."""
+    """A key absent from its dict.  Distinct from every value, ``None`` included."""
 
     def __repr__(self) -> str:
         return "<missing>"
@@ -296,7 +296,7 @@ def _traceable_helper(name: str) -> bool:
 
 
 class KernelSource:
-    """Hold a kernel's generated source, parsed once per compiled kernel.
+    """A kernel's generated source, parsed once per compiled kernel.
 
     The tracer may rely on this and nothing more: the functions it may step into, and the
     module-level constants that nothing rebinds.
@@ -491,7 +491,7 @@ def _describe_function(node: ast.FunctionDef) -> _Function:
 
 
 class _Value:
-    """Hold the result of a kernel expression.
+    """The result of a kernel expression.
 
     ``concrete`` is the value on the traced scan. ``local`` names the loop local that
     computes it when it depends on a moving value, and is ``None`` otherwise. ``is_bool``
@@ -509,14 +509,14 @@ class _Value:
 
 @dataclass(frozen=True)
 class _Ref:
-    """Represent one of the kernel's state containers as a value that the source passes."""
+    """One of the kernel's state containers, as a value the source passes around."""
 
     kind: str  # "tags", "memory", "blocks", "block", "prev"
     name: str = ""
 
 
 class _KernelRaised(Exception):
-    """Signal that the kernel, run on constants, would raise this exception here."""
+    """Raised when the kernel, run on constants, would raise this exception here."""
 
     def __init__(self, original: BaseException) -> None:
         super().__init__(repr(original))
@@ -569,7 +569,7 @@ _COMPARISONS: dict[type, tuple[str, Callable[[Any, Any], Any], bool]] = {
 
 @dataclass(frozen=True)
 class _Pure:
-    """Describe a builtin that has no side effect and no input except its arguments."""
+    """A builtin with no side effect and no input but its arguments."""
 
     spelling: str
     function: Callable[..., Any]
@@ -679,7 +679,7 @@ def _plain_tag(name: str) -> bool:
 
 @dataclass(frozen=True)
 class StopForm:
-    """Describe a stop predicate as the tracer sees it: a condition and its edges' memory."""
+    """A stop predicate as the tracer sees it: a condition, and its edges' memory."""
 
     condition: Any
     edges: tuple[Any, ...]
@@ -713,7 +713,7 @@ def _count_store(
 
 
 class _Tracer:
-    """Run one concolic pass over a scan, following the real path and marking moving values.
+    """Runs one concolic pass over a scan, following the real path and marking moving values.
 
     It interprets the generated source only as far as it recognizes it.
     """
@@ -1571,7 +1571,7 @@ def _current_value(kernel: Any, key: tuple[Any, ...]) -> Any:
 
 @dataclass(eq=False)
 class ScanTrace:
-    """Hold the result of tracing one scan: when it applies, and the loop that repeats it."""
+    """The result of tracing one scan: when it applies, and the loop that repeats it."""
 
     constants: tuple[tuple[tuple[Any, ...], Any], ...]
     loop: Callable[..., tuple[int, float]]
@@ -1609,7 +1609,7 @@ class ScanTrace:
 
 @dataclass(frozen=True)
 class LoopShape:
-    """Describe one iteration of a loop as data, for :mod:`~pyrung.core.cycle_jump`.
+    """One iteration of a loop, as data, for :mod:`~pyrung.core.cycle_jump` to reason about.
 
     An iteration loads ``loads`` and the clock and RTC values. It runs ``body`` in order.
     Then it assigns each of ``commits`` at once.
@@ -1884,7 +1884,7 @@ def build_trace(
 
 @dataclass(frozen=True)
 class CoastMoves:
-    """Describe what the scans of a coast loop do to the tags, by name.
+    """What the scans of a coast loop do to the tags, by name.
 
     In a coast loop a tag changes in one of three ways. It changes by a checked constant
     integer delta, by an exact flip that the path itself makes, or as a float ramp. So you
@@ -2080,7 +2080,7 @@ def _source_of(kernel: CompiledKernel) -> KernelSource:
 
 @dataclass
 class _PendingCheck:
-    """Hold a new trace's first iteration, run on copies, until the real scan answers."""
+    """A new trace's first iteration, on copies, awaiting the real scan's answer."""
 
     trace: ScanTrace
     tags: dict[str, Any]
@@ -2091,7 +2091,7 @@ class _PendingCheck:
 
 
 class ScanLoop:
-    """Run a guarded loop for one run. Call :meth:`advance` before every real scan."""
+    """One run's guarded loop.  Ask :meth:`advance` before every real scan."""
 
     _keep_plans = False
     # The jit counters' record of this run's stretches. The run sets it while they count.

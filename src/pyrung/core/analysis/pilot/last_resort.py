@@ -36,7 +36,7 @@ _MAX_ASKS = 5
 
 @dataclass(frozen=True)
 class LastResort:
-    """Record the one move that a plan rests on, which nothing in the trace pointed to."""
+    """The one move a plan rests on, which nothing in the trace pointed to."""
 
     # The input that the move set, or None for a wait.
     tag: str | None

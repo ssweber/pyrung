@@ -80,7 +80,7 @@ def _permissive(error: Exception) -> int:
 
 
 class QuietMathError(ArithmeticError):
-    """Signal a math error that CLICK's Math answers with 0 and no fault flag.
+    """A math error CLICK's Math answers with 0 and no fault flag.
 
     A MOD by 0 and ``0 ** 0`` are such errors (a CLICK read 0 and no flag). Only the
     ops that :func:`~pyrung.core.instruction.calc.calc_form` puts in a ``calc`` raise
@@ -624,7 +624,7 @@ class ExprCompare(Condition):
 
 
 class MathDomainError(ValueError):
-    """Signal that a math function received an operand outside its domain.
+    """Raised when a math function gets an operand outside its domain.
 
     Examples are ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, and
     ``asin``/``acos`` outside -1..1. ``calc`` turns it into CLICK's math-operation
@@ -878,7 +878,7 @@ def _operand_span(operand: Expression) -> tuple[int, int] | None:
 
 
 class RandIntExpr(Expression):
-    """Draw an integer each scan, from ``lo`` to ``hi`` inclusive: ``randint(lo, hi)``.
+    """``randint(lo, hi)``: an integer drawn each scan, ``lo..hi`` inclusive.
 
     The draw is an input, not a computation. Each site owns a hidden external tag
     (``_rand.<n>``). The scan's input drain writes that tag after patches. A ``patch()``

@@ -51,7 +51,7 @@ def _fits(key: str, value: str) -> bool:
 
 @dataclass(frozen=True)
 class CommentMigration:
-    """Rewrite an old ``profile=<kind>:a=..|b=..`` token into new keys, as one numbered step.
+    """One numbered rewrite of an old ``profile=<kind>:a=..|b=..`` token into new keys.
 
     It reads what older pyrung read. Spaces around the kind and the values are allowed, and
     a parameter older pyrung ignored is dropped. A token it can't rewrite whole stays as

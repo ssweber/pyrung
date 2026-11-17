@@ -68,7 +68,7 @@ class Affine:
 
 @dataclass(frozen=True)
 class Aggregate:
-    """Describe a writer that produces and stores an aggregate over a block range.
+    """A writer that produces and stores an aggregate over a block range.
 
     ``operation`` is ``"sum"`` or one of the range-aggregate kinds
     (``"max"``, ``"min"``, ``"median"``, ``"mean"``).  Only ``"sum"`` is

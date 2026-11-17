@@ -74,7 +74,7 @@ def generate(build: ConformanceProgram, *, ip: str = "127.0.0.1", port: int = 50
 
 
 class CircuitPySim:
-    """Run the conformance program's P1AM-200 code on this machine and serve it over Modbus.
+    """The conformance program's P1AM-200 code, run on this machine and served over Modbus.
 
     ``code.py`` runs in a child Python with stand-ins for the board's hardware
     (:mod:`pyrung.circuitpy.host`).  It has its own scan loop, wall-clock timers, and

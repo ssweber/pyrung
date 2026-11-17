@@ -59,7 +59,7 @@ PASTE_PROBE_FINDINGS = (
 
 @dataclass(frozen=True)
 class GroupBuild:
-    """Hold one group as built, with its subroutine, its DS block and its hash."""
+    """One group as built, with its subroutine, its DS block and its hash."""
 
     group: Group
     layout: GroupLayout
@@ -102,7 +102,7 @@ class GroupBuild:
 
 @dataclass(frozen=True)
 class ConformanceProgram:
-    """Hold the program that a Modbus run talks to, and the layout it was built with.
+    """The program a Modbus run talks to, and the layout it was built with.
 
     ``groups`` are the groups with at least one case on the wire, in the order given.
     ``skipped`` holds every in-process-only case as ``(group name, case)``. The program

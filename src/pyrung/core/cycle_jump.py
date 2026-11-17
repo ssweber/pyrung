@@ -114,7 +114,7 @@ class Unsupported(Exception):
 
 
 class _Bound:
-    """Hold the last cycle on which every decision so far comes out as on cycle 0."""
+    """The last cycle on which every decision taken so far comes out as on cycle 0."""
 
     __slots__ = ("last",)
 
@@ -413,7 +413,7 @@ def _deferred(node: ast.expr) -> ast.expr:
 
 
 class _Rewrite(ast.NodeTransformer):
-    """Rewrite each operation of a loop expression as a call that accepts forms."""
+    """Rewrites each operation of a loop expression as a call that accepts forms."""
 
     def __init__(self, names: frozenset[str]) -> None:
         self._names = names
@@ -599,7 +599,7 @@ class Step:
 
 @dataclass
 class Prediction:
-    """Say how many cycles run as the first does, and where they leave each cell."""
+    """How many cycles run as the first does, and where they leave each cell."""
 
     cycles: int
     period: int
@@ -619,7 +619,7 @@ def _value_at(value: Any, k: int) -> Any:
 
 
 class _TimeTable:
-    """Hold the clock and RTC values that each scan of each cycle shows."""
+    """The clock and RTC values each scan of each cycle shows, as constants or forms."""
 
     def __init__(
         self,
@@ -808,7 +808,7 @@ def predict(
 
 
 class _Asked:
-    """Hold the stop predicate and the values it is shown that move with the cycle."""
+    """The stop predicate, and the values it is shown that move with the cycle."""
 
     def __init__(
         self, stops: Callable[[Mapping[tuple[Any, ...], Any]], bool], cells: frozenset[Any]

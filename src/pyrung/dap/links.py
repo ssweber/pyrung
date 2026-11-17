@@ -39,7 +39,7 @@ LINK_KEYS = (*PHYSICAL_KEYS, "physical", "system")
 
 @dataclass(frozen=True)
 class BenchLink:
-    """Hold one bench change on a feedback tag.  It is a coupling to run, or ``None`` to cut."""
+    """One bench change on a feedback tag: a coupling to run, or ``None`` to cut."""
 
     coupling: Coupling | None
     enabled: bool = True

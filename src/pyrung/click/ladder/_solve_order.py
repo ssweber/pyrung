@@ -63,7 +63,7 @@ def contact_positions(rung: Rung) -> tuple[list[list[Any]], list[list[int]]]:
 
 @dataclass(frozen=True)
 class MovedRead:
-    """Describe a contact that a move would read across a write.
+    """A contact that a move would read across a write.
 
     Output *output*'s contact *contact* would be read across a write of *tag*. *writer* is
     the output (by position in the rung) whose write the contact crosses.
@@ -76,7 +76,7 @@ class MovedRead:
 
 
 class ReadOrder:
-    """Record where the source rung reads each output's contacts, and what each output writes."""
+    """Where the source rung reads each output's contacts, and what each output writes."""
 
     def __init__(self, program: Program, rung: Rung, instructions: Sequence[Any]) -> None:
         self._builder = _RowBuilder(program)

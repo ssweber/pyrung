@@ -53,7 +53,7 @@ class SearchOutOfMemory(BaseException):
 
 @dataclass(frozen=True)
 class WallClock:
-    """Hold the time at which a how() has to stop, however far it got."""
+    """When a how() has to stop, however far it got."""
 
     limit_s: float
     stop_at: float
@@ -107,7 +107,7 @@ def search_limits(clock: WallClock | None) -> Callable[[], None]:
 
 @dataclass
 class SearchBudget:
-    """Track spent search work and productive simulated dwell as separate quantities.
+    """Tracks spent search work and productive simulated dwell as separate quantities.
 
     Callers charge completed attempts before adoption. A checkpoint or a discarded
     experiment cannot refund this ledger. Research dispatches consume at least one

@@ -41,7 +41,7 @@ def _values(survivors: Mapping[str, tuple[Any, Any]]) -> str:
 
 @dataclass(frozen=True)
 class RestartReport:
-    """Report what a restart did for a goal that how() could not reach from the session."""
+    """What a restart did for a goal how() could not reach from the session."""
 
     reached: bool
     # Tag -> (the value it keeps through a restart, its default).  Inputs are left out, since
@@ -119,7 +119,7 @@ class RestartReport:
 
 @dataclass(frozen=True)
 class ReleaseReport:
-    """Hold the forces that a plan had to release, because nothing worked with them on."""
+    """The forces a plan had to release, because nothing worked with them on."""
 
     forces: tuple[str, ...]
     # What how() said with them on.

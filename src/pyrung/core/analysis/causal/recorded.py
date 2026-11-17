@@ -2048,7 +2048,7 @@ def recorded_effect(
 
 
 class _RungWriteCounterfactualView:
-    """Overlay one tag on the replayed ConditionView of one row."""
+    """One-tag overlay over the replayed ConditionView of one row."""
 
     __slots__ = ("_base", "_name", "_value")
 

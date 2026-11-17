@@ -148,7 +148,7 @@ class ScanPacer:
 
 
 class SpeedMeter:
-    """Measure the ratio of simulation time to wall time while continue runs.
+    """Measures the ratio of simulation time to wall time while continue runs.
 
     The reading updates at most every ``WINDOW_SECONDS`` of wall time.  That keeps it
     steady enough to display ("6.3x" when the PLC cannot keep up).

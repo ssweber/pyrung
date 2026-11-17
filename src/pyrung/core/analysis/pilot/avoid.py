@@ -9,7 +9,7 @@ _BARE_CHECK = "avoided condition"
 
 
 class _AvoidCheckRaised(BaseException):
-    """Carry an error from an avoid check on a real state out of the search to the caller.
+    """Carries an error from an avoid check on a real state out of the search to the caller.
 
     This is a BaseException, as ``SearchOutOfTime`` is.  The search reads its causes under
     many ``except Exception`` blocks that mean "no evidence", and a check that raised has not

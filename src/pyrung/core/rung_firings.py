@@ -32,7 +32,7 @@ WHY_SETTLE_SCAN_LIMIT = 10_000
 
 
 class UnrecordedScansError(ValueError):
-    """Raise when a question reaches more scans without records than it may step again."""
+    """Raised when a question reaches more scans without records than it may step again."""
 
     def __init__(self, first: int, last: int, scans: int) -> None:
         super().__init__(
@@ -51,7 +51,7 @@ class UnrecordedScansError(ValueError):
 
 
 class SearchQuestionRefused(BaseException):
-    """Raise when a question in a how() search meets :class:`UnrecordedScansError`.
+    """Raised when a question in a how() search meets :class:`UnrecordedScansError`.
 
     The search reads causes inside many ``except Exception`` blocks that mean "no evidence".
     But scans that the search cannot afford to read are not evidence that nothing happened
@@ -112,7 +112,7 @@ class ValueRange:
 
 @dataclass(frozen=True, slots=True)
 class Repeat:
-    """Store ranges that repeat every *period* scans, *count* times, as one entry.
+    """Ranges that repeat every *period* scans, *count* times, in one entry.
 
     ``ranges`` holds the first repetition.  Repetition r has the same ranges, moved r * period
     scans later.  Each range's values also move by r times its entry in ``steps``.  ``steps``
@@ -1610,7 +1610,7 @@ _REJOIN_REPETITIONS = 8
 
 @dataclass(frozen=True, slots=True)
 class _Cycle:
-    """Describe how one column takes more cycles.  See ``plan_repeat``."""
+    """How one column takes more cycles.  See ``plan_repeat``."""
 
     cycle: tuple[Any, ...]
     steps: tuple[int, ...]
@@ -1786,7 +1786,7 @@ def _step_of(range_: Any, step: int) -> int:
 
 
 class RepeatPlan:
-    """Plan how a timelines object takes more cycles of its last one.  See ``plan_repeat``."""
+    """How a timelines object takes more cycles of its last one.  See ``plan_repeat``."""
 
     __slots__ = ("_actions", "_period", "_timelines", "limit")
 

@@ -116,7 +116,7 @@ def discover_click_project(
 
 @dataclass(frozen=True)
 class ClickBinding:
-    """Hold a program's TagMap and the Modbus provider that serves it, before the adapter does."""
+    """A program's TagMap and the Modbus provider that serves it, not yet on the adapter."""
 
     tag_map: TagMap | None
     modbus_fallback: Any

@@ -123,7 +123,7 @@ class TraceCrossingBranch:
 
 @dataclass(frozen=True)
 class CounterEdge:
-    """Record the count that a counter-input transition is for.
+    """The count a counter-input transition is for.
 
     ``level`` is the counter's input read as a level.  ``direction`` is the sign
     in which one count moves ``accumulator`` toward the target.  A step under the

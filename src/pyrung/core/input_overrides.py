@@ -466,7 +466,7 @@ class TagsKnownOrReached(Mapping[str, "Tag"]):
 
 
 class InputOverrideManager:
-    """Hold one-shot patches and persistent force overrides."""
+    """Holds one-shot patches and persistent force overrides."""
 
     def __init__(
         self,

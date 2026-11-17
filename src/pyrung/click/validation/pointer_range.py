@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 
 class _PointerBounds:
-    """Find the addresses each pointer use can reach, from value_sets and the declared values.
+    """The addresses each pointer use can reach, from value_sets and the declared values.
 
     A pointer the value sets leave unbounded keeps its declared ``choices`` or
     ``min``/``max``.  One with neither has no known bound and is never reported.

@@ -473,7 +473,7 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
 
 @dataclass
 class _Footprint:
-    """Hold the tags that a condition reads, or that a stretch of a scan can write.
+    """The tags a condition reads, or the tags a stretch of a scan can write.
 
     *names* maps each tag named outright to its Tag, or to None for a fault flag.
     A static range adds each of its elements.  *blocks* holds the blocks that a
@@ -611,7 +611,7 @@ def _condition_footprint(condition: Any) -> _Footprint:
 
 
 class _ScanWrites:
-    """Work out what a stretch of a scan can write, including the subroutines it calls.
+    """What a stretch of a scan can write, subroutines it calls included.
 
     The destinations are what :func:`instruction_write_targets` declares (a
     forloop's index too) and the fault flags that an instruction can set.  A call

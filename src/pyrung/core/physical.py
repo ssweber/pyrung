@@ -113,7 +113,7 @@ ValueType = Literal["duration", "number", "number_or_tag", "flag"]
 
 @dataclass(frozen=True)
 class PhysicalKey:
-    """Describe one ``Physical`` keyword, which is also its comment key.
+    """One ``Physical`` keyword, which is also its comment key.
 
     ``default`` is the value when the key is left out (``None`` means nothing). ``suggested``
     is the comment text a dialog starts with.
@@ -207,7 +207,7 @@ class PhysicalKey:
 
 @dataclass(frozen=True)
 class PhysicalKind:
-    """Describe one way a device answers its command, and the keys that describe it.
+    """One way a device answers its command, and the keys that describe it.
 
     ``needs`` is ``"any"`` when at least one key must be given, and ``"all"`` when every
     required key must be. ``runs_as`` names the CLICK instruction the kind behaves like.

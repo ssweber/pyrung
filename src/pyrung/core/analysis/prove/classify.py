@@ -2549,7 +2549,7 @@ _UNLISTED_COMPARISON = "compared_unlisted"
 
 
 class _TagComparisons(NamedTuple):
-    """Hold the pairs of tags the rungs compare, and the tags compared with values no list holds."""
+    """The pairs of tags the rungs compare, and the tags compared with values no list holds."""
 
     pairs: frozenset[tuple[str, str]]
     unlisted: frozenset[str]
@@ -2765,7 +2765,7 @@ def _accumulator_names(program: Program) -> set[str]:
 
 
 class _AccStarts(NamedTuple):
-    """Return the values that a timer's or counter's Acc starts timing or counting from."""
+    """The values a timer's or counter's Acc starts timing or counting from."""
 
     values: frozenset[Any]
     # An up counter with a down input moves its Acc both ways.

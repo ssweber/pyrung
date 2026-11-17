@@ -940,7 +940,7 @@ def _down_edge_cancels(
 
 @dataclass(frozen=True)
 class _CounterCycle:
-    """Describe how the next count of a counter can come from this read.
+    """How the next count of a counter can come from this read.
 
     ``transition`` is a one-shot act on a program-owned input. ``holds`` replaces the
     reset-pin holds of an ordinary pulse frontier. ``futile`` says why no cycle of the

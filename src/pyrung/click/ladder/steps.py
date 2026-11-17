@@ -88,7 +88,7 @@ _FORMULA_TOKEN = re.compile(r"[A-Za-z_]+\d*(?::[A-Z]+\d+)?|\d+(?:\.\d+)?|\*\*|[^
 
 @dataclass(frozen=True)
 class StepEstimate:
-    """Hold the estimated CLICK program steps of one exported project."""
+    """Estimated CLICK program steps of one exported project."""
 
     main: int
     subroutines: dict[str, int] = field(default_factory=dict)

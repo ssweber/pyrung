@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class _PriorFacts:
-    """Hold the facts that how()'s domain prior reads."""
+    """What how()'s domain prior reads."""
 
     nondeterministic_dims: dict[str, tuple[Any, ...]]
     stateful_dims: dict[str, tuple[Any, ...]]
@@ -51,7 +51,7 @@ class _PriorFacts:
 
 @dataclass
 class _PassContext:
-    """Collect the facts as the passes build them."""
+    """Mutable accumulator the passes build the facts in."""
 
     program: Program
     dt: float = 0.010

@@ -54,7 +54,7 @@ _WIRE = "-"
 # ---- Net graph ----
 @dataclass
 class _Net:
-    """Represent one electrical node. ``col`` is the column whose left edge carries its vertical.
+    """One electrical node. ``col`` is the column whose left edge carries its vertical.
 
     *path* and *source* name what made the node, so an error about its vertical points there.
     """
@@ -72,7 +72,7 @@ class _Net:
 
 @dataclass(frozen=True)
 class _Contact:
-    """Represent a contact from net *src* to net *dst* on *row*. The ``-`` token is a plain wire."""
+    """A contact from net *src* to net *dst* on *row*. The ``-`` token is a plain wire."""
 
     src: int
     dst: int
@@ -84,7 +84,7 @@ class _Contact:
 
 @dataclass(frozen=True)
 class _Sink:
-    """Represent an output (or pin) on *row*, wired from *net* to AF."""
+    """An output (or pin) on *row*, wired from *net* to AF."""
 
     net: int
     row: int
@@ -95,7 +95,7 @@ class _Sink:
 
 @dataclass
 class _Branch:
-    """Hold conditions and the items under them in source order.
+    """Conditions and the items under them in source order.
 
     An item is an AF token or a branch.
     """

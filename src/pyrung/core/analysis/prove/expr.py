@@ -95,7 +95,7 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
 
 
 class _StateView:
-    """Let an expression read its tags from a mapping, as it reads them in a scan."""
+    """Lets an expression read its tags from a mapping, as it reads them in a scan."""
 
     __slots__ = ("_state",)
 

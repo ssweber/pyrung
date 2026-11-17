@@ -79,7 +79,7 @@ x, y, c, ds, dd, df, dh, td = b.x, b.y, b.c, b.ds, b.dd, b.df, b.dh, b.td
 
 @dataclass(frozen=True)
 class ClickTimer:
-    """Address timer ``n`` the way CLICK does: Done is T<n> and Acc is TD<n>."""
+    """Timer ``n`` as CLICK addresses it: Done is T<n> and Acc is TD<n>."""
 
     n: int
 
@@ -94,7 +94,7 @@ class ClickTimer:
 
 @dataclass(frozen=True)
 class ClickCounter:
-    """Address counter ``n`` the way CLICK does: Done is CT<n> and Acc is CTD<n>."""
+    """Counter ``n`` as CLICK addresses it: Done is CT<n> and Acc is CTD<n>."""
 
     n: int
 
