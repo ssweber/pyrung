@@ -1,10 +1,10 @@
-"""Scan time and STOP in the generated scan loop, against core.
+"""Test scan time and STOP in the generated scan loop, against core.
 
 Each test runs the generated ``code.py`` for a few scans on a stand-in board
-clock: ``time.monotonic_ns()`` reads an integer ns counter that moves only
-when the loop sleeps out its scan, one fixed step per pass; ``time.monotonic()``
-reads the same counter as CircuitPython does, a float with CircuitPython's
-30-bit precision.  Expected values come from core's runner where they can.
+clock. ``time.monotonic_ns()`` reads an integer ns counter. The counter moves one
+fixed step per pass, and only when the loop sleeps out its scan. ``time.monotonic()``
+reads the same counter the way CircuitPython does, as a float with CircuitPython's
+30-bit precision. Expected values come from core's runner where they can.
 """
 
 from __future__ import annotations
@@ -29,10 +29,10 @@ def _f32(value: float) -> float:
 
 
 def _circuitpython_float(value: float) -> float:
-    """*value* as a CircuitPython float: float32 less its two low mantissa bits.
+    """Return *value* as a CircuitPython float: float32 less its two low mantissa bits.
 
     CircuitPython builds for the SAMD51 store a float in an object word
-    (MICROPY_OBJ_REPR_C), which drops the two low bits of the float32 mantissa.
+    (MICROPY_OBJ_REPR_C). That drops the two low bits of the float32 mantissa.
     """
     (bits,) = struct.unpack("<I", struct.pack("<f", value))
     return struct.unpack("<f", struct.pack("<I", bits & ~3))[0]
@@ -83,9 +83,9 @@ def _run(
     """Run *scans* loop passes; return the namespace and a tag reader.
 
     With *stop_scans*, the RUN/STOP switch reads STOP (high, for
-    ``run_when_high=False``) on those passes.  *at_loop_top* runs at the top of
-    each pass, before the scan reads the clock: where a Modbus request served
-    after the previous scan lands.
+    ``run_when_high=False``) on those passes. *at_loop_top* runs at the top of
+    each pass, before the scan reads the clock. That is where a Modbus request
+    served after the previous scan lands.
     """
     hw = _hw()
     kwargs = {}
@@ -114,8 +114,8 @@ Ton = Timer.clone("Ton")
 
 @pytest.mark.parametrize("uptime_s", [100_000, 1_000_000], ids=["28h", "11d"])
 def test_timer_keeps_ms_at_long_uptime(monkeypatch, uptime_s):
-    # 12 scans of 10 ms: the first times boot to scan (0 here), the other 11
-    # add 10 ms each.  A float monotonic() at this uptime moves in steps of
+    # 12 scans of 10 ms. The first times boot to scan (0 here), and the other 11
+    # add 10 ms each. A float monotonic() at this uptime moves in steps of
     # 31 ms (28 h) or 250 ms (11 d), so the timer would lose time.
     with Program(strict=False) as prog:
         with Rung():
@@ -131,7 +131,7 @@ def test_timer_keeps_ms_at_long_uptime(monkeypatch, uptime_s):
 
 
 def test_board_clock_float_loses_the_ms_it_should():
-    # The stand-in's float clock is the one the old loop read: over the same
+    # The stand-in's float clock is the one the old loop read. Over the same
     # 110 ms it measures something else at either uptime.
     for uptime_s in (100_000, 1_000_000):
         clock = _BoardClock(uptime_s * 1_000_000_000)
@@ -165,8 +165,8 @@ def test_first_scan_after_stop_to_run_times_a_full_scan(monkeypatch):
     core_first_acc = plc.current_state.tags[FirstAcc.name]
     assert core_first_acc == 10
 
-    # Switch at STOP on passes 2..3 (debounced a pass later): STOP on pass 3,
-    # back to RUN on pass 5, the first RUN scan.
+    # The switch is at STOP on passes 2..3 (debounced a pass later), so the mode is STOP on
+    # pass 3 and back to RUN on pass 5, the first RUN scan.
     _namespace, read = _run(
         _first_acc_program(),
         monkeypatch,
@@ -218,8 +218,8 @@ def _fc15_on(start: int, count: int) -> bytes:
     ids=["fc05-sc50", "fc05-sc51", "fc15-sc50-sc51"],
 )
 def test_sc50_and_sc51_over_modbus_are_refused(monkeypatch, runstop, request_frame):
-    # SC50 and SC51 are ladder only.  The server answers exception 02, as
-    # pyrung's soft PLC does, stores nothing, and the code keeps scanning.
+    # SC50 and SC51 are ladder only. The server answers exception 02, as
+    # pyrung's soft PLC does. It stores nothing, and the code keeps scanning.
     request = bytearray(request_frame)
     namespace, read = _run(
         _count_program(),
@@ -234,7 +234,7 @@ def test_sc50_and_sc51_over_modbus_are_refused(monkeypatch, runstop, request_fra
     assert namespace["_t_answer"] == struct.pack(">HHHBBB", tid, 0, 3, 1, fc | 0x80, 2)
     assert namespace["_mode_run"] is True
     assert read(RunScans) == 6
-    # The TagMap brings SC11, SC50 and SC51 in.  The program alone does not.
+    # The TagMap brings SC11, SC50 and SC51 in. The program alone does not.
     assert namespace["_t_sys_mode_run"] is True
     assert namespace["_t_sys_cmd_mode_stop"] is False
     assert namespace["_t_sys_cmd_watchdog_reset"] is False
@@ -243,9 +243,9 @@ def test_sc50_and_sc51_over_modbus_are_refused(monkeypatch, runstop, request_fra
 @pytest.mark.parametrize(
     ("scans", "run_scans"),
     [
-        # Held through the switch's RUN; switch at STOP on 4..5, STOP on 5.
+        # Held through the switch's RUN. The switch is at STOP on 4..5, so the mode is STOP on 5.
         (6, 3),
-        # Back at RUN on 6, debounced on 7: STOP->RUN, and 7..9 run.
+        # Back at RUN on 6, debounced on 7. That is STOP->RUN, and 7..9 run.
         (10, 6),
     ],
     ids=["held", "switch-stop-then-run"],
@@ -299,8 +299,8 @@ def _core_until_stop(prog: Program, max_scans: int) -> dict[str, object]:
     ids=["no-runstop", "switch-in-run"],
 )
 def test_sc50_from_a_rung_stops_like_core(monkeypatch, runstop):
-    # Core: the scan after the write takes the command (SC50 clears, SC11
-    # reads off for it), runs, and the PLC is in STOP at its end, held there.
+    # Core: the scan after the write takes the command. SC50 clears and SC11
+    # reads off for it. The scan runs, and the PLC is in STOP at its end, held there.
     core = _core_until_stop(_rung_stop_program(), max_scans=10)
     assert core == {"RunScans": 3, "ModeScans": 2, "SC50": False}
 

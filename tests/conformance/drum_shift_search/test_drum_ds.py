@@ -1,12 +1,13 @@
-"""A drum step's DS preset, and a bad jump on the rung's return: ``drum_ds`` and ``jump_return``.
+"""Test a drum step's DS preset and a bad jump on the rung's return (``drum_ds``, ``jump_return``).
 
 Part ``follow2_drums``.
 
-``drum_ds/ds_preset_ends``: four time drums of three steps.  Each field is a drum's step.  It
-reads 1 while step 1 still times, 2 once step 1 has ended, and 3 once step 2 has.  The case reads
-them, and raises ``Fired``, once the control drum has timed 50 ms on its step 2.  A 1 ms step has
-ended by then at any scan length, and so has the 5 ms step of Result3.  Every step but the one asked about is a constant 30 s.  Each DS
-holds the value the case means from the reset on, as the init writes it.
+``drum_ds/ds_preset_ends``: four time drums of three steps. Each field is a drum's step. It
+reads 1 while step 1 still times, 2 once step 1 has ended, and 3 once step 2 has. The case reads
+them, and raises ``Fired``, once the control drum has timed 50 ms on its step 2. A 1 ms step has
+ended by then at any scan length, and so has the 5 ms step of Result3. Every step but the one
+asked about is a constant 30 s. Each DS holds the value the case means from the reset on, as
+the init writes it.
 
 - Result1 (D1): step 1's preset a DS holding 1 ms from the reset on, never written again.  Step 1
   ends, 2.
@@ -197,7 +198,7 @@ def test_jump_return():
 
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
 def test_drum_ds_at_any_scan(monkeypatch, dt):
-    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    """A CLICK scans in about 1 ms. The soft PLC scans in 10 to 40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     (only,) = drum_ds.cases
     assert_all_passed(run(Group("drum_ds", [replace(only, scans=max(only.scans, int(0.2 / dt)))])))

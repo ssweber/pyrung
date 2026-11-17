@@ -1,8 +1,9 @@
-"""The facts of each conformance case hold on every scan of its runs.
+"""Test that the facts of each conformance case hold on every scan of its runs.
 
-``tests/facts/conformance.py`` says how a case runs, and ``tests/facts/check.py`` what each
-fact claims.  :data:`KNOWN` lists the facts the runs refute that are not fixed yet.  Each
-has a strict xfail, so the test fails once the bug is fixed, and the entry has to go.
+``tests/facts/conformance.py`` says how a case runs. ``tests/facts/check.py`` says what each
+fact claims. :data:`KNOWN` lists the facts that the runs refute and that are not fixed yet.
+Each has a strict xfail, so the test fails once the bug is fixed, and you must then remove
+the entry.
 """
 
 from __future__ import annotations
@@ -22,15 +23,16 @@ from tests.facts.conformance import cases, check_case
 
 _CASES = {case_label(group.name, case): (group, case) for group, case in cases()}
 
-#: Facts the runs refute, by case: ``(fact, tag)`` -> the first scan that refutes it, and why.
+#: Facts the runs refute, by case. Each maps ``(fact, tag)`` to the first scan that refutes it,
+#: and says why.
 KNOWN: dict[str, dict[tuple[str, str], str]] = {}
 
-#: Facts a case's run may leave unjudged.  A case runs its script once, with ``Cmd`` its
-#: only input.  So a Done may never turn on or off, and an absorbed value may sit on a
-#: threshold.  The idioms reach both with inputs aimed at each counter and timer.
+#: Facts a case's run may leave unjudged. A case runs its script once, with ``Cmd`` as its
+#: only input. So a Done may never turn on or off, and an absorbed value may sit on a
+#: threshold. The idioms reach both with inputs aimed at each counter and timer.
 MAY_GO_UNJUDGED = ("done spec", "absorbed value")
 # The same script leaves some rungs off for the whole run, so an instruction on one may never
-# write.  So a class only has to write in one of the cases that have it.
+# write. So a class only has to write in one of the cases that have it.
 
 
 @cache
@@ -78,7 +80,7 @@ def _cases_with(kind: str) -> list[str]:
 
 @pytest.mark.parametrize("kind", sorted(set().union(*(_writer_classes(label) for label in _CASES))))
 def test_each_writer_class_writes_in_some_case(kind: str) -> None:
-    # A class the recorder can't see would pass every case's declared-writes check unseen.
+    # A class that the recorder cannot see would pass every case's declared-writes check unseen.
     labels = _cases_with(kind)
     assert any(kind not in _report(label).silent_writers for label in labels), labels
 
