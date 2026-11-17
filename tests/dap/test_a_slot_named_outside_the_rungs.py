@@ -83,7 +83,7 @@ def test_how_resolves_a_label_of_such_a_slot_by_its_own_name(tmp_path: Path) -> 
 def test_how_knows_such_a_slot(tmp_path: Path) -> None:
     adapter, out = _launched(tmp_path)
     answer = _say(adapter, out, "how Rq2 == 7")
-    assert "unknown tag" not in str(answer)
+    assert "Unknown tag" not in str(answer)
 
 
 _NOT_NAMED = _NAMED_OUTSIDE_THE_RUNGS.replace("alias = recipe[2]\n", "")
@@ -92,7 +92,7 @@ _NOT_NAMED = _NAMED_OUTSIDE_THE_RUNGS.replace("alias = recipe[2]\n", "")
 def test_how_knows_a_slot_no_code_names(tmp_path: Path) -> None:
     adapter, out = _launched(tmp_path, _NOT_NAMED)
     answer = _say(adapter, out, "how Rq2 == seven")
-    assert "unknown tag" not in str(answer)
+    assert "Unknown tag" not in str(answer)
     assert answer["success"] is True, answer
 
 
@@ -112,7 +112,7 @@ def test_reload_warns_of_its_type_changing(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     answer = _say(adapter, out, "reload")
-    assert "type changed" in answer["body"]["result"]
+    assert "changed type from" in answer["body"]["result"]
 
 
 def test_patch_refuses_a_word_on_a_numeric_slot_cleanly(tmp_path: Path) -> None:

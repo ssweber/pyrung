@@ -103,12 +103,12 @@ class TestPlanDisplay:
             reachable=False,
             target_tag="X",
             target_value=True,
-            reason="No productive next action was found; still waiting on Guard=True (have False)",
+            reason="how() found no next step that makes progress; still waiting on Guard=True (have False)",
             status=PlanStatus.STOPPED,
         )
         assert str(plan) == (
             "Stopped before reaching X=True.\n"
-            "  Reason: No productive next action was found.\n"
+            "  Reason: how() found no next step that makes progress.\n"
             "  Waiting for: Guard=True (have False)"
         )
 
@@ -296,7 +296,7 @@ class TestPlanDisplay:
         text = str(plan)
 
         assert "Temporary logic in effect: steps 1 and 2." in text
-        assert "Temporary logic: (same)." in text
+        assert "Temporary logic: the same as the last wait." in text
 
     def test_revocation_names_the_removed_temporary_logic_and_installation_step(self):
         State = Int("State")

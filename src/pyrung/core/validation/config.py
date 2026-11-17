@@ -25,7 +25,10 @@ class CheckConfig:
             raise ValueError("tool.pyrung.check must be a table")
         unknown = set(values) - {"select", "extend-select", "ignore"}
         if unknown:
-            raise ValueError(f"Unknown check settings: {', '.join(sorted(map(str, unknown)))}")
+            raise ValueError(
+                f"Unknown check settings: {', '.join(sorted(map(str, unknown)))}. "
+                "Use select, extend-select or ignore."
+            )
         validated: dict[str, tuple[str, ...]] = {}
         for key, value in values.items():
             if not isinstance(value, list) or not all(isinstance(item, str) for item in value):

@@ -69,7 +69,7 @@ def test_a_plan_that_needs_the_restart_says_so_as_its_first_step() -> None:
     assert plan.restart.reached is True
     text = str(plan)
     assert "1. Stop the program and go back to RUN." in text
-    assert "how() found no way from where the session is" in text
+    assert "how() could not reach the goal without a restart. Reason: " in text
     assert "\n2. " in text
     assert plan.total_scans == 1
     # The session did not move.  A replay of the plan reaches the target.
@@ -105,12 +105,12 @@ def test_a_restart_that_falls_short_says_what_it_needs() -> None:
     assert report.clear_scans == 1
     assert report.written_by == {step.name: ("rung 2",)}
     assert report.lines() == [
-        "Restart: alone it falls short, because Step=10 survives it.",
-        "  With Step=0 written while stopped, a restart reaches it in 1 scan.",
+        "Restart: a restart alone does not reach the goal, because Step=10 survives the restart.",
+        "  With Step=0 written while stopped, a restart reaches the goal in 1 scan.",
         "  Write Step by hand while stopped, or make it non-retentive.",
         "  Step is written by rung 2.",
     ]
-    assert "Restart: alone it falls short" in str(plan)
+    assert "Restart: a restart alone does not reach the goal" in str(plan)
 
 
 def test_what_a_clear_report_says_works() -> None:
@@ -138,7 +138,7 @@ def test_a_goal_a_restart_cannot_help_is_reported() -> None:
     assert plan.status is PlanStatus.STOPPED
     assert plan.restart.clear is None
     assert plan.restart.lines() == [
-        "Restart: stopping the program and going back to RUN does not reach it either."
+        "Restart: stopping the program and going back to RUN does not reach the goal either."
     ]
 
 
@@ -204,7 +204,9 @@ def test_an_avoid_that_rules_out_the_state_after_a_restart_is_reported(avoid) ->
 
     assert plan.status is PlanStatus.STOPPED
     assert plan.restart.avoided
-    assert plan.restart.lines()[0].startswith("Restart: not tried, the state after it is avoided")
+    assert plan.restart.lines()[0].startswith(
+        "Restart: not tried, because avoid= rules out the state after a restart"
+    )
 
 
 def test_the_restart_shares_the_callers_time(monkeypatch) -> None:
@@ -274,7 +276,10 @@ def test_a_clear_cut_short_keeps_what_it_has_and_says_so() -> None:
         clear_scans=scans,
         clear_untried=untried,
     )
-    assert "  how() ran out of time checking, so not all of them may be needed." in report.lines()
+    assert (
+        "  how() ran out of time before it checked every tag, so you may not need to "
+        "write all of them."
+    ) in report.lines()
 
 
 def test_a_needed_tag_stays_and_the_rest_go() -> None:

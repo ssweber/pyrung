@@ -367,7 +367,7 @@ class TestBlockCopyInstruction:
         instr = BlockCopyInstruction(DS.select(1, 3), DD.select(1, 2))
 
         state = SystemState().with_tags({"DS1": 1, "DS2": 2, "DS3": 3})
-        with pytest.raises(ValueError, match="length mismatch"):
+        with pytest.raises(ValueError, match="needs ranges of the same length"):
             execute(instr, state)
 
     def test_blockcopy_single_element(self):
@@ -1434,7 +1434,7 @@ class TestSearchInstruction:
         DS = Block("DS", TagType.INT, 1, 10)
         Result = Int("Result")
 
-        with pytest.raises(TypeError, match="found tag must be BOOL"):
+        with pytest.raises(TypeError, match="found= must be a BOOL tag"):
             SearchInstruction(
                 DS.select(1, 3) == 1,
                 result=Result,
@@ -1447,7 +1447,7 @@ class TestSearchInstruction:
         DS = Block("DS", TagType.INT, 1, 10)
         Found = Bool("Found")
 
-        with pytest.raises(TypeError, match="result tag must be INT or DINT"):
+        with pytest.raises(TypeError, match="result= must be an INT or DINT tag"):
             SearchInstruction(
                 DS.select(1, 3) == 1,
                 result=Real("Result"),
@@ -2039,7 +2039,7 @@ class TestNopInstruction:
         from pyrung.core import Bool, Program, Rung, out
 
         Light = Bool("Light")
-        with pytest.raises(RuntimeError, match="terminal"):
+        with pytest.raises(RuntimeError, match="ends its rung"):
             with Program():
                 with Rung():
                     nop()

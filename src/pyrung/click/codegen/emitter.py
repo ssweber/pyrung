@@ -54,6 +54,7 @@ from pyrung.click.codegen.utils import (
     _sub_operand_kwarg,
     _text_code_value,
 )
+from pyrung.core._messages import internal_error
 from pyrung.core.structure import AutoDefault
 
 if TYPE_CHECKING:
@@ -1291,6 +1292,15 @@ def _render_out_variant_call(
     return f"{py_func}({', '.join(parts)})"
 
 
+def _unknown_af(token: str) -> str:
+    """Return the message for AF column text that is no instruction or operand pyrung knows."""
+    return (
+        f"The AF column holds {token!r}, which is not an instruction or an operand that "
+        "pyrung knows. If it is a CLICK instruction that pyrung does not support yet, "
+        "please report it."
+    )
+
+
 def _render_af_token(
     token: str,
     collection: _OperandCollection,
@@ -1307,19 +1317,16 @@ def _render_af_token(
         try:
             sub = _sub_operand(token, collection, nicknames, structured_map)
         except ValueError as exc:
-            raise ValueError(f"Unrecognised AF token {token!r}") from exc
+            raise ValueError(_unknown_af(token)) from exc
         if sub == token and token not in collection.tags:
-            raise ValueError(
-                f"Unrecognised AF token {token!r}; not a known instruction or operand. "
-                f"If this is a new Click instruction, add it to the codegen."
-            )
+            raise ValueError(_unknown_af(token))
         return sub
 
     func_name = match.group(2)
     args_str = match.group(3) or ""
 
     if func_name not in _INSTRUCTION_NAMES:
-        raise ValueError(f"Unrecognised AF instruction: {func_name!r}")
+        raise ValueError(_unknown_af(func_name))
 
     # Map CSV token names → Python DSL names
     _CSV_TO_DSL = {
@@ -1417,8 +1424,10 @@ def _render_pin(
     elif pin.conditions:
         if len(pin.conditions) != 1:
             raise ValueError(
-                f"Pin .{pin.name}() cannot be rendered losslessly without a full condition tree; "
-                f"got {len(pin.conditions)} flat condition tokens."
+                internal_error(
+                    f"Pin .{pin.name}() cannot be rendered losslessly without a full "
+                    f"condition tree. It has {len(pin.conditions)} flat condition tokens"
+                )
             )
         cond = _render_condition(pin.conditions[0], collection, nicknames, structured_map)
     args = [cond] if cond else []

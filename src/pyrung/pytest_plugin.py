@@ -252,9 +252,16 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         if new_cold or new_stranded:
             parts: list[str] = []
             if new_cold:
-                parts.append(f"New cold rungs not in whitelist: {sorted(new_cold)}")
+                parts.append(
+                    f"New cold rungs not in whitelist: {', '.join(sorted(map(str, new_cold)))}. "
+                    f"To allow them, add them to [cold_rungs] allow in {whitelist_path}."
+                )
             if new_stranded:
-                parts.append(f"New stranded bits not in whitelist: {sorted(new_stranded)}")
+                parts.append(
+                    "New stranded bits not in whitelist: "
+                    f"{', '.join(sorted(map(str, new_stranded)))}. To allow them, add them "
+                    f"to [stranded_chains] allow in {whitelist_path}."
+                )
             session.exitstatus = 1
             session.config._pyrung_failures = parts  # ty: ignore[unresolved-attribute]
 

@@ -895,7 +895,7 @@ class TestAKernelThatWillNotCompile:
 
     def test_a_run_runs_interpreted(self) -> None:
         plc = _runner(CASES["staircase_mirror"], 0.3)
-        with pytest.warns(RuntimeWarning, match=r"compiling the kernel failed \(RuntimeError"):
+        with pytest.warns(RuntimeWarning, match=r"could not compile these scans \(RuntimeError"):
             plc.run_for(900.0)  # the first thousand scans are interpreted anyway
         assert plc.state.tags == self._stepped(plc.state.scan_id - 1).state.tags
 

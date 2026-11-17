@@ -173,7 +173,7 @@ def test_register_known_tag_conflict_on_same_name_raises():
 
     runner.patch({first: 1})
 
-    with pytest.raises(ValueError, match="Conflicting tag metadata"):
+    with pytest.raises(ValueError, match="Two different tags are named"):
         runner.patch({second: 2})
 
 

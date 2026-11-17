@@ -9,6 +9,7 @@ import pyrung.core.analysis.pilot.attempt_verification as _attempt_verification
 import pyrung.core.analysis.pilot.entry_execution as _entry_execution
 import pyrung.core.analysis.pilot.theory_recording as _theory_recording
 import pyrung.core.analysis.pilot.trial_commit as _trial_commit
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CompassObservation,
@@ -179,7 +180,7 @@ def transition_once(
 
     orientation_read = result.orientation
     if orientation_read is None:
-        raise RuntimeError("Compass orientation omitted its current-world reading")
+        raise RuntimeError(internal_error("Compass orientation omitted its current-world reading"))
     # Preserve the exact route alternative selected by this Orientation read.
     # The shared drive context intentionally carries no retained route, but
     # execution and verification of this one bearing must see its chart edge.
@@ -383,10 +384,10 @@ def transition_once(
     trial = _trial_commit.adopt_trial(attempt.trial, frame, state, ctx)
     if isinstance(act, ObserveScan):
         if expectation_checkpoint is None:
-            raise RuntimeError("entry observation lost its source checkpoint")
+            raise RuntimeError(internal_error("entry observation lost its source checkpoint"))
         executed = attempt.executed_attempt
         if executed is None:
-            raise RuntimeError("entry observation lost its exact execution")
+            raise RuntimeError(internal_error("entry observation lost its exact execution"))
         _entry_execution.retain_entry_bearing_execution(
             state,
             expectation_checkpoint,
@@ -415,9 +416,9 @@ def adopt_deferred_transition(
     """Adopt the exact fork whose controlling attempt was already recorded."""
 
     if transition.attempt is None or transition.trial is None:
-        raise ValueError("deferred adoption requires one accepted trial")
+        raise ValueError(internal_error("deferred adoption requires one accepted trial"))
     if not isinstance(transition.result, Bearing):
-        raise ValueError("deferred adoption requires one Bearing")
+        raise ValueError(internal_error("deferred adoption requires one Bearing"))
     trial = _trial_commit.adopt_trial(transition.trial, transition.frame, state, ctx)
     _retain_expectation_receipt(
         trial,

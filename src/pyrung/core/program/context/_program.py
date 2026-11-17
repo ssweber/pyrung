@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 def _validate_subroutine_name(name: str) -> str:
     if '"' in name:
-        raise ValueError('Subroutine name must not contain ".')
+        raise ValueError(f"Subroutine name {name!r} must not contain a double quote.")
     return name
 
 
@@ -181,8 +181,9 @@ class Program:
                 location = f" at line {source_line}"
 
             raise KeyError(
-                f"Subroutine '{instruction.subroutine_name}' not defined"
-                f" (referenced by call(){location})"
+                f"call(){location} names subroutine '{instruction.subroutine_name}', but the "
+                "program defines no subroutine of that name. Define it with subroutine(), "
+                "or fix the name."
             )
 
     def _call_subroutine_ctx(self, name: str, ctx: ScanContext) -> None:

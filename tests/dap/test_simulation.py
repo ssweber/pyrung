@@ -498,10 +498,10 @@ def test_unknown_targets_are_errors(tmp_path: Path):
     messages = _request(adapter, out_stream, "pyrungForce", {"tag": "td5", "value": 1})
     response = _response(messages)
     assert response["success"] is False
-    assert response["message"] == "unknown tag: td5 (address TD5 is not mapped to a tag)"
+    assert response["message"] == "Unknown tag 'td5' (address TD5 is not mapped to a tag)"
 
     messages = _request(adapter, out_stream, "pyrungPatch", {"tag": "Nope", "value": 1})
-    assert _response(messages)["message"] == "unknown tag: Nope"
+    assert _response(messages)["message"] == "Unknown tag 'Nope'."
 
     messages = _request(
         adapter, out_stream, "pyrungSetMode", {"mode": "run", "forces": {"CTD3": 1}}
@@ -526,7 +526,7 @@ def test_addresses_without_tag_map_are_errors(tmp_path: Path, monkeypatch: pytes
     adapter, out_stream = _launch(tmp_path)
     messages = _request(adapter, out_stream, "pyrungForce", {"tag": "C5", "value": True})
     assert _response(messages)["message"] == (
-        "unknown tag: C5 (address C5 is not mapped to a tag; the project has no TagMap)"
+        "Unknown tag 'C5' (address C5 is not mapped to a tag; the project has no TagMap)"
     )
     _shutdown(adapter, out_stream)
 
@@ -703,7 +703,7 @@ def test_live_commands_emit_events_and_frames(tmp_path: Path, session_dir: Path)
 
     ok, text = send_command("simlive", "force Bogus 1")
     assert not ok
-    assert "unknown tag: Bogus" in text
+    assert "Unknown tag 'Bogus'." in text
     _shutdown(adapter, out_stream)
 
 

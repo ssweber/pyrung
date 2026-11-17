@@ -9,6 +9,10 @@ from typing import Any
 
 from pyrung.core.validation.render import operand_name
 
+# The plan text here uses this reason, and pilot.py, last_resort.py, restart.py and the
+# console import it.  So all of them give the same words when how() stops with no next step.
+NO_NEXT_STEP = "how() found no next step that makes progress"
+
 
 @dataclass(frozen=True)
 class PlanStep:
@@ -223,7 +227,7 @@ def _rung_coast_summary(rungs: tuple[Any, ...], *, same_holds: bool = False) -> 
 
     lines: list[str] = []
     if steady:
-        keep = "(same)" if same_holds else ", ".join(steady)
+        keep = "the same as the last wait" if same_holds else ", ".join(steady)
         lines.append(f"   Keep: {keep}.")
     if oscillator_tags:
         rendered: list[str] = []
@@ -368,14 +372,14 @@ def _format_plan_step(
         sub: list[str] = []
         if step.rungs:
             if same_holds:
-                sub.append("   Temporary logic: (same).")
+                sub.append("   Temporary logic: the same as the last wait.")
             elif control_steps:
                 sub.append(f"   Temporary logic in effect: {_format_step_refs(control_steps)}.")
             else:
                 sub.extend(_rung_coast_summary(step.rungs))
         else:
             if step.steady_holds:
-                keep = "(same)" if same_holds else ", ".join(step.steady_holds)
+                keep = "the same as the last wait" if same_holds else ", ".join(step.steady_holds)
                 sub.append(f"   Keep: {keep}.")
             if step.pulsing_holds:
                 sub.append(f"   Pulse: {', '.join(step.pulsing_holds)}.")
@@ -557,10 +561,13 @@ class Plan:
 
         Reconstructs the reached state from the fork's ``scan_log`` + synthesis
         holds — the independent, hold-complete reproduction of the drive.  Raises
-        if the plan is unreachable (there is no recording to replay).
+        ``ValueError`` if the plan did not reach its target, because then there is no
+        recording to replay.
         """
         if self.fork is None:
-            raise ValueError("unreachable Plan has no recording to replay")
+            raise ValueError(
+                "This plan did not reach its target, so it has no recording to replay."
+            )
         return self.fork.replay_to(self.fork.state.scan_id)
 
     @property
@@ -595,7 +602,7 @@ class Plan:
                 if self.status is PlanStatus.CANNOT_REACH
                 else f"Stopped before reaching {goal}."
             )
-            reason = self.reason or "No productive next action was found."
+            reason = self.reason or f"{NO_NEXT_STEP}."
             reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
             restart = (
                 "".join(f"\n  {line}" for line in self.restart.lines())
@@ -625,7 +632,8 @@ class Plan:
                 if redirect:
                     redirects.extend(redirect.split(" | "))
             if redirects:
-                lines.append(f"  Other routes: {' | '.join(dict.fromkeys(redirects))}")
+                others = " or ".join(dict.fromkeys(redirects))
+                lines.append(f"  For another route, pass {others} to how().")
         leading = self._leading_steps()
         first_step = len(leading) + 1
         if leading:

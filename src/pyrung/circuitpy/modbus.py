@@ -53,13 +53,14 @@ class ModbusClientConfig:
             # A DS device ID and the WLAN port are CLICK forms the P1AM has no use for.
             if not isinstance(target.device_id, int):
                 raise TypeError(
-                    f"target {target.name!r}: the P1AM takes device_id as an int, "
-                    f"not a tag ({target.device_id.name!r})"
+                    f"Modbus target {target.name!r} reads its device_id from the tag "
+                    f"{target.device_id.name!r}. The P1AM takes device_id as an int. "
+                    "Pass a number."
                 )
             if target.com_port != "ethernet":
                 raise ValueError(
-                    f"target {target.name!r}: the P1AM talks Modbus TCP over Ethernet only, "
-                    f"got com_port={target.com_port!r}"
+                    f"Modbus target {target.name!r} has com_port={target.com_port!r}. The "
+                    "P1AM uses Modbus TCP over Ethernet only. Set com_port to 'ethernet'."
                 )
             seen.add(target.name)
 

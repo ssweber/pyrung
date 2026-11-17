@@ -6,6 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyrung.core._messages import internal_error
+
 # The ledger counts work in units.  A scan that the search steps costs one unit.  So do the
 # first two scans and the last scan of each wait.  The other scans of a wait cost a hundredth
 # of a unit each, whether or not the loop ran them.  A change to the loop therefore cannot
@@ -124,7 +126,7 @@ class SearchBudget:
 
     def charge(self, scans: int = 1, *, dwell_scans: int = 0) -> None:
         if scans < 0:
-            raise ValueError("pilot: work charge cannot be negative")
+            raise ValueError(internal_error("pilot: work charge cannot be negative"))
         self.experiments += 1
         self.dwell += dwell_scans
         self.spent += max(1, scans)

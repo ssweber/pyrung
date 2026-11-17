@@ -206,7 +206,7 @@ class TestRecordVerb:
         adapter, out = _setup(tmp_path)
         resp, _ = _repl(adapter, out, "record stop")
         assert resp["success"] is False
-        assert "No active recording" in resp["message"]
+        assert "No recording is running" in resp["message"]
 
     def test_record_while_already_recording(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -226,8 +226,10 @@ class TestRecordVerb:
         _repl(adapter, out, "force Button true", seq=10)
         resp, _ = _repl(adapter, out, "record with_forces", seq=11)
         assert resp["success"] is True
-        assert "Warning: active forces" in resp["body"]["result"]
-        assert "Button" in resp["body"]["result"]
+        assert (
+            "Warning: Button was already forced when the recording started."
+            in resp["body"]["result"]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +513,7 @@ class TestReplayVerb:
         assert resp["success"] is True
         result = resp["body"]["result"]
         assert "Replayed 3/5" in result
-        assert "(breakpoint, 2 command(s) remaining)" in result
+        assert ". A breakpoint stopped the replay with 2 command(s) left" in result
         assert adapter._runner.current_state.tags["Light"] is True
         assert [event["body"]["reason"] for event in stopped] == ["breakpoint"]
 
@@ -721,8 +723,11 @@ class TestAssertVerb:
         for text in ("assert State == HLED", "run until State == HLED within 5"):
             resp, _ = _repl(adapter, out, text)
             assert resp["success"] is False
-            assert resp["message"] == "HLED is not a choice of State"
-        assert _watch(adapter, out, "State == HLED") == (False, "HLED is not a choice of State")
+            assert resp["message"] == "HLED is not a choice of State. Its choices are IDLE, HELD."
+        assert _watch(adapter, out, "State == HLED") == (
+            False,
+            "HLED is not a choice of State. Its choices are IDLE, HELD.",
+        )
 
 
 def _watch(adapter: DAPAdapter, out: io.BytesIO, expression: str) -> tuple[bool, str]:
@@ -784,4 +789,6 @@ class TestChoiceLabelOnAField:
     def test_a_word_that_is_no_label_of_the_field_is_an_error(self, tmp_path: Path):
         adapter, out = _setup(tmp_path, _udt_choices_script())
         resp, _ = _repl(adapter, out, "assert Pump.State == HLED")
-        assert resp["message"] == "HLED is not a choice of Pump.State"
+        assert resp["message"] == (
+            "HLED is not a choice of Pump.State. Its choices are IDLE, HELD."
+        )

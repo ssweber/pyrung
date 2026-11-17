@@ -28,7 +28,7 @@ def test_mapped_tag_nickname_over_limit():
 
     assert len(findings) == 1
     assert f"{LONG!r} at X001" in findings[0].message
-    assert findings[0].location.startswith("main.rung[0]")
+    assert findings[0].location.startswith("main.rung[1]")
 
 
 def test_nickname_at_limit_passes():

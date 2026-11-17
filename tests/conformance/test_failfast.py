@@ -40,8 +40,10 @@ def test_a_group_the_loaded_part_lacks_fails_at_once(monkeypatch: pytest.MonkeyP
     holder = next(p for p, held in suite.PARTS.items() if "system" in held)
     text = str(caught.value)
     print(f"{took:.2f}s: {text}")
-    assert f"layout {running.program_hash}; system, faults and flag_probe are in part" in text
-    assert f"part {holder} (layout {real(holder).program_hash})" in text
+    assert (
+        f"layout hash {running.program_hash}, but system, faults and flag_probe are in part" in text
+    )
+    assert f"part {holder} (layout hash {real(holder).program_hash})" in text
     assert text.isascii()
 
 
@@ -58,5 +60,5 @@ def test_groups_from_different_parts_name_the_whole_suite() -> None:
         with pytest.raises(BuildMismatchError) as caught:
             suite.build_for(sim.endpoint, ["out", "system"])
     text = str(caught.value)
-    assert "are in the whole suite (layout " in text
+    assert "are in the whole suite (layout hash " in text
     assert text.endswith("Load the whole suite (make conformance-export).")

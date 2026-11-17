@@ -156,7 +156,7 @@ class TestNamespacesAndUnbound:
 
     def test_unbound_instruction_has_no_key(self):
         instr = OutInstruction(Bool("X"), oneshot=True)
-        with pytest.raises(RuntimeError, match="no site key"):
+        with pytest.raises(RuntimeError, match="is not part of a program"):
             instr.memory_key("_oneshot")
 
     def test_codegen_refuses_unbound_instruction(self):
@@ -165,7 +165,7 @@ class TestNamespacesAndUnbound:
         logic, _shared = _program()
         ctx = CodegenContext.for_kernel(logic)
         assert ctx.state_key_for(logic.rungs[0]._instructions[0]) == "i1"
-        with pytest.raises(RuntimeError, match="no site key"):
+        with pytest.raises(RuntimeError, match="is not part of a program"):
             ctx.state_key_for(OutInstruction(Bool("Y")))
 
     def test_bare_rung_list_binds(self):

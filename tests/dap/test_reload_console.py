@@ -448,7 +448,10 @@ def test_a_reload_back_to_a_coil_settles_it(
     script_path.write_text(_feedback_script(*middle), encoding="utf-8")
     resp, _ = _repl(adapter, out, "reload", seq=11)
     assert resp["success"] is True
-    assert "harness coil memory value(s) had no matching coupling" in resp["body"]["result"]
+    assert (
+        "harness memory value(s), because no link in the new program uses them"
+        in resp["body"]["result"]
+    )
     adapter._runner.patch({"Motor": True})
     _repl(adapter, out, "step 3", seq=12)
     script_path.write_text(_feedback_script(*last), encoding="utf-8")
@@ -639,7 +642,7 @@ class TestReloadSiteMemory:
         )
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "no matching site" in resp["body"]["result"]
+        assert "because their instruction changed or is gone" in resp["body"]["result"]
         assert "_oneshot:i1" not in adapter._runner.current_state.memory
 
     def test_an_inserted_edge_contact_does_not_rise_on_a_held_bit(self, tmp_path: Path):
@@ -657,8 +660,8 @@ class TestReloadSiteMemory:
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
         result = resp["body"]["result"]
-        assert "no matching site" not in result
-        assert "1 edge contact(s) new or edited start from their tag's current value" in result
+        assert "instruction memory value(s)" not in result
+        assert "1 new or edited edge contact(s) start from their tag's current value" in result
         assert "rise(Button) line 8 = on" in result
         memory = adapter._runner.current_state.memory
         assert memory["_edge:e1"] is True
@@ -713,7 +716,7 @@ class TestReloadRungMemory:
         script_path.write_text(OUT_COIL_SCRIPT.format(on=40), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "no matching site" not in resp["body"]["result"]
+        assert "instruction memory value(s)" not in resp["body"]["result"]
         memory = adapter._runner.current_state.memory
         assert memory["_timed_rung:i1"] is True
         assert memory["_debounce_rung:i2"] is True
@@ -737,8 +740,8 @@ class TestReloadRungMemory:
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
         result = resp["body"]["result"]
-        assert "1 site memory value(s) had no matching site" in result
-        assert "reset: _timed_rung:i1" in result
+        assert "Reset 1 instruction memory value(s), because their instruction changed" in result
+        assert "in the new program: _timed_rung:i1" in result
 
         _repl(adapter, out, "step 1", seq=13)
         # This is another coil, so the held rung is its first edge.
@@ -834,7 +837,7 @@ class TestReloadInputMemory:
         script_path.write_text(script.replace("preset=10", "preset=20"), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "no matching site" not in resp["body"]["result"]
+        assert "instruction memory value(s)" not in resp["body"]["result"]
         assert adapter._runner.current_state.memory["_cu:i1"] is True
 
         _repl(adapter, out, "step 2", seq=13)
@@ -858,7 +861,7 @@ class TestReloadInputMemory:
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
         # The count input is the rung, which the reset leg does not touch.
-        assert "no matching site" not in resp["body"]["result"]
+        assert "instruction memory value(s)" not in resp["body"]["result"]
 
         _repl(adapter, out, "step 1", seq=13)
         assert adapter._runner.current_state.tags["Parts_Acc"] == 1
@@ -880,8 +883,8 @@ class TestReloadInputMemory:
         resp, _ = _repl(adapter, out, "reload", seq=13)
         assert resp["success"] is True
         result = resp["body"]["result"]
-        assert "1 site memory value(s) had no matching site" in result
-        assert "reset: _cd:i1" in result
+        assert "Reset 1 instruction memory value(s), because their instruction changed" in result
+        assert "in the new program: _cd:i1" in result
 
         # The new leg is held, so its first scan is a rising edge.
         _repl(adapter, out, "force Dn2 true", seq=14)
@@ -898,7 +901,7 @@ class TestReloadInputMemory:
         assert resp["success"] is True
         # A helper leg is not part of the counter's identity, so the site still matches.
         # The new leg's first scan compares with the old leg's last value.
-        assert "site memory" not in resp["body"]["result"]
+        assert "instruction memory value(s)" not in resp["body"]["result"]
         assert adapter._runner.current_state.memory["_cd:i1"] is True
 
         _repl(adapter, out, "force Dn2 true", seq=14)
@@ -917,7 +920,7 @@ class TestReloadInputMemory:
         script_path.write_text(FLASHER_SCRIPT.format(on=80), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "no matching site" not in resp["body"]["result"]
+        assert "instruction memory value(s)" not in resp["body"]["result"]
 
         _repl(adapter, out, "step 1", seq=13)
         tags = adapter._runner.current_state.tags
@@ -934,7 +937,7 @@ class TestReloadInputMemory:
         script_path.write_text(ONESHOT_COPY_SCRIPT.format(value=7), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "no matching site" not in resp["body"]["result"]
+        assert "instruction memory value(s)" not in resp["body"]["result"]
 
         _repl(adapter, out, "step 1", seq=13)
         assert adapter._runner.current_state.tags["Setpoint"] == 5
@@ -953,7 +956,7 @@ class TestReloadInputMemory:
         script_path.write_text(TOGGLE_SCRIPT.format(target="Lamp2"), encoding="utf-8")
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "reset: _toggle:i1" in resp["body"]["result"]
+        assert "in the new program: _toggle:i1" in resp["body"]["result"]
 
         _repl(adapter, out, "step 1", seq=13)
         tags = adapter._runner.current_state.tags
@@ -1039,7 +1042,7 @@ class TestReloadTagTypeChange:
 
         resp, _ = _repl(adapter, out, "reload", seq=12)
         assert resp["success"] is True
-        assert "type changed" in resp["body"]["result"]
+        assert "Light changed type from BOOL to INT" in resp["body"]["result"]
         assert adapter._runner.current_state.tags["Light"] == 0
 
 
@@ -1060,6 +1063,11 @@ class TestReloadErrors:
 
         resp, _ = _repl(adapter, out, "reload", seq=10)
         assert resp["success"] is False
+        assert resp["message"].startswith(
+            "Reload failed. The old program stays loaded. "
+            "The program defines no PLC and no Program. Define one, or assign the PLC you "
+            "want to debug to a variable named runner."
+        )
         assert adapter._runner is old_runner
 
 
@@ -2078,9 +2086,9 @@ class TestPlannedCoilMoves:
 
         entry = _carried(resp, "A", "link")
         assert (entry["dropped"], entry["reason"], entry["to"]) == (True, "in use", None)
-        assert entry["detail"] == "a coil already runs on B"
+        assert entry["detail"] == "B keeps its own link after the reload"
         assert (
-            "Dropped the bench link on A because a coil already runs on B."
+            "Dropped the bench link on A because B keeps its own link after the reload."
             in (resp["body"]["result"])
         )
         assert adapter._bench_links == {}

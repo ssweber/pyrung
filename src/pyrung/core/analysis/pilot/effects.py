@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.causal._rung_writes import RungRead, RungWrite
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
@@ -123,7 +124,7 @@ class EffectExpectation:
 
     def __post_init__(self) -> None:
         if not self.obligations:
-            raise ValueError("an effect expectation must contain an obligation")
+            raise ValueError(internal_error("an effect expectation must contain an obligation"))
 
 
 @dataclass(frozen=True)
@@ -254,10 +255,12 @@ class EffectObservation:
             self.execution_owner is not None
             and getattr(self.execution_owner, "epoch", None) is None
         ):
-            raise ValueError("effect observation owner must expose one Epoch")
+            raise ValueError(internal_error("effect observation owner must expose one Epoch"))
         if self.displacement is None:
             if self.displacement_enabling_reads:
-                raise ValueError("displacement ancestry requires a displacement write")
+                raise ValueError(
+                    internal_error("displacement ancestry requires a displacement write")
+                )
             return
         if self.execution_projection is None:
             return
@@ -266,9 +269,13 @@ class EffectObservation:
             left is not right
             for left, right in zip(self.displacement_enabling_reads, exact, strict=False)
         ):
-            raise ValueError("displacement ancestry is not owned by the exact projection")
+            raise ValueError(
+                internal_error("displacement ancestry is not owned by the exact projection")
+            )
         if self.displacement_enabling_reads and len(self.displacement_enabling_reads) != len(exact):
-            raise ValueError("displacement ancestry is incomplete for the exact projection")
+            raise ValueError(
+                internal_error("displacement ancestry is incomplete for the exact projection")
+            )
         if not self.displacement_enabling_reads:
             object.__setattr__(
                 self,

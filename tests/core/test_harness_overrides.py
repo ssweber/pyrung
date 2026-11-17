@@ -120,7 +120,7 @@ def test_unlink_is_a_cut_override():
 
 def test_override_must_drive_its_key():
     harness = _installed(_plc())
-    with pytest.raises(ValueError, match="drives 'Spare'"):
+    with pytest.raises(ValueError, match="is a coupling for 'Spare'"):
         harness.set_overrides(
             {"Aux": Coupling("Motor", "Spare", Physical("Spare", on_delay="0ms"))}
         )

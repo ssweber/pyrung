@@ -13,6 +13,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core._messages import internal_error
 from pyrung.core.state import value_changed
 
 from .models import Transition
@@ -121,11 +122,15 @@ class ScanRungWriteProjection:
         for kind, accesses in (("read", self.reads), ("write", self.writes)):
             for access in accesses:
                 if access.scan_id != self.scan_id:
-                    raise ValueError(f"{kind} belongs to a different projection scan")
+                    raise ValueError(
+                        internal_error(f"{kind} belongs to a different projection scan")
+                    )
                 if not 0 <= access.run_order < len(self.runs):
-                    raise ValueError(f"{kind} has no projection-owned run order")
+                    raise ValueError(internal_error(f"{kind} has no projection-owned run order"))
                 if self.runs[access.run_order] is not access.run:
-                    raise ValueError(f"{kind} run identity does not match its projection order")
+                    raise ValueError(
+                        internal_error(f"{kind} run identity does not match its projection order")
+                    )
 
         by_run: dict[int, list[RungWrite]] = {}
         by_tag: dict[str, list[RungWrite]] = {}
@@ -203,7 +208,7 @@ class ScanRungWriteProjection:
         """
 
         if id(write) not in self._write_identities:
-            raise ValueError("write is not owned by this execution projection")
+            raise ValueError(internal_error("write is not owned by this execution projection"))
 
         runs = [write.run]
         enclosing = self.parent_run(write.run)
@@ -605,7 +610,9 @@ class ScanRungWriteProjection:
                 or source.name != tag_name
                 or value_changed(source.after, observed_value)
             ):
-                raise RuntimeError("observed read carries an inconsistent write definition")
+                raise RuntimeError(
+                    internal_error("observed read carries an inconsistent write definition")
+                )
             return Transition(
                 tag_name,
                 self.scan_id,
@@ -762,7 +769,7 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
             continue
         key = id(read.run.view)
         if key not in views:
-            raise ValueError("guard read refers to a view outside the projection")
+            raise ValueError(internal_error("guard read refers to a view outside the projection"))
         reads_by_view[key].append(read.occurrence)
 
     for key, view in views.items():
@@ -779,11 +786,13 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
             source = occurrence.source
             origin = "pending" if isinstance(source, WriteOccurrence) else source
             if origin not in {"entry", "pending", "default", "resolved"}:
-                raise ValueError(f"unknown captured read origin: {origin!r}")
+                raise ValueError(internal_error(f"unknown captured read origin: {origin!r}"))
             if occurrence.domain not in {"tag", "memory"}:
-                raise ValueError(f"unknown captured read domain: {occurrence.domain!r}")
+                raise ValueError(
+                    internal_error(f"unknown captured read domain: {occurrence.domain!r}")
+                )
             if occurrence.domain == "memory" and origin == "resolved":
-                raise ValueError("memory reads cannot have resolved origin")
+                raise ValueError(internal_error("memory reads cannot have resolved origin"))
 
             address = (occurrence.domain, occurrence.name)
             definition_source = source if isinstance(source, WriteOccurrence) else origin
@@ -801,8 +810,10 @@ def compact_projection_condition_views(projection: ScanRungWriteProjection) -> N
                 )
                 if previous_origin != origin or same_value is not True or not same_source:
                     raise ValueError(
-                        "one captured condition view observed incompatible definitions "
-                        f"for {occurrence.domain} {occurrence.name!r}"
+                        internal_error(
+                            "one captured condition view observed incompatible definitions "
+                            f"for {occurrence.domain} {occurrence.name!r}"
+                        )
                     )
             else:
                 definitions[address] = (origin, occurrence.value, definition_source)
@@ -927,7 +938,7 @@ def _dynamic_branch_paths(runs: tuple[RungRun, ...]) -> dict[int, tuple[int, ...
                 path: tuple[int, ...] = ()
                 if item.kind == "branch":
                     if parent_run is None:
-                        raise RuntimeError("captured branch has no parent rung")
+                        raise RuntimeError(internal_error("captured branch has no parent rung"))
                     branch_index = next(
                         (
                             index
@@ -937,7 +948,9 @@ def _dynamic_branch_paths(runs: tuple[RungRun, ...]) -> dict[int, tuple[int, ...
                         None,
                     )
                     if branch_index is None:
-                        raise RuntimeError("captured branch is absent from its parent rung")
+                        raise RuntimeError(
+                            internal_error("captured branch is absent from its parent rung")
+                        )
                     path = (*parent_path, branch_index)
                 elif item.kind == "loop_body":
                     # The program graph folds a body rung into the rung or

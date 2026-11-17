@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
 
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.navigation_contracts import (
     EvidenceScope,
     NavigationConstraints,
@@ -106,7 +107,9 @@ class CompassObservation:
 
     def __post_init__(self) -> None:
         if is_action(self.cause) and not self.applied:
-            raise ValueError("action observations require a non-empty applied artifact")
+            raise ValueError(
+                internal_error("action observations require a non-empty applied artifact")
+            )
 
     @property
     def applied_artifact(self) -> tuple[ActionPair, ...]:
@@ -293,7 +296,9 @@ def _table_record(
     """
     if provenance is Provenance.CONFIRMED:
         raise ValueError(
-            "CONFIRMED entries must come from outcome.confirmed_entry(); record() cannot mint them"
+            internal_error(
+                "CONFIRMED entries must come from outcome.confirmed_entry(); record() cannot mint them"
+            )
         )
     fv = _canon(from_val)
     key = (evidence_scope, tag, fv, cause, _applied_key(applied))

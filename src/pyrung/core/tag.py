@@ -55,7 +55,9 @@ def _structured_choice_items(raw: object, *, owner: str):
 
     count = getattr(raw, "count", None)
     if count != 1:
-        raise TypeError(f"{owner} structure choices require count=1, got {count!r}.")
+        raise TypeError(
+            f"{owner} accept a structure only when its count is 1, got count={count!r}."
+        )
 
     try:
         field_names = tuple(cast(Any, raw).field_names)
@@ -207,13 +209,15 @@ class Tag:
         # Mutual exclusivity checks
         if self.readonly and self.final:
             raise ValueError(
-                f"Tag {self.name!r}: readonly and final are mutually exclusive "
-                "(readonly = zero writers, final = exactly one)."
+                f"Tag {self.name!r}: readonly and final are mutually exclusive. readonly means "
+                "nothing writes the tag, and final means exactly one instruction writes it. "
+                "Choose one."
             )
         if self.readonly and self.external:
             raise ValueError(
-                f"Tag {self.name!r}: readonly and external are mutually exclusive "
-                "(readonly = nothing writes it, external = something outside the ladder writes it)."
+                f"Tag {self.name!r}: readonly and external are mutually exclusive. readonly "
+                "means nothing writes the tag, and external means something outside the ladder "
+                "writes it. Choose one."
             )
         if self.min is not None and self.max is not None and self.min >= self.max:
             raise ValueError(f"Tag {self.name!r}: min must be less than max.")
@@ -223,8 +227,8 @@ class Tag:
             raise ValueError(f"Tag {self.name!r}: readonly cannot be combined with physical.")
         if self.physical is not None and self.physical.kind != "delay" and self.link is None:
             raise ValueError(
-                f"Tag {self.name!r}: physical {self.physical.kind} requires link "
-                "(it answers a linked command)."
+                f"Tag {self.name!r}: physical {self.physical.kind} requires link. "
+                "Set link= to the command that this feedback answers."
             )
 
     def __hash__(self) -> int:
@@ -340,13 +344,13 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise | between Bool tag {self.name!r} and {other!r}. "
-                    "This is usually a precedence mistake; "
-                    "add parentheses: Ready | (Speed > 50)"
+                    "This is usually a precedence mistake. "
+                    f"Add parentheses, as in {self.name} | (Speed > 50)."
                 )
         if isinstance(other, CondBase):
             raise TypeError(
-                f"Cannot OR Tag with {type(other).__name__}. "
-                "Bitwise OR requires numeric/tag expression operands."
+                f"Cannot use | between tag {self.name!r} and a condition. "
+                "To combine conditions, use Or(...)."
             )
         return TagExpr(self) | cast(Any, other)
 
@@ -363,13 +367,13 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise | between {other!r} and Bool tag {self.name!r}. "
-                    "This is usually a precedence mistake; "
-                    "add parentheses: (Speed > 50) | Ready"
+                    "This is usually a precedence mistake. "
+                    f"Add parentheses, as in (Speed > 50) | {self.name}."
                 )
         if isinstance(other, CondBase):
             raise TypeError(
-                f"Cannot OR {type(other).__name__} with Tag. "
-                "Bitwise OR requires numeric/tag expression operands."
+                f"Cannot use | between a condition and tag {self.name!r}. "
+                "To combine conditions, use Or(...)."
             )
         return other | TagExpr(self)
 
@@ -570,8 +574,8 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise & between {other!r} and Bool tag {self.name!r}. "
-                    "This is usually a precedence mistake; "
-                    "add parentheses: (Speed > 50) & Ready"
+                    "This is usually a precedence mistake. "
+                    f"Add parentheses, as in (Speed > 50) & {self.name}."
                 )
 
         return other & TagExpr(self)
@@ -630,7 +634,7 @@ def _require_active_runner(tag_name: str):
     runner = get_active_runner()
     if runner is None:
         raise RuntimeError(
-            f"Tag '{tag_name}' is not bound to an active runner. Use: with PLC(...) as plc: ..."
+            f"You can read or write {tag_name}.value only inside a 'with PLC(...) as plc:' block."
         )
     return runner
 

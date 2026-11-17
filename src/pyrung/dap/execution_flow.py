@@ -394,7 +394,9 @@ def step_until(adapter: Any, should_stop: Callable[[ScanStep | None], bool]) -> 
 def assert_can_step_locked(adapter: Any) -> None:
     adapter._require_runner_locked()
     if adapter._thread_running_locked():
-        raise adapter.DAPAdapterError("Cannot step while continue is running")
+        raise adapter.DAPAdapterError(
+            "Cannot step while the debugger is running scans. Pause first."
+        )
 
 
 def thread_running_locked(adapter: Any) -> bool:

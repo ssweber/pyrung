@@ -679,7 +679,40 @@ def test_launch_reports_clear_discovery_error(tmp_path: Path):
 
     response = _single_response(messages)
     assert response["success"] is False
-    assert "Found 0 PLC(s), 0 Program(s)" in response["message"]
+    assert "The program defines no PLC and no Program." in response["message"]
+
+
+def test_launch_with_two_plcs_asks_which_one(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "two.py",
+        "from pyrung.core import PLC, Program\n"
+        "\n"
+        "with Program(strict=False) as one:\n"
+        "    pass\n"
+        "with Program(strict=False) as two:\n"
+        "    pass\n"
+        "\n"
+        "first = PLC(one)\n"
+        "second = PLC(two)\n",
+    )
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=1,
+        command="launch",
+        arguments={"program": str(script)},
+    )
+
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert (
+        "pyrung cannot tell which PLC to debug. Found 2 PLC(s), 2 Program(s)."
+        in (response["message"])
+    )
 
 
 def test_launch_requires_program_string(tmp_path: Path):
@@ -2311,7 +2344,7 @@ def test_evaluate_repl_non_command_points_to_watch(tmp_path: Path):
     )
     response = _single_response(messages)
     assert response["success"] is False
-    assert "Use Watch for predicate expressions." in response["message"]
+    assert "add it to the Watch panel." in response["message"]
 
 
 def test_conditional_breakpoint_stops_when_condition_is_true(tmp_path: Path):
@@ -3595,7 +3628,7 @@ def test_pyrung_unforce_unknown_tag_returns_error(tmp_path: Path):
     )
     response = _single_response(messages)
     assert response["success"] is False
-    assert response["message"] == "unknown tag: Nonexistent"
+    assert response["message"] == "Unknown tag 'Nonexistent'."
 
 
 def test_pyrung_unforce_requires_tag(tmp_path: Path):

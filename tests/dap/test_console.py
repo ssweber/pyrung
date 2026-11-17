@@ -315,7 +315,7 @@ class TestRun:
         scan_before = adapter._runner.current_state.scan_id
         resp, stopped = _repl(adapter, out, "run 10")
         assert resp["success"] is True
-        assert "10 cycle(s)" in resp["body"]["result"]
+        assert "10 scan(s)" in resp["body"]["result"]
         assert adapter._runner.current_state.scan_id == scan_before + 10
         assert len(stopped) >= 1
 
@@ -433,9 +433,12 @@ class TestRunUntil:
             assert resp["success"] is False
             assert resp["message"].startswith("Usage: run until <expression> within")
         resp, _ = _repl(adapter, out, "run until Done within 0")
-        assert resp["message"] == "cycle count must be >= 1"
+        assert resp["message"] == "The scan count must be 1 or more."
         resp, _ = _repl(adapter, out, "run until Done within soon")
-        assert resp["message"] == "Cannot parse 'soon' as cycle count or duration"
+        assert resp["message"] == (
+            "Cannot read 'soon' as a scan count or a duration. "
+            "Write a number such as 10, or a time such as 500ms."
+        )
 
     def test_a_timed_out_run_until_stops_a_replay_at_its_line(self, tmp_path: Path):
         adapter, out = _setup_ticks(tmp_path)
@@ -707,7 +710,7 @@ class TestCausalVerbs:
         assert fragments == [
             "  State jumped 6 -> 10",
             " Checking...",
-            " unexpected.\n  Preventable?",
+            " unexpected.\n  Can how() prevent this move?",
         ]
 
         result = progress.format(
@@ -718,6 +721,22 @@ class TestCausalVerbs:
             )
         )
         assert result == " Yes -- keep DoorClosed=True.\n"
+
+    def test_how_progress_puts_what_how_waits_for_on_its_own_line(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        reason = (
+            "how() used up max_scans after 5 units of search work and 0 scans of waiting. "
+            "Pass a larger max_scans to search further; still waiting on Done=True (have False)"
+        )
+        text = _PilotProgressFormatter().format(PilotEvent("stuck", 5, {"reason": reason}))
+
+        assert text == (
+            "\nStopping: how() used up max_scans after 5 units of search work and 0 scans of "
+            "waiting. Pass a larger max_scans to search further.\n"
+            "Waiting for: Done=True (have False)\n"
+        )
 
     def test_how_progress_streams_trial_result_on_the_same_line(self):
         from pyrung.core.analysis.pilot.types import PilotEvent
@@ -887,7 +906,9 @@ class TestCausalVerbs:
             PilotEvent("bearing_coast", 1, {"channel_tag": "WaitToSettle_2_Done"})
         )
 
-        assert repaired == "  Rewound to scan 0 and applied HeelBase=True; re-orienting.\n"
+        assert repaired == (
+            "  Went back to scan 0 and applied HeelBase=True. Looking for the next step from there.\n"
+        )
         assert coast == "  Waiting for WaitToSettle_2_Done..."
 
     def test_how_progress_prints_the_exact_self_guarded_correction(self):
@@ -1066,8 +1087,10 @@ class TestCausalVerbs:
         )
 
         assert result == (
-            "\nGuidance required before trying exploratory inputs: "
-            "PossibleStart=True; Mode=2, PossibleReset=True.\n"
+            "\nhow() has no evidence that these input changes help, so it does not try them:\n"
+            "    PossibleStart=True\n"
+            "    Mode=2, PossibleReset=True\n"
+            "  To try one, set it yourself and run how again.\n"
         )
 
     def test_how_progress_describes_observed_motion(self):
@@ -1108,7 +1131,7 @@ class TestCausalVerbs:
 
         assert (
             _format_pilot_progress(event)
-            == "  State 6 -> 7 after 3797 scans (3,300 in the loop; 497 interpreted).\n"
+            == "  State 6 -> 7 after 3797 scans (3,300 run on the fast path, 497 run one at a time).\n"
         )
 
 

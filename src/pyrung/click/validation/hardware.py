@@ -9,6 +9,7 @@ from pyclickplc.banks import BANKS
 
 from pyrung.click.capabilities import (
     CONVERTER_COMPATIBILITY,
+    FIELD_WRITABLE,
     HEX_CONSTANT_BANKS,
     single_register_fill_dest,
 )
@@ -21,6 +22,7 @@ from pyrung.core.instruction.conversions import (
 )
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.memory_block import _element_name, _store_block, block_room
+from pyrung.core.rung import dsl_call
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import ProgramLocation, _condition_children
@@ -54,6 +56,7 @@ from .resolve import (
     _instruction_location,
     _ResolutionCache,
     _unresolved_finding,
+    _wrong_role_text,
 )
 
 if TYPE_CHECKING:
@@ -181,14 +184,12 @@ def _evaluate_write_targets(
             written_by = ("CopyInstruction", "target")
 
         if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
+            findings.append(_unresolved_finding(location, mode, "operand"))
             continue
 
         for slot in resolution.slots:
             if slot.address is None and slot.memory_type in {"SC", "SD"}:
-                findings.append(
-                    _unresolved_finding(location, mode, "address required for SC/SD writability")
-                )
+                findings.append(_unresolved_finding(location, mode, "SC or SD write target"))
                 continue
 
             if not profile.field_writable(*written_by, slot.memory_type, slot.address):
@@ -197,15 +198,58 @@ def _evaluate_write_targets(
                     ClickFinding(
                         code=CLK_BANK_NOT_WRITABLE,
                         severity=_route_severity(CLK_BANK_NOT_WRITABLE, mode),
-                        message=(
-                            f"Write target {_bank_label(slot)} is not writable for Click "
-                            f"at {location_text}."
-                        ),
+                        message=_not_writable_text(instruction, slot, location_text, written_by),
                         location=location_text,
                     )
                 )
 
     return findings
+
+
+def _not_writable_text(
+    instruction: Any,
+    slot: Any,
+    location_text: str,
+    written_by: tuple[str, str] | None = None,
+) -> str:
+    """Return the message for a write that CLICK refuses to the instruction that makes it.
+
+    CLICK lets some instructions write a bank that others cannot, such as out() on SC162.
+    The advice names those instructions, read from ``FIELD_WRITABLE``.
+    """
+    call = dsl_call(instruction)
+    others: list[str] = []
+    for key, banks in FIELD_WRITABLE.items():
+        if key == written_by or slot.memory_type not in banks:
+            continue
+        subset = banks[slot.memory_type]
+        if subset is None or (slot.address is not None and slot.address in subset):
+            other = dsl_call(key[0])
+            if other != call and other not in others:
+                others.append(other)
+    if not others:
+        advice = "Write to another address."
+    else:
+        listed = others[0] if len(others) == 1 else f"{', '.join(others[:-1])} or {others[-1]}"
+        # out() drops its bit when the rung goes false, so it cannot stand in for a latch.
+        if call in _HELD_COILS:
+            advice = f"Only {listed} can write it."
+        else:
+            advice = f"Use {listed} instead."
+    return f"CLICK does not let {call} write {_bank_label(slot)}, at {location_text}. {advice}"
+
+
+_HELD_COILS = frozenset({"latch()", "reset()"})
+
+
+def _role_words(role: str) -> str:
+    """Return a role id such as ``timer_done_bit`` as the words ``timer done bit``."""
+    return role.replace("_", " ")
+
+
+def _role_banks(profile: HardwareProfile, role: str) -> str:
+    """Return the banks that *profile* allows for *role*, as ``"Y, C"``."""
+    return ", ".join(bank for bank in BANKS if profile.valid_for_role(bank, role))
 
 
 def _evaluate_role_assignments(
@@ -235,7 +279,7 @@ def _evaluate_role_assignments(
         resolution = resolver.resolve_operand_slots(value)
 
         if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
+            findings.append(_unresolved_finding(location, mode, "operand"))
             continue
 
         for slot in resolution.slots:
@@ -245,9 +289,8 @@ def _evaluate_role_assignments(
                     ClickFinding(
                         code=CLK_BANK_WRONG_ROLE,
                         severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-                        message=(
-                            f"Bank {_bank_label(slot)} is invalid for role {role} "
-                            f"at {location_text}."
+                        message=_wrong_role_text(
+                            slot, _role_words(role), location_text, _role_banks(profile, role)
                         ),
                         location=location_text,
                     )
@@ -376,11 +419,11 @@ def _exponential_from_an_integer(
             code=CLK_COPY_CONVERTER_INCOMPATIBLE,
             severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
             message=(
-                "to_text(exponential=True) needs a Real source (DF or a Real constant), "
-                f"got {item} at {location_text}."
+                "to_text(exponential=True) needs a Real source, such as a DF or a Real "
+                f"constant. The source here is {item} at {location_text}."
             ),
             location=location_text,
-            suggestion="Drop exponential=True. An integer source takes suppress_zero.",
+            suggestion="Remove exponential=True, or use suppress_zero for an integer source.",
         )
         for item in got
     ]
@@ -456,9 +499,9 @@ def _evaluate_copy_compatibility(
     dest_resolution = resolver.resolve_operand_slots(getattr(instruction, dest_field))
 
     if source_resolution.unresolved:
-        findings.append(_unresolved_finding(source_location, mode, "source bank unresolved"))
+        findings.append(_unresolved_finding(source_location, mode, "source"))
     if dest_resolution.unresolved:
-        findings.append(_unresolved_finding(dest_location, mode, "destination bank unresolved"))
+        findings.append(_unresolved_finding(dest_location, mode, "destination"))
     if source_resolution.unresolved or dest_resolution.unresolved:
         return findings
 
@@ -499,9 +542,8 @@ def _evaluate_copy_compatibility(
                         code=CLK_COPY_BANK_INCOMPATIBLE,
                         severity=_route_severity(CLK_COPY_BANK_INCOMPATIBLE, mode),
                         message=(
-                            f"Copy operation {refused} is incompatible for "
-                            f"{source_memory_type} -> {dest_memory_type} "
-                            f"at {location_text}."
+                            f"CLICK cannot {dsl_call(instruction)} from "
+                            f"{source_memory_type} to {dest_memory_type}, at {location_text}."
                         ),
                         location=location_text,
                     )
@@ -522,9 +564,9 @@ def _evaluate_copy_compatibility(
                             code=CLK_COPY_CONVERTER_INCOMPATIBLE,
                             severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
                             message=(
-                                f"Converter to_{converter.mode} requires source bank in "
-                                f"{sorted(valid_sources)}, got {source_memory_type} "
-                                f"at {location_text}."
+                                f"to_{converter.mode}() reads only from "
+                                f"{', '.join(sorted(valid_sources))}. The source at "
+                                f"{location_text} is {source_memory_type}."
                             ),
                             location=location_text,
                             suggestion=_build_suggestion(
@@ -540,9 +582,9 @@ def _evaluate_copy_compatibility(
                             code=CLK_COPY_CONVERTER_INCOMPATIBLE,
                             severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
                             message=(
-                                f"Converter to_{converter.mode} requires destination bank in "
-                                f"{sorted(valid_dests)}, got {dest_memory_type} "
-                                f"at {location_text}."
+                                f"to_{converter.mode}() writes only to "
+                                f"{', '.join(sorted(valid_dests))}. The destination at "
+                                f"{location_text} is {dest_memory_type}."
                             ),
                             location=location_text,
                             suggestion=_build_suggestion(
@@ -572,9 +614,9 @@ def _evaluate_pack_text(
     dest_resolution = resolver.resolve_operand_slots(instruction.dest)
 
     if source_resolution.unresolved:
-        findings.append(_unresolved_finding(source_location, mode, "source bank unresolved"))
+        findings.append(_unresolved_finding(source_location, mode, "source"))
     if dest_resolution.unresolved:
-        findings.append(_unresolved_finding(dest_location, mode, "destination bank unresolved"))
+        findings.append(_unresolved_finding(dest_location, mode, "destination"))
     if source_resolution.unresolved or dest_resolution.unresolved:
         return findings
 
@@ -594,8 +636,9 @@ def _evaluate_pack_text(
                     code=CLK_PACK_TEXT_BANK_INCOMPATIBLE,
                     severity=_route_severity(CLK_PACK_TEXT_BANK_INCOMPATIBLE, mode),
                     message=(
-                        "pack_text is incompatible for "
-                        f"{source_memory_type} -> {dest_memory_type} at {location_text}."
+                        f"pack_text() at {location_text} cannot pack {source_memory_type} "
+                        f"into {dest_memory_type}. CLICK packs TXT into DS, DD, DH, DF, TD or "
+                        "CTD."
                     ),
                     location=location_text,
                 )
@@ -849,9 +892,10 @@ def _evaluate_text_past_bank(
     pyrung writes the elements that its block holds and drops the rest. A constant into
     TXT that runs past the bank as written is refused, because CLICK's Copy refuses it
     (OBJ-003). Any other store past the bank warns. CLICK's Copy accepts a register
-    source, which saves no end address. A store past a block that is mapped inside a bank
-    warns that CLICK writes on into the bank, where pyrung stops. Only a store whose
-    shortest text runs past the end is reported.
+    source, which saves no end address. A store past the end of a block that is mapped
+    inside a bank warns. CLICK writes the rest of the text into the bank past the block,
+    and pyrung stops at the end of the block. Only a store whose shortest text runs past
+    the end is reported.
     """
     if type(instruction).__name__ != "CopyInstruction":
         return []
@@ -1016,9 +1060,8 @@ def _evaluate_drums(
                     ClickFinding(
                         code=CLK_BANK_WRONG_ROLE,
                         severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-                        message=(
-                            f"Bank {_bank_label(slot)} is invalid for role {role} "
-                            f"at {location_text}."
+                        message=_wrong_role_text(
+                            slot, _role_words(role), location_text, _role_banks(profile, role)
                         ),
                         location=location_text,
                     )
@@ -1029,7 +1072,7 @@ def _evaluate_drums(
         location = _instruction_location(base_location, f"instruction.outputs[{idx}]")
         resolution = resolver.resolve_operand_slots(output)
         if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "drum output bank unresolved"))
+            findings.append(_unresolved_finding(location, mode, "drum output"))
             continue
         for slot in resolution.slots:
             if not profile.is_writable(slot.memory_type, slot.address):
@@ -1038,10 +1081,7 @@ def _evaluate_drums(
                     ClickFinding(
                         code=CLK_BANK_NOT_WRITABLE,
                         severity=_route_severity(CLK_BANK_NOT_WRITABLE, mode),
-                        message=(
-                            f"Write target {_bank_label(slot)} is not writable for Click "
-                            f"at {location_text}."
-                        ),
+                        message=_not_writable_text(instruction, slot, location_text),
                         location=location_text,
                     )
                 )
@@ -1051,9 +1091,11 @@ def _evaluate_drums(
                     ClickFinding(
                         code=CLK_BANK_WRONG_ROLE,
                         severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
-                        message=(
-                            "Bank "
-                            f"{_bank_label(slot)} is invalid for role drum_output_bit at {location_text}."
+                        message=_wrong_role_text(
+                            slot,
+                            "drum output",
+                            location_text,
+                            _role_banks(profile, "drum_output_bit"),
                         ),
                         location=location_text,
                     )
@@ -1071,7 +1113,7 @@ def _evaluate_drums(
                     value=event_tag,
                     role="drum_event_condition",
                     location=event_location,
-                    unresolved_reason="event condition bank unresolved",
+                    unresolved_reason="drum event condition",
                 )
 
     jump_step = getattr(instruction, "jump_step", None)
@@ -1083,8 +1125,8 @@ def _evaluate_drums(
                 code=CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
                 severity=_route_severity(CLK_DRUM_JUMP_STEP_TAG_REQUIRED, mode),
                 message=(
-                    "drum jump step must be a DS memory address for Click portability "
-                    f"at {location_text}."
+                    f"The drum's jump step at {location_text} is not a tag. CLICK needs a DS "
+                    "tag there."
                 ),
                 location=location_text,
             )
@@ -1330,7 +1372,7 @@ def _evaluate_modbus_banks(
         location = _instruction_location(base_location, f"instruction.{field_name}")
         resolution = resolver.resolve_operand_slots(value)
         if resolution.unresolved:
-            findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
+            findings.append(_unresolved_finding(location, mode, "operand"))
             continue
 
         for slot in resolution.slots:

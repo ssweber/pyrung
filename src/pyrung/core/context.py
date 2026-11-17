@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pyrsistent import PMap, pmap
 
+from pyrung.core._messages import read_only_system_point
+
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
     from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
@@ -43,11 +45,11 @@ def refused_inside_its_own_scan() -> RuntimeError:
     A function that the PLC's own scan is calling made the call.
     """
     return RuntimeError(
-        "A run_function called step(), run(), run_for(), run_until(), start(), stop() or "
-        "reboot(), or set battery_present, on the PLC running it, which a PLC can't do in the "
-        "middle of its own scan. "
+        "A run_function or run_enabled_function called step(), run(), run_for(), run_until(), "
+        "start(), stop() or reboot(), or set battery_present, on the PLC that is running it. "
+        "A PLC cannot do that in the middle of its own scan. "
         "Set a tag through outs= and act on it from outside the scan. To scan from inside the "
-        "function, use another PLC or CompiledPLC; a PLC can make one with fork()."
+        "function, use another PLC or a CompiledPLC. You can make one with fork()."
     )
 
 
@@ -528,7 +530,7 @@ class ScanContext:
             value: The value to set.
         """
         if name in self._read_only_tags:
-            raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+            raise ValueError(read_only_system_point(name))
         sink = self._write_sink
         if sink is not None:
             source = sink("tag", name, self._get_tag_internal(name), value)
@@ -545,7 +547,7 @@ class ScanContext:
         """
         for name in updates:
             if name in self._read_only_tags:
-                raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+                raise ValueError(read_only_system_point(name))
         sink = self._write_sink
         if sink is not None:
             for name, value in updates.items():

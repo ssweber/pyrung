@@ -1708,7 +1708,7 @@ def _rung_tree_node_indices(rung: Rung, node_index_by_rung: dict[int, int]) -> l
 
 
 def _nodes_after_first_return(rung: Rung, node_index_by_rung: dict[int, int]) -> frozenset[int]:
-    """Return the nodes of *rung*'s tree with an item that a return earlier can skip.
+    """Return the nodes of *rung*'s tree with an item that a return earlier in the rung can skip.
 
     The rung's items run in source order.  A branch runs in place, and its contacts
     were read up front, with the rung's.  When a return fires, it skips everything after

@@ -29,10 +29,10 @@ _LOOP_HINT = (
 )
 
 
-_ASSIGN_HINT = "DSL instructions write to tags directly; no intermediate Python variables needed"
+_ASSIGN_HINT = "Instructions write to tags directly, so you do not need a Python variable"
 
 
-_TRY_HINT = "Errors in DSL scope are programming mistakes; no recovery logic in ladder logic"
+_TRY_HINT = "An error while you build a program is a mistake in the program, so do not catch it"
 
 
 _COMPREHENSION_HINT = (
@@ -40,22 +40,24 @@ _COMPREHENSION_HINT = (
 )
 
 
-_SCOPE_HINT = "DSL scope should not mutate external Python state"
+_SCOPE_HINT = "Do not change Python state outside the program from inside it"
 
 
-_RETURN_HINT = "Use `return_early()` for early subroutine exit; no Python control flow in DSL scope"
+_RETURN_HINT = "Use `return_early()` to leave a subroutine early"
 
 
 _IMPORT_HINT = "Move imports outside the Program/subroutine scope"
 
 
-_ASSERT_HINT = "Not valid in ladder logic; handle validation outside DSL scope"
+_ASSERT_HINT = "Do your checks outside the Program or subroutine"
 
 
 _DEF_HINT = "Define functions and classes outside the Program/subroutine scope"
 
 
-_GENERIC_STMT_HINT = "Only `with ...:`, bare function calls, and `pass` are allowed in DSL scope"
+_GENERIC_STMT_HINT = (
+    "Inside a Program or subroutine, write only `with` blocks, bare function calls and `pass`"
+)
 
 _COMMENT_IN_RUNG_HINT = (
     "comment() attaches to the *next* rung; move it before the `with rung(...):`"
@@ -125,7 +127,7 @@ def _warn_check_skipped(target: str, reason: Exception) -> None:
     quietly instead.  There is nothing to inspect, so there is nothing to warn about.
     """
     warnings.warn(
-        f"Unable to perform strict DSL control-flow check for {target}: {reason}",
+        f"pyrung skipped the strict check of {target}. It could not check the source: {reason}",
         RuntimeWarning,
         stacklevel=3,
     )
@@ -143,7 +145,7 @@ def _describe_forbidden_node(node: ast.AST) -> tuple[str, str]:
     for node_types, label, hint in _FORBIDDEN_NODE_RULES:
         if isinstance(node, node_types):
             return (type(node).__name__ if label is None else label), hint
-    return type(node).__name__, "This construct is not allowed in strict DSL scope"
+    return type(node).__name__, _GENERIC_STMT_HINT
 
 
 def _raise_forbidden_node(
@@ -156,7 +158,8 @@ def _raise_forbidden_node(
     construct, hint = _describe_forbidden_node(node)
     line = _absolute_line(node, line_offset)
     raise ForbiddenControlFlowError(
-        f"{filename}:{line}: forbidden Python construct '{construct}' in strict DSL scope. "
+        f"{filename}:{line}: Python '{construct}' is not allowed in a strict Program or "
+        "subroutine. "
         f"{hint}. Opt out with {opt_out_hint}."
     )
 
@@ -312,7 +315,7 @@ def _check_function_body_strict(
         node for node in module.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     ]
     if not function_nodes:
-        _warn_check_skipped(source_label, RuntimeError("function body AST not found"))
+        _warn_check_skipped(source_label, RuntimeError("pyrung found no function in the source"))
         return
 
     filename = inspect.getsourcefile(fn) or inspect.getfile(fn)
@@ -364,7 +367,9 @@ def _check_with_body_from_frame(frame: FrameType, *, opt_out_hint: str) -> None:
     relative_line = frame.f_lineno - start_line + 1
     with_node = _find_enclosing_with(module, relative_line)
     if with_node is None:
-        _warn_check_skipped(source_label, RuntimeError("enclosing with-statement AST not found"))
+        _warn_check_skipped(
+            source_label, RuntimeError("pyrung found no with block around this line")
+        )
         return
 
     filename = inspect.getsourcefile(code) or code.co_filename

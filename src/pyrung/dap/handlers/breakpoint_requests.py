@@ -165,12 +165,15 @@ def compile_condition_for_breakpoint(adapter: Any, source: str) -> Callable[[Sys
     return compile_condition(expr)
 
 
+_HIT_COUNT_RULE = "The hit count must be a whole number of 1 or more."
+
+
 def parse_hit_condition(adapter: Any, raw_value: Any) -> int | None:
     if raw_value is None:
         return None
     if isinstance(raw_value, int):
         if raw_value <= 0:
-            raise adapter.DAPAdapterError("hitCondition must be >= 1")
+            raise adapter.DAPAdapterError(_HIT_COUNT_RULE)
         return raw_value
     if isinstance(raw_value, str):
         text = raw_value.strip()
@@ -179,6 +182,6 @@ def parse_hit_condition(adapter: Any, raw_value: Any) -> int | None:
         if text.isdigit():
             parsed = int(text)
             if parsed <= 0:
-                raise adapter.DAPAdapterError("hitCondition must be >= 1")
+                raise adapter.DAPAdapterError(_HIT_COUNT_RULE)
             return parsed
-    raise adapter.DAPAdapterError("hitCondition must be a positive integer")
+    raise adapter.DAPAdapterError(_HIT_COUNT_RULE)

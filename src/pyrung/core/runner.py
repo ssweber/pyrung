@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard, TypeVar, cast
 
 from pyrsistent import PMap, pmap
 
+from pyrung.core._messages import NEEDS_MODBUS_CLIENT
 from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC, absent_scalars
@@ -728,7 +729,7 @@ def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
     return any(
         needle in message
         for needle in (
-            "requires generate_circuitpy",
+            NEEDS_MODBUS_CLIENT,
             "Unsupported",
         )
     )
@@ -953,8 +954,8 @@ def _compile_avoid(spec: Any) -> Any:
         pred, tags, expr = _compile_avoid_member(cond)
         if _avoid_expr_has_edge(expr):
             raise ValueError(
-                "avoid= does not support rise()/fall() transition conditions; "
-                "use a snapshot state condition or callable"
+                "avoid= cannot use rise() or fall(). Use a condition on tag values, such as "
+                "a tag or a comparison, or a function of the state."
             )
         name = _render_avoid_expr(expr) if expr is not None else ", ".join(tags or ()) or "avoid"
         condition = _avoid_condition(cond, expr)
@@ -2424,7 +2425,7 @@ class PLC:
         if assume and to is _SENTINEL:
             raise ValueError("assume= requires projected mode (provide to=)")
         if since is not None and to is not _SENTINEL:
-            raise ValueError("since= is only supported in recorded mode")
+            raise ValueError("since= cannot be used with to=. Leave one of them out.")
         if since is not None and not isinstance(since, int):
             raise TypeError("since must be an int or None")
         if since is not None and scan is not None and since > scan:
@@ -2622,7 +2623,10 @@ class PLC:
         return None if self._coast_memo is None else self._coast_memo.check_limits
 
     def _stepped_again(self, first: int, last: int, check_limits: Callable[[], None] | None) -> PLC:
-        """Return a replay of scans up to *last* from the checkpoint before *first*."""
+        """Return a replay of scans up to *last* from the checkpoint before *first*.
+
+        The replay records those scans in its own timelines. These timelines have no cap.
+        """
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         for name in _RECORDS:
@@ -3532,8 +3536,9 @@ class PLC:
             # is only speed: what the scans would answer, an interpreted scan answers too.
             if not _looks_like_compiled_replay_gap(exc):
                 warnings.warn(
-                    f"compiling the kernel failed ({type(exc).__name__}: {exc}); "
-                    "these scans run interpreted, slower and with the same answers",
+                    f"pyrung could not compile these scans ({type(exc).__name__}: {exc}), so it "
+                    "runs them in the interpreter. The results are the same, only slower. "
+                    "This is a bug in pyrung. Please report it.",
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -3759,13 +3764,14 @@ class PLC:
             )
         if target_scan_id > self._state.scan_id:
             raise ValueError(
-                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
+                f"target_scan_id {target_scan_id} is after the latest scan, {self._state.scan_id}."
             )
         log_base = self._scan_log.base_scan
         if target_scan_id < log_base:
             raise ValueError(
-                f"target_scan_id {target_scan_id} predates the log horizon "
-                f"({log_base}); those scans have been trimmed"
+                f"Scan {target_scan_id} is no longer in the history. The oldest scan kept is "
+                f"{log_base}. To keep more scans, pass a longer history= or a larger "
+                "history_budget= to PLC()."
             )
 
     def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
@@ -3923,7 +3929,7 @@ class PLC:
             )
         if target_scan_id > self._state.scan_id:
             raise ValueError(
-                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
+                f"target_scan_id {target_scan_id} is after the latest scan, {self._state.scan_id}."
             )
 
         cached = self._cached_replay_trace
@@ -4532,10 +4538,11 @@ class PLC:
             or existing.default != tag.default
         ):
             raise ValueError(
-                f"Conflicting tag metadata for {tag.name!r}: existing "
-                f"(type={existing.type.name}, retentive={existing.retentive}, "
-                f"default={existing.default!r}) vs new "
-                f"(type={tag.type.name}, retentive={tag.retentive}, default={tag.default!r})."
+                f"Two different tags are named {tag.name!r}. The first has "
+                f"type={existing.type.name}, retentive={existing.retentive} and "
+                f"default={existing.default!r}. The second has type={tag.type.name}, "
+                f"retentive={tag.retentive} and default={tag.default!r}. Rename one, or give "
+                "both the same type, retentive and default."
             )
 
     def _register_known_tags_from_mapping_keys(

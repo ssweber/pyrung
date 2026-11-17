@@ -249,7 +249,10 @@ def _with_choice_values(adapter: Any, expr: Expr, tags: Any, state: SystemState)
         tag = tags.get(name)
         if getattr(tag, "choices", None) and tag.type is not TagType.CHAR:
             # Only a Char holds text, so on any other tag the word must be one of its labels.
-            raise adapter.DAPAdapterError(f"{typed} is not a choice of {expr.tag.name}")
+            labels = ", ".join(str(label) for label in tag.choices.values())
+            raise adapter.DAPAdapterError(
+                f"{typed} is not a choice of {expr.tag.name}. Its choices are {labels}."
+            )
         return expr
     if isinstance(expr, And):
         return And(

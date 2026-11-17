@@ -55,7 +55,7 @@ def _validate_output_tags(outputs: Sequence[Tag]) -> tuple[Tag, ...]:
     if not outputs:
         raise ValueError("drum outputs must contain at least 1 tag")
     if len(outputs) > 16:
-        raise ValueError("drum outputs max is 16")
+        raise ValueError(f"A drum has at most 16 outputs, and you gave {len(outputs)}.")
     names: set[str] = set()
     cooked: list[Tag] = []
     for output in outputs:
@@ -235,11 +235,14 @@ class _DrumBaseInstruction(Instruction):
 
         self.step_count = len(self.pattern)
         if self.step_count > 16:
-            raise ValueError("drum step count max is 16")
+            raise ValueError(f"A drum has at most 16 steps, and the pattern has {self.step_count}.")
         output_count = len(self.outputs)
-        for row in self.pattern:
+        for step, row in enumerate(self.pattern, start=1):
             if len(row) != output_count:
-                raise ValueError("drum pattern size must match steps x outputs")
+                raise ValueError(
+                    f"Each drum pattern row needs one value per output. Row {step} has "
+                    f"{len(row)} values, and the drum has {output_count} outputs."
+                )
 
         if self.reset_condition is None:
             raise ValueError("drum reset condition is required")
@@ -521,7 +524,10 @@ class EventDrumInstruction(_DrumBaseInstruction):
             jog_condition=jog_condition,
         )
         if len(events) != self.step_count:
-            raise ValueError("event_drum events count must match step count")
+            raise ValueError(
+                f"event_drum has {self.step_count} steps but {len(events)} events. "
+                "Give one event per step."
+            )
         self.events = tuple(to_condition(event) for event in events)
         if any(event is None for event in self.events):
             raise ValueError("event_drum events must contain valid BOOL conditions")
@@ -639,7 +645,10 @@ class TimeDrumInstruction(_TimedDrumInstruction):
             jog_condition=jog_condition,
         )
         if len(presets) != self.step_count:
-            raise ValueError("time_drum presets count must match step count")
+            raise ValueError(
+                f"time_drum has {self.step_count} steps but {len(presets)} presets. "
+                "Give one preset per step."
+            )
         cooked_presets: list[Tag | int] = []
         for preset in presets:
             if isinstance(preset, Tag):
@@ -790,9 +799,15 @@ class TimeEventDrumInstruction(_TimedDrumInstruction):
             jog_condition=jog_condition,
         )
         if len(presets) != self.step_count:
-            raise ValueError("time_event_drum presets count must match step count")
+            raise ValueError(
+                f"time_event_drum has {self.step_count} steps but {len(presets)} presets. "
+                "Give one preset per step."
+            )
         if len(events) != self.step_count:
-            raise ValueError("time_event_drum events count must match step count")
+            raise ValueError(
+                f"time_event_drum has {self.step_count} steps but {len(events)} events. "
+                "Give one event per step."
+            )
         cooked_presets: list[Tag | int | None] = []
         for preset in presets:
             if preset is None or (isinstance(preset, int) and not isinstance(preset, bool)):

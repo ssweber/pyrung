@@ -298,7 +298,7 @@ def test_nesting_limit_is_three():
 
 
 def test_break_and_continue_need_a_conditioned_body_rung():
-    with pytest.raises(RuntimeError, match="conditioned body rung"):
+    with pytest.raises(RuntimeError, match="works only inside a forloop"):
         with Program(strict=False):
             with Rung():
                 with forloop(2):
@@ -311,7 +311,7 @@ def test_break_and_continue_need_a_conditioned_body_rung():
                     with Rung():
                         continue_loop()
 
-    with pytest.raises(RuntimeError, match="conditioned body rung"):
+    with pytest.raises(RuntimeError, match="works only inside a forloop"):
         with Program(strict=False):
             with Rung(Enable):
                 break_loop()

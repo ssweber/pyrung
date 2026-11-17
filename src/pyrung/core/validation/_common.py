@@ -370,8 +370,8 @@ def _loop_count_conditions(loop: Any) -> tuple[tuple[Condition, ...], bool] | No
     verifier refuses the loop past the cap.  A REAL count is inexact because 0.5
     truncates to 0.  An expression count is inexact for its own reasons.
 
-    While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero, every count runs the body.  A
-    constant count that runs no iteration returns None.
+    While ``FOR_ZERO_COUNT_ITERATIONS`` is nonzero, every count runs the body.  For a
+    constant count that runs no iteration, this returns None.
     """
     from pyrung.core.condition import IndirectCompareNe
     from pyrung.core.instruction.control import (
@@ -1456,6 +1456,23 @@ def _scope_reach_chains(program: Program) -> dict[str, tuple[tuple[Condition, ..
 # ---------------------------------------------------------------------------
 # Message formatting
 # ---------------------------------------------------------------------------
+
+
+def rung_path(subroutine: str | None, rung_index: int) -> str:
+    """Return the head of a location path, ``main.rung[1]`` or ``subroutine[name].rung[1]``.
+
+    The rung counts from 1, as every rung number a user reads does. *rung_index* counts
+    from 0.
+    """
+    if subroutine is None:
+        return f"main.rung[{rung_index + 1}]"
+    return f"subroutine[{subroutine}].rung[{rung_index + 1}]"
+
+
+def rung_label(subroutine: str | None, rung_index: int) -> str:
+    """Return ``main rung 1`` or ``subroutine 'name' rung 1`` for a 0-based *rung_index*."""
+    scope = "main" if subroutine is None else f"subroutine '{subroutine}'"
+    return f"{scope} rung {rung_index + 1}"
 
 
 def compact_location(

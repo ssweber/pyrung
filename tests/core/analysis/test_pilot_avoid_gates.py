@@ -257,7 +257,7 @@ def test_edge_sensitive_avoid_is_rejected_clearly() -> None:
     prog, target, _mid = _folded_wink_program()
     trigger = Bool("EdgeAvoid")
 
-    with pytest.raises(ValueError, match=r"avoid=.*rise\(\)/fall\(\)"):
+    with pytest.raises(ValueError, match=r"avoid= cannot use rise\(\) or fall\(\)"):
         PLC(prog, dt=0.010).how(target, avoid=rise(trigger), max_scans=2000)
 
 
@@ -417,7 +417,7 @@ def test_avoid_union_no_clean_lever_declines_naming_it() -> None:
     path = plc.how(target, avoid=(tags["A"], tags["B"]), max_scans=800)
     assert not path.reachable
     reason = path.reason or ""
-    assert "avoid excludes" in reason, reason
+    assert "blocked how() while it was trying to" in reason, reason
     assert ("A" in reason) or ("B" in reason), reason
 
 

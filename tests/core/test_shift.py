@@ -308,7 +308,7 @@ class TestShiftBuilder:
 
         with Program():
             with Rung(Data):
-                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     shift(C.select(1, 3)).clock(ClockValue).reset(Reset)
 
     def test_reset_rejects_int_tag_condition(self):
@@ -319,5 +319,5 @@ class TestShiftBuilder:
 
         with Program():
             with Rung(Data):
-                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     shift(C.select(1, 3)).clock(Clock).reset(ResetValue)

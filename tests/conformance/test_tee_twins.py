@@ -115,7 +115,7 @@ def test_draw_tees_refuses_cells_with_nothing_to_hang_a_tee_on():
     pin = _row("", ["A", "-"], ".p()")
     for bad in ("", "T", "T:B", "|"):
         rows = _rows(_row("R", ["A", bad], "box()"), pin)
-        with pytest.raises(ValueError, match="nothing to hang a tee on"):
+        with pytest.raises(ValueError, match="A tee needs a plain"):
             draw_tees(rows, "g/x", spec)
     ok = draw_tees(_rows(_row("R", ["A", "-"], "box()"), pin), "g/x", spec)
     assert ok[1][2] == "T"
@@ -181,6 +181,6 @@ def test_the_importer_reads_the_bare_twin_as_the_rail_drawing(control_build):
 
 
 def test_a_bare_tee_shares_no_contact():
-    with pytest.raises(ValueError, match="shares none"):
+    with pytest.raises(ValueError, match="a bare tee shares no contacts"):
         TeeSpec("box(", (".p()",), after=1, bare=True)
     TeeSpec("box(", (".p()",), after=0, bare=True)

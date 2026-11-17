@@ -77,7 +77,8 @@ def _verify_codegen_identity(
 
     if mismatches:
         raise CodegenIdentityError(
-            "codegen identity check failed (validate=True):\n  " + "\n  ".join(mismatches)
+            "The generated code would not rebuild these structure defaults. This is a bug "
+            "in pyrung. Please report it with your nickname CSV.\n  " + "\n  ".join(mismatches)
         )
 
 
@@ -98,8 +99,8 @@ def _verify_emitted_logic(
         mismatch = emitted_logic_mismatch(rungs)
         if mismatch is not None:
             raise ValueError(
-                f"{scope_name}: generated code would change the rung logic: {mismatch}. "
-                "This is a codegen bug; please report it with the source CSV."
+                f"{scope_name}: the generated code would change the rung logic. {mismatch}. "
+                "This is a bug in pyrung. Please report it with the source CSV."
             )
 
 

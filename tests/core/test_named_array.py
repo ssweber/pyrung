@@ -176,7 +176,7 @@ def test_named_array_decorator_readonly_defaults_and_field_override():
 
 
 def test_named_array_auto_default_restricted_by_base_type():
-    with pytest.raises(ValueError, match="not numeric"):
+    with pytest.raises(ValueError, match="works only on INT, DINT and WORD"):
 
         @named_array("BOOL", count=2)
         class _Alarm:

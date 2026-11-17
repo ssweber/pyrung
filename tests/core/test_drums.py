@@ -582,8 +582,8 @@ def test_time_event_drum_requires_reset_builder() -> None:
     ("presets", "events", "match"),
     [
         ([100, None], [None, None], "step 2 needs a preset, an event, or both"),
-        ([100, 200], [None], "events count"),
-        ([100, 200, 300], [None, None], "presets count"),
+        ([100, 200], [None], "has 2 steps but 1 events"),
+        ([100, 200, 300], [None, None], "has 2 steps but 3 presets"),
     ],
 )
 def test_time_event_drum_rejects_bad_steps(
@@ -704,7 +704,7 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Y1"] is False
 
-    # When enabled again, the drum is still complete, because the jump left its outputs off.
+    # When enabled again, the drum is still complete. The jump left its outputs off.
     runner.patch({"Enable": True, "Jump": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1

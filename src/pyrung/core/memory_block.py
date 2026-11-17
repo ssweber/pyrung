@@ -742,8 +742,8 @@ class Block:
         # whether a reset works never depends on what ran.
         if addr in self._tag_cache and (addr in self._indexed or addr in self._mapped_tags):
             raise ValueError(
-                f"Cannot {action} {self.name}[{addr}] after tag materialization. "
-                "Configure slot metadata before reading/indexing that slot."
+                f"Cannot {action} {self.name}[{addr}], because your code has already indexed "
+                f"or mapped it. Reset the slot before your code uses {self.name}[{addr}]."
             )
 
     def _drop_slot_config(self, addr: int) -> None:
@@ -1023,8 +1023,8 @@ class Block:
             )
         if not self._is_sparse_address_valid(addr):
             raise IndexError(
-                f"Address {addr} is not valid for {self.name} block "
-                f"(valid window: {self.start}-{self.end}, sparse-ranged)"
+                f"{self.name} has no address {addr}. "
+                f"Its addresses run from {self.start} to {self.end}, with gaps."
             )
 
     def _element_or_none(self, addr: int) -> Tag | None:

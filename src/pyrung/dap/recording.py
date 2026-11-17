@@ -201,7 +201,11 @@ def replay_recording(path: Path) -> str:
         raise ReplayFailed(None, "the recording names no program (add a '# program: <file>' line)")
     program = (path.parent / header.program).resolve()
     if not program.is_file():
-        raise ReplayFailed(None, f"program not found: {program}")
+        raise ReplayFailed(
+            None,
+            f"Cannot find the program {program}. The '# program:' line gives its path "
+            "relative to the recording's folder.",
+        )
 
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=io.BytesIO())
     try:

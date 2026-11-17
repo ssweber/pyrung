@@ -300,5 +300,5 @@ def test_unclaimed_row_after_last_pin_rejected():
         comment_lines=[],
         rows=_drum_rows(_row("", "C6", ".reset()"), _row("", "C8", ".jog()"), stray),
     )
-    with pytest.raises(ValueError, match=r"drops condition\(s\).*C9"):
+    with pytest.raises(ValueError, match=r"contacts that connect to no output: .*C9"):
         _analyze_single_rung(rung, validate=True)

@@ -31,7 +31,7 @@ def _find_program(module_path: str) -> tuple:
     if variable is not None:
         obj = getattr(mod, variable, None)
         if obj is None or not isinstance(obj, Program):
-            msg = f"'{variable}' in {module_path} is not a Program instance"
+            msg = f"{module_path} has no Program named '{variable}'."
             raise SystemExit(msg)
         return obj, mod
 
@@ -42,7 +42,10 @@ def _find_program(module_path: str) -> tuple:
             found.append((attr, obj))
 
     if not found:
-        msg = f"No Program instance found in {module_path}"
+        msg = (
+            f"{module_path} has no Program at module level. Pass the module that "
+            "defines your Program, or name it as module:variable."
+        )
         raise SystemExit(msg)
     if len(found) > 1:
         names = ", ".join(name for name, _ in found)
@@ -63,7 +66,7 @@ def _cmd_check(args: argparse.Namespace) -> None:
     if args.config:
         path = Path(args.config)
         if not path.is_file():
-            raise ValueError(f"Check configuration not found: {path}")
+            raise SystemExit(f"No file at {path}. Pass the path of a pyproject.toml to --config.")
         config = load_check_config(path) or CheckConfig()
     else:
         config, _ = find_check_config(Path.cwd())
@@ -116,7 +119,7 @@ def main() -> None:
 
     # -- check --
     check_p = sub.add_parser("check", help="Run static ladder checks")
-    check_p.add_argument("module", help="Python module containing the Program")
+    check_p.add_argument("module", help="module that defines the Program, as mymod or mymod:name")
     check_p.add_argument("--config", help="Read check settings from this pyproject.toml")
     check_p.add_argument(
         "--extend-select", nargs="+", metavar="RULE", help="Add rule codes or prefixes"

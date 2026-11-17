@@ -471,7 +471,7 @@ class TestGenerateCircuitPyAPI:
             with Rung(Bool("Enable")):
                 run_function(abs)
 
-        with pytest.raises(ValueError, match="inspect"):
+        with pytest.raises(ValueError, match="cannot read the source of"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0)
 
     def test_strict_validation_blocks_io_untracked_findings(self):
@@ -683,7 +683,7 @@ class TestInstructionCoverage:
         assert "_delta" in source_code
         assert "_store_int(" in source_code
         assert "_wrap_int(" in source_code
-        assert "BlockCopy length mismatch" in source_code
+        assert "blockcopy() needs ranges of the same length" in source_code
         assert "_blockcopy_values = []" in source_code
         assert "for _raw, _dst_idx in zip(_blockcopy_values," in source_code
         assert "Indirect range start must be <= end" in source_code
@@ -936,7 +936,7 @@ class TestInstructionCoverage:
                 copy(cfg[idx], a)
                 copy(ds_bank[idx], b)
 
-        with pytest.raises(ValueError, match="addressed indirectly"):
+        with pytest.raises(ValueError, match="indirectly and also uses"):
             CodegenContext.for_kernel(prog)
 
     def test_compile_kernel_accepts_named_array_symbol_default(self):

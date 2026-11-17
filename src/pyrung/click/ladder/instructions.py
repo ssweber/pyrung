@@ -277,8 +277,9 @@ class _InstructionMixin:
             self._raise_issue(
                 path=f"{path}.value",
                 message=(
-                    "fill() of one register exports as a Copy, and a Copy between text and "
-                    "a number converts. Write copy() with convert= to say which conversion."
+                    "fill() of one register exports as a CLICK Copy. A Copy between text "
+                    "and a number converts the value. Use copy() with convert= to choose "
+                    "the conversion."
                 ),
                 source=instruction,
             )

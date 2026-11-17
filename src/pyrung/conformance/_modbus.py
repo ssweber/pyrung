@@ -527,7 +527,8 @@ async def _await_program_hash(client: Any, endpoint: Endpoint, timeout: float) -
         lambda: _read_ds(client, PROGRAM_HASH_REGISTER, 1),
         lambda regs: regs[0] != 0,
         timeout,
-        f"DS{PROGRAM_HASH_REGISTER} stayed 0 on {endpoint}: the conformance program is not running",
+        f"DS{PROGRAM_HASH_REGISTER} on {endpoint} stayed 0, so the conformance program is not "
+        "running. Load the exported project and put the PLC in RUN.",
     )
     return found
 
@@ -559,8 +560,9 @@ async def _drive(
             )
         if found != build.program_hash:
             raise BuildMismatchError(
-                f"{endpoint} runs program layout {found}; these groups are layout "
-                f"{build.program_hash} ({', '.join(g.subroutine for g in build.groups)}). "
+                f"{endpoint} runs a program with layout hash {found}, but these groups build "
+                f"layout hash {build.program_hash}: "
+                f"{', '.join(g.subroutine for g in build.groups)}. "
                 "Export the project again and load it."
             )
 
@@ -573,8 +575,9 @@ async def _drive(
                 continue
             where = "main and its helper subroutines" if g.group.in_main else g.subroutine
             note = (
-                f"{where} is stale: repush (DS{g.hash_register} reads {group_hash}, "
-                f"this build writes {g.group_hash})"
+                f"{where} is stale. Copy this build's {where} to CLICK and write it to "
+                f"the PLC. DS{g.hash_register} reads {group_hash}, and this build writes "
+                f"{g.group_hash}."
             )
             results[g.name] = [
                 CaseResult(

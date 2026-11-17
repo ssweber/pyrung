@@ -43,23 +43,23 @@ class TestParseDuration:
         assert parse_duration(" T#1min30s ") == 90_000
 
     def test_empty_string(self):
-        with pytest.raises(ValueError, match="empty duration"):
+        with pytest.raises(ValueError, match="the duration is empty"):
             parse_duration("")
 
     def test_whitespace_only(self):
-        with pytest.raises(ValueError, match="empty duration"):
+        with pytest.raises(ValueError, match="the duration is empty"):
             parse_duration("   ")
 
     def test_no_unit(self):
-        with pytest.raises(ValueError, match="no duration tokens"):
+        with pytest.raises(ValueError, match="is not a duration"):
             parse_duration("500")
 
     def test_just_unit(self):
-        with pytest.raises(ValueError, match="no duration tokens"):
+        with pytest.raises(ValueError, match="is not a duration"):
             parse_duration("ms")
 
     def test_garbage(self):
-        with pytest.raises(ValueError, match="no duration tokens"):
+        with pytest.raises(ValueError, match="is not a duration"):
             parse_duration("hello")
 
     def test_trailing_garbage(self):

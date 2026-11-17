@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.effect_observation import write_replay_scan_ids
 from pyrung.core.analysis.pilot.execution import (
@@ -113,7 +114,9 @@ def _observe_intrascan_act_occurrence(
 
     act = attempt.bearing.act
     if not isinstance(act, (ProgramScan, IntrascanPulse)):
-        raise TypeError("intrascan occurrence observation requires a typed intrascan act")
+        raise TypeError(
+            internal_error("intrascan occurrence observation requires a typed intrascan act")
+        )
     projection = attempt.projection_at(attempt.pulse.scan_before + 1)
     matching = (
         tuple(write for write in projection.writes if act.expected_write.matches(write))

@@ -35,7 +35,7 @@ def test_parse_args_rejects_omitted_required_field() -> None:
 
 
 def test_parse_args_rejects_invalid_type() -> None:
-    with pytest.raises(_ParseError, match="Invalid type for field: program"):
+    with pytest.raises(_ParseError, match="Field program cannot take a value of type int"):
         parse_args(_LaunchArgs, {"program": 123}, error=_ParseError)
 
 
@@ -50,7 +50,7 @@ def test_parse_args_applies_field_coercer() -> None:
 
 
 def test_parse_args_rejects_failed_coercion() -> None:
-    with pytest.raises(_ParseError, match="Invalid value for field: variablesReference"):
+    with pytest.raises(_ParseError, match="Field variablesReference cannot take the value 'nope'"):
         parse_args(
             _VariablesArgs,
             {"variablesReference": "nope"},

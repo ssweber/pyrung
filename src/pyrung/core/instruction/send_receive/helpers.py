@@ -41,7 +41,9 @@ def _addresses_for_count(bank: str, start: int, count: int) -> tuple[int, ...]:
         end = start + count - 1
         if end > cfg.max_addr:
             raise ValueError(
-                f"{bank} range overflow: start {start}, count {count} exceeds {cfg.max_addr}"
+                f"{count} {bank} addresses from {bank} address {start} run past "
+                f"{bank} address {cfg.max_addr}, the last one. "
+                "Use a shorter source or dest, or an earlier remote_start."
             )
         return tuple(range(start, end + 1))
 
@@ -53,7 +55,8 @@ def _addresses_for_count(bank: str, start: int, count: int) -> tuple[int, ...]:
             current += 1
         if current > cfg.max_addr:
             raise ValueError(
-                f"{bank} range overflow: start {start}, count {count} exceeds valid addresses"
+                f"{count} {bank} addresses from {bank} address {start} run past the last "
+                f"valid {bank} address. Use a shorter source or dest, or an earlier remote_start."
             )
         addresses.append(current)
     return tuple(addresses)
@@ -92,7 +95,8 @@ def _normalize_operand_count(operand: Tag | BlockRange, count: int | None) -> in
     effective = expected if count is None else count
     if effective != expected:
         raise ValueError(
-            f"count mismatch: operand resolves to {expected} tag(s) but count={effective}"
+            f"count={effective} does not match the {expected} tag(s) in the source or dest. "
+            f"Leave count out, or set it to {expected}."
         )
     return expected
 

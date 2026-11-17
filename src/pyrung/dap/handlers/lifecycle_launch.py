@@ -166,7 +166,11 @@ def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
     """Reconstruct *runner* with initial state loaded from a Click CSV snapshot."""
     tags_mod = _find_project_tags_module(project_dir)
     if tags_mod is None:
-        raise ValueError("Cannot load snapshot: no TagMap found in project")
+        raise ValueError(
+            "Cannot load snapshot. pyrung found no module in the program's folder that "
+            "defines a TagMap named mapping. Put the TagMap in a module, such as tags.py, "
+            "that the program imports."
+        )
     mapping: TagMap = tags_mod.mapping
     # Generated projects name plain addresses on the Click banks themselves
     # rather than in the TagMap, so seed those slots too.
@@ -212,7 +216,10 @@ def load_program(
     on the PLC a launch would build.
     """
     if not program_path.is_file():
-        raise adapter.DAPAdapterError(f"launch.program file not found: {program_path}")
+        raise adapter.DAPAdapterError(
+            f"The program file {program_path} does not exist. "
+            "Check program in your launch configuration."
+        )
 
     previous_dap_flag = os.environ.get("PYRUNG_DAP_ACTIVE")
     os.environ["PYRUNG_DAP_ACTIVE"] = "1"
@@ -230,7 +237,9 @@ def load_program(
 
     with adapter._state_lock:
         if adapter._thread_running_locked():
-            raise adapter.DAPAdapterError("Cannot launch while continue is running")
+            raise adapter.DAPAdapterError(
+                "Cannot launch while the debugger is running scans. Pause first."
+            )
         adapter._clear_debug_registrations_locked()
         adapter._runner = runner
         adapter._scan_gen = None
@@ -326,9 +335,16 @@ def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
     if len(programs) == 1:
         return PLC(programs[0])
 
+    if not runners and not programs:
+        raise adapter.DAPAdapterError(
+            "The program defines no PLC and no Program. Define one, or assign the PLC you "
+            "want to debug to a variable named runner."
+        )
     raise adapter.DAPAdapterError(
-        "Launch script must provide 'runner' as PLC, or define exactly one PLC "
-        f"or exactly one Program. Found {len(runners)} PLC(s), {len(programs)} Program(s)."
+        "pyrung cannot tell which PLC to debug. "
+        f"Found {len(runners)} PLC(s), {len(programs)} Program(s). "
+        "Define exactly one PLC or one Program, or assign the PLC you want to debug "
+        "to a variable named runner."
     )
 
 

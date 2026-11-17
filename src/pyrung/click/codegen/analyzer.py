@@ -68,8 +68,8 @@ def _strip_wire_prefix(cell: str) -> str:
 def _warn_bypassed_contact(label: str) -> None:
     """Warn when imported topology shorts around a contact cell."""
     warnings.warn(
-        f"Imported ladder topology bypasses contact {label!r}; "
-        "this condition was omitted from generated logic.",
+        f"In the imported ladder, a wire runs around contact {label!r}, so the contact "
+        "has no effect. The generated code leaves the contact out.",
         stacklevel=3,
     )
 
@@ -85,9 +85,9 @@ def _warn_dropped_contact(label: str, row: int) -> None:
     names both and prescribes no fix.
     """
     warnings.warn(
-        f"Imported ladder rung drops contact {label!r} (row {row}): it is present in the "
-        "source grid but is not connected into any output, so it was omitted from generated "
-        "logic. The source ladder is malformed or the codec produced invalid topology.",
+        f"Contact {label!r} on row {row} of the imported rung connects to no output. The "
+        "generated code leaves it out. Either the ladder is malformed, or pyrung decoded "
+        "its wiring wrongly.",
         stacklevel=2,
     )
 
@@ -599,7 +599,9 @@ def _sp_reduce(
     # Non-SP fallback: Shannon expansion
     if edges:
         warnings.warn(
-            "Rung contains bridge topology; resolved via Shannon expansion",
+            "The rung has a bridge, a contact that joins two parallel branches. The "
+            "generated code rewrites the rung as branches with the same logic. Some "
+            "contacts may appear more than once.",
             stacklevel=2,
         )
         e = _pick_shannon_edge(source, sink, edges)
@@ -962,7 +964,8 @@ def _analyze_single_rung(
             )
         if _rows_have_content(rows):
             raise ValueError(
-                "Rung contains condition/output content that did not resolve to a complete output object."
+                "The rung has contacts or an instruction, but no path joins the left rail to "
+                "an output. Wire the rung to an output instruction, or delete the rung."
             )
         return _AnalyzedRung(
             comment=comment,
@@ -1036,9 +1039,8 @@ def _analyze_single_rung(
         if validate:
             detail = ", ".join(f"{label} (row {drow})" for label, drow in dropped)
             raise ValueError(
-                "Rung drops condition(s) present in the source but not connected into any "
-                f"output: {detail}. The source ladder is malformed or the codec produced "
-                "invalid topology."
+                f"The rung has contacts that connect to no output: {detail}. Either the "
+                "ladder is malformed, or pyrung decoded its wiring wrongly."
             )
 
     # Record each output as the source wired it (full condition + pins). After grouping,

@@ -88,6 +88,7 @@ from pyrung.core.instruction.send_receive import (
 from pyrung.core.kernel import PROVE_FOR_ITERATION_CAP
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
+from pyrung.core.rung import dsl_call
 from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
@@ -425,7 +426,10 @@ def compile_instruction(
         return []
 
     loc = _source_location(instr)
-    raise NotImplementedError(f"Unsupported instruction type: {type(instr).__name__} at {loc}")
+    call = dsl_call(instr)
+    raise NotImplementedError(
+        f"A code.py cannot run {call} at {loc}. Remove {call} from the program for the P1AM."
+    )
 
 
 def compile_rung(
@@ -687,7 +691,7 @@ def _compile_function_call_instruction(
         enabled_body.extend(
             [
                 f"if {result_var} is None:",
-                f'    raise TypeError("{_in_quotes(f"run_function: {fn_name!r} returned None but outs were declared")}")',
+                f'    raise TypeError("{_in_quotes(f"run_function: {fn_name!r} returned None. Return a dict with a key for each name in outs=.")}")',
             ]
         )
         for key, target in instr._outs.items():
@@ -696,7 +700,7 @@ def _compile_function_call_instruction(
                 [
                     f"if {key!r} not in {result_var}:",
                     "    raise KeyError(",
-                    f'        f"{_in_f_string(f"run_function: {fn_name!r} missing key {key!r}; got ")}{{sorted({result_var})}}"',
+                    f'        f"{_in_f_string(f"run_function: {fn_name!r} returned no {key!r} key. It returned the keys ")}{{sorted({result_var})}}."',
                     "    )",
                 ]
             )
@@ -723,7 +727,7 @@ def _compile_enabled_function_call_instruction(
         lines.extend(
             [
                 f"{' ' * indent}if {result_var} is None:",
-                f'{" " * (indent + 4)}raise TypeError("{_in_quotes(f"run_enabled_function: {fn_name!r} returned None but outs were declared")}")',
+                f'{" " * (indent + 4)}raise TypeError("{_in_quotes(f"run_enabled_function: {fn_name!r} returned None. Return a dict with a key for each name in outs=.")}")',
             ]
         )
         for key, target in instr._outs.items():
@@ -732,7 +736,7 @@ def _compile_enabled_function_call_instruction(
                 [
                     f"{' ' * indent}if {key!r} not in {result_var}:",
                     f"{' ' * (indent + 4)}raise KeyError(",
-                    f'{" " * (indent + 8)}f"{_in_f_string(f"run_enabled_function: {fn_name!r} missing key {key!r}; got ")}{{sorted({result_var})}}"',
+                    f'{" " * (indent + 8)}f"{_in_f_string(f"run_enabled_function: {fn_name!r} returned no {key!r} key. It returned the keys ")}{{sorted({result_var})}}."',
                     f"{' ' * (indent + 4)})",
                 ]
             )

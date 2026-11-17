@@ -460,7 +460,7 @@ def test_replay_to_rejects_invalid_target() -> None:
 
     with pytest.raises(ValueError, match="must be >= 0"):
         source.replay_to(-1)
-    with pytest.raises(ValueError, match="beyond current tip"):
+    with pytest.raises(ValueError, match="is after the latest scan"):
         source.replay_to(source.current_state.scan_id + 1)
 
 

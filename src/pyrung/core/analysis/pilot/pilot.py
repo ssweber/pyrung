@@ -22,7 +22,9 @@ import pyrung.core.analysis.pilot.requirement_repair as _requirement_repair
 import pyrung.core.analysis.pilot.target_route as _target_route
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
 import pyrung.core.analysis.pilot.theory_recording as _theory_recording
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.graph import (
+    NO_NEXT_STEP,
     PlanStep,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
@@ -131,7 +133,7 @@ from pyrung.core.analysis.pilot.world_key import (
 )
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.coast_run import CoastMemo, memo_of
-from pyrung.core.rung_firings import SearchQuestionRefused
+from pyrung.core.rung_firings import SETTLE_SCAN_LIMIT, SearchQuestionRefused
 from pyrung.core.runner import SearchStopped
 
 if TYPE_CHECKING:
@@ -197,14 +199,21 @@ def _with_avoid_reason(
         frontier = fr[0][0] if fr else ctx.target.tag
     else:
         frontier = ctx.target.tag
+    conditions = "condition" if len(names) == 1 else "conditions"
+    trying = (
+        f"change {frontier}"
+        if frontier == ctx.target.tag
+        else f"change {frontier} to reach {ctx.target.tag}"
+    )
     return (
-        f"{base}: avoid excludes {', '.join(names)} (frontier {frontier}, target {ctx.target.tag})"
+        f"{base.rstrip('.')}. The avoid= {conditions} {', '.join(names)} blocked how() "
+        f"while it was trying to {trying}"
     )
 
 
 def _stopped_reason() -> str:
     """Translate internal orientation taxonomy into an honest public stop."""
-    return "No productive next action was found"
+    return NO_NEXT_STEP
 
 
 def _retire_temporal_hypothesis(
@@ -547,19 +556,33 @@ def _pilot_loop_events(
         termination = TheoryTermination.WALL_CLOCK
         assert clock is not None
         reason = _out_of_a_limit(
-            f"wall-clock budget exhausted ({clock.limit_s:g} s)", at_the_stop, ctx
+            f"how() ran out of time after {clock.limit_s:g} s. "
+            "Pass a larger wall_clock_s to search longer",
+            at_the_stop,
+            ctx,
         )
     elif isinstance(stop, SearchOutOfMemory):
         termination = TheoryTermination.BUDGET
-        reason = _out_of_a_limit("memory budget exhausted (about 1 GB held)", at_the_stop, ctx)
+        reason = _out_of_a_limit(
+            "how() stopped because its search held about 1 GB of memory", at_the_stop, ctx
+        )
     elif isinstance(stop, TheoryInvariantError):
         # The search's record of what it tried stopped adding up, so nothing could verify a
         # plan from it.
         termination = TheoryTermination.STUCK
-        reason = _out_of_a_limit(f"how() lost track of its own evidence: {stop}", at_the_stop, ctx)
+        reason = _out_of_a_limit(
+            internal_error(f"how() lost track of its own evidence: {stop}"), at_the_stop, ctx
+        )
     else:
         termination = TheoryTermination.STUCK
-        reason = _out_of_a_limit(f"a question was refused: {stop}", at_the_stop, ctx)
+        refusal = stop.refusal
+        reason = _out_of_a_limit(
+            f"how() stopped because it would have to step {refusal.scans} scans again to read "
+            f"what happened in scans {refusal.first}..{refusal.last}, more than the limit of "
+            f"{SETTLE_SCAN_LIMIT}",
+            at_the_stop,
+            ctx,
+        )
     _theory_recording._run_optional_theory_hook(
         _theory_recording._record_optional_theory_abandoned, state, termination
     )
@@ -1255,8 +1278,8 @@ def _search_events(
                 if changed:
                     continue
             terminal_reason = (
-                "Compass found only exploratory input hypotheses; external guidance "
-                "is required before executing them"
+                "how() stopped, because it has no evidence that any input change it has not "
+                "tried would help. To try one, set it yourself and run how() again"
             )
             yield PilotEvent(
                 "guidance_requested",
@@ -1507,7 +1530,7 @@ def _search_events(
                     frame,
                     _with_avoid_reason(
                         (
-                            "The entry observation was rejected"
+                            "how() rejected the program's first scan"
                             if isinstance(act, ObserveScan)
                             else "The exact intrascan scan was rejected"
                         ),
@@ -1554,7 +1577,7 @@ def _search_events(
                     state,
                     ctx,
                     frame,
-                    "working theory's exact temporal Bearing was rejected",
+                    "how() rejected a step that its current plan needs",
                     journal_channel_tags,
                     journal_acc_names,
                     candidate_count=1,
@@ -1745,8 +1768,8 @@ def _search_events(
     if not reached:
         frame = last_frame
         reason = _with_avoid_reason(
-            f"budget exhausted ({state.search_scans} search work units + "
-            f"{state.budget.dwell} productive dwell scans)",
+            f"how() used up max_scans after {state.search_scans} units of search work and "
+            f"{state.budget.dwell} scans of waiting. Pass a larger max_scans to search further",
             state,
             ctx,
             frame,

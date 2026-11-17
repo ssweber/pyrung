@@ -9,6 +9,7 @@ from pyrung.circuitpy.codegen.context import (
     ModbusClientJobSpec,
     ModbusClientSymbolSpec,
 )
+from pyrung.core._messages import needs_modbus_client
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusRtuTarget,
@@ -19,6 +20,7 @@ from pyrung.core.instruction.send_receive import (
 from pyrung.core.memory_block import (
     BlockRange,
 )
+from pyrung.core.rung import dsl_call
 from pyrung.core.tag import Tag
 
 
@@ -52,32 +54,34 @@ def _modbus_client_spec_for_instruction(
     if existing is not None:
         return existing
     if ctx.modbus_client is None:
-        raise ValueError(
-            f"{type(instr).__name__} requires generate_circuitpy(..., modbus_client=ModbusClientConfig(...))"
-        )
+        raise ValueError(needs_modbus_client(dsl_call(instr)))
 
     targets = {target.name: target for target in ctx.modbus_client.targets}
     if instr.target_name not in targets:
-        raise ValueError(f"Unknown Modbus client target: {instr.target_name!r}")
+        raise ValueError(
+            f"ModbusClientConfig has no target named {instr.target_name!r}. Add a target "
+            "with that name to its targets, or fix the name in the instruction."
+        )
     # The generated code takes its connection from ModbusClientConfig, so a CLICK-only form
     # on the instruction's own target would be dropped without a word.
     raw = instr.raw_target
     if isinstance(instr.device_id, Tag):
         raise TypeError(
-            f"target {instr.target_name!r}: the P1AM takes device_id as an int, "
-            f"not a tag ({instr.device_id.name!r})"
+            f"Modbus target {instr.target_name!r} reads its device_id from the tag "
+            f"{instr.device_id.name!r}. The P1AM takes device_id as an int. Pass a number."
         )
     if isinstance(raw, ModbusTcpTarget) and raw.com_port != "ethernet":
         raise ValueError(
-            f"target {instr.target_name!r}: the P1AM talks Modbus TCP over Ethernet only, "
-            f"got com_port={raw.com_port!r}"
+            f"Modbus target {instr.target_name!r} has com_port={raw.com_port!r}. The P1AM "
+            "uses Modbus TCP over Ethernet only. Set com_port to 'ethernet'."
         )
 
     if instr.bank is None:
         # Raw ModbusAddress path (TCP only).
         if isinstance(instr.raw_target, ModbusRtuTarget):
             raise ValueError(
-                "ModbusRtuTarget is not yet supported for CircuitPython code generation"
+                "CircuitPython code generation does not support a ModbusRtuTarget. "
+                "Use a ModbusTcpTarget."
             )
         assert instr.remote_address is not None
         ra = instr.remote_address

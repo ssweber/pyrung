@@ -29,7 +29,7 @@ class CopyConverter:
         """Allow ``to_binary()`` to work the same as ``to_binary``."""
         if not kwargs:
             return self
-        raise TypeError(f"converter with mode {self.mode!r} does not accept arguments")
+        raise TypeError(f"to_{self.mode} takes no arguments. Only to_text() takes options.")
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def _normalize_termination_code(value: int | str | None) -> int | None:
     if not isinstance(value, int):
         raise TypeError("termination_code must be int, str, or None")
     if value < 0 or value > 127:
-        raise ValueError("termination_code must be in ASCII range 0..127")
+        raise ValueError(f"termination_code must be in ASCII range 0..127, got {value}.")
     return value
 
 

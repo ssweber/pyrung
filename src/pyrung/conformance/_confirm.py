@@ -6,8 +6,8 @@ run drops each case that failed.  A case counts as confirmed while its recorded 
 matches the hash it runs with.  If you rewrite a case (its sentence, expectation, ladder
 or slot), it stays unconfirmed until it passes on a CLICK again.
 
-An in-process-only case is recorded with an empty hash.  No CLICK runs it, so its entry
-says that someone checked it another way.
+An entry with an empty hash marks an in-process-only case that someone checked another
+way.  No CLICK runs such a case, so a run never adds this entry.  It is written by hand.
 
 The record is a TOML file that the suite keeps under version control::
 

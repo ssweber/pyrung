@@ -51,7 +51,7 @@ def test_unselected_seed_departure_does_not_start_independent_blocker_search() -
 
     finished = list(pilot_events(PLC(program), target, max_scans=40))[-1].data
     assert finished["reached"] is False
-    assert "No productive next action" in finished["reason"]
+    assert "how() found no next step that makes progress" in finished["reason"]
 
     # The last resort may try the guard without a stated reason.  A plan that needs it names it.
     plan = pilot_how(PLC(program), target, max_scans=40)
@@ -69,7 +69,7 @@ def test_unselected_cold_faults_do_not_compose_as_retained_rebases() -> None:
     assert not plan.reachable
     assert not plan.ordered_steps
     assert plan.reason is not None
-    assert "No productive next action" in plan.reason
+    assert "how() found no next step that makes progress" in plan.reason
 
 
 def test_post_startup_invocation_does_not_rewind_to_earliest_retained_floor() -> None:

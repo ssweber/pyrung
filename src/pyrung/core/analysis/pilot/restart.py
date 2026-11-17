@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pyrung.core.analysis.graph import NO_NEXT_STEP
 from pyrung.core.analysis.pilot.avoid import _avoid_weighed_names, _AvoidCheckRaised
 from pyrung.core.analysis.pilot.budget import WallClock
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
@@ -71,27 +72,31 @@ class RestartReport:
         line = f"{number}. Stop the program and go back to RUN."
         if self.released_forces:
             line += f" This releases the force on {', '.join(self.released_forces)}."
-        reason = (self.session_reason or "No productive next action was found").removeprefix(
-            "pilot: "
+        reason = (self.session_reason or NO_NEXT_STEP).removeprefix("pilot: ")
+        return (
+            f"{line}\n   how() could not reach the goal without a restart. "
+            f"Reason: {reason.rstrip('.')}."
         )
-        return f"{line}\n   how() found no way from where the session is: {reason.rstrip('.')}."
 
     def lines(self) -> list[str]:
         """Return the report as text, for a plan that stopped."""
         if self.avoided:
             return [
-                f"Restart: not tried, the state after it is avoided ({', '.join(self.avoided)})."
+                "Restart: not tried, because avoid= rules out the state after a restart "
+                f"({', '.join(self.avoided)})."
             ]
         if self.no_answer:
             return ["Restart: how() ran out of time before it had an answer."]
         if self.raised is not None:
-            return [f"Restart: no answer, on a scan after it avoid check {self.raised}."]
+            return [
+                f"Restart: no answer. On a scan after the restart, the avoid check {self.raised}."
+            ]
         if self.clear is None:
             kept = _values(self.survivors)
             verb = "survives" if len(self.survivors) == 1 else "survive"
             return [
-                "Restart: stopping the program and going back to RUN does not reach it either"
-                + (f" ({kept} {verb})." if kept else ".")
+                "Restart: stopping the program and going back to RUN does not reach the goal "
+                "either." + (f" {kept} {verb} the restart." if kept else "")
             ]
         needed = {tag: self.survivors[tag] for tag in self.clear}
         verb = "survives" if len(needed) == 1 else "survive"
@@ -103,13 +108,17 @@ class RestartReport:
         else:
             advice = "Write those by hand while stopped, or make them non-retentive."
         lines = [
-            f"Restart: alone it falls short, because {_values(needed)} {verb} it.",
-            f"  With {wanted} written while stopped, a restart reaches it in "
+            f"Restart: a restart alone does not reach the goal, because {_values(needed)} "
+            f"{verb} the restart.",
+            f"  With {wanted} written while stopped, a restart reaches the goal in "
             f"{self.clear_scans} {scans}.",
             f"  {advice}",
         ]
         if self.clear_untried:
-            lines.append("  how() ran out of time checking, so not all of them may be needed.")
+            lines.append(
+                "  how() ran out of time before it checked every tag, so you may not need to "
+                "write all of them."
+            )
         for tag, rungs in (self.written_by or {}).items():
             shown = ", ".join(rungs[:_RUNGS_SHOWN])
             more = len(rungs) - _RUNGS_SHOWN
@@ -126,12 +135,11 @@ class ReleaseReport:
     session_reason: str | None = None
 
     def step_line(self, number: int = 1) -> str:
-        reason = (self.session_reason or "No productive next action was found").removeprefix(
-            "pilot: "
-        )
+        reason = (self.session_reason or NO_NEXT_STEP).removeprefix("pilot: ")
+        force = "the force" if len(self.forces) == 1 else "the forces"
         return (
-            f"{number}. Release the force on {', '.join(self.forces)}.\n"
-            f"   how() found no way with it on: {reason.rstrip('.')}."
+            f"{number}. Release {force} on {', '.join(self.forces)}.\n"
+            f"   how() could not reach the goal with {force} on. Reason: {reason.rstrip('.')}."
         )
 
 

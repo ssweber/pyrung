@@ -12,6 +12,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol
 
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.candidate_policy import _holds_defeat_needed
 from pyrung.core.analysis.pilot.causal import chase_chain_tags
 from pyrung.core.analysis.pilot.constrained_reachability import (
@@ -99,7 +100,7 @@ def correction_identity(pilot_rungs: Iterable[PilotRung]) -> CorrectionIdentity:
     identities: list[tuple[Any, ...]] = []
     for rung in pilot_rungs:
         if not isinstance(rung, PilotRung):
-            raise TypeError("correction identity requires executable PilotRungs")
+            raise TypeError(internal_error("correction identity requires executable PilotRungs"))
         identities.append(_rung_identity(rung))
     return tuple(sorted(identities, key=repr))
 
@@ -379,7 +380,7 @@ def _retained_scoped_rungs(
         tag, value = _proposal_pair(proposal)
         destination = plc._tag_known_or_reached(tag)
         if destination is None:
-            raise KeyError(f"retained correction tag {tag!r} is not a program tag")
+            raise KeyError(internal_error(f"retained correction tag {tag!r} is not a program tag"))
         continuation = CompareEq(destination, value)
         guard = AnyCondition(
             occurrence_scope,
@@ -410,12 +411,16 @@ def _exploratory_correction_rungs(
     if channel_name is not None:
         channel = plc._tag_known_or_reached(channel_name)
         if channel is None:
-            raise KeyError(f"incident channel {channel_name!r} is not a program tag")
+            raise KeyError(
+                internal_error(f"incident channel {channel_name!r} is not a program tag")
+            )
         source_scope = CompareEq(channel, incident.before_snap.get(channel_name))
     for tag_name, value in progress_mark:
         tag = plc._tag_known_or_reached(tag_name)
         if tag is None:
-            raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
+            raise KeyError(
+                internal_error(f"progress receipt tag {tag_name!r} is not a program tag")
+            )
         progress_coordinates.append(CompareEq(tag, value))
     if source_scope is None and not progress_coordinates:
         return proposals

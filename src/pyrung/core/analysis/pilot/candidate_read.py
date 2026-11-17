@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
@@ -333,7 +334,9 @@ class CandidateRead:
     def __post_init__(self) -> None:
         if self.continuation is not None and self.diagnosis is not None:
             raise ValueError(
-                "a candidate read cannot both authorize continuation and diagnose stuck"
+                internal_error(
+                    "a candidate read cannot both authorize continuation and diagnose stuck"
+                )
             )
 
 

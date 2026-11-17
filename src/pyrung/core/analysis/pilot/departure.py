@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import (
     AwaitedAction,
@@ -113,7 +114,9 @@ class ContinuationEvidence:
 
     def __post_init__(self) -> None:
         if self.awaited_action is not None and not self.awaited_action_inspected:
-            raise ValueError("an awaited action requires an inspected awaited action")
+            raise ValueError(
+                internal_error("an awaited action requires an inspected awaited action")
+            )
 
 
 @dataclass(frozen=True)
@@ -170,7 +173,9 @@ def _settle_departure(
     session = CoastSession(fork, kind="departure-settle")
     receipt = session.settle_landing(channel_tag)
     if receipt.kernel_scans != len(session.kernel_scan_ids):
-        raise RuntimeError("settlement kernel accounting does not match its session")
+        raise RuntimeError(
+            internal_error("settlement kernel accounting does not match its session")
+        )
     return (
         fork,
         ExecutionReceipt(

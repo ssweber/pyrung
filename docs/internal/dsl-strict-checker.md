@@ -52,8 +52,7 @@ Use this for generated code, metaprogramming, or cases where you know what you'r
 ## Error format
 
 ```
-filename.py:42: forbidden Python construct 'if/elif/else' in strict DSL scope.
-Use `rung(condition)` to express conditional logic. Opt out with Program(strict=False).
+filename.py:42: Python 'if/elif/else' is not allowed in a strict Program or subroutine. Use `Rung(condition)` to express conditional logic. Opt out with Program(strict=False).
 ```
 
 Errors include the source file and line number, the construct name, the DSL-idiomatic alternative, and how to opt out.

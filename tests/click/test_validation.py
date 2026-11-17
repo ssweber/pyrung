@@ -1150,7 +1150,7 @@ class TestLocationFormatting:
         assert len(ptr_findings) > 0
         loc = ptr_findings[0].location
         # Should contain deterministic location format
-        assert loc.startswith("main.rung[0].")
+        assert loc.startswith("main.rung[1].")
         assert "instruction[1](CopyInstruction)" in loc
         assert "instruction.source" in loc
 
@@ -1595,7 +1595,7 @@ class TestImmediateValidation:
 
         report = validate_click_program(prog, tag_map, mode="strict")
         found = [f for f in report.errors if f.code == CLK_IMMEDIATE_CONTACT_MUST_BE_X]
-        assert [f.location for f in found] == ["main.rung[0].branch[0].condition"]
+        assert [f.location for f in found] == ["main.rung[1].branch[0].condition"]
 
     def test_immediate_contact_in_a_nested_loop_body_is_reported_once(self):
         Start = Bool("Start")

@@ -94,15 +94,19 @@ class ModbusAddress:
                 # Caller explicitly set register_type — must match
                 if self.register_type != inferred_rt:
                     raise ValueError(
-                        f"984 address {addr} implies {inferred_rt.name}, "
-                        f"but register_type={self.register_type.name}"
+                        f"Address {addr} is a {inferred_rt.name} address, but you passed "
+                        f"register_type={self.register_type.name}. Leave register_type out, "
+                        f"or set it to {inferred_rt.name}."
                     )
             else:
                 object.__setattr__(self, "register_type", inferred_rt)
             addr = raw_addr
         # --- range check on resolved raw address ---
         if addr < 0 or addr > 0xFFFE:
-            raise ValueError(f"address must be in 0..0xFFFE, got {addr}")
+            raise ValueError(
+                f"Modbus address {addr} is out of range. Use 0..0xFFFE, a 984 address such "
+                "as 400001, or a hex string such as '0h'."
+            )
         if not isinstance(self.register_type, RegisterType):
             raise TypeError(
                 f"register_type must be RegisterType, got {type(self.register_type).__name__}"
@@ -183,12 +187,12 @@ class ModbusTcpTarget(_TargetEquality):
         if not isinstance(self.port, int):
             raise TypeError(f"port must be int, got {type(self.port).__name__}")
         if self.port < 1 or self.port > 65535:
-            raise ValueError("port must be in 1..65535")
+            raise ValueError(f"port must be in 1..65535, got {self.port}.")
         _check_device_id(self.device_id, 255)
         if not isinstance(self.timeout_ms, int):
             raise TypeError(f"timeout_ms must be int, got {type(self.timeout_ms).__name__}")
         if self.timeout_ms <= 0:
-            raise ValueError("timeout_ms must be > 0")
+            raise ValueError(f"timeout_ms must be > 0, got {self.timeout_ms}.")
         if not isinstance(self.com_port, str):
             raise TypeError(f"com_port must be str, got {type(self.com_port).__name__}")
         if self.com_port not in VALID_TCP_COM_PORTS:
@@ -229,23 +233,23 @@ class ModbusRtuTarget(_TargetEquality):
         if not isinstance(self.baudrate, int):
             raise TypeError(f"baudrate must be int, got {type(self.baudrate).__name__}")
         if self.baudrate <= 0:
-            raise ValueError("baudrate must be > 0")
+            raise ValueError(f"baudrate must be > 0, got {self.baudrate}.")
         if not isinstance(self.bytesize, int):
             raise TypeError(f"bytesize must be int, got {type(self.bytesize).__name__}")
         if self.bytesize not in {5, 6, 7, 8}:
-            raise ValueError("bytesize must be in {5, 6, 7, 8}")
+            raise ValueError(f"bytesize must be 5, 6, 7 or 8, got {self.bytesize}.")
         if not isinstance(self.parity, str):
             raise TypeError(f"parity must be str, got {type(self.parity).__name__}")
         if self.parity not in {"N", "E", "O", "M", "S"}:
-            raise ValueError("parity must be one of 'N', 'E', 'O', 'M', 'S'")
+            raise ValueError(f"parity must be one of 'N', 'E', 'O', 'M', 'S', got {self.parity!r}.")
         if not isinstance(self.stopbits, int):
             raise TypeError(f"stopbits must be int, got {type(self.stopbits).__name__}")
         if self.stopbits not in {1, 2}:
-            raise ValueError("stopbits must be 1 or 2")
+            raise ValueError(f"stopbits must be 1 or 2, got {self.stopbits}.")
         if not isinstance(self.timeout_ms, int):
             raise TypeError(f"timeout_ms must be int, got {type(self.timeout_ms).__name__}")
         if self.timeout_ms <= 0:
-            raise ValueError("timeout_ms must be > 0")
+            raise ValueError(f"timeout_ms must be > 0, got {self.timeout_ms}.")
         if not isinstance(self.com_port, str):
             raise TypeError(f"com_port must be str, got {type(self.com_port).__name__}")
         if self.com_port not in VALID_COM_PORTS:

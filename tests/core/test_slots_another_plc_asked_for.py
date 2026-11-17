@@ -130,7 +130,7 @@ def test_a_slot_the_users_code_indexed_still_refuses_a_reset() -> None:
     _program, slots, _lamp = _pointer_program()
     slots.slot(2, retentive=True)
     _ = slots[2]
-    with pytest.raises(ValueError, match="after tag materialization"):
+    with pytest.raises(ValueError, match="has already indexed or mapped it"):
         slots.slot(2).reset()
 
 

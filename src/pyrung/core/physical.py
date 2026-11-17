@@ -22,6 +22,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, overload
 
+_DURATION_ADVICE = " Write a time with units, such as '500ms' or '2s'."
 _DURATION_TOKEN = re.compile(r"(\d+(?:\.\d+)?)\s*(ms|min|s|m|h|d)")
 
 _UNIT_TO_MS: dict[str, float] = {
@@ -46,7 +47,7 @@ def parse_duration(text: str) -> int:
     if stripped.startswith("T#"):
         stripped = stripped[2:].strip()
     if not stripped:
-        raise ValueError("empty duration string")
+        raise ValueError(f"the duration is empty.{_DURATION_ADVICE}")
 
     total = 0.0
     pos = 0
@@ -56,7 +57,7 @@ def parse_duration(text: str) -> int:
         if match.start() != pos:
             bad = stripped[pos : match.start()].strip()
             if bad:
-                raise ValueError(f"unexpected '{bad}' in duration '{text}'")
+                raise ValueError(f"unexpected '{bad}' in duration '{text}'.{_DURATION_ADVICE}")
         value = float(match.group(1))
         unit = match.group(2)
         total += value * _UNIT_TO_MS[unit]
@@ -64,11 +65,11 @@ def parse_duration(text: str) -> int:
         found = True
 
     if not found:
-        raise ValueError(f"no duration tokens in '{text}'")
+        raise ValueError(f"'{text}' is not a duration.{_DURATION_ADVICE}")
 
     trailing = stripped[pos:].strip()
     if trailing:
-        raise ValueError(f"unexpected '{trailing}' in duration '{text}'")
+        raise ValueError(f"unexpected '{trailing}' in duration '{text}'.{_DURATION_ADVICE}")
 
     return int(total)
 
@@ -295,7 +296,7 @@ PHYSICAL_KINDS: tuple[PhysicalKind, ...] = (
                 "flasher_off",
                 "flasher",
                 "Off time",
-                "How long it stays off between blinks.",
+                "How long the feedback stays off between blinks.",
                 "500ms",
             ),
         ),
@@ -595,7 +596,9 @@ class Physical:
         for key_name, raw in values.items():
             key = PHYSICAL_KEYS.get(key_name)
             if key is None:
-                raise ValueError(f"Physical {name!r}: unknown key {key_name!r}.")
+                raise ValueError(
+                    f"Physical {name!r}: unknown key {key_name!r}. Keys: {_kinds_hint()}."
+                )
             if key.is_flag:
                 if raw is not True:
                     raise ValueError(f"{key_name} is a bare flag. Write {key_name} alone.")

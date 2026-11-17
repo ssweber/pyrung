@@ -88,8 +88,7 @@ def resolve_tag_ctx(
     if isinstance(target, ImmediateRef):
         if not isinstance(target.value, Tag):
             raise TypeError(
-                "Immediate wrapper target must wrap a Tag in this context, "
-                f"got {type(target.value).__name__}."
+                f"An immediate() output target must be a Tag, got {type(target.value).__name__}."
             )
         return target.value
     # Regular Tag

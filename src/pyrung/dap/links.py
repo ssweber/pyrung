@@ -248,7 +248,7 @@ def fit_bench_links(
             continue
         project = declared.get(fb)
         if project is not None and same_wiring(coupling, project):
-            notes.append(f"Bench link on {fb} is now in the program.")
+            notes.append(f"Dropped the bench link on {fb}: {in_program(fb)}.")
             dropped.append((fb, entry, "in program", fb))
             continue
         problem = link_problem(runner, coupling)
@@ -266,13 +266,20 @@ def fit_bench_links(
     return kept, notes
 
 
+def in_program(tag: str) -> str:
+    """The reason a bench link on *tag* is dropped once the program declares the same link."""
+    return f"the program already links {tag} the same way"
+
+
 def set_link_locked(adapter: Any, coupling: Coupling) -> str:
     """Add or replace the bench link on the coupling's feedback."""
     fb = coupling.fb_name
     project = _declared(adapter).get(fb)
     if project is not None and same_wiring(coupling, project):
-        adapter._bench_links.pop(fb, None)
-        text = f"{fb} already has this link in the program; bench change removed"
+        if adapter._bench_links.pop(fb, None) is not None:
+            text = f"Dropped the bench link on {fb}: {in_program(fb)}."
+        else:
+            text = f"No bench link to add: {in_program(fb)}."
     else:
         adapter._bench_links[fb] = BenchLink(coupling)
         text = f"Linked {enable_text(adapter, coupling)} -> {fb} on the bench"

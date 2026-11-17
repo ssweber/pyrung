@@ -139,7 +139,7 @@ def test_udt_rejects_invalid_declarations():
         class _NoFields:
             pass
 
-    with pytest.raises(TypeError, match="not supported"):
+    with pytest.raises(TypeError, match="is not a tag type"):
 
         @udt(count=1)
         class _BadAnnotation:
@@ -147,7 +147,7 @@ def test_udt_rejects_invalid_declarations():
 
 
 def test_udt_rejects_auto_default_for_non_numeric_type():
-    with pytest.raises(ValueError, match="not numeric"):
+    with pytest.raises(ValueError, match="works only on INT, DINT and WORD"):
 
         @udt(count=1)
         class _BadAuto:
@@ -160,10 +160,10 @@ def test_instance_view_validates_index_and_missing_attributes():
         id: Int
 
     alarms = cast(Any, Alarm)
-    with pytest.raises(IndexError, match="out of range"):
+    with pytest.raises(IndexError, match="has no instance"):
         _ = alarms[0]
 
-    with pytest.raises(IndexError, match="out of range"):
+    with pytest.raises(IndexError, match="has no instance"):
         _ = alarms[3]
 
     with pytest.raises(AttributeError, match="no field"):
@@ -248,9 +248,9 @@ def test_udt_count_one_getitem_supports_only_index_one():
 
     alarm = cast(Any, Alarm)
     assert alarm[1].id is alarm.id
-    with pytest.raises(IndexError, match="out of range"):
+    with pytest.raises(IndexError, match="has no instance"):
         _ = alarm[0]
-    with pytest.raises(IndexError, match="out of range"):
+    with pytest.raises(IndexError, match="has no instance"):
         _ = alarm[2]
 
 

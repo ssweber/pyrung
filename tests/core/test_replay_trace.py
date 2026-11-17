@@ -101,7 +101,7 @@ def test_replay_trace_at_validates_target_scan_id() -> None:
     with pytest.raises(ValueError, match="must be >"):
         source.replay_trace_at(source._initial_scan_id - 1)
 
-    with pytest.raises(ValueError, match="beyond current tip"):
+    with pytest.raises(ValueError, match="is after the latest scan"):
         source.replay_trace_at(source.current_state.scan_id + 1)
 
 
