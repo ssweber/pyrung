@@ -1,14 +1,15 @@
-"""Hardware confirmations: which cases have passed on a real CLICK, as they are now.
+"""Record which conformance cases have passed on a real CLICK, as they are now.
 
-A run against a real CLICK records each case that passed, keyed ``group/id``,
-with the hash of the case's exported rows (``GroupBuild.case_hashes``) and the
-date, and drops each case that failed.  A case counts as confirmed while its
-recorded hash matches the one it runs with, so rewriting a case (its sentence,
-expectation, ladder or slot) leaves it unconfirmed until it passes on a CLICK
-again.  An in-process-only case is recorded with an empty hash: no CLICK runs
-it, so its entry says that someone checked it on one another way.
+A run against a real CLICK records each case that passed, keyed ``group/id``.  The record
+holds the hash of the case's exported rows (``GroupBuild.case_hashes``) and the date.  The
+run drops each case that failed.  A case counts as confirmed while its recorded hash
+matches the hash it runs with.  If you rewrite a case (its sentence, expectation, ladder
+or slot), it stays unconfirmed until it passes on a CLICK again.
 
-The record is a TOML file the suite keeps under version control::
+An in-process-only case is recorded with an empty hash.  No CLICK runs it, so its entry
+says that someone checked it another way.
+
+The record is a TOML file that the suite keeps under version control::
 
     [cases]
     "rungs/branch_sees_rung_entry" = { hash = "af0402ff4ba8", on = "2026-10-30" }
@@ -38,7 +39,7 @@ class Confirmation:
 
 
 def load_confirmations(path: str | Path) -> dict[str, Confirmation]:
-    """The record at *path* (empty if there is none yet), keyed ``group/id``."""
+    """Return the record at *path* (empty if there is none yet), keyed ``group/id``."""
     path = Path(path)
     if not path.exists():
         return {}
@@ -50,10 +51,10 @@ def load_confirmations(path: str | Path) -> dict[str, Confirmation]:
 
 
 def is_confirmed(result: CaseResult, confirmations: Mapping[str, Confirmation]) -> bool:
-    """Whether *result*'s case has passed on a CLICK as it is now.
+    """Return whether *result*'s case has passed on a CLICK as it is now.
 
-    A result from an in-process run has no hash: there its entry's presence
-    is enough.
+    A result from an in-process run has no hash.  For such a result, the presence of its
+    entry is enough.
     """
     entry = confirmations.get(f"{result.group}/{result.case.id}")
     if entry is None:
@@ -66,12 +67,12 @@ def record_confirmations(
 ) -> tuple[list[str], list[str]]:
     """Record the wire *results* of a run against a real CLICK at *path*.
 
-    Each case that passed is written with its hash and the date *on*; each
-    that failed is dropped.  Stale and skipped cases are left as they are.
+    Write each case that passed with its hash and the date *on*.  Drop each case that
+    failed.  Leave stale and skipped cases as they are.
 
     Returns:
         ``(added, dropped)``: the keys that became confirmed and the keys that
-        stopped being so.
+        stopped being confirmed.
     """
     record = load_confirmations(path)
     added: list[str] = []
