@@ -835,7 +835,8 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
             "reset: " + ", ".join(stale)
         )
 
-    # The report describes only what was staged.  The adapter takes it in _commit_reload.
+    # The report reads only what was staged, so it describes exactly what _commit_reload
+    # gives the adapter.
     new_addr = _addresses(binding.tag_map)
     if plain:
         carried, carry_lines = _carry_report(

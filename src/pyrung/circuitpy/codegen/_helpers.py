@@ -389,7 +389,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # A math function that can fail, as _math_func, gives 0 for a domain error and sets
-    # SC46 in a calc.  It also gives 0 for an integer too large for a float, and sets SC43.
+    # SC46 in a calc.  It also gives 0 for an integer too large for a float, and sets SC43
+    # in a calc.
     "_permissive_math": [
         "def _permissive_math(func, value, flags=None):",
         "    try:",

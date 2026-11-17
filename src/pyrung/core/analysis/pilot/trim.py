@@ -379,7 +379,10 @@ def trim_holds(
     settable: frozenset[str],
     clock: WallClock | None,
 ) -> Plan:
-    """Return *plan* with the temporary logic that it reaches without taken out, or as it was."""
+    """Return *plan* without the temporary logic that it can reach *goal* without.
+
+    If no logic can come out, return *plan* as it was.
+    """
     if not plan.reachable or plan.fork is None:
         return plan
     timeline = _timeline(plan)

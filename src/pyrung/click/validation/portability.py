@@ -373,7 +373,7 @@ def _evaluate_immediate_coil_target(
 def _evaluate_immediate_contacts(
     program: Any, tag_map: TagMap, mode: ValidationMode, resolver: _ResolutionCache
 ) -> list[ClickFinding]:
-    """Report each immediate NO/NC contact that reads an input not mapped to X.
+    """Report each immediate NO/NC contact whose tag is mapped to a bank other than X.
 
     CLICK offers an immediate contact on X only.
     """
@@ -1193,8 +1193,8 @@ def _evaluate_compare_hex_mix(
 ) -> list[ClickFinding]:
     """Report a compare that pairs a hex operand (XD, YD, DH) with a decimal one.
 
-    CLICK's Compare dialog pairs a hex operand only with another hex one, and its editor
-    refuses any other pair. A pasted rung skips the check.
+    CLICK's Compare dialog pairs a hex operand only with another hex one. CLICK's editor
+    refuses a hex operand paired with a decimal one. A pasted rung skips the check.
     """
     from pyrung.core.condition import Condition
     from pyrung.core.validation.render import render_condition

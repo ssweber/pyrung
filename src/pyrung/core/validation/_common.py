@@ -818,7 +818,7 @@ def _iter_program_calls(program: Program) -> Iterable[_ProgramCall]:
 
 
 def _inexact_entry_subroutines(program: Program) -> frozenset[str]:
-    """Return the subroutines whose entry its caller-map conditions do not decide.
+    """Return the subroutines whose caller-map conditions do not decide whether they run.
 
     These are each subroutine with a call site that :func:`_iter_rung_calls` marks
     inexact, and every subroutine called from one at any depth, because its entry

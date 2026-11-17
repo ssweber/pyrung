@@ -155,8 +155,8 @@ class ConformanceProgram:
     def export_workspace(self, workspace: str | Path) -> Path:
         """Replace ``src/plc/`` in a ClickNick workspace with this program as pyrung source.
 
-        ClickNick generates the source the same way it does after a CLICK save. The
-        exported ladder CSVs go through :func:`~pyrung.click.ladder_to_pyrung_project`
+        This method generates the source the same way that ClickNick does after a CLICK
+        save. The exported ladder CSVs go through :func:`~pyrung.click.ladder_to_pyrung_project`
         (``index=True``, with this program's nicknames). Rungs that did not change export
         to the same CSV, so ClickNick's Preview Changes shows only the rungs that did.
         Nothing else in the workspace changes. ``csv/`` stays CLICK's accepted snapshot,

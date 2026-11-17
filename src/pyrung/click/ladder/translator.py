@@ -163,7 +163,10 @@ class _TranslatorMixin:
 
     @staticmethod
     def _is_hex_bank_operand(rendered: str) -> bool:
-        """Return True when a rendered operand (``DH1``, ``DH1..DH4``, ``DH[DS1]``) is hex."""
+        """Return True when a rendered operand is in a hex bank.
+
+        ``DH1``, ``DH1..DH4`` and ``DH[DS1]`` are such operands.
+        """
         match = re.match(r"[A-Za-z]+", rendered)
         return match is not None and match.group(0).upper() in HEX_CONSTANT_BANKS
 

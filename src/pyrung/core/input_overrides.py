@@ -518,7 +518,7 @@ class InputOverrideManager:
             tag_type = self._known_type(name)
         if tag_type is None:
             # A name that no rung reads has no type here.  Only a CHAR can be written "",
-            # and a blank stores NUL.
+            # so a "" written here is a blank CHAR, and it stores NUL.
             return store_char(value)
         return _value_a_type_holds(tag_type, value, f"{method}() of {name}")
 

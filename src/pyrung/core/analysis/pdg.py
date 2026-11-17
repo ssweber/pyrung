@@ -130,7 +130,8 @@ class RungNode:
 
         An analysis that asks whether a rung always writes a tag reads this.  The result
         leaves out the writes in ``may_writes`` and the fault flags.  Most instructions
-        only ever set a fault flag.
+        set a fault flag and never clear it.  So the node does not write the flag every
+        time it runs.
         """
         return self.writes - self.may_writes
 
@@ -417,7 +418,7 @@ class ProgramGraph:
     def tag_positions(
         self, tag_name: str, blocks: Collection[Block]
     ) -> frozenset[tuple[Block, int]]:
-        """Return each ``(block, address)`` in *blocks* that a store reaches for ``tag_name``.
+        """Return each ``(block, address)`` in *blocks* where a store writes ``tag_name``.
 
         These are the elements that the tag occupies (``block_positions``) and the addresses
         whose slot name is the tag's name.  The runtime stores by the name that the bank

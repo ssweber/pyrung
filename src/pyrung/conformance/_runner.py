@@ -254,8 +254,8 @@ def _diff(
 def assert_all_passed(results: list[CaseResult]) -> None:
     """Raise ``AssertionError`` listing stale groups and every case that ran and failed.
 
-    A case skipped in-process only passes.  A stale group fails, because its cases did
-    not run.
+    A case that was skipped because it can run only in-process passes.  A stale group
+    fails, because its cases did not run.
     """
     lines: list[str] = []
     stale_seen: set[str] = set()

@@ -293,8 +293,9 @@ def is_program_constant(name: str, ctx: WalkContext) -> bool:
     reference constant has **no program writers** and is **not** an operator/field
     interface.  In a ``WalkContext``, the drive-layer ``steerable`` set has already
     had the reference constants subtracted.  So an operator-facing word is *in*
-    ``steerable``, and a program constant is not.  That is how a ``WalkContext`` reads
-    "not a lever" without the ``known`` tag dict.  The function fails closed.  Any
+    ``steerable``, and a program constant is not.  That is how this function reads
+    "not a lever" from a ``WalkContext``, without the ``known`` tag dict.  The function
+    fails closed.  Any
     writer, a write from outside the ladder (``ProgramGraph.written_from_outside``), or
     membership in ``steerable`` means the name is not a constant.
     """
