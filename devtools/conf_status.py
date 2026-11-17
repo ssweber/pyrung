@@ -5,10 +5,10 @@ Usage (from the pyrung repo root):
     uv run python -I devtools/conf_status.py            # every part
     uv run python -I devtools/conf_status.py follow_flags units
 
-A case is done when confirmed.toml holds it at its current hash. A probe (a case whose expectation is a
-`between(...)` range) never confirms anything by passing, so it is done when readings.toml holds a reading at
-its current hash. A part needs a run when any case is not done. Otherwise check the open project with
-devtools/ckp_check.py and move on.
+A case is done when confirmed.toml holds it at its current hash. A probe is a case whose
+expectation is a `between(...)` range. Passing never confirms a probe. A probe is done when
+readings.toml holds a reading at its current hash. A part needs a run when any case is not
+done. Otherwise check the open project with devtools/ckp_check.py and move on.
 """
 
 from __future__ import annotations

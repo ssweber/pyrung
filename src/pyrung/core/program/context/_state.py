@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class _Building(threading.local):
-    """The open scopes of what this thread is building, innermost last.
+    """Hold the open scopes of what this thread is building, innermost last.
 
     Each thread has its own, so two threads can build programs at once.
     """
@@ -46,7 +46,7 @@ def _require_rung_context(func_name: str) -> Rung:
 
 
 def _current_forloop_body() -> ForLoop | None:
-    """The forloop whose body is the current capture scope, if any.
+    """Return the forloop whose body is the current capture scope, if any.
 
     Inside ``with forloop(...)`` the current rung context is the loop's
     capture context until a body ``Rung`` (or a nested loop) opens.

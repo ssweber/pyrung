@@ -287,16 +287,16 @@ def awaited_actions(
 
 
 def is_program_constant(name: str, ctx: WalkContext) -> bool:
-    """Whether *name* is a program constant (a never-written, non-lever register).
+    """Return whether *name* is a program constant (a never-written, non-lever register).
 
-    Reuses the exact distinction ``compute_reference_constants`` draws (a
+    This uses the exact distinction that ``compute_reference_constants`` draws.  A
     reference constant has **no program writers** and is **not** an operator/field
-    interface).  In a ``WalkContext`` the drive-layer ``steerable`` set has already
-    had the reference constants subtracted, so an operator-facing word is *in*
-    ``steerable`` while a program constant is not — the WalkContext-only way to
-    read "not a lever" without the ``known`` tag dict.  Fail-closed: any writer, a
-    write from outside the ladder (``ProgramGraph.written_from_outside``), or
-    membership in ``steerable``, means not a constant.
+    interface.  In a ``WalkContext``, the drive-layer ``steerable`` set has already
+    had the reference constants subtracted.  So an operator-facing word is *in*
+    ``steerable``, and a program constant is not.  That is how a ``WalkContext`` reads
+    "not a lever" without the ``known`` tag dict.  The function fails closed.  Any
+    writer, a write from outside the ladder (``ProgramGraph.written_from_outside``), or
+    membership in ``steerable`` means the name is not a constant.
     """
     if not name:
         return False

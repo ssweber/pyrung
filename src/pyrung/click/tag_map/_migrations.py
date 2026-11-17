@@ -28,7 +28,7 @@ def _tokens(group: str) -> list[str]:
 
 
 def _params(text: str) -> dict[str, str] | None:
-    """``a=1|b=2`` as a dict, as older pyrung read it, or ``None`` when a part has no ``=``."""
+    """Return ``a=1|b=2`` as a dict, as older pyrung read it, or ``None`` if a part has no ``=``."""
     values: dict[str, str] = {}
     for pair in text.split("|"):
         key, sep, value = pair.partition("=")
@@ -39,7 +39,7 @@ def _params(text: str) -> dict[str, str] | None:
 
 
 def _fits(key: str, value: str) -> bool:
-    """True when the current comment grammar can hold *value* as *key*."""
+    """Return True when the current comment grammar can hold *value* as *key*."""
     if not value or _CHOICE_VALUE_RE.fullmatch(value) is None:
         return False
     try:
@@ -51,11 +51,11 @@ def _fits(key: str, value: str) -> bool:
 
 @dataclass(frozen=True)
 class CommentMigration:
-    """One numbered rewrite of an old ``profile=<kind>:a=..|b=..`` token into new keys.
+    """Rewrite an old ``profile=<kind>:a=..|b=..`` token into new keys, as one numbered step.
 
     It reads what older pyrung read. Spaces around the kind and the values are allowed, and
     a parameter older pyrung ignored is dropped. A token it can't rewrite whole stays as
-    written, so ``old_form_tokens`` lists it for the user to fix.
+    written. ``old_form_tokens`` then lists it for the user to fix.
     """
 
     number: int
@@ -68,7 +68,7 @@ class CommentMigration:
     required: tuple[str, ...]
 
     def rewrite_token(self, token: str) -> str | None:
-        """The new tokens for one old *token*, or ``None`` when this migration can't read it."""
+        """Return the new tokens for one old *token*, or ``None`` if this migration can't read it."""
         head, _, value = token.partition("=")
         if head != "profile":
             return None
@@ -84,7 +84,7 @@ class CommentMigration:
         return ", ".join(f"{new}={value}" for new, value in renamed)
 
     def apply(self, comment: str) -> str:
-        """*comment* with this migration's old tokens rewritten, every other character kept."""
+        """Return *comment* with this migration's old tokens rewritten and all else kept."""
 
         def group(match: re.Match[str]) -> str:
             content = match.group()[1:-1]
@@ -100,7 +100,7 @@ class CommentMigration:
         return _TAG_META_GROUP_RE.sub(group, comment)
 
     def applies(self, comment: str) -> bool:
-        """True when this migration would change *comment*."""
+        """Return True when this migration would change *comment*."""
         return self.apply(comment) != comment
 
 
@@ -131,7 +131,7 @@ MIGRATIONS: tuple[CommentMigration, ...] = (
 
 
 def old_form_tokens(comment: str) -> tuple[str, ...]:
-    """Every old token in *comment*'s metadata groups. The parser refuses each one.
+    """Return every old token in *comment*'s metadata groups. The parser refuses each one.
 
     ``old_form_tokens(upgrade_comment(c))`` lists the ones no migration can rewrite, so the
     user can fix them by hand.
@@ -145,12 +145,12 @@ def old_form_tokens(comment: str) -> tuple[str, ...]:
 
 
 def comment_needs_upgrade(comment: str) -> bool:
-    """True when *comment* holds an old token, whether or not a migration can rewrite it."""
+    """Return True when *comment* holds an old token, even one that no migration can rewrite."""
     return bool(old_form_tokens(comment))
 
 
 def pending_migrations(comment: str) -> tuple[CommentMigration, ...]:
-    """The migrations that would change *comment*, in the order they run."""
+    """Return the migrations that would change *comment*, in the order they run."""
     pending: list[CommentMigration] = []
     for migration in MIGRATIONS:
         upgraded = migration.apply(comment)
@@ -161,7 +161,7 @@ def pending_migrations(comment: str) -> tuple[CommentMigration, ...]:
 
 
 def upgrade_comment(comment: str) -> str:
-    """*comment* with every migration run in order. A current comment comes back unchanged."""
+    """Return *comment* with every migration run in order. A current comment is unchanged."""
     for migration in MIGRATIONS:
         comment = migration.apply(comment)
     return comment

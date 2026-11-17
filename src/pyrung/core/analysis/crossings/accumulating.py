@@ -1,4 +1,4 @@
-"""Counter crossings — the done-bit inverts to a predecessor accumulator bound.
+"""Invert a counter's done bit to a bound on the predecessor accumulator.
 
 A counter or timer sets its done bit by comparing its accumulator to a preset:
 
@@ -7,16 +7,17 @@ A counter or timer sets its done bit by comparing its accumulator to a preset:
   so a preset >= 0 is done from its first scan)
 
 Counters change the accumulator before comparing it, by one count on a rising
-edge of an input. A count-up can therefore finish from ``acc == preset - 1``
-and a count-down from ``acc == preset + 1``. Their inexact reverse bounds
-include that one-scan frontier, producing a sound predecessor superset. Dynamic presets use an
-explicit :class:`~pyrung.core.crossing.AffineCmp`, preserving both the preset
-dependency and the one-scan offset.
+edge of an input. So a count-up can finish from ``acc == preset - 1``, and a
+count-down can finish from ``acc == preset + 1``. Their inexact reverse bounds
+include that one-scan frontier. This gives a sound predecessor superset. Dynamic
+presets use an explicit :class:`~pyrung.core.crossing.AffineCmp`, which keeps both
+the preset dependency and the one-scan offset.
 
-Timers can advance by a scan-duration- and unit-dependent amount, including
-fractional hidden memory. Until those inputs are representable, both timer
-families deliberately fall through. ``done == False`` and accumulator targets
-also fall through because reset/hold paths do not have one useful sound bound.
+A timer can advance by an amount that depends on the scan duration and the unit.
+That amount can include fractional hidden memory. Until those inputs can be
+represented, both timer families deliberately fall through. ``done == False`` and
+accumulator targets also fall through, because the reset and hold paths have no
+single useful sound bound.
 """
 
 from __future__ import annotations

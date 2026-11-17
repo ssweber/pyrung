@@ -23,12 +23,14 @@ if TYPE_CHECKING:
 
 
 def tof_armed_key(acc_name: str) -> str:
-    """Memory key set on the first scan an off-delay timer runs enabled, or runs
-    with Done on or Acc above 0.
+    """Return the memory key that marks an off-delay timer as armed.
+
+    The key is set on the first scan the timer runs enabled, or runs with Done on or
+    Acc above 0.
 
     A TOF that was never enabled rests at ``Done False, Acc 0`` and does not
     time (``timers/tof_never_enabled``).  Once enabled, it judges ``Acc <
-    preset`` on every scan its rung is false, so a TD the ladder writes to 0
+    preset`` on every scan its rung is false.  So a TD that the ladder writes to 0
     turns Done back on and counts from 0 (``tof_rewrite/done_after_td_zeroed``).
     STOP -> RUN clears the key with the rest of the memory.
     """

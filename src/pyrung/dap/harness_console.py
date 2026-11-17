@@ -34,7 +34,7 @@ def install_harness(adapter: Any) -> Harness:
 
 @dataclass(frozen=True)
 class StagedHarness:
-    """A harness installed and fit on a runner, for the adapter to take or throw away."""
+    """Hold a harness that was installed and fit on a runner.  The adapter takes it or drops it."""
 
     #: ``None`` when the program and the bench links have no coupling.
     harness: Harness | None

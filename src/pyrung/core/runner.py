@@ -207,7 +207,7 @@ _RUN_FOR_MAX_COUNTED_SCANS = 500_000_000
 
 
 class _ConditionPredicate:
-    """A ``run_until()`` / ``when()`` condition with no edges: stateless."""
+    """Judge a ``run_until()`` / ``when()`` condition that has no edges. It keeps no state."""
 
     __slots__ = ("_condition", "_context")
 
@@ -230,13 +230,13 @@ class _ConditionPredicate:
 
 
 class _EdgePredicate:
-    """A ``run_until()`` / ``when()`` condition holding ``rise()`` / ``fall()``.
+    """Judge a ``run_until()`` / ``when()`` condition that contains ``rise()`` or ``fall()``.
 
-    Its edges compare against the bit as this predicate last judged it, armed
-    from the runner's current state.  A breakpoint registers its own armed
-    copy (two registrations from one ``when()`` never share memory) and
-    re-arms it when re-enabled, so the scans it skipped while disabled do not
-    count as an edge.
+    Each edge compares its bit against the value it had when this predicate last judged it.
+    The predicate is armed from the runner's current state. A breakpoint registers its own
+    armed copy, so two registrations from one ``when()`` never share memory. The breakpoint
+    re-arms its copy when you enable it again. The scans it skipped while disabled then do
+    not count as an edge.
     """
 
     __slots__ = ("_condition", "_edges", "_context", "_current", "_last_seen")
@@ -266,7 +266,7 @@ class _EdgePredicate:
         self._last_seen = self._bits(self._context(self._current()))
 
     def armed(self) -> _EdgePredicate:
-        """An independent copy, armed now."""
+        """Return an independent copy of this predicate, armed now."""
         return _EdgePredicate(self._condition, self._edges, self._context, self._current)
 
     def __call__(self, state: SystemState) -> bool:
@@ -347,13 +347,14 @@ class _BreakpointBuilder:
     def do(self, callback: Callable[[SystemState], None]) -> _RunnerHandle:
         """Run ``callback(state)`` after each committed scan where the condition holds.
 
-        The callback receives the post-scan :class:`SystemState` and may drive the
-        runner via ``plc.patch`` / ``plc.force``.  Unlike :meth:`pause`, the run
-        continues.  This is the hook for reactive inputs — e.g. a liveness
-        oscillator ``when(tag != v).do(lambda s: plc.patch({tag: v}))`` — which the
-        runner then applies every scan.
-        Use ``patch`` (one-shot) rather than ``force`` for a reactive re-assert —
-        a force would pin the tag so the program could never drift it.
+        The callback receives the post-scan :class:`SystemState`. It may call ``plc.patch``
+        or ``plc.force``. Unlike :meth:`pause`, the run continues.
+
+        Use this for reactive inputs. For example, a liveness oscillator is
+        ``when(tag != v).do(lambda s: plc.patch({tag: v}))``. The runner then applies
+        the patch every scan. To re-assert a value, use ``patch``, which applies once,
+        and not ``force``. A force would pin the tag, and the program could never
+        move it.
         """
         return self._runner._register_breakpoint(
             predicate=self._predicate,
@@ -369,19 +370,20 @@ def _iter_tags_and_edge_names(
     block_uses: list[Any] | None = None,
     beyond_rungs: list[Tag] | None = None,
 ) -> tuple[tuple[Tag, ...], frozenset[str]]:
-    """Single-pass graph walk collecting both Tag objects and edge tag names.
+    """Walk the graph once and collect both Tag objects and edge tag names.
 
-    The tags returned are what the rungs say.  A range holds its block, whose cache is every
-    slot anything has asked for, and a call holds its program, which holds what has run and
-    been asked of it, so the walk takes neither on its way.  Of a block's slots it takes the
-    ones a map_to put there.  Of a program it takes only its rungs and subroutines.
+    The tags returned are the ones the rungs name. A range refers to its block, and the
+    block's cache holds every slot that anything has asked for. A call refers to its
+    program, which holds what has run and what has been asked of it. The walk does not
+    enter either one to collect tags. From a block it collects the slots that a ``map_to``
+    put there. From a program it collects only the rungs and subroutines.
 
     *block_uses*, when given, also collects each range and pointer into a block.
     *beyond_rungs*, when given, also collects the tags found in those blocks
-    once the rungs are done.  A tag a rung names wins over another of the same name.
-    Of a block's cache it takes only the slots the user's code indexed (``block[n]``).
-    The rest are what scans and analyses asked for, and a runner built later must not
-    know more than one built first.
+    once the rungs are done.  A tag that a rung names wins over another tag of the same name.
+    From a block's cache it collects only the slots that the user's code indexed
+    (``block[n]``). The rest are slots that scans and analyses asked for. A runner built
+    later must not know more than a runner built first.
     """
     from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.memory_block import (
@@ -518,7 +520,7 @@ def _program_writes_read_only_system_tags(program: Any) -> bool:
 
 
 def _global_names(code: CodeType) -> tuple[set[str], set[str]]:
-    """The global names *code* and the code nested in it read, and those it binds."""
+    """Return the global names that *code* and its nested code read, and the ones it binds."""
     read: set[str] = set()
     bound: set[str] = set()
     for instruction in dis.get_instructions(code):
@@ -608,12 +610,12 @@ def _is_self_contained_builtin(name: str) -> bool:
 
 
 def _reaches_past_its_scope(code: CodeType) -> bool:
-    """Whether *code* imports, sets an attribute, or asks an object for a dunder or a frame.
+    """Return whether *code* imports, sets an attribute, or asks for a dunder or a frame.
 
-    An import or an attribute of ``math`` shares state with every other call, and a dunder
+    An import or an attribute of ``math`` shares state with every other call. A dunder
     (``__globals__``, ``__defaults__``, ``__traceback__``), a frame or ``str.format``
-    (``"{0.__globals__}"``) hands over the function's own module, by a route no global
-    name shows.
+    (``"{0.__globals__}"``) gives code the function's own module. No global name shows
+    that route.
     """
     for instruction in dis.get_instructions(code):
         if instruction.opname in ("IMPORT_NAME", "STORE_ATTR", "DELETE_ATTR"):
@@ -635,14 +637,15 @@ def _is_immutable_constant(value: Any) -> bool:
 
 
 def _may_be_called_again(fn: Any) -> bool:
-    """Whether a kernel may run *fn*, given that an undo means calling it again.
+    """Return whether a kernel may run *fn*, given that an undo calls it again.
 
-    A kernel calls the function itself, so its names, defaults and cells are the ones
-    stepping sees.  What a kernel can't promise is one call per scan: a batch that raises
-    or leaves its bounds is undone and stepped, which calls the function again for scans
-    it has already run.  So a function that keeps anything from one call to the next, or
-    reaches past its own frame to something that can (a closure cell, a global, a mutable
-    default, an import, a dunder or a frame), runs stepped, once per scan.
+    A kernel calls the function itself, so it sees the same names, defaults and cells that
+    stepping sees. A kernel cannot promise one call per scan. If a batch raises or leaves
+    its bounds, the runner undoes the batch and steps it. That calls the function again for
+    scans it has already run. So a function runs stepped, once per scan, if it keeps
+    anything from one call to the next. It also runs stepped if it reaches past its own
+    frame to something that can keep state. That means a closure cell, a global, a mutable
+    default, an import, a dunder or a frame.
     """
     if not inspect.isfunction(fn) or fn.__closure__ or fn.__builtins__ is not vars(builtins):
         return False
@@ -664,9 +667,10 @@ def _may_be_called_again(fn: Any) -> bool:
 
 
 def _hands_over_nothing_it_could_keep(value: Any) -> bool:
-    """Whether an ``ins`` value reaches the function as a fresh value, or one nothing can change.
+    """Return whether an ``ins`` value reaches the function fresh, or as one nothing can change.
 
-    A list a function appends to, or any object it can call, is state like a mutable default.
+    A list that a function appends to is state, like a mutable default. So is any object
+    that the function can call.
     """
     from pyrung.core.expression import Expression
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
@@ -678,10 +682,10 @@ def _hands_over_nothing_it_could_keep(value: Any) -> bool:
 
 
 def calls_that_depend_on_more_than_their_inputs(program: Any) -> list[tuple[Any, str]]:
-    """Each ``run_function`` whose answer may not follow from its inputs, and why.
+    """Return each ``run_function`` whose answer may not follow from its inputs, and why.
 
-    This is the one gate on calling a function outside its own scan. A kernel's undo calls
-    it again, with inputs no scan may ever give it.
+    This is the only gate on calling a function outside its own scan. A kernel's undo calls
+    the function again, with inputs that no scan may ever give it.
     """
     from pyrung.core.instruction.control import (
         EnabledFunctionCallInstruction,
@@ -783,9 +787,9 @@ class _DebugNamespace:
         """Forget a partially stepped scan without committing it.
 
         Call this when dropping a ``scan_steps()`` / ``scan_steps_debug()``
-        generator before it is exhausted.  The scan already took the pending
-        patches; they are queued again (ahead of any newer patch for the same
-        tag) so the next scan applies them instead of losing them.
+        generator before it is exhausted.  The scan has already taken the pending
+        patches. The runner queues them again, ahead of any newer patch for the same
+        tag, so the next scan applies them instead of losing them.
         """
         self._plc._requeue_drained_patches()
 
@@ -849,7 +853,7 @@ def _avoid_expr_has_edge(expr: Any) -> bool:
 
 
 def _avoid_condition_predicate(condition: Any) -> Callable[[dict[str, Any]], bool]:
-    """Evaluate *condition* itself on a state, each tag not yet in it at its default."""
+    """Return a function that evaluates *condition* on a state, with absent tags at default."""
 
     class _StateReads:
         def __init__(self, state: dict[str, Any]) -> None:
@@ -873,7 +877,7 @@ def _avoid_opaque_name(condition: Any) -> str:
 def _avoid_condition(spec: Any, expr: Any) -> Any | None:
     """Return the executable condition of one condition-like avoid.
 
-    Opaque callables have no expression and therefore none.
+    An opaque callable has no expression, so the function returns None for it.
     """
 
     if expr is None:
@@ -895,8 +899,8 @@ def _compile_avoid_member(
     """Compile one avoid member into ``(predicate, tag names, expression)``.
 
     A plain callable has no expression and names no tags, so both are ``None``.
-    A condition lowers to an expression, and the predicate reads an undecided
-    expression as violated.  Its tag names are ``None`` when it reads a tag it cannot
+    A condition lowers to an expression. The predicate reads an undecided expression as
+    violated. The tag names are ``None`` when the condition reads a tag that it cannot
     name, such as a pointer element.
     """
     from pyrung.core.condition import Condition, _as_condition, _normalize_and_condition
@@ -931,13 +935,13 @@ def _compile_avoid_member(
 def _compile_avoid(spec: Any) -> Any:
     """Compile ``avoid=`` into a :class:`_AvoidPredicate` (a **union**).
 
-    Each condition is avoided independently: ``avoid=(A, B)`` / ``avoid=[A, B]``
-    exclude a path that depends on *either*, while ``avoid=And(A, B)`` is a single
-    member that excludes only the combined state.  Every member keeps its own
-    printable name and condition so a decline can point at what it violated and
-    a PILOT coast can say what it reads. Opaque callables retain
-    only their predicate; rise/fall transition conditions are rejected because
-    avoidance is defined over snapshots.
+    Each condition is avoided independently. ``avoid=(A, B)`` and ``avoid=[A, B]``
+    exclude a path that depends on *either* condition. ``avoid=And(A, B)`` is a single
+    member that excludes only the combined state.  Every member keeps its own printable
+    name and condition. A decline can then point at the condition it violated, and a PILOT
+    coast can say what the condition reads. An opaque callable keeps only its predicate.
+    The function rejects rise and fall transition conditions, because avoidance is
+    defined over snapshots.
     """
     if spec is None:
         return None
@@ -987,13 +991,13 @@ _EpochCacheEvent = Literal[
 
 
 class EpochCaches:
-    """Invalidation registry for history-derived epoch caches.
+    """Register which events invalidate the history-derived epoch caches.
 
     The matrix deliberately preserves the lifecycle asymmetry.  Trimming
     prunes surviving recent states separately.  A runtime-scope reset and a
-    recording reset are distinct events: a fork's time-mode setup starts a log
-    with no runtime reset.  Reboot and STOP-to-RUN compose both, because each
-    returns scan ids to 0 and a slab from before would answer for a new scan.
+    recording reset are distinct events. A fork's time-mode setup starts a log
+    without a runtime reset.  Reboot and STOP-to-RUN do both, because each
+    returns scan ids to 0, and a slab from before would answer for a new scan.
     """
 
     INVALIDATION_MATRIX: Mapping[_EpochCacheEvent, tuple[_EpochCacheName, ...]] = MappingProxyType(
@@ -1060,12 +1064,13 @@ def _new_epoch_ref() -> EpochRef:
 
 
 class AvoidCheckError(Exception):
-    """An ``avoid=`` check raised on a real state: where how() starts, or a scan a trial ran.
+    """Report that an ``avoid=`` check raised on a real state.
 
-    A check that raised did not say the state is clear, so how() does not go through it,
-    and it proved nothing about the target.  So there is no plan to return, and the check's
-    own exception is the ``__cause__``.  A raise on a state how() is only weighing, such as
-    a hold laid over a state, is not this error.
+    A real state is the one where how() starts, or a scan that a trial ran. A check that
+    raised did not say the state is clear, so how() does not go through that state. The
+    check also proved nothing about the target. So how() has no plan to return, and the
+    check's own exception is the ``__cause__``.  A check that raises on a state how() is
+    only weighing, such as a hold laid over a state, does not cause this error.
     """
 
     def __init__(self, check: str, error: Exception) -> None:
@@ -1082,10 +1087,10 @@ class AvoidCheckError(Exception):
 
 
 class SearchStopped(Exception):
-    """A how() world stopped itself, and its next scan would restart it.
+    """Signal that a how() world stopped itself, so its next scan would restart it.
 
-    A restart is a new recording with scan ids from 0.  A plan is scans of one
-    recording, so how() ends here rather than step over it.
+    A restart starts a new recording with scan ids from 0.  A plan is scans of one
+    recording, so how() ends the search here rather than step over the restart.
     """
 
     def __init__(self, scan_id: int) -> None:
@@ -1657,14 +1662,13 @@ class PLC:
                 transitions (see :attr:`keep_forces_on_run`).
             _tag_index: Internal (``fork()``).  A ``(known_tags_by_name,
                 edge_tag_names, constrained_tags)`` triple from a runner
-                sharing the same program object.  The dicts are copied
-                (both sides keep registering privately); the AST walk
+                sharing the same program object.  The dicts are copied, so
+                both sides keep registering privately.  The AST walk
                 and constraint-index build that would recreate them —
                 the dominant fork cost on large programs — are skipped.
-                Contract: the caller must pass an ``initial_state`` that
-                already contains a value for every known tag (``fork()``
-                pre-seeds defaults), because the default-seeding scan is
-                also skipped.
+                The caller must pass an ``initial_state`` that already contains a
+                value for every known tag, because the default-seeding scan is
+                also skipped. ``fork()`` pre-seeds defaults.
         """
         if realtime and dt is not None:
             raise ValueError("Cannot specify dt= with realtime=True")
@@ -1720,10 +1724,10 @@ class PLC:
         self._state_tags_read_cache: dict[str, Any] | None = None
         self._state_tags_read_cache_state: SystemState | None = None
         self._running = True
-        # How many of this PLC's ``run_function`` bodies are running now: none of them may
-        # scan, stop or reboot it or set its battery (ScanContext.call_user_function).  Not "a
-        # scan is open": a paused scan_steps generator has one open, and doing those beside it
-        # is legal.
+        # The number of this PLC's ``run_function`` bodies that are running now. None of them
+        # may scan, stop or reboot it, or set its battery (ScanContext.call_user_function).
+        # This counts running bodies, not open scans. A paused scan_steps generator has a scan
+        # open, and doing those things beside it is legal.
         self._user_calls_running = 0
         self._battery_present = True
         self._keep_forces_on_run = bool(keep_forces_on_run)
@@ -1940,9 +1944,9 @@ class PLC:
 
     @property
     def tags(self) -> MappingProxyType[str, Tag]:
-        """Read-only mapping of tag name → Tag object, for what the program has and reaches.
+        """Return a read-only mapping of tag name to Tag object, for what the program reaches.
 
-        A slot a range reaches becomes a tag when it is read from here.
+        Reading a slot that a range reaches creates a tag for it.
         """
         return MappingProxyType(
             TagsKnownOrReached(self._known_tags_by_name, self._tags_rungs_reach)
@@ -1994,7 +1998,7 @@ class PLC:
         return owner.state_at(scan_id)
 
     def _timestamp_at(self, scan_id: int) -> float:
-        """A scan's timestamp, added up from the nearest state its epoch holds, not stepped to."""
+        """Return a scan's timestamp, added up from the nearest state its epoch holds."""
         owner = self._causal_lineage.owner_at(scan_id)
         if owner is None:
             raise KeyError(scan_id)
@@ -2115,11 +2119,11 @@ class PLC:
         paths via ``ScanContext.capturing_rung``.
 
         Values are attempted writes, including a later writer reasserting the
-        already-pending value. Transition consumers compare committed state;
-        causal execution consumers retain the exact writer occurrence.
+        already-pending value. Transition consumers compare committed state.
+        Causal execution consumers retain the exact writer occurrence.
 
-        A column that grew too long to keep, or that a loop's record cannot speak for,
-        is read by stepping the scan again from the nearest checkpoint, up to
+        If a column grew too long to keep, or a loop's record cannot speak for it, the
+        method steps the scan again from the nearest checkpoint. It raises
         ``UnrecordedScansError`` where that is too far.
         """
         target = self._playhead if scan_id is None else scan_id
@@ -2133,13 +2137,13 @@ class PLC:
         return firings
 
     def _recorded_rung_firings(self, target: int) -> PMap:
-        """What the timelines say of *target*, a value they gave up on as ``_UNKNOWN_VALUE``."""
+        """Return what the timelines say of *target*. A value they gave up on is unknown."""
         self._settle_compiled_ranges(target, target)
         owner = self._causal_lineage.owner_at(target)
         return owner.rung_firing_timelines.at(target) if owner is not None else pmap()
 
     def _refusal(self, first: int, last: int, scans: int) -> BaseException:
-        """What a question gets when reading *first*..*last* would step too far."""
+        """Return the error a question gets when reading *first*..*last* would step too far."""
         refusal = UnrecordedScansError(first, last, scans)
         return SearchQuestionRefused(refusal) if self._search_refuses_restart else refusal
 
@@ -2560,10 +2564,11 @@ class PLC:
     ) -> None:
         """Give the scans in *first*..*last* that ran without records their records.
 
-        A plain compiled run commits states and no index, which is its whole speed.  The
-        first question that reaches such a scan pays for it, by stepping it again from the
-        nearest checkpoint: the answer is then what a stepped run recorded, because it is
-        one.  An epoch's ranges settle once, for every fork that holds it.
+        A plain compiled run commits states and no index. That is where its speed comes
+        from.  The first question that reaches such a scan pays for it, by stepping the scan
+        again from the nearest checkpoint. The answer is then what a stepped run recorded,
+        because the question ran a stepped run.  An epoch's ranges settle once, for every
+        fork that holds the epoch.
         """
         asked = self._unrecorded_in(first, last)
         if not asked:
@@ -2582,7 +2587,7 @@ class PLC:
     def _unrecorded_in(
         self, first: int | None = None, last: int | None = None
     ) -> list[tuple[PLC, tuple[int, int]]]:
-        """Each epoch's scans in *first*..*last* that ran without records, by the epoch's runner."""
+        """Return each epoch's scans in *first*..*last* that ran without records, by runner."""
         lineage = self._causal_lineage
         owners = [self] if self._unrecorded_scans else []
         for epoch in lineage.sealed_epochs:
@@ -2606,11 +2611,11 @@ class PLC:
         return anchor if anchor is not None else self._initial_scan_id
 
     def _search_limits(self) -> Callable[[], None] | None:
-        """What a how() asking this question polls while it waits for the answer."""
+        """Return the function that a how() search polls for its limits while it waits."""
         return None if self._coast_memo is None else self._coast_memo.check_limits
 
     def _stepped_again(self, first: int, last: int, check_limits: Callable[[], None] | None) -> PLC:
-        """A replay of scans up to *last* from the checkpoint before *first*, with its records."""
+        """Return a replay of scans up to *last* from the checkpoint before *first*."""
         anchor = self._nearest_checkpoint_at_or_before(first - 1)
         replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
         for name in _RECORDS:
@@ -2658,7 +2663,7 @@ class PLC:
         cannot say, or the rung does not conduct, it runs the next scan on a throwaway
         copy of the PLC to see where the write stores.
 
-        Multiple tags produce one unified tree — a single explanation
+        Several tags produce one tree. It is a single explanation that is
         consistent with all observations.
 
         Args:
@@ -2690,8 +2695,8 @@ class PLC:
         """Run the next scan on a throwaway copy of this PLC, and return its rung runs in order.
 
         The copy starts from *state* (the current one by default) with the pending forces
-        and patches, as the next scan would.  This PLC never sees it.  It answers None when
-        no scan can run here, or when the scan raises.
+        and patches, as the next scan would.  This PLC never sees the copy.  The method
+        returns None when no scan can run here, or when the scan raises.
         """
         if self._program is None or not self._running or self._user_calls_running:
             return None
@@ -2719,13 +2724,14 @@ class PLC:
     def _recorded_pointer_write(
         self, pdg: Any, scan_id: int
     ) -> Callable[[int, str, Any], bool | None] | None:
-        """Read from the scan history whether a write through a pointer writes a tag's value.
+        """Return whether the scan history shows a pointer write storing a tag's value.
 
-        why() asks it about a node, a tag and the tag's value at *scan_id*, as it asks a listed
-        writer.  It answers True when the node stored the value at the tag's last change, or
-        stored it again on its latest run since then.  It answers False when the node did
-        neither.  It answers None when the history cannot say: the value was there before
-        the history starts, or the scans are too many to step again.
+        why() asks about a node, a tag and the tag's value at *scan_id*, as it does for a
+        listed writer.  The method returns True when the node stored the value at the tag's
+        last change, or stored it again on its latest run since then.  It returns False when
+        the node did neither.  It returns None when the history cannot say. That happens when
+        the value was there before the history starts, or when too many scans would have to
+        be stepped again.
         """
         program = self._program
         if program is None or not pdg.unlisted_writes:
@@ -2785,17 +2791,18 @@ class PLC:
         goal, and records where it went on ``Path.route``. Exclude a reported
         route with ``avoid=`` and PILOT will look for another.
 
-        ``avoid X`` = do not take a path that depends on X.  It excludes routes,
-        operator actions, and observed scan states that satisfy the predicate —
-        momentary commands are treated as actions, not just settled states (so
-        ``avoid=C_Complete`` will not *press* ``C_Complete`` even though it
-        settles back to rest).  A path is excluded if it depends on the avoided
-        condition at *any* of these three gates, and if every path is excluded
-        the returned Path is unreachable with a reason that names the violated
-        avoid condition(s).  A check that raises on the state how() starts from, or
-        on a scan a trial runs, raises ``AvoidCheckError`` here, since it has not
-        said that state is clear.  A raise on a state how() is only weighing, such
-        as a hold laid over a state, says nothing about the route and denies nothing.
+        ``avoid X`` means do not take a path that depends on X.  It excludes routes,
+        operator actions, and observed scan states that satisfy the predicate.
+        Momentary commands count as actions, not just settled states. So
+        ``avoid=C_Complete`` will not *press* ``C_Complete``, even though it
+        settles back to rest.  A path is excluded if it depends on the avoided
+        condition at *any* of these three gates.  If every path is excluded,
+        the returned Path is unreachable, and its reason names the violated
+        avoid condition(s).  If a check raises on the state how() starts from, or
+        on a scan a trial runs, how() raises ``AvoidCheckError``, because the check
+        has not said that state is clear.  A check that raises on a state how() is only
+        weighing, such as a hold laid over a state, says nothing about the route and
+        denies nothing.
 
         Args:
             conditions: Target condition(s).  Each is a Tag (``Running``) or a
@@ -2817,9 +2824,9 @@ class PLC:
                 ``None`` for no limit.  A search this ends may have reached on a faster
                 machine.
             unlink: Harness-feedback tag names to free for fault injection.
-                Named tags have their ``link=`` coupling removed so the harness
-                stops driving them and PILOT may steer them directly — the way
-                to reach a fault (e.g. a dead sensor) that the intact physical
+                how() removes the ``link=`` coupling from the named tags. The harness
+                then stops driving them, and PILOT may steer them directly. Use this
+                to reach a fault, such as a dead sensor, that the intact physical
                 link would otherwise hold out of reach.
 
         Returns:
@@ -3171,8 +3178,8 @@ class PLC:
         """Populate one bounded causal slab and return *scan_id*.
 
         A stretch's checkpoints can be far apart.  Positioning and materialization
-        are separate: the run-up goes through the compiled kernel and leaves nothing
-        behind, and only one fixed-size working set is retained.
+        are separate steps. The run-up goes through the compiled kernel and leaves nothing
+        behind. Only one fixed-size working set is retained.
         """
         old = next(reversed(self._replay_slabs.values()), {})
         ahead = bool(old) and max(old) < scan_id <= max(old) + _REPLAY_SLAB_SCANS // 2
@@ -3298,7 +3305,7 @@ class PLC:
                 self._causal_initial_tags[name] = value
 
     def _note_plant_change(self) -> None:
-        """Keep the plant that ran the scans so far: it is about to be replaced.
+        """Keep the plant that ran the scans so far, because it is about to be replaced.
 
         Replay runs a scan under the plant that ran it.  A checkpoint here starts any
         later scan's replay on this side of the change, so no replay crosses it.
@@ -3321,7 +3328,7 @@ class PLC:
         self._checkpoints[scan_id] = self._state
 
     def _earlier_plant_at(self, scan_id: int) -> list[Any] | None:
-        """The plant the scans after *scan_id* ran under, when it is not the current one."""
+        """Return the plant that the scans after *scan_id* ran under, if not the current one."""
         for changed_at, plant in self._plant_changes:
             if scan_id < changed_at and plant is not None:
                 return plant
@@ -3342,13 +3349,13 @@ class PLC:
             replay._harness._detach()
 
     def _plant_tag_defaults(self) -> dict[str, Any]:
-        """Each tag the synthesis plant uses, at its default.
+        """Return each tag the synthesis plant uses, at its default.
 
-        A plant stores its timers' zeros from its first scan, into tags no rung has
-        written.  A kernel holds an absent tag at its default and notices a write only
-        by the value leaving it, so it could not say when such a tag joined the state.
-        Present from the start of a recording, they read and commit the same in every
-        engine.
+        From its first scan, a plant stores its timers' zeros into tags that no rung has
+        written.  A kernel holds an absent tag at its default. It notices a write only
+        when the value leaves the default, so it could not say when such a tag joined
+        the state.  The tags are present from the start of a recording, so they read and
+        commit the same in every engine.
         """
         synthesis = self._synthesis
         if synthesis is None:
@@ -3413,10 +3420,10 @@ class PLC:
     def _thin_checkpoints(self, keep: int) -> None:
         """Drop every other checkpoint once more than *keep* are held.
 
-        A checkpoint only shortens a replay, since the scan log says the rest: one
-        dropped costs run-up and never a value.  A checkpoint at a plant change or an
-        edit stays, because no replay crosses one.  Its force record goes with it unless
-        the forces changed on that scan.
+        A checkpoint only shortens a replay, because the scan log holds the rest. Dropping
+        one costs run-up time and never a value.  A checkpoint at a plant change or an
+        edit stays, because no replay crosses one.  A dropped checkpoint takes its force
+        record with it, unless the forces changed on that scan.
         """
         if len(self._checkpoints) <= keep:
             return
@@ -3433,7 +3440,7 @@ class PLC:
         self._scan_log.drop_force_records_unchanged_at(dropped)
 
     def _bind_logic_sites(self) -> Any:
-        """The site table of the logic this runner scans (binding it if never bound)."""
+        """Return the site table of the logic this runner scans. Bind it first if unbound."""
 
         program = self._program
         if program is not None:
@@ -3447,20 +3454,19 @@ class PLC:
         return table
 
     def _soft_exec_program(self) -> Any:
-        """The compilation unit for soft-exec replay: the user program bracketed
-        by the synthesis overlay (``plant`` + ``holds`` + user rungs).
+        """Return the compilation unit for soft-exec replay.
 
-        Synthesis is *logic*, so replay re-derives it by compiling it into the
-        replay kernel — bool TON/TOF compile natively, an opaque ``run_function``
-        that may not be called again falls back to interpreted replay (which re-installs
-        synthesis via ``fork_onto``).  This is the
-        *soft* root; deploy (Click / CircuitPython) and ``prove`` compile the
-        **bare** ``self._program`` instead — the brackets never reach a
-        controller or the verifier.
+        The unit is the user program, bracketed by the synthesis overlay (``plant`` +
+        ``holds`` + user rungs).  Synthesis is *logic*, so replay re-derives it by compiling
+        it into the replay kernel.  Bool TON and TOF compile natively.  An opaque
+        ``run_function`` that may not be called again falls back to interpreted replay, which
+        re-installs synthesis via ``fork_onto``.  This is the *soft* root.  Deploy (Click /
+        CircuitPython) and ``prove`` compile the **bare** ``self._program`` instead, so the
+        brackets never reach a controller or the verifier.
 
-        Returns the bare program when no overlay is installed; cached, since the
-        bracketing is a pure function of the program + overlay rung lists (the
-        harness invalidates the cache when the overlay changes).
+        The method returns the bare program when no overlay is installed.  It caches the
+        result, because the bracketing is a pure function of the program and the overlay rung
+        lists.  The harness invalidates the cache when the overlay changes.
         """
         syn = self._synthesis
         if self._program is None or syn is None or syn.is_empty():
@@ -3620,12 +3626,13 @@ class PLC:
         kernel: CompiledKernel | None = None,
         through: int = -1,
     ) -> tuple[PLC, ScanLogSnapshot, int, dict[int, list[LifecycleEvent]]]:
-        """A replay fork at the checkpoint *anchor*, or at scan *through* if *kernel* runs to it.
+        """Build a replay fork at checkpoint *anchor*, or at scan *through* if *kernel* runs to it.
 
-        The fork starts from the checkpoint's state or the kernel's.  So each replay steps its
-        scans under the plant, forces, run mode, battery and time mode they ran under.
-        ``anchor`` is a key in ``self._checkpoints``, or None for the oldest kept scan.  Returns
-        the fork, the log, the scan the fork is at, and the lifecycle events by scan.
+        The fork starts from the checkpoint's state or the kernel's.  Each replay then steps
+        its scans under the plant, forces, run mode, battery and time mode that they ran under.
+        ``anchor`` is a key in ``self._checkpoints``, or None for the oldest kept scan.  The
+        method returns the fork, the log, the scan the fork is at, and the lifecycle events
+        by scan.
         """
         log = self._scan_log.snapshot()
         lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
@@ -3733,7 +3740,7 @@ class PLC:
         state: SystemState,
         log: ScanLogSnapshot | ScanLog,
     ) -> tuple[datetime, float]:
-        """The RTC base *state* ran on: a later change must not reach back to it."""
+        """Return the RTC base that *state* ran on. A later change must not reach back to it."""
         recorded = log.rtc_base_at(state.scan_id)
         return (self._rtc_base, self._rtc_base_sim_time) if recorded is None else recorded
 
@@ -3754,12 +3761,12 @@ class PLC:
             )
 
     def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
-        """``replay_to()`` with every scan stepped, never the kernel."""
+        """Do what ``replay_to()`` does, but step every scan and never use the kernel."""
         self._check_replay_target(target_scan_id)
         return self._replay_to(target_scan_id, None)
 
     def _replay_to(self, target_scan_id: int, kernel: CompiledKernel | None) -> PLC:
-        """A fork at *target_scan_id* from the checkpoint before it, for inspection.
+        """Return a fork at *target_scan_id* from the checkpoint before it, for inspection.
 
         *kernel*, if given, runs the scans up to the target.  The fork steps the target
         scan, so it holds the target's records.  The fork never talks to a Modbus device,
@@ -3828,15 +3835,17 @@ class PLC:
         self._sync_runtime_flags_from_state()
 
     def _replay_kernel_from(self, scan_id: int) -> CompiledKernel | None:
-        """The kernel, if it can rebuild every key of the scans after *scan_id*'s checkpoint.
+        """Return the kernel if it can rebuild every key after *scan_id*'s checkpoint.
 
         Stepping adds a tag to the state on its first write.  A kernel holds an absent
-        tag at its default and notices the first write only by the value leaving it, so
-        a rung, patch or force that may store the default into a tag the checkpoint lacks
-        replays interpreted.  compiled_run.run_scans holds a live run to the same rule.
+        tag at its default. It notices the first write only when the value leaves the
+        default. So a rung, patch or force that may store the default into a tag that the
+        checkpoint lacks replays interpreted.  compiled_run.run_scans holds a live run to
+        the same rule.
 
-        A rung reading the scan time minimum: the first scan's hook takes the scan time
-        when the tag is absent, and a kernel has the tag, at 0, so it would stay 0.
+        A rung that reads the scan time minimum is another case. The first scan's hook sets
+        the scan time when the tag is absent. A kernel has the tag, at 0, so the value would
+        stay 0.
         """
         if self._earlier_plant_at(scan_id) is not None:
             return None  # The kernel is compiled from the current plant.
@@ -3861,7 +3870,7 @@ class PLC:
         return kernel
 
     def _compiled_fork_at(self, target_scan_id: int, kernel: CompiledKernel) -> PLC:
-        """A fork at *target_scan_id*, with the kernel running each scan after the checkpoint."""
+        """Return a fork at *target_scan_id*, with the kernel running each later scan."""
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
         return self._build_replay_fork(anchor, kernel, target_scan_id)[0]
 
@@ -4341,9 +4350,9 @@ class PLC:
     def keep_forces_on_run(self) -> bool:
         """Whether active forces survive a STOP -> RUN transition.
 
-        Off by default: entering RUN clears forces along with patches, like a
-        fresh start.  When on, forces are kept (and apply from the first scan);
-        tags and pending patches still reset.  ``reboot()`` clears forces
+        This is off by default. Entering RUN then clears forces along with patches, like a
+        fresh start.  When it is on, forces are kept and apply from the first scan.
+        Tags and pending patches still reset.  ``reboot()`` clears forces
         either way.
         """
         return self._keep_forces_on_run
@@ -4396,13 +4405,12 @@ class PLC:
         tags keep their values and the rest return to their defaults, as over
         STOP -> RUN.  With it False every tag returns to its default.  Forces
         are cleared either way.  ``state.scan_id`` and
-        ``state.timestamp`` return to 0.  Because post-reboot scan_ids
+        ``state.timestamp`` return to 0.  Post-reboot scan_ids
         would alias pre-reboot entries in every sparse channel
-        (patches, forces, rtc_base_changes, dts), the scan log and
-        checkpoints are reset to a fresh recording session rooted at
-        the post-reboot scan 0.  Pre-reboot history is not
-        replay-addressable — users who need that should ``fork()``
-        before rebooting.
+        (patches, forces, rtc_base_changes, dts).  So the reboot resets the scan log and
+        checkpoints to a fresh recording session that starts at
+        the post-reboot scan 0.  You cannot replay pre-reboot history.
+        If you need it, call ``fork()`` before rebooting.
         """
         self._refuse_inside_a_call()
         tag_values = self._rebuild_tags_for_reset(preserve_retentive=self._battery_present)
@@ -4419,8 +4427,9 @@ class PLC:
         """Start a fresh recording rooted at scan 0, which a reset has just returned to.
 
         The scan ids to come would alias every sparse channel of the old log (patches,
-        forces, rtc_base_changes, dts), so history replayed the old run's entries, and
-        every state in a replay slab, so a seek returned the old run's state outright.
+        forces, rtc_base_changes, dts). History would then replay the old run's entries.
+        The ids would also alias every state in a replay slab, so a seek would return the
+        old run's state outright.
         """
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
@@ -4470,10 +4479,11 @@ class PLC:
         return walked.edge_names - _DERIVED_EDGE_TAGS.keys()
 
     def _type_a_name_holds(self, name: str) -> TagType | None:
-        """The type a patch or force by *name* stores, or None if it stores as given.
+        """Return the type that a patch or force by *name* stores, or None if as given.
 
-        A tag known only because something else named it, an override or a cached slot
-        no rung reaches, doesn't change what the name means: the rungs say that.
+        A tag known only because something else named it does not change what the name
+        means. That includes an override or a cached slot that no rung reaches. The rungs
+        say what the name means.
         """
         known = self._known_tags_by_name.get(name)
         if known is None or name in self._names_no_rung_gave:
@@ -4481,7 +4491,7 @@ class PLC:
         return known.type
 
     def _tag_known_or_reached(self, name: str) -> Tag | None:
-        """The tag *name* names, or None.  A slot its factory refuses is None, as in ``plc.tags``."""
+        """Return the tag *name* names, or None.  A slot its factory refuses gives None."""
         known = self._known_tags_by_name.get(name)
         if known is not None:
             return known
@@ -4576,10 +4586,9 @@ class PLC:
         *scan_id* is the scan the change belongs to, the next one by default.  A
         compiled range, which applied it some scans ago, says which.
 
-        No-op in replay mode — the log's ``rtc_base_changes`` entry is
-        load-bearing, and ``replay_to`` applies it via
-        ``_set_rtc_internal`` directly.  Re-firing here would
-        duplicate-record and (worse) shift the recorded scan_id.
+        In replay mode this does nothing. The log's ``rtc_base_changes`` entry matters, and
+        ``replay_to`` applies it via ``_set_rtc_internal`` directly.  Applying the change
+        here too would record it twice and shift the recorded scan_id.
         """
         if self._replay_mode:
             return
@@ -4723,7 +4732,7 @@ class PLC:
         self._input_overrides.patch(tags)
 
     def patch_as_recorded(self, recorded: Mapping[str, bool | int | float | str]) -> None:
-        """Queue a patch a scan log recorded: see ``InputOverrideManager.restore_patch``."""
+        """Queue a patch that a scan log recorded. See ``InputOverrideManager.restore_patch``."""
         self._register_known_tags_from_mapping_keys(recorded)
         self._input_overrides.restore_patch(recorded)
 
@@ -4816,9 +4825,8 @@ class PLC:
     def pending_patches(self) -> Mapping[str, bool | int | float | str]:
         """Read-only view of patches not yet in the committed state.
 
-        Holds the patches queued for the next scan, plus any already taken
-        by a scan still being stepped (``debug.scan_steps_debug()``) that has
-        not committed.
+        Returns the patches queued for the next scan, plus any that a scan still
+        being stepped (``debug.scan_steps_debug()``) has taken but not committed.
         """
         drained = self._this_scan_drained_patches
         if not drained:
@@ -4988,7 +4996,7 @@ class PLC:
         registration.enabled = False
 
     def _note_unrecorded_scans(self, first: int, last: int) -> None:
-        """These scans ran and left no records: a question that reaches them settles them."""
+        """Note that scans *first*..*last* ran without records. A question settles them."""
         windows = self._unrecorded_scans
         if windows and windows[-1][1] == first - 1:
             windows[-1] = (windows[-1][0], last)
@@ -5000,9 +5008,9 @@ class PLC:
     def _record_landing(self, first_scan_id: int | None = None) -> None:
         """Cache the state a compiled run landed on, and checkpoint it if one is due.
 
-        It is the exact state of its scan, so history may serve it, and a replay may
+        It is the exact state of its scan. History may serve it, and a replay may
         anchor on it, as on any stepped scan.  *first_scan_id* is the first of the
-        scans that ran with no records: a question that reaches them settles them.
+        scans that ran with no records. A question that reaches them settles them.
         """
         state = self._state
         scan_id = state.scan_id
@@ -5122,7 +5130,7 @@ class PLC:
         return ctx, dt
 
     def _randint_site_list(self) -> tuple[RandIntExpr, ...]:
-        """The ``randint`` sites the program's rungs run, as the compiled run draws them."""
+        """Return the ``randint`` sites the program's rungs run, as the compiled run draws them."""
         return self._tags_rungs_reach.randint_sites()
 
     def _evaluate_synthesis(
@@ -5135,10 +5143,10 @@ class PLC:
     ) -> None:
         """Evaluate synthesis bracket rungs in their own condition scope.
 
-        The brackets are scanned like a subroutine body: a fresh condition
-        scope, writes batched into the same ctx/commit as the user rungs.  Each
-        entry records under a synthetic ``RungId`` in the node timeline, leaving
-        the public integer main-rung timeline unchanged.
+        The brackets are scanned like a subroutine body. They get a fresh condition
+        scope, and their writes batch into the same ctx and commit as the user rungs.  Each
+        entry records under a synthetic ``RungId`` in the node timeline.  The public
+        integer main-rung timeline stays unchanged.
         """
         if not rungs:
             return

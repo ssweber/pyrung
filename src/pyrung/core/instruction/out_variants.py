@@ -1,18 +1,18 @@
 """CLICK v4 Out coil variants: toggle, debounce, flasher and timed.
 
-Each variant is its own class and none subclasses ``OutInstruction``: the
+Each variant is its own class, and none subclasses ``OutInstruction``.  The
 analyses that dispatch on ``OutInstruction`` read it as "the coil equals its
 rung", which no variant is.  The variants keep their state in tags: the target
-bit and the owned Timers' accumulators (CLICK's TD).  The exceptions are
-memory keys written every scan: the rung's previous state (toggle, debounce,
-timed) and a flasher's phase.  Timed phases carry the usual ``_frac:<Acc>``
-remainder, in nanoseconds.
+bit and the accumulators of the Timers they own (CLICK's TD).  Some state is
+memory keys that the variant writes every scan.  Those are the rung's previous
+state (toggle, debounce, timed) and a flasher's phase.  Timed phases also carry
+the usual ``_frac:<Acc>`` remainder, in nanoseconds.
 
 None of them writes a Timer's ``Done`` bit (CLICK's T), ``EN`` or ``TT``.  A
 CLICK Out coil claims the whole timer number and never turns T<n> on
-(hardware round 1, probe O6), so a contact on
-that Timer's ``Done`` is always off.  The ``*_done`` fields only name the
-claimed timer, for the Click mapping checks.
+(hardware round 1, probe O6).  So a contact on that Timer's ``Done`` is always
+off.  The ``*_done`` fields only name the claimed timer, for the Click mapping
+checks.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def _coil_tag(target: Tag | ImmediateRef) -> Tag:
 
 
 def _tick(ctx: ScanContext, acc: Tag, unit: TimeUnit) -> tuple[int, int | Fraction]:
-    """Advance *acc* by this scan's dt; return the new value and remainder."""
+    """Advance *acc* by this scan's dt.  Return the new value and remainder."""
     frac = ctx.get_memory(f"_frac:{acc.name}", 0)
     int_units, rem = elapsed_units(frac, ctx.get_memory("_dt", 0.0), unit)
     return min(ctx.get_tag(acc.name, 0) + int_units, _ACC_MAX), rem
@@ -76,7 +76,7 @@ def _target_plan(
 
 
 class ToggleInstruction(Instruction):
-    """Toggle coil: inverts the target on each OFF->ON transition of the rung.
+    """Model a toggle coil, which inverts the target on each OFF->ON transition of the rung.
 
     The target keeps its value while the rung is false.  The rung's previous
     state is memory, so a rung that is already true on the first scan toggles.
@@ -113,27 +113,27 @@ class ToggleInstruction(Instruction):
 
 
 class DebounceInstruction(Instruction):
-    """Debounce coil: the target follows the rung once it has held steady.
+    """Model a debounce coil, where the target follows the rung once it has held steady.
 
-    Two accumulators, one a side (hardware readings of 2026-11-06).  The on
-    side's counts while the rung is true: from 0 at a rise, held at a fall.
-    The off side's is 0 on every true scan.  It counts while the rung is false
-    and the target is on.  With the target off, the off TD holds its value,
-    including one the ladder wrote (``deb_off/off_td_with_coil_off``,
-    2026-11-12).  The target turns on on a true scan whose on accumulator,
-    ticked, reaches its preset.  It turns off on a false scan whose off
-    accumulator reached its preset before this scan's tick.  Between the two
-    it holds.  So the off side lags a scan.  On the scan of the fall it ticks
-    and compares nothing.  It drops the target a scan after a TOF of its
-    preset would (``coil_timing/deb_off_against_tof``), so a 0/0 debounce
+    The coil has two accumulators, one for each side (hardware readings of 2026-11-06).
+    The on side counts while the rung is true.  It counts from 0 at a rise and holds at
+    a fall.  The off side is 0 on every true scan.  It counts while the rung is false
+    and the target is on.  With the target off, the off TD holds its value, including a
+    value that the ladder wrote (``deb_off/off_td_with_coil_off``, 2026-11-12).
+
+    The target turns on on a true scan whose on accumulator, after its tick, reaches its
+    preset.  It turns off on a false scan whose off accumulator reached its preset before
+    this scan's tick.  Between the two it holds.  So the off side lags a scan.  On the
+    scan of the fall it ticks and compares nothing.  It drops the target a scan after a
+    TOF of its preset would (``coil_timing/deb_off_against_tof``).  So a 0/0 debounce
     filters a one-scan dropout (``deb_zero/off_side_lag``).
 
-    The lag is taken in the compare, not the count: an off side that only
-    started ticking on the scan after the fall would read its TD a scan
-    short, under the 100 ms that ``coil_timing/off_td_held`` read (101).
-    The off TD read on the scan of the fall itself would tell the two apart:
-    a scan's time here, 0 under a count that starts late.  The rung's
-    previous state is memory.  Neither Timer's ``Done`` is written.
+    The lag is in the compare, not the count.  An off side that only started ticking on
+    the scan after the fall would read its TD a scan short, under the 100 ms that
+    ``coil_timing/off_td_held`` read (101).  Reading the off TD on the scan of the fall
+    itself would tell the two apart.  It reads a scan's time here, and 0 under a count
+    that starts late.  The rung's previous state is memory.  Neither Timer's ``Done`` is
+    written.
     """
 
     INERT_WHEN_DISABLED = False
@@ -216,26 +216,26 @@ class DebounceInstruction(Instruction):
 
 
 class FlasherInstruction(Instruction):
-    """Flasher coil: alternates on and off phases while the rung is true.
+    """Model a flasher coil, which alternates on and off phases while the rung is true.
 
-    The phase is hidden state, a memory cell (hardware readings of
-    2026-11-06): 0 idle, 1 on, 2 off, 3 on from the next scan, 4 off from the
-    next scan.  The rung false sets it idle, turns the target off and freezes
-    both accumulators.  A true rung on an idle phase starts an on phase, both
-    accumulators from 0 (the off TD does not run on from where it froze,
-    hardware round of 2026-11-05).  Each scan ticks the running phase's
-    accumulator, and the target shows that phase.  When the running phase's
-    accumulator reaches its preset, the other phase runs from the next scan.
-    The new phase clears its accumulator on that scan, before it ticks.  So
-    every phase shows for at least one scan, and a 1 ms first on phase lights
-    the rung's first scan (``flash_zero/short_first_phase``).  The accumulator
-    of the phase not running holds, through the scan that ends the running
-    phase too.  ``out_more/preset_mid_phase`` reads it in the middle of the
-    next on phase only, so no CLICK has read that last scan.  A TD the ladder
-    writes past the running phase's preset ends that phase on its next tick
-    (``td_write`` read it for both phases).
-    One written to the phase not running stands until that phase starts
-    again and clears it.  The model implies this, but no CLICK has read it.
+    The phase is hidden state in a memory cell (hardware readings of 2026-11-06).  Its
+    values are 0 idle, 1 on, 2 off, 3 on from the next scan, and 4 off from the next scan.
+    A false rung sets the phase idle, turns the target off and freezes both accumulators.
+    A true rung on an idle phase starts an on phase, with both accumulators from 0.  The
+    off TD does not run on from where it froze (hardware round of 2026-11-05).
+
+    Each scan ticks the running phase's accumulator, and the target shows that phase.
+    When the running phase's accumulator reaches its preset, the other phase runs from
+    the next scan.  The new phase clears its accumulator on that scan, before it ticks.
+    So every phase shows for at least one scan, and a 1 ms first on phase lights the
+    rung's first scan (``flash_zero/short_first_phase``).
+
+    The accumulator of the phase that is not running holds.  That includes the scan that
+    ends the running phase.  ``out_more/preset_mid_phase`` reads it in the middle of the
+    next on phase only, so no CLICK has read that last scan.  A TD that the ladder writes
+    past the running phase's preset ends that phase on its next tick (``td_write`` read
+    it for both phases).  A TD written to the phase that is not running stands until that
+    phase starts again and clears it.  The model implies this, but no CLICK has read it.
 
     An on or off preset of 0 or below sets the phase idle, turns the target
     off and freezes both accumulators, as a false rung does
@@ -334,18 +334,18 @@ class FlasherInstruction(Instruction):
 
 
 class TimedInstruction(Instruction):
-    """Timed coil: a rung edge turns the target on for a set time.
+    """Model a timed coil, where a rung edge turns the target on for a set time.
 
-    Not maintained, the target is on for exactly the preset and then off even
-    if the rung is still true; another pulse needs the rung to go false and
+    Not maintained, the target is on for exactly the preset and then off, even
+    if the rung is still true.  Another pulse needs the rung to go false and
     true again.  Maintained, the target is on for at least the preset and then
     follows the rung.  An edge during the on time does not restart it, and the
     on time runs out whatever the rung does.  The on time runs while the
-    target is on and the accumulator is short of the preset; a rising edge
-    outside it starts one from 0, and the accumulator otherwise holds, the
-    rung false included (hardware round of 2026-11-05).  The rung's previous
+    target is on and the accumulator is short of the preset.  A rising edge
+    outside the on time starts one from 0.  Otherwise the accumulator holds, even
+    when the rung is false (hardware round of 2026-11-05).  The rung's previous
     state is memory.  The edge's scan counts toward the time, as on_delay's
-    first scan does, so a preset of a scan or less (0 or below included) gives
+    first scan does.  So a preset of a scan or less, 0 or below included, gives
     no pulse.  The Timer's ``Done`` is not written.
     """
 
