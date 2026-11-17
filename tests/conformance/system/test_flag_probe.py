@@ -275,7 +275,7 @@ def prove_source_flag_is_read_before_the_copy_settles(slot):
 
 
 class _SC40Window(Block):
-    """Is the SC bank with SC40 as pyrung's runtime flag, so a range over it reads the flag.
+    """The SC bank with SC40 as pyrung's runtime flag, so a range over it reads the flag.
 
     A raw ``sc[40]`` is a plain tag that nothing writes.  A CLICK Math accepts a bit only in
     a SUM over a bit range, and pyrung has no range over system points.

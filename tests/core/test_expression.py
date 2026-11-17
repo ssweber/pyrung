@@ -860,7 +860,7 @@ def _eval_in(expr, tags):
 
 
 class TestRangeAggregateExpr:
-    """Test that BlockRange.max()/.min()/.median()/.mean() return a RangeAggregateExpr."""
+    """Checks that BlockRange.max()/.min()/.median()/.mean() return a RangeAggregateExpr."""
 
     DS = Block("DS", TagType.INT, 1, 10)
     VALUES = {"DS1": 3, "DS2": -7, "DS3": 10, "DS4": 4}

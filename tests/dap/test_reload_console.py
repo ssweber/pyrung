@@ -1577,7 +1577,7 @@ class TestAutoreloadReport:
         monkeypatch.setattr(adapter, "_request_state_frame", lambda _info: None)
 
         class OneEdit:
-            """Edit the program on the first wait, then stop the loop."""
+            """Edits the program on the first wait, then stops the loop."""
 
             calls = 0
 
