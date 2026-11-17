@@ -1,14 +1,15 @@
-"""CLICK spelling of hex and REAL constants on export, and reading them back.
+"""Check how CLICK spells hex and REAL constants on export, and how it reads them back.
 
-CLICK reads digits in a hex context (hex-mode Math, a DH/XD/YD value or
-compare) as hex and appends ``h`` when a rung is typed; a pasted rung gets no
-such fix-up.  pyrung literals stay decimal, so pyrung ``255`` exports as
-``FFh`` (unpadded: CLICK's Math normalizes ``000Ah`` to ``Ah``, and Copy
-and Compare keep either spelling).  REAL constants are float32 in CLICK, keep at most 7
-significant digits, and are written the way CLICK writes them (``3.402823E+38``).
-A blank text constant is ``$00``, CLICK's ASCII-code constant for NUL (a TXT
-blank): a quoted ``""`` writes no TXT at all, and CLICK ends a quoted constant
-at NUL.
+When you type a rung, CLICK reads digits in a hex context as hex and appends ``h``. A hex
+context is hex-mode Math, or a DH/XD/YD value or compare. A pasted rung gets no such fix-up.
+pyrung literals stay decimal, so pyrung ``255`` exports as ``FFh``. The export is unpadded
+because CLICK's Math normalizes ``000Ah`` to ``Ah``, and Copy and Compare keep either spelling.
+
+REAL constants are float32 in CLICK and keep at most 7 significant digits. CLICK writes them
+in its own way (``3.402823E+38``).
+
+A blank text constant is ``$00``, CLICK's ASCII-code constant for NUL (a TXT blank). A quoted
+``""`` writes no TXT at all, and CLICK ends a quoted constant at NUL.
 """
 
 from __future__ import annotations
@@ -102,7 +103,7 @@ def test_decimal_contexts_stay_decimal():
 
 
 def test_hex_compare_outside_word_range_rejected():
-    """pyrung's DH1 == -1 is never true; CLICK's FFFFh would be, so refuse."""
+    """Refuse DH1 == -1. It is never true in pyrung, but CLICK's FFFFh would be."""
     with Program() as logic:
         with Rung(dh[1] == -1):
             out(c[1])
@@ -126,7 +127,7 @@ def test_hex_constants_round_trip_with_pyrung_meaning():
 
 
 def test_native_padded_hex_compare_reads_back():
-    """CLICK's own ``DH53==0000h`` (tumbler sm_IsCmdValid) imports and re-exports unpadded."""
+    """Import CLICK's own ``DH53==0000h`` (tumbler sm_IsCmdValid) and re-export it unpadded."""
     bundle = _bundle(("DH53==0000h", "out(C1051)"))
     ns: dict = {}
     exec_with_source(ladder_to_pyrung(bundle), ns)
@@ -136,7 +137,7 @@ def test_native_padded_hex_compare_reads_back():
 
 @pytest.mark.parametrize("value", [0x0, 0xA, 0xC, 0xC1, 0xD1F, 0xDD01, 0xDF10, 0xCAFE, 0xFFFF])
 def test_unpadded_hex_that_looks_like_an_address_round_trips(value: int):
-    """``C1h`` / ``DD01h`` are constants, not the C1 or DD1 registers."""
+    """Read ``C1h`` and ``DD01h`` as constants, not as the C1 or DD1 registers."""
     with Program() as logic:
         with Rung(dh[1] == value):
             copy(value, dh[2])
@@ -150,7 +151,7 @@ def test_unpadded_hex_that_looks_like_an_address_round_trips(value: int):
     [("hex", "math(DH1 + 0x255, DH2)"), ("decimal", "math(DH1 + 255, DH2)")],
 )
 def test_importer_reads_bare_digits_in_hex_math_as_hex(mode: str, expected: str):
-    """CLICK reads ``DH1 + 255`` in hex-mode Math as 255h; only there."""
+    """CLICK reads ``DH1 + 255`` as 255h in hex-mode Math, and nowhere else."""
     bundle = _bundle(("", f"math(DH1 + 255,DH2,mode={mode})"))
     assert expected in strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
 
@@ -167,7 +168,7 @@ def test_importer_reads_bare_digits_in_hex_math_as_hex(mode: str, expected: str)
         (100.0, "100.0"),
         (0.1, "0.1"),
         (0.0, "0.0"),
-        # CLICK keeps 7 significant digits: a pasted 3.40282347E+38 reads back
+        # CLICK keeps 7 significant digits. A pasted 3.40282347E+38 reads back as
         # 3.402823e+38, and the 8-digit 3.4028235E+38 fails v4's range check.
         (1 / 3, "0.3333333"),
         (3e38, "3.0E+38"),
@@ -206,8 +207,8 @@ def test_real_constants_export_click_style():
 
 @pytest.mark.parametrize("value", [pymath.inf, pymath.nan, 1e39])
 def test_unrepresentable_real_rejected(value: float):
-    # The DSL refuses a REAL literal past CLICK's range; the exporter's
-    # spelling has no form for one either, as a backstop.
+    # The DSL refuses a REAL literal past CLICK's range. As a backstop, the
+    # exporter has no spelling for one either.
     with Program():
         with Rung():
             with pytest.raises(ValueError, match="outside the REAL range"):
@@ -216,9 +217,12 @@ def test_unrepresentable_real_rejected(value: float):
 
 
 def test_negative_operands_export_click_style():
-    """What CLICK v4 takes, typed: ``DS1 + ( -5 )`` but not ``DS1 + -5``; a leading
-    ``- DS1`` (its spelling of ``-DS1``) but not ``DS1 * ( - DS2 )``, so a negation
-    inside a formula is written ``( 0 - DS2 )``."""
+    """Check what CLICK v4 accepts when typed.
+
+    It accepts ``DS1 + ( -5 )`` but not ``DS1 + -5``. It accepts a leading ``- DS1`` (its
+    spelling of ``-DS1``) but not ``DS1 * ( - DS2 )``. So write a negation inside a formula
+    as ``( 0 - DS2 )``.
+    """
     with Program() as logic:
         with Rung():
             math(ds[1] + -5, ds[2])
@@ -283,7 +287,7 @@ def test_real_exponent_round_trips():
 
 
 def test_blank_text_constants_export_as_ascii_code():
-    """``""`` writes nothing on CLICK; a raw NUL in quotes ends the constant."""
+    """Check that ``""`` writes nothing on CLICK and a raw NUL in quotes ends the constant."""
     with Program() as logic:
         with Rung():
             fill("\x00", txt.select(1, 2))
@@ -351,7 +355,7 @@ def test_blank_text_constants_import_as_nul():
 
 @pytest.mark.parametrize("blank", ["$00", '""'])
 def test_csv_blank_spellings_import_as_blank(blank: str):
-    """``$00`` is the export's spelling; ``""`` from older CSVs still reads as the blank."""
+    """Read ``$00`` as the blank. It is the export's spelling, and older CSVs use ``""``."""
     bundle = _bundle(
         ("", 'copy("Q",TXT1)'),
         ("", f"copy({blank},TXT1)"),

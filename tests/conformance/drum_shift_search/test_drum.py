@@ -1,31 +1,35 @@
 """Drums: the ``drum`` group (subroutine ``Conf_Drum``).
 
-A drum's outputs, events, completion flag and control inputs are C bits and its
-accumulator a TD register, and no slot field is either, so each case uses raw
-registers it owns: C1901..C2000, C801..C850 and TD401..TD500
-(``memory.OWNED``), ten C bits per case (cases 11 on take theirs from
-C801..C850, and the last cases fewer, from what is left).  The current step is a slot field (DS), ``Result1`` in every
-case; a jump target is a slot field too (CLICK takes it from a DS).  Each
-drum's reset input is ``Cmd == 0``, so the reset puts it back on step 1 with
-its time cleared.  A case that also resets mid-run puts an ``Or`` of
-``Cmd == 0`` and its own reset scan on the reset input, with the jump and jog
-pins after it (its second branch row sits between the pin rows).
+A drum's outputs, events, completion flag and control inputs are C bits, and its
+accumulator is a TD register. No slot field is any of these, so each case uses raw
+registers that it owns: C1901..C2000, C801..C850 and TD401..TD500 (``memory.OWNED``).
+Each case gets ten C bits. Cases 11 on take theirs from C801..C850, and the last cases
+get fewer, from what is left. The current step is a slot field (DS), ``Result1`` in
+every case. A jump target is a slot field too (CLICK takes it from a DS). Each drum's
+reset input is ``Cmd == 0``, so the reset puts it back on step 1 with its time cleared.
+A case that also resets mid-run puts an ``Or`` of ``Cmd == 0`` and its own reset scan
+on the reset input, with the jump and jog pins after it (its second branch row sits
+between the pin rows).
 
-The event-drum cases count their own scans (``scans.py``): a C bit driven by a
-rung keyed on the scan number is the event, the jog or the jump, and rungs
-below the drum record the scan each step is entered, the step on a given scan,
-and when an output or the completion flag was last on.  ``Fired`` goes up once
-the record is final, so every expectation is an exact int.  The time drum case
-paces itself on its accumulator instead (each control fires once the step has
-timed 100 ms), so it runs on a CLICK whose scan is far shorter than 10 ms.
+The event-drum cases count their own scans (``scans.py``). A C bit driven by a rung
+keyed on the scan number is the event, the jog or the jump. Rungs below the drum record
+the scan each step is entered, the step on a given scan, and when an output or the
+completion flag was last on. ``Fired`` goes up once the record is final, so every
+expectation is an exact int. The time drum case paces itself on its accumulator
+instead (each control fires once the step has timed 100 ms), so it runs on a CLICK
+whose scan is far shorter than 10 ms.
 
 The expectations are what a CLICK does, and the likeliest answer of an open probe
-otherwise.  A CLICK event
-drum: jump and jog act on their rising edges even while the drum is paused;
-reset is a level that wins, taking the drum to step 1 with its flag off and ALL its outputs off,
-and drops a jump or jog on its scan; jump beats jog on one scan; a paused drum
-does not write its outputs; at completion all its outputs go off until a jog
-(a jump moves the step but leaves them off).
+otherwise. A CLICK event drum behaves like this:
+
+- Jump and jog act on their rising edges even while the drum is paused.
+- Reset is a level that wins. It takes the drum to step 1 with its flag off and ALL
+  its outputs off, and it drops a jump or jog on its scan.
+- Jump beats jog on one scan.
+- A paused drum does not write its outputs.
+- At completion all its outputs go off until a jog. A jump moves the step but leaves
+  them off.
+
 What each case tells apart:
 
 - ``te_acc_counts_while_waiting``, ``te_level_event_already_on``: the open
@@ -174,25 +178,25 @@ DEADLINE_MS = 1500
 
 
 def entered(slot: Any, step: int, into: Any) -> None:
-    """*into* = the scan the drum (``Result1``) first reads *step*.  Below the drum."""
+    """Record in *into* the scan on which the drum (``Result1``) first reads *step*."""
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, slot.Result1 == step, into == 0):
         copy(slot.Scratch, into)
 
 
 def at_scan(slot: Any, scan: int, value: Any, into: Any) -> None:
-    """*into* = *value* as scan *scan* reaches this rung."""
+    """Copy *value* into *into* when scan *scan* reaches this rung."""
     with Rung(slot.Cmd != 0, slot.Scratch == scan):
         copy(value, into)
 
 
 def first_on_from(slot: Any, bit: Any, scan: int, into: Any) -> None:
-    """*into* = the first scan from *scan* on that *bit* is on (0 if none)."""
+    """Record in *into* the first scan from *scan* on that *bit* is on (0 if none)."""
     with Rung(slot.Cmd != 0, slot.Scratch >= scan, slot.Scratch <= WINDOW, bit, into == 0):
         copy(slot.Scratch, into)
 
 
 def last_on(slot: Any, bit: Any, into: Any, count: Any = None) -> None:
-    """*into* = the last scan *bit* is on; *count* = how many scans it is on."""
+    """Record in *into* the last scan *bit* is on, and in *count* how many scans it is on."""
     with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, bit):
         copy(slot.Scratch, into)
         if count is not None:
@@ -768,7 +772,7 @@ def test_drum():
 
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040])
 def test_te_waits_at_any_scan(monkeypatch, dt):
-    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    """Pass at scan times of 1 ms (a CLICK) and 10 to 40 ms (the soft PLC)."""
     monkeypatch.setattr(runner_module, "DT", dt)
     ids = ("te_acc_counts_while_waiting", "te_level_event_already_on")
     cases = [replace(k, scans=int(0.7 / dt)) for k in group.cases if k.id in ids]

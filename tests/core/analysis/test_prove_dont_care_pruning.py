@@ -111,7 +111,7 @@ class TestArithmeticOperand:
 
 
 class TestAtomReads:
-    """The tags an atom reads, which a reader must pin or enumerate before it decides."""
+    """Tests for the tags an atom reads.  A reader must pin or enumerate them before it decides."""
 
     def test_an_arithmetic_operand_gives_the_tags_it_reads(self):
         from pyrung import Int
@@ -136,7 +136,7 @@ class TestAtomReads:
         assert _referenced_tags(ExprAnd((Atom("Run", "xic"), compared))) is None
 
     def test_a_pinned_gate_refuses_an_operand_tag_it_lacks(self):
-        """This pins the gate's contract.  The evaluator's own check already refused before the fix."""
+        """Pin the gate's contract.  The evaluator's own check already refused before the fix."""
         from pyrung import Int
         from pyrung.core.analysis.pilot.availability import _guard_eval_atom
         from pyrung.core.analysis.simplified import _condition_to_expr
