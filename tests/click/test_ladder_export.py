@@ -232,7 +232,7 @@ def test_or_expansion_with_trailing_and_golden():
 
 
 def _rows(*rows: str) -> list[tuple[str, ...]]:
-    """Rows from their leading cells: ``out(...)`` is reached by wires, others stop."""
+    """Expand each row from its leading cells. Wires reach ``out(...)``, and other rows stop."""
     expanded = []
     for row in rows:
         *cells, last = row.split(",")
@@ -246,7 +246,7 @@ def _rows(*rows: str) -> list[tuple[str, ...]]:
 
 
 def _assert_or_merge(source: str, expected: list[tuple[str, ...]]) -> None:
-    """The rows export as drawn, and read back to a program that exports them again."""
+    """Export the rows as drawn, then read them back into a program that exports them again."""
     logic, mapping = build_program(source)
     bundle = pyrung_to_ladder(logic, mapping)
     assert list(bundle.main_rows[1:-1]) == expected
@@ -356,7 +356,7 @@ def test_contact_after_or_merge_shares_the_merge_cell(conditions: str, rows: lis
     ],
 )
 def test_a_text_compare_with_a_longer_literal_stays_one_compare_in_an_or(build, rows):
-    # TXT1 != "AB" is an Or of one compare per character underneath.
+    # Underneath, TXT1 != "AB" is an Or of one compare per character.
     outputs = sum(row.split(",")[-1].startswith("out(") for row in rows)
     with Program(strict=False) as logic:
         with Rung(*build()):
@@ -395,7 +395,7 @@ def test_or_merge_keeps_its_bare_t(conditions: str, rows: list[str]):
 
 
 def test_or_merge_carries_a_branch_split():
-    # A branch hangs from the Or's merge column, as in R34 of the CLICK's save
+    # A branch hangs from the Or's merge column, as in R34 of the CLICK save
     # (test_ladder_topology.py).
     _assert_export_main_rows(
         """
@@ -436,7 +436,7 @@ def test_merged_contact_reads_back_as_the_or_it_was_written_as():
         """
     )
     bundle = pyrung_to_ladder(logic, mapping)
-    # Conf_Drum's rung, as CLICK has it saved.
+    # This is Conf_Drum's rung as CLICK saved it.
     assert bundle.main_rows[1][:5] == ("R", "DS1!=0", "T:DS2==2", "T:DS2<=6", "-")
     assert bundle.main_rows[2][:4] == ("", "", "DS2>=4", "")
     assert "Rung(DS1 != 0, Or(DS2 == 2, DS2 >= 4), DS2 <= 6)" in ladder_to_pyrung(bundle).replace(
@@ -753,7 +753,7 @@ def test_bundle_writes_one_rung_source_entry_per_click_rung(tmp_path: Path):
     )
     bundle = pyrung_to_ladder(logic, mapping)
 
-    # The continued rung is a CLICK rung of its own, with its own source span.
+    # The continued rung is a CLICK rung of its own, and it has its own source span.
     assert [entry.rung for entry in bundle.main_sources] == [1, 2, 3]
     assert [len(entry.sources) for entry in bundle.main_sources] == [1, 1, 0]  # 3 is end()
     first, second = bundle.main_sources[0].sources[0], bundle.main_sources[1].sources[0]
@@ -935,8 +935,8 @@ def test_calc_hex_token_uses_inferred_hex_mode():
 
 def test_calc_exports_wide_constants_as_written_once_allowed():
     # pyrung runs the 3000000000 as its low 32 bits, as a pasted one ran on a CLICK.
-    # Validation refuses it (CLK_MATH_WIDE_CONSTANT), since CLICK's editor does.  Once
-    # allowed, the export writes the formula as written.
+    # Validation refuses it (CLK_MATH_WIDE_CONSTANT), because CLICK's editor does. Once
+    # the code is allowed, the export writes the formula as written.
     from pyrung.click.ladder import LadderExportError
 
     logic, mapping = build_program(
@@ -1558,7 +1558,7 @@ def _assert_native_pattern(
     """The hand-drawn pattern imports as *logic*, and *logic* exports as *expected_rows*.
 
     The fixture was drawn by hand and never saved by a CLICK, so it pins only what the importer
-    reads.  The export draws the form CLICK's syntax check keeps (test_ladder_topology.py).
+    reads. The export draws the form that CLICK's syntax check keeps (test_ladder_topology.py).
     """
     from pyrung.click.ladder._exporter import _LadderExporter
 
@@ -1846,7 +1846,7 @@ def test_calc_sum_expr_decimal_mode():
     [("max", "MAX"), ("min", "MIN"), ("median", "MDN"), ("mean", "AVG")],
 )
 def test_calc_range_aggregate_renders_click_name(method, click_name):
-    """max/min/median/mean render like SUM, with CLICK's MAX/MIN/MDN/AVG names."""
+    """Render max/min/median/mean like SUM, with CLICK's MAX/MIN/MDN/AVG names."""
     Enable = Bool("Enable")
     DS = Block("DS", TagType.INT, 1, 10)
     Result = Int("Result")
@@ -1865,7 +1865,7 @@ def test_calc_range_aggregate_renders_click_name(method, click_name):
 
 
 def test_calc_range_aggregate_hex_mode():
-    """MAX over a WORD range stays in hex mode (CLICK allows MAX/MIN/MDN/AVG in hex)."""
+    """Keep MAX over a WORD range in hex mode. CLICK allows MAX/MIN/MDN/AVG in hex."""
     Enable = Bool("Enable")
     DH = Block("DH", TagType.WORD, 1, 10)
     Dest = Block("Dest", TagType.WORD, 1, 1)
@@ -1884,7 +1884,7 @@ def test_calc_range_aggregate_hex_mode():
 
 
 def test_calc_bool_range_sum_renders_plain_sum():
-    """SUM over a bit bank renders as plain SUM; CLICK has no separate spelling."""
+    """Render SUM over a bit bank as plain SUM. CLICK has no separate spelling."""
     Enable = Bool("Enable")
     Flags = Block("Flags", TagType.BOOL, 1, 8)
     Count = Int("Count")
@@ -1903,7 +1903,7 @@ def test_calc_bool_range_sum_renders_plain_sum():
 
 
 def test_calc_abs_renders_uppercase():
-    """abs(x) renders as CLICK's ABS ( x ), spaced the way CLICK's formula editor writes it."""
+    """Render abs(x) as CLICK's ABS ( x ), with the spaces that CLICK's formula editor writes."""
     Enable = Bool("Enable")
     Delta = Int("Delta")
     Result = Int("Result")
@@ -1924,7 +1924,7 @@ def test_calc_abs_renders_uppercase():
 
 
 def test_calc_randint_renders_rand():
-    """randint(lo, hi) renders as CLICK's RAND ( lo , hi ); the hidden draw tag never shows."""
+    """Render randint(lo, hi) as CLICK's RAND ( lo , hi ). The hidden draw tag never shows."""
     Enable = Bool("Enable")
     Lo = Int("Lo")
     Hi = Int("Hi")
@@ -1946,7 +1946,7 @@ def test_calc_randint_renders_rand():
 
 
 def test_calc_randint_of_words_is_hex():
-    """The hidden draw tag is not an operand: RAND of WORD bounds into a WORD is hex mode."""
+    """Ignore the hidden draw tag as an operand, so RAND of WORD bounds into a WORD is hex."""
     Enable = Bool("Enable")
     Lo = Tag("Lo", TagType.WORD)
     Hi = Tag("Hi", TagType.WORD)
@@ -1965,7 +1965,7 @@ def test_calc_randint_of_words_is_hex():
 
 
 def test_calc_grouping_parens_render_spaced():
-    """Grouping parens are spaced like a call's: CLICK writes ( a + b ) and - ( a + b )."""
+    """Space grouping parens like a call's. CLICK writes ( a + b ) and - ( a + b )."""
     Enable = Bool("Enable")
     A = Int("A")
     B = Int("B")
@@ -2014,7 +2014,7 @@ def test_calc_range_aggregate_composes_with_abs():
 
 
 def test_summary_has_no_rename_for_math():
-    """math() is CLICK's Math by name: the summary reports no rename, nor for calc()."""
+    """Report no rename for math() or calc(), because math() is CLICK's Math by name."""
     Enable = Bool("Enable")
     A = Int("A")
     B = Int("B")
@@ -2041,7 +2041,7 @@ def test_summary_has_no_rename_for_math():
 
 
 def test_summary_has_no_renames_without_one():
-    """A program with nothing CLICK names differently reports no rename."""
+    """Report no rename for a program with nothing that CLICK names differently."""
     Enable = Bool("Enable")
     Light = Bool("Light")
 
@@ -2131,7 +2131,7 @@ def test_summary_return_not_counted_when_explicit():
 
 
 def test_conditional_return_at_end_still_gets_tail():
-    """A subroutine ending in a conditional return() still needs CLICK's unconditional RET."""
+    """Add CLICK's unconditional RET to a subroutine that ends in a conditional return()."""
     Enable = Bool("Enable")
     Light = Bool("Light")
 
@@ -2326,7 +2326,10 @@ def test_click_v4_target_forms_export(target, token):
 
 @pytest.mark.parametrize("register", ["TD1", "SD50"])
 def test_device_id_outside_ds_is_refused(register):
-    """CLICK's Slave ID box takes a number or a DS address; an Int tag on TD or SD is neither."""
+    """Refuse an Int tag on TD or SD as a device ID.
+
+    CLICK's Slave ID box accepts a number or a DS address.
+    """
     logic, mapping = build_program(
         f"""
         with Program() as p:
@@ -2341,7 +2344,7 @@ def test_device_id_outside_ds_is_refused(register):
 
 @pytest.mark.parametrize("source", ["DS1", "DD1", "DH1", "5"])
 def test_to_text_exponential_from_an_integer_is_refused(source):
-    """CLICK offers Exponential Numbering only for a Real source."""
+    """Offer Exponential Numbering only for a Real source, as CLICK does."""
     logic, mapping = build_program(
         f"""
         with Program() as p:
@@ -2373,7 +2376,7 @@ def test_to_text_exponential_from_an_integer_is_refused(source):
     ],
 )
 def test_to_text_writes_the_flag_its_source_type_has(source, rendered, convert, flag):
-    """A Real source, a constant or a pointer included, writes exponential and no other."""
+    """Write only the exponential flag for a Real source, even a constant or a pointer."""
     _assert_export_main_rows(
         f"""
         with Program() as p:
@@ -2440,7 +2443,7 @@ def test_receive_rtu_modbus_address_token():
     ids=["hex", "hex-coil", "984", "raw", "raw-coil"],
 )
 def test_receive_modbus_address_keeps_its_notation(remote_start, dest, csv_address):
-    """Hex stays hex; 984 and raw offsets export as MODBUS 984."""
+    """Export hex addresses as hex, and 984 and raw offsets as MODBUS 984."""
     _assert_export_main_rows(
         f"""
         with Program() as p:
@@ -2562,7 +2565,7 @@ def test_branch_rendered_height_over_32_rows_raises_clear_error():
 
 
 class TestContinuedExport:
-    """Each continued rung exports as a CLICK rung of its own, as CLICK's syntax check draws it."""
+    """Export each continued rung as a CLICK rung of its own, as CLICK's syntax check draws it."""
 
     def test_continued_rung_is_its_own_click_rung(self):
         _assert_export_main_rows(
@@ -2764,8 +2767,8 @@ def test_one_register_fill_exports_a_copy_of_the_same_value(build, token):
 
 
 def test_one_register_fill_into_text_from_a_number_register_is_still_refused():
-    # A Fill takes no number register into TXT, and a one-register Fill must pass
-    # the Fill table as well as the Copy one.
+    # A Fill accepts no number register into TXT. A one-register Fill must pass
+    # the Fill table as well as the Copy table.
     with pytest.raises(LadderExportError, match="Copy operation fill is incompatible"):
         _single_fill_tokens(lambda: fill(ds[1], txt.select(5, 5)))
 
@@ -2779,7 +2782,7 @@ def test_one_register_fill_keeps_the_checks_of_a_copy():
 
 
 def test_one_register_fill_refuses_text_that_a_copy_would_convert():
-    # The bank check refuses these first, so allow it to reach the export's own refusal.
+    # The bank check refuses these first. Allow its code so the export's own refusal is reached.
     allow = ("CLK_COPY_BANK_INCOMPATIBLE",)
     with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
         _single_fill_tokens(lambda: fill(df[1], txt.select(5, 5)), allow=allow)
@@ -2793,7 +2796,7 @@ def test_one_register_fill_refuses_several_characters():
 
 
 def test_pointer_range_fill_is_still_refused():
-    # Its length is unknown at export, so it is never turned into a Copy.
+    # Its length is unknown at export, so the export never turns it into a Copy.
     ptr = Int("Ptr")
     with pytest.raises(LadderExportError, match="CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"):
         with Program(strict=False) as logic:

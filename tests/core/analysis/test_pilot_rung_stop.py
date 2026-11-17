@@ -1,8 +1,9 @@
 """how() and a program that stops itself.
 
-A rung that sets ``sys.cmd_mode_stop`` ends the recording: the next scan is a restart
-with scan ids from 0.  A plan is the scans of one recording, so how() says it stopped
-rather than step over it, or plan a route stepping would never run.
+A rung that sets ``sys.cmd_mode_stop`` ends the recording. The next scan is a restart
+with scan ids from 0. A plan covers the scans of one recording, so how() says the program
+stopped. It does not step over the stop, and it does not plan a route that stepping would
+never run.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ def test_a_stop_before_the_target_is_the_answer(stop_at: int, lamp_at: int) -> N
             out(Lamp)
     plc = PLC(logic, dt=0.001)
 
-    # Stepped: the program stops one scan after the timer is done, and starts again from
+    # Stepped: the program stops one scan after the timer is done and starts again from
     # nothing, so the lamp never comes on.
     stepped = plc.fork()
     while stepped._running:
@@ -64,7 +65,7 @@ def test_a_stop_before_the_target_is_the_answer(stop_at: int, lamp_at: int) -> N
 
 
 def test_the_returned_fork_is_not_a_search() -> None:
-    # The stop is after the target, so the search never meets it and the caller does.
+    # The stop comes after the target. The search never reaches it, but the caller does.
     with Program() as logic:
         with Rung():
             on_delay(LampTimer, preset=50)
@@ -179,8 +180,8 @@ def test_how_on_a_plc_in_stop_says_stopped(stop, then) -> None:
 
 @pytest.mark.parametrize("then", [_patch_the_count, _force_the_count], ids=["patch", "force"])
 def test_how_says_stopped_when_the_waiting_scan_stops_the_plc(then) -> None:
-    # The program writes the stop bit on scan 51, so the scan that applies the patch or force
-    # is the one that stops.
+    # The program writes the stop bit on scan 51. The scan that applies the patch or force
+    # is therefore the scan that stops.
     plc = PLC(_counting_program(), dt=0.01)
     for _ in range(50):
         plc.step()
