@@ -132,8 +132,8 @@ _CLICK_BLOCKS: dict[str, _AddressableBlock] = {
 }
 
 # Everything a test snippet might reference — pre-loaded into the exec namespace
-# A pool for tests that need more than one timer (the Out coil variants own
-# one or two each); mapped to T1..T10 / TD1..TD10 only when a source uses it.
+# A pool for tests that need more than one timer. The Out coil variants own one or two each.
+# It maps to T1..T10 and TD1..TD10 only when a source uses it.
 Timers = Timer.clone("Timers", count=10)
 
 _EXEC_NAMESPACE: dict[str, object] = {
@@ -424,9 +424,9 @@ def exec_with_source(
 
 
 def rows_logic(rows) -> list[tuple]:
-    """Per-output (AF, full condition, pins) of ladder rows, NOPs included.
+    """Return per-output (AF, full condition, pins) entries of ladder rows, NOPs included.
 
-    Compares logic, not shape: continued rows and branches that read the same
+    This compares logic, not shape. Continued rows and branches that read the same
     contacts give the same entries.
     """
     from pyrung.click._topology import Series, make_compound
@@ -453,7 +453,7 @@ def rows_logic(rows) -> list[tuple]:
 
 
 def bundle_logic(bundle) -> dict[str, list[tuple]]:
-    """:func:`rows_logic` for the main scope and every subroutine."""
+    """Return :func:`rows_logic` for the main scope and every subroutine."""
     scopes = {"main": rows_logic(bundle.main_rows)}
     for name, rows in bundle.subroutine_rows:
         scopes[name] = rows_logic(rows)
@@ -487,10 +487,10 @@ def _join_scope(rows, rungs) -> tuple[tuple[str, ...], ...]:
 
 
 def join_continued(bundle, program: Program):
-    """*bundle* with each continued rung drawn as one more wire of the CLICK rung above it.
+    """Return *bundle* with each continued rung drawn as one more wire of the CLICK rung above it.
 
-    A CLICK program saved before a syntax check can hold such a rung, and the importer reads its
-    wires back as ``.continued()`` rungs.  Each program rung must export as one CLICK rung.
+    A CLICK program saved before a syntax check can hold such a rung. The importer reads its
+    wires back as ``.continued()`` rungs. Each program rung must export as one CLICK rung.
     """
     import dataclasses
 
@@ -506,7 +506,7 @@ def join_continued(bundle, program: Program):
 
 
 def rung_drawing(rungs, *, as_exported: bool = False) -> list[tuple]:
-    """Each rung as written, as a tuple of (continued, contact count, items).
+    """Return each rung as written, as a tuple of (continued, contact count, items).
 
     With *as_exported*, the rungs are listed as the export draws them.  Each continued rung is a
     rung of its own, and so is each item of a rung or branch that has no contact, at any depth

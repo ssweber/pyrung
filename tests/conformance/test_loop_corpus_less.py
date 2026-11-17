@@ -1,7 +1,7 @@
-"""The parts that decline as built, without the cases that make them: then they run in the loop.
+"""Run each part that declines as built, less the cases that make it decline, in the loop.
 
-Such a case keeps its whole part out, RAND or a read of the scan counter, so here its neighbours
-get their turn, all in one scan.
+A case such as RAND or a read of the scan counter keeps its whole part out of the loop. Here
+those cases are dropped, so their neighbours get their turn, all in one scan.
 """
 
 from __future__ import annotations
