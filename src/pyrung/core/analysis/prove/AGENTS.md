@@ -18,10 +18,10 @@ PILOT runs the PLC to check every plan it returns. So a domain that is too wide 
 - A timer's or counter's Acc starts from 0, from its default and from every value another write stores, such as a copy or a `math()` (`_acc_start_values`). Its instruction times or counts on from each of them.
   - An up counter with a down input can cross its preset either way. So its domain also holds the preset and the values one and two below it and one above it.
   - An Acc gets no domain when the outside writes it, when a write stores values no list holds, or when two instructions time or count it.
-- Tags the rungs compare with each other share the values of their domains (`_close_tag_comparisons`). Each gap between two of those values, and each end, also gets one value for each tag in the group. A group with a `Real` gets them at even fractions of the gap. A value added below the lowest end goes no lower than the tag can hold, such as 0 for an Acc that no write sets negative. So when a rung compares two tags directly, as in `A == B` or `A < B`, some pair of domain values answers as the run does. A chain such as `A < B, B < C` works the same way.
+- Tags the rungs compare with each other share the values of their domains (`_close_tag_comparisons`). Each gap between two of those values, and each end, also gets one value for each tag in the group. A group with a `Real` gets them at even fractions of the gap. A group with an integer tag also gets whole numbers there, so an `Int` and a `Real` can be equal. A value added below the lowest end goes no lower than the tag can hold, such as 0 for an Acc that no write sets negative. So when a rung compares two tags directly, as in `A == B` or `A < B`, some pair of domain values answers as the run does. A chain such as `A < B, B < C` works the same way.
 - A comparison through a pointer or an expression gets no such pair, and neither does a comparison with a tag that has no domain (`_tag_comparisons`). A tag compared that way gets no domain, unless a domain can list every value it holds (`_drop_unlisted_comparisons`). Such a domain is one of these:
-  - the `choices=` of a tag no rung writes (a rung may store a value past them)
-  - the declared range of an integer tag no rung writes (a `Real` has none)
+  - the `choices=` of a tag no rung writes. A rung may store a value past a tag's choices.
+  - the declared range of an integer tag no rung writes. A `Real`'s range has too many values to list.
   - the values its writers store (`collect_produced_value_domains`), when the outside does not write it and no instruction times or counts it
 
   Each tag those writers read that has a domain then needs every value too, since a swap of it changes what they store.

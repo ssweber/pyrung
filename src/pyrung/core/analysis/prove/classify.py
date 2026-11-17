@@ -2684,6 +2684,7 @@ def _close_tag_comparisons(
     can sit between the same two split points, or past the same end, in any order.  So
     each gap between two split points, and each end, also gets as many values as the
     group has tags.  A group with a Real takes the values of a gap at even fractions of it.
+    A group with an integer tag takes whole numbers there too.
 
     *domains* maps each kind of domain to its dict, which this updates in place.  A tag
     with ``choices=`` keeps its domain, since it holds no other value.  A tag in *fixed*
@@ -2732,14 +2733,23 @@ def _close_tag_comparisons(
         points = sorted({v for name in group for v in values_of(name)})
         count = len(members)
         added = set(points)
-        below = {points[0] - step for step in range(1, count + 1)}
-        added |= {points[-1] + step for step in range(1, count + 1)}
-        real = any(tags[name].type is TagType.REAL for name in group if name in tags)
+        steps = range(1, count + 1)
+        below = {points[0] - step for step in steps}
+        added |= {points[-1] + step for step in steps}
+        kinds = {tags[name].type is TagType.REAL for name in group if name in tags}
+        if False in kinds:
+            # An integer tag holds only whole numbers, so it needs whole numbers past each end
+            # and inside each gap, even when a Real's split points are fractions.
+            if math.isfinite(points[0]):
+                below |= {math.ceil(points[0]) - step for step in steps}
+            if math.isfinite(points[-1]):
+                added |= {math.floor(points[-1]) + step for step in steps}
         for low, high in itertools.pairwise(points):
-            if real:
-                added |= {low + (high - low) * step / (count + 1) for step in range(1, count + 1)}
-            else:
-                added |= {low + step for step in range(1, count + 1) if low + step < high}
+            if True in kinds:
+                added |= {low + (high - low) * step / (count + 1) for step in steps}
+            if False in kinds and math.isfinite(low):
+                start = math.floor(low) + 1
+                added |= {start + step - 1 for step in steps if start + step - 1 < high}
         for name in members:
             tag = tags[name]
             if tag.choices is not None:
@@ -2860,10 +2870,10 @@ def _lowest_held(
     atom_index: dict[str, list[Atom]],
     non_finite: frozenset[str],
 ) -> Any:
-    """The lowest value *name* can hold, or None when only its type bounds it.
+    """The lowest value *name* can hold.
 
-    An Acc that only times or counts up stays at or above the lowest value it starts from.
-    So an Acc that no write sets negative stays at 0 or above.
+    That is its type's lowest value, or 0 for an Acc that only counts up from values no lower
+    than 0.  None for a type with no lowest value.
     """
     from pyrung.core.instruction.counters import CountDownInstruction
     from pyrung.core.validation._common import walk_instructions
@@ -3725,10 +3735,9 @@ def _classify_dimensions_from_graph(
             return tuple(sorted(tag.choices))
         if name in timed:
             return None
-        # A structural domain holds split points as well as stored values, so it lists too
-        # few.  A rung may store a value past ``choices=`` as well.  The values the writers
-        # store list them all.  They come from literals or from a declared Int range.  An
-        # external Real has none.
+        # A structural domain holds split points, not every value a write stores.  A rung may
+        # store a value past ``choices=`` too.  The values the writers store come from
+        # literals or from a declared Int range, and an external Real has none.
         if not produced:
             produced.append(collect_produced_value_domains(program, graph))
         return produced[0].get(name)

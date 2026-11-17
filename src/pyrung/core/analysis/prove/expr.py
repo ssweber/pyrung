@@ -81,11 +81,47 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         except TypeError:
             return None
         eval_atom = Atom(atom.tag, atom.form, operand)
-    elif isinstance(atom.operand, (Expression, IndirectRef, IndirectExprRef, IndirectBlockRange)):
-        # An expression or a pointer element answers a comparison with a condition, not a
-        # bool, and the mapping cannot say what it reads.
+    elif isinstance(atom.operand, Expression):
+        # Comparing with the expression itself would give a condition, not a bool.
+        operand = _expression_value(atom.operand, state)
+        if operand is None:
+            return None
+        eval_atom = Atom(atom.tag, atom.form, operand)
+    elif isinstance(atom.operand, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
+        # The mapping cannot say which element a pointer reads.
         return None
     return _eval_atom(eval_atom, state[atom.tag])
+
+
+class _StateView:
+    """Lets an expression read its tags from a mapping, as it reads them in a scan."""
+
+    __slots__ = ("_state",)
+
+    def __init__(self, state: Mapping[str, Any]) -> None:
+        self._state = state
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        return self._state.get(name, default)
+
+    def get_memory(self, key: str, default: Any = None) -> Any:
+        return default
+
+
+def _expression_value(expr: Expression, state: Mapping[str, Any]) -> int | float | None:
+    """What *expr* gives on *state*, or None when *state* lacks a tag it reads."""
+    from pyrung.core.analysis.sp_values import _expr_tag_names
+
+    names = _expr_tag_names(expr)
+    if names is None or not names <= state.keys():
+        return None
+    try:
+        value = expr.evaluate(_StateView(state))  # type: ignore[arg-type]
+    except (TypeError, ValueError, ArithmeticError):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
 
 
 def _eval_arith_atom_from_state(atom: ArithAtom, state: Mapping[str, Any]) -> bool | None:

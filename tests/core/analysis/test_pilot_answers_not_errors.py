@@ -97,6 +97,11 @@ class TestArithmeticInARung:
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="how() has no lever that sets Lvl to the value Tb[P] reads, so it stops",
+    )
     def test_a_tag_compared_with_a_pointer_element(self) -> None:
         """``Lvl == Tb[P]`` once raised a TypeError from inside how()."""
         level = Int("Lvl", external=True, min=0, max=20)
@@ -108,7 +113,7 @@ class TestArithmeticInARung:
             with Rung(level == table[Int("P", external=True, min=1, max=3)], level > 5):
                 latch(hit)
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
-        assert plan.status in {PlanStatus.REACHED, PlanStatus.STOPPED}, plan.reason
+        assert plan.status is PlanStatus.REACHED, plan.reason
 
     def test_a_tag_not_equal_to_arithmetic(self) -> None:
         """``A != B + 2`` beside ``A == B + 2`` once raised a TypeError from inside how()."""
@@ -122,8 +127,8 @@ class TestArithmeticInARung:
                 out(Bool("Two"))
             with Rung(left != right + 2, Bool("Go", external=True)):
                 latch(hit)
-        plan = PLC(program, dt=0.01).how(hit, wall_clock_s=3.0, max_scans=300)
-        assert plan.status in {PlanStatus.REACHED, PlanStatus.STOPPED}, plan.reason
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
 
     def test_a_goal_holding_arithmetic_twice_keeps_one(self) -> None:
         """Merging goals once hashed each value, and an expression has no hash."""
@@ -196,6 +201,19 @@ class TestTargetForms:
         limit = Int("Limit", default=5)
         with pytest.raises(ValueError, match="compared with arithmetic"):
             PLC(program, dt=0.01).how(watch.Acc == limit + 1, **BOUND)
+
+    @pytest.mark.parametrize("offset", [0, 1])
+    def test_an_equal_target_with_a_pointer_element_is_a_clear_error(self, offset: int) -> None:
+        """``Held == Tb[P + 1]`` once raised a TypeError from inside how()."""
+        held = Int("Held")
+        table = Block("Tb", TagType.INT, 1, 3)
+        entry = Int("P", external=True, min=1, max=2)
+        with Program(strict=False) as program:
+            with Rung(Bool("Grab", external=True)):
+                copy(Int("Lvl", external=True, min=0, max=20), held)
+        element = table[entry + 1] if offset else table[entry]
+        with pytest.raises(ValueError, match="compared with a pointer element"):
+            PLC(program, dt=0.01).how(held == element, **BOUND)
 
     def test_and_is_several_targets(self) -> None:
         program, watch, _other, hit = self._program()

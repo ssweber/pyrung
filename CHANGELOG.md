@@ -43,7 +43,7 @@
 - `how()` no longer misses the states where two tags a rung compares directly are equal, such as the Accs of two timers.
 - `how()` no longer misses values of a tag that a rung compares with a pointer element, with arithmetic or with an input that has no bounds.
 - `how()` no longer raises `TypeError` on a rung that compares a tag with arithmetic or a pointer element, such as `Fed.Acc == Cut.Acc + 2` or `Lvl == Tb[P]`.
-- `how(Lvl == Sp + 2)` now raises a `ValueError` that asks for a tag or a literal, as `how(Lvl > Sp + 2)` does.
+- `how(Lvl == Sp + 2)` and `how(Lvl == Tb[P])` now raise a `ValueError` that asks for a literal.
 - `how()` now keeps a drum step's preset or an off-delay's preset that a rung below the instruction sets (it took the preset for a value set before each read).
 - `how()` now keeps a continuous `search()`'s result, which the search reads to resume after it (it took the result for a value set before each read).
 - `why()` now follows a timer's Acc or a continuous `search()`'s result back to a later rung that writes it (it stopped at the tag).

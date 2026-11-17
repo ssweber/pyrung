@@ -1824,6 +1824,23 @@ def real_readings_kept_in_order() -> Any:
 
 
 @idiom
+def count_compared_with_a_real_reading() -> Any:
+    """An Int count and a Real reading inside one band, and rungs that compare them."""
+    count = Int("BinCount", external=True)
+    reading = Real("BinReading", external=True)
+    with Program() as prog:
+        with Rung(count > 2, count < 9, reading > 4.6, reading < 5.4, count == reading):
+            out(Bool("BinCountMatches"))
+        with Rung(count < reading):
+            out(Bool("BinCountBelow"))
+    return prog
+
+
+# The count and the reading are equal inside the band.
+OPENING["count_compared_with_a_real_reading"] = ({"BinCount": 5, "BinReading": 5.0},) * 3
+
+
+@idiom
 def shown_count_compared_with_an_hmi_count() -> Any:
     """A count copied to a display tag, which a rung compares with an HMI count."""
     boxes = Counter.clone("Boxes")
