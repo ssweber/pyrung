@@ -13,6 +13,13 @@
 
 ## Unreleased
 
+### What's new
+
+#### Check a recording
+
+- The console's `assert Tag == value` checks one tag. A replay stops at the first failed check.
+- The console's `run until <condition> within <N | duration>` runs scans until the condition holds. It fails if the limit comes first.
+
 ### Behaviour changes
 
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
@@ -30,6 +37,9 @@
 
 ### Fixes
 
+- The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
+- A `replay` that stops on a failed line now reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
+- A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).

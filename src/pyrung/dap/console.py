@@ -9,7 +9,8 @@ acquire it.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +33,9 @@ class ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
     #: Extra fields for the evaluate response body, for clients that read data.
     body: dict[str, Any] = field(default_factory=dict)
+    #: True when a breakpoint ended the command early. ``replay`` stops on it. Every step
+    #: sends a "stopped" event, so the event alone can't tell a breakpoint apart.
+    hit_breakpoint: bool = False
 
 
 @dataclass(frozen=True)
@@ -319,35 +323,57 @@ def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     adapter._assert_can_step_locked()
     scans_completed = 0
     hit_bp = False
-    for _ in range(n):
-        _advance_one_full_scan(adapter)
-        scans_completed += 1
-        if adapter._current_rung_hits_breakpoint_locked():
-            hit_bp = True
-            break
+    with stop_if_scans_ran(adapter):
+        for _ in range(n):
+            _advance_one_full_scan(adapter)
+            scans_completed += 1
+            if adapter._current_rung_hits_breakpoint_locked():
+                hit_bp = True
+                break
 
     scan_id = adapter._current_scan_id
     suffix = " (breakpoint)" if hit_bp else ""
     return ConsoleResult(
         f"Stepped {scans_completed} scan(s), now at scan {scan_id}{suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
+        hit_breakpoint=hit_bp,
     )
 
 
-@register("run", usage="run <N | duration>  (e.g. 10, 500ms, 2 s)", group="execution")
+@register(
+    "run",
+    usage="run <N | duration> | run until <expression> within <N | duration>",
+    group="execution",
+    # Declared: the derived grammar would keep only the first form.
+    slots=(
+        Slot(kind="text", label="N | duration", required=False),
+        Slot(kind="expression", label="expression", required=False, keyword="until"),
+        Slot(kind="text", label="N | duration", required=False, keyword="within"),
+    ),
+)
 def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
         raise adapter.DAPAdapterError(
-            "Usage: run <cycles> or run <duration> (e.g. run 10, run 500ms)"
+            "Usage: run <cycles> or run <duration> (e.g. run 10, run 500ms), "
+            "or run until <expression> within <cycles or duration>"
         )
-    spec = _run_spec(parts)
-    adapter._assert_can_step_locked()
-    runner = adapter._require_runner_locked()
+    with stop_if_scans_ran(adapter):
+        if parts[1].lower() == "until":
+            return _run_until(adapter, expression.strip().split(None, 2)[2:])
+        cycles, seconds = _run_limit(adapter, parts[1:])
+        adapter._assert_can_step_locked()
+        runner = adapter._require_runner_locked()
+        if cycles is not None:
+            return _run_cycles(adapter, runner, cycles)
+        return _run_duration(adapter, runner, seconds)
 
+
+def _run_limit(adapter: Any, tokens: list[str]) -> tuple[int | None, float]:
+    """Read ``10``, ``500ms`` or ``2 s`` as a scan count or a number of seconds."""
+    spec = _run_spec(tokens)
     try:
-        cycles = int(spec)
-        return _run_cycles(adapter, runner, cycles)
+        return int(spec), 0.0
     except ValueError:
         pass
 
@@ -357,8 +383,103 @@ def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
         ms = parse_duration(spec)
     except ValueError as exc:
         raise adapter.DAPAdapterError(f"Cannot parse '{spec}' as cycle count or duration") from exc
+    return None, ms / 1000.0
 
-    return _run_duration(adapter, runner, ms / 1000.0)
+
+_WITHIN_RE = re.compile(r"\s+within\s+", re.IGNORECASE)
+
+
+def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
+    from pyrung.dap.handlers.stack_variables_evaluate import (
+        condition_predicate,
+        parse_known_condition,
+    )
+
+    text = rest[0].strip() if rest else ""
+    splits = list(_WITHIN_RE.finditer(text))
+    if not splits or not text[: splits[-1].start()].strip():
+        raise adapter.DAPAdapterError(
+            "Usage: run until <expression> within <cycles or duration> "
+            "(e.g. run until Done within 500, run until Done within 2 s)"
+        )
+    condition = text[: splits[-1].start()].strip()
+    cycles, seconds = _run_limit(adapter, text[splits[-1].end() :].split())
+    if cycles is not None and cycles < 1:
+        raise adapter.DAPAdapterError("cycle count must be >= 1")
+    if cycles is None and seconds <= 0:
+        raise adapter.DAPAdapterError("duration must be positive")
+
+    runner = adapter._require_runner_locked()
+    holds = condition_predicate(
+        adapter, parse_known_condition(adapter, runner.current_state, condition)
+    )
+    adapter._assert_can_step_locked()
+    start_time = runner.current_state.timestamp
+    scans = 0
+    hit_bp = False
+    while not holds(runner.current_state):
+        out_of_scans = cycles is not None and scans >= cycles
+        out_of_time = cycles is None and runner.current_state.timestamp >= start_time + seconds
+        if out_of_scans or out_of_time:
+            elapsed = runner.current_state.timestamp - start_time
+            raise adapter.DAPAdapterError(
+                f"run until: {condition} still false after {scans} scan(s) ({elapsed:.3f}s)"
+            )
+        _advance_one_full_scan(adapter)
+        scans += 1
+        if adapter._current_rung_hits_breakpoint_locked():
+            hit_bp = True
+            break
+
+    elapsed = runner.current_state.timestamp - start_time
+    scan_id = adapter._current_scan_id
+    outcome = " (breakpoint)" if hit_bp else f", {condition} is true"
+    return ConsoleResult(
+        f"Ran {scans} scan(s) ({elapsed:.3f}s elapsed), now at scan {scan_id}{outcome}",
+        events=[("stopped", adapter._stopped_body("step"))],
+        hit_breakpoint=hit_bp,
+    )
+
+
+def queue_stop_for_error(adapter: Any, error: Any) -> None:
+    """Queue a "stopped" event for the scans a failing command ran.
+
+    The mark on *error* stops a surrounding ``replay`` from queuing a second one.
+    """
+    if getattr(error, "stop_queued", False):
+        return
+    adapter._enqueue_internal_event("stopped", adapter._stopped_body("step"))
+    error.stop_queued = True
+
+
+def scan_mark(adapter: Any) -> tuple[Any, int | None]:
+    """Record the last finished scan, so a caller can later tell whether any scan has run since.
+
+    The runner is part of the mark because a ``reload`` replaces it and may restart the count.
+    """
+    runner = adapter._runner
+    return runner, None if runner is None else runner.current_state.scan_id
+
+
+def scans_ran_since(adapter: Any, mark: tuple[Any, int | None]) -> bool:
+    runner, scan_id = scan_mark(adapter)
+    return runner is not mark[0] or scan_id != mark[1]
+
+
+@contextmanager
+def stop_if_scans_ran(adapter: Any) -> Iterator[None]:
+    """Queue a stop when a command fails after it ran scans.
+
+    An error answer carries no events, so without the stop the client's view stays on the
+    old scan.
+    """
+    mark = scan_mark(adapter)
+    try:
+        yield
+    except Exception as exc:
+        if scans_ran_since(adapter, mark):
+            queue_stop_for_error(adapter, exc)
+        raise
 
 
 def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:
@@ -377,13 +498,16 @@ def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:
     return ConsoleResult(
         f"Ran {scans} cycle(s), now at scan {scan_id}{suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
+        hit_breakpoint=hit_bp,
     )
 
 
-def _run_spec(parts: list[str]) -> str:
-    if len(parts) >= 3 and _looks_like_split_duration(parts[1], parts[2]):
-        return f"{parts[1]}{parts[2]}"
-    return parts[1]
+def _run_spec(tokens: list[str]) -> str:
+    if not tokens:
+        return ""
+    if len(tokens) >= 2 and _looks_like_split_duration(tokens[0], tokens[1]):
+        return f"{tokens[0]}{tokens[1]}"
+    return tokens[0]
 
 
 def _looks_like_split_duration(value: str, unit: str) -> bool:
@@ -412,6 +536,7 @@ def _run_duration(adapter: Any, runner: Any, seconds: float) -> ConsoleResult:
     return ConsoleResult(
         f"Ran {scans} scan(s) ({elapsed:.3f}s elapsed){suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
+        hit_breakpoint=hit_bp,
     )
 
 
