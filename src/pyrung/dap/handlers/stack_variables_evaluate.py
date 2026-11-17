@@ -7,6 +7,7 @@ Must preserve evaluate command semantics and error message text.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -194,21 +195,32 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
 def evaluate_watch_expression_locked(adapter: Any, expression: str) -> Any:
     state = adapter._effective_evaluate_state_locked()
+    parsed = parse_known_condition(adapter, state, expression)
+
+    if isinstance(parsed, Compare) and parsed.op is None and parsed.right is None:
+        return adapter._state_value_for_reference(state, parsed.tag.name)
+
+    return condition_predicate(adapter, parsed)(state)
+
+
+def parse_known_condition(adapter: Any, state: SystemState, expression: str) -> Expr:
+    """Parse a condition, and refuse it when it names a tag that *state* doesn't hold."""
     try:
         parsed = parse_condition(expression)
     except ExpressionParseError as exc:
         raise adapter.DAPAdapterError(str(exc)) from exc
 
-    references = adapter._expression_references(parsed)
-    for name in sorted(references):
+    for name in sorted(adapter._expression_references(parsed)):
         if not adapter._state_has_reference(state, name):
             raise adapter.DAPAdapterError(f"Unknown tag or memory reference: {name}")
+    return parsed
 
-    if isinstance(parsed, Compare) and parsed.op is None and parsed.right is None:
-        return adapter._state_value_for_reference(state, parsed.tag.name)
 
-    state_for_eval = _state_with_reference_aliases(adapter, state, references)
-    return compile_condition(parsed)(state_for_eval)
+def condition_predicate(adapter: Any, parsed: Expr) -> Callable[[SystemState], bool]:
+    """Compile a parsed condition into a test of any state, reading aliases such as ``Pump.Run``."""
+    references = adapter._expression_references(parsed)
+    predicate = compile_condition(parsed)
+    return lambda state: predicate(_state_with_reference_aliases(adapter, state, references))
 
 
 def effective_evaluate_state_locked(adapter: Any) -> SystemState:

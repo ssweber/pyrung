@@ -59,6 +59,7 @@ analysis:
   simplified [tag]
 
 capture:
+  assert <tag> == <value>
   harness <install|remove|status>                       needs physical+link=
   record <action> | record stop
   replay <filepath> [--harness current|recorded|off]
@@ -184,6 +185,18 @@ replay session.txt --harness off              # ignore harness inputs
 ```
 
 Replay executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line. The default `current` harness mode installs the harness declared by the current program and skips recorded harness inputs. `recorded` removes the current harness and applies provenance-tagged harness inputs from the transcript. `off` removes the harness and skips those inputs.
+
+### Checks
+
+```text
+assert Light == true       # fails unless Light is on
+assert Temp == 72.5        # a Real within one part in a million passes
+assert State == HELD       # a choice label stands for its value
+```
+
+`assert` compares one tag with one value. A failed `assert` is an error, so a replay stops at that line and reports the value it found. A tag the program doesn't have is an error too.
+
+`assert` reads the values the last full scan left, as `get` does. After a `next` into the middle of a scan, it doesn't see the rungs that scan has run so far.
 
 ## Autoharness
 

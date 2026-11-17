@@ -9,11 +9,19 @@ that ``replay`` runs.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pyrung.dap.console import ConsoleResult, register
+from pyrung.dap.expressions import Compare, Literal, _resolve_choice_label
+from pyrung.dap.grammar import Slot
+from pyrung.dap.handlers.stack_variables_evaluate import condition_predicate, parse_known_condition
+
+#: A CLICK keeps a Real to about 7 significant digits, so ``assert`` takes a Real
+#: within one part in a million (or 1e-6 near zero) as equal.
+REAL_TOLERANCE = 1e-6
 
 
 @dataclass(frozen=True)
@@ -152,6 +160,52 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
     if warnings:
         text += "\n" + "\n".join(warnings)
     return ConsoleResult(text)
+
+
+# ---------------------------------------------------------------------------
+# Assert verb
+# ---------------------------------------------------------------------------
+
+_ASSERT_USAGE = "Usage: assert <tag> == <value>"
+
+
+@register(
+    "assert",
+    usage="assert <tag> == <value>",
+    group="capture",
+    slots=(Slot(kind="tag", label="tag"), Slot(kind="value", label="value", keyword="==")),
+)
+def _cmd_assert(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split(None, 1)
+    if len(parts) < 2:
+        raise adapter.DAPAdapterError(_ASSERT_USAGE)
+    runner = adapter._require_runner_locked()
+    state = runner.current_state
+    parsed = parse_known_condition(adapter, state, parts[1])
+    if not isinstance(parsed, Compare) or parsed.op != "==" or parsed.right is None:
+        raise adapter.DAPAdapterError(_ASSERT_USAGE)
+
+    name = parsed.tag.name
+    typed = parsed.right.value
+    expected = typed
+    if isinstance(typed, str):
+        label_value = _resolve_choice_label(runner.tags, name, typed)
+        if label_value is not None:
+            expected = label_value
+    actual = adapter._state_value_for_reference(state, name)
+
+    if isinstance(actual, float) and _is_number(expected):
+        matched = math.isclose(actual, expected, rel_tol=REAL_TOLERANCE, abs_tol=REAL_TOLERANCE)
+    else:
+        check = Compare(tag=parsed.tag, op="==", right=Literal(value=expected))
+        matched = condition_predicate(adapter, check)(state)
+    if not matched:
+        raise adapter.DAPAdapterError(f"assert failed: {name} = {actual!r}, expected {typed!r}")
+    return ConsoleResult(f"assert ok: {name} = {actual!r}")
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 # ---------------------------------------------------------------------------

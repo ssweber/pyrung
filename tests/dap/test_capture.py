@@ -67,11 +67,11 @@ def _runner_script() -> str:
     )
 
 
-def _setup(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+def _setup(tmp_path: Path, script: str | None = None) -> tuple[DAPAdapter, io.BytesIO]:
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script_path = tmp_path / "logic.py"
-    script_path.write_text(_runner_script(), encoding="utf-8")
+    script_path.write_text(script or _runner_script(), encoding="utf-8")
     _send_request(
         adapter, out_stream, seq=1, command="launch", arguments={"program": str(script_path)}
     )
@@ -568,3 +568,85 @@ class TestReplayHarnessModes:
         assert "harness=off" in resp["body"]["result"]
         assert adapter._harness is None
         assert adapter._runner.current_state.tags.get("Device_Fb", False) is False
+
+
+def _values_script() -> str:
+    return (
+        "from pyrung.core import Bool, Int, PLC, Program, Real, Rung, copy, out\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "light = Bool('Light')\n"
+        "temp = Real('Temp')\n"
+        "state = Int('State', choices={1: 'IDLE', 2: 'HELD'})\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        out(light)\n"
+        "        copy(2, state)\n"
+        "    with Rung(~button):\n"
+        "        copy(1, state)\n"
+        "    with Rung():\n"
+        "        copy(temp, temp)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+class TestAssertVerb:
+    def test_assert_passes_on_an_equal_value(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        _repl(adapter, out, "step", seq=11)
+        resp, _ = _repl(adapter, out, "assert Light == true", seq=12)
+        assert resp["success"] is True
+        assert resp["body"]["result"] == "assert ok: Light = True"
+
+    def test_assert_fails_naming_the_value_it_found(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        resp, _ = _repl(adapter, out, "assert Light == true")
+        assert resp["success"] is False
+        assert resp["message"] == "assert failed: Light = False, expected True"
+
+    def test_assert_takes_a_real_within_the_tolerance(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Temp 12.5000001", seq=10)
+        _repl(adapter, out, "step", seq=11)
+        resp, _ = _repl(adapter, out, "assert Temp == 12.5", seq=12)
+        assert resp["success"] is True
+        resp, _ = _repl(adapter, out, "assert Temp == 12.51", seq=13)
+        assert resp["success"] is False
+        assert "assert failed: Temp = 12.5000001" in resp["message"]
+
+    def test_assert_reads_a_choice_label(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        _repl(adapter, out, "step", seq=11)
+        assert _repl(adapter, out, "assert State == HELD", seq=12)[0]["success"] is True
+        resp, _ = _repl(adapter, out, "assert State == IDLE", seq=13)
+        assert resp["message"] == "assert failed: State = 2, expected 'IDLE'"
+
+    def test_assert_names_an_unknown_tag(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        resp, _ = _repl(adapter, out, "assert Lamp == true")
+        assert resp["success"] is False
+        assert resp["message"] == "Unknown tag or memory reference: Lamp"
+
+    def test_assert_takes_only_an_equality(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        for text in ("assert", "assert Light", "assert Temp > 1"):
+            resp, _ = _repl(adapter, out, text)
+            assert resp["success"] is False
+            assert resp["message"] == "Usage: assert <tag> == <value>"
+
+    def test_a_failed_assert_stops_a_replay_at_its_line(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "patch Button true\nstep\nassert Light == true\n"
+            "patch Button false\nstep\nassert Light == true\nstep 5\n",
+        )
+        resp, _ = _repl(adapter, out, f"replay {transcript}")
+        result = resp["body"]["result"]
+        assert "Replay error at line 6: assert failed: Light = False, expected True" in result
+        assert "Executed 5/7" in result

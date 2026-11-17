@@ -13,6 +13,12 @@
 
 ## Unreleased
 
+### What's new
+
+#### Check a recording
+
+- The console's `assert Tag == value` checks a tag, and a failed `assert` stops a replay at its line.
+
 ### Behaviour changes
 
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
