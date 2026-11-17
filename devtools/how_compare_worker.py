@@ -121,8 +121,8 @@ def save():
     tmp = args.out + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(DOC, fh, indent=0)
-    # On Windows a reader (an indexer, a virus scan) holding the old file denies the
-    # replace for a moment; the run's last save must not lose its rows to that.
+    # On Windows, a reader that holds the old file (an indexer, a virus scan) denies the
+    # replace for a moment.  The run's last save must not lose its rows to that.
     for attempt in range(20):
         try:
             os.replace(tmp, args.out)
@@ -183,7 +183,10 @@ def safe_goal(goal, tags):
 
 
 def stepped_replay_final(fork):
-    """The fork's recording stepped scan by scan from its anchor with no loop and no checkpoint."""
+    """Return the hash of the fork's recording replayed scan by scan from its anchor.
+
+    The replay uses no loop and no checkpoint.
+    """
     try:
         replay, log, anchor, lifecycle = fork._build_replay_fork(None)
         for scan in range(anchor + 1, fork.state.scan_id + 1):
@@ -300,8 +303,9 @@ def run_row(case):
             flags.append("GOAL_FALSE_AT_TIP the plan's fork does not satisfy the goal")
 
     # Independent of the plan: does stepping the session itself reach the goal, and when?
-    # Checked against the plan only where the plan has no input and no hold, because only then is
-    # the plan what the session does by itself.  Every other reached row says why it is unchecked.
+    # The result is checked against the plan only where the plan has no input and no hold.
+    # Only then is the plan what the session does by itself.  Every other reached row says
+    # why it is unchecked.
     if goal is not None:
         cap = args.step_cap
         if reached:
@@ -333,7 +337,8 @@ def run_row(case):
                 flags.append(
                     f"PLAN_VS_STEP plan ends scan {row['tip']}, stepping never reaches in {cap} scans"
                 )
-        # how() declined or raised, with no avoid in the way, where the session reaches by itself
+        # how() declined or raised, although no avoid was in the way and the session
+        # reaches the goal by itself.
         declined = (not reached) and (plan is None or row["status"] in ("STOPPED", "CANNOT_REACH"))
         if declined and isinstance(hit, int) and avoid is None and row.get("inputs", 0) == 0:
             flags.append(f"MISSED stepping reaches at scan {hit}, how() says {row['status']}")

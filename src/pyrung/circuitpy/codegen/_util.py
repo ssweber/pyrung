@@ -34,8 +34,10 @@ def _bool_literal(expr: str) -> bool | None:
 
 
 def _optional_value_type_name(value: Any) -> str | None:
-    """The type of the tag or pointer *value* reads, as :func:`copy_source_kind` takes it
-    (an ``immediate()`` operand is its tag's); ``None`` for anything else."""
+    """Return the type of the tag or pointer *value* reads, as :func:`copy_source_kind` takes it.
+
+    An ``immediate()`` operand has its tag's type.  Anything else returns ``None``.
+    """
     kind = copy_source_kind(value)
     return kind.name if isinstance(kind, TagType) else None
 
@@ -57,10 +59,10 @@ def _store_coerce_expr(source_expr: str, dest_type: str, ctx: CodegenContext) ->
 
 
 def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: CodegenContext) -> str:
-    """*source_expr* as a Copy, Block copy or Fill stores it into *dest_type*.
+    """Return *source_expr* as a Copy, Block copy or Fill stores it into *dest_type*.
 
-    *source* is the store's ``copy_source_kind`` (``copy_store_transform``): a Word
-    from a register clamps past 65535, a Word into an Int keeps its bits.  Any other
+    *source* is the store's ``copy_source_kind`` (``copy_store_transform``).  A Word
+    from a register clamps past 65535, and a Word into an Int keeps its bits.  Any other
     store is :func:`_store_coerce_expr`'s.
     """
     store = copy_store_transform(TagType[dest_type], source)
@@ -103,7 +105,7 @@ def _first_defined_name(source: str) -> str | None:
 
 
 def _module_level_binds(tree: ast.Module) -> Counter[str]:
-    """How many times each name is bound at the top of a module, and through ``global``."""
+    """Return how many times each name is bound at the top of a module, and through ``global``."""
     binds: Counter[str] = Counter()
 
     def walk(node: ast.AST) -> None:
@@ -129,11 +131,12 @@ def _module_level_binds(tree: ast.Module) -> Counter[str]:
 def _refuse_a_def_over_a_generated_name(source: str, function_sources: Mapping[str, str]) -> None:
     """Refuse a generated module whose embedded ``def`` shares a name with its other code.
 
-    A def lands at the top of the module, so it and a helper, an import, a tag or another
-    function's alias of that name overwrite one another: the module calls something other
-    than the function, or the function's symbol is something else.  Asked of the module as
-    rendered rather than of a list of names, so it answers for what this program uses and
-    for this target.  Two embedded defs may share a name: each alias binds after its def.
+    A def lands at the top of the module.  If a helper, an import, a tag or another
+    function's alias has the same name, one overwrites the other.  Then the module calls
+    something other than the function, or the function's symbol is something else.  The
+    check asks this of the module as rendered, not of a list of names, so it answers for
+    what this program uses and for this target.  Two embedded defs may share a name,
+    because each alias binds after its def.
     """
     if not function_sources:
         return
@@ -168,7 +171,7 @@ def _global_line(symbols: list[str], indent: int) -> str | None:
 
 
 def _default_literal(value: Any) -> str | None:
-    """Python source for a default, or None for one no literal can spell.
+    """Return Python source for a default, or None for one that no literal can spell.
 
     ``repr`` is not source for every default a slot can carry: an ``IntEnum`` member
     spells ``<Color.BLUE: 2>``, and ``float("inf")`` spells a bare ``inf``.

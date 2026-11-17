@@ -88,16 +88,16 @@ class RevisitCredential:
 
 @dataclass(frozen=True)
 class _AvoidMember:
-    """One avoided snapshot condition and, when it has one, its runtime Condition."""
+    """Hold one avoided snapshot condition and, when it has one, its runtime Condition."""
 
     name: str
     pred: Callable[[dict[str, Any]], bool]
     # It is None for a condition that reads a tag it cannot name, so no weighed state trips it.
     tags: frozenset[str] | None = frozenset()
     # The normalized runtime Condition equivalent to ``pred``.  CoastSession
-    # uses it only to say what it reads; ``pred`` remains authoritative.
-    # Opaque callables have none and therefore retain the narrower
-    # real-observed-scan contract.
+    # uses it only to say what it reads.  ``pred`` stays authoritative.
+    # Opaque callables have none, so they keep the narrower real-observed-scan
+    # contract.
     condition: Any | None = None
 
 
@@ -125,7 +125,7 @@ class _AvoidPredicate:
         start: dict[str, Any],
         state: dict[str, Any],
     ) -> tuple[str, ...]:
-        """Members clear at trial start that are true on a scan the trial ran.
+        """Return the members that were clear at trial start and are true on a scan the trial ran.
 
         The start may be the state behind how()'s start, so it is only weighed.
         """
@@ -232,8 +232,9 @@ class _PilotContext:
     # Public ``how()`` supplies none; other navigation clients may constrain an
     # exact action without implying a retained route choice.
     blocked_actions: frozenset[_ActionPair]
-    # Invocation work allowance, in the ledger's units (see ``budget``): every scan run,
-    # and bounded research requests.  Discarded work is never refunded.
+    # The work allowance for one invocation, in the ledger's units (see ``budget``).  It
+    # counts every scan run and bounded research requests.  Discarded work is never
+    # refunded.
     max_scans: int
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
@@ -302,7 +303,7 @@ class _StepContext:
         )
 
     def point_at(self, scan_id: int) -> ExecutionPoint | None:
-        """Resolve one exact interpreted scan; a scan inside a stretch has none."""
+        """Resolve one exact interpreted scan.  A scan inside a stretch has none."""
 
         matches = tuple(
             point
@@ -612,7 +613,7 @@ class _PulseState:
     post_pulse_key: _StateKey
     snap: dict[str, Any]
     key: _StateKey
-    # Ordered interpreted scans owned by this execution fork. Scan IDs inside a
+    # The interpreted scans that this execution fork owns, in order.  Scan IDs inside a
     # stretch of the loop are deliberately absent.
     kernel_scan_ids: tuple[int, ...]
     # Selected-scan replay memo. The immutable epoch owner is retained beside
