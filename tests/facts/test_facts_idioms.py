@@ -21,6 +21,9 @@ from pyrung.core import PLC
 from tests.facts.check import RandomInputs, Report, Step, check_program
 from tests.facts.corpus import CORPUS, OPENING, PREPARE
 
+# recipe_mode_compared_with_a_table_entry stores values past RecipeMode's choices on purpose.
+pytestmark = pytest.mark.filterwarnings("ignore:BoundsViolation. RecipeMode=:UserWarning")
+
 #: Seeds of the random runs, one run each.
 SEEDS = (1, 2)
 
