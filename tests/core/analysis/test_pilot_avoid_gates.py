@@ -17,7 +17,7 @@ Three internal gates enforce it:
 * **Scan gate** (``coast.CoastSession`` -> ``verify.verify_gates``) —
   condition-like members ride folded coasts as named triggers, while settle
   trajectories preserve every real snapshot. Opaque callables observe only
-  endpoints, retained real snapshots, and kernel scans a coast executes.
+  endpoints, retained real snapshots, and the kernel scans that a coast executes.
 
 Arity: ``avoid=`` accepts one condition or a tuple/list = **union** of
 exclusions (each avoided independently); ``avoid=And(A, B)`` avoids only the

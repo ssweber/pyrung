@@ -1,8 +1,8 @@
 """A debounce of 0/0, scan by scan: the ``deb_zero`` group (part ``follow_timing``).
 
-``out_more/zero_and_below`` has a CLICK turn a 0/0 debounce off at scan 7, a scan after its
-rung's 6.  This case asks whether the off side always takes a scan more (the off delay times a
-scan before it is done, even at 0) or that was a scan's lag of the case.
+In ``out_more/zero_and_below``, a CLICK turned a 0/0 debounce off at scan 7, a scan after its
+rung fell at 6.  This case asks whether the off side always takes one scan more (the off delay
+times a scan before it is done, even at 0), or whether that scan was lag in that case.
 
 ``off_side_lag``: one rung, an Out on scans 3, 4, 5, 7, 8 and 11 (a one-scan dropout at 6, a
 two-scan one at 9 and 10, a one-scan pulse at 11), drives a 0/0 debounce, a TON of 0 and a TOF of

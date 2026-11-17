@@ -1,8 +1,8 @@
-"""Generated code powers a block's slots on as stepping does.
+"""Test that generated code powers on a block's slots the same way that stepping does.
 
-A tag holding a slot lives in the block's array, with no scalar line of its own, so
-the array carries its default.  A pointer reads the same cell.  The interpreter is
-the reference; the wire and the retentive save read the array too.
+A tag that names a slot lives in the block's array and has no scalar line of its own, so
+the array holds its default.  A pointer reads the same cell.  The interpreter is the
+reference.  The wire and the retentive save read the array too.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def _same_spelling() -> Program:
 
 
 def _name_on_a_slot_with_its_own_default() -> Program:
-    """The name wins, even with no default of its own: it is what the engines seed."""
+    """The name wins, even though it has no default of its own, because the engines seed from it."""
     slots = Block("Cb", TagType.INT, 1, 8)
     slots.slot(3, name="Nm", default=5)
     return _read_by_name_and_pointer(Int("Nm"), slots, 3)
@@ -222,7 +222,7 @@ class _Sink:
 
 
 def _saved_values(namespace: dict[str, Any]) -> dict[str, Any]:
-    """What ``save_memory`` writes, with the card and the files stubbed out."""
+    """Return what ``save_memory`` writes, with the card and the files stubbed out."""
     saved: dict[str, Any] = {}
 
     class _Json:
@@ -264,7 +264,7 @@ def _mbap(pdu: bytes) -> bytes:
 
 
 def _wire_read(namespace: dict[str, Any], bank: str, index: int) -> bytes:
-    """The response PDU of a one-register read."""
+    """Return the response PDU of a one-register read."""
     addr, _ = plc_to_modbus(bank, index)
     return namespace["_mb_handle"](_mbap(struct.pack(">BHH", 3, addr, 1)), 12)[7:]
 
@@ -280,7 +280,7 @@ def test_the_wire_reads_a_mapped_default(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_the_wire_serves_a_name_whatever_was_indexed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A name on a raw register with no TagMap row, in a bank the program keeps an array of."""
+    """The wire serves a name on a raw register that has no TagMap row, in a bank with an array."""
     blocks = ClickBlocks()
     name = Int("Cp", default=6)
     name.map_to(blocks.ds[30])
@@ -299,7 +299,7 @@ def test_the_wire_serves_a_name_whatever_was_indexed(monkeypatch: pytest.MonkeyP
 
 
 def test_the_wire_refuses_a_cell_no_register_can_hold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Not a crash in ``_mb_handle``: the program keeps running, and the next read works."""
+    """``_mb_handle`` does not crash.  The program keeps running and the next read works."""
     for indexed_first in (False, True):
         blocks = ClickBlocks()
         name = Dint("Cp", default=100000)
@@ -377,7 +377,7 @@ def test_an_enum_default_is_seeded_as_its_value(monkeypatch: pytest.MonkeyPatch)
 def test_a_default_no_literal_can_spell_stays_at_zero(
     value: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only reachable on a slot no scan reaches: the interpreter's tag would refuse it."""
+    """Only a slot that no scan reaches can hold this default.  The interpreter would refuse it."""
     slots = Block("Fl", TagType.REAL, 1, 8)
     slots.slot(5, default=value)
     namespace = _run(_generate(_read_slot_through_a_pointer(slots, 3)), monkeypatch)
@@ -662,7 +662,7 @@ def test_stop_to_run_matches_the_interpreter(build: Any, monkeypatch: pytest.Mon
 def test_a_retentive_slot_keeps_its_value_across_stop_to_run(
     default: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reached only by a pointer.  The interpreter loses this one, which is its own bug."""
+    """The slot is reached only by a pointer.  The interpreter loses its value, which is a bug."""
     slots = Block("Cb", TagType.INT, 1, 8)
     slots.slot(3, default=default, retentive=True)
     namespace = _scan_with_switch(_written_through_a_pointer(slots, 3), _RUN_STOP_RUN, monkeypatch)
@@ -724,7 +724,7 @@ def _output_masks(switch: list[bool], monkeypatch: pytest.MonkeyPatch, **kwargs:
 def test_a_pointer_only_output_energises_again_after_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Off in STOP, and back at its power-on True at RUN; scan 2 wrote it False."""
+    """The output is off in STOP and returns to its power-on True at RUN.  Scan 2 wrote False."""
     assert _output_masks(_RUN_STOP_RUN, monkeypatch) == [2, 0, 0, 0, 0, 0, 2, 2]
 
 
@@ -735,7 +735,7 @@ def test_a_pointer_only_output_energises_after_booting_in_stop(
 
 
 def test_a_retentive_output_keeps_its_value_across_stop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Scan 2 writes it True; STOP turns the output off, and RUN finds the True again."""
+    """Scan 2 writes True.  STOP turns the output off, and RUN finds the True again."""
     masks = _output_masks(_RUN_STOP_RUN, monkeypatch, retentive=True, default=False)
     assert masks == [0, 2, 2, 2, 0, 0, 2, 2]
 
