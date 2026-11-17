@@ -1,22 +1,22 @@
 """On-delay, retentive on-delay and off-delay timers: the ``timers`` group
 (subroutine ``Conf_Timers``).
 
-Each timer is a raw CLICK Timer, ``T<n>`` with ``TD<n>`` (``ClickTimer``).  The
-cases own T1..T100 and C1401..C1500 (``memory.OWNED``), one run of ten timers
-per case (T1.., T11.., ...); the last two cases split T91..T100.
+Each timer is a raw CLICK Timer, ``T<n>`` with ``TD<n>`` (``ClickTimer``). The
+cases own T1..T100 and C1401..C1500 (``memory.OWNED``). Each case uses one run of
+ten timers (T1.., T11.., ...), and the last two cases split T91..T100.
 
 Over the wire a timer sees wall-clock time, so no expectation is a raw
-accumulator.  A case either counts its own scans (``scans.py``) and asks what
-the timer did on a given scan, or runs in steps that ``Scratch`` holds.  A step
-ends on a threshold of a timer's own Acc or Done, so no expectation depends on
-how long a scan lasts.  A step's rungs come below the timers in reverse order,
-so each new step starts on the next scan.  A step that waits a set time runs a
-200 ms TON of its own and ends on its Done.  Each stepped case has a deadline
+accumulator. A case does one of two things. It counts its own scans (``scans.py``)
+and asks what the timer did on a given scan. Or it runs in steps that ``Scratch``
+holds. A step ends on a threshold of a timer's own Acc or Done, so no expectation
+depends on how long a scan lasts. A step's rungs come below the timers in reverse
+order, so each new step starts on the next scan. A step that waits a set time runs
+a 200 ms TON of its own and ends on its Done. Each stepped case has a deadline
 TON of its own (``scans.deadline``) that times the case out at a step.
 ``test_stepped_cases_at_any_scan`` runs each one at scans of 0.2 to 50 ms.
 
-The reset is the instructions' own: every TON and TOF rung is gated on ``Cmd``,
-and each RTON's reset input is ``Cmd == 0``.  A TOF has no reset: once its rung
+The reset is the instructions' own. Every TON and TOF rung is gated on ``Cmd``,
+and each RTON's reset input is ``Cmd == 0``. A TOF has no reset. Once its rung
 drops it times out and its TD keeps counting, so the TOF cases ``keep`` it.
 
 Which case tells pyrung's model from which other model:
@@ -27,15 +27,15 @@ Which case tells pyrung's model from which other model:
   One whose Acc stopped at the preset never ends step 0 (it times out there).
 - ``ton_done_on_enabling_scan``: pyrung adds the enabling scan's time and
   judges Done on that scan, so a 0 ms preset is done on the scan its rung goes
-  true.  A timer that only starts timing on the enabling scan ("no tick until
+  true. A timer that only starts timing on the enabling scan ("no tick until
   the next scan") reads Result1 = 5, Result2 = 4.
 - ``rton_holds_across_rung_false``: step 0 runs the RTON until its Acc reads
   250, step 1 waits 200 ms with its rung false, and step 2 reads it.  An RTON
   that dropped like a TON reads 0, 0.  One that kept timing reads Result2 = 0.
 - ``rton_reset_gap``: pyrung's reset clears Acc and Done and returns, so the
-  reset scan reads Done off even with a 0 ms preset and the rung true.  A reset
-  that then re-judges Done (Acc 0 >= preset 0) reads Result1 = 0; one that also
-  counts the enabled rung's time on the reset scan reads Result4 = 0.
+  reset scan reads Done off even with a 0 ms preset and the rung true. A reset
+  that then re-judges Done (Acc 0 >= preset 0) reads Result1 = 0. A reset that
+  also counts the enabled rung's time on the reset scan reads Result4 = 0.
 - ``tof_never_enabled``: two TOFs with 1000 ms presets, one whose rung is true
   on scans 1..2 and one whose rung is never true.  A TOF that times whenever
   its rung is false, enabled or not, reads Result3 > 0; one that starts done,
@@ -50,7 +50,7 @@ Which case tells pyrung's model from which other model:
   late) reads Result2 = 1.  A TOF that drops Done at once reads Result3 = 0.
   A TOF whose Acc stops at the preset never ends step 1 (it times out there).
 - ``tof_enable_atomic``: a TOF that sets Done a scan after the rung returns
-  reads Result1 = 3, Result3 = 5; one that clears Acc a scan late reads
+  reads Result1 = 3, Result3 = 5. A TOF that clears Acc a scan late reads
   Result4 = 1.
 - ``preset_raised_resumes`` and ``preset_lowered_fires_at_once``: ``Result4``
   holds the preset.  Step 0 ends on the TON's Done (raised) or on its Acc
@@ -63,20 +63,20 @@ Which case tells pyrung's model from which other model:
   Result3 = 1 if Acc is under 600 then.  "Lowered below Acc" also catches a
   Done that is set only on the scan Acc crosses the preset (Result1 = 0).
 - ``fractional_accumulation``: a timer that drops the part of a unit each scan
-  leaves a 1 s timer at 0 when every scan is 10 ms (Result1 = 0); one that
+  leaves a 1 s timer at 0 when every scan is 10 ms (Result1 = 0). A timer that
   counts seconds on a free-running 1 s tick, not from its enable, is almost
   always done early (Result2 = 0).
 - ``acc_clamps_at_32767``: once the TON is timing, its TD is written to 32000,
-  so it reaches the clamp in under a second rather than 33 s.  An accumulator
-  that wraps reads negative; one that stops at the preset never fires; a TON
+  so it reaches the clamp in under a second rather than 33 s. An accumulator
+  that wraps reads negative. One that stops at the preset never fires. A TON
   that keeps its own count and ignores the write never fires and reads
-  Result3 = 0.  Step 0 writes the TD and step 1 ends once Acc reads 32767.
-  Result2 is 1 if Done is on during that scan.  Step 2 runs a 200 ms TON (T98),
-  then reads Result1 = Acc.  The case times out after 3000 ms on T97 if it has
+  Result3 = 0. Step 0 writes the TD and step 1 ends once Acc reads 32767.
+  Result2 is 1 if Done is on during that scan. Step 2 runs a 200 ms TON (T98),
+  then reads Result1 = Acc. The case times out after 3000 ms on T97 if it has
   not fired (``scans.deadline``).
 
 The 0 ms presets (``ton_done_on_enabling_scan``, ``rton_reset_gap``,
-``tof_enable_atomic``) keep those cases about scans, not milliseconds: they
+``tof_enable_atomic``) keep those cases about scans, not milliseconds. They
 hold however short the PLC's scan is.
 """
 
@@ -109,13 +109,13 @@ ACC_CLAMP_DEADLINE_MS = 3000
 
 
 def step(slot, n):
-    """The conditions of step *n*.  ``Scratch`` holds the step the case is on."""
+    """Return the conditions of step *n*. ``Scratch`` holds the step the case is on."""
     return (slot.Cmd != 0, slot.Scratch == n)
 
 
 def prove_ton_auto_reset(slot):
-    # T1's rung is true in step 0 only.  The step ends once Acc reads 500, past the 200 ms
-    # preset.  Step 1 is the first scan the rung is false.
+    # T1's rung is true in step 0 only. The step ends once Acc reads 500, past the 200 ms
+    # preset. Step 1 is the first scan on which the rung is false.
     ton = ClickTimer(1)
     with Rung(*step(slot, 0)):
         on_delay(ton, 200)
@@ -135,7 +135,7 @@ def prove_ton_auto_reset(slot):
 
 
 def prove_ton_done_on_enabling_scan(slot):
-    # The rung goes true on scan 3; the preset is 0 ms.
+    # The rung goes true on scan 3. The preset is 0 ms.
     ton = ClickTimer(11)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch >= 3):
@@ -145,8 +145,8 @@ def prove_ton_done_on_enabling_scan(slot):
 
 
 def prove_rton_holds_across_rung_false(slot):
-    # T21's rung is true in step 0 only, until its Acc reads 250.  Step 1 runs T22, a 200 ms
-    # TON, so the RTON would have counted on if it did not hold.  Step 2 reads it.
+    # T21's rung is true in step 0 only, until its Acc reads 250. Step 1 runs T22, a 200 ms
+    # TON, so the RTON would have counted on if it did not hold. Step 2 reads it.
     rton, wait = ClickTimer(21), ClickTimer(22)
     with Rung(*step(slot, 0)):
         on_delay(rton, 200).reset(slot.Cmd == 0)
@@ -184,8 +184,8 @@ TOF_LONG_PRESET = 1000
 
 
 def prove_tof_never_enabled(slot):
-    # T41's rung is true on scans 1..2, then false.  Scratch is 1 or more on
-    # every scan Cmd != 0, so T42's rung is never true.
+    # T41's rung is true on scans 1..2, then false. Scratch is 1 or more on
+    # every scan where Cmd != 0, so T42's rung is never true.
     dropped, never = ClickTimer(41), ClickTimer(42)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch <= 2):
@@ -207,8 +207,8 @@ def init_tof_times_only_when_false(slot):
 
 
 def prove_tof_times_only_when_false(slot):
-    # T51's rung is true in step 0, which T52, a 200 ms TON, ends.  The rung is false from step 1,
-    # which ends once the TOF's Acc reads 400.  Step 2 reads it.
+    # T51's rung is true in step 0, which T52, a 200 ms TON, ends. The rung is false from step 1,
+    # which ends once the TOF's Acc reads 400. Step 2 reads it.
     tof, wait = ClickTimer(51), ClickTimer(52)
     with Rung(*step(slot, 0)):
         off_delay(tof, 200)
@@ -237,7 +237,7 @@ def prove_tof_times_only_when_false(slot):
 
 
 def prove_tof_enable_atomic(slot):
-    # The rung is false on scans 3 and 4 only; the preset is 0 ms, so Done
+    # The rung is false on scans 3 and 4 only. The preset is 0 ms, so Done
     # falls on scan 3.
     tof = ClickTimer(61)
     count_scans(slot)
@@ -251,7 +251,7 @@ def prove_tof_enable_atomic(slot):
 
 def prove_preset_raised_resumes(slot):
     # The preset is Result4: 200 ms, raised to 500 ms on the scan T71 is done (step 0).
-    # Step 1 is the first scan T71 runs with the raised preset.  Step 2 ends on the TON's Done.
+    # Step 1 is the first scan T71 runs with the raised preset. Step 2 ends on the TON's Done.
     ton = ClickTimer(71)
     with Rung(slot.Cmd != 0, slot.Result4 == 0):
         copy(200, slot.Result4)
@@ -298,8 +298,8 @@ def prove_preset_lowered_fires_at_once(slot):
 
 
 def prove_fractional_accumulation(slot):
-    # T91 counts seconds, T92 milliseconds, both from the same scan.  C1491 is
-    # on for the scan T91 is first done.
+    # T91 counts seconds and T92 counts milliseconds, both from the same scan. C1491 is
+    # on for the scan on which T91 is first done.
     sec, clock = ClickTimer(91), ClickTimer(92)
     with Rung(slot.Cmd != 0):
         on_delay(clock, 3000)
@@ -317,9 +317,9 @@ def prove_fractional_accumulation(slot):
 
 
 def prove_acc_clamps_at_32767(slot):
-    # A 100 ms TON.  A rung below it writes its TD to 32000 on the first scan its Acc reads above 0
-    # (step 0).  The write comes after the TON runs, so a TON that clears TD as it starts has
-    # already done so.  Step 1 ends once Acc reads 32767.  Step 2 runs T98, a 200 ms TON, so a TD
+    # A 100 ms TON. A rung below it writes its TD to 32000 on the first scan its Acc reads above 0
+    # (step 0). The write comes after the TON runs, so a TON that clears TD as it starts has
+    # already done so. Step 1 ends once Acc reads 32767. Step 2 runs T98, a 200 ms TON, so a TD
     # that wraps or falls back shows.
     ton, wait = ClickTimer(96), ClickTimer(98)
     with Rung(slot.Cmd != 0):
@@ -466,7 +466,10 @@ STEPPED_SECONDS = {
 @pytest.mark.parametrize("dt", [0.0002, 0.0005, 0.001, 0.010, 0.025, 0.040, 0.050])
 @pytest.mark.parametrize("case_id", sorted(STEPPED_SECONDS))
 def test_stepped_cases_at_any_scan(monkeypatch, case_id, dt):
-    """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""
+    """Run each stepped case at many scan times.
+
+    The CLICK scans in about 1 ms, the soft PLC in 10..40 ms.
+    """
     monkeypatch.setattr(runner_module, "DT", dt)
     (stepped,) = (c for c in group.cases if c.id == case_id)
     stepped = replace(stepped, scans=int(STEPPED_SECONDS[case_id] / dt))

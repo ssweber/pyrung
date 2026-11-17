@@ -45,7 +45,7 @@ def _server(monkeypatch, mapping: TagMap, prog: Program | None = None):
 
 
 def _exception(answer: bytes) -> int | None:
-    """The exception code of *answer*, or ``None`` for a normal answer."""
+    """Return the exception code of *answer*, or ``None`` for a normal answer."""
     return answer[8] if answer[7] & 0x80 else None
 
 

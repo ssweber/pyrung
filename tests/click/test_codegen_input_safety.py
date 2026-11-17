@@ -190,7 +190,9 @@ def test_supported_click_expressions_still_generate(expression: str) -> None:
     ],
 )
 def test_click_spaced_formula_imports_like_bare(spaced: str, bare: str) -> None:
-    """CLICK writes NAME ( a , b ) and ( a + b ); a hand-written CSV may not."""
+    """Import a spaced formula like its bare form. CLICK writes NAME ( a , b ) and ( a + b ), but a
+    hand-written CSV may not.
+    """
     assert ladder_to_pyrung(_bundle(f"math({spaced},DS10)")) == ladder_to_pyrung(
         _bundle(f"math({bare},DS10)")
     )
