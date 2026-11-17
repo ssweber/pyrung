@@ -1,7 +1,7 @@
-"""A PLC answers as one built first, whatever another PLC or an analysis asked of a block.
+"""A PLC answers the same as one built first, whatever another PLC or an analysis asked of a block.
 
-A block makes a tag for each slot anything asks for, and keeps it.  Scans through a
-pointer, how(), a coverage report and the static facts all ask.  None of that may change what
+A block makes a tag for each slot that anything asks for, and keeps it. Scans through a
+pointer, how(), a coverage report and the static facts all ask. None of that may change what
 a PLC built later knows, holds or answers.
 """
 

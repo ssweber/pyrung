@@ -1,13 +1,14 @@
 """A For whose count is a DD holding -1: the ``for_dd_minus`` group (part ``follow_values``).
 
-A DS count of -1 runs 65535 times (``loop/negative_count_reads_unsigned``), and a DD count is read
-whole (``for_wide/count_forms`` ran 65537 and 65536).  A DD count is read signed too: -1 runs none
-(the PLC stays in RUN), so the case
-arms itself and needs no person or raised watchdog.
+A DS count of -1 runs 65535 times (``loop/negative_count_reads_unsigned``). A DD count is read
+whole (``for_wide/count_forms`` ran 65537 and 65536). A DD count is read as signed too, so -1
+runs none and the PLC stays in RUN. The case therefore arms itself and needs no person or
+raised watchdog.
 
-- ``minus_one_count``: the case writes -1 into the count DD81 (Result1 = 1) and runs the For over
-  it once, counting into DD82.  Result2 = 1: no iteration (DD82 = 0); 2 for 65535, the low word
-  unsigned; 3 for one.  Result3 is DD82 / 1000.
+- ``minus_one_count``: the case writes -1 into the count DD81 (Result1 = 1) and runs the For
+  over it once, counting into DD82. Result2 = 1 means no iteration (DD82 = 0). Result2 = 2
+  means 65535, the low word read as unsigned. Result2 = 3 means one.
+  Result3 is DD82 / 1000.
 
 The cases own what ``memory.OWNED_APART`` lists under this group.
 """
