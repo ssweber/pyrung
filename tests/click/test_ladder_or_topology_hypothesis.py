@@ -332,11 +332,11 @@ def test_or_topology_round_trip_with_compares(tree):
 
 @st.composite
 def _nested_or_rung(draw):
-    """Contacts and Ors in series, where an Or's row may be an And holding another Or.
+    """Draw contacts and Ors in series, where an Or's row may be an And that holds another Or.
 
-    Returns ``(conditions, tags, outputs, pin)``.  The rung has 1-3 outputs, or a counter whose
-    reset pin is a contact or an Or (``pin`` is then that condition).  Some rungs start with a run of
-    contacts that brings them near AE.
+    Return ``(conditions, tags, outputs, pin)``. The rung has 1-3 outputs, or a counter whose
+    reset pin is a contact or an Or. In that case ``pin`` is that condition. Some rungs start
+    with a run of contacts that brings them near AE.
     """
     tags: list[Bool] = []
     counter = [0]

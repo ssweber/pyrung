@@ -1,7 +1,7 @@
-"""Long runs land where stepping does: run_until() and run_for() on the guarded loop.
+"""Check that run_until() and run_for() on the guarded loop land where stepping does.
 
-These programs were first written against the fold that the loop replaced, most of them for
-a bug it had; they stay as a corpus, and their comments still say what the bug was.
+These programs were first written against the fold that the loop replaced, most of them to catch
+a bug it had. They stay as a corpus. Their comments still say what the bug was.
 """
 
 from __future__ import annotations
@@ -162,8 +162,8 @@ class TestTimerFold:
 
 
 class TestCounterFold:
-    """A counter counts rising edges: a held rung counts once, so there is no
-    counter plateau to fold, and a run that counts lands where stepping does."""
+    """A counter counts rising edges. A held rung counts once, so there is no counter plateau to
+    fold. A run that counts lands where stepping does."""
 
     def test_held_rung_counts_once_and_patches_nothing(self) -> None:
         prog, ctr = _counter_program(100)
@@ -463,8 +463,8 @@ class TestSystemClockFold:
         return prog
 
     def test_reading_scan_clock_toggle_disables_fold(self) -> None:
-        # scan_clock_toggle flips every scan — no periodic edge to land on, so
-        # reading it degrades fold to scan-by-scan, staying bit-equal to nofold.
+        # scan_clock_toggle flips every scan, so there is no periodic edge to land on.
+        # Reading it degrades fold to scan-by-scan, which stays bit-equal to nofold.
         plc_fold = PLC(self._toggle_program(), dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
@@ -496,8 +496,8 @@ def _count_kernel_scans(plc: PLC) -> ScansOutsideLoop:
 
 
 class TestResolvedOnReadSignalFold:
-    """A rung reading a resolved-on-read signal: the run lands where stepping
-    does, and still folds between the signal's edges where it can."""
+    """A rung that reads a resolved-on-read signal lands where stepping does. The run still
+    folds between the signal's edges where it can."""
 
     @staticmethod
     def _clock_heartbeat_program(preset_ms: int = 100_000) -> Program:
@@ -592,9 +592,9 @@ class TestResolvedOnReadSignalFold:
 
 
 class TestClockBesideAComparison:
-    """A heartbeat clock gating a rung that also reads an accumulator through a
-    comparison.  Its clock ends every window, before and after the comparison
-    settles, and each pulse lands on the scan stepping puts it."""
+    """A heartbeat clock gates a rung that also reads an accumulator through a comparison. The
+    clock ends every window, before and after the comparison settles. Each pulse lands on the
+    scan where stepping puts it."""
 
     @staticmethod
     def _heartbeat(gate: Callable[[Timer], Any]) -> Callable[[], Program]:
@@ -634,8 +634,8 @@ class TestClockBesideAComparison:
 
 
 class TestClockSaturationFold:
-    """A heartbeat gated on a comparison that saturates partway up the ramp.  The
-    oracle is equality with scan-by-scan; folding stays between the clock's edges."""
+    """A heartbeat is gated on a comparison that saturates partway up the ramp. The result must
+    equal the scan-by-scan run. Folding still happens between the clock's edges."""
 
     @staticmethod
     def _stable_saturated_program(preset_ms: int = 1_000_000) -> Program:
@@ -697,8 +697,8 @@ class TestClockSaturationFold:
 
     @staticmethod
     def _live_before_saturation_program(preset_ms: int = 1_000_000) -> Program:
-        """The heartbeat writes a *moving* value derived from the accumulator,
-        so before saturation each edge genuinely differs: no edge may be skipped."""
+        """The heartbeat writes a *moving* value derived from the accumulator. Before saturation
+        each edge really differs, so the fold may not skip any edge."""
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         Bucket = Int("Bucket")
@@ -791,13 +791,13 @@ class TestClockPulseFoldRegression:
 
 
 class TestUnreadAccumulatorFold:
-    """A timer/counter whose Done is unread still has the preset as a visible
-    crossing (the Done bit flips there), and run_until thresholds on the raw
-    accumulator are folded onto exactly, not skipped past to the preset."""
+    """The preset is still a visible crossing for a timer or counter whose Done bit nothing
+    reads, because the Done bit flips there. A run_until threshold on the raw accumulator is
+    folded onto exactly. The fold does not skip past it to the preset."""
 
     @staticmethod
     def _unread_timer_program(preset_ms: int = 100_000) -> tuple[Program, Timer]:
-        """A timer whose Done bit nothing reads — pure accumulator churn."""
+        """A timer whose Done bit nothing reads, so it is pure accumulator churn."""
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         with Program() as prog:
@@ -895,8 +895,8 @@ def _run_until_exact(
 
 
 class TestRungsAcrossAWindow:
-    """A rung whose reads hold still across a plateau folds; one that moves, or a
-    clock it reads, ends the window where stepping would see the change."""
+    """A rung whose reads hold still across a plateau folds. A rung that reads a moving value or
+    a clock ends the window where stepping would see the change."""
 
     def test_clock_gated_rung_with_stable_inputs_pulses_as_stepped(self) -> None:
         """An edge-gated rung is not an indicator: each pulse lands exactly, and
@@ -1098,8 +1098,8 @@ def _math_func_calc():
 
 
 def _back_edge_chain():
-    """Each rung reads a coil written further down the scan, so a change at
-    the bottom needs one scan per rung to reach the top."""
+    """Each rung reads a coil that is written further down the scan. A change at the bottom
+    needs one scan per rung to reach the top."""
     stages = [Bool(f"Stage{i}") for i in range(8)]
     Sensor = Bool("Sensor", external=True)
     with Rung(stages[1]):
@@ -1414,8 +1414,8 @@ def _run_scans(plc: PLC, n: int, *, jit: bool) -> None:
 
 
 class TestRtcTickBound:
-    """A rung or a run_until condition that reads an ``rtc.*`` field bounds every
-    fold window at that field's next tick, so folding never skips one."""
+    """If a rung or a run_until condition reads an ``rtc.*`` field, every fold window ends at
+    that field's next tick. Folding never skips a tick."""
 
     def test_rtc_condition_rung_does_not_skip_its_second(self) -> None:
         prog, _x = _rtc_latch_program()
@@ -2064,9 +2064,8 @@ def _forced_gate_program(edge: bool) -> Program:
 
 
 class TestSoftRtcForcedTags:
-    """A force re-applies after logic, so a forced tag's stored value is not
-    what a rung between a mid-scan writer and the force saw.  The off judgement
-    never reads a forced tag."""
+    """A force re-applies after logic. So the stored value of a forced tag is not what a rung
+    between a mid-scan writer and the force saw. The off judgement never reads a forced tag."""
 
     _START = (2026, 3, 1, 12, 59, 5, 250_000)
 
@@ -2098,8 +2097,8 @@ class TestSoftRtcForcedTags:
 
 
 class TestSoftRtcCallablePredicate:
-    """A callable run_until predicate declares no reads, so it may read a clock
-    copy: every RTC tick stays a bound and the copy stays observed."""
+    """A callable run_until predicate declares no reads, so it may read a clock copy. Every RTC
+    tick stays a bound, and the copy stays observed."""
 
     @pytest.mark.parametrize("dt", [0.01, 1.0])
     def test_callable_reading_a_copy_stops_where_stepping_does(self, dt: float) -> None:
@@ -2156,8 +2155,8 @@ class TestRtcNearDatetimeMax:
 
 
 class TestLandingScanRaises:
-    """A landing scan that raises commits nothing and leaves the tip as the
-    pre-fold state, as an unfolded scan that raises does."""
+    """If the landing scan raises, nothing is committed and the tip stays at the pre-fold state.
+    An unfolded scan that raises behaves the same way."""
 
     def test_tip_is_unchanged_when_the_landing_raises(self) -> None:
         from pyrung import run_function
@@ -2304,10 +2303,9 @@ class TestClockEdgeProbe:
 
 
 class TestTimerCarryExact:
-    """A timer adds ``dt`` in its unit plus a float carry each scan; a fold
-    lands it where that per-scan recurrence would, not where one aggregate
-    ``skip * dt`` floors.  An earlier rung reading the accumulator sees the
-    value the last folded scan starts from."""
+    """A timer adds ``dt`` in its unit plus a float carry each scan. A fold lands it where that
+    per-scan recurrence would, not where one aggregate ``skip * dt`` floors. An earlier rung
+    that reads the accumulator sees the value that the last folded scan starts from."""
 
     @staticmethod
     def _timer_with_reader(unit: str, preset: int) -> Callable[[], Program]:
@@ -2393,9 +2391,9 @@ class TestTimerCarryExact:
 
 
 class TestSelfFeedingChurnExact:
-    """A calc that feeds its own destination is not just left out of the
-    plateau guard: an exact affine self-calc is patched forward in closed form
-    (wrapping and faulting exactly as stepping), any other shape is guarded."""
+    """A calc that feeds its own destination is not simply left out of the plateau guard. The
+    fold patches an exact affine self-calc forward in closed form, wrapping and faulting exactly
+    as stepping does. Any other shape stays guarded."""
 
     @staticmethod
     def _churn_program(body: Callable[[Any], Any], *, read: bool = False) -> Callable[[], Program]:
@@ -2876,8 +2874,8 @@ class TestSelfFeedingChurnExact:
 
 
 class TestFoldLandingCheckpoint:
-    """A landing that puts the tip on a checkpoint scan is checkpointed
-    there, never at the scan id it first commits under."""
+    """If a landing puts the tip on a checkpoint scan, the checkpoint is taken there, never at
+    the scan id it first commits under."""
 
     @staticmethod
     def _program() -> Program:
@@ -2949,9 +2947,9 @@ class TestClockEdgesAsRead:
 
 
 class TestFlagsFollowInsideAWindow:
-    """SC40 follows the last Math, SC43 and SC44 the last Copy or Math, so a flag
-    can be up between two rungs and down at the end of the scan.  A window holds
-    each of those readings exactly, or does not fold across a change."""
+    """SC40 follows the last Math. SC43 and SC44 follow the last Copy or Math. So a flag can be
+    up between two rungs and down at the end of the scan. A window holds each of those readings
+    exactly, or does not fold across a change."""
 
     SC40 = system.fault.division_error
     SC43 = system.fault.out_of_range
@@ -3389,9 +3387,9 @@ def copy_rung(dest: Any) -> None:
 
 
 class TestUnseenStopsStayExact:
-    """A bound that only exists to keep a fold exact (a self-calc's wrap)
-    shortens windows but never opens one, and a ``when()`` callback is
-    judged on every scan: the fold cannot see either stop."""
+    """A bound that exists only to keep a fold exact (a self-calc's wrap) shortens windows but
+    never opens one. A ``when()`` callback is judged on every scan. The fold cannot see either
+    stop."""
 
     @staticmethod
     def _counter(step_tag: bool = False, timer: bool = False) -> Callable[[], Program]:
@@ -3443,9 +3441,8 @@ class TestUnseenStopsStayExact:
 
     @pytest.mark.parametrize("tag", ["Hit", "Tmr_Done", "Tmr_Acc"])
     def test_monitor_on_a_steady_tag_still_folds(self, tag: str) -> None:
-        """A monitor fires only when its tag changes, so one on a tag that holds
-        through the plateau leaves the fold free, and the landing judges it at
-        the scan it stands for."""
+        """A monitor fires only when its tag changes. A monitor on a tag that holds through the
+        plateau leaves the fold free, and the landing judges it at the scan it stands for."""
 
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
@@ -3497,9 +3494,9 @@ class TestUnseenStopsStayExact:
 
 
 class TestTagStepSelfCalcGuardedWhenRead:
-    """``math(T + K, T)`` with ``K`` a tag is a fold source only when nothing
-    else reads ``T``; a moving preset, a comparison against a moving tag or
-    an expression read keeps it in the plateau guard."""
+    """``math(T + K, T)`` with ``K`` a tag is a fold source only when nothing else reads ``T``.
+    A moving preset, a comparison against a moving tag or an expression read keeps it in the
+    plateau guard."""
 
     @staticmethod
     def _expression_reader() -> Program:
@@ -3554,9 +3551,8 @@ class TestTagStepSelfCalcGuardedWhenRead:
 
 
 class TestFoldedHistoryReplays:
-    """Fold projections are not inputs: replaying a folded live run steps the
-    folded scans and re-derives them, and history serves each landing at the
-    scan it stands for."""
+    """Fold projections are not inputs. Replaying a folded live run steps the folded scans and
+    re-derives them. History serves each landing at the scan it stands for."""
 
     @staticmethod
     def _program() -> Program:
@@ -4466,9 +4462,9 @@ class TestFoldedHistoryQueries:
 
 
 class TestLandingDtReadouts:
-    """The landing scan runs with the aggregate dt, but the scan it stands
-    for lasted one normal dt: the scan-time extrema and ``_dt`` record that,
-    and a rung reading ``sys.dt`` mid-scan keeps the run unfolded."""
+    """The landing scan runs with the aggregate dt, but the scan it stands for lasted one normal
+    dt. The scan-time extrema and ``_dt`` record that. A rung that reads ``sys.dt`` mid-scan
+    keeps the run unfolded."""
 
     @staticmethod
     def _shape(reader: str | None) -> Callable[[], Program]:
@@ -4503,9 +4499,8 @@ class TestLandingDtReadouts:
 
 
 class TestTimeEventDrum:
-    """A time & event drum is a timed source whose step may end on its preset,
-    on its event, or on both.  Event-only steps place no timer crossing; the
-    event's own change bounds the window."""
+    """A time & event drum is a timed source. A step may end on its preset, on its event, or on
+    both. Event-only steps place no timer crossing. The event's own change bounds the window."""
 
     @staticmethod
     def _shape(gate: bool, read_done: bool) -> Callable[[], Program]:
@@ -4658,12 +4653,11 @@ class TestOutVariants:
 
 
 class TestContestedTimer:
-    """A timer whose accumulator something else also writes in the scan (a
-    second timer instruction, a copy, a force, a second call into its
-    subroutine) can be reset and timed again every scan: its scan-boundary
-    readings stay put while the landing scan would time the whole window in
-    one step.  Such a window folds only while every other writer is proven off;
-    otherwise the run steps."""
+    """A timer whose accumulator something else also writes in the scan (a second timer
+    instruction, a copy, a force, a second call into its subroutine) can be reset and timed
+    again every scan. Its scan-boundary readings stay put, but the landing scan would time the
+    whole window in one step. Such a window folds only while every other writer is proven off.
+    Otherwise the run steps."""
 
     @staticmethod
     def _shape(kind: str) -> Callable[[], Program]:
