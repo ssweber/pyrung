@@ -35,6 +35,7 @@ from pyrung.click.codegen.models import (
     _TagMetadata,
     _TimerCounterCloneDecl,
 )
+from pyrung.click.codegen.shaping import keeps_nop
 from pyrung.click.codegen.utils import (
     _CLICK_FUNC_RE,
     _CLICK_FUNC_TO_PYTHON,
@@ -192,6 +193,8 @@ def _collect_operands(
                 collection.has_And = True
             if instr.branch_tree is not None:
                 collection.has_branch = True
+            if keeps_nop(rung, instr):
+                collection.has_nop = True
             for pin in instr.pins:
                 if pin.condition_tree is not None:
                     for cond in _walk_tree_labels(pin.condition_tree):
@@ -1181,6 +1184,8 @@ def _scan_file_refs(
                 refs.has_And = True
             if instr.branch_tree is not None:
                 refs.has_branch = True
+            if keeps_nop(rung, instr):
+                refs.has_nop = True
             for pin in instr.pins:
                 if pin.condition_tree is not None:
                     for cond in _walk_tree_labels(pin.condition_tree):

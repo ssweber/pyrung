@@ -726,6 +726,9 @@ def _split_wires(rung: _AnalyzedRung) -> list[_AnalyzedRung] | None:
     instructions = rung.instructions
     if len(instructions) < 2:
         return None
+    # NOP wires stay one rung, as a nop() in a branch for each contact, so none is lost.
+    if all(instr.af_token == NOP for instr in instructions):
+        return None
     if any(instr.wire is None for instr in instructions) or rung.source_outputs is None:
         return None
     groups: list[list[int]] = []
@@ -1053,12 +1056,6 @@ def _analyze_single_rung(
         )
         for tree, af_token, af_row in output_trees
     )
-
-    if len(instructions) > 1 and any(instr.af_token == NOP for instr in instructions):
-        raise ValueError(
-            "NOP shares this rung with other outputs; CLICK deletes a NOP row that "
-            "shares its rung. Remove the NOP row."
-        )
 
     return _AnalyzedRung(
         comment=comment,

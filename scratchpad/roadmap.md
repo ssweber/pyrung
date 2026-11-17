@@ -307,6 +307,7 @@ All [nothing] unless marked.
     block end with CLK_TEXT_PAST_BLOCK, while a windowed compare on the same tag reads on through the bank.
   - A text store in a structure field past the structure.
   - An import round trip of a compare across a UDT boundary or onto padding.
+- **A For body rung with branches imports to code that fails.** The import writes `branch()` inside `forloop()`, and the DSL refuses it ("branch() is not permitted inside forloop()"). A NOP leg beside a coil hits it, and so do two coils on branches.
 - **A PDG cached before a later TagMap goes stale** (`program._cached_graph`, pdg.py ~1819). `writers_of` keeps only
   the mapped tag while every engine writes on.
 - **The weak `_pyrung_hw_slot`** frees with the bank when the TagMap and ClickBlocks are dropped, and a store then

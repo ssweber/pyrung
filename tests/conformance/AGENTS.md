@@ -436,7 +436,7 @@ Each line becomes a sentence, a ladder, and a row in the report. `[x]` lines nam
 - [ ] a plain reset of a counter or timer bit (`reset(CT1)`, `reset(T1)`) and the accumulator: the exporter refuses the write (`CLK_BANK_NOT_WRITABLE`), so no case yet
 - [ ] whether a NOP or a blank row splits a rung's solve: no drawing tells L from a split (`test_row_solve.py` docstring)
 - [ ] solve order around a `call()` between the rows of one rung (the home exists, `in_main=True`, but no such case yet); a branch row in a For body rung (pyrung refuses `branch()` inside `forloop()`)
-- [ ] empty rung (NOP): nothing to observe. CLICK refuses a contact before NOP and deletes a NOP row that shares its rung (so `rungs/nop_rung_takes_snapshot` is retired); the exporter refuses the first and draws an empty rung as a CLICK rung of its own, and a bare NOP round-trips (`tests/click/test_codegen.py`)
+- [ ] empty rung (NOP): nothing to observe. CLICK keeps a contact before NOP and reports it in its Syntax Check (C0003), which `CLK_NOP_NO_COIL` flags. A NOP fed by a bare wire is dropped, so `rungs/nop_rung_takes_snapshot` is retired. The exporter draws an empty rung as a CLICK rung of its own, and a bare NOP round-trips (`tests/click/test_codegen.py`)
 - [x] subroutines: same rules (every case runs inside its group's subroutine)
 - [x] a subroutine called twice a scan: an edge contact fires once per edge (`call_twice/rise_once_per_scan`, pending S3)
 - [x] call into a subroutine from a For body (probe; `loop_call/call_inside_loop`; a call from a group's own subroutine is nested, which CLICK refuses and `CLK_NESTED_CALL` flags)
