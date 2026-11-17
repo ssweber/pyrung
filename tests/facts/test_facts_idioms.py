@@ -50,7 +50,7 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
     "text_copy_skipped_on_a_bad_digit": {
         ("scan-local", "KeyLevel"): (
             "scan 10.  The copy writes nothing when KeyChar is not a digit, so KeyLevel keeps"
-            " the value of the scan before.  The prover takes the copy for a write on every"
+            " the value of the scan before.  The facts take the copy for a write on every"
             " scan."
         ),
     },

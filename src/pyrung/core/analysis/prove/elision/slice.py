@@ -262,6 +262,7 @@ class _EntryRead:
 
 
 # Two checks of one program must not swap the same instruction's ``execute`` at once.
+# The lock is one for the whole process, so it serialises the checks of every program.
 _ENTRY_READS_LOCK = threading.RLock()
 
 

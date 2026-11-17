@@ -33,6 +33,7 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove.elision import _elide_scan_local_stateful_dims
+from pyrung.core.analysis.prove.elision.slice import _SliceElision
 
 
 def _slice_elide(
@@ -397,6 +398,23 @@ def test_preset_written_above_each_scan_is_elided(kind: str) -> None:
     _reduced, elided = _slice_elide(logic, {"Preset": (0, 100, 300)}, dict(_PRESET_INPUTS))
 
     assert "Preset" in elided
+
+
+def test_drum_preset_written_first_each_scan_is_elided() -> None:
+    """A rung with no condition above the drum writes its preset, so def-use chains elide it."""
+    preset = Int("Preset")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(Int("HmiPreset", external=True, min=0, max=500), preset)
+        with Rung(Bool("Run", external=True)):
+            _preset_box("drum", preset)
+
+    dims = {"Preset": (0, 100, 500)}
+    inputs = {**_PRESET_INPUTS, "HmiPreset": (0, 100, 500)}
+    analyzer = _SliceElision(logic, build_program_graph(logic), dims, inputs)
+
+    assert analyzer.candidate_elidable("Preset") == (True, "fast_path")
 
 
 def test_search_table_filled_above_each_scan_is_elided() -> None:
