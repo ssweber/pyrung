@@ -2555,7 +2555,8 @@ def _with_done_boundary(
 _COMPARISON_FORMS = frozenset({"eq", "ne", "lt", "le", "gt", "ge"})
 
 #: The form of the atom that stands for a comparison with values no list holds.  No reader
-#: of an atom knows it.  So the tag counts as compared, and no absorption drops its value.
+#: of an atom knows this form.  So the tag counts as compared, and no absorption drops its
+#: value.
 _UNLISTED_COMPARISON = "compared_unlisted"
 
 
@@ -2622,11 +2623,11 @@ def _drop_unlisted_comparisons(
 ) -> set[str]:
     """Take the domain from each tag compared with values no list holds, and return those tags.
 
-    A domain stands for the values between its split points, and such a comparison gives
-    it none.  So a run can reach a value that answers the comparison unlike every value of
+    A domain stands for the values between its split points.  Such a comparison gives it
+    none.  So a run can reach a value that answers the comparison unlike every value of
     the domain.  The tag keeps a domain only when it can have one that lists every value
-    the tag can hold.  *every_value* gives that domain, or None.  Its result also lists every
-    value of each tag the tag's writers read, since a swap of one of those changes the tag.
+    the tag can hold.  *every_value* gives that domain, or None.  It also lists every value
+    of each tag the writers read, since a swap of one changes what the writers store.
 
     A tag compared with a tag that has no domain is compared with values no list holds
     too.  A tag outside *domains* has its values in *fixed* when it has any.  So taking
@@ -2687,8 +2688,8 @@ def _close_tag_comparisons(
     *domains* maps each kind of domain to its dict, which this updates in place.  A tag
     with ``choices=`` keeps its domain, since it holds no other value.  A tag in *fixed*
     has no domain to update, such as a readonly preset, but its values are split points.
-    *floor* gives the lowest value a tag can hold, or None.  A tag gets no added value
-    below it.
+    *floor* gives the lowest value a tag can hold, or None.  None of the values added below
+    the group's lowest value goes below it.
     """
     owner = {name: kind for kind, found in domains.items() for name in found}
 
@@ -2731,7 +2732,7 @@ def _close_tag_comparisons(
         points = sorted({v for name in group for v in values_of(name)})
         count = len(members)
         added = set(points)
-        added |= {points[0] - step for step in range(1, count + 1)}
+        below = {points[0] - step for step in range(1, count + 1)}
         added |= {points[-1] + step for step in range(1, count + 1)}
         real = any(tags[name].type is TagType.REAL for name in group if name in tags)
         for low, high in itertools.pairwise(points):
@@ -2744,7 +2745,7 @@ def _close_tag_comparisons(
             if tag.choices is not None:
                 continue
             lowest = floor(name)
-            mine = added if lowest is None else {v for v in added if v >= lowest}
+            mine = added | {v for v in below if lowest is None or v >= lowest}
             values = set(domains[owner[name]][name]) | held_candidates(tag, mine)
             if tag.min is not None:
                 values = {v for v in values if v >= tag.min}
@@ -3726,8 +3727,8 @@ def _classify_dimensions_from_graph(
             return None
         # A structural domain holds split points as well as stored values, so it lists too
         # few.  A rung may store a value past ``choices=`` as well.  The values the writers
-        # store list them all.  They come from literals or from a declared Int range, and
-        # an external Real has none.
+        # store list them all.  They come from literals or from a declared Int range.  An
+        # external Real has none.
         if not produced:
             produced.append(collect_produced_value_domains(program, graph))
         return produced[0].get(name)
