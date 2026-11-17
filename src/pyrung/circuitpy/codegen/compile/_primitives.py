@@ -53,6 +53,8 @@ from pyrung.core.memory_block import (
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 
+from ._emit import emit_frac_get, emit_mem_get, emit_mem_set
+
 
 def _snapshot_tag_symbol(
     tag: Tag | ImmediateRef,
@@ -1021,19 +1023,19 @@ def _compile_guarded_instruction(
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
         if enabled_literal is False:
-            lines.append(f"{sp}_mem[{key!r}] = False")
+            lines.append(f"{sp}{emit_mem_set(key, 'False')}")
             lines.extend(f"{sp}{line}" for line in disabled)
             return lines
         fire = [
-            f"if not bool(_mem.get({key!r}, False)):",
+            f"if not bool({emit_mem_get(key, 'False')}):",
             *[f"    {line}" for line in (*run_settle, *enabled_body)],
-            f"    _mem[{key!r}] = True",
+            f"    {emit_mem_set(key, 'True')}",
         ]
         if enabled_literal is True:
             lines.extend(f"{sp}{line}" for line in (*idle, *fire))
             return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{inner}_mem[{key!r}] = False")
+        lines.append(f"{inner}{emit_mem_set(key, 'False')}")
         lines.extend(f"{inner}{line}" for line in disabled)
         if idle:
             lines.append(f"{sp}else:")
@@ -1283,9 +1285,12 @@ def _timer_carry_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -
     directly, and its floats are too short to hold a time.  The kernel has only ``dt``.
     """
     ctx.timer_unit_ns[acc.name] = unit.ns
-    dt_ns = '_dt_to_ns(_mem.get("_dt", 0.0))' if ctx.kernel_runtime else '_mem.get("_dt_ns", 0)'
+    if ctx.kernel_runtime:
+        dt_ns = f"_dt_to_ns({emit_mem_get('_dt', '0.0', quote='double')})"
+    else:
+        dt_ns = emit_mem_get("_dt_ns", "0", quote="double")
     return [
-        f'{sp}_carry = _mem.get("_frac:{acc.name}", 0) + {dt_ns}',
+        f"{sp}_carry = {emit_frac_get(acc, quote='double')} + {dt_ns}",
         f"{sp}_int_units = _carry // {unit.ns}",
         f"{sp}_new_frac = _carry % {unit.ns}",
     ]

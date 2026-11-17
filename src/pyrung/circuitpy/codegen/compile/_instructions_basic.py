@@ -40,6 +40,7 @@ from pyrung.core.memory_block import block_room, element_names_after
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
+from ._emit import emit_frac, emit_mem_get, emit_mem_set
 from ._primitives import (
     _compile_assignment_lines,
     _compile_copy_source,
@@ -112,22 +113,22 @@ def _compile_out_instruction(
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
         if enabled_literal is False:
-            lines.append(f"{sp}_mem[{key!r}] = False")
+            lines.append(f"{sp}{emit_mem_set(key, 'False')}")
             lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent))
             return lines
         if enabled_literal is True:
-            lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
+            lines.append(f"{sp}if not bool({emit_mem_get(key, 'False')}):")
             lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-            lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+            lines.append(f"{' ' * (indent + 4)}{emit_mem_set(key, 'True')}")
             lines.append(f"{sp}else:")
             lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
             return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
+        lines.append(f"{' ' * (indent + 4)}{emit_mem_set(key, 'False')}")
         lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-        lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
+        lines.append(f"{sp}elif not bool({emit_mem_get(key, 'False')}):")
         lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+        lines.append(f"{' ' * (indent + 4)}{emit_mem_set(key, 'True')}")
         lines.append(f"{sp}else:")
         lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
         return lines
@@ -185,7 +186,7 @@ def _compile_on_delay_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    frac_key = f"_frac:{instr.accumulator.name}"
+    acc = instr.accumulator
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
@@ -199,7 +200,7 @@ def _compile_on_delay_instruction(
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
-                f'{" " * (indent + 4)}_mem["{frac_key}"] = 0',
+                f"{' ' * (indent + 4)}{emit_frac(acc, '0', quote='double')}",
                 f"{' ' * (indent + 4)}{done_write} = False",
                 f"{' ' * (indent + 4)}{acc_write} = 0",
                 f"{sp}else:",
@@ -219,18 +220,20 @@ def _compile_on_delay_instruction(
         [
             f"{isp}if {enabled_expr}:",
             *tick,
-            f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
+            f"{' ' * (inner + 4)}{emit_frac(acc, '_new_frac', quote='double')}",
             f"{' ' * (inner + 4)}{done_write} = (_acc >= _preset)",
             f"{' ' * (inner + 4)}{acc_write} = _acc",
         ]
     )
     if ctx.proof_metadata:
-        lines.insert(-3, f'{" " * (inner + 4)}_mem["{preset_key}"] = _preset')
+        lines.insert(
+            -3, f"{' ' * (inner + 4)}{emit_mem_set(preset_key, '_preset', quote='double')}"
+        )
     if not instr.has_reset:
         lines.extend(
             [
                 f"{isp}else:",
-                f'{" " * (inner + 4)}_mem["{frac_key}"] = 0',
+                f"{' ' * (inner + 4)}{emit_frac(acc, '0', quote='double')}",
                 f"{' ' * (inner + 4)}{done_write} = False",
                 f"{' ' * (inner + 4)}{acc_write} = 0",
             ]
@@ -259,7 +262,7 @@ def _compile_off_delay_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    frac_key = f"_frac:{instr.accumulator.name}"
+    acc = instr.accumulator
     armed_key = tof_armed_key(instr.accumulator.name)
     preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
@@ -271,27 +274,27 @@ def _compile_off_delay_instruction(
     sp12 = " " * (indent + 12)
     # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
     lines = [
-        f'{sp}_tof_armed = _mem.get("{armed_key}", False)',
+        f"{sp}_tof_armed = {emit_mem_get(armed_key, 'False', quote='double')}",
         f"{sp}if {enabled_expr}:",
         f"{sp4}if not _tof_armed:",
-        f'{sp8}_mem["{armed_key}"] = True',
-        f'{sp4}_mem["{frac_key}"] = 0',
+        f"{sp8}{emit_mem_set(armed_key, 'True', quote='double')}",
+        f"{sp4}{emit_frac(acc, '0', quote='double')}",
         f"{sp4}{done_write} = True",
         f"{sp4}{acc_write} = 0",
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
         f"{sp4}if _tof_armed or {done_read} or _acc != 0:",
         f"{sp8}if not _tof_armed:",
-        f'{sp12}_mem["{armed_key}"] = True',
+        f"{sp12}{emit_mem_set(armed_key, 'True', quote='double')}",
         *_timer_carry_lines(instr.accumulator, instr.unit, ctx, sp8),
         f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
         f"{sp8}_preset = int({preset})",
-        f'{sp8}_mem["{frac_key}"] = _new_frac',
+        f"{sp8}{emit_frac(acc, '_new_frac', quote='double')}",
         f"{sp8}{done_write} = _acc < _preset",
         f"{sp8}{acc_write} = _acc",
     ]
     if ctx.proof_metadata:
-        lines.insert(-3, f'{sp8}_mem["{preset_key}"] = _preset')
+        lines.insert(-3, f"{sp8}{emit_mem_set(preset_key, '_preset', quote='double')}")
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
     tt_expr = f"not bool({enabled_expr}) and bool({done_read})"
     lines.extend(
@@ -313,8 +316,8 @@ def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list
     now = f"{name}_now"
     return [
         f"{sp}{now} = bool({input_expr})",
-        f"{sp}{name} = {now} and not _mem.get({key!r}, False)",
-        f"{sp}_mem[{key!r}] = {now}",
+        f"{sp}{name} = {now} and not {emit_mem_get(key, 'False')}",
+        f"{sp}{emit_mem_set(key, now)}",
     ]
 
 
@@ -383,7 +386,7 @@ def _compile_count_up_instruction(
         ]
     )
     if ctx.proof_metadata:
-        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
+        lines.insert(-2, f"{' ' * inner}{emit_mem_set(preset_key, '_preset', quote='double')}")
     # Counter status bits: CU = enabled, CD = down condition active
     cd_expr = f"bool({down_expr})" if instr.down_condition is not None else "False"
     lines.extend(
@@ -438,7 +441,7 @@ def _compile_count_down_instruction(
         ]
     )
     if ctx.proof_metadata:
-        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
+        lines.insert(-2, f"{' ' * inner}{emit_mem_set(preset_key, '_preset', quote='double')}")
     # Counter status bits: CU = False (always), CD = enabled
     lines.extend(
         _compile_status_bit_lines(

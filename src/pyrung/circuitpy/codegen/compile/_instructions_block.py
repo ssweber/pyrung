@@ -32,6 +32,7 @@ from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
+from ._emit import emit_frac, emit_mem_get, emit_mem_set
 from ._primitives import (
     _compile_guarded_instruction,
     _compile_lvalue,
@@ -358,7 +359,7 @@ def _compile_shift_instruction(
         *range_setup,
         *empty_check,
         f"_clock_curr = {clock_expr}",
-        f"_clock_prev = bool(_mem.get({key!r}, False))",
+        f"_clock_prev = bool({emit_mem_get(key, 'False')})",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
         f"    _prev_values = [bool({_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx)}) for _idx in {range_indices}]",
@@ -368,7 +369,7 @@ def _compile_shift_instruction(
         f"if {reset_expr}:",
         f"    for _idx in {range_indices}:",
         f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
-        f"_mem[{key!r}] = _clock_curr",
+        emit_mem_set(key, "_clock_curr"),
     ]
     range_flush = _compile_range_flush(instr.bit_range, range_symbol, ctx)
     if range_flush:
@@ -425,7 +426,7 @@ def _compile_drum_instruction(
     if not isinstance(instr, EventDrumInstruction):
         clear_time = [
             f"{_compile_lvalue(instr.accumulator, ctx)} = 0",
-            f"_mem[{f'_frac:{instr.accumulator.name}'!r}] = 0",
+            emit_frac(instr.accumulator, "0"),
         ]
     complete = [f"{flag_write} = True", *(f"{symbol} = False" for symbol in output_symbols)]
 
@@ -446,7 +447,7 @@ def _compile_drum_instruction(
         lines.extend(
             [
                 f"_jump_curr = bool({jump_expr})",
-                f"_jump_edge = _jump_curr and (not bool(_mem.get({jump_prev_key!r}, False)))",
+                f"_jump_edge = _jump_curr and (not bool({emit_mem_get(jump_prev_key, 'False')}))",
                 "if _jump_edge:",
                 f"    _jump_target = int({_compile_value(instr.jump_step, ctx)})",
             ]
@@ -459,7 +460,7 @@ def _compile_drum_instruction(
         lines.extend(
             [
                 f"_jog_curr = bool({jog_expr})",
-                f"_jog_edge = _jog_curr and (not bool(_mem.get({jog_prev_key!r}, False)))",
+                f"_jog_edge = _jog_curr and (not bool({emit_mem_get(jog_prev_key, 'False')}))",
             ]
         )
     reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
@@ -520,7 +521,7 @@ def _compile_drum_instruction(
             "    if _invalid:",
             f"        {step_write} = 1",
             f"    if not {flag_on}:",
-            f"        if not bool(_mem.get({rung_prev_key!r}, False)):",
+            f"        if not bool({emit_mem_get(rung_prev_key, 'False')}):",
             *_indent_body(write_row, 12),
             "        else:",
             *_indent_body(_drum_end_lines(instr, ctx), 12),
@@ -542,15 +543,15 @@ def _compile_drum_instruction(
                     target_var="_event_curr",
                     value_exprs=_event_drum_event_exprs(instr, ctx),
                 ),
-                f"_mem[{f'_drum_event_prev:{key_base}'!r}] = _event_curr",
-                f"_mem[{f'_drum_last_step:{key_base}'!r}] = _step",
+                emit_mem_set(f"_drum_event_prev:{key_base}", "_event_curr"),
+                emit_mem_set(f"_drum_last_step:{key_base}", "_step"),
             ]
         )
-    lines.append(f"_mem[{rung_prev_key!r}] = _enabled and (not _reset_active)")
+    lines.append(emit_mem_set(rung_prev_key, "_enabled and (not _reset_active)"))
     if has_jump:
-        lines.append(f"_mem[{jump_prev_key!r}] = _jump_curr")
+        lines.append(emit_mem_set(jump_prev_key, "_jump_curr"))
     if has_jog:
-        lines.append(f"_mem[{jog_prev_key!r}] = _jog_curr")
+        lines.append(emit_mem_set(jog_prev_key, "_jog_curr"))
 
     return [" " * indent + line for line in lines]
 
@@ -569,8 +570,8 @@ def _drum_end_lines(
                 value_exprs=_event_drum_event_exprs(instr, ctx),
             ),
             # A step reached by a write to the register or a correction has spent its edge.
-            f"_end_met = _event_curr and (_step_raw == int(_mem.get({f'_drum_last_step:{key_base}'!r}, 0)))"
-            f" and (not bool(_mem.get({f'_drum_event_prev:{key_base}'!r}, False)))",
+            f"_end_met = _event_curr and (_step_raw == int({emit_mem_get(f'_drum_last_step:{key_base}', '0')}))"
+            f" and (not bool({emit_mem_get(f'_drum_event_prev:{key_base}', 'False')}))",
         ]
 
     preset_exprs = [
@@ -589,7 +590,7 @@ def _drum_end_lines(
         ]
         if ctx.proof_metadata:
             preset_key = prove_effective_preset_key(instr.completion_flag.name)
-            lines.append(f"_mem[{preset_key!r}] = _limit")
+            lines.append(emit_mem_set(preset_key, "_limit"))
         lines.append(f"_end_met = {_TIME_UP}")
         return lines
 
@@ -637,12 +638,11 @@ def _drum_tick_lines(
     """Add this scan's time to Acc; the step's preset, ``_limit``, is the tick's limit."""
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     lines = [f"_acc = int({_compile_value(instr.accumulator, ctx)})"]
-    frac_key = f"_frac:{instr.accumulator.name}"
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
     lines.extend(
         [
             *_timer_carry_lines(instr.accumulator, instr.unit, ctx, ""),
-            f"_mem[{frac_key!r}] = _new_frac",
+            emit_frac(instr.accumulator, "_new_frac"),
             f"_acc = min(_acc + _int_units, {max_acc})",
         ]
     )
