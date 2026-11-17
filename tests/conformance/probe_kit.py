@@ -10,8 +10,8 @@ nothing from another case can show.
 Most values read back as a class: 1 for the first reading the case names, 2 for
 the second and so on, and 0 for anything else.  A Word or a Real does not fit a slot's
 Int whatever a Copy does with it.  How a Word comes out of a Copy is itself one of the
-questions.  SC46 stays on until a Math clears it, so another case's op can leave it on.  A case that reads it uses :class:`GuardedProbes`, which
-waits for a scan the flag starts off.
+questions.  SC46 stays on until a Math clears it, so another case's op can leave it on.
+A case that reads it uses :class:`GuardedProbes`, which waits for a scan the flag starts off.
 """
 
 from __future__ import annotations
