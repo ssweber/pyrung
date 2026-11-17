@@ -52,7 +52,7 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
 def _addresses(tag_map: Any) -> dict[str, str] | None:
-    """Each mapped tag's CLICK address, or ``None`` when the program has no tag map."""
+    """Return each mapped tag's CLICK address, or ``None`` when the program has no tag map."""
     if tag_map is None:
         return None
     return {slot.logical_name: slot.hardware_address for slot in tag_map.mapped_slots()}
@@ -60,14 +60,15 @@ def _addresses(tag_map: Any) -> dict[str, str] | None:
 
 @dataclass(frozen=True)
 class ReloadPlan:
-    """Where a reload puts each force, bench change and declared link, by old tag name.
+    """Say where a reload moves each force, bench change and declared link, by old tag name.
 
     ``forces`` maps a forced tag to the tag it moves to, or to ``None`` to release
     it.  ``links`` maps a bench change's feedback to ``{"en": enable, "fb": feedback}``,
     to ``{"cut": True, "fb": feedback}`` for a cut, or to ``None`` to remove it.
-    ``declared`` maps the feedback of a link the old program declares to the feedback
-    of the link the new program declares in its place, so the coil keeps its state.  A
-    force or bench change the plan leaves out follows its tag name.
+    ``declared`` maps the feedback of a link that the old program declares to the
+    feedback of the link that the new program declares in its place.  The coil then
+    keeps its state.  A force or bench change that the plan leaves out follows its
+    tag name.
     """
 
     forces: Mapping[str, Any] = field(default_factory=dict)
@@ -77,7 +78,7 @@ class ReloadPlan:
 
 @dataclass(eq=False)
 class _Carry:
-    """One force, bench change or declared link in a reload, with what became of it."""
+    """Record one force, bench change or declared link in a reload, and what became of it."""
 
     #: The old name of the forced tag, or of the link's feedback.
     tag: str
@@ -116,9 +117,9 @@ _LABELS = {
 def _place(targets: dict[_Carry, tuple[str, Any]]) -> None:
     """Give each force or link in *targets* its new name.
 
-    Two forces or bench changes that end on one tag would fight over it, and neither
-    is the right one to keep.  So each one whose tag another also takes is dropped,
-    planned or not.  A force dropped this way is released.
+    If two forces or bench changes end on one tag, they would fight over it, and
+    neither is the right one to keep.  So drop each one whose tag another also
+    takes, planned or not.  A force dropped this way is released.
     """
     by_name: dict[str, list[_Carry]] = {}
     for carry, (name, _new_entry) in targets.items():
@@ -160,7 +161,7 @@ _PLAN_LINK_KEYS = frozenset({"en", "fb", "cut"})
 
 
 def _planned_bench(fb: str, entry: BenchLink, raw: Any) -> tuple[str, BenchLink] | str:
-    """The new feedback and bench entry *raw* plans for *fb*, or why the plan is wrong."""
+    """Return the new feedback and bench entry that *raw* plans for *fb*, or why it is wrong."""
     if not isinstance(raw, Mapping):
         return "its plan is not an object or null"
     unknown = sorted(str(key) for key in raw if key not in _PLAN_LINK_KEYS)
@@ -194,7 +195,7 @@ def _planned_bench(fb: str, entry: BenchLink, raw: Any) -> tuple[str, BenchLink]
 def _plan_links(
     old_bench: Mapping[str, BenchLink], plan: Mapping[str, Any]
 ) -> tuple[list[_Carry], dict[_Carry, tuple[str, Any]]]:
-    """One entry for each bench change and plan item, and the feedback each one goes to."""
+    """Return one entry for each bench change and plan item, and the feedback each goes to."""
     carries: list[_Carry] = []
     targets: dict[_Carry, tuple[str, Any]] = {}
     for fb, entry in old_bench.items():
@@ -225,9 +226,9 @@ def _plan_declared(
     old_active: Mapping[str, Coupling | None],
     plan: Mapping[str, Any],
 ) -> tuple[list[_Carry], dict[_Carry, tuple[str, Any]]]:
-    """One entry for each item of the plan's ``declared``, and the feedback it goes to.
+    """Return one entry for each item of the plan's ``declared``, and the feedback it goes to.
 
-    Only a declared link that no bench change replaced ran a coil, so only that one
+    Only a declared link that no bench change replaced ran a coil.  So only that link
     has a state to move.
     """
     old_declared = {c.fb_name for c in old_harness.declared()} if old_harness else set()
@@ -248,9 +249,10 @@ def _plan_declared(
 
 
 def _taken(carry: _Carry, bench_on: bool) -> str | None:
-    """The feedback a kept bench change replaces the program's link on after the reload.
+    """Return the feedback whose program link a kept bench change replaces after the reload.
 
-    ``None`` when it was dropped or released, and when it waits disabled or with bench off.
+    Return ``None`` when the change was dropped or released, or when it waits disabled
+    or with bench off.
     """
     if carry.dropped or carry.to is None or carry.new_entry is None:
         return None
@@ -260,11 +262,11 @@ def _taken(carry: _Carry, bench_on: bool) -> str | None:
 def _bench_wins(
     bench: list[_Carry], declared_targets: dict[_Carry, tuple[str, Any]], bench_on: bool
 ) -> dict[_Carry, tuple[str, Any]]:
-    """The declared entries that no bench change takes the feedback of.
+    """Return the declared entries whose feedback no bench change takes.
 
-    A bench change the harness runs replaces the program's link on its feedback, before
-    the reload and after it.  So a declared entry onto that feedback is dropped, and the
-    bench change stays.
+    A bench change that the harness runs replaces the program's link on its feedback,
+    before the reload and after it.  So a declared entry onto that feedback is dropped,
+    and the bench change stays.
     """
     benched = {_taken(carry, bench_on) for carry in bench} - {None}
     kept: dict[_Carry, tuple[str, Any]] = {}
@@ -279,11 +281,11 @@ def _bench_wins(
 
 
 def _declared_couplings(runner: PLC) -> dict[str, Coupling]:
-    """The links *runner*'s program declares, by feedback.
+    """Return the links that *runner*'s program declares, by feedback.
 
     A reload needs them before it builds the new runner, because a moved coil's
     state goes into the state that runner starts from.  Finding them registers the
-    linked tags on *runner*.  That does no harm, since the reload builds its own
+    linked tags on *runner*.  That does no harm, because the reload builds its own
     runner from *runner*'s program.
     """
     scratch = Harness(runner)
@@ -301,14 +303,14 @@ def _coil_moves(
     new_runner: PLC,
     new_known: Mapping[str, Any],
 ) -> dict[str, Coupling]:
-    """The coupling each moved coil runs as in the new program, by its old feedback.
+    """Return the coupling that each moved coil runs as in the new program, by old feedback.
 
     A planned bench link that the old harness ran and the new program accepts runs
-    the same coil under its new names, so the coil keeps its memory and its count.
-    So does the coil of a declared link the plan moves to a link the new program
-    declares with the same kind and trigger.  A coil never moves onto a feedback
-    whose own coil stays there, since that coil's state would be lost.  Such an
-    entry is dropped as ``in use``.
+    the same coil under its new names.  The coil keeps its memory and its count.
+    The coil of a declared link does the same when the plan moves it to a link that
+    the new program declares with the same kind and trigger.  A coil never moves onto
+    a feedback whose own coil stays there, because that coil's state would be lost.
+    Such an entry is dropped as ``in use``.
     """
     moves: dict[str, tuple[_Carry, Coupling]] = {}
     for carry in bench:
@@ -318,7 +320,7 @@ def _coil_moves(
         if old_active.get(carry.tag) is not None and link_problem(new_runner, coupling) is None:
             moves[carry.tag] = (carry, coupling)
     old_declared = {c.fb_name: c for c in old_harness.declared()} if old_harness else {}
-    # Whether a bench link may move onto a declared feedback depends on the new program too.
+    # The new program also decides whether a bench link may move onto a declared feedback.
     onto_declared = any(c.fb_name in old_declared for _carry, c in moves.values())
     new_declared: dict[str, Coupling] = {}
     if onto_declared or any(carry.to is not None for carry in declared):
@@ -335,8 +337,8 @@ def _coil_moves(
                 carry.drop("gone", target, f"{target} is not in the new program")
             continue
         old = old_declared[carry.tag]
-        # Another kind of coil keeps other timers, and another trigger fires on
-        # other values.  So the old coil's state does not fit, and the new coil settles.
+        # A different kind of coil keeps different timers, and a different trigger fires
+        # on different values.  The old coil's state does not fit, so the new coil settles.
         new_kind, old_kind = coupling.physical.kind, old.physical.kind
         if new_kind != old_kind:
             carry.drop(
@@ -357,7 +359,7 @@ def _coil_moves(
     by_tag = {carry.tag: carry for carry in bench}
 
     def stays(fb: str, mover: _Carry, leaving: set[str]) -> bool:
-        """Whether the coil the old harness ran on *fb* still runs there after the reload."""
+        """Return whether the coil that the old harness ran on *fb* still runs there afterward."""
         if fb not in running or fb in leaving:
             return False
         own = by_tag.get(fb)
@@ -376,8 +378,8 @@ def _coil_moves(
         ]
         if not blocked:
             break
-        # A dropped move keeps its coil on its own feedback, so a move onto that
-        # feedback may be blocked now.
+        # A dropped move leaves its coil on its own feedback.  A move onto that
+        # feedback may now be blocked.
         for fb in blocked:
             carry, coupling = moves.pop(fb)
             target = coupling.fb_name
@@ -390,13 +392,13 @@ def _article(word: str) -> str:
 
 
 def _type_name(tag: Any) -> str:
-    """The tag's type with its article, such as ``"an Int"``."""
+    """Return the tag's type with its article, such as ``"an Int"``."""
     name = tag.type.value.capitalize()
     return f"{_article(name)} {name}"
 
 
 def _why(carry: _Carry) -> str:
-    """Why *carry* was dropped, as the rest of "Dropped the force on A because ..."."""
+    """Return why *carry* was dropped, worded to follow "Dropped the force on A because"."""
     about = carry.about or carry.tag
     if carry.reason == "gone":
         return f"{about} is not in the new program"
@@ -423,9 +425,9 @@ def _carry_report(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """List each force and bench change a plain reload moved to another address or dropped.
 
-    Forces and bench changes follow the tag name.  Returns one entry per change
-    for clients, and a sentence for each force drop and each move.  A bench
-    change that was dropped already has its own note from the harness fit.
+    Forces and bench changes follow the tag name.  Return one entry per change
+    for clients, and a sentence for each force drop and each move.  The harness
+    fit already writes its own note for a bench change that was dropped.
     """
     entries: list[dict[str, Any]] = []
     lines: list[str] = []
@@ -511,7 +513,7 @@ def _plan_report(
     """List every force and bench change of a planned reload, and every plan entry.
 
     Unlike a plain reload's report, this lists an entry that kept its name and
-    address too.  The caller then sees each change its plan left out.
+    address too.  So the caller sees each change that its plan left out.
     """
     entries: list[dict[str, Any]] = []
     lines: list[str] = []
@@ -575,7 +577,7 @@ def _plan_report(
 
 @dataclass(frozen=True)
 class _StagedReload:
-    """A reload built on objects the adapter does not hold yet."""
+    """Hold a reload whose objects the adapter has not taken yet."""
 
     runner: PLC
     breakpoints: BreakpointManager
@@ -597,7 +599,7 @@ def _reload_locked(
     With a *plan*, ``carried`` lists every force and bench change and every plan
     entry.
 
-    The reload is built first, and the adapter takes it in one step that cannot
+    The reload is built first.  The adapter then takes it in one step that cannot
     fail.  A reload that fails leaves the program, mode, forces, harness, bench
     links, tag map and breakpoints as they were.
     """
@@ -713,8 +715,8 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
 
     patched_tags = {k: v for k, v in old_state.tags.items() if k not in tags_to_drop}
     # Site memory (one-shots, drum and shift edges, edge contacts) is keyed by
-    # site, and site keys are ordinal: carry each site's memory to the site of
-    # the new program with the same fingerprint, drop what no longer matches.
+    # site, and site keys are ordinal.  Carry each site's memory to the site of
+    # the new program with the same fingerprint, and drop what no longer matches.
     remap = remap_site_memory_report(
         old_state.memory, old_runner._site_table, new_runner._site_table
     )
@@ -833,7 +835,7 @@ def _stage_reload(adapter: Any, plan: ReloadPlan, plain: bool) -> _StagedReload:
             "reset: " + ", ".join(stale)
         )
 
-    # The report reads only what was staged, so it says what the adapter takes below.
+    # The report describes only what was staged.  The adapter takes it in _commit_reload.
     new_addr = _addresses(binding.tag_map)
     if plain:
         carried, carry_lines = _carry_report(
@@ -886,9 +888,9 @@ def _drop_coil_memory_no_coupling_owns(runner: PLC) -> list[str]:
     """Drop each harness coil memory that no coil of the new harness keeps.
 
     A reload keeps a coil's memory for the coil of the same kind on the same
-    feedback.  Kept for a renamed feedback or another kind, the memory would wait in
-    the state.  A later reload back to it would then read a stale value and skip the
-    settle at install.
+    feedback.  If the feedback was renamed or the kind changed, the memory would wait
+    in the state.  A later reload back to it would then read a stale value and skip
+    the settle at install.
     """
     owned: set[str] = set()
     synthesis = runner._synthesis

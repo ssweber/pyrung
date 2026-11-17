@@ -56,19 +56,19 @@ class _ValidationMixin:
     def _run_precheck(self, allow: Collection[str] = ()) -> list[str]:
         """Refuse the export on any finding not allowed.
 
-        Returns the warnings to give once the export succeeds, so a store the render
-        then refuses gets no warning before its error.
+        Return the warnings to give once the export succeeds.  This way a store that the
+        render then refuses gets no warning before its error.
         """
         report = self._tag_map.validate(self._program, mode="strict")
         # We intentionally fail on warnings and hints to keep export deterministic.
         findings = [*report.errors, *report.warnings, *report.hints]
-        # The step count is the whole project's, and an estimate: rows over the
-        # limit still render faithfully, so it warns instead of refusing.  So does a
-        # text past its block, which a CLICK writes on into the bank.  A text past its
-        # bank warns too, unless it is a constant into TXT, which the render refuses.
-        # CLICK's Copy accepts a register source, which saves no end address.  A
-        # pointer that can run past its bank warns too, as the CLICK takes the write.
-        # A rung whose contacts feed only a NOP warns too, because CLICK keeps it.
+        # The step count is the whole project's, and an estimate.  Rows over the limit
+        # still render faithfully, so it warns instead of refusing.  These warn too:
+        # - A text past its block, which a CLICK writes on into the bank.
+        # - A text past its bank, unless it is a constant into TXT, which the render refuses.
+        # - A pointer that can run past its bank.  CLICK's Copy accepts a register source,
+        #   which saves no end address, and CLICK takes the write.
+        # - A rung whose contacts feed only a NOP, because CLICK keeps it.
         warn_only = (
             CLK_STEP_LIMIT,
             CLK_TEXT_PAST_BANK,
@@ -154,7 +154,7 @@ class _ValidationMixin:
 
 
 def _rung_comments(rung: Rung) -> list[str | None]:
-    """A rung's comment, then its forloop body rungs' (nested loops included)."""
+    """Return a rung's comment, then its forloop body rungs' (nested loops included)."""
     comments: list[str | None] = [rung.comment]
 
     def _loop(loop: ForLoopInstruction) -> None:
@@ -211,8 +211,8 @@ class _RoundTripValidationMixin:
         actual_rungs = _analyze_rungs(_parse_rows([tuple(_HEADER), *rendered_rows]))
         scope_path = f"subroutine[{subroutine_name}]" if scope == "subroutine" else "main"
 
-        # The rows must also come back as the same logic through codegen:
-        # ladder_to_pyrung renders the blocks this check walks.
+        # The rows must also come back as the same logic through codegen.
+        # ladder_to_pyrung renders the blocks that this check walks.
         mismatch = emitted_logic_mismatch(actual_rungs)
         if mismatch is not None:
             self._raise_issue(

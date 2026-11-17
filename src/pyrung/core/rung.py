@@ -60,14 +60,14 @@ class Rung:
         self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence
         self._execution_plan: list[tuple[int, Instruction | Rung]] = []
         self._terminal_instruction: Instruction | None = None
-        # Outputs in this rung's wire tree (its own and its branches'), and the
-        # box with pins among them: a box with pins ends its rung.
+        # The number of outputs in this rung's wire tree (its own and its branches'), and
+        # the box with pins among them.  A box with pins ends its rung.
         self._tree_outputs = 0
         self._pin_box: Instruction | None = None
         # A forloop body's bare instructions are each a body rung of their own.
         self._loop_capture = False
-        # A forloop body rung: no .continued() there, so a box's neighbours
-        # move to body rungs of their own.
+        # True for a forloop body rung.  There is no .continued() there, so a box's
+        # neighbours move to body rungs of their own.
         self._in_loop_body = False
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
@@ -76,8 +76,8 @@ class Rung:
         # several wires.  The rung is solved and exported as a rung of its own.
         self._use_prior_snapshot = False
         # ``(memory key, tag)`` of the edge sites this rung's own contacts hold
-        # (its row), scanned when the solve reaches the row; built on first
-        # scan (pyrung.core.site_memory.build_edge_frames).
+        # (its row).  They are scanned when the solve reaches the row, and built on
+        # first scan (pyrung.core.site_memory.build_edge_frames).
         self._edge_frame: tuple[tuple[str, str], ...] | None = None
         self.source_file = source_file
         self.source_line = source_line
@@ -123,7 +123,7 @@ class Rung:
         self._execution_items.append(instruction)
         self._execution_plan.append((instruction._executor_kind, instruction))
         # A forloop body's bare box is a body rung of its own, so the next bare
-        # instruction is another body rung: the box ends only its own (a NOP
+        # instruction is another body rung.  The box ends only its own rung (a NOP
         # still ends the flow).
         if instruction.is_terminal() and not (self._loop_capture and instruction.has_pins()):
             self._terminal_instruction = instruction
@@ -164,7 +164,7 @@ class Rung:
         self._execution_plan.append((_EXECUTOR_BRANCH, branch))
 
     def _first_output(self) -> Instruction | None:
-        """The first instruction of this rung's wire tree, in solve order."""
+        """Return the first instruction of this rung's wire tree, in solve order."""
         for item in self._execution_items:
             if isinstance(item, Rung):
                 found = item._first_output()
@@ -213,11 +213,12 @@ class Rung:
         """Evaluate this rung within a ScanContext.
 
         Writes are batched in the context and committed at scan end.  Each
-        instruction solves only the path from the rail to it: the trunk's
-        contacts are read once and that power is held for everything under
-        it; each branch's own contacts are read when execution reaches the
-        branch, so they see the writes of the instructions above it.  A ``.continued()`` rung is a rung of
-        its own, its contacts read live like any other's.
+        instruction solves only the path from the rail to it.  The trunk's
+        contacts are read once, and that power is held for everything under
+        it.  Each branch's own contacts are read when execution reaches the
+        branch, so they see the writes of the instructions above it.  A
+        ``.continued()`` rung is a rung of its own, and its contacts are read
+        live like any other's.
 
         Args:
             ctx: ScanContext for reading/writing with batched updates.
@@ -227,12 +228,12 @@ class Rung:
         self.execute(ctx, conditions_true)
 
     def _new_row_view(self, ctx: ScanContext, *, live: bool = False) -> ConditionView:
-        """A condition view for this rung's own row (its trunk, or a branch's
-        local contacts), taken as the solve reaches it, with the row's edge
-        sites scanned.
+        """Return a condition view for this rung's own row (its trunk, or a branch's
+        local contacts).
 
-        *live* views read the pending writes directly and are only good for
-        evaluating the row at once; a frozen one (the default) may be kept and
+        Take the view as the solve reaches the row, with the row's edge sites scanned.
+        A *live* view reads the pending writes directly and is only good for
+        evaluating the row at once.  A frozen view (the default) may be kept and
         re-read later (observers, the debugger).
         """
         frame = self._edge_frame
@@ -269,8 +270,10 @@ class Rung:
         return True
 
     def _solve_row(self, ctx: ScanContext, parent_enabled: bool) -> bool:
-        """Solve this branch (or For-body rung) as the solve reaches it: its
-        own contacts, read live, under the power held from the row above."""
+        """Solve this branch (or For-body rung) as the solve reaches it.
+
+        Read its own contacts live, under the power held from the row above.
+        """
         condition_view = self._new_row_view(ctx, live=True)
         return parent_enabled and self._evaluate_local_conditions(condition_view)
 
@@ -286,9 +289,9 @@ class Rung:
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """Execute this rung's rows in solve order with the provided power state.
 
-        Each branch is solved when the loop reaches it (``_solve_row``): its
-        own contacts read live, under *enabled*, the power held for the rows
-        under this one.
+        Each branch is solved when the loop reaches it (``_solve_row``).  Its
+        own contacts are read live, under *enabled*, which is the power held for
+        the rows under this one.
 
         Args:
             ctx: Live ScanContext for instruction read-after-write.
@@ -317,7 +320,7 @@ _DSL_NAMES = {
 
 
 def _dsl_label(instruction: Instruction | None) -> str:
-    """``count_up() (line 12)``: the instruction as its author wrote it."""
+    """Return ``count_up() (line 12)``, the instruction as its author wrote it."""
     if instruction is None:  # pragma: no cover - defensive
         return "the other output"
     class_name = type(instruction).__name__
@@ -330,7 +333,7 @@ def _dsl_label(instruction: Instruction | None) -> str:
 
 
 def _box_shares_rung(box: Instruction, other: Instruction | None, in_loop_body: bool) -> str:
-    """Why *box*, a box with pins, cannot share its rung with *other*."""
+    """Return why *box*, a box with pins, cannot share its rung with *other*."""
     where = (
         "what comes before the box into a body rung above, what follows it into a body "
         "rung of its own."

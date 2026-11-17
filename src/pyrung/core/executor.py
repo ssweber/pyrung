@@ -36,8 +36,8 @@ if TYPE_CHECKING:
 
 
 ExecutionMode = Literal["natural", "forced_on", "forced_off"]
-# ``loop_body`` is a ``with Rung(...)`` inside a forloop body: one run per
-# iteration, a fresh condition view each time, local contacts only.
+# ``loop_body`` is a ``with Rung(...)`` inside a forloop body.  It runs once per
+# iteration, with a fresh condition view each time and local contacts only.
 ExecutionKind = Literal["rung", "branch", "subroutine", "synthetic", "loop_body"]
 
 
@@ -167,26 +167,26 @@ class RungRun:
     )
 
     def condition_view(self, condition: object) -> ConditionView:
-        """The view of the row that read *condition*, a leaf of :meth:`sp_tree`.
+        """Return the view of the row that read *condition*, a leaf of :meth:`sp_tree`.
 
         A branch's conditions start with the contacts it inherits.  Those were
         read on their own rows as the solve started them (the trunk power is
-        held from the split), not on the branch row, which comes after any
-        writes above it; re-reading them on *view* misexplains the branch.
+        held from the split).  They were not read on the branch row, which comes
+        after any writes above it.  Re-reading them on *view* misexplains the branch.
         """
         if not self.inherited_views:
             return self.view
         return self._row_conditions[1].get(id(condition), self.view)
 
     def sp_tree(self) -> Any:
-        """The rung's SP tree, with one leaf object per position.
+        """Return the rung's SP tree, with one leaf object per position.
 
         ``rung.sp_tree()`` shares a condition object wherever the program used
-        it twice (``shared = Or(A, Z)`` on the trunk and again on a branch), so
+        it twice (``shared = Or(A, Z)`` on the trunk and again on a branch).  So
         an object cannot name the row that read it.  Here every inherited
         position that shares an object with another row gets a structural copy
         of its own, so :meth:`condition_view` routes each leaf to its row.
-        Built once per run.
+        The tree is built once per run.
         """
         return self._sp_tree
 
@@ -301,8 +301,10 @@ def _summarize_tag_writes(
 
 
 def _condition_nodes(condition: object) -> list[object]:
-    """*condition* and every nested ``all_of``/``any_of`` member (the SP-tree
-    leaves are the members)."""
+    """Return *condition* and every nested ``all_of``/``any_of`` member.
+
+    The SP-tree leaves are the members.
+    """
     from pyrung.core.condition import AllCondition, AnyCondition
 
     nodes = [condition]
@@ -313,7 +315,7 @@ def _condition_nodes(condition: object) -> list[object]:
 
 
 def _distinct_condition(condition: Any) -> Any:
-    """A structural copy of *condition* whose every node is a new object.
+    """Return a structural copy of *condition* in which every node is a new object.
 
     Leaves are shallow copies: they read the same tags (and an edge contact
     the same memory key) as the original.
@@ -1404,9 +1406,9 @@ def _execute_rung(
     call_stack: tuple[str, ...],
 ) -> None:
     observer.begin_rung(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
-    # Each row gets its own view as the solve reaches it (rows above it have
-    # written).  It is frozen so an observer can re-read the row after the
-    # scan; ``_condition_snapshot`` hands it to ``begin_condition``.
+    # Each row gets its own view as the solve reaches it, after the rows above it have
+    # written.  The view is frozen so an observer can re-read the row after the scan.
+    # ``_condition_snapshot`` hands it to ``begin_condition``.
     condition_view = rung._new_row_view(ctx)
     ctx._condition_snapshot = condition_view
     observer.begin_condition(ctx, rung_index, rung, kind, depth, subroutine_name, call_stack)
