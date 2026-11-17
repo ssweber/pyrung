@@ -467,7 +467,10 @@ def test_storage_sd_commands_auto_clear_and_pulse_write_status():
 
 
 def test_fault_division_error_clears_next_scan_by_the_held_oneshot_math(runner_factory):
-    """A one-shot Math that does not fire still clears its flags (CLICK, ``flag_reads/oneshot_held``)."""
+    """A one-shot Math that does not fire still clears its flags.
+
+    CLICK: ``flag_reads/oneshot_held``.
+    """
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
@@ -564,7 +567,7 @@ def test_fault_address_error_carries_until_a_copy_runs(runner_factory):
 
 
 class TestSystemPointsStayOutOfBlocks:
-    """A CLICK never holds one in a block, and no fold can see one read through a pointer."""
+    """A CLICK never holds a system point in a block.  No fold sees one read through a pointer."""
 
     @pytest.mark.parametrize(
         ("point", "bank_type"),
@@ -585,7 +588,7 @@ class TestSystemPointsStayOutOfBlocks:
             Int("rtc.second").map_to(Block("Cb", TagType.INT, 1, 8)[3])
 
     def test_a_block_range_cannot_carry_one(self) -> None:
-        """``Block.map_to`` takes a slot's name, so the name is where it stops."""
+        """``Block.map_to`` receives a slot's name, so it refuses a system name at that point."""
         logical = Block("Sn", TagType.INT, 1, 4)
         with pytest.raises(ValueError, match="can't live in a block"):
             logical.slot(3, name="rtc.second")
