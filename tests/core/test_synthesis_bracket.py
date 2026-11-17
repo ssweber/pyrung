@@ -98,10 +98,10 @@ def test_empty_synthesis_is_inert() -> None:
 
 
 def test_conditional_hold_branch_oscillates() -> None:
-    # A two-rule liveness hold as ONE rung: both guards mean the state the
+    # A two-rule liveness hold as ONE rung.  Both guards mean the state the
     # bracket starts from, so the polarities stay mutually exclusive and the tag
-    # oscillates each scan.  The bracket folds them into one out(W) (two
-    # writers of W in one rung would cancel); toggle() would not do here,
+    # oscillates each scan.  The bracket folds them into one out(W), because two
+    # writers of W in one rung would cancel.  toggle() would not do here,
     # since it flips on a rising edge, not every scan.
     from pyrung.core.condition import CompareNe
 
@@ -188,7 +188,7 @@ def _bracket_as_program_rung() -> Program:
 
 
 def test_bracket_rules_read_the_starting_state_on_every_backend() -> None:
-    # A synthesis bracket runs like a user rung; it is laid out so its rules
+    # A synthesis bracket runs like a user rung.  It is laid out so its rules
     # still read the state it starts from.  The interpreter, the
     # observed executor path, the debugger and the compiled kernel agree.
     from pyrung.core import CompiledPLC
@@ -225,8 +225,8 @@ def test_bracket_rules_read_the_starting_state_on_every_backend() -> None:
 
 
 def test_a_user_rung_of_the_same_shape_solves_row_by_row() -> None:
-    # The same two rules as user branches: the second reads the first's write,
-    # so they cancel and W stays False (a CLICK does the same).
+    # The same two rules as user branches.  The second reads the first's write,
+    # so they cancel and W stays False.  A CLICK does the same.
     from pyrung import branch, latch, reset
 
     W = Bool("W")
@@ -278,8 +278,8 @@ def test_non_bool_alternation_reads_the_starting_state_on_every_backend() -> Non
 
 
 def test_guarded_copy_last_active_rule_wins_from_the_starting_state() -> None:
-    # A reads B and B reads A; every guard means the state the bracket starts
-    # from, the last active rule for a destination wins, and a Bool with no
+    # A reads B and B reads A.  Every guard means the state the bracket starts
+    # from.  The last active rule for a destination wins, and a Bool with no
     # active rule returns to False.
     from pyrung.core.synthesis import guarded_copy_rung
 
@@ -314,8 +314,8 @@ def test_guarded_copy_last_active_rule_wins_from_the_starting_state() -> None:
 
 
 def test_guarded_copy_refuses_a_value_that_is_not_a_constant() -> None:
-    # A tag value would be read when the scan reaches its copy, after earlier
-    # writes of the bracket, so the bracket only takes constants.
+    # The bracket accepts only constants.  A tag value would be read when the scan
+    # reaches its copy, after earlier writes of the bracket.
     from pyrung.core.synthesis import guarded_copy_rung
 
     sel, src, gate = Int("Sel"), Int("Src"), Bool("Gate")
