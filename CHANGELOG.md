@@ -30,6 +30,7 @@
 
 ### Fixes
 
+- The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
