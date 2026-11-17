@@ -4,9 +4,9 @@ Each helper returns the source for one piece of an instruction's scan, such as a
 read or a timer's tick.  The kernel and the CircuitPython ``code.py`` share them, so a
 behaviour is written once for both.
 
-Some emitters spell the same piece differently, and the helpers keep each spelling, so
-the output does not change.  A ``quote`` of ``"double"`` writes a memory key as
-``"key"``, and ``"repr"`` writes it as Python's ``repr`` does (``'key'``).
+Some emitters spell the same piece differently.  The helpers keep each spelling, so the
+output does not change.  A ``quote`` of ``"double"`` writes a memory key as ``"key"``.
+A ``quote`` of ``"repr"`` writes it as Python's ``repr`` does (``'key'``).
 """
 
 from __future__ import annotations
@@ -37,17 +37,17 @@ def emit_mem_set(key: str, value: str, *, quote: Quote = "repr") -> str:
     return f"_mem[{_key_literal(key, quote)}] = {value}"
 
 
-def frac_key(acc: Tag) -> str:
+def _frac_key(acc: Tag) -> str:
     """The memory cell holding the part of a unit a timer's *acc* has not counted yet."""
     return f"_frac:{acc.name}"
 
 
 def emit_frac_get(acc: Tag, *, quote: Quote = "repr") -> str:
-    return emit_mem_get(frac_key(acc), "0", quote=quote)
+    return emit_mem_get(_frac_key(acc), "0", quote=quote)
 
 
 def emit_frac(acc: Tag, value: str, *, quote: Quote = "repr") -> str:
-    return emit_mem_set(frac_key(acc), value, quote=quote)
+    return emit_mem_set(_frac_key(acc), value, quote=quote)
 
 
 def emit_frac_keep(acc: Tag) -> str:
@@ -58,8 +58,8 @@ def emit_frac_keep(acc: Tag) -> str:
 def emit_prev(key: str, *, cast: bool = True) -> str:
     """A bit as the instruction memory *key* last stored it.  It reads off until the first store.
 
-    The edge contacts read the cell without ``bool()`` (``cast=False``), and every other site
-    wraps it.
+    Edge contacts and counter inputs read the cell without ``bool()`` (``cast=False``).
+    Every other emitter wraps it.
     """
     read = emit_mem_get(key, "False")
     return f"bool({read})" if cast else read
@@ -73,7 +73,7 @@ def emit_prev_store(key: str, now: str) -> str:
 def emit_rise(now: str, key: str, *, cast: bool = True, paren: bool = False) -> str:
     """True on the scan the bit *now* is on and *key* holds it off.
 
-    The drum writes ``(not ...)`` in brackets (``paren=True``), and the other sites do not.
+    The drum writes ``(not ...)`` in brackets (``paren=True``), and the other emitters do not.
     """
     not_prev = f"not {emit_prev(key, cast=cast)}"
     if paren:
@@ -222,12 +222,12 @@ def emit_timer_clear(
     return [*lines, f"{done} = {done_value}", f"{acc} = 0"]
 
 
-COMPARE_OPS = ("==", "!=", "<", "<=", ">", ">=")
+_COMPARE_OPS = ("==", "!=", "<", "<=", ">", ">=")
 
 
 def emit_cmp(left: str, op: str, right: str, *, paren: bool = True) -> str:
     """The compare *left* *op* *right*, in brackets unless ``paren=False``."""
-    if op not in COMPARE_OPS:
+    if op not in _COMPARE_OPS:
         raise ValueError(f"Unsupported comparison: {op!r}")
     compare = f"{left} {op} {right}"
     return f"({compare})" if paren else compare

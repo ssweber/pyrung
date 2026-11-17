@@ -115,7 +115,7 @@ def _compile_out_instruction(
         key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
-        # Written in the order the output reads them, since a range write takes the next name.
+        # Each range write takes the next local name, so build the writes in output order.
         off, fire, held = [], [], []
         if enabled_literal is not True:
             off = _compile_target_write_lines(instr.target, "False", ctx, 0)
@@ -266,7 +266,10 @@ def _preset_key(
     instr: OnDelayInstruction | OffDelayInstruction | CountUpInstruction | CountDownInstruction,
     ctx: CodegenContext,
 ) -> str | None:
-    """The memory key the prover reads a timer's or counter's preset from, when it asks for one."""
+    """The memory key that holds a timer's or counter's preset for the prover.
+
+    It is None unless the kernel is built with ``proof_metadata``.
+    """
     return prove_effective_preset_key(instr.done_bit.name) if ctx.proof_metadata else None
 
 
