@@ -1004,8 +1004,8 @@ def hmi_request_taken_when_nonzero() -> Any:
 #: Idioms that need a harness on each PLC: name -> the function that installs it.
 PREPARE: dict[str, Callable[[PLC], None]] = {}
 
-#: Idioms whose runs start with set inputs: name -> the inputs of each first scan.  The
-#: random walk runs after them.
+#: Idioms whose runs start with fixed inputs: name -> one patch for each of the first scans.
+#: The random walk runs after them.
 OPENING: dict[str, tuple[dict[str, Any], ...]] = {}
 
 
