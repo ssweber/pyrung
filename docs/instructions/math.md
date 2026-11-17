@@ -24,23 +24,26 @@ The expression comes first and the destination second, as in every pyrung instru
 
 ## Wide constants
 
-CLICK's editor refuses a whole-number constant outside −2147483648..2147483647 in any Math. A hex-mode Math (only `Word` tags) takes a whole number from 0 to 65535. pyrung writes −32768..−1 there as its 16 bits, so −1 exports as FFFFh. CLICK validation reports any other constant (`CLK_MATH_WIDE_CONSTANT`). The export refuses any other hex-mode constant even when that finding is allowed, since no CLICK hex constant holds it.
+CLICK's editor rejects a whole-number constant outside −2147483648..2147483647 in any Math. A hex-mode Math (only `Word` tags) accepts a whole number from 0 to 65535. For −32768..−1 in hex mode, pyrung writes the constant as its 16 bits, so −1 exports as FFFFh. CLICK validation reports any other constant (`CLK_MATH_WIDE_CONSTANT`). The export rejects any other hex-mode constant, even when you allow that finding, because no CLICK hex constant can hold it.
 
 ## REAL range and precision
 
-A CLICK REAL is a 32-bit float, so a `math()` or `copy()` result past ±3.4028235E+38 is +Inf or −Inf. A `math()` also sets `system.fault.out_of_range` (SC43). Inf and NaN follow IEEE 754 in later arithmetic. A default or literal must be finite and in range. A `patch()` or `force()` of a finite value past the range raises `ValueError`.
+A CLICK REAL is a 32-bit float. A `math()` or `copy()` result past ±3.4028235E+38 becomes +Inf or −Inf. A `math()` also sets `system.fault.out_of_range` (SC43). Later arithmetic on Inf and NaN follows IEEE 754. A default or literal must be finite and in range. A `patch()` or `force()` of a finite value past the range raises `ValueError`.
 
-Into an `Int`, `Dint` or `Word`, a `math()` result of ±Inf stores 0 and sets `out_of_range`, and NaN stores 0 with no flag. A `copy()` of ±Inf clamps instead (see [Copy](copy.md)).
+If a `math()` result of ±Inf goes into an `Int`, `Dint` or `Word`, it stores 0 and sets `out_of_range`. A NaN result stores 0 and sets no flag. A `copy()` of ±Inf clamps instead (see [Copy](copy.md)).
 
-The range is checked when `math()` stores its result, not at each step of the formula.
+`math()` checks the range when it stores its result, not at each step of the formula.
 
-Inside the range pyrung keeps a `Real` at Python's 64-bit precision, while a CLICK REAL is a 32-bit float. For example, `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
+Inside the range, pyrung keeps a `Real` at Python's 64-bit precision. A CLICK REAL is a 32-bit float. For example, `16777216.0 + 1` is 16777217 in pyrung and 16777216 on a CLICK. Compare a `Real` with a tolerance, not `==`, when the last digits matter.
 
 ## Division
 
-- A division by zero is 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5. Every later `math()` clears the flag, including one on a false rung and a one-shot that does not fire. A `copy()`, coil, timer or counter leaves it. Read it on the next rung.
+- A division by zero gives 0 and sets `system.fault.division_error`. The rest of the formula runs, so `math(X / Zero + 5, D)` stores 5.
+- Every later `math()` clears the flag. This includes a `math()` on a false rung and a one-shot that does not fire. A `copy()`, coil, timer or counter leaves the flag alone. Read it on the next rung.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
-- In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1. A MOD by zero is 0 with no flag, and the rest of the formula runs. Anywhere else `%` is Python's, so an index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
+- In a `math()`, `%` (CLICK's MOD) truncates too, so the remainder takes the dividend's sign. `−7 % 2 = −1`, where Python's `%` gives 1.
+- A MOD by zero gives 0 and sets no flag. The rest of the formula runs.
+- Outside a `math()`, `%` is Python's. An index such as `DS[(P - 1) % 10 + 1]` wraps 0 to 10.
 
 ## Math errors
 
@@ -48,11 +51,11 @@ Inside the range pyrung keeps a `Real` at Python's 64-bit precision, while a CLI
 math(sqrt(Level), Root)     # Level = -4.0
 ```
 
-A math function given an operand outside its domain is 0 and sets `system.fault.math_operation_error` (CLICK's SC46). Examples are `sqrt` of a negative and `log` of 0. The rest of the formula runs, so `sqrt(Level) + 5` stores 5. The PLC stays in RUN, as a real CLICK does.
+A math function that receives an operand outside its domain gives 0 and sets `system.fault.math_operation_error` (CLICK's SC46). Examples are `sqrt` of a negative and `log` of 0. The rest of the formula runs, so `sqrt(Level) + 5` stores 5. The PLC stays in RUN, as a real CLICK does.
 
 ## Math outside `math()`
 
-An expression outside `math()` is permissive. That covers a rung condition, a `copy()` source, a `forloop()` count and an index expression such as `DS[I + 1]`. An operation in it that hits a math error (a division by zero, a math function outside its domain) gives 0, sets no fault flag and never stops the scan. This is pyrung's own rule. A CLICK has no expressions outside Math, and the CLICK validator flags them. Use `math()` when the flag matters.
+An expression outside `math()` is permissive. That covers a rung condition, a `copy()` source, a `forloop()` count and an index expression such as `DS[I + 1]`. If an operation in it causes a math error (a division by zero, or a math function given an operand outside its domain), the operation gives 0. It sets no fault flag and never stops the scan. This is pyrung's own rule. A CLICK has no expressions outside Math, and the CLICK validator flags them. Use `math()` when you need the flag.
 
 ## Mode inference
 
@@ -65,7 +68,7 @@ An expression outside `math()` is permissive. That covers a rung condition, a `c
 
 For CLICK portability, do not mix WORD and non-WORD math in the same `math()` expression. CLICK validation reports `CLK_MATH_MODE_MIXED` for mixed-family expressions.
 
-CLICK's editor takes only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`, and as either side of `<<` and `>>`. CLICK validation reports `CLK_MATH_ARG_NOT_PLAIN` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`. Compute the value into a tag in a `math()` above. The same holds for `randint()` bounds.
+CLICK's editor accepts only a tag or a constant as an argument of `lsh`, `rsh`, `lro` and `rro`. It accepts only a tag or a constant on either side of `<<` and `>>`. CLICK validation reports `CLK_MATH_ARG_NOT_PLAIN` for `lsh(W + 1, 2)` or `(W & 0xFF) << 2`. Compute the value into a tag in a `math()` above. The same rule applies to `randint()` bounds.
 
 ## Range aggregates
 
@@ -78,14 +81,14 @@ math(DF.select(1, 8).mean(), Avg)        # average
 math(C.select(1, 16).sum(), OnCount)     # Bool range: counts True bits
 ```
 
-Each method returns a lazy expression over the range, read at scan time. They compose with the rest of the expression:
+Each method returns a lazy expression over the range. pyrung reads the range at scan time. You can combine these expressions with the rest of the formula:
 
 ```python
 math(DS.select(1, 10).max() + abs(Offset), Result)
 math(DS.select(1, 10).sum() / 10, Result)
 ```
 
-`median()` of an even count is the mean of the two middle values. Over integers that mean is truncated toward zero (`{9, 2, 10, 1}` gives 5), as on a CLICK. On a WORD range (hex mode) values are unsigned 16-bit.
+`median()` of an even count is the mean of the two middle values. Over integers, that mean is truncated toward zero (`{9, 2, 10, 1}` gives 5), as on a CLICK. On a WORD range (hex mode), values are unsigned 16-bit.
 
 Mode inference applies normally. WORD-only ranges infer hex mode, and anything else infers decimal.
 
@@ -95,7 +98,7 @@ Mode inference applies normally. WORD-only ranges infer hex mode, and anything e
 math(abs(Error), Magnitude)
 ```
 
-Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only, so `abs()` of WORD tags is a portability finding.
+Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal mode only. Validation therefore reports `abs()` of WORD tags as a portability finding.
 
 ## `randint()`
 
@@ -106,13 +109,13 @@ math(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
 math(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts
 ```
 
-`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it draws between them.
+`randint(lo, hi)` includes both ends, like Python's `random.randint`. If `lo` is above `hi`, it still draws between them.
 
-- Equal bounds are a math error. The `randint()` reads 0 and the `math()` sets `system.fault.math_operation_error`.
+- Equal bounds are a math error. The `randint()` returns 0 and the `math()` sets `system.fault.math_operation_error`.
 - A float or expression bound is read as an integer, so `randint(2.5, 2.9)` has equal bounds.
-- A draw outside the destination's range wraps and sets `system.fault.out_of_range`, as any `math()` result does.
+- A draw outside the destination's range wraps and sets `system.fault.out_of_range`, like any other `math()` result.
 
-A decimal Math takes an integer constant or a DS or DD tag as a bound. A hex Math takes an integer constant or a DH tag. CLICK validation refuses:
+A decimal Math accepts an integer constant or a DS or DD tag as a bound. A hex Math accepts an integer constant or a DH tag. CLICK validation rejects:
 
 - any other bound: a `Real` tag, a float constant, a bit, a TD, CTD, SD, XD or YD tag, a DH tag in a decimal Math, or text (`CLK_RAND_BOUND_TYPE`)
 - equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`)
@@ -120,7 +123,7 @@ A decimal Math takes an integer constant or a DS or DD tag as a bound. A hex Mat
 
 Use constants or a DS or DD tag as bounds. Compute an expression bound into a tag in a `math()` above. For a one-value draw, use a plain constant.
 
-Draws are deterministic, so a run replays the same sequence. A test chooses a draw through the call's hidden tag, as it sets any input:
+Draws are deterministic, so a run replays the same sequence. In a test, you choose a draw through the call's hidden tag, the same way you set any input:
 
 ```python
 roll = randint(1, 6)
@@ -129,9 +132,9 @@ plc.patch({roll.tag: 6})                 # next scan draws 6
 plc.force(roll.tag, 3)                   # every scan draws 3 until unforced
 ```
 
-A hex-mode draw whose bounds are cut to 16 bits is chosen through `roll.ucut_tag` instead.
+For a hex-mode draw whose bounds are cut to 16 bits, use `roll.ucut_tag` instead.
 
-`randint` is not allowed inside a `forloop()`. Every iteration would read the scan's one draw, while CLICK draws again on each execution. On CircuitPython the board calls `random.randint` directly, so its draws are not replayable.
+You cannot use `randint` inside a `forloop()`. Every iteration would read the scan's one draw, while CLICK draws again on each execution. On CircuitPython the board calls `random.randint` directly, so you cannot replay its draws.
 
 ## Range aggregates on CLICK
 
@@ -145,12 +148,12 @@ A hex-mode draw whose bounds are cut to 16 bits is chosen through `roll.ucut_tag
 | `abs(x)` | `ABS ( x )` | no |
 | `randint(lo, hi)` | `RAND ( lo , hi )` | yes |
 
-In pyrung the aggregates work anywhere an expression does (`copy()` sources, rung comparisons). CLICK accepts them only inside Math, and validation says so (`CLK_EXPR_ONLY_IN_MATH`). CLICK validation also checks each range:
+In pyrung, the aggregates work anywhere an expression does (`copy()` sources, rung comparisons). CLICK accepts them only inside Math, and validation reports this (`CLK_EXPR_ONLY_IN_MATH`). CLICK validation also checks each range:
 
 | Finding | Rule |
 |---------|------|
 | `CLK_MATH_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). A range that starts at XD0 or YD0 must end there, since CLICK's XD0:XD1 also holds XD0u. |
 | `CLK_MATH_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
 | `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
-| `CLK_MATH_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` refuse a bit range (X, Y, C, T, CT, SC); `SUM` accepts one. |
-| `CLK_MATH_SUM_BANK_NOT_AVAILABLE` | `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, or SD in decimal mode, and DH, XD, or YD in hex mode. |
+| `CLK_MATH_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` reject a bit range (X, Y, C, T, CT, SC). `SUM` accepts one. |
+| `CLK_MATH_SUM_BANK_NOT_AVAILABLE` | In decimal mode, `SUM` reads X, Y, C, T, SC, DS, DD, DF, TD, CTD or SD. In hex mode, it reads DH, XD or YD. |

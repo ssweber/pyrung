@@ -386,13 +386,13 @@ Common findings:
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `math()` first |
 | `out` / `latch` / `reset` target | Any tag (`reset(DS1)`, `reset(TXT1)`) | Bit memory only: X, Y, C, T, CT, SC (`CLK_BANK_WRONG_ROLE`); clear a register with `copy()` or `fill()` |
-| Whole-number constant in `math()` | Any. Hex mode cuts it to 16 bits, as a CLICK does | −2147483648..2147483647, and 0..65535 in hex mode (`CLK_MATH_WIDE_CONSTANT`). The export writes −32768..−1 in hex mode as its 16 bits, and refuses any other hex constant even when allowed |
-| Whole-number constant in `copy()` or `fill()` into a `Word` | Any | 0..65535 into DH, XD or YD (`CLK_COPY_WIDE_CONSTANT`). The export writes −32768..−1 as its 16 bits, and refuses any other constant even with `allow=` |
-| A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`CLK_MATH_BIT_OPERAND`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK and 0 in pyrung, because the `sc` block does not follow the system points |
+| Whole-number constant in `math()` | Any. Hex mode cuts it to 16 bits, as a CLICK does | −2147483648..2147483647, and 0..65535 in hex mode (`CLK_MATH_WIDE_CONSTANT`). In hex mode the export writes −32768..−1 as its 16 bits. It rejects any other hex constant, even when allowed |
+| Whole-number constant in `copy()` or `fill()` into a `Word` | Any | 0..65535 into DH, XD or YD (`CLK_COPY_WIDE_CONSTANT`). The export writes −32768..−1 as its 16 bits. It rejects any other constant, even with `allow=` |
+| A bit in a `math()` formula (`c[1] + 5`) | Any Bool tag, read as 0 or 1 | A bit only inside `SUM` over a bit range (`CLK_MATH_BIT_OPERAND`). Write `c.select(1, 1).sum() + 5`, or copy the bit into a DS tag in a rung above. A CT bit has no SUM, so copy it into a DS tag. `sc.select(1, 1).sum()` is 1 on a CLICK. In pyrung it is 0, because the `sc` block does not follow the system points |
 | Compare of a `Word` mapped to `DH`, `XD` or `YD` with a `DS`, `DD`, `DF`, `TD`, `CTD` or `SD` tag | Compares the values | Both sides hex, or a hex tag against a constant. Copy the `Word` into a `DS` tag first (`CLK_COMPARE_HEX_MIX`) |
-| Text compare on a `Char` (`Name == "AB"`) | Compares the Chars that follow it in its block | Those Chars mapped to consecutive TXT addresses in order (`CLK_TEXT_WINDOW_NOT_CONTIGUOUS`) |
-| Text `copy()` that runs past the end of its bank | Drops what runs past | Start it low enough to keep every character (`CLK_TEXT_PAST_BANK`). The export refuses a constant that runs past TXT1000 as written, such as `1.5` into TXT999, even with `allow=`. CLICK's Copy refuses it. Text that runs past only once converted, such as `1.5` into TXT995, warns. So does a register source, which CLICK's Copy accepts |
-| Text `copy()` that runs past the end of its block | Drops what runs past | A CLICK writes on into the bank. Map the block onto more of the bank (`CLK_TEXT_PAST_BLOCK`) |
+| Text compare on a `Char` (`Name == "AB"`) | Compares the Chars that follow it in its block | The Chars must map to consecutive TXT addresses, in order (`CLK_TEXT_WINDOW_NOT_CONTIGUOUS`) |
+| Text `copy()` that runs past the end of its bank | Drops what runs past | Start it low enough to keep every character (`CLK_TEXT_PAST_BANK`). The export rejects a constant whose text runs past TXT1000 as written, such as `1.5` into TXT999. `allow=` does not change this, and CLICK's Copy rejects it too. If the text runs past TXT1000 only after conversion, such as `1.5` into TXT995, the export warns. It also warns for a register source. CLICK's Copy accepts that |
+| Text `copy()` that runs past the end of its block | Drops what runs past | A CLICK keeps writing into the bank past the block. Map the block onto more of the bank (`CLK_TEXT_PAST_BLOCK`) |
 
 ### Timer preset limits
 
@@ -416,20 +416,24 @@ on_delay(MyTimer, preset=60, unit="sec")
 
 ### Out coil variants
 
-`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Each phase timer must map to `T<n>` with `TD<n>` of the same number, and a register preset to `DS`. Validation reports `CLK_TIMER_PAIR_MISMATCH` for any timer or counter whose Done and Acc map to different numbers. This includes `on_delay` and the counters. CLICK's Out dialog offers fewer units than its timers. `debounce` and `flasher` take `ms` or `sec`, and `timed` takes `ms`, `sec` or `min`. Any other unit is `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` takes `immediate(...)`.
+`toggle`, `debounce`, `flasher` and `timed` are CLICK v4's Out coil types. Map each phase timer to `T<n>` with the `TD<n>` of the same number. Map a register preset to `DS`. Validation reports `CLK_TIMER_PAIR_MISMATCH` for any timer or counter whose Done and Acc map to different numbers. This includes `on_delay` and the counters.
+
+CLICK's Out dialog offers fewer units than its timers do. `debounce` and `flasher` accept `ms` or `sec`. `timed` accepts `ms`, `sec` or `min`. Validation reports any other unit as `CLK_OUT_UNIT_UNSUPPORTED`. Only `toggle` accepts `immediate(...)`.
 
 ### For/Next
 
-A `forloop` exports as its For rung, one rung per body item, and `next()`. A bare instruction is a wire-only rung. A `with rung(...)` inside the loop keeps its contacts. A nested loop is a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`.
+A `forloop` exports as its For rung, one rung per body item, and `next()`. A bare instruction becomes a wire-only rung. A `with rung(...)` inside the loop keeps its contacts. A nested loop becomes a For rung of its own. `break_loop()` and `continue_loop()` export as `break()` and `continue()`.
 
 CLICK allows:
 
 - three levels of loops, counting the loops of a subroutine called inside a loop (`CLK_FORLOOP_NESTING_DEPTH`)
 - a one-shot only on the outermost For (`CLK_FORLOOP_INNER_ONESHOT`)
 - no `return_early()` between For and Next (`CLK_FORLOOP_RETURN_INSIDE`)
-- no nested subroutine calls, so a `call()` inside a subroutine is flagged (`CLK_NESTED_CALL`)
+- no nested subroutine calls, so validation flags a `call()` inside a subroutine (`CLK_NESTED_CALL`)
 
-`loop.idx` has no CLICK address, so count iterations with a `DS` pointer instead. A false For rung skips its body. A `DS` count is read as unsigned 16-bit, so -1 runs 65535 iterations. A `DD` count is signed, so -1 runs none. A count of 0 runs none.
+`loop.idx` has no CLICK address. Count iterations with a `DS` pointer instead. A false For rung skips its body.
+
+A `DS` count is read as unsigned 16-bit, so -1 runs 65535 iterations. A `DD` count is signed, so -1 runs none. A count of 0 runs none.
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
@@ -444,7 +448,7 @@ Blk = Block("Blk", TagType.INT, 1, 10)       # mapped onto ds.select(100, 109)
 copy(Blk[idx], dest)                         # CLK_PTR_BLOCK_OFFSET
 ```
 
-CLICK takes only `DS[pointer]`. Validation reports `CLK_PTR_BLOCK_OFFSET` and the ladder export refuses the program. The finding is a hint in the default mode and an error in strict mode, and the export refuses either way. Add the offset in a `DS` tag and index the bank directly:
+CLICK accepts only `DS[pointer]`. Validation reports `CLK_PTR_BLOCK_OFFSET`, and the ladder export rejects the program. The finding is a hint in the default mode and an error in strict mode. The export rejects the program in both modes. Add the offset in a `DS` tag and index the bank directly:
 
 ```python
 math(idx + 99, Ptr)
@@ -458,9 +462,16 @@ ptr = Int("Ptr", max=1010)
 copy(dd[ptr], out)  # CLK_PTR_PAST_BANK: DD ends at DD1000
 ```
 
-Validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank. The values a pointer can take are its `choices`, its `min` and `max` (a `max` alone counts as an upper bound), and every value a `copy()` or `math()` in the program can store in it. A `For` loop index with a constant count takes 0 to count - 1. A pointer built from a value the program cannot bound is not reported.
+Validation warns with `CLK_PTR_PAST_BANK` when a pointer can address memory past the end of its bank. To decide which values a pointer can hold, validation uses:
 
-A CLICK `copy()` through a `DD` pointer past `DD1000` writes into the memory there and sets no flag. pyrung drops that write and reads 0 there. Keep the pointer inside the bank, or give the tag `min`/`max` or `choices`.
+- the tag's `choices`
+- the tag's `min` and `max` (a `max` alone counts as an upper bound)
+- every value that a `copy()` or `math()` in the program can store in the pointer
+- 0 to count - 1, for a `For` loop index with a constant count
+
+Validation does not report a pointer built from a value that the program cannot bound.
+
+A CLICK `copy()` through a `DD` pointer past `DD1000` writes into the memory there and sets no flag. pyrung drops that write, and a read from there returns 0. Keep the pointer inside the bank, or give the tag `min`/`max` or `choices`.
 
 ## Ladder CSV export
 
@@ -502,11 +513,11 @@ with rung():
 
 Both forms produce identical CSV output.
 
-An empty rung with conditions (`with rung(C1): pass`) exports as the contacts in front of a NOP. CLICK keeps that rung. Its Syntax Check reports it as C0003, "There is no Coil instruction in the rung". Validation reports the rung as `CLK_NOP_NO_COIL`. Export writes it and warns.
+An empty rung with conditions (`with rung(C1): pass`) exports as the contacts in front of a NOP. CLICK keeps that rung. Its Syntax Check reports it as C0003, "There is no Coil instruction in the rung". Validation reports the rung as `CLK_NOP_NO_COIL`. The export writes the rung and warns.
 
 ### Boxes with pins
 
-A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung. CLICK takes all of a box's inputs (its pins) from one branch. If the box's input wire also feeds another output, CLICK draws the rung but won't compile it (error C000A). pyrung refuses that rung when the program is built.
+A box with pins (a counter, a retentive timer's `.reset()`, a shift register, a drum) ends its rung. CLICK takes all of a box's inputs (its pins) from one branch. If the box's input wire also feeds another output, CLICK draws the rung but does not compile it (error C000A). pyrung rejects that rung when you build the program.
 
 Put the outputs that come before the box in a rung above it. Put the outputs that follow it in a rung of their own:
 
@@ -519,7 +530,7 @@ with rung(Start):
 
 A box with no pins, such as a TON, can share the wire.
 
-A program saved before a syntax check can hold a CLICK rung with several wires. That rung imports with `.continued()` on each wire after the first. Outputs share a `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact. So the generated code reads the way the CLICK rung does. Two contacts with the same label stay two contacts.
+A program saved before a syntax check can hold a CLICK rung with several wires. That rung imports with `.continued()` on each wire after the first. Outputs share a `with rung(...)` or `with branch(...)` only where the CLICK rows branch them off one contact. The generated code then reads the way the CLICK rung does. Two contacts with the same label stay two contacts.
 
 ## Loading PLC state
 
@@ -536,7 +547,7 @@ runner = PLC(logic, initial_state=SystemState().with_tags(tags))
 
 `read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
 
-`skip_default=True` omits zero, false and empty values. A PLC dump lists every address, and most sit at their default, so this keeps the result small.
+`skip_default=True` omits zero, false and empty values. A PLC dump lists every address, and most sit at their default. Omitting them keeps the result small.
 
 Some programs use CLICK bank slots directly, such as `x.slot(1, name="Button")` or a bare `ds[5]`. Generated projects do this for plain nicknames. These addresses have no TagMap entry. Pass the bank set as `blocks` to seed them too:
 

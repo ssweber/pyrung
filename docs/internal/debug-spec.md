@@ -203,7 +203,10 @@ Each instruction solves the path from the rail to it, and the trace follows that
 - A branch's contacts are evaluated when the step reaches the branch, against the writes of the instructions above it. Until then its region reads `disabled_local` with its conditions skipped (under an unpowered parent, `disabled_parent`, final from the rung's first step).
 - Every branch under a powered parent gets a `branch` step, powered or not, so its final region is in some event. Branch steps are not stop points for `next`/`stepIn`.
 - A box's pins are traced as the box read them, at box entry.
-- The whole-program trace built from the last committed scan (Continue and scan frames) takes each region of a rung's first event from the last event carrying it, so each branch shows its solved state. Regions are matched by their place in the rung's tree (each step carries its own as `branch_path`), not by source span, which branches built by one helper share. Nested branches are included, those under an unpowered branch too; steps of a called subroutine or a loop body are skipped. `pyrungTrace` sends the debugger's current event (`runner.debug.last_event()`) as it stands.
+- The whole-program trace is built from the last committed scan (Continue and scan frames). For each region of a rung's first event, it takes the region from the last event that carries it. Each branch therefore shows its solved state.
+- The trace matches regions by their place in the rung's tree. Each step carries its own place as `branch_path`. The trace does not match by source span, because branches built by one helper share a span.
+- The trace includes nested branches, including those under an unpowered branch. It skips steps of a called subroutine or a loop body.
+- `pyrungTrace` sends the debugger's current event (`runner.debug.last_event()`) as it stands.
 
 ### Architecture
 
@@ -248,7 +251,9 @@ These requests drive the [simulator controls](../guides/dap-vscode.md#simulator-
 
 `pyrungSetMode` pauses Continue first. `run` from STOP performs the STOP -> RUN transition without executing a scan. The transition resets non-retentive tags, clears patches, and clears forces unless `keepForcesOnRun` is set. `pyrungSetMode` then applies the given forces and patches, so the first scan sees them. Execution stays paused until the client continues or steps. `stop` enters STOP mode. The next step or Continue performs STOP -> RUN again.
 
-The link requests mirror the [bench link](../guides/console.md#bench-links) console verbs. Each response key is one camelCase field, such as `flasherOn` for `flasher_on`. `pyrungListLinks` gives each value as the text a comment would hold (`"0.8"`, `"500ms"`), and `maintained` and `toggle` as booleans. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now. Each `pyrungScanFrame` carries `linksRevision`, which changes whenever the wiring does, so a client refetches `pyrungListLinks` only then. Each frame also carries `linksPending`. It gives the simulated milliseconds left before each bool feedback flips, for every feedback whose on- or off-delay is counting.
+The link requests mirror the [bench link](../guides/console.md#bench-links) console verbs. Each response key is one camelCase field, such as `flasherOn` for `flasher_on`. `pyrungListLinks` returns each value as the text a comment would hold (`"0.8"`, `"500ms"`). It returns `maintained` and `toggle` as booleans. `source` is `"project"` for a link the program declares and `"bench"` for a session change. `active` says whether the link runs now.
+
+Each `pyrungScanFrame` carries `linksRevision`. It changes whenever the wiring changes, so a client needs to fetch `pyrungListLinks` again only then. Each frame also carries `linksPending`. For every feedback whose on-delay or off-delay is counting, it gives the simulated milliseconds left before that bool feedback flips.
 
 ### State frames
 
@@ -328,7 +333,9 @@ Each `reason` means:
 - A bench change that runs on a feedback drops a `declared` entry onto it as `not declared`. The bench change stays. A disabled bench change, or any with bench wiring off, lets the entry move.
 - A coil never moves onto a feedback whose own coil stays there. Such an entry is dropped as `in use`.
 
-A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. A feedback value moves only into a tag of the same type. Otherwise the new feedback starts from its default. The plan is applied when the new program replaces the old one. A reload that fails changes nothing, so the old program, mode, forces, harness, bench changes and breakpoints stay. A plan whose `forces`, `links` or `declared` is not an object fails the request. So does a plan with a key that is not a tag name. Any other problem with an entry is reported in `carried` and leaves the rest of the plan applied. `pyrungReload` pauses a running Continue first.
+A moved link that ran before the reload keeps its state, so a timed coil part way through its time carries on. The state is the coil's memory, its timer counts and its feedback's value. A feedback value moves only into a tag of the same type. Otherwise the new feedback starts from its default.
+
+The plan is applied when the new program replaces the old one. A reload that fails changes nothing, so the old program, mode, forces, harness, bench changes and breakpoints stay. The request fails if `forces`, `links` or `declared` is not an object. It also fails if the plan has a key that is not a tag name. Any other problem with an entry is reported in `carried`, and the rest of the plan is still applied. `pyrungReload` pauses a running Continue first.
 
 The response body is `{result, carried}`, as for the console `reload`. Here `carried` lists every force and bench change of the session, moved or not. It also lists each `declared` entry, and each plan entry that matched nothing. Each entry has these fields:
 
@@ -405,9 +412,9 @@ Mapped to core engine phases:
 
 ### Force and edge detection
 
-- Each `rise()` / `fall()` contact keeps its own memory (`_edge:e{N}` in `SystemState.memory`): the bit as that contact last saw it, updated every scan its row is solved, powered or not, and off at RUN and at STOP->RUN.
-- A contact compares the value present when it is solved with that memory. Since forced variables may diverge mid-cycle, a contact below a rung that assigns a forced tag sees the assigned value; one above it sees the pre-logic force value.
-- So the memory a contact carries into the next scan is the value it read, not the committed post-force value: two contacts on one forced tag can remember different values.
+- Each `rise()` / `fall()` contact has its own memory (`_edge:e{N}` in `SystemState.memory`). The memory is the bit as that contact last saw it. It updates on every scan that solves the contact's row, powered or not. It is off at RUN and at STOP->RUN.
+- A contact compares the value present when it is solved with that memory. Forced variables may diverge mid-cycle. A contact below a rung that assigns a forced tag sees the assigned value. A contact above that rung sees the pre-logic force value.
+- The memory a contact carries into the next scan is therefore the value it read, not the committed post-force value. Two contacts on one forced tag can remember different values.
 - Breakpoint and `run_until()` edges are no contact of the program: each keeps private memory, judged on the committed scan snapshot (see below).
 
 ---

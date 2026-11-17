@@ -39,7 +39,7 @@ with rung(fall(Button)):    # True for ONE scan on True→False transition
     reset(Motor)
 ```
 
-As on a CLICK, each `rise()` or `fall()` contact keeps its own memory of the bit. The memory updates every scan the contact is reached, whether the rung has power or not. It starts as off at RUN, so:
+As on a CLICK, each `rise()` or `fall()` contact has its own memory of the bit. The memory updates on every scan that reaches the contact, whether the rung has power or not. The memory starts as off at RUN. This has these results:
 
 - A bit already on at the first scan rises on that scan.
 - Two `rise(Button)` contacts each see the edge, wherever they sit.
@@ -99,7 +99,7 @@ with rung(Setpoint < DS[Step + 1]):
     out(NextIsHigher)
 ```
 
-An address outside the block, or in a gap of a sparse block, reads as its type's zero value, and no fault flag is set. `copy()` and `math()` treat a source below the block differently. They set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). A CLICK takes a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
+An address outside the block, or in a gap of a sparse block, reads as its type's zero value. No fault flag is set. `copy()` and `math()` treat a source below the block differently. They set `system.fault.address_error` and write nothing (see [`copy`](copy.md)). A CLICK accepts a pointer only in Copy, and the CLICK validator flags one in a contact (`CLK_PTR_CONTEXT_ONLY_COPY`).
 
 ## INT truthiness
 
@@ -122,4 +122,4 @@ with rung((PressureA + PressureB) > 100):
 
 Inline expressions work in simulation. The CLICK dialect validator will flag them if targeting CLICK hardware. Rewrite them as `math()` instructions instead.
 
-An inline expression is permissive. An operation that hits a math error (a division by zero, a math function outside its domain) gives 0 and sets no fault flag. See [Math outside `math()`](math.md#math-outside-math).
+An inline expression is permissive. If an operation in it causes a math error (a division by zero, or a math function given an operand outside its domain), the operation gives 0 and sets no fault flag. See [Math outside `math()`](math.md#math-outside-math).
