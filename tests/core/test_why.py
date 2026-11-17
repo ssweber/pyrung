@@ -10,16 +10,21 @@ from __future__ import annotations
 from pyrung.core import (
     PLC,
     And,
+    Block,
     Bool,
     Int,
     Or,
     Program,
     Rung,
+    TagType,
+    Timer,
     copy,
     latch,
     math,
+    on_delay,
     out,
     reset,
+    search,
 )
 from pyrung.core.state import SystemState
 
@@ -423,6 +428,41 @@ class TestWriteBeforeRead:
 
         root_tags = [r.tag_name for r in result.conjunctive_roots]
         assert "Intermediate" not in root_tags
+
+    def test_a_tag_its_instruction_reads_back_is_walked(self) -> None:
+        """An Acc or a continuous search's result carries over, so it is not scan-local."""
+        timer = Timer.clone("W")
+        table = Block("Table", TagType.INT, 1, 20)
+        result = Int("Result")
+        found = Bool("Found")
+        hold = Bool("Hold", external=True)
+        output = Bool("Output")
+        held_by_hold = (
+            (lambda: on_delay(timer, 50, "ms"), timer.Acc, 20),
+            (
+                lambda: search(table.select(1, 10) == 0, result=result, found=found, continuous=True),
+                result,
+                3,
+            ),
+        )
+        for owner, tag, threshold in held_by_hold:
+            with Program() as logic:
+                with Rung():
+                    owner()
+                with Rung(hold):
+                    copy(0, tag)
+                with Rung(tag >= threshold):
+                    out(output)
+            plc = PLC(logic=logic, dt=0.010)
+            for _ in range(5):
+                plc.step()
+            plc.patch({"Hold": True})
+            plc.step()
+
+            chain = plc.why(output)
+            assert plc.state.tags[tag.name] == 0
+            assert tag.name in [s.transition.tag_name for s in chain.steps]
+            assert "Hold" in [r.tag_name for r in chain.conjunctive_roots]
 
 
 # ---------------------------------------------------------------------------

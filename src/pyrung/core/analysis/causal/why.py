@@ -127,9 +127,21 @@ def why_cause(
         )
         init_constants = frozenset(projected.keys())
 
+        # A timer's Acc, a drum's step and a continuous search's result carry over
+        # from scan to scan, because their instruction reads them back before writing.
+        # The def-use chains miss that read, so skipping these tags would drop a later
+        # rung that writes them.
+        from pyrung.core.instruction.advanced import SearchInstruction
+        from pyrung.core.validation._common import walk_instructions
+
+        read_back = frozenset().union(*(node.exclusive_reads for node in pdg.rung_nodes)) | {
+            instr.result.name
+            for instr in walk_instructions(program)
+            if isinstance(instr, SearchInstruction) and instr.continuous
+        }
         wbr: set[str] = set()
         for t in cone:
-            if t not in tags and pdg.unconditional_write_before_read(t):
+            if t not in tags and t not in read_back and pdg.unconditional_write_before_read(t):
                 wbr.add(t)
         wbr_tags = frozenset(wbr)
     else:
