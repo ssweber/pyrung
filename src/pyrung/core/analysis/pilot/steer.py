@@ -895,9 +895,9 @@ def _try_action_batch(
 ) -> _AttemptResult:
     policy = bearing.act.policy
     # ── Action gate (what the tag can hold) ──────────────────────────────
-    # A trace reads its literal off the rung as written, and a patch refuses what the
-    # tag's type cannot hold ("AB" on a CHAR).  No scan can see it hold that value, so
-    # the action is out of reach, not a failure of the run.
+    # A trace reads its literal off the rung as written.  A patch refuses a value that the
+    # tag's type cannot hold, such as "AB" on a CHAR.  No scan can see the tag hold that
+    # value, so the action is out of reach.  The run did not fail.
     refused = frozenset(
         (name, value)
         for name, value in policy.applied
@@ -1672,8 +1672,8 @@ def _coast_to_bearing(
         # horizon explicitly; a counterfactual that makes the distant boundary
         # unreachable must not turn that bounded proof into a fresh long coast.
         if estimate is not None and budget is None:
-            # The loop's scans are what the estimate counts, at their price; the interpreted
-            # scans around them cost a unit each.  No charge exceeds the scans themselves.
+            # The estimate counts the loop's scans at their price.  The interpreted scans
+            # around them cost a unit each.  No charge exceeds the scans themselves.
             scans_per_unit = session.loop_scans_per_unit() if session else 1
             coast_budget = max(
                 coast_budget,

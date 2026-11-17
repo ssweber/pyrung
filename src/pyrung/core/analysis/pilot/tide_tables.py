@@ -374,7 +374,8 @@ def guard_verdict(
     overlay_base = {**snapshot, **fixed}
     reads = _referenced_tags(expr)
     if reads is None:
-        # A tag no domain lists would be read at its value now.  That can make a live guard look dead.
+        # A tag that no domain lists would be read at its current value, and that can make a
+        # live guard look dead.  Punt instead.
         return GUARD_PUNT
     free = sorted(reads - set(fixed))
 
@@ -643,9 +644,11 @@ def _model_constant(
     snapshot: dict[str, Any],
     pdg: ProgramGraph,
 ) -> Any | None:
-    """A constant operand value: a never-written / readonly tag read from the
-    snapshot.  Returns ``None`` when the program or anything outside the ladder
-    writes *tag*, so it is not a constant we can pin."""
+    """Return a constant operand value: a never-written or readonly tag, read from the snapshot.
+
+    Return ``None`` when the program or anything outside the ladder writes *tag*, because
+    then it is not a constant we can pin.
+    """
     if pdg.writers_of.get(tag) or pdg.written_from_outside(tag):
         return None
     return snapshot.get(tag)

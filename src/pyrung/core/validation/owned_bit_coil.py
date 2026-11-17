@@ -1,12 +1,12 @@
-"""Refuse coils that write a bit a timer or counter owns.
+"""Reject coils that write a bit that a timer or counter owns.
 
 The Done bit of ``on_delay``, ``off_delay``, ``count_up`` and ``count_down`` is
-rewritten by that instruction on every execution, so an ``out``, ``latch``,
-``reset`` or ``toggle`` on it is a silent trap (and CLICK has no coil on a
-timer or counter bit at all).  The instruction's own ``.reset()`` pin is the
-way to clear it.  This runs when a ``Program`` scope closes.
+rewritten by that instruction on every execution.  An ``out``, ``latch``,
+``reset`` or ``toggle`` on it is a silent trap.  CLICK has no coil on a
+timer or counter bit at all.  To clear the bit, use the instruction's own
+``.reset()`` pin.  This check runs when a ``Program`` scope closes.
 
-Ranges resolved only at runtime (pointer-indexed block ranges) are not checked.
+The check skips ranges that are resolved only at runtime (pointer-indexed block ranges).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ _COILS = {
 
 
 class OwnedBitCoilError(ValueError):
-    """A coil writes a bit owned by a timer or counter instruction."""
+    """Raised when a coil writes a bit that a timer or counter instruction owns."""
 
 
 def _coil_tag_names(instr: Any) -> list[str]:
