@@ -63,6 +63,31 @@ def test_from_nickname_file_strips_the_spaces_around_a_nickname(tmp_path):
     assert mapping.resolve("Pump") == "C1"
 
 
+def test_from_nickname_file_names_the_line_of_a_malformed_row(tmp_path):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(
+        _CSV_HEADER + 'C1,BIT,"Pump",0,No,""\n' + 'ZZ9,BIT,"Valve",0,No,""\n', encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=r"nicknames\.csv line 3: Address 'ZZ9' is not a CLICK"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_reads_true_and_1_as_retentive(tmp_path):
+    path = tmp_path / "nicknames.csv"
+    path.write_text(
+        _CSV_HEADER + 'C1,BIT,"Pump",0,True,""\n' + 'C2,BIT,"Fan",0,1,""\n', encoding="utf-8"
+    )
+
+    mapping = TagMap.from_nickname_file(path)
+    out_path = tmp_path / "out.csv"
+    mapping.to_nickname_file(out_path)
+    rows = pyclickplc.read_csv(out_path)
+
+    assert rows[get_addr_key("C", 1)].retentive is True
+    assert rows[get_addr_key("C", 2)].retentive is True
+
+
 def test_from_nickname_file_refuses_names_that_differ_only_in_case(tmp_path):
     path = tmp_path / "nicknames.csv"
     path.write_text(
@@ -2464,6 +2489,15 @@ def test_load_snapshot_returns_system_state(tmp_path, monkeypatch):
     assert state.tags["Valve_LS"] is True
     assert state.tags["Speed"] == 42
     assert "DS999" not in state.tags
+
+
+def test_load_snapshot_names_the_row_of_a_malformed_dump(tmp_path):
+    mapping = TagMap({Tag("Level", TagType.INT): ds[1]})
+    dump = tmp_path / "data.csv"
+    dump.write_text("<DS=START>\nAddress,1,2,\nDS1,5,6,7,8,\n<DS=END>\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Cannot load snapshot: DS1 row has 4 cells, not 2"):
+        mapping.load_snapshot(dump)
 
 
 def test_load_snapshot_reads_a_dump_as_click_writes_it(tmp_path):

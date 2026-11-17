@@ -777,6 +777,19 @@ def test_modbus_server_round_trip_and_stop(tmp_path: Path):
         sock.bind(("127.0.0.1", port))
 
 
+def test_modbus_server_on_port_0_reports_the_port_it_bound():
+    from pyrung.dap.modbus import ModbusConfig, ModbusSimServer
+
+    server = ModbusSimServer(object(), ModbusConfig(host="127.0.0.1", port=0))
+    try:
+        assert server.start() is True
+        assert server.port > 0
+        with socket.create_connection(("127.0.0.1", server.port), timeout=2):
+            pass
+    finally:
+        server.stop()
+
+
 def test_modbus_bind_failure_does_not_fail_launch(tmp_path: Path):
     with socket.socket() as blocker:
         blocker.bind(("127.0.0.1", 0))

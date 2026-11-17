@@ -28,16 +28,9 @@ def _hardware_tag(address: str) -> Tag:
     raise ValueError(f"Unsupported system hardware address: {address!r}")
 
 
-def _slot(
-    logical: Tag, address: str, read_only: bool, *, nickname: str | None = None
-) -> SystemClickSlot:
-    """Build a slot whose nickname is pyclickplc's catalog entry for the address.
-
-    ``nickname`` overrides the catalog where CLICK writes a shorter name than the catalog's
-    help-file label (the catalog says ``_RTC_Month (1-12)``, CLICK writes ``_RTC_Month``).
-    """
-    if nickname is None:
-        nickname = AUTOMATIONDIRECT_SYSTEM_NICKNAMES[(address[:2], int(address[2:]))].nickname
+def _slot(logical: Tag, address: str, read_only: bool) -> SystemClickSlot:
+    """Build a slot whose nickname is pyclickplc's catalog entry for the address."""
+    nickname = AUTOMATIONDIRECT_SYSTEM_NICKNAMES[(address[:2], int(address[2:]))].nickname
     return SystemClickSlot(logical, _hardware_tag(address), nickname, read_only)
 
 
@@ -71,12 +64,12 @@ SYSTEM_CLICK_SLOTS = (
     _slot(system.fault.code, "SD1", True),
     _slot(system.rtc.year4, "SD19", True),
     _slot(system.rtc.year2, "SD20", True),
-    _slot(system.rtc.month, "SD21", True, nickname="_RTC_Month"),
-    _slot(system.rtc.day, "SD22", True, nickname="_RTC_Day"),
+    _slot(system.rtc.month, "SD21", True),
+    _slot(system.rtc.day, "SD22", True),
     _slot(system.rtc.weekday, "SD23", True),
-    _slot(system.rtc.hour, "SD24", True, nickname="_RTC_Hour"),
-    _slot(system.rtc.minute, "SD25", True, nickname="_RTC_Minute"),
-    _slot(system.rtc.second, "SD26", True, nickname="_RTC_Second"),
+    _slot(system.rtc.hour, "SD24", True),
+    _slot(system.rtc.minute, "SD25", True),
+    _slot(system.rtc.second, "SD26", True),
     _slot(system.rtc.new_year4, "SD29", False),
     _slot(system.rtc.new_month, "SD31", False),
     _slot(system.rtc.new_day, "SD32", False),

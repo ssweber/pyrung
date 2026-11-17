@@ -15,6 +15,8 @@
 
 ### Behaviour changes
 
+- Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
+  Look a point up by its new name, or by its tag such as `system.fault.plc_error`. A nickname file row with the old name loads and is ignored.
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
   Fix the row, or leave its Data Type blank.
 - The console no longer has the `log`, `note`, `candidates`, `accept`, `deny`, `suppress` and `spec` commands.
@@ -28,6 +30,7 @@
 
 ### Fixes
 
+- A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
 - `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.

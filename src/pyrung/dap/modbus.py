@@ -106,7 +106,7 @@ class ModbusSimServer:
             self._shutdown_loop()
             return False
         self._server = server
-        self.port = _bound_port(server, config.port)
+        self.port = server.bound_port or config.port
         return True
 
     def stop(self) -> None:
@@ -157,17 +157,8 @@ class ModbusSimServer:
             loop.close()
 
 
-def _bound_port(server: Any, fallback: int) -> int:
-    """Return the port actually bound (differs from the request for port 0)."""
-    try:
-        sockets = server._server.transport.sockets
-        return int(sockets[0].getsockname()[1])
-    except Exception:
-        return fallback
-
-
 def _bind_error(config: ModbusConfig, exc: Exception) -> str:
-    """Describe a start failure, preferring the OS reason over pymodbus' generic one."""
+    """Describe a start failure, preferring the OS reason over the server's own error."""
     reason = str(exc) or type(exc).__name__
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
