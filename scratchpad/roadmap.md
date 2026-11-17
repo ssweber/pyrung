@@ -34,9 +34,7 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
   runs it. [Sam]
 
 - **Comments still say `calc`.** Many docstrings and comments still say `calc` where the code now says `math`.
-  The prose rewrite (docs/plain-py) kept the old word because the rename is a fact change. Rename them in one pass.
-- **About 60 comments the prose rewrite could not read.** The planner sends the list after docs/plain-py merges.
-  Rewrite or cut each one.
+  The comment rewrite (#85) kept the old word, because the rename changes a fact. Rename them in one pass.
 
 ## 1. The deletions release
 
@@ -124,9 +122,9 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
     - The TOF profile ignores the armed memory (timers.py:301). The kernel times a TOF only while it is armed or done
       or has a nonzero Acc. So PILOT may wait on a TOF that was never armed, with Done False and Acc 0, and it never moves.
 - **Two write questions left by bob/validator-writes.** [nothing]
-  - COIL_CONFLICTING_OUTPUT keeps its own list, `_common._instruction_write_targets`. The write sites add `receive()`'s
-    destination and `run_enabled_function()`'s outputs on a scan with the rung off, since both write then. Switching
-    adds them to an error-level check. Run each one first to confirm what it writes with the rung off.
+  - COIL_CONFLICTING_OUTPUT keeps its own list, `_common._instruction_write_targets`. `write_sites` also reports
+    `receive()`'s destination and `run_enabled_function()`'s outputs on a scan with the rung off, because both write
+    then. If COIL_CONFLICTING_OUTPUT switched to `write_sites`, this error-level check would report those writes too. Run each one first to confirm what it writes with the rung off.
   - The choices, readonly and final checks skip a write through a pointer that may reach a flagged slot. Decide
     what severity a write that only might land gets.
 - **Other validators read tag flags from `_build_tag_map`, which lists only contacts, `.target` and `.source`.**
@@ -245,7 +243,7 @@ All [nothing].
   that is gone becomes whatever now names its old address. Recordings hold names: the nickname, or the display
   address where there is none.
 - Declining ClickNick's setup prompt means no recording.
-- **A reload drops the scan-1 stop event.** `reload_console.py:771-772` calls `reloaded.stop()` before
+- **A reload drops the scan-1 stop event.** `src/pyrung/dap/reload_console.py:773-774` calls `reloaded.stop()` before
   `_set_time_mode`, which starts a new scan log, so history never records that stop. Found by bob/record-save's review. [nothing]
 
 ## 4. Console commands for every change
@@ -319,8 +317,8 @@ look for the one change that closes a group, as the codegen records closed the h
 - A comparison with arithmetic stops, as in `A.Acc == B.Acc + 2` and `A.Acc - B.Acc == 2`. So does `A.Acc > B.Acc` on two counters. The trace has no lever for them.
 - The planner's guesses read `writers_of` alone, so they miss a write through a pointer that lists no targets. These are tide_tables.py:518 and :645, static_expressions.py:302, trace_constraints.py:235, options.py:150 and :155, and guidance.py:75. A run checks each plan, so none of them makes a false claim. [nothing]
 - An off-delay that was never switched on still stops `how()`. The off-delay's profile now plans "switch it on
-  until Done, then off" (bob/bindings-timers). The trace's accumulator path doesn't trace a timer's enable, so
-  the plan never starts. An on-delay there is reached only through the last resort. [nothing]
+  until Done, then off" (bob/bindings-timers). The trace does not follow a timer's enable through the
+  accumulator, so PILOT never starts the plan. An on-delay there is reached only through the last resort. [nothing]
 - Chains past the trace depth of 15 reach only through the last resort.
 - An En misread. It reads the scan end where it should read at the rung.
 - Fold the frontier projection into `read_program_step`.
@@ -410,12 +408,13 @@ All [nothing] unless marked.
 
 - **Two drum cases flake on the local soft PLC.** `drum/pins_read_before_step_fix` and its tee twin sometimes
   read Result4 = 3, depending on scan speed. `drum_idle` reads Result2 = 1022 when the soft PLC scans fast. Each
-  fails the same way as a part run and as a pick (bob/main-runner found them). A case must not depend on how fast
+  fails the same way when run as a part and when run as a pick (bob/main-runner found them). A case must not depend on how fast
   the host scans, so each needs to step on its own Acc or Done.
 - **Two dap tests read the wall clock and fail under load.**
   `tests/dap/test_tag_changes_long_run.py::test_loading_a_window_reaches_the_stepped_entries` failed on a loaded
   machine twice on 2026-11-17, and passes alone. Its handler stops at a `history_seek` deadline.
-  `tests/dap/test_live.py::TestListSessions` fails when two workers share `pyrung-logic.port`. Neither may depend on
+  `tests/dap/test_live.py::TestListSessions` fails when two workers write the same port file
+  (`%TEMP%/pyrung/pyrung-logic.port` in the failing run). Neither may depend on
   machine speed or on another worker.
 - **`CompiledPLC` leaves out a block slot that no rung uses.** When the program text writes `DS[1]` and no rung
   reads or writes it, `PLC`'s state holds `DS1: 0` and `CompiledPLC`'s state has no `DS1`. The two engines must
