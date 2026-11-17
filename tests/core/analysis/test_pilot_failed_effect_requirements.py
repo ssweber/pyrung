@@ -1199,3 +1199,55 @@ def test_public_overwritten_effect_event_keeps_selected_writer_and_source() -> N
     assert overwritten.observation.disposition == "OVERWRITTEN"
     assert overwritten.selected_writer == (None, 0, ())
     assert overwritten.source_scan == 1
+
+
+@pytest.mark.parametrize("kind", ["up", "down"])
+def test_counter_profile_declares_its_reset_as_the_completion_control(kind: str) -> None:
+    # The generated code computes a counter's Done only under its reset's else.
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+
+    done, acc, preset = Bool("C.Done"), Int("C.Acc"), Int("CPreset")
+    count, reset = Bool("C.Count"), Bool("C.Reset")
+    instruction = (
+        CountUpInstruction(done, acc, preset, count, reset)
+        if kind == "up"
+        else CountDownInstruction(done, acc, preset, count, reset)
+    )
+
+    controls = instruction.advance_profile().completion_controls
+    assert controls is not None
+    assert [(demand.condition, demand.value) for demand in controls] == [
+        (instruction.reset_condition, False),
+    ]
+
+
+def test_counter_done_write_passes_the_completion_branch_check() -> None:
+    from pyrung.core.analysis.pilot.requirement_derivation import _completion_branch_error
+    from pyrung.core.instruction.counters import CountUpInstruction
+
+    evidence = _evidence()
+    counter = CountUpInstruction(
+        Bool("Watchdog.Done"),
+        Int("Watchdog.Acc"),
+        Int("WatchdogPresetMs"),
+        Bool("Watchdog.Enable"),
+        Bool("Watchdog.Reset"),
+    )
+    reset_read = replace(
+        evidence.enable_read,
+        ordinal=21,
+        occurrence=ReadOccurrence(21, "tag", "Watchdog.Reset", False, "entry"),
+    )
+    projection = replace(
+        evidence.projection,
+        reads=(*evidence.projection.reads, reset_read),
+    )
+    owner = AdvanceOwner(counter.advance_profile(), counter)
+    error = _completion_branch_error(
+        owner,
+        projection,
+        evidence.definition,
+        {"Watchdog.Acc": 10, "WatchdogPresetMs": 10},
+        Cmp("Watchdog.Acc", ">=", "WatchdogPresetMs", bound_is_tag=True),
+    )
+    assert error is None

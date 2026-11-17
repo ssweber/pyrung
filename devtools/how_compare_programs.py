@@ -37,6 +37,8 @@ Groups (the brief for this tool, written after two branches regressed how() unse
                (directly and with a constant added), a tag its copies leave at 0 or 10
                compared with an input, an input compared with an unbounded input, and an
                input compared with a set point plus 2
+    relations  facts read from the generated code: an off delay asked for Acc from power-up,
+               before its enable was ever on, and a counter whose reset is latched on
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
 and never reuse it, because two runs are compared by name.
@@ -1856,3 +1858,51 @@ def _accs_level_above_a_set_point():
 
 
 _add("accs", "accs/an input equal to a set point plus 2", _accs_level_above_a_set_point)
+
+
+# --------------------------------------------------------------------------- relations
+
+
+def _off_delay_never_armed():
+    """An off delay times only after its enable has been on once, and a fresh PLC has not.
+
+    From power-up, Acc >= 2 needs Go on for a scan, then Go off for two seconds.  The off
+    delay's profile plans that first scan, but how() stops here today ("No productive next
+    action was found"), because the trace does not follow the profile's first step yet.  That
+    stop is the expected answer until the trace does.
+    """
+    go, timer = Bool("Go", external=True), Timer.clone("Tof")
+    with Program(strict=False) as prog:
+        with Rung(go):
+            off_delay(timer, 3, "s")
+    target = timer.Acc >= 2
+    return dict(plc=PLC(prog, dt=0.01), targets=(target,), goal=_auto_goal(target))
+
+
+def _counter_held_in_reset():
+    """A counter's Done needs its reset off, and the latched Hold has it on at entry.
+
+    Release unlatches Hold.  Then two rises of Pulse reach the preset of 2.
+    """
+    pulse, arm, release = (
+        Bool("Pulse", external=True),
+        Bool("Arm", external=True),
+        Bool("Release", external=True),
+    )
+    hold, count = Bool("Hold"), Counter.clone("HeldCtr")
+    with Program(strict=False) as prog:
+        with Rung(arm):
+            latch(hold)
+        with Rung(release):
+            reset(hold)
+        with Rung(pulse):
+            count_up(count, 2).reset(hold)
+    plc = PLC(prog, dt=0.01)
+    plc.patch({"Arm": True})
+    plc.step()
+    plc.step()
+    return dict(plc=plc, targets=(count.Done,), goal=_tag_goal(count.Done))
+
+
+_add("relations", "relations/off delay Acc from power-up, never enabled", _off_delay_never_armed)
+_add("relations", "relations/counter Done with its reset latched on", _counter_held_in_reset)
