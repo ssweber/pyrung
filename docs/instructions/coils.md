@@ -18,7 +18,7 @@ With `oneshot=True`, the output is True for only one scan on the rung's rising e
 
 ## Out coil variants
 
-CLICK v4's Out coil has four output types. The other three own one or two timers each, given as `(timer, preset)` in `on_delay` order, with one `unit` for the coil (`"ms"` by default).
+CLICK v4's Out coil has four output types. The three besides `toggle` each use one or two timers. You give each timer as `(timer, preset)`, in the same form as `on_delay`. The coil has one `unit` for all its timers (`"ms"` by default).
 
 ### `toggle` — flip on each press
 
@@ -27,7 +27,7 @@ with rung(PushButton):
     toggle(Light)   # each OFF->ON of the rung inverts Light; it holds while the rung is false
 ```
 
-`toggle` takes `immediate(...)` like `out`. A rung that is already true on the first scan counts as a rising edge.
+`toggle` accepts `immediate(...)`, like `out`. A rung that is already true on the first scan counts as a rising edge.
 
 ### `debounce` — follow the rung once it holds steady
 
@@ -36,7 +36,7 @@ with rung(LevelSwitch):
     debounce(TankFull, on=(Timer[1], 500), off=(Timer[2], 200))
 ```
 
-`TankFull` turns on after the rung has been true for 500 ms and off after it has been false for 200 ms. A shorter blip changes nothing. The off side takes one scan longer than an `off_delay` with the same preset. CLICK requires both sides.
+`TankFull` turns on after the rung has been true for 500 ms. It turns off after the rung has been false for 200 ms. A shorter blip changes nothing. The off side takes one scan longer than an `off_delay` with the same preset. CLICK requires both sides.
 
 ### `flasher` — blink while the rung is true
 
@@ -45,7 +45,7 @@ with rung(Alarm):
     flasher(Beacon, on=(Timer[3], 500), off=(Timer[4], 500))
 ```
 
-The on phase starts when the rung goes true. When a phase reaches its preset, the other phase starts. The rung going false turns `Beacon` off, and the next true rung starts again with an on phase. CLICK's editor refuses a constant preset of 0 or below. A register preset of 0 or below turns `Beacon` off and freezes both `Acc` values.
+The on phase starts when the rung goes true. When a phase reaches its preset, the other phase starts. When the rung goes false, `Beacon` turns off. The next time the rung is true, the coil starts again with an on phase. CLICK's editor rejects a constant preset of 0 or below. A register preset of 0 or below turns `Beacon` off and freezes both `Acc` values.
 
 ### `timed` — on for a set time
 
@@ -55,9 +55,11 @@ with rung(CallButton):
     timed(Lamp, Timer[6], 3, "sec", maintained=True)   # at least 3 s, then follows the rung
 ```
 
-A rung edge starts the on time. The on time runs out whatever the rung does, and an edge during it does not restart it. Without `maintained=True`, the next pulse needs the rung to go false and true again. A preset of 0 or below gives no pulse.
+A rung edge starts the on time. The on time runs out whatever the rung does. An edge during the on time does not restart it. Without `maintained=True`, the rung must go false and true again before the next pulse. A preset of 0 or below gives no pulse.
 
-These coils never turn on their timer's `Done` bit, so a contact on `Timer[3].Done` won't tell you a `flasher` or `timed` coil has finished. Read the coil itself, or compare the `Acc`. Only `toggle` takes `immediate(...)`. Don't reuse a coil's timer elsewhere. An `on_delay` on the same timer is a conflicting-output finding, as it is in CLICK.
+These coils never turn on their timer's `Done` bit. A contact on `Timer[3].Done` therefore does not tell you that a `flasher` or `timed` coil has finished. Read the coil itself, or compare the `Acc`. Only `toggle` accepts `immediate(...)`.
+
+Do not reuse a coil's timer elsewhere. An `on_delay` on the same timer is a conflicting-output finding, as it is in CLICK.
 
 ## `latch` — set and hold (SET)
 

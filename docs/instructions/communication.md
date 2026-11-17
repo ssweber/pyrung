@@ -27,9 +27,9 @@ drive = ModbusRtuTarget(name="drive", com_port="cpu3", device_id=DriveId)
 
 `com_port="wlan"` sends over the CLICK's WLAN port. A TCP target with no `com_port` uses Ethernet. An RTU target takes `"cpu2"` (the default), `"cpu3"`, `"slot0_1"`, `"slot0_2"`, `"slot1_1"` or `"slot1_2"`.
 
-`device_id` is a number or a DS tag. The instruction reads the tag as each request starts, so the program can change which device it talks to. CLICK takes only a DS register there. pyrung refuses any tag but an `Int` when you build the target. CLICK export refuses an `Int` mapped outside DS.
+`device_id` is a number or a DS tag. The instruction reads the tag as each request starts, so the program can change which device it talks to. CLICK accepts only a DS register there. pyrung rejects any tag except an `Int` when you build the target. The CLICK export rejects an `Int` that is mapped outside DS.
 
-A TCP device ID runs 0..255 and an RTU one 0..247. A `receive()` from an RTU device refuses device ID 0, the broadcast address.
+A TCP device ID runs 0..255 and an RTU one 0..247. A `receive()` from an RTU device rejects device ID 0, the broadcast address.
 
 ### Send
 
@@ -63,7 +63,7 @@ with rung(Enable):
 
 ### Status tags
 
-Both instructions take four status tags, each optional as in CLICK (one left off runs on a hidden tag and exports as off):
+Both instructions accept four status tags. Each is optional, as in CLICK. If you leave one off, the instruction uses a hidden tag, and the export writes that status as off:
 
 - **sending** / **receiving** (`BOOL`) — True while the transaction is in progress
 - **success** (`BOOL`) — Latches True on success. The next request clears it.
@@ -88,7 +88,7 @@ This also covers a hardware timing case. On a real CLICK, if the TCP connection 
 - a `receive()` destination
 - the success or error bit of a `send()` or `receive()`
 
-A plan step that sets one stands for the device's answer. The busy bit and the exception code keep their values. The forks `how()` returns don't talk to the device either.
+A plan step that sets one of these tags stands for the device's answer. The busy bit and the exception code keep their values. The forks that `how()` returns do not talk to the device either.
 
 ### Remote addressing
 

@@ -13,13 +13,18 @@ copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 
 `copy()`, `blockcopy()`, `fill()` and `pack_text()` **clamp** an out-of-range value to the destination type's min/max and set `system.fault.out_of_range`. A `Real` or Inf into a `Dint` clamps with no flag. This is different from `math()`, which wraps.
 
-`copy()` does not clamp in two cases. A `Word` into an `Int` keeps its bits (65535 is -1). A negative number from -32768 to -1 into a `Word` keeps its low 16 bits (-1 is 65535). Anything below -32768 stores 32768. CLICK's editor takes no constant into a bit, so the CLICK export refuses `copy(2, C[1])` and `fill(1, C.select(1, 4))`. Set bits with `out()`, `latch()` or `reset()`.
+`copy()` does not clamp in two cases:
 
-A pointer (`DS[Ptr]`) or an index expression (`DS[Ptr + 1]`) may use only `Int` and `Dint` tags, integer constants and integer operators (`//` rather than `/`). The same holds for the bounds of a `select()` given tags or expressions. Anything else raises `TypeError` when the program is built. Copy a `Word` or `Real` into an `Int` first.
+- A `Word` into an `Int` keeps its bits (65535 is -1).
+- A negative number from -32768 to -1 into a `Word` keeps its low 16 bits (-1 is 65535). Anything below -32768 stores 32768.
 
-A pointer that falls below the block sets `system.fault.address_error` and the destination keeps its value. This holds whether the bad address is the source or the destination. Past the block's last address a read gives zero, a write is dropped and no flag is set. A `select()` with tag or expression bounds outside the block sets `address_error` and writes nothing.
+CLICK's editor accepts no constant into a bit, so the CLICK export rejects `copy(2, C[1])` and `fill(1, C.select(1, 4))`. Set bits with `out()`, `latch()` or `reset()`.
 
-Each `math()` or copy instruction clears `out_of_range` and `address_error` when it runs, then sets the one it trips. A `math()` that does not run (rung false, or a one-shot that does not fire) clears them too. A copy instruction that does not run leaves them, and so do coils, timers and counters. Read a flag on the rung right after the instruction.
+A pointer (`DS[Ptr]`) or an index expression (`DS[Ptr + 1]`) may use only `Int` and `Dint` tags, integer constants and integer operators (`//` rather than `/`). The same rule applies to the bounds of a `select()` that you give tags or expressions. Anything else raises `TypeError` when you build the program. Copy a `Word` or `Real` into an `Int` first.
+
+A pointer that falls below the block sets `system.fault.address_error`, and the destination keeps its value. This applies whether the bad address is the source or the destination. Past the block's last address, a read gives zero and a write is dropped. No flag is set. A `select()` with tag or expression bounds outside the block sets `address_error` and writes nothing.
+
+Each `math()` or copy instruction clears `out_of_range` and `address_error` when it runs, then sets the one it trips. A `math()` that does not run (rung false, or a one-shot that does not fire) clears them too. A copy instruction that does not run leaves them alone. Coils, timers and counters also leave them alone. Read a flag on the rung right after the instruction.
 
 ## `blockcopy` — copy a range
 
@@ -70,7 +75,7 @@ copy(DS[1], Txt[1], convert=to_binary)                         # raw byte: 123 �
 
 A `Word` is written in hex, so `to_text()` of 0x00AB is "AB", and "00AB" with `suppress_zero=False`.
 
-`exponential` applies to a `Real` source and `suppress_zero` to any other, as in CLICK's Copy dialog. A `Real` source ignores `suppress_zero`. CLICK export refuses `exponential=True` from a source that isn't a `Real`.
+`exponential` applies to a `Real` source. `suppress_zero` applies to any other source. This matches CLICK's Copy dialog. A `Real` source ignores `suppress_zero`. The CLICK export rejects `exponential=True` from a source that is not a `Real`.
 
 `termination_code` appends a single ASCII character after the converted text. Pass an int (0–127), a one-character string, or a `$XX` hex string matching CLICK's native notation (e.g. `"$0D"` for carriage return). This matches the CLICK PLC Termination Code option (C0-1x and C2-x CPUs).
 
@@ -102,7 +107,7 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 | `to_text()` | Numeric → Text | Copy Option 4a / 4c | yes | no | no |
 | `to_binary` | Numeric → Text | Copy Binary (Option 4a) | yes | no | no |
 
-`to_value`, `to_ascii`, and `to_binary` take no arguments. Pass them bare, with no parentheses. `to_binary()` also works. `to_text()` accepts keyword arguments for formatting options.
+`to_value`, `to_ascii`, and `to_binary` accept no arguments. Pass them bare, with no parentheses. `to_binary()` also works. `to_text()` accepts keyword arguments for formatting options.
 
 ## Pack / unpack
 

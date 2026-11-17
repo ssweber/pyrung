@@ -104,13 +104,15 @@ with rung(Enable):
 
 `continue_loop()` skips the rest of the current iteration. `break_loop()` leaves
 the innermost loop. The scan carries on after its Next. Both need a body rung
-with at least one contact, as in CLICK. When the loop's own rung is false, the
-body does not run at all, as on CLICK. Its `out()` coils keep their values. Its
-timers and counters neither time, count nor reset. Its one-shots do not
-re-arm (only the For's own `oneshot=True` does). To turn a body coil off when
-the loop stops, `reset()` it from a rung of its own.
+with at least one contact, as in CLICK.
 
-`branch()` is not allowed inside a loop, and a body rung cannot hold another
+When the loop's own rung is false, the body does not run at all, as on CLICK.
+Its `out()` coils keep their values. Its timers and counters neither time,
+count nor reset. Its one-shots do not re-arm (only the For's own
+`oneshot=True` does). To turn a body coil off when the loop stops, `reset()` it
+from a rung of its own.
+
+You cannot use `branch()` inside a loop. A body rung cannot hold another
 `with rung()`.
 
 ### Nested loops

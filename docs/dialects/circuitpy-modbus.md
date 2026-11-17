@@ -186,7 +186,7 @@ CircuitPython code generation supports Modbus TCP only, not RTU (serial).
 | `device_id` | `int` | `1` | Modbus unit ID (0–255) |
 | `timeout_ms` | `int` | `1000` | Per-transaction timeout |
 
-The P1AM takes neither a DS tag as `device_id` nor `com_port="wlan"`. `ModbusClientConfig` refuses both.
+The P1AM supports neither a DS tag as `device_id` nor `com_port="wlan"`. `ModbusClientConfig` rejects both.
 
 Unlike the CLICK dialect's threaded `send`/`receive`, the CircuitPython versions generate a non-blocking state machine. Each transaction advances one step per scan (connect, send request, wait for response, apply result). The scan loop is never blocked. Status tags (`sending`/`receiving`, `success`, `error`, `exception_response`) update as the transaction progresses. When the rung condition goes false, status tags reset to defaults.
 
@@ -201,9 +201,9 @@ The generated server serves:
 - the whole bank, when a rung reaches it by pointer or block instruction (`ds[ptr]`, `fill(0, c.select(1, 3))`)
 - XD and YD in CLICK's layout, built from the X and Y bits the TagMap maps. A write to YD sets those Y bits.
 
-A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there answers with Modbus exception 2 (illegal data address), because the P1AM has nowhere to keep it (a CLICK stores it). To keep such a value on the P1AM, map it in the TagMap.
+A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there gets Modbus exception 2 (illegal data address), because the P1AM has nowhere to store the value. A CLICK would store it. To keep such a value on the P1AM, map it in the TagMap.
 
-A write to an SC or SD that CLICK's Data View shows as Read Only answers with exception 2. So does a coil write to X, T or CT, which a client can only read. An FC 15 or FC 16 write that reaches one refused address stores nothing.
+A write to an SC or SD that CLICK's Data View shows as Read Only gets exception 2. A coil write to X, T or CT gets exception 2 as well, because a client can only read those. If an FC 15 or FC 16 write reaches one rejected address, it stores nothing.
 
 ## Scan cycle with Modbus
 

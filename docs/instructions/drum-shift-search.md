@@ -63,7 +63,7 @@ with rung(Running):
         .jog(Start)
 ```
 
-A tag preset (`DS[1]`) needs CLICK v4 firmware. Earlier firmware takes literal durations only, and Click validation leaves a hint.
+A tag preset (`DS[1]`) needs CLICK v4 firmware. Earlier firmware accepts literal durations only, and Click validation leaves a hint.
 
 ## Time & event drum
 
@@ -98,9 +98,9 @@ All three drums run the same routine:
 - **Reset** is a level, and it wins. While it is on, the drum sits on step 1, with its completion flag off and **every output off**.
 - **Jump and jog** act on their rising edges, even while the rung is false. A jump beats a jog. A jog on the last step completes the drum.
 - **A step's own end** needs the rung true and the completion flag off. A false rung pauses the drum and the outputs stay as they were.
-- **Outputs** are written when the step moves or the rung comes back, not on every scan, so a value another rung writes to one stands until then.
-- **The completion flag is the drum's state.** Completing sets it and turns every output off. While it is on, the drum's own time and events do nothing. A reset clears the flag, and so can any other rung.
-- **The step register** out of range sends the drum to step 1 on the next true scan. Writing it is not a move. The outputs stay, and the next event or jog acts on the new step.
+- **Outputs** are written when the step moves or the rung comes back, not on every scan. A value that another rung writes to an output therefore stands until then.
+- **The completion flag is the drum's state.** When the drum completes, it sets the flag and turns every output off. While the flag is on, the drum's own time and events do nothing. A reset clears the flag. Any other rung can clear it too.
+- **The step register**: if its value is out of range, the drum goes to step 1 on the next true scan. Writing to the register does not move the drum. The outputs stay, and the next event or jog acts on the new step.
 - **A tag preset is read on every scan** the step times. A preset of 0 or less ends the step on its first timing scan.
 
 ### Variadic condition chaining
@@ -129,7 +129,7 @@ The first argument is a comparison expression built from a `.select()` range. It
 - On success: `result = matched_address` (1-based), `found = True`
 - On miss: `result = -1`, `found = False`
 - `result` must be INT or DINT, and `found` must be BOOL
-- For CLICK, `result` must be a `DS` and the range in `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT`. The export refuses anything else
+- For CLICK, `result` must be a `DS` and the range in `DS`, `DD`, `DH`, `DF`, `TD`, `CTD` or `TXT`. The export rejects anything else
 
 ### Continuous search (resume from last position)
 
