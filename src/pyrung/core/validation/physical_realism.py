@@ -11,6 +11,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.write_sites import static_write_target_tags
 from pyrung.core.condition import (
     AllCondition,
     FallingEdgeCondition,
@@ -19,11 +20,8 @@ from pyrung.core.condition import (
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.validation._common import (
     WriteSite,
-    _build_tag_map,
     _chain_pair_mutually_exclusive,
     _collect_write_sites,
-    _resolve_tag_names,
-    _resolve_tag_objects,
     site_frame,
 )
 from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
@@ -31,6 +29,7 @@ from pyrung.core.validation.render import operand_name
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
 
 TAG_RANGE_VIOLATION = "TAG_RANGE_VIOLATION"
@@ -77,13 +76,13 @@ def _literal_range_targets(instr: Any) -> list[tuple[Tag, str, int | float]]:
         source = instr.source
         if not _is_numeric_literal(source):
             return []
-        return [(tag, itype, source) for tag in _resolve_tag_objects(instr.target)]
+        return [(tag, itype, source) for tag in static_write_target_tags(instr.target)]
 
     if isinstance(instr, FillInstruction):
         source = instr.value
         if not _is_numeric_literal(source):
             return []
-        return [(tag, itype, source) for tag in _resolve_tag_objects(instr.dest)]
+        return [(tag, itype, source) for tag in static_write_target_tags(instr.dest)]
 
     return []
 
@@ -152,7 +151,7 @@ def _literal_write_sites(program: Program) -> list[tuple[WriteSite, int | float,
     return literal_sites
 
 
-def _linked_command_name(feedback: Tag, tag_map: dict[str, Tag]) -> str | None:
+def _linked_command_name(feedback: Tag) -> str | None:
     link = feedback.link
     if link is None:
         return None
@@ -170,31 +169,35 @@ def _linked_command_name(feedback: Tag, tag_map: dict[str, Tag]) -> str | None:
         except Exception:
             return None
 
-    if link_field in tag_map:
-        return link_field
     return link_field
 
 
-def _linked_feedback_by_command(tag_map: dict[str, Tag]) -> dict[str, list[Tag]]:
+def _linked_feedback_by_command(tags: dict[str, Tag]) -> dict[str, list[Tag]]:
     result: dict[str, list[Tag]] = defaultdict(list)
-    for tag in tag_map.values():
+    for tag in tags.values():
         if tag.link is None:
             continue
-        command_name = _linked_command_name(tag, tag_map)
+        command_name = _linked_command_name(tag)
         if command_name is not None:
             result[command_name].append(tag)
     return result
 
 
-def _validate_link_enables(tag_map: dict[str, Tag]) -> list[PhysicalRealismFinding]:
-    """A ``link=`` whose enable the program never touches: the harness skips it."""
+def _validate_link_enables(graph: ProgramGraph) -> list[PhysicalRealismFinding]:
+    """A ``link=`` whose enable the program never touches: the harness skips it.
+
+    A write through a pointer that names no targets may still store into the enable,
+    and the harness then runs the link.
+    """
     findings: list[PhysicalRealismFinding] = []
-    for tag_name in sorted(tag_map):
-        tag = tag_map[tag_name]
+    for tag_name in sorted(graph.tags):
+        tag = graph.tags[tag_name]
         if tag.link is None or tag.physical is None:
             continue
-        command_name = _linked_command_name(tag, tag_map)
-        if command_name is not None and command_name in tag_map:
+        command_name = _linked_command_name(tag)
+        if command_name is not None and (
+            command_name in graph.tags or graph.may_be_written(command_name)
+        ):
             continue
         findings.append(
             PhysicalRealismFinding(
@@ -249,7 +252,7 @@ def _out_targets(instr: Any) -> list[tuple[str, str]]:
     from pyrung.core.instruction.coils import OutInstruction
 
     if isinstance(instr, OutInstruction):
-        return [(name, type(instr).__name__) for name in _resolve_tag_names(instr.target)]
+        return [(tag.name, type(instr).__name__) for tag in static_write_target_tags(instr.target)]
     return []
 
 
@@ -261,10 +264,9 @@ def _opposing_out_pair(site_a: WriteSite, site_b: WriteSite) -> bool:
     return not _chain_pair_mutually_exclusive(site_a.conditions, site_b.conditions)
 
 
-def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[PhysicalRealismFinding]:
+def _validate_ranges(program: Program) -> list[PhysicalRealismFinding]:
     findings: list[PhysicalRealismFinding] = []
-    for site, value, literal_target in _literal_write_sites(program):
-        tag = tag_map.get(site.target_name, literal_target)
+    for site, value, tag in _literal_write_sites(program):
         too_low = tag.min is not None and value < tag.min
         too_high = tag.max is not None and value > tag.max
         if not too_low and not too_high:
@@ -300,10 +302,10 @@ def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[Physical
     return findings
 
 
-def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismFinding]:
+def _validate_missing_profiles(tags: dict[str, Tag]) -> list[PhysicalRealismFinding]:
     findings: list[PhysicalRealismFinding] = []
-    for tag_name in sorted(tag_map):
-        tag = tag_map[tag_name]
+    for tag_name in sorted(tags):
+        tag = tags[tag_name]
         if tag.link is None or tag.type == TagType.BOOL:
             continue
         if tag.physical is not None and tag.physical.kind != "delay":
@@ -327,11 +329,11 @@ def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismF
 
 def _validate_antitoggle(
     program: Program,
-    tag_map: dict[str, Tag],
+    tags: dict[str, Tag],
     *,
     dt: float,
 ) -> list[PhysicalRealismFinding]:
-    linked_by_command = _linked_feedback_by_command(tag_map)
+    linked_by_command = _linked_feedback_by_command(tags)
     out_sites = _collect_write_sites(program, target_extractor=_out_targets)
     out_by_target: dict[str, list[WriteSite]] = defaultdict(list)
     for site in out_sites:
@@ -424,10 +426,13 @@ def validate_physical_realism(program: Program, *, dt: float = 0.010) -> Physica
     if dt <= 0:
         raise ValueError("dt must be > 0 seconds.")
 
-    tag_map = _build_tag_map(program)
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    # Every tag the program reads or writes, through any instruction or operand.
+    graph = build_program_graph(program)
     findings: list[PhysicalRealismFinding] = []
-    findings.extend(_validate_ranges(program, tag_map))
-    findings.extend(_validate_missing_profiles(tag_map))
-    findings.extend(_validate_link_enables(tag_map))
-    findings.extend(_validate_antitoggle(program, tag_map, dt=dt))
+    findings.extend(_validate_ranges(program))
+    findings.extend(_validate_missing_profiles(graph.tags))
+    findings.extend(_validate_link_enables(graph))
+    findings.extend(_validate_antitoggle(program, graph.tags, dt=dt))
     return PhysicalRealismReport(findings=tuple(findings))
