@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-from pyrung.circuitpy.codegen._constants import (
-    _DINT_MAX,
-    _DINT_MIN,
-    _INT_MAX,
-)
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
     _coil_reset_value,
@@ -40,7 +35,18 @@ from pyrung.core.memory_block import block_room, element_names_after
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
-from ._emit import emit_frac, emit_mem_get, emit_mem_set, emit_oneshot, emit_prev_store, emit_rise
+from ._emit import (
+    emit_count,
+    emit_done,
+    emit_frac,
+    emit_mem_get,
+    emit_mem_set,
+    emit_oneshot,
+    emit_prev_store,
+    emit_rise,
+    emit_tick,
+    emit_timer_clear,
+)
 from ._primitives import (
     _compile_assignment_lines,
     _compile_copy_source,
@@ -55,7 +61,6 @@ from ._primitives import (
     _copy_converter_target_info,
     _copy_converter_write_lines,
     _past_end_keeps,
-    _timer_carry_lines,
 )
 
 
@@ -177,57 +182,39 @@ def _compile_on_delay_instruction(
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     acc = instr.accumulator
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
+    clear = emit_timer_clear(done_write, acc_write, frac=acc)
     lines: list[str] = []
     if instr.reset_condition is not None:
         reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
             instr.reset_condition, ctx
         )
-        lines.extend(
-            [
-                f"{sp}if {reset_expr}:",
-                f"{' ' * (indent + 4)}{emit_frac(acc, '0', quote='double')}",
-                f"{' ' * (indent + 4)}{done_write} = False",
-                f"{' ' * (indent + 4)}{acc_write} = 0",
-                f"{sp}else:",
-            ]
-        )
+        lines.append(f"{sp}if {reset_expr}:")
+        lines.extend(f"{sp}    {line}" for line in clear)
+        lines.append(f"{sp}else:")
         inner = indent + 4
     else:
         inner = indent
     isp = " " * inner
-    tick = [
-        f"{' ' * (inner + 4)}_acc = int({acc_read})",
-        *_timer_carry_lines(instr.accumulator, instr.unit, ctx, " " * (inner + 4)),
-        f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{' ' * (inner + 4)}_preset = int({preset})",
+    run = [
+        *emit_tick(acc, instr.unit, ctx, read="local", acc_read=acc_read),
+        *emit_done(
+            done_write,
+            acc_write,
+            ">=",
+            preset,
+            preset_key=_preset_key(instr, ctx),
+            then=[emit_frac(acc, "_new_frac", quote="double")],
+        ),
     ]
-    lines.extend(
-        [
-            f"{isp}if {enabled_expr}:",
-            *tick,
-            f"{' ' * (inner + 4)}{emit_frac(acc, '_new_frac', quote='double')}",
-            f"{' ' * (inner + 4)}{done_write} = (_acc >= _preset)",
-            f"{' ' * (inner + 4)}{acc_write} = _acc",
-        ]
-    )
-    if ctx.proof_metadata:
-        lines.insert(
-            -3, f"{' ' * (inner + 4)}{emit_mem_set(preset_key, '_preset', quote='double')}"
-        )
+    lines.append(f"{isp}if {enabled_expr}:")
+    lines.extend(f"{isp}    {line}" for line in run)
     if not instr.has_reset:
-        lines.extend(
-            [
-                f"{isp}else:",
-                f"{' ' * (inner + 4)}{emit_frac(acc, '0', quote='double')}",
-                f"{' ' * (inner + 4)}{done_write} = False",
-                f"{' ' * (inner + 4)}{acc_write} = 0",
-            ]
-        )
+        lines.append(f"{isp}else:")
+        lines.extend(f"{isp}    {line}" for line in clear)
     # Status bits: computed after all branches using final tag values
     done_read = _compile_value(instr.done_bit, ctx)
     if instr.has_reset:
@@ -254,7 +241,6 @@ def _compile_off_delay_instruction(
     acc_write = _compile_lvalue(instr.accumulator, ctx)
     acc = instr.accumulator
     armed_key = tof_armed_key(instr.accumulator.name)
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
@@ -268,23 +254,29 @@ def _compile_off_delay_instruction(
         f"{sp}if {enabled_expr}:",
         f"{sp4}if not _tof_armed:",
         f"{sp8}{emit_mem_set(armed_key, 'True', quote='double')}",
-        f"{sp4}{emit_frac(acc, '0', quote='double')}",
-        f"{sp4}{done_write} = True",
-        f"{sp4}{acc_write} = 0",
+        *(
+            f"{sp4}{line}"
+            for line in emit_timer_clear(done_write, acc_write, frac=acc, done_value="True")
+        ),
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
         f"{sp4}if _tof_armed or {done_read} or _acc != 0:",
         f"{sp8}if not _tof_armed:",
         f"{sp12}{emit_mem_set(armed_key, 'True', quote='double')}",
-        *_timer_carry_lines(instr.accumulator, instr.unit, ctx, sp8),
-        f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{sp8}_preset = int({preset})",
-        f"{sp8}{emit_frac(acc, '_new_frac', quote='double')}",
-        f"{sp8}{done_write} = _acc < _preset",
-        f"{sp8}{acc_write} = _acc",
+        *(f"{sp8}{line}" for line in emit_tick(acc, instr.unit, ctx, read="caller")),
+        *(
+            f"{sp8}{line}"
+            for line in emit_done(
+                done_write,
+                acc_write,
+                "<",
+                preset,
+                preset_key=_preset_key(instr, ctx),
+                paren=False,
+                then=[emit_frac(acc, "_new_frac", quote="double")],
+            )
+        ),
     ]
-    if ctx.proof_metadata:
-        lines.insert(-3, f"{sp8}{emit_mem_set(preset_key, '_preset', quote='double')}")
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
     tt_expr = f"not bool({enabled_expr}) and bool({done_read})"
     lines.extend(
@@ -292,6 +284,43 @@ def _compile_off_delay_instruction(
             instr, ctx, indent, en_bit=f"bool({enabled_expr})", tt_bit=tt_expr
         )
     )
+    return lines
+
+
+def _preset_key(
+    instr: OnDelayInstruction | OffDelayInstruction | CountUpInstruction | CountDownInstruction,
+    ctx: CodegenContext,
+) -> str | None:
+    """The memory key the prover reads a timer's or counter's preset from, when it asks for one."""
+    return prove_effective_preset_key(instr.done_bit.name) if ctx.proof_metadata else None
+
+
+def _counter_lines(
+    instr: CountUpInstruction | CountDownInstruction,
+    ctx: CodegenContext,
+    indent: int,
+    writes: tuple[str, str],
+    count: list[str],
+    op: str,
+    preset: str,
+) -> list[str]:
+    """A counter's reset test, then its *count* lines and its Done compare.
+
+    *writes* holds the Done and Acc write targets.
+    """
+    done_write, acc_write = writes
+    sp = " " * indent
+    lines: list[str] = []
+    if instr.reset_condition is not None:
+        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+            instr.reset_condition, ctx
+        )
+        lines.append(f"{sp}if {reset_expr}:")
+        lines.extend(f"{sp}    {line}" for line in emit_timer_clear(done_write, acc_write))
+        lines.append(f"{sp}else:")
+        sp += "    "
+    done = emit_done(done_write, acc_write, op, preset, preset_key=_preset_key(instr, ctx))
+    lines.extend(f"{sp}{line}" for line in (*count, *done))
     return lines
 
 
@@ -320,13 +349,11 @@ def _compile_count_up_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     site = ctx.state_key_for(instr)
     up_key = f"{COUNT_UP_MEMORY}:{site}"
-    sp = " " * indent
     lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent)
     down_expr: str | None = None
     if instr.down_condition is not None:
@@ -336,47 +363,18 @@ def _compile_count_up_instruction(
         lines.extend(
             _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent)
         )
-    if instr.reset_condition is not None:
-        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
-            instr.reset_condition, ctx
-        )
-        lines.extend(
-            [
-                f"{sp}if {reset_expr}:",
-                f"{' ' * (indent + 4)}{done_write} = False",
-                f"{' ' * (indent + 4)}{acc_write} = 0",
-                f"{sp}else:",
-            ]
-        )
-        inner = indent + 4
-    else:
-        inner = indent
-    isp = " " * inner
+    down_edge = None if down_expr is None else "_cd_edge"
     lines.extend(
-        [
-            f"{' ' * inner}_acc = int({acc_read})",
-            f"{' ' * inner}_delta = 0",
-            f"{isp}if _cu_edge:",
-            f"{' ' * (inner + 4)}_delta += 1",
-        ]
-    )
-    if down_expr is not None:
-        lines.extend(
-            [
-                f"{isp}if _cd_edge:",
-                f"{' ' * (inner + 4)}_delta -= 1",
-            ]
+        _counter_lines(
+            instr,
+            ctx,
+            indent,
+            (done_write, acc_write),
+            emit_count(acc_read, up="_cu_edge", down=down_edge),
+            ">=",
+            preset,
         )
-    lines.extend(
-        [
-            f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc + _delta))",
-            f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done_write} = (_acc >= _preset)",
-            f"{' ' * inner}{acc_write} = _acc",
-        ]
     )
-    if ctx.proof_metadata:
-        lines.insert(-2, f"{' ' * inner}{emit_mem_set(preset_key, '_preset', quote='double')}")
     # Counter status bits: CU = enabled, CD = down condition active
     cd_expr = f"bool({down_expr})" if instr.down_condition is not None else "False"
     lines.extend(
@@ -396,42 +394,22 @@ def _compile_count_down_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     down_key = f"{COUNT_DOWN_MEMORY}:{ctx.state_key_for(instr)}"
-    sp = " " * indent
     lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent)
-    if instr.reset_condition is not None:
-        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
-            instr.reset_condition, ctx
-        )
-        lines.extend(
-            [
-                f"{sp}if {reset_expr}:",
-                f"{' ' * (indent + 4)}{done_write} = False",
-                f"{' ' * (indent + 4)}{acc_write} = 0",
-                f"{sp}else:",
-            ]
-        )
-        inner = indent + 4
-    else:
-        inner = indent
-    isp = " " * inner
     lines.extend(
-        [
-            f"{' ' * inner}_acc = int({acc_read})",
-            f"{isp}if _cd_edge:",
-            f"{' ' * (inner + 4)}_acc -= 1",
-            f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))",
-            f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done_write} = (_acc <= _preset)",
-            f"{' ' * inner}{acc_write} = _acc",
-        ]
+        _counter_lines(
+            instr,
+            ctx,
+            indent,
+            (done_write, acc_write),
+            emit_count(acc_read, up=None, down="_cd_edge"),
+            "<=",
+            preset,
+        )
     )
-    if ctx.proof_metadata:
-        lines.insert(-2, f"{' ' * inner}{emit_mem_set(preset_key, '_preset', quote='double')}")
     # Counter status bits: CU = False (always), CD = enabled
     lines.extend(
         _compile_status_bit_lines(

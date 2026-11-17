@@ -32,7 +32,15 @@ from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
-from ._emit import emit_frac, emit_mem_get, emit_mem_set, emit_prev, emit_prev_store, emit_rise
+from ._emit import (
+    emit_frac,
+    emit_mem_get,
+    emit_mem_set,
+    emit_prev,
+    emit_prev_store,
+    emit_rise,
+    emit_tick,
+)
 from ._primitives import (
     _compile_guarded_instruction,
     _compile_lvalue,
@@ -44,7 +52,6 @@ from ._primitives import (
     _range_item_read_expr,
     _range_item_write_expr,
     _search_compare_expr,
-    _timer_carry_lines,
 )
 
 
@@ -637,17 +644,18 @@ def _drum_tick_lines(
 ) -> list[str]:
     """Add this scan's time to Acc; the step's preset, ``_limit``, is the tick's limit."""
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    lines = [f"_acc = int({_compile_value(instr.accumulator, ctx)})"]
+    acc_read = _compile_value(instr.accumulator, ctx)
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
-    lines.extend(
-        [
-            *_timer_carry_lines(instr.accumulator, instr.unit, ctx, ""),
-            emit_frac(instr.accumulator, "_new_frac"),
-            f"_acc = min(_acc + _int_units, {max_acc})",
-        ]
+    tick = emit_tick(
+        instr.accumulator,
+        instr.unit,
+        ctx,
+        read="local",
+        acc_read=acc_read,
+        max_acc=max_acc,
+        frac_first=True,
     )
-    lines.append(f"{acc_write} = _acc")
-    return lines
+    return [*tick, f"{acc_write} = _acc"]
 
 
 def _event_drum_event_exprs(instr: EventDrumInstruction, ctx: CodegenContext) -> list[str]:

@@ -7,7 +7,6 @@ backends agree on tags and memory.
 
 from __future__ import annotations
 
-from pyrung.circuitpy.codegen._constants import _INT_MAX
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.core.instruction import (
     DebounceInstruction,
@@ -33,12 +32,12 @@ from ._emit import (
     emit_prev,
     emit_prev_store,
     emit_rise,
+    emit_tick,
 )
 from ._primitives import (
     _compile_lvalue,
     _compile_target_write_lines,
     _compile_value,
-    _timer_carry_lines,
 )
 
 
@@ -49,10 +48,8 @@ def _use_memory(ctx: CodegenContext) -> None:
 
 def _tick_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -> list[str]:
     """Advance *acc* by this scan's dt into ``_acc``; leave the remainder in ``_new_frac``."""
-    return [
-        *_timer_carry_lines(acc, unit, ctx, sp),
-        f"{sp}_acc = min(int({_compile_value(acc, ctx)}) + _int_units, {_INT_MAX})",
-    ]
+    tick = emit_tick(acc, unit, ctx, read="inline", acc_read=_compile_value(acc, ctx))
+    return [f"{sp}{line}" for line in tick]
 
 
 def _compile_toggle_instruction(
