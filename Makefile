@@ -59,8 +59,8 @@ test-tumbler:
 
 # Conformance cases over Modbus TCP against pyrung's local soft PLC.
 # Point at a real CLICK running the exported program with PLC=host[:port];
-# run some groups only with GROUP=name[,name...].
-CONFORMANCE_ARGS = $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(TARGET),--conformance-target=$(TARGET))
+# run some groups only with GROUP=name[,name...], or a project of picked cases with CASES=.
+CONFORMANCE_ARGS = $(if $(PLC),--conformance-plc=$(PLC)) $(if $(GROUP),--conformance-group=$(GROUP)) $(if $(CASES),--conformance-cases=$(CASES)) $(if $(TARGET),--conformance-target=$(TARGET))
 
 test-conformance:
 	uv run pytest -m "conformance and not suite_repeat" tests/conformance/ -q -rP $(CONFORMANCE_ARGS)
@@ -73,8 +73,9 @@ test-conformance-repeat:
 # Write the conformance CLICK project (main, one subroutine per group, nicknames).
 # PART=coils, copy, math, drum1, drum2, drum3, control, system or boot writes one part: the whole suite is over CLICK's 8000 steps.
 # PART=units, fixed_scan, text_flasher, follow_flags, follow_values, follow_timing, follow_extra or a follow2_* part writes a part on memory of its own; fixed_scan runs with fixed scan on, at 100 ms.
+# CASES=group/id,group,... (or @file) writes only those cases, every rung in main.
 conformance-export:
-	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) $(or $(OUT),build/conformance$(if $(PART),-$(PART)))
+	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) $(if $(CASES),--cases $(CASES)) $(or $(OUT),build/conformance$(if $(PART),-$(PART))$(if $(CASES),-cases))
 
 # Regenerate src/plc/ in the conformance ClickNick workspace, for Preview Changes.
 conformance-workspace:
