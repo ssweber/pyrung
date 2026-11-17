@@ -25,6 +25,8 @@ K = TypeVar("K")
 # Scans a question may step again to get the records of scans that have none, about what a
 # compiled run would have cost stepped.  Past this it is an error rather than a wait nobody asked for.
 SETTLE_SCAN_LIMIT = 250_000
+# why() steps at most this many.  It is the snapshot tool, and a debugger console blocks on it.
+WHY_SETTLE_SCAN_LIMIT = 10_000
 
 
 class UnrecordedScansError(ValueError):

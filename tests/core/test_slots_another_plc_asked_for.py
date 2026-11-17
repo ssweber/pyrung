@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 
 from pyrung.core import PLC, Block, Bool, Char, Int, Program, Rung, TagType, copy, out
-from pyrung.core.analysis.causal.recorded import _tag_in_block
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import _build_prior_facts
 from pyrung.core.harness import Coupling, link_problem
@@ -233,8 +232,12 @@ def test_a_slot_of_a_big_block_is_in_it_before_anything_asks_for_it() -> None:
     # A block past the program graph's cap is written through a pointer as a whole,
     # and cause() looks for the slot's writer by the slot's name.
     big = Block("Bq", TagType.INT, 1, 1500)
-    assert _tag_in_block(big, "Bq900")
-    assert not _tag_in_block(big, "Bq1501")
+    with Program(strict=False) as program:
+        with Rung():
+            copy(1, big[Int("BqPtr", external=True)])
+    graph = build_program_graph(program)
+    assert graph.pointer_writers_of("Bq900")
+    assert not graph.pointer_writers_of("Bq1501")
     assert not big._tag_cache
 
 

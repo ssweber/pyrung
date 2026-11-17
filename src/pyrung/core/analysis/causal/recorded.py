@@ -256,7 +256,7 @@ def _writer_footprint(
     read-diff never misses the operand the firing branch actually read.
     """
     footprint: set[str] = set()
-    for n_idx in pdg.writers_of.get(tag_name, frozenset()):
+    for n_idx in pdg.writers_in_any_run_of(tag_name):
         node = pdg.rung_nodes[n_idx]
         if node.rung_index == rung_idx and node.subroutine == sub_name:
             footprint |= node.data_reads
@@ -707,7 +707,9 @@ def _walk_frame(
         tag_obj = pdg.tags.get(name) if pdg is not None else None
         if tag_obj is not None and getattr(tag_obj, "external", False):
             return "external"
-        if pdg is not None and pdg.writers_of.get(name, frozenset()):
+        # No recorded write is at hand to confirm, so a write through a pointer counts
+        # only where the program's own values can aim it.
+        if pdg is not None and pdg.may_be_written(name):
             return None
         return "never_written"
 
@@ -813,7 +815,7 @@ def _walk_frame(
         # the exact writer occurrence.
         candidate_rungs = frozenset(
             RungId(pdg.rung_nodes[node_idx].subroutine, pdg.rung_nodes[node_idx].rung_index)
-            for node_idx in pdg.writers_of.get(name, frozenset())
+            for node_idx in pdg.writers_in_any_run_of(name)
         )
         if node_previous_firing_fn is not None and candidate_rungs:
             prior_scans: Any = _indexed_value_transition_scans(
@@ -922,9 +924,12 @@ def _walk_frame(
             history=history,
             tag_name=tag_name,
             scan_id=scan_id,
+            to_value=transition.to_value,
             timelines=timelines,
             scan_log=scan_log,
             initial_tags=initial_tags,
+            node_runs_fn=node_runs_fn,
+            node_runs_cache=node_runs_cache,
         )
         if not resolved_writers:
             resolved_writers = indirect_writers
@@ -1251,7 +1256,7 @@ def _recurrence_seed(
     looped = {rung_idx for tag, rung_idx, sub in lineage if tag == tag_name and sub is None}
     others = frozenset(
         node.rung_index
-        for node in (pdg.rung_nodes[idx] for idx in pdg.writers_of.get(tag_name, ()))
+        for node in (pdg.rung_nodes[idx] for idx in pdg.writers_in_any_run_of(tag_name))
         if node.subroutine is None and node.rung_index not in looped
     )
     if not others:
@@ -1294,7 +1299,7 @@ def _replayed_writers_from_pdg(
     Returns resolved ``(rung_index, rung, subroutine)`` tuples so the
     caller gets correct rung objects for subroutine and branch writers.
     """
-    candidates = pdg.writers_of.get(tag_name, frozenset())
+    candidates = pdg.writers_in_any_run_of(tag_name)
     if not candidates:
         return []
     return _executed_writers_from_pdg(
@@ -1312,23 +1317,6 @@ def _replayed_writers_from_pdg(
     )
 
 
-def _tag_in_block(block: Any, tag_name: str) -> bool:
-    """Check whether *tag_name* is a tag inside *block*.
-
-    The answer comes from the slot names, not the block's cache.  The cache holds whichever
-    slots something has asked for, so a fresh runner's answer would differ from a later one's.
-    """
-    mapped = getattr(block, "_mapped_tags", None)
-    if mapped is not None:
-        for tag in mapped.values():
-            if getattr(tag, "name", None) == tag_name:
-                return True
-    return any(
-        block._effective_slot_name(addr) == tag_name
-        for addr in block._window_addresses(block.start, block.end)
-    )
-
-
 def _resolve_indirect_writers(
     *,
     pdg: ProgramGraph,
@@ -1336,27 +1324,27 @@ def _resolve_indirect_writers(
     history: History,
     tag_name: str,
     scan_id: int,
+    to_value: Any,
     timelines: RungFiringTimelines | None,
     scan_log: Any,
     initial_tags: Any,
+    node_runs_fn: Any = None,
+    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
 ) -> tuple[
     list[tuple[int, Rung, str | None]],
     dict[tuple[int, str | None], tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]]],
 ]:
-    """Resolve indirect writers whose block contains *tag_name*.
+    """Resolve the indirect writers that stored *tag_name* in this scan.
 
     When a block exceeds ``_INDIRECT_BLOCK_CAP``, the PDG drops per-tag
-    writes and records an ``IndirectWriteRef`` descriptor instead.  This
-    function checks whether *tag_name* lives inside the descriptor's block
-    and, if so, treats the indirect copy as the writer — synthesising a
-    crossing with the instruction's source tags as triggers and the pointer
-    as an enabler.
+    writes and records an ``IndirectWriteRef`` descriptor instead.  The walk
+    credits such a write only when a run of its rung in this scan wrote
+    *to_value* to *tag_name*.  The crossing it builds takes the instruction's
+    source tags as triggers and the pointer as an enabler.
 
-    The pointer at end-of-scan may NOT match *tag_name* when the
-    subroutine is called multiple times per scan (each call overwrites
-    the pointer).  Block membership is sufficient: the tag *did*
-    transition, and the indirect write is the only instruction that
-    writes to this block region.
+    The pointer at the end of the scan can differ from the one the write used,
+    because a subroutine called twice in a scan sets it twice.  The run's own
+    write names the tag either way.
     """
     writers: list[tuple[int, Rung, str | None]] = []
     crossings: dict[
@@ -1364,20 +1352,19 @@ def _resolve_indirect_writers(
         tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]],
     ] = {}
 
+    if program is None:
+        return writers, crossings
     state = history.at(scan_id)
-
-    tag_obj = pdg.tags.get(tag_name)
-    tag_addr = getattr(tag_obj, "_pyrung_block_addr", None) if tag_obj is not None else None
+    runs = _node_runs_at(scan_id, node_runs_fn, node_runs_cache)
 
     for ref in pdg.indirect_writes:
-        if tag_addr is not None:
-            if not (ref.block.start <= tag_addr <= ref.block.end):
-                continue
-        elif not _tag_in_block(ref.block, tag_name):
+        if ref.node_index not in pdg.pointer_writers_of(tag_name, (ref.block,)):
+            continue
+        if not writer_runs_for_node(pdg, program, ref.node_index, tag_name, to_value, runs):
             continue
 
         node = pdg.rung_nodes[ref.node_index]
-        rung = resolve_rung(program, node) if program is not None else None
+        rung = resolve_rung(program, node)
         if rung is None:
             continue
 
@@ -1505,7 +1492,7 @@ def _recorded_writers_from_firings(
 
     # 2. Main-scope (and branch) writers — from the main-rung firing log.
     main_rungs = program.rungs if program is not None else logic
-    candidates = pdg.writers_of.get(tag_name, frozenset()) if pdg is not None else frozenset()
+    candidates = pdg.writers_in_any_run_of(tag_name) if pdg is not None else frozenset()
 
     for rung_idx in sorted(main_matching):
         writes = firings[rung_idx]
