@@ -147,9 +147,10 @@ def emit_tick(
 ) -> list[str]:
     """Lines that add this scan's time to *acc* in ``_acc``, held at *max_acc*.
 
-    The rest of a unit is left in ``_new_frac`` for the caller to store.  The drum stores it
-    before the add (``frac_first``).  The tick reads Acc with *acc_read* into ``_acc`` first,
-    or inside the add with *inline*.  With no *acc_read*, the caller has read ``_acc``.
+    The rest of a unit is left in ``_new_frac`` for the caller to store.  The drum stores
+    ``_new_frac`` before the add (``frac_first``).  The tick reads Acc with *acc_read* into
+    ``_acc`` first, or inside the add with *inline*.  With no *acc_read*, the caller has read
+    ``_acc``.
     """
     lines = [f"_acc = int({acc_read})"] if acc_read is not None and not inline else []
     lines += _carry_lines(acc, unit, ctx)
@@ -189,8 +190,8 @@ def emit_done(
     """Lines that read *preset*, set *done* from ``_acc`` *op* the preset, and store ``_acc``.
 
     *done* and *acc* are the write targets.  A *preset_key* also stores the preset for the
-    prover.  A timer passes its Acc as *frac*, which stores the fraction before the compare.
-    The off delay writes the compare without brackets (``paren=False``).
+    prover.  A timer passes its Acc as *frac*, and the lines store that Acc's fraction before
+    the compare.  The off delay writes the compare without brackets (``paren=False``).
     """
     lines = [f"_preset = int({preset})"]
     if preset_key is not None:

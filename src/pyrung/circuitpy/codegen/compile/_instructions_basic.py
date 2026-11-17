@@ -47,6 +47,7 @@ from ._emit import (
     emit_oneshot,
     emit_rise,
     emit_tick,
+    emit_truth,
 )
 from ._primitives import (
     _compile_assignment_lines,
@@ -110,8 +111,8 @@ def _compile_out_instruction(
     indent: int,
 ) -> list[str]:
     sp = " " * indent
-    # Each range write takes the next local name, so the writes are built in output order,
-    # and a literal True enable builds no off side.
+    # Each range write takes the next local name, so the writes are built in output order.
+    # A literal True enable never runs the off side, so that side is not built.
     always = _bool_literal(enabled_expr) is True
     if instr.oneshot:
         key = f"_oneshot:{ctx.state_key_for(instr)}"
@@ -161,7 +162,7 @@ def _reset_expr(
 
 
 def _rest_or_run(reset_expr: str | None, rest: list[str], run: list[str]) -> list[str]:
-    """*rest* on a scan the reset is on, else *run*.  With no reset, *run* runs alone."""
+    """Lines that run *rest* on a scan the reset is on, and *run* on any other scan."""
     if reset_expr is None:
         return run
     return emit_if_enabled(reset_expr, rest, otherwise=run, fold=False)
@@ -253,7 +254,7 @@ def _compile_off_delay_instruction(
         *(f"{sp8}{line}" for line in (*tick, *done)),
     ]
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
-    tt_expr = f"not bool({enabled_expr}) and bool({done_read})"
+    tt_expr = f"not bool({enabled_expr}) and {emit_truth(done_read)}"
     lines.extend(
         _compile_status_bit_lines(
             instr, ctx, indent, en_bit=f"bool({enabled_expr})", tt_bit=tt_expr
