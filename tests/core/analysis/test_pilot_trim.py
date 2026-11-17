@@ -1,4 +1,4 @@
-"""Temporary logic a reached plan doesn't need is taken out, by running the plan without it."""
+"""Check that a reached plan drops temporary logic it does not need, by running it without."""
 
 from __future__ import annotations
 
@@ -77,7 +77,10 @@ def test_a_set_that_meets_a_state_to_avoid_leaves_the_temporary_logic_in(monkeyp
 
 
 def test_a_goal_on_a_tag_no_scan_has_written_keeps_what_writes_it():
-    """No scan has rtc.new_second until the copy writes it, so the wait alone does not reach the goal."""
+    """No scan has rtc.new_second until the copy writes it.
+
+    So the wait alone does not reach the goal.
+    """
     enable = Bool("En", external=True)
     wait = Timer.clone("W")
     with Program(strict=False) as logic:
@@ -97,7 +100,10 @@ def test_a_goal_on_a_tag_no_scan_has_written_keeps_what_writes_it():
 
 
 def _armed_then_held(dt: float) -> tuple[PLC, Bool]:
-    """Start arms only with En off.  Then En times a 3 s wait, so En goes on two scans after Start."""
+    """Start arms only with En off.
+
+    Then En times a 3 s wait, so En goes on two scans after Start.
+    """
     start, enable, hit = Bool("Start", external=True), Bool("En", external=True), Bool("Hit")
     armed = Bool("Armed")
     wait = Timer.clone("W")
@@ -187,7 +193,10 @@ def test_a_set_less_than_a_second_before_a_set_of_any_tag_stays_temporary_logic(
 
 
 def _dwell() -> tuple[PLC, object]:
-    """Sensor on 30 ms and off 30 ms within the 70 ms watchdogs, then a 250 ms run: State 7."""
+    """Return a PLC with the sensor on 30 ms and off 30 ms, then a 250 ms run.
+
+    Both fit within the 70 ms watchdogs.
+    """
     sensor = Bool("HoldSensor", external=True)
     stable_on, stable_off = Timer.clone("HoldStableOn"), Timer.clone("HoldStableOff")
     on_wd, off_wd, run = Timer.clone("HoldOnWD"), Timer.clone("HoldOffWD"), Timer.clone("HoldRun")

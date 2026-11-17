@@ -1,4 +1,4 @@
-"""Forms CLICK v4's editor accepts, which the export once refused.
+"""Forms that CLICK v4's editor accepts and that the export once refused.
 
 Each test names the CLICK answer it rests on.  The answer files are:
 - clicknick ``buildbot/jobs/editor-answers/RESULTS.md`` (rows A6 to A10)
@@ -47,7 +47,7 @@ def _codes(write) -> set[str]:
 
 
 def _exports_as(write, token: str) -> Program:
-    """*write* has no finding and exports as *token*."""
+    """Assert that *write* has no finding and exports as *token*."""
     prog = _program(write)
     assert _codes(write) == set()
     assert token in pyrung_to_ladder(prog, TagMap()).main_rows[1]
@@ -55,7 +55,7 @@ def _exports_as(write, token: str) -> Program:
 
 
 def _exports_and_imports_as(write, token: str) -> None:
-    """*write* exports as *token* and imports back to the same rung."""
+    """Assert that *write* exports as *token* and imports back to the same rung."""
     code, before, after = round_trip_logic(_exports_as(write, token), TagMap())
     assert before == after, code
 
@@ -99,7 +99,7 @@ def test_a_decimal_math_into_an_sd_click_refuses_is_still_refused(dest):
 
 
 def test_a_hex_math_into_yd_exports():
-    # editor-answers A10 and math_hex.answers.json: a hex Math takes YD0 and YD1 as its
+    # editor-answers A10 and math_hex.answers.json: a hex Math accepts YD0 and YD1 as its
     # Result.  The import reads no YD yet.
     _exports_as(lambda: math(dh[1] + dh[2], yd[1]), "math(DH1 + DH2,YD1,mode=hex)")
 
@@ -171,7 +171,7 @@ def test_a_sum_over_xd_or_yd_exports(bank, token):
 
 def test_a_sum_from_xd0_is_still_refused():
     # CLICK's XD0:XD1 range runs through XD0u (math_hex.answers.json accepts SUM(XD0:XD0u)
-    # and SUM(XD0u:XD1)), and a pyrung block of XD never holds XD0u.
+    # and SUM(XD0u:XD1)).  A pyrung block of XD never contains XD0u.
     _refused(lambda: math(xd.select(0, 1).sum(), dh[100]), CLK_MATH_RANGE_NOT_CONTIGUOUS)
 
 
@@ -235,7 +235,7 @@ def test_a_hex_math_constant_with_a_fraction_is_reported():
 
 
 def test_a_fill_of_one_yd_exports_as_the_copy_click_accepts():
-    # A Fill of one register exports as a Copy, and copy_single.answers.json accepts a Copy
+    # A Fill of one register exports as a Copy.  copy_single.answers.json accepts a Copy
     # into YD0.
     _exports_as(lambda: fill(5, yd.select(1, 1)), "copy(5h,YD1)")
 
@@ -359,5 +359,6 @@ def test_a_fraction_into_a_word_is_left_to_the_export(bank):
     ],
 )
 def test_a_copy_click_accepts_exports_and_imports(write, token):
-    # RESULTS6.md rows 1c, 2 and 7, and copy-encodings RESULTS.md: CLICK accepts each of these Copies.
+    # RESULTS6.md rows 1c, 2 and 7, and copy-encodings RESULTS.md: CLICK accepts each of
+    # these Copies.
     _exports_and_imports_as(write, token)

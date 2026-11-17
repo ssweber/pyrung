@@ -1,10 +1,10 @@
-"""A Real's raw bits, as Modbus reads them: the ``real_bits`` group.
+"""Check a Real's raw bits as Modbus reads them: the ``real_bits`` group.
 
-Part ``copy`` (``suite.PARTS``).  The harness reads slots, so the raw IEEE bits a CLICK
-keeps in a DF, which is what two Modbus registers would show, come through an
-Unpack Copy into two DH and a compare on each.  ``underflow`` and ``float32_equality``
-expect what a CLICK does and are ``pending="F32"``.  The other cases expect what pyrung
-reads (a float64 packed to a float32).
+Part ``copy`` (``suite.PARTS``).  The harness reads slots.  To see the raw IEEE bits that a
+CLICK keeps in a DF, which two Modbus registers would show, the ladder runs an Unpack Copy into
+two DH and a compare on each.  ``underflow`` and ``float32_equality`` expect what a CLICK does
+and are ``pending="F32"``.  The other cases expect what pyrung reads (a float64 packed to a
+float32).
 
 - ``minus_zero_math``: DF 0.0 * -1.0.  IEEE keeps the sign: high word 0x8000
   (Result1 = 1; 2 is 0x0000, any other 0), low word 0 (ErrorCode = 1).  A store that
@@ -20,8 +20,9 @@ reads (a float64 packed to a float32).
   word tells which NaN (Result3): 2 for 0xFFC0 (x86's default, what Python's
   subtraction leaves), 1 for 0x7FC0 (ARM's), 3 for 0xFFFF, 0 for any other; Result4 is
   its low word, 1 for zero, 2 for 0xFFFF.  A CLICK's NaN reads 0xFFFF:0xFFFF, and so
-  does pyrung's, whichever NaN it holds.  The word is compared after an XOR with 0x0080, each bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these
-  registers; a client (ClickNick, the sim) shows what these bits decode to.
+  does pyrung's, whichever NaN it holds.  The word is compared after an XOR with 0x0080, each
+  bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these registers.  A
+  client (ClickNick, the sim) shows what these bits decode to.
 - ``underflow``: 1.0E-20 * 1.0E-20 and 1.0E-30 * 1.0E-30 compared with 0.  A CLICK
   keeps the first as a float32 denormal (Result1 = 0, Result4 = 1) and stores the second as
   0 (Result2 = 1), with no SC43 (Result3 = 0).
