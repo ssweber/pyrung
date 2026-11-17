@@ -464,7 +464,7 @@ def _proved_on(plc: PLC, tag: Any, value: Any = True) -> str | None:
 
 
 class TestForcesAndPatchesOfTheSession:
-    """how() searches a fork, which drops both forces and patches. The proof is about the session."""
+    """how() searches a fork, which drops forces and patches. The proof is about the session."""
 
     def test_the_watchdog_proves_with_nothing_forced(self) -> None:
         program, hit, _watch = _watchdog_chain()

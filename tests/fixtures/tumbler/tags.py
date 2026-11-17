@@ -8,7 +8,7 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = block
 
 
 def _rests_at_0(values: range) -> dict[int, str]:
-    """Return hand-written index choices.  A regen drops them, and test_pointer_ranges.py says so."""
+    """Return hand-written index choices.  A regen drops them and test_pointer_ranges.py says so."""
     return {0: "Rest", **{value: str(value) for value in values}}
 
 
