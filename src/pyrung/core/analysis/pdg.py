@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Collection
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
 from enum import Enum
@@ -24,7 +23,6 @@ from pyrung.core.memory_block import (
     IndirectBlockRange,
     IndirectExprRef,
     IndirectRef,
-    InputBlock,
     block_positions,
 )
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag, tag_written_from_outside
@@ -200,13 +198,6 @@ class ProgramGraph:
     _slot_index: dict[tuple[Block, int], dict[str, frozenset[int]]] = field(
         default_factory=dict, repr=False, compare=False
     )
-    # In an ``unbounded_index_reads`` graph, the elements each over-cap write
-    # through an unbounded index reaches, by ``id`` of its destination ref
-    # (refs overload ``==``).  Empty otherwise.
-    indirect_reach: dict[int, tuple[str, ...]] = field(default_factory=dict)
-    # Likewise the elements each read through an unbounded index reaches
-    # (``unbounded_read_names``).
-    indirect_read_reach: dict[int, tuple[str, ...]] = field(default_factory=dict)
     # Every indexed access with a single affine pointer, and the blocks indexed
     # by any other expression (``DS[Ptr * 2]``), whose elements no pointer
     # range bounds.
@@ -215,15 +206,11 @@ class ProgramGraph:
     # Every tag an index reads: pointers, the tags of index expressions, and
     # ``IndirectBlockRange`` bounds.
     index_tags: frozenset[str] = frozenset()
-    # Fault flags whose implicit writes (``RungNode.implicit_writes``) count as
-    # writes here: the ones a rung reads, plus any the caller observes
-    # (``build_program_graph(observed_system=...)``).  A fault write nothing
+    # The fault flags some rung reads.  Their implicit writes
+    # (``RungNode.implicit_writes``) count as writes here.  A fault write nothing
     # reads is dead, so it stays out of ``writers_of`` and the cones.
     fault_writes: frozenset[str] = frozenset()
     unread_fault_writes: frozenset[str] = frozenset()
-    _observed_variants: (
-        dict[tuple[frozenset[str], tuple[tuple[str, int], ...], bool], ProgramGraph] | None
-    ) = field(default=None, init=False, repr=False)
     _main_node_index: dict[int, int] | None = field(default=None, init=False, repr=False)
     _call_site_cache: dict[str, frozenset[int]] | None = field(default=None, init=False, repr=False)
     _call_sites_cache: tuple[CallSite, ...] | None = field(default=None, init=False, repr=False)
@@ -977,151 +964,6 @@ def _indirect_expr_base_tag(expr: Any) -> Tag | None:
 _RANGE_COLLAPSE_THRESHOLD = 3
 
 
-class _UnboundedReads:
-    """What an index with no declared bounds reads, in an ``unbounded_index_reads`` graph.
-
-    The elements of its block that can change (some instruction writes them,
-    they belong to an ``InputBlock``, or they are ``external``), narrowed to
-    the addresses the pointer's writers can produce when the value-set
-    fixpoint bounds them (``DS[HistorianId * 10 + 2991]`` with ``HistorianId``
-    clamped to 0..4).  Every other element holds its power-on value, so which
-    one the index picks is decided by the pointer alone.
-
-    A write through an unbounded index into a block past
-    ``_INDIRECT_BLOCK_CAP`` has no element list of its own (``indirect_writes``
-    keeps it for the recorded walk); here it writes the elements its value set
-    reaches (``reached``, by id of the destination ref), so they join
-    ``writers_of`` and the reads above.  A write whose addresses are unbounded
-    too writes none of them: its pointer has no domain, and the verifier
-    reports it Intractable.  An indexed window (``block.select(Ptr, Ptr + 1)``)
-    past the cap writes from its lowest start to its highest end, or, unbounded,
-    the whole block as in any graph.
-    """
-
-    def __init__(self, program: Program, graph: ProgramGraph) -> None:
-        from pyrung.core.validation._common import walk_instructions
-
-        from .value_sets import _ValueSets
-
-        # An unwritten tag is an input to the verifier (any value may reach
-        # it) unless it is readonly, a constant at its default.
-        unwritten = frozenset(
-            name
-            for name, tag in graph.tags.items()
-            if name not in graph.writers_of and not tag.readonly
-        )
-        instructions = list(walk_instructions(program))
-        self._values = _ValueSets(
-            instructions,
-            graph.tags,
-            unwritten,
-            None,
-            follow_indirect_reads=True,
-            declared_inputs=True,
-            written_first=frozenset(
-                name for name in graph.writers_of if graph.unconditional_write_before_read(name)
-            ),
-        )
-        self._graph = graph
-        self._written: dict[str, list[Tag]] = defaultdict(list)
-        self._written_in: dict[int, list[Tag]] = {}
-        # Elements an over-cap write through an unbounded index reaches, and
-        # what each read through one reaches, by id of the ref.
-        self.reached: dict[int, list[Tag]] = {}
-        self.read_reach: dict[int, tuple[str, ...]] = {}
-        for instr in instructions:
-            for dest in instruction_write_targets(instr):
-                if isinstance(dest, ImmediateRef):
-                    dest = dest.value
-                if not isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
-                    continue
-                block = dest.block
-                if block.end - block.start + 1 <= _INDIRECT_BLOCK_CAP:
-                    continue  # writes the whole block
-                if isinstance(dest, IndirectBlockRange):
-                    addresses = self._values.window(dest)
-                elif isinstance(dest, IndirectRef):
-                    bounded = _indirect_ref_tags(block, dest.pointer)
-                    addresses = None if bounded is not None else self._values.addresses(dest)
-                else:
-                    bounded = _indirect_expr_tags(block, dest.expr)
-                    addresses = None if bounded is not None else self._values.addresses(dest)
-                if addresses is None:
-                    continue
-                tags: list[Tag] = [
-                    block._get_tag(addr)
-                    for addr in sorted(addresses)
-                    if block.start <= addr <= block.end
-                ]
-                self.reached[id(dest)] = tags
-                self._written[block.name].extend(tags)
-
-    def tags(self, ref: IndirectRef | IndirectExprRef) -> list[Tag]:
-        block = ref.block
-        graph = self._graph
-        written = self._written_in.get(id(block))
-        if written is None:
-            written = self._written_in[id(block)] = [
-                graph.tags[name]
-                for name in sorted(graph.writers_of)
-                if name in graph.tags and graph.tag_positions(name, (block,))
-            ]
-        changing = {tag.name: tag for tag in written}
-        changing.update({tag.name: tag for tag in self._written.get(block.name, ())})
-        for tag in _input_slots(block):
-            changing.setdefault(tag.name, tag)
-        addresses = self._values.addresses(ref)
-        tags = list(changing.values())
-        if addresses is not None and not graph._is_unscannable(block):
-            tags = [
-                tag
-                for tag in tags
-                if any(
-                    addr in addresses for _owner, addr in graph.tag_positions(tag.name, (block,))
-                )
-            ]
-        self.read_reach[id(ref)] = tuple(tag.name for tag in tags)
-        return tags
-
-
-_UNBOUNDED_READS: ContextVar[_UnboundedReads | None] = ContextVar("_UNBOUNDED_READS", default=None)
-
-
-def _unbounded_read_tags(ref: IndirectRef | IndirectExprRef) -> list[Tag] | None:
-    """What *ref* reads in an ``unbounded_index_reads`` build; ``None`` outside one."""
-    reads = _UNBOUNDED_READS.get()
-    return None if reads is None else reads.tags(ref)
-
-
-def _unbounded_write_reach() -> dict[int, tuple[str, ...]]:
-    """``ProgramGraph.indirect_reach`` for the graph being built."""
-    reads = _UNBOUNDED_READS.get()
-    if reads is None:
-        return {}
-    return {key: tuple(tag.name for tag in tags) for key, tags in reads.reached.items()}
-
-
-def _unbounded_read_reach() -> dict[int, tuple[str, ...]]:
-    """``ProgramGraph.indirect_read_reach`` for the graph being built."""
-    reads = _UNBOUNDED_READS.get()
-    return {} if reads is None else dict(reads.read_reach)
-
-
-def _unbounded_write_tags(ref: IndirectRef | IndirectExprRef | IndirectBlockRange) -> list[Tag]:
-    """What an over-cap *ref* writes in an ``unbounded_index_reads`` build."""
-    reads = _UNBOUNDED_READS.get()
-    return [] if reads is None else reads.reached.get(id(ref), [])
-
-
-def _input_slots(block: Block) -> list[Tag]:
-    """The elements of *block* that change with nothing in the program writing them."""
-    if isinstance(block, InputBlock) or block._pyrung_field_external:
-        return _full_block_tags(block)
-    addrs = {addr for addr, entry in block._slot_config.items() if entry.external is True}
-    addrs.update(addr for addr, tag in block._mapped_tags.items() if tag.external)
-    return [block._get_tag(addr) for addr in sorted(addrs) if block.start <= addr <= block.end]
-
-
 def _record_range(
     ranges: dict[str, list[str]],
     block_name: str,
@@ -1190,8 +1032,6 @@ def _extract_tag_names(
         if isinstance(current, IndirectRef):
             walk(current.pointer)
             tags = _indirect_ref_tags(current.block, current.pointer)
-            if tags is None:
-                tags = _unbounded_read_tags(current)
             if tags is not None:
                 for tag in tags:
                     _register_tag(tag, tag_refs, found)
@@ -1205,8 +1045,6 @@ def _extract_tag_names(
             if tags is None and _indirect_affine(current.expr) is None:
                 # No pointer range bounds a non-affine index: it may read any element.
                 tags = _full_block_tags(current.block)
-            if not tags:
-                tags = _unbounded_read_tags(current) or tags
             if tags is not None:
                 for tag in tags:
                     _register_tag(tag, tag_refs, found)
@@ -1281,9 +1119,7 @@ def _extract_write_targets(
             return
 
         if isinstance(current, BlockRange | IndirectBlockRange):
-            tags = (
-                isinstance(current, IndirectBlockRange) and _unbounded_write_tags(current)
-            ) or _block_tags(current)
+            tags = _block_tags(current)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if (
@@ -1301,7 +1137,7 @@ def _extract_write_targets(
             reads.update(_extract_tag_names(current.pointer, tag_refs, ranges=ranges))
             tags = _indirect_ref_tags(current.block, current.pointer)
             if tags is None:
-                tags = _full_block_tags(current.block) or _unbounded_write_tags(current)
+                tags = _full_block_tags(current.block)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
@@ -1312,7 +1148,7 @@ def _extract_write_targets(
             reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
             tags = _indirect_expr_tags(current.block, current.expr)
             if tags is None:
-                tags = _full_block_tags(current.block) or _unbounded_write_tags(current)
+                tags = _full_block_tags(current.block)
             for tag in tags:
                 _register_tag(tag, tag_refs, writes)
             if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
@@ -2018,75 +1854,22 @@ def collect_program_tags(program: Program) -> tuple[Tag, ...]:
     return tuple(tag_refs[name] for name in sorted(tag_refs))
 
 
-def build_program_graph(
-    program: Program,
-    *,
-    observed_system: Collection[str] = (),
-    observed_tags: Collection[Tag] = (),
-    unbounded_index_reads: bool = False,
-) -> ProgramGraph:
-    """Build the static PDG summary for a Program.
+def build_program_graph(program: Program) -> ProgramGraph:
+    """Build the static PDG summary for a Program, cached on the program.
 
     An instruction's implicit fault writes (``_fault_writes``) count as writes
-    for the fault flags some rung reads.  *observed_system* names system tags
-    read from outside the program (a verifier property or projection): they
-    join ``tags`` and, for fault flags, their implicit writes count too, in a
-    graph variant cached beside the program's own.  *observed_tags* are other
-    tags read from outside: the ones no rung reads or writes join ``tags`` the
-    same way, with no readers or writers.
-
-    An index with no bounds (``DS[Ptr]``, ``Ptr`` without min/max/choices)
-    registers no reads by default.  *unbounded_index_reads* makes it read the
-    elements of its block that can change, as the verifier needs (see
-    ``_UnboundedReads``).
+    for the fault flags some rung reads.  A read through an unbounded index
+    (``DS[Ptr]`` where ``Ptr`` has neither ``choices=`` nor both ``min=`` and
+    ``max=``) adds no element of ``DS`` to the reads.
     """
-    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-
     cached_graph = getattr(program, "_cached_graph", None)
     if cached_graph is None:
-        cached_graph = _build_program_graph(program, frozenset(), ())
+        cached_graph = _build_program_graph(program)
         program._cached_graph = cached_graph
-    extra = frozenset(
-        name
-        for name in observed_system
-        if name in cached_graph.unread_fault_writes
-        or (name in SYSTEM_TAGS_BY_NAME and name not in cached_graph.tags)
-    )
-    outside: dict[str, Tag] = {}
-    for tag in observed_tags:
-        if tag.name not in cached_graph.tags and tag.name not in SYSTEM_TAGS_BY_NAME:
-            outside.setdefault(tag.name, tag)
-    if not extra and not outside and not unbounded_index_reads:
-        return cached_graph
-    variants = cached_graph._observed_variants
-    if variants is None:
-        variants = cached_graph._observed_variants = {}
-    # The variant holds its tags, so their ids stay unique while it is cached.
-    key = (
-        extra,
-        tuple(sorted((name, id(tag)) for name, tag in outside.items())),
-        unbounded_index_reads,
-    )
-    graph = variants.get(key)
-    if graph is None:
-        reads = _UnboundedReads(program, cached_graph) if unbounded_index_reads else None
-        token = _UNBOUNDED_READS.set(reads)
-        try:
-            graph = variants[key] = _build_program_graph(
-                program, extra, tuple(outside[name] for name in sorted(outside))
-            )
-        finally:
-            _UNBOUNDED_READS.reset(token)
-    return graph
+    return cached_graph
 
 
-def _build_program_graph(
-    program: Program,
-    observed_system: frozenset[str],
-    observed_tags: tuple[Tag, ...],
-) -> ProgramGraph:
-    from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
-
+def _build_program_graph(program: Program) -> ProgramGraph:
     tag_refs: dict[str, Tag] = {}
     rung_nodes: list[RungNode] = []
     node_index_by_rung: dict[int, int] = {}
@@ -2158,14 +1941,7 @@ def _build_program_graph(
         for tag_name in node.writes:
             writers_of_mut[tag_name].add(node_index)
         implicit.update(node.implicit_writes)
-    fault_writes = frozenset(
-        name for name in implicit if name in all_readers_of_mut or name in observed_system
-    )
-    for name in observed_system:
-        if name in SYSTEM_TAGS_BY_NAME:
-            tag_refs.setdefault(name, SYSTEM_TAGS_BY_NAME[name])
-    for tag in observed_tags:
-        tag_refs.setdefault(tag.name, tag)
+    fault_writes = frozenset(name for name in implicit if name in all_readers_of_mut)
     if fault_writes:
         for node_index, node in enumerate(rung_nodes):
             for tag_name in node.implicit_writes & fault_writes:
@@ -2187,8 +1963,6 @@ def _build_program_graph(
         block_ranges=range_acc,
         pointer_tags=pointer_tags,
         indirect_writes=indirect_writes,
-        indirect_reach=_unbounded_write_reach(),
-        indirect_read_reach=_unbounded_read_reach(),
         pointer_uses=pointer_uses,
         opaque_index_blocks=opaque_index_blocks,
         index_tags=index_tags,
@@ -2198,9 +1972,6 @@ def _build_program_graph(
     if unlisted_writes:
         graph.unlisted_writes = _UnlistedReach(program, graph).narrow(unlisted_writes)
     graph.tag_roles = classify_tags(graph)
-    for tag in observed_tags:
-        # Read from outside and written by no rung: an input.
-        graph.tag_roles.setdefault(tag.name, TagRole.INPUT)
     return graph
 
 
@@ -2249,21 +2020,6 @@ def _visit_indirect_refs(
     if hasattr(obj, "__dict__"):
         for v in vars(obj).values():
             _visit_indirect_refs(v, visit, seen, visit_range)
-
-
-def unbounded_read_names(obj: Any, graph: ProgramGraph) -> frozenset[str]:
-    """Tags the unbounded indexes in *obj* read, per *graph*'s ``indirect_read_reach``.
-
-    ``_extract_tag_names`` outside a graph build resolves an index with no
-    declared bounds to nothing; this is what the ``unbounded_index_reads``
-    graph found it reads.  Empty for any other graph.
-    """
-    reach = graph.indirect_read_reach
-    if not reach:
-        return frozenset()
-    out: set[str] = set()
-    _visit_indirect_refs(obj, lambda ref: out.update(reach.get(id(ref), ())), set())
-    return frozenset(out)
 
 
 def _collect_pointer_uses(
@@ -2568,7 +2324,7 @@ def _listed_by_declared_bounds(dest: Any) -> bool:
     """Whether the facts' writer lists name what *dest* writes in a block past the cap.
 
     They follow a plain pointer's ``choices=``, or a ``min=``/``max=`` span of 1000
-    addresses or fewer (``prove.classify._expand_bounded_indirect_tag_names``), and
+    addresses or fewer (``prove.classify._expand_indirect_tag_names``), and
     nothing else past the cap.
     """
     if not isinstance(dest, IndirectRef):

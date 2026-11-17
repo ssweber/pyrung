@@ -1340,7 +1340,7 @@ def test_hidden_memory_info_tracks_shift_and_drums() -> None:
     assert {"TEDrumOutput", "TEDrumStep", "TEDrumAcc", "TEDrumDone"} <= set(hidden_writes)
 
 
-def _division_fault_reader_case(*, read_fault: bool) -> Program:
+def _division_fault_reader_case() -> Program:
     from pyrung.core import system
 
     divisor = Int("FaultDivisor")
@@ -1349,14 +1349,13 @@ def _division_fault_reader_case(*, read_fault: bool) -> Program:
     with Program(strict=False) as logic:
         with Rung():
             math(100 / divisor, quotient)
-        if read_fault:
-            with Rung(system.fault.division_error):
-                out(hit)
+        with Rung(system.fault.division_error):
+            out(hit)
     return logic
 
 
 def test_read_fault_flag_counts_its_implicit_writers() -> None:
-    graph = build_program_graph(_division_fault_reader_case(read_fault=True))
+    graph = build_program_graph(_division_fault_reader_case())
 
     assert graph.writers_of["fault.division_error"] == frozenset({0})
     assert "fault.division_error" in graph.fault_writes
@@ -1366,16 +1365,3 @@ def test_read_fault_flag_counts_its_implicit_writers() -> None:
     assert any(version.defined_at == 0 and 1 in version.read_by for version in chain)
     # The flag nobody reads stays out.
     assert "fault.out_of_range" not in graph.writers_of
-
-
-def test_observed_fault_flag_counts_its_implicit_writers() -> None:
-    logic = _division_fault_reader_case(read_fault=False)
-    base = build_program_graph(logic)
-    assert "fault.division_error" not in base.writers_of
-
-    observed = build_program_graph(logic, observed_system=("fault.division_error",))
-    assert observed is not base
-    assert observed.writers_of["fault.division_error"] == frozenset({0})
-    assert "FaultDivisor" in observed.upstream_slice("fault.division_error")
-    assert build_program_graph(logic, observed_system=("fault.division_error",)) is observed
-    assert build_program_graph(logic) is base

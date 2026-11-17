@@ -431,7 +431,11 @@ def test_literal_domain_counts_a_write_past_the_block_cap():
     """``copy(Val, DS[WPtr])`` can land on DS7, so DS7's writes are not all literals."""
     from pyrung.core import Block, TagType
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.prove.classify import _collect_literal_write_domains
+    from pyrung.core.analysis.prove.classify import (
+        _collect_all_exprs,
+        _collect_structural_domains,
+        collect_produced_value_domains,
+    )
 
     go, put = Bool("Go", external=True), Bool("Put", external=True)
     sel = Int("Sel", external=True, choices={0: "a", 1: "b"})
@@ -447,7 +451,8 @@ def test_literal_domain_counts_a_write_past_the_block_cap():
         with Rung(put):
             copy(val, ds[wptr])
 
-    graph = build_program_graph(logic, unbounded_index_reads=True)
-    domains = _collect_literal_write_domains(logic, graph.tags, graph.indirect_reach)
+    graph = build_program_graph(logic)
+    domains = _collect_structural_domains(logic, graph, _collect_all_exprs(logic, graph))
 
     assert "DS7" not in domains
+    assert "DS7" not in collect_produced_value_domains(logic, graph)

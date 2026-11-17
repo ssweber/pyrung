@@ -425,27 +425,6 @@ def test_a_huge_block_with_a_formatter_counts_every_tag_as_reached() -> None:
     assert not exact.unlisted_writers_of("Source")
 
 
-def _unbounded(prog: Program) -> Any:
-    return build_program_graph(prog, unbounded_index_reads=True)
-
-
-def test_an_unbounded_read_sees_a_plain_tag_named_like_a_slot() -> None:
-    for pointer_bounded in (False, True):
-        big = Block("Big", TagType.INT, 1, 2000)
-        plain = Int("Big5")
-        ptr = Int("Ptr") if pointer_bounded else Int("Ptr", external=True)
-        with Program(strict=False) as prog:
-            if pointer_bounded:
-                with Rung():
-                    copy(5, ptr)
-            with Rung(WRITE):
-                copy(42, plain)
-            with Rung():
-                copy(big[ptr], Int("Dest"))
-        graph = _unbounded(prog)
-        assert ("Big5",) in graph.indirect_read_reach.values()
-
-
 def test_a_rename_after_the_first_lookup_gives_the_new_answer() -> None:
     big = Block("Big", TagType.INT, 1, 5000)
     big.slot(9, name="First")
