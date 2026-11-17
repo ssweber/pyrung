@@ -208,7 +208,7 @@ plan = plc.how(Burner)
 print(plan)
 # Reached Burner=True in 3 scans (~30ms).
 # Route: ProdMode
-#   Other routes: avoid=ProdMode
+#   For another route, pass avoid=ProdMode to how().
 #
 # Steps:
 #

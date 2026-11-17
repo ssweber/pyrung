@@ -530,13 +530,16 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
         if None in candidates:
             whole = candidates[None].program_hash
             raise BuildMismatchError(
-                f"{endpoint} runs program layout {found}; {asked} {are} in the whole suite "
-                f"(layout {whole}). Load the whole suite (make conformance-export)."
+                f"{endpoint} runs a program with layout hash {found}, but {asked} {are} in "
+                f"the whole suite (layout hash {whole}). Load the whole suite "
+                "(make conformance-export)."
             )
-        layouts = " or ".join(f"part {p} (layout {c.program_hash})" for p, c in candidates.items())
+        layouts = " or ".join(
+            f"part {p} (layout hash {c.program_hash})" for p, c in candidates.items()
+        )
         where = " or ".join(f"part {p}" for p in candidates)
         raise BuildMismatchError(
-            f"{endpoint} runs program layout {found}; {asked} {are} in {layouts}. "
+            f"{endpoint} runs a program with layout hash {found}, but {asked} {are} in {layouts}. "
             f"Load {where} (make conformance-export PART={'|'.join(map(str, candidates))}). "
             f"{_PICK_HINT}"
         )
@@ -547,7 +550,8 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
             return candidate
         known.append(f"{part or 'whole'} {candidate.program_hash}")
     raise BuildMismatchError(
-        f"{endpoint} runs program layout {found}; the suite is layout {', '.join(known)}. "
+        f"{endpoint} runs a program with layout hash {found}, but the suite has layout hash "
+        f"{', '.join(known)}. "
         f"Export the part again (make conformance-export "
         f"PART={'|'.join([*PARTS, *APART_PARTS])}) and load it. {_PICK_HINT}"
     )

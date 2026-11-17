@@ -84,6 +84,7 @@
 
 ### Fixes
 
+- The messages from `how()`, the debug console and `pyrung live` now say what went wrong and what to do about it.
 - The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
 - A `replay` that stops on a failed line now reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
