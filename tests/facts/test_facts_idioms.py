@@ -29,6 +29,9 @@ SCANS = 600
 
 Driver = Callable[[PLC, Step, RandomInputs], None]
 
+#: The tally of a domain swap that crossed a comparison.
+_CROSSED = "domain swap crossed a comparison, not judged"
+
 #: Facts the runs refute, by idiom: ``(fact, tag)`` -> the first scan that refutes it.
 KNOWN: dict[str, dict[tuple[str, str], str]] = {
     "funcdep_follows_its_source": {
@@ -138,6 +141,11 @@ def test_facts_hold(name: str) -> None:
     known = KNOWN.get(name, {})
     new = [str(v) for v in report.violations if (v.fact, v.key) not in known]
     assert not new, "\n".join(new)
+    # A swap that crosses a comparison judges nothing.  A domain that grew too coarse would
+    # excuse more and more swaps that way.
+    judged = report.tally.judged
+    swapped = sum(count for kind, count in judged.items() if kind.endswith(", swapped"))
+    assert judged.get(_CROSSED, 0) * 10 <= swapped
     # The runs move every stepping tag, so they reach the values its writes produce.
     assert not report.unmoved
     assert sorted(report.unjudged) == sorted(UNJUDGED.get(name, {}))
