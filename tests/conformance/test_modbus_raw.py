@@ -1133,6 +1133,7 @@ _LOCAL_HEADER = """\
 def test_raw_requests(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
+    conformance_cases: str | None,
     conformance_sim: type,
 ) -> None:
     # Import it here because suite imports this module for its group.
@@ -1140,6 +1141,8 @@ def test_raw_requests(
 
     if conformance_groups is not None and GROUP not in conformance_groups:
         pytest.skip(f"GROUP= leaves out {GROUP}")
+    if conformance_cases is not None:
+        pytest.skip(f"CASES= leaves out {GROUP}, which no pick can hold")
     build = suite.build(GROUP)
     g = build.group(GROUP)
     ((index, _),) = g.cases

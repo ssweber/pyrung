@@ -15,6 +15,7 @@ import hashlib
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -204,6 +205,8 @@ def build_program(
     *,
     part: str | None = None,
     scan_limit_ms: int | None = None,
+    main: bool = False,
+    only: Mapping[str, AbstractSet[str]] | None = None,
 ) -> ConformanceProgram:
     """Build the canonical program for *groups* on *manifest*'s fixed DS blocks.
 
@@ -212,27 +215,53 @@ def build_program(
     the program in messages. On a real PLC, a run whose longest scan is past
     *scan_limit_ms* is void (``ScanTimeError``).
 
+    With *main* every group's case rungs run in the main program, as an ``in_main``
+    group's do.  *only* then maps a group name to the ids of the cases to run (a group it
+    leaves out runs every case).  Each case keeps its manifest slot and the hash of its own
+    rows in the whole group, so a pass confirms what a part run would.  The layout hash
+    names every case, so a program of other cases is a mismatch.  A group's header holds a
+    hash of its cases' hashes, which tracks just the rows the program holds.
+
     Raises:
         ManifestError: A wire case or group has no manifest entry. The message
             says what to add.
-        ValueError: No case can run over Modbus, group names repeat, two cases
-            share memory, or a nickname would be longer than CLICK allows.
+        ValueError: One of these:
+
+            - no case can run over Modbus
+            - group names repeat
+            - two cases share memory
+            - a nickname would be longer than CLICK allows
+            - *main* is given a group called more than once a scan
+            - *only* is given without *main*
     """
     from pyrung.click import ClickBlocks, TagMap
     from pyrung.click.ladder import pyrung_to_ladder
 
     group_list = [groups] if isinstance(groups, Group) else list(groups)
+    picks = dict(only or {})
+    if picks and not main:
+        raise ValueError("Pass main=True with only=. It picks cases for a program run in main.")
+    # Groups whose rungs a part runs in a subroutine and this build runs in main.
+    moved: set[str] = set()
+    if main:
+        moved = {g.name for g in group_list if not g.in_main}
+        group_list = [_in_main(g) for g in group_list]
     names = tuple(g.name for g in group_list)
     if len(set(names)) != len(names):
         raise ValueError(f"Group names repeat: {names}")
     if manifest is None:
         manifest = Manifest.packed(group_list)
 
-    skipped = tuple((g.name, c) for g in group_list for c in g.cases if c.in_process_only)
-    wire_groups = [g for g in group_list if any(c.in_process_only is None for c in g.cases)]
+    def runs(g: Group, c: Case) -> bool:
+        return c.in_process_only is None and (g.name not in picks or c.id in picks[g.name])
+
+    skipped = tuple(
+        (g.name, c) for g in group_list if g.name not in picks for c in g.cases if c.in_process_only
+    )
+    wire_groups = [g for g in group_list if any(runs(g, c) for c in g.cases)]
     if not wire_groups:
         raise ValueError("No cases can run over Modbus.")
-    check_disjoint([(g.name, c) for g in wire_groups for c in g.cases if c.in_process_only is None])
+    check_disjoint([(g.name, c) for g in wire_groups for c in g.cases if runs(g, c)])
 
     ds = ClickBlocks().ds
     program_hash_tag = Int("Conf_ProgramHash")
@@ -242,11 +271,19 @@ def build_program(
         longest_scan_tag.map_to(ds[LONGEST_SCAN_REGISTER]),
     ]
     staged: list[
-        tuple[Group, GroupLayout, tuple[tuple[int, Case], ...], _NamedArrayRuntime, Tag]
+        tuple[
+            Group,
+            GroupLayout,
+            tuple[tuple[int, Case], ...],
+            tuple[tuple[int, Case], ...],
+            _NamedArrayRuntime,
+            Tag,
+        ]
     ] = []
     for g in wire_groups:
         layout = manifest.layout_for(g)
-        cases = tuple((layout.cases[c.id], c) for c in g.cases if c.in_process_only is None)
+        every = tuple((layout.cases[c.id], c) for c in g.cases if c.in_process_only is None)
+        cases = tuple((i, c) for i, c in every if runs(g, c))
         slot = make_slot(layout.slots, name=g.title)
         hash_tag = Int(f"{g.title}_Hash")
         _check_nicknames(g, hash_tag, slot, layout.slots)
@@ -260,40 +297,54 @@ def build_program(
         for i in range(1, layout.slots + 1):
             spare = slot_register(layout.base, i) + len(SLOT_FIELDS)
             mappings.append(Int(f"DS{spare}").map_to(ds[spare]))
-        staged.append((g, layout, cases, slot, hash_tag))
+        staged.append((g, layout, every, cases, slot, hash_tag))
     tag_map = TagMap(mappings)
 
     built: list[GroupBuild] = []
-    for g, layout, cases, slot, hash_tag in staged:
+    for g, layout, every, cases, slot, hash_tag in staged:
+        # Hash the whole group, picked or not.  A case's hash is its rows as its part exports
+        # them, and there the last case of an in-main group holds main's closing rung.
         with Program(strict=False) as body:
             if g.in_main:
-                _case_rungs(g.name, cases, slot)
+                _case_rungs(g.name, every, slot)
             else:
                 with subroutine(g.subroutine):
-                    _case_rungs(g.name, cases, slot)
+                    _case_rungs(g.name, every, slot)
         # Validated export: a case that the CLICK exporter rejects fails here, before
         # any wire traffic. Mark such a case ``in_process_only``.
         bundle = _draw_tees(
-            pyrung_to_ladder(body, tag_map, allow=PASTE_PROBE_FINDINGS), [_Drawn(g, cases)]
+            pyrung_to_ladder(body, tag_map, allow=PASTE_PROBE_FINDINGS), [_Drawn(g, every)]
         )
         if g.in_main:
             # The rungs are main's, and the helper subroutines they call.
             rows = (("main", bundle.main_rows), *bundle.subroutine_rows)
             group_hash = _fold(repr(rows))
-            case_hashes = _case_hashes(g.name, rows, _helper_owners(cases, slot))
+            case_hashes = _case_hashes(
+                g.name, rows, _helper_owners(every, slot), moved=g.name in moved
+            )
+            if main:
+                # The rows of the cases this program holds, whichever they are.
+                case_hashes = {c.id: case_hashes[c.id] for _, c in cases}
+                group_hash = _fold(repr(sorted(case_hashes.items())))
         else:
             group_hash = _fold(repr(bundle.subroutine_rows))
             case_hashes = _case_hashes(g.name, bundle.subroutine_rows)
         built.append(GroupBuild(g, layout, cases, slot, hash_tag, group_hash, case_hashes))
 
-    program_hash = _fold(
-        repr(
-            (
-                LAYOUT_VERSION,
-                [_layout_entry(g) for g in built],
+    if main:
+        # The cases, not only the groups: a program of other cases of the same groups is
+        # another layout.
+        entries = [(*_layout_entry(g), tuple(c.id for _, c in g.cases)) for g in built]
+        program_hash = _fold(repr((LAYOUT_VERSION, "main", entries)))
+    else:
+        program_hash = _fold(
+            repr(
+                (
+                    LAYOUT_VERSION,
+                    [_layout_entry(g) for g in built],
+                )
             )
         )
-    )
 
     with Program(strict=False) as program:
         with Rung():
@@ -332,6 +383,16 @@ def build_program(
         part=part,
         scan_limit_ms=scan_limit_ms,
     )
+
+
+def _in_main(group: Group) -> Group:
+    """*group* with its case rungs in main, or ``ValueError`` when it cannot run there."""
+    if group.calls != 1:
+        raise ValueError(
+            f"Group {group.name!r} is called {group.calls} times a scan, and its cases count "
+            "calls, so they cannot run in main."
+        )
+    return Group(group.name, group.cases, in_main=True)
 
 
 @dataclass(frozen=True)
@@ -404,6 +465,8 @@ def _case_hashes(
     group: str,
     subroutine_rows: Sequence[tuple[str, Sequence[Sequence[str]]]],
     owners: Mapping[str, str] | None = None,
+    *,
+    moved: bool = False,
 ) -> dict[str, str]:
     """Map each case id to the SHA-256 (12 hex digits) of its rows.
 
@@ -411,6 +474,11 @@ def _case_hashes(
 
     *owners* (an in-main group) names the case that defines each helper subroutine. The
     rows of that subroutine belong to that case, not to the case before them.
+
+    *moved* says that a part runs these main rows in a subroutine. Main's closing
+    ``end()`` rung is then left out, as the subroutine's ``return()`` rung is, so each
+    case has the hash that it has in its part. An ``in_main`` group keeps the ``end()``
+    rung, because the hashes of its part include it.
 
     The last case's span stops before the closing tail of the subroutine. The exporter
     ends every subroutine with one unconditional ``return()`` rung
@@ -421,7 +489,7 @@ def _case_hashes(
     spans: dict[str, list[Sequence[str]]] = {}
     for name, rows in subroutine_rows:
         body = list(rows)
-        if body and _is_return_tail(body[-1]):
+        if body and (_is_return_tail(body[-1]) or (moved and _is_tail(body[-1], "end()"))):
             body.pop()
         current: list[Sequence[str]] | None = None
         if owners is not None and name in owners:
@@ -440,10 +508,15 @@ def _case_hashes(
 
 def _is_return_tail(row: Sequence[str]) -> bool:
     """Return True for the unconditional ``return()`` rung that ends an exported subroutine."""
+    return _is_tail(row, "return()")
+
+
+def _is_tail(row: Sequence[str], instruction: str) -> bool:
+    """Return True for an unconditional rung that holds only *instruction*."""
     return (
         len(row) > 2
         and row[0].startswith("R")
-        and row[-1] == "return()"
+        and row[-1] == instruction
         and all(cell == "-" for cell in row[1:-1])
     )
 

@@ -4,20 +4,30 @@ Passive recording layer: every console command evaluated while a
 recording is active gets appended to the buffer with its scan_id
 and timestamp.  ``record ACTION`` / ``record stop`` bracket a
 named capture.  On stop the buffer yields a plain-text transcript
-that ``replay`` runs.
+that ``replay`` runs, and ``record save`` writes it to a file.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from pyrung.core.time_mode import TimeMode
 from pyrung.dap.console import ConsoleResult, register
 from pyrung.dap.expressions import Compare
 from pyrung.dap.grammar import Slot
 from pyrung.dap.handlers.stack_variables_evaluate import condition_predicate, parse_known_condition
+from pyrung.dap.recording import (
+    RECORDING_SUFFIX,
+    FinishedRecording,
+    RecordingFormatError,
+    RecordingHeader,
+    parse_header,
+    program_sha256,
+    pyrung_version,
+)
 
 #: A CLICK keeps a Real to about 7 significant digits.  So ``assert`` treats two Reals
 #: as equal when they are within one part in a million (or 1e-6 near zero).
@@ -65,16 +75,30 @@ class CaptureBuffer:
     entries: list[CaptureEntry] = field(default_factory=list)
     start_scan_id: int | None = None
     start_timestamp: float = 0.0
+    header: RecordingHeader = field(default_factory=RecordingHeader)
+    program_path: Path | None = None
+    #: The last stopped recording, which ``record save`` writes.
+    finished: FinishedRecording | None = None
 
     @property
     def recording(self) -> bool:
         return self.action is not None
 
-    def start(self, action: str, scan_id: int | None, timestamp: float) -> None:
+    def start(
+        self,
+        action: str,
+        scan_id: int | None,
+        timestamp: float,
+        *,
+        header: RecordingHeader | None = None,
+        program_path: Path | None = None,
+    ) -> None:
         self.action = action
         self.entries = []
         self.start_scan_id = scan_id
         self.start_timestamp = timestamp
+        self.header = header if header is not None else RecordingHeader()
+        self.program_path = program_path
 
     def append(
         self,
@@ -87,23 +111,35 @@ class CaptureBuffer:
             self.entries.append(CaptureEntry(command, scan_id, timestamp, provenance=provenance))
 
     def stop(self) -> tuple[str, list[CaptureEntry]]:
-        """Stop recording and return ``(transcript, raw_entries)``."""
-        lines = [f"# action: {self.action}"]
+        """Stop recording and return ``(transcript, raw_entries)``.
+
+        The transcript names the program by its file name, as a recording saved beside it does.
+        """
+        lines: list[str] = []
         for entry in self.entries:
             if entry.provenance == "console":
                 lines.append(entry.command)
             else:
                 lines.append(f"{entry.provenance}: {entry.command}")
+        self.finished = FinishedRecording(
+            header=replace(self.header, action=self.action),
+            program_path=self.program_path,
+            commands=lines,
+        )
         raw = list(self.entries)
         self.action = None
         self.entries = []
-        return "\n".join(lines) + "\n", raw
+        folder = self.program_path.parent if self.program_path is not None else None
+        return self.finished.text(folder), raw
 
     def reset(self) -> None:
         self.action = None
         self.entries = []
         self.start_scan_id = None
         self.start_timestamp = 0.0
+        self.header = RecordingHeader()
+        self.program_path = None
+        self.finished = None
 
 
 # ---------------------------------------------------------------------------
@@ -124,11 +160,14 @@ def capture_hook(adapter: Any, verb: str, expression: str, *, provenance: str = 
     capture.append(expression.strip(), scan_id, timestamp, provenance=provenance)
 
 
-@register("record", usage="record <action> | record stop", group="capture")
+_RECORD_USAGE = "record <action> | record stop | record save [file]"
+
+
+@register("record", usage=_RECORD_USAGE, group="capture")
 def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
-        raise adapter.DAPAdapterError("Usage: record <action> | record stop")
+        raise adapter.DAPAdapterError(f"Usage: {_RECORD_USAGE}")
 
     sub = parts[1]
     capture: CaptureBuffer = adapter._capture
@@ -137,7 +176,14 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
         if not capture.recording:
             raise adapter.DAPAdapterError("No active recording")
         transcript, _entries = capture.stop()
-        return ConsoleResult(f"Recording stopped.\n{transcript}")
+        return ConsoleResult(
+            f"Recording stopped. 'record save' writes it to {_default_file_name(capture.finished)}.\n"
+            f"{transcript}"
+        )
+
+    if sub.lower() == "save":
+        rest = expression.strip().split(None, 2)
+        return _save_recording(adapter, capture, rest[2] if len(rest) > 2 else None)
 
     if capture.recording:
         raise adapter.DAPAdapterError(
@@ -154,12 +200,67 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
         forced = ", ".join(sorted(runner.forces.keys()))
         warnings.append(f"Warning: active forces at record start: {forced}")
 
-    capture.start(action_name, scan_id, timestamp)
+    program_text = getattr(adapter, "_program_path", None)
+    program_path = Path(program_text) if program_text else None
+    realtime = runner.time_mode == TimeMode.REALTIME
+    header = RecordingHeader(
+        program_sha256=program_sha256(program_path) if program_path is not None else None,
+        pyrung_version=pyrung_version(),
+        scan_time=None if realtime else runner.dt,
+        realtime=realtime,
+        harness=adapter._harness is not None,
+    )
+    capture.start(action_name, scan_id, timestamp, header=header, program_path=program_path)
 
     text = f"Recording '{action_name}' from scan {scan_id}"
     if warnings:
         text += "\n" + "\n".join(warnings)
     return ConsoleResult(text)
+
+
+def _default_file_name(finished: FinishedRecording | None) -> str:
+    action = finished.header.action if finished is not None else None
+    return f"{action}{RECORDING_SUFFIX}"
+
+
+def _save_recording(adapter: Any, capture: CaptureBuffer, file_text: str | None) -> ConsoleResult:
+    stopped = ""
+    if capture.recording:
+        capture.stop()
+        stopped = "Recording stopped. "
+    finished = capture.finished
+    if finished is None:
+        raise adapter.DAPAdapterError("Nothing to save. Start a recording with 'record <action>'.")
+    target = resolve_session_path(adapter, file_text or _default_file_name(finished))
+    if not target.suffix:
+        target = target.with_name(target.name + RECORDING_SUFFIX)
+    if not target.parent.is_dir():
+        raise adapter.DAPAdapterError(f"Folder not found: {target.parent}")
+    replaced = " (replaced the file that was there)" if target.exists() else ""
+    try:
+        target.write_text(finished.text(target.parent), encoding="utf-8")
+    except OSError as exc:
+        raise adapter.DAPAdapterError(f"Cannot write {target}: {exc}") from exc
+    return ConsoleResult(
+        f"{stopped}Saved '{finished.header.action}' ({len(finished.commands)} command(s))"
+        f" to {target}{replaced}"
+    )
+
+
+def resolve_session_path(adapter: Any, text: str) -> Path:
+    """Read a file path typed at the console, taking a relative one from the program's folder.
+
+    The debugger's own working folder depends on how it was started, so the program's
+    folder is the one place ``record save`` and ``replay`` both know.
+    """
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1]
+    path = Path(text).expanduser()
+    program_text = getattr(adapter, "_program_path", None)
+    if not path.is_absolute() and program_text:
+        path = Path(program_text).parent / path
+    return path.resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -203,23 +304,45 @@ def _cmd_assert(adapter: Any, expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
-@register("replay", usage="replay <filepath> [--harness current|recorded|off]", group="capture")
+_REPLAY_USAGE = "replay <filepath> [--harness current|recorded|off]"
+
+
+@register("replay", usage=_REPLAY_USAGE, group="capture")
 def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(None, 1)
     if len(parts) < 2:
-        raise adapter.DAPAdapterError("Usage: replay <filepath> [--harness current|recorded|off]")
+        raise adapter.DAPAdapterError(f"Usage: {_REPLAY_USAGE}")
 
     filepath_text, harness_mode = _parse_replay_args(parts[1].strip())
-    filepath = Path(filepath_text).expanduser().resolve()
+    filepath = resolve_session_path(adapter, filepath_text)
     if not filepath.is_file():
         raise adapter.DAPAdapterError(f"File not found: {filepath}")
+    return replay_file(adapter, filepath, harness_mode)
+
+
+def replay_file(adapter: Any, filepath: Path, harness_mode: str | None) -> ConsoleResult:
+    """Run every command of a transcript, and stop at the first that fails.
+
+    The console's ``replay`` and pytest both replay through here. A failure raises
+    ``DAPAdapterError`` with ``replay_line`` and ``replay_reason`` set. With no
+    *harness_mode*, a recording made with the harness off replays with no harness.
+    """
+    from pyrung.dap.console import dispatch, queue_stop_for_error, scan_mark, scans_ran_since
 
     lines = filepath.read_text(encoding="utf-8").splitlines()
+    try:
+        header = parse_header(lines)
+    except RecordingFormatError as exc:
+        error = adapter.DAPAdapterError(f"Replay error at line {exc.line}: {exc}")
+        error.replay_line = exc.line
+        error.replay_reason = str(exc)
+        raise error from exc
+    if harness_mode is None:
+        harness_mode = "off" if header.harness is False else "current"
     commands = _replay_commands(lines, harness_mode=harness_mode)
 
+    scan_time_note = _apply_scan_time(adapter, header)
     _configure_replay_harness(adapter, harness_mode)
-
-    from pyrung.dap.console import dispatch, queue_stop_for_error, scan_mark, scans_ran_since
 
     executed = 0
     hit_bp = False
@@ -234,6 +357,8 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
                 f"Executed {executed}/{len(commands)} command(s)"
             )
             error.stop_queued = getattr(exc, "stop_queued", False)
+            error.replay_line = lineno
+            error.replay_reason = str(exc)
             if last_stop is not None or scans_ran_since(adapter, start):
                 # Queue a "step" stop and never a reload's "entry" stop, because an "entry"
                 # stop would clear the editor's decorations.
@@ -257,18 +382,49 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = (
         [("stopped", last_stop)] if last_stop is not None else []
     )
-    return ConsoleResult(
+    text = (
         f"Replayed {executed}/{len(commands)} command(s), now at scan {scan_id}"
-        f" [harness={harness_mode}]{suffix}",
-        events=events,
-        hit_breakpoint=hit_bp,
+        f" [harness={harness_mode}]{suffix}"
     )
+    if scan_time_note is not None:
+        text = f"{scan_time_note}\n{text}"
+    return ConsoleResult(text, events=events, hit_breakpoint=hit_bp)
 
 
-def _parse_replay_args(rest: str) -> tuple[str, str]:
+def _apply_scan_time(adapter: Any, header: RecordingHeader) -> str | None:
+    """Give the PLC the recording's scan time, because its timers count by it.
+
+    Only a PLC that has run no scan takes it. A change drops the scan history, and a
+    replay in the middle of a session must leave that history alone.
+    """
+    runner = adapter._require_runner_locked()
+    if header.realtime:
+        mode, dt = TimeMode.REALTIME, runner.dt
+    elif header.scan_time is not None:
+        mode, dt = TimeMode.FIXED_STEP, header.scan_time
+    else:
+        return None
+    if runner.time_mode == mode and (mode == TimeMode.REALTIME or runner.dt == dt):
+        return None
+    recorded = _scan_time_text(mode, dt)
+    if runner.current_state.scan_id != 0 or adapter._scan_gen is not None:
+        current = _scan_time_text(runner.time_mode, runner.dt)
+        return (
+            f"Note: the recording ran at a scan time of {recorded}. "
+            f"This PLC has already scanned, so the replay keeps its {current}."
+        )
+    runner._set_time_mode(mode, dt=dt)
+    return f"Scan time set to {recorded}, as recorded"
+
+
+def _scan_time_text(mode: TimeMode, dt: float) -> str:
+    return "realtime" if mode == TimeMode.REALTIME else f"{dt!r} s"
+
+
+def _parse_replay_args(rest: str) -> tuple[str, str | None]:
     modes = {"current", "recorded", "off"}
     tokens = rest.split()
-    mode = "current"
+    mode: str | None = None
     if len(tokens) >= 2 and tokens[-2] == "--harness" and tokens[-1] in modes:
         mode = tokens[-1]
         return " ".join(tokens[:-2]), mode

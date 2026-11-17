@@ -3,9 +3,9 @@
 Detects latch/reset imbalances where a Bool tag can be latched but never
 reset (stuck HIGH) or reset but never latched (stuck LOW).
 
-Covers ``LatchInstruction``, ``ResetInstruction``, and ``CopyInstruction``
-when the destination is a Bool tag (source-aware: literal True/1 → latch,
-literal False/0 → reset, tag/expression → both).  All three are
+Covers ``LatchInstruction``, ``ResetInstruction``, ``CopyInstruction`` and
+``FillInstruction`` when the destination is a Bool tag (source-aware: literal
+True/1 → latch, literal False/0 → reset, tag/expression → both).  All four are
 INERT_WHEN_DISABLED=True — they only fire when their rung condition is
 true — so *rung conditions matter* for reachability analysis (unlike the
 INERT_WHEN_DISABLED=False conflicting-output validator).
@@ -49,12 +49,16 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.tag import tag_written_from_outside
+from pyrung.core.analysis.write_sites import (
+    instruction_write_targets,
+    instruction_written_tags,
+    static_write_target_tags,
+)
+from pyrung.core.tag import ImmediateRef, tag_written_from_outside
 from pyrung.core.validation._common import (
     DomainMap,
     WriteSite,
     _build_caller_map,
-    _build_tag_map,
     _caller_conditions,
     _CallerMap,
     _chains_cover_domain,
@@ -62,18 +66,19 @@ from pyrung.core.validation._common import (
     _domain_map,
     _flatten_and_conditions,
     _inexact_entry_subroutines,
-    _resolve_tag_names,
-    _resolve_tag_objects,
     _scope_reach_chains,
     _tag_name,
+    iter_rungs,
     site_frame,
+    walk_instructions,
 )
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
 from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.condition import Condition
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
@@ -116,13 +121,13 @@ def _classify_copy_source_for_bool(source: Any) -> list[str]:
 def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
     """Return (tag_name, instruction_type) pairs for latch/reset-like writes.
 
-    Covers LatchInstruction, ResetInstruction, CopyInstruction when the
-    destination is a Bool tag (source-aware classification), and OutInstruction
+    Covers LatchInstruction, ResetInstruction, CopyInstruction and FillInstruction
+    when the destination is a Bool tag (source-aware classification), and OutInstruction
     (both sides — whether the reset side is *guaranteed* is a property of the coil,
     which :func:`_self_clearing_coils` decides later).
     """
     from pyrung.core.instruction.coils import LatchInstruction, OutInstruction, ResetInstruction
-    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
     from pyrung.core.instruction.out_variants import (
         DebounceInstruction,
         FlasherInstruction,
@@ -133,12 +138,12 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
 
     if isinstance(instr, (LatchInstruction, ResetInstruction)):
         itype = type(instr).__name__
-        return [(name, itype) for name in _resolve_tag_names(instr.target)]
+        return [(tag.name, itype) for tag in static_write_target_tags(instr.target)]
 
     if isinstance(instr, OutInstruction):
         return [
             (tag.name, itype)
-            for tag in _resolve_tag_objects(instr.target)
+            for tag in static_write_target_tags(instr.target)
             if tag.type == TagType.BOOL
             for itype in (_OUT_LATCH, _OUT_RESET)
         ]
@@ -147,21 +152,112 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
         instr, (ToggleInstruction, DebounceInstruction, FlasherInstruction, TimedInstruction)
     ):
         return [
-            (name, itype)
-            for name in _resolve_tag_names(instr.target)
+            (tag.name, itype)
+            for tag in static_write_target_tags(instr.target)
             for itype in (_VARIANT_LATCH, _VARIANT_RESET)
         ]
 
-    if isinstance(instr, CopyInstruction):
+    if isinstance(instr, (CopyInstruction, FillInstruction)):
+        source = instr.source if isinstance(instr, CopyInstruction) else instr.value
         results: list[tuple[str, str]] = []
-        for tag in _resolve_tag_objects(instr.dest):
+        for tag in static_write_target_tags(instr.dest):
             if tag.type != TagType.BOOL:
                 continue
-            for itype in _classify_copy_source_for_bool(instr.source):
+            for itype in _classify_copy_source_for_bool(source):
                 results.append((tag.name, itype))
         return results
 
     return []
+
+
+def _store_sides(instr: Any) -> list[str]:
+    """The sides a store by *instr* supplies to a Bool tag.
+
+    A ``copy()`` or ``fill()`` of a literal supplies only its own side.  Any other
+    store may write either value.
+    """
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+
+    if isinstance(instr, CopyInstruction):
+        return _classify_copy_source_for_bool(instr.source)
+    if isinstance(instr, FillInstruction):
+        return _classify_copy_source_for_bool(instr.value)
+    return [_COPY_LATCH, _COPY_RESET]
+
+
+def _instructions_with_loop_bodies(instructions: Iterable[Any]) -> Iterator[Any]:
+    from pyrung.core.instruction.control import ForLoopInstruction
+
+    for instr in instructions:
+        yield instr
+        if isinstance(instr, ForLoopInstruction):
+            yield from _instructions_with_loop_bodies(instr.instructions)
+
+
+def _pointer_sides(
+    program: Program, graph: ProgramGraph, names: set[str]
+) -> tuple[set[str], set[str]]:
+    """The tags in *names* that a write through a pointer may set, and those it may clear.
+
+    The pointer's declared bounds name the elements of a small block.  In a block too
+    large to list, the graph names the elements the pointer can reach.  It names them
+    by rung, so this counts each pointer write in a rung for every element that the
+    rung's pointer writes can reach.
+    """
+    from pyrung.core.analysis.pdg import _extract_write_targets
+    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
+
+    node_index = {id(node): index for index, node in enumerate(graph.rung_nodes)}
+    set_by: set[str] = set()
+    cleared_by: set[str] = set()
+    for loc, rung in iter_rungs(program):
+        node = graph.rung_node(
+            scope=loc.scope,
+            subroutine=loc.subroutine,
+            rung_index=loc.rung_index,
+            branch_path=loc.branch_path,
+        )
+        index = node_index.get(id(node)) if node is not None else None
+        for instr in _instructions_with_loop_bodies(rung._instructions):
+            pointers = [
+                leaf
+                for target in instruction_write_targets(instr)
+                if isinstance(
+                    leaf := target.value if isinstance(target, ImmediateRef) else target,
+                    (IndirectRef, IndirectExprRef, IndirectBlockRange),
+                )
+            ]
+            if not pointers:
+                continue
+            reached: set[str] = set()
+            for leaf in pointers:
+                reached |= _extract_write_targets(leaf, {})[0]
+            reached &= names
+            if index is not None:
+                reached |= {name for name in names if index in graph.unlisted_writers_of(name)}
+            sides = _store_sides(instr)
+            if _COPY_LATCH in sides:
+                set_by |= reached
+            if _COPY_RESET in sides:
+                cleared_by |= reached
+    return set_by, cleared_by
+
+
+def _written_unclassified(program: Program, names: set[str]) -> set[str]:
+    """The tags in *names* that an instruction such as ``math()`` or ``unpack_to_bits()``
+    writes by name.
+
+    Such a write may store either value, so the check skips the tag.
+    """
+    found: set[str] = set()
+    for instr in walk_instructions(program):
+        classified = {name for name, _itype in _latch_reset_write_targets(instr)}
+        found.update(
+            tag.name
+            for tag in instruction_written_tags(instr)
+            if tag.name in names and tag.name not in classified
+        )
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +417,7 @@ def _undeclared_domain_tags(
     sites: Iterable[WriteSite],
     reach_chains: dict[str, tuple[tuple[Condition, ...], ...]],
     return_rungs: dict[str, tuple[int, ...]],
-    tag_map: dict[str, Tag],
+    tags: dict[str, Tag],
     domains: DomainMap,
     loop_conditions: dict[int, tuple[Condition, ...] | None] | None = None,
 ) -> list[str]:
@@ -347,7 +443,7 @@ def _undeclared_domain_tags(
     for chain in chains:
         for cond in _flatten_and_conditions(chain):
             name = _tag_name(getattr(cond, "tag", None))
-            tag = tag_map.get(name) if name is not None else None
+            tag = tags.get(name) if name is not None else None
             if tag is None or tag.type == TagType.BOOL or name in domains:
                 continue
             value = getattr(cond, "value", None)
@@ -584,13 +680,23 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     """
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.data_transfer import FillInstruction
 
     sites = _collect_write_sites(program, target_extractor=_latch_reset_write_targets)
-    # A write through a pointer that lists no targets may supply the missing side.
-    unlisted = build_program_graph(program).unlisted_written()
+    graph = build_program_graph(program)
+    site_names = {site.target_name for site in sites}
+    written_unclassified = _written_unclassified(program, site_names)
+    set_by_pointer, cleared_by_pointer = _pointer_sides(program, graph, site_names)
+    # readonly and external come from the tag each instruction writes. A rung can test a
+    # tag no latch or reset writes, so the declared domains come from every tag the
+    # program uses.
+    written_tags = {
+        tag.name: tag
+        for instr in {id(site.instruction): site.instruction for site in sites}.values()
+        for tag in instruction_written_tags(instr)
+    }
     caller_map = _build_caller_map(program)
-    tag_map = _build_tag_map(program)
-    domains = _domain_map(tag_map)
+    domains = _domain_map(graph.tags)
     reach_chains = _scope_reach_chains(program)
     # A call can enter a subroutine in a way that its conditions do not decide (a
     # forloop body-rung contact that an iteration can change, a oneshot loop, a
@@ -641,14 +747,14 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
 
     for tag_name in all_tags:
         # Skip readonly tags — they're frozen constants, not stuck-bit candidates
-        tag = tag_map.get(tag_name)
-        if tag is not None and tag.readonly:
+        tag = written_tags[tag_name]
+        if tag.readonly:
             continue
         # Skip a tag the outside writes (see tag_written_from_outside).  The field, the
         # HMI or the runtime handles the missing side.
-        if tag is not None and tag_written_from_outside(tag):
+        if tag_written_from_outside(tag):
             continue
-        if tag_name in unlisted:
+        if tag_name in written_unclassified:
             continue
 
         latches = latch_sites.get(tag_name, [])
@@ -658,7 +764,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
         reachable_latches = [s for s in latches if not _site_provably_unreachable(s, caller_map)]
         reachable_resets = [s for s in resets if not _site_provably_unreachable(s, caller_map)]
 
-        if reachable_latches and not reachable_resets:
+        if reachable_latches and not reachable_resets and tag_name not in cleared_by_pointer:
             held = [
                 s
                 for s in reachable_latches
@@ -672,7 +778,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                     f"run; reset({tag_name}) when it stops running?"
                 )
                 undeclared = _undeclared_domain_tags(
-                    held, reach_chains, return_rungs, tag_map, domains, loop_conditions
+                    held, reach_chains, return_rungs, graph.tags, domains, loop_conditions
                 )
                 if undeclared:
                     names = ", ".join(undeclared)
@@ -703,7 +809,13 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                     ),
                 )
             )
-        elif reachable_resets and not reachable_latches:
+        elif (
+            reachable_resets
+            and not reachable_latches
+            and tag_name not in set_by_pointer
+            # A fill() that clears a range of spares nothing sets is the usual clear-all.
+            and not all(isinstance(s.instruction, FillInstruction) for s in reachable_resets)
+        ):
             findings.append(
                 StuckBitFinding(
                     code=COIL_STUCK_LOW,

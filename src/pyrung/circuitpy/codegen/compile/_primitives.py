@@ -49,6 +49,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
+from pyrung.core.relations.records import Read, TagValue
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from ._emit import emit_if_enabled, emit_oneshot
@@ -63,7 +64,21 @@ def _snapshot_tag_symbol(
 ) -> str:
     if isinstance(tag, ImmediateRef):
         tag = tag.tag
+    text = _tag_symbol_text(
+        tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots
+    )
+    if ctx.recorder is not None:
+        text = ctx.recorder.mark(Read(TagValue(tag.name), tag.default), text)
+    return text
 
+
+def _tag_symbol_text(
+    tag: Tag,
+    ctx: CodegenContext,
+    *,
+    scalar_snapshots: dict[str, str] | None,
+    block_snapshots: dict[int, str] | None,
+) -> str:
     block_info = ctx.tag_block_addresses.get(tag.name)
     if block_info is not None and block_snapshots is not None:
         block_id, addr = block_info

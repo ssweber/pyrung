@@ -275,7 +275,8 @@ class TestHarnessPatches:
         resp, _ = _repl(adapter, out, "record stop", seq=20)
         transcript = resp["body"]["result"]
         for line in transcript.splitlines():
-            if "harness:" in line:
+            # The header's "# harness: on" line is a comment, not a command.
+            if "harness:" in line and not line.startswith("#"):
                 assert line.startswith("harness:")
 
     def test_uninstall_on_disconnect(self, tmp_path: Path):

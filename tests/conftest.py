@@ -206,6 +206,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         ),
     )
     group.addoption(
+        "--conformance-cases",
+        action="store",
+        default=None,
+        metavar="PICK",
+        help=(
+            "Run a project of picked cases, every rung in main: group/id or group, "
+            "comma-separated, @file for a file of them (env: PYRUNG_CONFORMANCE_CASES). "
+            "Export it with make conformance-export CASES=..."
+        ),
+    )
+    group.addoption(
         "--conformance-target",
         action="store",
         default=None,

@@ -176,6 +176,10 @@ class CodegenContext:
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
+    # A ``relations.records.Recorder`` makes the emit helpers record what each piece of
+    # code reads, writes and compares.  Only the relations reader sets it, on a render
+    # that nothing runs.
+    recorder: Any = None
 
     @classmethod
     def for_kernel(

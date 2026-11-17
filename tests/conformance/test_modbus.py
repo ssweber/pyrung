@@ -34,6 +34,7 @@ from pyrung.conformance import (
     case,
     format_report,
     load_confirmations,
+    record_confirmations,
     run_modbus,
     wait_for_scan_counter_wrap,
 )
@@ -52,13 +53,20 @@ pytestmark = pytest.mark.conformance
 def test_all_groups_over_modbus(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
+    conformance_cases: str | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    build = suite.build_for(conformance_endpoint, conformance_groups)
-    # Without GROUP=, run every loaded group.
-    loaded = [g for g in (*suite.ALL_GROUPS, *suite.APART_GROUPS) if g.name in build.names]
-    groups = conformance_groups or [g.name for g in loaded]
+    if conformance_cases is not None:
+        # A project of picked cases: its own build, which DS1 must match.
+        build = suite.build_main(suite.parse_picks(conformance_cases))
+        expected = sum(len(g.cases) for g in build.groups) + len(build.skipped)
+    else:
+        build = suite.build_for(conformance_endpoint, conformance_groups)
+        # Without GROUP=, count the cases of every loaded group.
+        loaded = [g for g in (*suite.ALL_GROUPS, *suite.APART_GROUPS) if g.name in build.names]
+        expected = sum(len(g.cases) for g in loaded)
+    groups = conformance_groups or list(build.names)
     # system/scan_counter_wraps_to_zero can tell only once SD9 has passed 32767.
     # pyrung's own targets read 0 either way, so only a CLICK has to wait.
     if conformance_endpoint is not None and test_system.group.name in groups:
@@ -78,7 +86,7 @@ def test_all_groups_over_modbus(
     for line in reading_lines(results):
         print(line)
     if conformance_groups is None:
-        assert len(results) == sum(len(g.cases) for g in loaded)
+        assert len(results) == expected
     assert_all_passed(results)
 
 
@@ -109,6 +117,7 @@ def _passes(results, label: str) -> None:
 def test_suite_repeats_without_restarting(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
+    conformance_cases: str | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
     """Run the suite twice on one PLC, then each group alone, A -> B -> ... -> B -> A.
@@ -116,7 +125,10 @@ def test_suite_repeats_without_restarting(
     Every case resets its own state while ``Cmd == 0``, so a run never depends
     on what ran before it on the same PLC.
     """
-    build = suite.build_for(conformance_endpoint, conformance_groups)
+    if conformance_cases is not None:
+        build = suite.build_main(suite.parse_picks(conformance_cases))
+    else:
+        build = suite.build_for(conformance_endpoint, conformance_groups)
     local = conformance_endpoint is None
     names = conformance_groups or [g.name for g in build.groups]
     with _one_plc(build, conformance_endpoint, conformance_sim) as endpoint:
@@ -131,6 +143,7 @@ def test_suite_repeats_without_restarting(
 def test_the_groups_apart_on_a_local_target(
     conformance_endpoint: Endpoint | None,
     conformance_groups: list[str] | None,
+    conformance_cases: str | None,
     conformance_sim: type[SimServer] | type[CircuitPySim],
 ) -> None:
     """Run each part apart on pyrung's own target, once, as a program of its own.
@@ -140,7 +153,7 @@ def test_the_groups_apart_on_a_local_target(
     timers, to be the scan's last. Without a fixed scan the counts are wall-clock time,
     and no case fails on them.
     """
-    if conformance_endpoint is not None or conformance_groups is not None:
+    if conformance_endpoint is not None or conformance_groups or conformance_cases:
         pytest.skip("runs when the whole suite runs on a local target")
     results = []
     for part in suite.APART_PARTS:
@@ -264,6 +277,26 @@ def test_mismatched_layout_bails_before_writing() -> None:
             loaded, sim.endpoint, groups=[g.name for g in suite.ALL_GROUPS], local=True
         )
     assert_all_passed(results)
+
+
+def test_picked_cases_run_in_main_and_confirm_their_parts_hashes(tmp_path) -> None:
+    picks = ["word_store/word_literals", "coils/out_follows_rung", "numeric/int_calc_wraps"]
+    picked = suite.build_main(picks)
+    with SimServer(picked) as sim:
+        assert sim.endpoint is not None
+        results = run_modbus(picked, sim.endpoint, local=True)
+        # GROUP= reads DS1 for a part, and says a pick needs CASES=.
+        with pytest.raises(BuildMismatchError, match="CASES="):
+            suite.build_for(sim.endpoint, ["word_store"])
+    assert_all_passed(results)
+    assert sorted(f"{r.group}/{r.case.id}" for r in results) == sorted(picks)
+    # The confirmation a CLICK pass would write is the one a pass in its part writes.
+    record_confirmations(tmp_path / "confirmed.toml", results, on="2026-11-17")
+    recorded = load_confirmations(tmp_path / "confirmed.toml")
+    parts = {"word_store": "copy", "coils": "coils", "numeric": "math"}
+    for r in results:
+        in_part = suite.build(parts[r.group]).group(r.group).case_hashes[r.case.id]
+        assert recorded[f"{r.group}/{r.case.id}"].hash == in_part
 
 
 def test_the_loaded_part_is_read_from_ds1() -> None:

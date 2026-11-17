@@ -66,6 +66,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.affine import extract_forward_affine
+from pyrung.core.analysis.write_sites import instruction_written_tags
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -86,7 +87,6 @@ from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import (
     RungLoc,
     _collect_write_sites,
-    _resolve_tag_names,
     iter_rungs,
     site_frame,
     walk_instructions,
@@ -104,6 +104,7 @@ from pyrung.core.validation.render import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.condition import Condition
     from pyrung.core.instruction.advance import AdvanceProfile
     from pyrung.core.program import Program
@@ -449,23 +450,11 @@ def _acc_index(program: Program) -> dict[str, AdvanceProfile]:
     return index
 
 
-def _write_target_names(instr: Any) -> set[str]:
-    """Tag names an instruction writes, unwrapping list-valued fields (drums, ``_outs``)."""
-    names: set[str] = set()
-    for field in getattr(type(instr), "_writes", ()):
-        target = getattr(instr, field, None)
-        targets = target if isinstance(target, (list, tuple)) else (target,)
-        for one in targets:
-            names.update(_resolve_tag_names(one))
-    return names
-
-
-def _written_names(program: Program) -> set[str]:
-    """Every tag name written by any instruction (its declared ``_writes`` fields)."""
-    names: set[str] = set()
-    for instr in walk_instructions(program):
-        names |= _write_target_names(instr)
-    return names
+def _written_names(graph: ProgramGraph) -> set[str]:
+    """Every tag name a rung may write, a write through a pointer included."""
+    return {name for name, nodes in graph.writers_of.items() if nodes} | set(
+        graph.unlisted_written()
+    )
 
 
 def _calc_derived_names(program: Program) -> set[str]:
@@ -481,7 +470,7 @@ def _calc_derived_names(program: Program) -> set[str]:
         affine = extract_forward_affine(instr)
         non_identity = affine is not None and (affine[1] != 1 or affine[2] != 0)
         if isinstance(instr, CalcInstruction) or non_identity:
-            names |= _write_target_names(instr)
+            names.update(tag.name for tag in instruction_written_tags(instr))
     return names
 
 
@@ -1200,10 +1189,10 @@ def validate_cmp_conditions(
     from pyrung.core.validation.context import ValidationContext
 
     acc = _acc_index(program)
-    written = _written_names(program)
     calc = _calc_derived_names(program)
     context = _context or ValidationContext(program)
     graph = context.graph
+    written = _written_names(graph)
     stepping = _compute_stepping_tags(program, graph)
     produced_domains = context.produced_domains
     closed_domains = context.closed_domains

@@ -12,6 +12,8 @@ from pyrung.conformance import CircuitPySim, Endpoint, SimServer, parse_endpoint
 ENDPOINT_ENV = "PYRUNG_CONFORMANCE_PLC"
 #: Environment fallback for ``--conformance-group``.
 GROUP_ENV = "PYRUNG_CONFORMANCE_GROUP"
+#: Environment fallback for ``--conformance-cases``.
+CASES_ENV = "PYRUNG_CONFORMANCE_CASES"
 #: Environment fallback for ``--conformance-target``.
 TARGET_ENV = "PYRUNG_CONFORMANCE_TARGET"
 #: Local targets by ``--conformance-target`` name.
@@ -32,6 +34,24 @@ def conformance_groups(request: pytest.FixtureRequest) -> list[str] | None:
     if not raw:
         return None
     return [name.strip() for name in raw.split(",") if name.strip()]
+
+
+@pytest.fixture(scope="session")
+def conformance_cases(request: pytest.FixtureRequest) -> str | None:
+    """The pick of cases whose project runs every rung in main, or ``None`` for a part."""
+    raw = request.config.getoption("conformance_cases", default=None) or os.environ.get(CASES_ENV)
+    if raw and (
+        request.config.getoption("conformance_group", default=None) or os.environ.get(GROUP_ENV)
+    ):
+        raise pytest.UsageError("Give CASES= or GROUP=, not both. CASES= names every case to run.")
+    if raw:
+        from tests.conformance import suite
+
+        try:
+            suite.parse_picks(raw)
+        except ValueError as exc:
+            raise pytest.UsageError(str(exc)) from None
+    return raw or None
 
 
 @pytest.fixture(scope="session")

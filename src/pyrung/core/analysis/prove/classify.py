@@ -95,6 +95,7 @@ from .absorb import (
     _find_redundant_acc_absorptions,
     _find_threshold_absorptions,
     _has_forbidden_data_read,
+    _leg_reads,
     _merge_threshold_absorptions,
     _owner_reset_condition_refs,
     _threshold_atom_for_progress,
@@ -3031,7 +3032,7 @@ def _expand_consumed_accs_for_reset_timing(
             kind = done_acc_info.kinds.get(done_name)
             if kind is None:
                 continue
-            reset_refs.update(_owner_reset_condition_refs(program, acc_name, kind))
+            reset_refs.update(_owner_reset_condition_refs(program, acc_name))
         if not reset_refs:
             return
 
@@ -3119,23 +3120,7 @@ def _has_instruction_snapshot_reader(program: Program, tag_name: str) -> bool:
     prior's view of them exact.  Drum and shift legs are not absorbed and are
     ordered by the def-use chains alone.
     """
-    from pyrung.core.analysis.pdg import _extract_tag_names
-    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
-    from pyrung.core.instruction.timers import OnDelayInstruction
-    from pyrung.core.validation._common import walk_instructions
-
-    for instr in walk_instructions(program):
-        conditions: list[Any] = []
-        if isinstance(instr, OnDelayInstruction):
-            conditions.append(instr.reset_condition)
-        elif isinstance(instr, CountUpInstruction):
-            conditions.extend((instr.reset_condition, instr.down_condition))
-        elif isinstance(instr, CountDownInstruction):
-            conditions.append(instr.reset_condition)
-        for condition in conditions:
-            if condition is not None and tag_name in _extract_tag_names(condition, {}):
-                return True
-    return False
+    return tag_name in _leg_reads(program).snapshot
 
 
 def _has_same_rung_branch_reader(

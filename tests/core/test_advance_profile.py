@@ -400,3 +400,57 @@ def test_shift_establishes_one_more_prefix_bit_then_retraces() -> None:
     assert operation.until == Eq(bits[2].name, frozenset((True,)))
     assert [demand.value for demand in operation.holds] == [True, False]
     assert operation.pulse is not None
+
+
+def _off_delay_at_rest() -> tuple[Program, Timer, Bool]:
+    timer = Timer.clone("TOF")
+    run = Bool("run", external=True)
+    with Program() as program:
+        with Rung(run):
+            off_delay(timer, 50, "ms")
+    return program, timer, run
+
+
+def test_off_delay_never_enabled_is_enabled_before_it_times() -> None:
+    # An off delay times only once it has been enabled.  At rest from power-up
+    # (Done False, Acc 0) the first operation enables it until Done is on.
+    program, timer, _run = _off_delay_at_rest()
+    [instruction] = walk_instructions(program)
+    profile = instruction.advance_profile()
+    assert profile is not None
+
+    rest = {timer.Done.name: False, timer.Acc.name: 0}
+    step = profile.plan(Cmp(timer.Acc.name, ">=", 20), rest)
+    assert step is not None
+    assert step.until == Eq(timer.Done.name, frozenset((True,)))
+    assert [(d.condition, d.value) for d in step.holds] == [(instruction.enable_condition, True)]
+
+    # Done on or a nonzero Acc shows that the timer was enabled.  So the plan times it at once.
+    for enabled in (
+        {timer.Done.name: True, timer.Acc.name: 0},
+        {timer.Done.name: False, timer.Acc.name: 3},
+    ):
+        step = profile.plan(Cmp(timer.Acc.name, ">=", 20), enabled)
+        assert step is not None
+        assert step.until == Cmp(timer.Acc.name, ">=", 20)
+        assert [(d.condition, d.value) for d in step.holds] == [
+            (instruction.enable_condition, False)
+        ]
+
+
+def test_following_the_off_delay_plan_from_rest_reaches_its_target() -> None:
+    from pyrung.core import PLC
+
+    program, timer, run = _off_delay_at_rest()
+    profile = _only_profile(program)
+    assert profile is not None
+    target = Cmp(timer.Acc.name, ">=", 20)
+    plc = PLC(program, dt=0.001)
+    for _ in range(100):
+        step = profile.plan(target, plc.current_state.tags)
+        if step is None:
+            break
+        for demand in step.holds:
+            plc.patch({run.name: demand.value})
+        plc.step()
+    assert plc.current_state.tags[timer.Acc.name] >= 20

@@ -59,7 +59,6 @@ from pyrung.core.instruction.control import ForLoopInstruction
 from pyrung.core.tag import TagType
 from pyrung.core.validation._common import (
     _build_caller_map,
-    _build_tag_map,
     _inexact_entry_subroutines,
     _loop_count_conditions,
     _scope_reach_chains,
@@ -744,7 +743,7 @@ def test_stuck_bits_count_tag_domain_covers_the_call() -> None:
             with forloop(C):
                 call("work")
         _out_z_work()
-    assert "C" in _build_tag_map(logic)
+    assert "C" in build_program_graph(logic).tags
     assert not [f for f in validate_stuck_bits(logic).findings if f.code == COIL_STUCK_HIGH]
 
 

@@ -92,7 +92,7 @@ from pyrung.core.crossing import (
 from pyrung.core.expression import ExprCompare
 from pyrung.core.instruction.advance import ConditionDemand, constraint_holds
 from pyrung.core.instruction.conversions import copy_store_transform
-from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+from pyrung.core.relations import relations_for
 from pyrung.core.tag import metadata_edits
 
 if TYPE_CHECKING:
@@ -804,24 +804,33 @@ def _edges_as_levels(expr: Any) -> Any:
 
 
 def _counter_reset_off(owner: Any, step: Any, counts_edges: bool) -> tuple[ConditionDemand, ...]:
-    """Return the demand that a counter's level reset pin is off, which a count needs.
+    """Return the level inputs that must hold for a count on the pulsed input to land.
 
-    The reset wins over a count on the same scan and holds ``Acc`` at 0. So while a
-    counter advances, the reset is one more hold. That applies when the pulse demand is
-    a count input and not the reset pin itself. An edge reset (``rise(R)``) is off on
-    every scan except the one where it rises, so it adds no hold.
+    A counter's generated code counts only under the ``else`` of its reset. So while
+    the counter advances, the reset is one more hold. An edge reset (``rise(R)``) is
+    off on every scan except the one where it rises, so it adds no hold.
     """
 
     if not counts_edges or step.pulse is None:
         return ()
-    reset = getattr(owner.instruction, "reset_condition", None)
-    if (
-        reset is None
-        or step.pulse.condition is reset
-        or isinstance(reset, (RisingEdgeCondition, FallingEdgeCondition))
-    ):
-        return ()
-    return (ConditionDemand(reset, False),)
+    instruction = owner.instruction
+    relations = relations_for(instruction)
+    pulsed = next(
+        (
+            field
+            for field in type(instruction)._conditions
+            if getattr(instruction, field, None) is step.pulse.condition
+        ),
+        None,
+    )
+    holds = None if relations is None or pulsed is None else relations.count_holds(pulsed)
+    return tuple(
+        ConditionDemand(condition, value)
+        for field, value in holds or ()
+        if not isinstance(
+            condition := getattr(instruction, field), (RisingEdgeCondition, FallingEdgeCondition)
+        )
+    )
 
 
 def _counter_phase_support(env: _TraceEnv, nodes: list[TraceNode]) -> frozenset[str]:
@@ -929,9 +938,11 @@ def _down_edge_cancels(
     mirrors the up input (``down(~Y)``) takes back the count at each release.
     """
 
-    down = getattr(owner.instruction, "down_condition", None)
-    if not isinstance(owner.instruction, CountUpInstruction) or down is None:
+    relations = relations_for(owner.instruction)
+    opposing = None if relations is None else relations.opposing_count_field
+    if opposing is None:
         return False
+    down = getattr(owner.instruction, opposing)
     level = _edges_as_levels(_condition_to_expr(down))
     on = _eval_expr_from_state(level, _route_judgment._route_overlay(on_phase, env.snapshot))
     off = _eval_expr_from_state(level, _route_judgment._route_overlay(off_phase, env.snapshot))
@@ -1234,7 +1245,8 @@ def _advance_frontier(
         # reader-owned chain.
         return None
     stage_boundary = owner.profile.linear is None
-    counts_edges = isinstance(owner.instruction, (CountUpInstruction, CountDownInstruction))
+    relations = relations_for(owner.instruction)
+    counts_edges = relations is not None and relations.counts_on_rise
     atom = _trace_constraints._constraint_atom(step.until)
     boundary = TraceNode(
         tag=step.until.tag,
