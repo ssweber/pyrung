@@ -8,6 +8,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 import render_corpus  # noqa: E402
 
@@ -23,8 +25,9 @@ def test_two_renders_compare_equal_and_a_change_is_found(tmp_path: Path) -> None
     assert (first / render_corpus.SUMS).read_bytes() == (second / render_corpus.SUMS).read_bytes()
     rendered = sorted(path.name for path in (first / ONLY).iterdir())
     assert "code.py" in rendered
-    assert sum(name.startswith("kernel_") and name.endswith(".py") for name in rendered) == 8
-    assert sum(name.endswith(".meta") for name in rendered) == 8
+    assert sum(name.startswith("kernel_") and name.endswith(".py") for name in rendered) == 9
+    assert sum(name.endswith(".meta") for name in rendered) == 9
+    assert "def _kernel_step_pre(" in (first / ONLY / "kernel_b0_p0_f0_s1.py").read_text()
 
     changed = second / ONLY / "kernel_b1_p0_f0.py"
     changed.write_bytes(changed.read_bytes() + b"\n")
@@ -33,6 +36,13 @@ def test_two_renders_compare_equal_and_a_change_is_found(tmp_path: Path) -> None
         f"only in {first}: {ONLY}/code.py",
         f"differs: {ONLY}/kernel_b1_p0_f0.py",
     ]
+
+
+def test_a_render_stops_on_a_pyrung_from_another_tree(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(render_corpus, "ROOT", tmp_path)
+    with pytest.raises(SystemExit, match="Nothing rendered"):
+        render_corpus.render(tmp_path / "out", ONLY)
+    assert not (tmp_path / "out").exists()
 
 
 def test_every_label_has_a_file_name_of_its_own() -> None:

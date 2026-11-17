@@ -1,13 +1,26 @@
 """Render the codegen's output for a fixed corpus, so a refactor can show it changed no byte.
 
-    uv run python devtools/render_corpus.py render OUT [--only SUBSTRING]
+    uv run python devtools/render_corpus.py render OUT [--only SUBSTRING] [--base REF]
     uv run python devtools/render_corpus.py compare A B
+
+To check a branch against its base, render both and compare them:
+
+    uv run python devtools/render_corpus.py render build/rc-base --base origin/main
+    uv run python devtools/render_corpus.py render build/rc-head
+    uv run python devtools/render_corpus.py compare build/rc-base build/rc-head
+
+``--base REF`` exports REF's ``src`` and ``tests`` with ``git archive`` into
+``build/render-corpus-trees``.  It renders that tree with this tree's two corpus scripts,
+so the base needs no copy of them.  A render stops unless it imports pyrung from the
+``src`` beside its own ``devtools``.  So a base render can never render the head instead.
 
 ``render`` writes one file per program and mode under OUT, and ``OUT/SHA256SUMS``:
 
     kernel_b{0,1}_p{0,1}_f{0,1}.py   compile_kernel's source, for blockless, proof_metadata
                                      and force_rung_enable off (0) and on (1)
     kernel_b{0,1}_p{0,1}_f{0,1}.meta the kernel's other fields, such as timer_unit_ns
+    kernel_b0_p0_f0_s1.py, .meta     the same with ``split_after=1``, which also writes
+                                     ``pre_step_fn``, for the ``programs/`` entries only
     code.py, pyrung_rt.py            generate_circuitpy's output on a P1AM with one module
 
 A mode that refuses the program writes ``<mode>.err`` with the exception's type and
@@ -29,8 +42,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
 import time
 import traceback
 from collections.abc import Callable, Iterator
@@ -38,8 +55,10 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _path in (ROOT, ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+TREES = ROOT / "build" / "render-corpus-trees"
 
 SUMS = "SHA256SUMS"
 _UNSAFE = re.compile(r"[^A-Za-z0-9.+-]+")
@@ -146,7 +165,7 @@ def _code_py(built: Any) -> Any:
 
 
 def _meta(kernel: Any) -> str:
-    """The fields of *kernel* that the run reads beside its source, one line each.
+    """The fields of *kernel* that a kernel run reads besides its source, one line each.
 
     The sets and ``timer_unit_ns`` are sorted, since their order means nothing.
     ``referenced_tags`` and ``block_specs`` keep their order.
@@ -183,14 +202,37 @@ def _write(path: Path, text: str) -> None:
     path.write_bytes(text.encode("utf-8"))
 
 
+def _pyrung_here() -> Path:
+    """Where pyrung was imported from.  It must be this tree's ``src``, or the render stops."""
+    import pyrung
+
+    found = Path(pyrung.__file__).resolve().parent
+    if not found.is_relative_to((ROOT / "src").resolve()):
+        raise SystemExit(f"pyrung comes from {found}, not from {ROOT / 'src'}. Nothing rendered.")
+    return found
+
+
 def render(out: Path, only: str | None = None) -> dict[str, float]:
     """Render the corpus into *out* (which must not exist yet) and return the times."""
     from pyrung.circuitpy.codegen.render_kernel import compile_kernel
     from pyrung.conformance._build import ConformanceProgram
 
+    _pyrung_here()
     if out.exists():
         raise SystemExit(f"{out} exists. Render into a new directory.")
     times = {"kernel source": 0.0, "code.py": 0.0, "programs": 0}
+
+    def kernel(folder: Path, program: Any, mode: str, **options: Any) -> None:
+        timings: dict[str, float] = {}
+        try:
+            compiled = compile_kernel(program, timings=timings, **options)
+        except Exception as exc:  # noqa: BLE001
+            _write(folder / f"{mode}.err", _error_text(exc))
+            return
+        times["kernel source"] += timings["source"]
+        _write(folder / f"{mode}.py", compiled.source)
+        _write(folder / f"{mode}.meta", _meta(compiled))
+
     for rel, build in _corpus(only):
         folder = out / rel
         try:
@@ -204,21 +246,10 @@ def render(out: Path, only: str | None = None) -> dict[str, float]:
             for proof in (False, True):
                 for force in (False, True):
                     mode = f"kernel_b{int(blockless)}_p{int(proof)}_f{int(force)}"
-                    timings: dict[str, float] = {}
-                    try:
-                        kernel = compile_kernel(
-                            program,
-                            blockless=blockless,
-                            proof_metadata=proof,
-                            force_rung_enable=force,
-                            timings=timings,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        _write(folder / f"{mode}.err", _error_text(exc))
-                        continue
-                    times["kernel source"] += timings["source"]
-                    _write(folder / f"{mode}.py", kernel.source)
-                    _write(folder / f"{mode}.meta", _meta(kernel))
+                    options = {"blockless": blockless, "proof_metadata": proof}
+                    kernel(folder, program, mode, force_rung_enable=force, **options)
+        if rel.startswith("programs/"):
+            kernel(folder, program, "kernel_b0_p0_f0_s1", split_after=1)
         started = time.perf_counter()
         try:
             output = _code_py(built)
@@ -231,6 +262,34 @@ def render(out: Path, only: str | None = None) -> dict[str, float]:
             _write(folder / "pyrung_rt.py", output.runtime)
     _write(out / SUMS, _sums(out))
     return times
+
+
+def _export(ref: str) -> Path:
+    """REF's ``src`` and ``tests``, exported once per commit, plus this tree's corpus scripts."""
+    found = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        capture_output=True,
+        text=True,
+    )
+    if found.returncode:
+        raise SystemExit(f"{ref!r} is not a git ref: {found.stderr.strip()}")
+    sha = found.stdout.strip()
+    tree = TREES / sha
+    if not (tree / ".complete").exists():
+        archive = subprocess.run(
+            ["git", "-C", str(ROOT), "archive", "--format=tar", sha, "src", "tests"],
+            capture_output=True,
+            check=True,
+        )
+        shutil.rmtree(tree, ignore_errors=True)  # a half-extracted earlier try
+        tree.mkdir(parents=True)
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+            tar.extractall(tree, filter="data")
+        (tree / ".complete").write_text(sha)  # last, so a crash never looks done
+    (tree / "devtools").mkdir(exist_ok=True)
+    for name in ("render_corpus.py", "render_corpus_programs.py"):
+        shutil.copyfile(ROOT / "devtools" / name, tree / "devtools" / name)
+    return tree
 
 
 def _files(root: Path) -> dict[str, Path]:
@@ -268,15 +327,18 @@ def main(argv: list[str]) -> int:
     render_cmd = commands.add_parser("render", help="render the corpus into a new directory")
     render_cmd.add_argument("out", type=Path)
     render_cmd.add_argument("--only", help="render only the entries whose path holds this text")
+    render_cmd.add_argument("--base", help="render this git ref's tree instead of this one")
     compare_cmd = commands.add_parser("compare", help="compare two renders")
     compare_cmd.add_argument("a", type=Path)
     compare_cmd.add_argument("b", type=Path)
     args = parser.parse_args(argv)
 
+    if args.command == "render" and args.base:
+        script = _export(args.base) / "devtools" / "render_corpus.py"
+        command = [sys.executable, str(script), "render", str(args.out.resolve())]
+        return subprocess.run(command + (["--only", args.only] if args.only else [])).returncode
     if args.command == "render":
-        import pyrung
-
-        print(f"pyrung from {Path(pyrung.__file__).parent}")
+        print(f"pyrung from {_pyrung_here()}")
         started = time.perf_counter()
         times = render(args.out, args.only)
         files = len(_files(args.out))

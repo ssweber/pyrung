@@ -111,8 +111,8 @@ def _compile_out_instruction(
     indent: int,
 ) -> list[str]:
     sp = " " * indent
-    # Each range write takes the next local name, so the writes are built in output order.
-    # A literal True enable never runs the off side, so that side is not built.
+    # Each range write takes the next local name, so this builds the writes in output order.
+    # A literal True enable never runs the off side, so this does not build it.
     always = _bool_literal(enabled_expr) is True
     if instr.oneshot:
         key = f"_oneshot:{ctx.state_key_for(instr)}"

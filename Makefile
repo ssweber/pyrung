@@ -80,10 +80,14 @@ conformance-export:
 conformance-workspace:
 	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) --workspace $(or $(WORKSPACE),tests/conformance/workspace)
 
-# Render the codegen's output for a fixed corpus (devtools/render_corpus.py).  Render the base
-# and the branch into two folders, then compare them.  A pure refactor of the codegen compares equal.
+# Render the codegen's output for a fixed corpus (devtools/render_corpus.py), then compare two
+# renders.  A pure refactor of the codegen compares equal.  BASE=ref renders that commit's tree
+# with this branch's corpus scripts.
+#   make render-corpus OUT=build/rc-base BASE=origin/main
+#   make render-corpus OUT=build/rc-head
+#   make render-compare A=build/rc-base B=build/rc-head
 render-corpus:
-	uv run python devtools/render_corpus.py render $(or $(OUT),build/render-corpus) $(if $(ONLY),--only $(ONLY))
+	uv run python devtools/render_corpus.py render $(or $(OUT),build/render-corpus) $(if $(ONLY),--only $(ONLY)) $(if $(BASE),--base $(BASE))
 
 render-compare:
 	uv run python devtools/render_corpus.py compare $(A) $(B)
