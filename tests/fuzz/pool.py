@@ -35,6 +35,14 @@ class TagPool:
     def all_numeric(self) -> list[Tag]:
         return self.int_inputs + self.int_tags + self.dint_tags + self.real_tags + self.word_tags
 
+    def preset_tags(self) -> list[Tag]:
+        """Tags a timer preset may read: INT, DINT or WORD, never REAL."""
+        return self.int_inputs + self.int_tags + self.dint_tags + self.word_tags
+
+    def writable_preset_tags(self) -> list[Tag]:
+        """Writable tags a timer preset may read, never REAL."""
+        return self.int_tags + self.dint_tags + self.word_tags
+
     def all_char(self) -> list[Tag]:
         return self.char_tags
 

@@ -19,7 +19,7 @@ Each file contains a `test_reproducer()` function runnable by pytest.
 
 ## Running fuzz tests longer
 
-Two env vars control duration:
+`make test-fuzz` runs the long profile. The merge queue runs `make test-fuzz-gate`, which caps each test at 400 programs and 60 s per program. Two env vars control the long profile:
 
 - `FUZZ_MAX_EXAMPLES` is the number of random programs Hypothesis generates (default 200).
 - `FUZZ_SCANS` is the number of scans each program runs (default 50).

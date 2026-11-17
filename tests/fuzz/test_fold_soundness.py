@@ -19,13 +19,14 @@ Reproducer on failure: the drawn ``spec`` is the reproducer: it is printed via
 from __future__ import annotations
 
 import hypothesis.strategies as st
+import pytest
 from hypothesis import example, given, note, settings
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, math, on_delay, out
 from pyrung.core import rise, system
 from pyrung.core.runner import PLC
 
-from .conftest import MAX_EXAMPLES
+from .conftest import PROFILE
 
 _CLOCKS = ["clock_500ms", "clock_1s"]
 _FORMS = ["gt", "ge", "lt", "le", "eq"]
@@ -108,60 +109,57 @@ def _run(spec: dict, *, jit: bool) -> dict:
     return dict(plc.state.tags)
 
 
-def test_saturated_heartbeat_fold_is_bit_equal() -> None:
+@pytest.mark.fuzz
+@given(spec=_heartbeat_spec())
+@settings.get_profile(PROFILE)
+# The canonical case from the unit suite — always exercised.
+@example(
+    spec={
+        "src": "timer",
+        "preset": 20_000,
+        "threshold": 100,
+        "form": "gt",
+        "clock": "clock_1s",
+        "body": "calc",
+        "dt": 0.010,
+        "a": 3,
+        "b": 4,
+    }
+)
+# Boundary-straddle regression: Done (16 750 ms; first found as a per-scan
+# counter's 1676 counts) lands at t=16.75 s, exactly a clock_500ms rise
+# edge.  Accumulated scan time drifts to 16.74999999999982 (clock low)
+# while a big-step timestamp lands on 16.75 (clock high) — the
+# OTE coil disagreed (Beat True vs False) until clock phase was
+# grid-snapped (system_points.clock_phase).
+@example(
+    spec={
+        "src": "timer",
+        "preset": 16_750,
+        "threshold": 1,
+        "form": "gt",
+        "clock": "clock_500ms",
+        "body": "coil",
+        "dt": 0.010,
+        "a": 0,
+        "b": 0,
+    }
+)
+def test_saturated_heartbeat_fold_is_bit_equal(spec: dict) -> None:
     """run_until(Done) in the loop must equal scan-by-scan across the heartbeat family."""
-
-    @given(spec=_heartbeat_spec())
-    @settings(max_examples=MAX_EXAMPLES, deadline=None)
-    # The canonical case from the unit suite — always exercised.
-    @example(
-        spec={
-            "src": "timer",
-            "preset": 20_000,
-            "threshold": 100,
-            "form": "gt",
-            "clock": "clock_1s",
-            "body": "calc",
-            "dt": 0.010,
-            "a": 3,
-            "b": 4,
+    folded = _run(spec, jit=True)
+    stepped = _run(spec, jit=False)
+    if folded != stepped:
+        diffs = {
+            k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
+            for k in sorted(set(folded) | set(stepped))
+            if folded.get(k) != stepped.get(k)
         }
-    )
-    # Boundary-straddle regression: Done (16 750 ms; first found as a per-scan
-    # counter's 1676 counts) lands at t=16.75 s, exactly a clock_500ms rise
-    # edge.  Accumulated scan time drifts to 16.74999999999982 (clock low)
-    # while a big-step timestamp lands on 16.75 (clock high) — the
-    # OTE coil disagreed (Beat True vs False) until clock phase was
-    # grid-snapped (system_points.clock_phase).
-    @example(
-        spec={
-            "src": "timer",
-            "preset": 16_750,
-            "threshold": 1,
-            "form": "gt",
-            "clock": "clock_500ms",
-            "body": "coil",
-            "dt": 0.010,
-            "a": 0,
-            "b": 0,
-        }
-    )
-    def inner(spec: dict) -> None:
-        folded = _run(spec, jit=True)
-        stepped = _run(spec, jit=False)
-        if folded != stepped:
-            diffs = {
-                k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
-                for k in sorted(set(folded) | set(stepped))
-                if folded.get(k) != stepped.get(k)
-            }
-            note(f"spec={spec}")
-            note(f"fold != nofold: {diffs}")
-            raise AssertionError(
-                f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
-            )
-
-    inner()
+        note(f"spec={spec}")
+        note(f"fold != nofold: {diffs}")
+        raise AssertionError(
+            f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -254,41 +252,38 @@ def _run_stable(spec: dict, *, jit: bool) -> dict:
     return dict(plc.state.tags)
 
 
-def test_stable_input_rungs_are_bit_equal() -> None:
+@pytest.mark.fuzz
+@given(spec=_stable_input_spec())
+@settings.get_profile(PROFILE)
+@example(
+    spec={
+        "src": "timer",
+        "preset": 5_000,
+        "threshold": 100,
+        "form": "gt",
+        "clock": "clock_1s",
+        "dt": 0.010,
+        "a": 3,
+        "b": 4,
+        "n_stable": 2,
+        "stable_bodies": ["calc", "coil"],
+    }
+)
+def test_stable_input_rungs_are_bit_equal(spec: dict) -> None:
     """Every tag must be bit-equal to scan-by-scan."""
-
-    @given(spec=_stable_input_spec())
-    @settings(max_examples=MAX_EXAMPLES, deadline=None)
-    @example(
-        spec={
-            "src": "timer",
-            "preset": 5_000,
-            "threshold": 100,
-            "form": "gt",
-            "clock": "clock_1s",
-            "dt": 0.010,
-            "a": 3,
-            "b": 4,
-            "n_stable": 2,
-            "stable_bodies": ["calc", "coil"],
+    folded = _run_stable(spec, jit=True)
+    stepped = _run_stable(spec, jit=False)
+    if folded != stepped:
+        diffs = {
+            k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
+            for k in sorted(set(folded) | set(stepped))
+            if folded.get(k) != stepped.get(k)
         }
-    )
-    def inner(spec: dict) -> None:
-        folded = _run_stable(spec, jit=True)
-        stepped = _run_stable(spec, jit=False)
-        if folded != stepped:
-            diffs = {
-                k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
-                for k in sorted(set(folded) | set(stepped))
-                if folded.get(k) != stepped.get(k)
-            }
-            note(f"spec={spec}")
-            note(f"fold != nofold: {diffs}")
-            raise AssertionError(
-                f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
-            )
-
-    inner()
+        note(f"spec={spec}")
+        note(f"fold != nofold: {diffs}")
+        raise AssertionError(
+            f"the loop disagreed with scan-by-scan\n  spec={spec}\n  diffs={diffs}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -414,37 +409,36 @@ def _run_composite(spec: dict, *, jit: bool) -> tuple[int, dict]:
     return plc.state.scan_id, image
 
 
-def test_composite_readers_fold_is_bit_equal() -> None:
+def spec_of(sources, readers, gate="none", dt=0.01, seconds=12.0):
+    return {"sources": sources, "readers": readers, "gate": gate, "dt": dt, "seconds": seconds}
+
+
+def reader(shape, *, src=0, k=5, d=100, form="ge", count=True):
+    return {"src": src, "shape": shape, "k": k, "d": d, "form": form, "count": count}
+
+
+@pytest.mark.fuzz
+@given(spec=_composite_spec())
+@settings.get_profile(PROFILE)
+# Review probes, always exercised: read-above (a6), slow-timer == (a7),
+# pulse reset (a3), expression / stored copy (gap_dataread), affine self-calc (a1).
+@example(spec=spec_of(["timer_ms"], [reader("cmp_above")]))
+@example(spec=spec_of(["timer_s"], [reader("eq", k=7, d=1)], dt=0.1))
+@example(spec=spec_of(["counter_pulse_reset"], [reader("cmp_below", k=1, d=7)]))
+@example(spec=spec_of(["timer_ms"], [reader("expr", k=1, d=100), reader("stored", k=1, d=100)]))
+@example(spec=spec_of(["selfcalc", "timer_ms"], [reader("operand"), reader("display")]))
+def test_composite_readers_fold_is_bit_equal(spec: dict) -> None:
     """Every reader shape the reviews found must leave stepping's exact state."""
-
-    def spec_of(sources, readers, gate="none", dt=0.01, seconds=12.0):
-        return {"sources": sources, "readers": readers, "gate": gate, "dt": dt, "seconds": seconds}
-
-    def reader(shape, *, src=0, k=5, d=100, form="ge", count=True):
-        return {"src": src, "shape": shape, "k": k, "d": d, "form": form, "count": count}
-
-    @given(spec=_composite_spec())
-    @settings(max_examples=MAX_EXAMPLES, deadline=None)
-    # Review probes, always exercised: read-above (a6), slow-timer == (a7),
-    # pulse reset (a3), expression / stored copy (gap_dataread), affine self-calc (a1).
-    @example(spec=spec_of(["timer_ms"], [reader("cmp_above")]))
-    @example(spec=spec_of(["timer_s"], [reader("eq", k=7, d=1)], dt=0.1))
-    @example(spec=spec_of(["counter_pulse_reset"], [reader("cmp_below", k=1, d=7)]))
-    @example(spec=spec_of(["timer_ms"], [reader("expr", k=1, d=100), reader("stored", k=1, d=100)]))
-    @example(spec=spec_of(["selfcalc", "timer_ms"], [reader("operand"), reader("display")]))
-    def inner(spec: dict) -> None:
-        f_scan, folded = _run_composite(spec, jit=True)
-        s_scan, stepped = _run_composite(spec, jit=False)
-        if (f_scan, folded) != (s_scan, stepped):
-            diffs = {
-                k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
-                for k in sorted(set(folded) | set(stepped))
-                if folded.get(k) != stepped.get(k)
-            }
-            note(f"spec={spec}")
-            raise AssertionError(
-                f"the loop disagreed with scan-by-scan (scans {f_scan} vs {s_scan})\n"
-                f"  spec={spec}\n  diffs={diffs}"
-            )
-
-    inner()
+    f_scan, folded = _run_composite(spec, jit=True)
+    s_scan, stepped = _run_composite(spec, jit=False)
+    if (f_scan, folded) != (s_scan, stepped):
+        diffs = {
+            k: (folded.get(k, "<missing>"), stepped.get(k, "<missing>"))
+            for k in sorted(set(folded) | set(stepped))
+            if folded.get(k) != stepped.get(k)
+        }
+        note(f"spec={spec}")
+        raise AssertionError(
+            f"the loop disagreed with scan-by-scan (scans {f_scan} vs {s_scan})\n"
+            f"  spec={spec}\n  diffs={diffs}"
+        )

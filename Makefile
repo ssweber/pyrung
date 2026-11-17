@@ -11,7 +11,7 @@ DOCS_ADDR ?= localhost:8000
 PYTEST_WORKERS ?= 6
 PYTEST_PARALLEL = -n $(PYTEST_WORKERS) --dist=loadfile --max-worker-restart=0
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-bytecode test-conformance test-conformance-repeat conformance-export conformance-workspace render-corpus render-compare watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-bytecode test-conformance test-conformance-repeat conformance-export conformance-workspace render-corpus render-compare watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-fuzz test-fuzz-gate verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check
 
 default: install verify
 
@@ -22,10 +22,10 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both $(PYTEST_PARALLEL)
+	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --runner-backend=both $(PYTEST_PARALLEL)
 
 test-fold:
-	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q $(PYTEST_PARALLEL)
+	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --fold-check -q $(PYTEST_PARALLEL)
 
 # The test files this branch adds, under --fold-check: the mergeq `fold-new` stage, so a new file
 # cannot first meet the lockstep in the full `test-fold` run.
@@ -105,7 +105,11 @@ test-integration:
 	uv run pytest -m integration
 
 test-fuzz:
-	uv run pytest tests/fuzz/
+	uv run pytest tests/fuzz/ -n $(PYTEST_WORKERS) --dist=load --max-worker-restart=0
+
+# The capped profile the merge queue runs (tests/fuzz/conftest.py).
+test-fuzz-gate:
+	FUZZ_PROFILE=gate uv run pytest tests/fuzz/ -n $(PYTEST_WORKERS) --dist=load --max-worker-restart=0
 
 verify: lint test test-conformance test-hypothesis docs-check
 
