@@ -11,15 +11,23 @@ ones the runs cannot reach, and why.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import cache
+from typing import Any
 
 import pytest
 
-from tests.facts.check import Report, check_program
-from tests.facts.corpus import CORPUS, PREPARE
+from pyrung.core import PLC
+from tests.facts.check import RandomInputs, Report, Step, check_program
+from tests.facts.corpus import CORPUS, OPENING, PREPARE
 
 #: Seeds of the random runs, one run each.
 SEEDS = (1, 2)
+
+#: Scans of each random walk, as ``check_program`` runs by default.
+SCANS = 600
+
+Driver = Callable[[PLC, Step, RandomInputs], None]
 
 #: Facts the runs refute, by idiom: ``(fact, tag)`` -> the first scan that refutes it.
 KNOWN: dict[str, dict[tuple[str, str], str]] = {
@@ -45,6 +53,18 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
         ("stateful domain", "HeldLevel"): (
             "scan 15.  HeldLevel copies RawLevel, and its domain takes RawLevel's split"
             " points at 10 only.  No value of it is above 50."
+        ),
+    },
+    "real_reading_compared_with_a_table_entry": {
+        ("input domain", "HmiTemp"): (
+            "scan 2.  HmiTemp = 1.5 is copied into the table entry TempIn is compared with."
+            "  HmiTemp's domain lists whole numbers only, since no rung compares it."
+        ),
+    },
+    "shown_count_compared_with_an_hmi_count": {
+        ("stateful domain", "Boxes_Acc"): (
+            "scan 10.  BoxesShown copies the count, and a rung compares it with HmiBoxes."
+            "  The count's domain ends at its preset, 3, so 5 is no value of it."
         ),
     },
     "text_copy_skipped_on_a_bad_digit": {
@@ -86,7 +106,24 @@ SILENT: dict[str, dict[str, str]] = {
 
 @cache
 def _report(name: str) -> Report:
-    return check_program(name, CORPUS[name], seeds=SEEDS, prepare=PREPARE.get(name))
+    opening = OPENING.get(name)
+    return check_program(
+        name,
+        CORPUS[name],
+        seeds=SEEDS,
+        prepare=PREPARE.get(name),
+        driver=None if opening is None else _opening_then_walk(opening),
+    )
+
+
+def _opening_then_walk(opening: tuple[dict[str, Any], ...]) -> Driver:
+    def drive(_plc: PLC, one_scan: Step, walk: RandomInputs) -> None:
+        for patch in opening:
+            one_scan(patch)
+        for _ in range(SCANS):
+            one_scan(walk.next())
+
+    return drive
 
 
 def _found(report: Report) -> set[tuple[str, str]]:

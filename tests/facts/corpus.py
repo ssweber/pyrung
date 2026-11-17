@@ -1004,6 +1004,10 @@ def hmi_request_taken_when_nonzero() -> Any:
 #: Idioms that need a harness on each PLC: name -> the function that installs it.
 PREPARE: dict[str, Callable[[PLC], None]] = {}
 
+#: Idioms whose runs start with set inputs: name -> the inputs of each first scan.  The
+#: random walk runs after them.
+OPENING: dict[str, tuple[dict[str, Any], ...]] = {}
+
 
 def _harness(plc: PLC) -> None:
     Harness(plc).install()
@@ -1755,3 +1759,86 @@ def level_compared_with_a_table_entry() -> Any:
         with Rung(table[entry] == level):
             out(Bool("BinAtEntry"))
     return prog
+
+
+@idiom
+def held_reading_compared_with_a_table_entry() -> Any:
+    """A copied reading compared with the table entry a pointer picks."""
+    raw = Int("ScaleRaw", external=True, min=0, max=100)
+    entry = Int("ScaleEntry", external=True, min=1, max=2)
+    table = Block("ScaleTable", TagType.INT, 1, 2)
+    held = Int("ScaleHeld")
+    with Program() as prog:
+        with Rung(raw > 10):
+            out(Bool("ScaleLoaded"))
+        with Rung(Bool("ScaleGrab", external=True)):
+            copy(raw, held)
+        with Rung(Bool("ScaleTableSet", external=True)):
+            copy(Int("HmiScale", external=True, min=0, max=100), table[1])
+        with Rung(held == table[entry]):
+            out(Bool("ScaleAtEntry"))
+    return prog
+
+
+@idiom
+def recipe_mode_compared_with_a_table_entry() -> Any:
+    """A tag with ``choices=`` that a copy can set past them, compared with a table entry."""
+    mode = Int("RecipeMode", choices={0: "Off", 1: "Fill", 2: "Mix"})
+    entry = Int("RecipeEntry", external=True, min=1, max=2)
+    table = Block("RecipeTable", TagType.INT, 1, 2)
+    hmi = Int("HmiRecipe", external=True, min=0, max=100)
+    with Program() as prog:
+        with Rung(hmi > 50):
+            out(Bool("RecipeHigh"))
+        with Rung(Bool("RecipeLoad", external=True)):
+            copy(hmi, mode)
+        with Rung(Bool("RecipeTableSet", external=True)):
+            copy(Int("HmiRecipeEntry", external=True, min=0, max=100), table[1])
+        with Rung(mode == table[entry]):
+            out(Bool("RecipeAtEntry"))
+    return prog
+
+
+@idiom
+def real_reading_compared_with_a_table_entry() -> Any:
+    """A Real input compared with the Real table entry a pointer picks."""
+    entry = Int("TempEntry", external=True, min=1, max=2)
+    table = Block("TempTable", TagType.REAL, 1, 2)
+    with Program() as prog:
+        with Rung(Bool("TempTableSet", external=True)):
+            copy(Real("HmiTemp", external=True, min=0, max=10), table[1])
+        with Rung(Real("TempIn", external=True, min=0, max=10) == table[entry]):
+            out(Bool("TempAtEntry"))
+    return prog
+
+
+@idiom
+def real_readings_kept_in_order() -> Any:
+    """Two Real inputs inside one band, and a rung that compares them."""
+    first = Real("BandA", external=True, min=0, max=1)
+    second = Real("BandB", external=True, min=0, max=1)
+    with Program() as prog:
+        with Rung(first > 0.5, first < 0.9, second > 0.5, second < 0.9, first < second):
+            out(Bool("BandInOrder"))
+    return prog
+
+
+@idiom
+def shown_count_compared_with_an_hmi_count() -> Any:
+    """A count copied to a display tag, which a rung compares with an HMI count."""
+    boxes = Counter.clone("Boxes")
+    shown = Dint("BoxesShown")
+    with Program() as prog:
+        with Rung(Bool("BoxPulse", external=True)):
+            count_up(boxes, 3).reset(Bool("BoxesClear", external=True))
+        with Rung():
+            copy(boxes.Acc, shown)
+        with Rung(shown == Dint("HmiBoxes", external=True)):
+            out(Bool("BoxesAtHmi"))
+    return prog
+
+
+# The count runs past its preset to the HMI count, 5.
+OPENING["shown_count_compared_with_an_hmi_count"] = tuple(
+    {"BoxPulse": scan % 2 == 0, "BoxesClear": False, "HmiBoxes": 5} for scan in range(12)
+)

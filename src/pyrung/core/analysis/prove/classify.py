@@ -2618,14 +2618,15 @@ def _drop_unlisted_comparisons(
     pairs: Iterable[tuple[str, str]],
     unlisted: Iterable[str],
     fixed: Mapping[str, tuple[Any, ...]],
-    every_value: Callable[[str], tuple[Any, ...] | None],
+    every_value: Callable[[str], Mapping[str, tuple[Any, ...]] | None],
 ) -> set[str]:
     """Take the domain from each tag compared with values no list holds, and return those tags.
 
     A domain stands for the values between its split points, and such a comparison gives
     it none.  So a run can reach a value that answers the comparison unlike every value of
     the domain.  The tag keeps a domain only when it can have one that lists every value
-    the tag can hold.  *every_value* gives that domain, or None.
+    the tag can hold.  *every_value* gives that domain, or None.  Its result also lists every
+    value of each tag the tag's writers read, since a swap of one of those changes the tag.
 
     A tag compared with a tag that has no domain is compared with values no list holds
     too.  A tag outside *domains* has its values in *fixed* when it has any.  So taking
@@ -2654,7 +2655,10 @@ def _drop_unlisted_comparisons(
         kind = owner[name]
         every = every_value(name)
         if every is not None:
-            domains[kind][name] = tuple(sorted(set(every) | set(domains[kind][name])))
+            for listed, values in every.items():
+                if listed in owner:
+                    found = domains[owner[listed]]
+                    found[listed] = tuple(sorted(set(values) | set(found[listed])))
             continue
         del domains[kind][name]
         del owner[name]
@@ -2668,6 +2672,7 @@ def _close_tag_comparisons(
     tags: Mapping[str, Tag],
     pairs: Iterable[tuple[str, str]],
     fixed: Mapping[str, tuple[Any, ...]],
+    floor: Callable[[str], Any] = lambda _name: None,
 ) -> None:
     """Give tags the rungs compare with each other the split points of one another.
 
@@ -2677,11 +2682,13 @@ def _close_tag_comparisons(
     with each other gets the values of every domain in the group.  All the group's tags
     can sit between the same two split points, or past the same end, in any order.  So
     each gap between two split points, and each end, also gets as many values as the
-    group has tags.
+    group has tags.  A group with a Real takes the values of a gap at even fractions of it.
 
     *domains* maps each kind of domain to its dict, which this updates in place.  A tag
     with ``choices=`` keeps its domain, since it holds no other value.  A tag in *fixed*
     has no domain to update, such as a readonly preset, but its values are split points.
+    *floor* gives the lowest value a tag can hold, or None.  A tag gets no added value
+    below it.
     """
     owner = {name: kind for kind, found in domains.items() for name in found}
 
@@ -2726,13 +2733,19 @@ def _close_tag_comparisons(
         added = set(points)
         added |= {points[0] - step for step in range(1, count + 1)}
         added |= {points[-1] + step for step in range(1, count + 1)}
+        real = any(tags[name].type is TagType.REAL for name in group if name in tags)
         for low, high in itertools.pairwise(points):
-            added |= {low + step for step in range(1, count + 1) if low + step < high}
+            if real:
+                added |= {low + (high - low) * step / (count + 1) for step in range(1, count + 1)}
+            else:
+                added |= {low + step for step in range(1, count + 1) if low + step < high}
         for name in members:
             tag = tags[name]
             if tag.choices is not None:
                 continue
-            values = set(domains[owner[name]][name]) | held_candidates(tag, added)
+            lowest = floor(name)
+            mine = added if lowest is None else {v for v in added if v >= lowest}
+            values = set(domains[owner[name]][name]) | held_candidates(tag, mine)
             if tag.min is not None:
                 values = {v for v in values if v >= tag.min}
             if tag.max is not None:
@@ -2831,6 +2844,43 @@ def _acc_start_values(
         else _AccStarts(frozenset(values[name]), name in both_ways)
         for name in wanted
     }
+
+
+#: The lowest value each integer type holds.
+_TYPE_FLOORS = {TagType.INT: -32768, TagType.DINT: -(2**31), TagType.WORD: 0}
+
+
+def _lowest_held(
+    program: Program,
+    graph: ProgramGraph,
+    name: str,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]],
+    non_finite: frozenset[str],
+) -> Any:
+    """The lowest value *name* can hold, or None when only its type bounds it.
+
+    An Acc that only times or counts up stays at or above the lowest value it starts from.
+    So an Acc that no write sets negative stays at 0 or above.
+    """
+    from pyrung.core.instruction.counters import CountDownInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    tag = graph.tags[name]
+    lowest = _TYPE_FLOORS.get(tag.type)
+    if name not in _accumulator_names(program) or graph.unlisted_writers_of(name):
+        return lowest
+    counts_down = any(
+        isinstance(instr, CountDownInstruction) and getattr(instr.accumulator, "name", None) == name
+        for instr in walk_instructions(program)
+    )
+    starts = _acc_start_values(
+        program, graph, (name,), all_exprs, known_domains, atom_index, non_finite
+    )[name]
+    if counts_down or starts is None or starts.both_ways or min(starts.values) < 0:
+        return lowest
+    return 0
 
 
 def _crossing_points(preset: int, starts: _AccStarts) -> set[int]:
@@ -3662,39 +3712,59 @@ def _classify_dimensions_from_graph(
             tag_pairs.add((left, right))
     timed = set(done_acc_info.pairs.values()) | unmodeled_accs | _accumulator_names(program)
     domains = {"stateful": stateful, "nondeterministic": nondeterministic}
+    produced: list[dict[str, tuple[Any, ...]]] = []
+
+    def stored_values(name: str) -> tuple[Any, ...] | None:
+        tag = graph.tags[name]
+        written = graph.may_be_written(name) or name in receive_dest_names
+        if not written and not graph.written_from_outside(name):
+            # A tag nothing writes holds its power-on value.
+            return (tag.default,)
+        if tag.choices is not None and not written:
+            return tuple(sorted(tag.choices))
+        if name in timed:
+            return None
+        # A structural domain holds split points as well as stored values, so it lists too
+        # few.  A rung may store a value past ``choices=`` as well.  The values the writers
+        # store list them all.  They come from literals or from a declared Int range, and
+        # an external Real has none.
+        if not produced:
+            produced.append(collect_produced_value_domains(program, graph))
+        return produced[0].get(name)
+
+    # A tag compared with a tag that has no domain keeps its own only when every value of
+    # that tag is listed.
     fixed = {
         name: values
-        for name, values in structural_domains.items()
-        if name not in stateful
+        for name in sorted({name for pair in tag_pairs for name in pair})
+        if name in graph.tags
+        and name not in stateful
         and name not in nondeterministic
         and name not in infeasible_tags
         and (unclassified is None or name not in unclassified)
-        and not graph.written_from_outside(name)
-        and name not in receive_dest_names
+        and (values := stored_values(name)) is not None
     }
-    # A tag nothing writes holds its power-on value.
-    for name in {name for pair in tag_pairs for name in pair}:
-        tag = graph.tags.get(name)
-        if (
-            tag is not None
-            and name not in fixed
-            and not graph.may_be_written(name)
-            and not graph.written_from_outside(name)
-            and name not in receive_dest_names
-        ):
-            fixed[name] = (tag.default,)
 
-    def every_value(name: str) -> tuple[Any, ...] | None:
-        tag = graph.tags[name]
-        if tag.choices is not None:
-            return tuple(sorted(tag.choices))
-        outside = graph.written_from_outside(name) or name in receive_dest_names
-        if name in structural_domains and not outside and name not in timed:
-            return structural_domains[name]
-        if name not in graph.writers_of and not graph.unlisted_writers_of(name):
-            # An input holds its declared values.
-            return _declared_domain(tag)
-        return None
+    def every_value(name: str) -> dict[str, tuple[Any, ...]] | None:
+        # A swap of a tag a writer reads changes what the writer stores.  So each such tag
+        # that has a domain needs every value as well.
+        found: dict[str, tuple[Any, ...]] = {}
+        work = [name]
+        while work:
+            current = work.pop()
+            if current in found:
+                continue
+            values = stored_values(current)
+            if values is None:
+                return None
+            found[current] = values
+            for node in graph.all_writers_of(current):
+                work.extend(
+                    read
+                    for read in graph.rung_nodes[node].data_reads
+                    if read in stateful or read in nondeterministic
+                )
+        return found
 
     for name in sorted(
         _drop_unlisted_comparisons(domains, tag_pairs, comparisons.unlisted, fixed, every_value)
@@ -3703,7 +3773,15 @@ def _classify_dimensions_from_graph(
             unclassified.add(name)
         else:
             infeasible_tags.append(name)
-    _close_tag_comparisons(domains, graph.tags, tag_pairs, fixed)
+    _close_tag_comparisons(
+        domains,
+        graph.tags,
+        tag_pairs,
+        fixed,
+        lambda name: _lowest_held(
+            program, graph, name, all_exprs, known_domains, atom_idx, non_finite
+        ),
+    )
     if profile:
         profile_last = _classify_profile_mark(timings, "tag_classification_loop", profile_last)
 
