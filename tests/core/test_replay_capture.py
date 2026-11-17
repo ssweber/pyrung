@@ -173,8 +173,8 @@ def test_sparse_replay_lands_as_stepped_across_recorded_events() -> None:
         if source.current_state.scan_id == 2999:
             expected = source.current_state
 
-    # Start the replay at the initial state.  Checkpoint force snapshots remain in the scan
-    # log and must not become false boundaries when the effective force map is unchanged.
+    # Start the replay at the initial state. Checkpoint force snapshots stay in the scan log.
+    # They must not become false boundaries when the effective force map has not changed.
     source._checkpoints.clear()
     assert source._compiled_replay_supported_kernel() is not None
 
@@ -289,9 +289,9 @@ def test_a_forward_walk_extends_the_slab_instead_of_refilling_it(
 
     misses = _read(plc, truth, list(range(1001, 4001)), monkeypatch)
 
-    # The first miss fills the scans up to it.  Each later miss replays the 800 scans
-    # from it and keeps the old slab's last 800 states.  3,000 scans take 5 fills (they took
-    # one per scan that is not a checkpoint).
+    # The first miss fills the scans up to it. Each later miss replays the 800 scans from it
+    # and keeps the last 800 states of the old slab. Reading 3,000 scans takes 5 fills. It used
+    # to take one fill per scan that is not a checkpoint.
     assert misses == [1001, 1002, 1802, 2602, 3402]
     slab = next(iter(plc._replay_slabs.values()))
     assert (min(slab), max(slab), len(slab)) == (2602, 4201, 1600)
@@ -304,7 +304,8 @@ def test_ascending_pairs_share_one_slab(monkeypatch: pytest.MonkeyPatch) -> None
 
     misses = _read(plc, truth, scans, monkeypatch)
 
-    # 13 pairs take 6 fills (they took 20, one per read of a scan that is not a checkpoint).
+    # 13 pairs take 6 fills. They used to take 20, one per read of a scan that is not a
+# checkpoint.
     assert misses == [1100, 1101, 2001, 2900, 3801, 4700]
 
 
@@ -314,8 +315,8 @@ def test_far_apart_ascending_pairs_fill_twice_per_pair(monkeypatch: pytest.Monke
 
     misses = _read(plc, truth, scans, monkeypatch)
 
-    # A pair more than 800 scans past the slab fills the scans up to its first read, then
-    # 800 scans from its second.  Scan 2800 is a checkpoint.
+    # A pair more than 800 scans past the slab fills the scans up to its first read. Then it
+    # fills 800 scans from its second read. Scan 2800 is a checkpoint.
     assert misses == [1100, 1101, 2801, 4500, 4501]
 
 

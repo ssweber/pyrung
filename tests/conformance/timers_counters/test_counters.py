@@ -338,13 +338,13 @@ def prove_first_scan_input_already_on(slot):
 
 
 def _pins_read_before_count(slot, number: int, up_bit, down_bit):
-    # Preset 2, up pulses on scans 1 and 3, a down pulse on scan 3.  The up
-    # rung and the down pin share ~Done; each adds one contact of its own, a
-    # pulse bit (set only under Cmd != 0).  The reset pin shares ~Done too and adds
-    # Cmd == 0, so it resets the counter at idle between runs (Done is off then).  The
-    # rail and tee cases are this ladder, on their own counter and bits; only the
-    # CLICK drawing of the pins differs (CLICK takes pins all from the rail or all
-    # teed off one node, so the tee twin tees the reset pin too).
+    # Preset 2, up pulses on scans 1 and 3, a down pulse on scan 3.  The up rung and the
+    # down pin share ~Done.  Each adds one contact of its own, a pulse bit that is set only
+    # under Cmd != 0.  The reset pin shares ~Done too and adds Cmd == 0, so it resets the
+    # counter at idle between runs (Done is off then).  The rail and tee cases are this
+    # ladder, on their own counter and bits.  Only the CLICK drawing of the pins differs.
+    # CLICK takes the pins either all from the rail or all teed off one node, so the tee
+    # twin tees the reset pin too.
     counter = ClickCounter(number)
     count_scans(slot)
     with Rung(slot.Cmd != 0, on(slot, 1, 3)):

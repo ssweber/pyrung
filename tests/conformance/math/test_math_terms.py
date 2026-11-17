@@ -126,7 +126,7 @@ def init_error_terms(slot: Any) -> None:
     reset(c.select(181, 185))
 
 
-#: What a formula into a DF may hold, in each field's order; 4 and 5 are +/-Inf, 0 any other.
+#: What a formula into a DF may hold, in each field's order.  4 and 5 are +/-Inf.  0 is any other.
 REAL_READINGS = (5.0, 0.0, 99.0)
 
 
