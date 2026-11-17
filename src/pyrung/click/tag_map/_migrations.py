@@ -68,7 +68,7 @@ class CommentMigration:
     required: tuple[str, ...]
 
     def rewrite_token(self, token: str) -> str | None:
-        """Return the new tokens for one old *token*, or ``None`` if this migration can't read it."""
+        """Return the new tokens for one old *token*, or ``None`` if it can't be read."""
         head, _, value = token.partition("=")
         if head != "profile":
             return None

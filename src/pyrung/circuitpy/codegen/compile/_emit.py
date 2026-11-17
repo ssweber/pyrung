@@ -123,7 +123,7 @@ def _saturate(value: str, high: int, low: int | None = None) -> str:
 
 
 def _carry_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext) -> list[str]:
-    """Return the lines that split this scan's time into ``_int_units`` whole units and ``_new_frac``.
+    """Return the lines that split this scan's time into ``_int_units`` and ``_new_frac``.
 
     The lines work in integer nanoseconds, as ``instruction.utils.elapsed_units`` does.  A
     board's clock reads integer nanoseconds directly, and a board's floats are too short to
