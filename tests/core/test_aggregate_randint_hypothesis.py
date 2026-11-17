@@ -337,7 +337,7 @@ def test_randint_tag_bounds_are_read_each_scan(lo, hi, scans):
 @given(lo=bound_st)
 @SETTINGS
 def test_randint_equal_bounds_are_a_math_error(lo):
-    """Draw 0 and set SC46 for equal integer constants, on every runner."""
+    """With equal integer constants, the draw is 0 and SC46 is set, on every runner."""
     logic, _expr = _randint_program(lo, lo)
     for runner in (PLC(logic), CompiledPLC(logic)):
         runner.patch({"AgGo": True})

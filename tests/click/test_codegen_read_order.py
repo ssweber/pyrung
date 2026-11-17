@@ -247,9 +247,10 @@ WRITTEN: dict[str, Callable[[], None]] = {
 
 @pytest.mark.parametrize("name", list(WRITTEN))
 def test_round_trip_gives_back_the_code_written(name: str):
-    """Round-trip pyrung -> CLICK -> pyrung -> CLICK and get back the same rungs and rows.
+    """Round-trip pyrung -> CLICK -> pyrung -> CLICK.
 
-    The rungs match the drawing that the export makes.
+    The imported rungs match the export's drawing of the written rungs.  The second export
+    writes the same rows as the first.
     """
     with Program() as logic:
         WRITTEN[name]()

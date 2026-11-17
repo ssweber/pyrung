@@ -247,9 +247,10 @@ class TestBitEqual:
 
     @pytest.mark.parametrize("kind", ["time", "time_event"])
     def test_drum_reading_another_step_than_the_boundary_shows(self, kind: str) -> None:
-        """Check writers above and below the drum that see step 2's 500 ms preset.
+        """Check a drum that times step 2's preset while every scan boundary shows step 3.
 
-        Every scan boundary shows step 3's 200 ms preset, which the timer is already past.
+        A rung above the drum writes 2 to its step, and a rung below writes 3.  Step 2's preset
+        is 500 ms.  The drum's accumulator is already past step 3's 200 ms preset.
         """
         Long = Timer.clone("Long")
         Step = Int("DrumStep")
@@ -415,7 +416,7 @@ class TestEdgeCounter:
 
 
 def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
-    """Check an active-hold soak whose period a read system clock forces wide.
+    """Build an active-hold soak whose period a read system clock forces wide.
 
     The soak is a self-calc (``+1``/scan), so it can reach long dwells without the
     32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``, whose full period
@@ -477,7 +478,7 @@ class TestAcrossClocks:
 
 
 def _rtc_reader_cycle_program() -> Program:
-    """Check a period-2 oscillation beside an unconditional reader of the RTC second.
+    """Build a period-2 oscillation beside an unconditional reader of the RTC second.
 
     A rung latches on the value of that second.  A coast must not miss a tick.
     """
@@ -1027,7 +1028,11 @@ class TestWrittenInputs:
 
     @pytest.mark.parametrize("first", [(200, 5000), (5000, 200)], ids=["low", "high"])
     def test_an_operand_that_alternates_through_the_period(self, first: tuple[int, int]) -> None:
-        """Check two writers, one per phase of the cycle.  Every boundary but one phase misleads."""
+        """Check two writers of the preset, one for each phase of the cycle.
+
+        The preset that a scan boundary shows is not the preset that the timer reads on the
+        next scan.
+        """
 
         def build() -> Program:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
@@ -1095,7 +1100,10 @@ class TestInputWrites:
         below: int | None = None,
         writer_on: bool = False,
     ) -> Any:
-        """Check a 2-scan cycle with a preset in a block that a rung writes through a pointer."""
+        """Return a builder for a 2-scan cycle that reads a timer preset from a block.
+
+        A rung writes that block through a pointer.
+        """
 
         def build() -> Program:
             Big = TestInputWrites.BIG
@@ -1168,7 +1176,7 @@ class TestInputWrites:
 
     @staticmethod
     def _gated(above: str, below: str) -> Any:
-        """Check a cycle with writers around the reader, on the toggle's phases."""
+        """Return a builder for a cycle with writers around the reader, on the toggle's phases."""
 
         def build() -> Program:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
@@ -1228,7 +1236,7 @@ class TestInputWrites:
 
     @staticmethod
     def _mirror_program() -> Program:
-        """Check clock mirrors, an indirect writer and a preset in the block it writes.
+        """Build clock mirrors, an indirect writer and a preset in the block that it writes.
 
         The indirect writer stores a mirror when asked.  The writer's cone reaches the mirrors.
         """

@@ -1,4 +1,7 @@
-"""Check that a reached plan drops temporary logic it does not need, by running it without."""
+"""Check that how() removes temporary logic that a reached plan does not need.
+
+To find out, how() runs the plan without that logic.
+"""
 
 from __future__ import annotations
 
@@ -193,9 +196,10 @@ def test_a_set_less_than_a_second_before_a_set_of_any_tag_stays_temporary_logic(
 
 
 def _dwell() -> tuple[PLC, object]:
-    """Return a PLC with the sensor on 30 ms and off 30 ms, then a 250 ms run.
+    """Return a PLC and the goal that ``HoldState`` is 7.
 
-    Both fit within the 70 ms watchdogs.
+    The sensor must be on for 30 ms and off for 30 ms within each 70 ms watchdog.  A 250 ms
+    run sets ``HoldState`` to 7 if neither watchdog trips.
     """
     sensor = Bool("HoldSensor", external=True)
     stable_on, stable_off = Timer.clone("HoldStableOn"), Timer.clone("HoldStableOff")

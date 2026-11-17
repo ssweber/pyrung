@@ -4235,7 +4235,7 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     assert adapter._runner.forces["Counter"] == 3
     assert type(adapter._runner.forces["Counter"]) is int
 
-    # An Int cannot hold a word, and the session says so
+    # An Int cannot hold text, and the session says so
     for seq, command in ((6, "pyrungForce"), (7, "pyrungPatch")):
         messages = _send_request(
             adapter,
@@ -4616,8 +4616,10 @@ def test_pyrung_causal_recorded_effect(tmp_path: Path):
 
 
 def test_pyrung_causal_branch_reads_trunk_contact_on_trunk_row(tmp_path: Path):
-    """cause() names a trunk contact written above a branch as the trigger it read, not its
-    reset, because the branch held the trunk's power."""
+    """cause() names the contact A as a trigger of Y, not the reset of A.
+
+    The rung resets A above its branch.  The branch still has the power that A gave the trunk.
+    """
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(

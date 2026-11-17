@@ -13,8 +13,8 @@ runs.
 If a pointer is below its block, the instruction sets SC44 and leaves the
 destination alone. If a pointer is past its block, no flag is set, a read returns
 the type's zero and a write is dropped. If a dynamic window falls outside its
-block, either side sets SC44 and nothing is written. The conformance groups in
-``tests/conformance/system/`` hold what a real CLICK did.
+block, below it or past it, the instruction sets SC44 and writes nothing. The
+conformance groups in ``tests/conformance/system/`` hold what a real CLICK did.
 """
 
 from __future__ import annotations
@@ -291,8 +291,8 @@ _ONESHOTS: dict[str, Callable[[], object]] = {
 def test_a_oneshot_that_does_not_fire(engine, fault_name, oneshot, kept, monkeypatch) -> None:
     """The oneshot clears the flag on scan 1, when it fires.
 
-    On scan 2 it does not fire, so the flag stays set. Only a Math clears it then.
-    This matches CLICK: ``flag_reads/oneshot_held``.
+    On scan 2 it does not fire. A Copy one-shot then leaves the flag set, and a Math
+    one-shot still clears it. This matches CLICK: ``flag_reads/oneshot_held``.
     """
     flag, fault = _FAULTS[fault_name]
     cleared, left = Bool("Cleared"), Bool("Kept")
@@ -724,7 +724,11 @@ def _window_stage() -> None:
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("op_name", list(_WINDOW_OUT))
 def test_a_window_out_of_its_block_is_an_address_error(engine, op_name, monkeypatch) -> None:
-    """A window past its block sets SC44. CLICK was measured only for a single Copy pointer."""
+    """A window outside its block sets SC44, whether it is below the block or past it.
+
+    CLICK was measured only for a single Copy pointer past its bank, and that pointer sets no
+    flag.
+    """
     op, untouched, value = _WINDOW_OUT[op_name]
     with Program(strict=False) as prog:
         with Rung():
@@ -939,7 +943,10 @@ _SPARSE_WINDOWS: dict[str, tuple[Callable[[], object], tuple[Any, ...], tuple[An
 @pytest.mark.parametrize("engine", _ENGINES)
 @pytest.mark.parametrize("op_name", list(_SPARSE_WINDOWS))
 def test_a_dynamic_window_skips_a_gap(engine, op_name, monkeypatch) -> None:
-    """A dynamic window skips a gap. A static ``select()`` checks only a window's outer bounds."""
+    """A dynamic window checks only its outer bounds, so it skips a gap.
+
+    A static ``select()`` does the same.
+    """
     op, watch, values = _SPARSE_WINDOWS[op_name]
     with Program(strict=False) as prog:
         with Rung():

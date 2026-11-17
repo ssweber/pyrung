@@ -469,7 +469,8 @@ class TestPlanDisplay:
             ),
         )
 
-        # A coast waits on the plan. A shortcut past the plan is not an instruction.
+        # The wait in a coast is a step of the plan. A shortcut past that wait is not an
+        # instruction, so the plan does not print one.
         assert "Jump ahead" not in str(plan)
 
     def test_pulse_step_renders_as_set_and_keeps_its_observed_transition(self):

@@ -32,7 +32,7 @@ _EVERY_PART = loop_corpus.CORPUS_PARTS
 
 
 def _part_as_built(part: str) -> Subject:
-    """Return the subject that ``suite.build(part)`` builds."""
+    """Return a subject for the program that ``suite.build(part)`` builds."""
     return loop_corpus.subject_of_build(suite.build(part), f"part {part}")
 
 

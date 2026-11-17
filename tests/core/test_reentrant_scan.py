@@ -251,7 +251,7 @@ def test_a_callable_in_a_subroutine_is_refused(make):
 def test_a_kernel_says_whether_it_calls_a_function():
     """Check that a kernel reports whether it calls a function.
 
-    The scan skips the marker when this flag is False, so a body must never be left out.
+    CompiledPLC skips the marker when this flag is False, so a body must never be left out.
     """
     with Program(strict=False) as plain:
         with Rung():
@@ -610,9 +610,10 @@ def test_start_in_run_mode_stays_a_no_op_inside_a_callable(make):
 
 
 def test_a_commit_callback_may_step_the_plc():
-    """Check that a callback is not a scan inside a scan.
+    """Check that a commit callback may step the PLC.
 
-    It runs after the commit, with no callable running.
+    The callback runs after the commit, with no callable running, so its step is not a scan
+    inside a scan.
     """
     plc, _call = _built(BACKENDS["interpreted"])
     plain, _ = _built(BACKENDS["interpreted"])
@@ -789,7 +790,10 @@ def test_abandoning_a_paused_scan_leaves_the_plc_free(debug):
 
 @pytest.mark.parametrize("debug", [False, True], ids=["scan_steps", "scan_steps_debug"])
 def test_a_paused_scans_own_callable_is_refused(debug):
-    """Check that the callable of a paused scan hits the refusal like any other scan."""
+    """Check that the callable of a paused scan hits the refusal.
+
+    The callable of any other scan hits it too.
+    """
     plc, call = _built(BACKENDS["interpreted"])
     plc.run(3)
     before = plc.current_state
@@ -836,7 +840,10 @@ def test_committing_a_prepared_scan_from_inside_a_callable_is_refused():
 
 
 def _self_stepper(fires_at: int) -> tuple[PLC, Any]:
-    """Check a plain closure over its PLC that fires on a scan past the interpreted prefix."""
+    """Return a PLC and a plain closure over it.
+
+    The closure steps the PLC on a scan past the interpreted prefix.
+    """
 
     def inner(c: int) -> dict[str, int]:
         if c == fires_at:

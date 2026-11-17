@@ -4,11 +4,11 @@
 The suite's in-process runner, ``pyrung.conformance.run``, drives its programs with ``plc.step()``,
 and ``SimServer`` free-runs a realtime PLC, which is not fixed-step.  So no conformance program
 reached the loop.  This module drives them the way a case is driven (``Cmd`` written, run, read),
-with long runs.  Each run goes through ``tests/fold_check.py``'s ``_checked``.  That checks a
-stepped twin scan by scan, stops asked on the twin, the runner around the state, history and the
-scans past the landing.  Where a case records an expectation, the run has to meet it too, as
-``run()`` judges it, ``pending`` included.  So the loop, stepping and the recorded expectation
-all agree.
+with long runs.  Each run goes through ``tests/fold_check.py``'s ``_checked``.  ``_checked``
+compares the run with a twin that steps scan by scan, and it asks the run's stops on the twin.  It
+also checks the runner around the state, the history and the scans past the landing.  Where a
+case records an expectation, the run has to meet it too, as ``run()`` judges it, ``pending``
+included.  So the loop, stepping and the recorded expectation all agree.
 
 :class:`Tally` counts what ran where, so a corpus that stopped reaching the loop says so.
 """
@@ -140,7 +140,10 @@ def subject_of_build(build: Any, label: str) -> Subject:
 
 
 def whole_run_decline(program: Program) -> str | None:
-    """Return why the loop refuses every run of *program* (``_program_blocker``), or None."""
+    """Return why the loop refuses every run of *program*, or None.
+
+    The loop makes this check in ``ScanLoop._program_blocker``.
+    """
     kernel = PLC(program, dt=DT)._compiled_replay_supported_kernel()
     assert kernel is not None
     if randint_sites(kernel.referenced_tags):
@@ -379,7 +382,10 @@ class Driver:
         assert not missed, "the loop run misses what is recorded:\n" + "\n".join(missed)
 
     def chopped_and_cut_short(self, settle: int = 100, idle: int = 100) -> None:
-        """Drive long stretches, a run cut in pieces (each a new loop), and an early Cmd drop."""
+        """Drive long stretches, a run cut in pieces, and a run whose ``Cmd`` is taken away early.
+
+        Each piece of the cut run is a new loop.
+        """
         self.run_scans(settle)
         self._reset()
         self.run_scans(idle)
@@ -462,7 +468,8 @@ class Driver:
 def every_drill(subject: Subject, tally: Tally) -> None:
     """Run every drill, as ``PYRUNG_LOOP_CORPUS_DEEP`` does.
 
-    Other time steps cross a timer's limits sooner.
+    Two long waits also run at time steps of 0.1 s and 0.007 s, because other time steps cross a
+    timer's limits sooner.
     """
     with fine_loop():
         tally.add(subject, lambda d: d.judged_passes(idle=100))

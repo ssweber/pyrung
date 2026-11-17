@@ -439,8 +439,8 @@ def test_a_reload_back_to_a_coil_settles_it(
     """A coil whose memory went stale does not read that memory after a reload back.
 
     The first program runs with Motor off, so its coil remembers its rung as off.
-    Motor turns on under the program between.  If the reload read the stale memory, it
-    would turn that held Motor into a rise.
+    Motor turns on under the program between.  If the coil read the stale memory after the
+    reload, the held Motor would look like a rise.
     """
     first = ("Fb", last[1])
     adapter, out, script_path = _setup(tmp_path, _feedback_script(*first))
