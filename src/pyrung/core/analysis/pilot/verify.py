@@ -1,13 +1,14 @@
 """Judge an executed fork before it may replace the current world.
 
 ``verify_gates`` applies avoid and target checks, rejects spins and structural
-dead ends, delegates motion attribution and progress classification to
-``outcome.py``, then decides whether that classified landing may revisit an
-executable world. A trace-setup step under a counter-input transition that
-raises the input without a count, or clears one, is rejected as it lands. It
-reports a suspicious excursion to the drive loop without performing runtime
-investigation; recovery converts any exact correction evidence into an inert
-Working Theory requirement.
+dead ends, and delegates motion attribution and progress classification to
+``outcome.py``. It then decides whether that classified landing may revisit an
+executable world. It rejects a trace-setup step, as it lands, when a
+counter-input transition raises the input without a count or clears a count.
+
+``verify_gates`` reports a suspicious excursion to the drive loop without
+performing runtime investigation. Recovery converts any exact correction
+evidence into an inert Working Theory requirement.
 
 Passing these gates makes a trial eligible for commit and progress monitoring;
 it does not guarantee that later assessment will retain the committed world.
@@ -689,8 +690,8 @@ def _verify_gates(
                 avoid_names=settled,
             )
         for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
-            # Some trials keep their source here: the values they stood on before any scan,
-            # which may be behind how()'s start, and no scan they ran.
+            # Some trials keep their source here.  That is the values they stood on before
+            # any scan, which may be behind how()'s start.  It holds no scan that they ran.
             wink = (
                 _avoid_weighed_after_clear(ctx.avoid_pred, frame.snap, snap)
                 if snap is trial.source_snap
@@ -1089,10 +1090,10 @@ def _verify_gates(
             else ()
         )
         if lost_counts:
-            # The selected read cycles a counter's input for one count.  A
-            # step that raised the input without counting (a reset the read
-            # could not see held it) or cleared a count already made is no
-            # local progress: accepting it would cycle the input forever.
+            # The selected read cycles a counter's input to make one count.  A step is no
+            # local progress if it raised the input without counting (a reset that the
+            # read could not see held it) or cleared a count already made.  Accepting
+            # such a step would cycle the input forever.
             gate_events.append(
                 PilotGateEvent(
                     "counter-count-lost",

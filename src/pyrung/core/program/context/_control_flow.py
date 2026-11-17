@@ -232,7 +232,7 @@ class ForLoop:
 
 
 def _contains_randint(value: Any, seen: set[int], seen_calls: set[str] | None = None) -> bool:
-    """Whether a ``randint`` expression is reachable from *value*'s fields."""
+    """Return True if a ``randint`` expression is reachable from *value*'s fields."""
     from pyrung.core.expression import RandIntExpr
     from pyrung.core.instruction.control import CallInstruction
 
@@ -241,8 +241,8 @@ def _contains_randint(value: Any, seen: set[int], seen_calls: set[str] | None = 
     if isinstance(value, RandIntExpr):
         return True
     if isinstance(value, CallInstruction):
-        # Its fields reach the whole Program: scan the subroutines it calls, not
-        # every one, following calls from them in turn.
+        # Its fields reach the whole Program.  Scan only the subroutines that it calls,
+        # and follow the calls in them in turn.
         program = value._program
         name = value.subroutine_name
         if name in seen_calls or program is None:
@@ -268,15 +268,15 @@ def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
     """Create a repeated block context.
 
     A bare instruction in the body is an always-true body rung.  A body rung
-    with contacts is written as ``with Rung(...)`` inside the loop; its
+    with contacts is written as ``with Rung(...)`` inside the loop.  Its
     contacts are evaluated on every iteration.  Loops nest up to three deep,
     each with its own ``loop.idx``.
 
-    As on CLICK, a false loop rung skips the body (its coils hold, its
-    one-shots do not re-arm), and a tag count is read once: an Int as unsigned
-    16-bit, so -1 runs 65535 iterations, and a Dint whole and signed, so 65536
-    runs 65536 and 0 or below runs none.  A constant is read whole, so
-    ``forloop(70000)`` runs 70000.
+    As on CLICK, a false loop rung skips the body.  Its coils hold and its
+    one-shots do not re-arm.  A tag count is read once.  An Int is read as
+    unsigned 16-bit, so -1 runs 65535 iterations.  A Dint is read whole and
+    signed, so 65536 runs 65536 iterations, and 0 or below runs none.  A
+    constant is read whole, so ``forloop(70000)`` runs 70000.
 
     Example:
         with Rung(Enable):

@@ -1,8 +1,8 @@
 """Read compatibility and input preferences for a simultaneous goal.
 
 The static pre-pass proves only direct same-tag conflicts and the mutual
-exclusion in :mod:`static_proofs`. Input supports rank current-world
-alternatives only; this module never orders a sequence of target drives.
+exclusion that :mod:`static_proofs` proves. Input supports rank current-world
+alternatives only. This module never orders a sequence of target drives.
 Anything not proved is left for joint concrete execution and verification.
 """
 
