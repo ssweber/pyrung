@@ -25,7 +25,15 @@ from pyrung.core.instruction.out_variants import (
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
-from ._emit import emit_frac, emit_frac_keep, emit_mem_get, emit_mem_set
+from ._emit import (
+    emit_frac,
+    emit_frac_keep,
+    emit_mem_get,
+    emit_mem_set,
+    emit_prev,
+    emit_prev_store,
+    emit_rise,
+)
 from ._primitives import (
     _compile_lvalue,
     _compile_target_write_lines,
@@ -60,14 +68,14 @@ def _compile_toggle_instruction(
     assert isinstance(target, Tag)
     lines = [
         f"{sp}_en = bool({enabled_expr})",
-        f"{sp}if _en and not bool({emit_mem_get(key, 'False')}):",
+        f"{sp}if {emit_rise('_en', key)}:",
     ]
     lines.extend(
         _compile_target_write_lines(
             instr.target, f"not bool({_compile_value(target, ctx)})", ctx, indent + 4
         )
     )
-    lines.append(f"{sp}{emit_mem_set(key, '_en')}")
+    lines.append(f"{sp}{emit_prev_store(key, '_en')}")
     return lines
 
 
@@ -88,8 +96,8 @@ def _compile_debounce_instruction(
     target_write = _compile_lvalue(instr.target, ctx)
     return [
         f"{sp}_en = bool({enabled_expr})",
-        f"{sp}_was = bool({emit_mem_get(rung_key, 'False')})",
-        f"{sp}{emit_mem_set(rung_key, '_en')}",
+        f"{sp}_was = {emit_prev(rung_key)}",
+        f"{sp}{emit_prev_store(rung_key, '_en')}",
         f"{sp}if _en:",
         f"{sp4}if not _was:",
         # A rise starts the on side from 0.
@@ -223,8 +231,8 @@ def _compile_timed_instruction(
     held_target = "_en" if instr.maintained else "False"
     return [
         f"{sp}_en = bool({enabled_expr})",
-        f"{sp}_rose = _en and not bool({emit_mem_get(rung_key, 'False')})",
-        f"{sp}{emit_mem_set(rung_key, '_en')}",
+        f"{sp}_rose = {emit_rise('_en', rung_key)}",
+        f"{sp}{emit_prev_store(rung_key, '_en')}",
         f"{sp}_t_preset = int({_compile_value(instr.on_preset, ctx)})",
         f"{sp}_timing = bool({_compile_value(instr.target, ctx)}) and (",
         f"{sp4}int({_compile_value(instr.timer_acc, ctx)}) < _t_preset",

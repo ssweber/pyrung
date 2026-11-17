@@ -32,7 +32,7 @@ from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
-from ._emit import emit_frac, emit_mem_get, emit_mem_set
+from ._emit import emit_frac, emit_mem_get, emit_mem_set, emit_prev, emit_prev_store, emit_rise
 from ._primitives import (
     _compile_guarded_instruction,
     _compile_lvalue,
@@ -359,7 +359,7 @@ def _compile_shift_instruction(
         *range_setup,
         *empty_check,
         f"_clock_curr = {clock_expr}",
-        f"_clock_prev = bool({emit_mem_get(key, 'False')})",
+        f"_clock_prev = {emit_prev(key)}",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
         f"    _prev_values = [bool({_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx)}) for _idx in {range_indices}]",
@@ -369,7 +369,7 @@ def _compile_shift_instruction(
         f"if {reset_expr}:",
         f"    for _idx in {range_indices}:",
         f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
-        emit_mem_set(key, "_clock_curr"),
+        emit_prev_store(key, "_clock_curr"),
     ]
     range_flush = _compile_range_flush(instr.bit_range, range_symbol, ctx)
     if range_flush:
@@ -447,7 +447,7 @@ def _compile_drum_instruction(
         lines.extend(
             [
                 f"_jump_curr = bool({jump_expr})",
-                f"_jump_edge = _jump_curr and (not bool({emit_mem_get(jump_prev_key, 'False')}))",
+                f"_jump_edge = {emit_rise('_jump_curr', jump_prev_key, paren=True)}",
                 "if _jump_edge:",
                 f"    _jump_target = int({_compile_value(instr.jump_step, ctx)})",
             ]
@@ -460,7 +460,7 @@ def _compile_drum_instruction(
         lines.extend(
             [
                 f"_jog_curr = bool({jog_expr})",
-                f"_jog_edge = _jog_curr and (not bool({emit_mem_get(jog_prev_key, 'False')}))",
+                f"_jog_edge = {emit_rise('_jog_curr', jog_prev_key, paren=True)}",
             ]
         )
     reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
@@ -521,7 +521,7 @@ def _compile_drum_instruction(
             "    if _invalid:",
             f"        {step_write} = 1",
             f"    if not {flag_on}:",
-            f"        if not bool({emit_mem_get(rung_prev_key, 'False')}):",
+            f"        if not {emit_prev(rung_prev_key)}:",
             *_indent_body(write_row, 12),
             "        else:",
             *_indent_body(_drum_end_lines(instr, ctx), 12),
@@ -543,15 +543,15 @@ def _compile_drum_instruction(
                     target_var="_event_curr",
                     value_exprs=_event_drum_event_exprs(instr, ctx),
                 ),
-                emit_mem_set(f"_drum_event_prev:{key_base}", "_event_curr"),
+                emit_prev_store(f"_drum_event_prev:{key_base}", "_event_curr"),
                 emit_mem_set(f"_drum_last_step:{key_base}", "_step"),
             ]
         )
-    lines.append(emit_mem_set(rung_prev_key, "_enabled and (not _reset_active)"))
+    lines.append(emit_prev_store(rung_prev_key, "_enabled and (not _reset_active)"))
     if has_jump:
-        lines.append(emit_mem_set(jump_prev_key, "_jump_curr"))
+        lines.append(emit_prev_store(jump_prev_key, "_jump_curr"))
     if has_jog:
-        lines.append(emit_mem_set(jog_prev_key, "_jog_curr"))
+        lines.append(emit_prev_store(jog_prev_key, "_jog_curr"))
 
     return [" " * indent + line for line in lines]
 
@@ -571,7 +571,7 @@ def _drum_end_lines(
             ),
             # A step reached by a write to the register or a correction has spent its edge.
             f"_end_met = _event_curr and (_step_raw == int({emit_mem_get(f'_drum_last_step:{key_base}', '0')}))"
-            f" and (not bool({emit_mem_get(f'_drum_event_prev:{key_base}', 'False')}))",
+            f" and (not {emit_prev(f'_drum_event_prev:{key_base}')})",
         ]
 
     preset_exprs = [

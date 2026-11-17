@@ -48,3 +48,29 @@ def emit_frac(acc: Tag, value: str, *, quote: Quote = "repr") -> str:
 def emit_frac_keep(acc: Tag) -> str:
     """A store of *acc*'s fraction back into its cell, so a scan that does not tick writes it."""
     return emit_frac(acc, emit_frac_get(acc, quote="double"), quote="double")
+
+
+def emit_prev(key: str, *, cast: bool = True) -> str:
+    """A bit as the instruction memory *key* last stored it.  It reads off until the first store.
+
+    The edge contacts read the cell without ``bool()`` (``cast=False``), and every other site
+    wraps it.
+    """
+    read = emit_mem_get(key, "False")
+    return f"bool({read})" if cast else read
+
+
+def emit_prev_store(key: str, now: str) -> str:
+    """A store of this scan's bit *now* into *key*, for the next scan's :func:`emit_prev`."""
+    return emit_mem_set(key, now)
+
+
+def emit_rise(now: str, key: str, *, cast: bool = True, paren: bool = False) -> str:
+    """True on the scan the bit *now* is on and *key* holds it off.
+
+    The drum writes ``(not ...)`` in brackets (``paren=True``), and the other sites do not.
+    """
+    not_prev = f"not {emit_prev(key, cast=cast)}"
+    if paren:
+        not_prev = f"({not_prev})"
+    return f"{now} and {not_prev}"

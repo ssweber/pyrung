@@ -93,7 +93,7 @@ from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 
-from ._emit import emit_mem_get, emit_mem_set
+from ._emit import emit_prev, emit_prev_store
 from ._primitives import (
     CALC_FLAGS,
     _appends_flags,
@@ -130,11 +130,11 @@ def _compile_edge_row(row: Any, ctx: CodegenContext, indent: int) -> list[str]:
         now, was = _edge_locals(key)
         tag_expr = _snapshot_tag_symbol(edge.tag, ctx)
         lines.append(f"{sp}{now} = bool({tag_expr})")
-        lines.append(f"{sp}{was} = {emit_mem_get(key, 'False')}")
+        lines.append(f"{sp}{was} = {emit_prev(key, cast=False)}")
         # Stored only when it changes: an unwritten memory reads off, as in
         # the interpreter, whose state holds no entry until a contact sees on.
         lines.append(f"{sp}if {now} != {was}:")
-        lines.append(f"{sp}    {emit_mem_set(key, now)}")
+        lines.append(f"{sp}    {emit_prev_store(key, now)}")
     return lines
 
 

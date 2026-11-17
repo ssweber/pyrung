@@ -40,7 +40,7 @@ from pyrung.core.memory_block import block_room, element_names_after
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
-from ._emit import emit_frac, emit_mem_get, emit_mem_set
+from ._emit import emit_frac, emit_mem_get, emit_mem_set, emit_prev_store, emit_rise
 from ._primitives import (
     _compile_assignment_lines,
     _compile_copy_source,
@@ -316,8 +316,8 @@ def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list
     now = f"{name}_now"
     return [
         f"{sp}{now} = bool({input_expr})",
-        f"{sp}{name} = {now} and not {emit_mem_get(key, 'False')}",
-        f"{sp}{emit_mem_set(key, now)}",
+        f"{sp}{name} = {emit_rise(now, key, cast=False)}",
+        f"{sp}{emit_prev_store(key, now)}",
     ]
 
 
