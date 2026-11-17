@@ -1,8 +1,8 @@
-"""Slot template and fixed CLICK register layout for conformance cases.
+"""Define the slot template and the fixed CLICK register layout for conformance cases.
 
-DS1..DS10 are the program header.  Each group owns a block of DS registers
-starting at its ``base``: the first 10 registers are the group header, then
-slot N of the group lives at ``base + 10*N`` .. ``base + 10*N + 7``.
+DS1..DS10 are the program header. Each group owns a block of DS registers starting at
+its ``base``. The first 10 registers are the group header. Slot N of the group then
+lives at ``base + 10*N`` .. ``base + 10*N + 7``.
 """
 
 from __future__ import annotations
@@ -26,15 +26,16 @@ SLOT_FIELDS = (
     "Ready",
 )
 
-#: DS register that holds the program (layout) hash, written every scan by the main program.
+#: The DS register that holds the program (layout) hash. The main program writes it every
+#: scan.
 PROGRAM_HASH_REGISTER = 1
-#: DS register where the main program keeps the longest SD10 (scan time, ms) it has read
-#: since the harness last wrote 0 there.  The harness voids a run whose longest scan is past
-#: the program's limit.
+#: The DS register where the main program keeps the longest SD10 (scan time, ms) that it
+#: has read since the harness last wrote 0 there. The harness voids a run whose longest
+#: scan is past the program's limit.
 LONGEST_SCAN_REGISTER = 2
 #: DS1..DS10 are the program header; group blocks start after it.
 HEADER_END = 10
-#: Registers per slot (9 fields plus 1 spare); also the size of a group header.
+#: The registers per slot: 9 fields plus 1 spare. It is also the size of a group header.
 SLOT_STRIDE = 10
 #: Highest DS register on a CLICK.
 DS_LAST = 4500
@@ -61,7 +62,10 @@ def make_slot(count: int, name: str = "Slot") -> _NamedArrayRuntime:
 
 
 def block_size(slots: int) -> int:
-    """DS registers a group with *slots* slot capacity occupies, header included."""
+    """Return the number of DS registers that a group with *slots* slot capacity occupies.
+
+    The count includes the header.
+    """
     return (slots + 1) * SLOT_STRIDE
 
 

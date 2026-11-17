@@ -33,23 +33,27 @@ Numeric = int | float
 # =============================================================================
 
 
-#: While ``calc`` evaluates its formula, the list its failing operations put
-#: their fault flags in (tag names); ``None`` everywhere else.
+#: While ``calc`` evaluates its formula, this holds the list that the failing operations
+#: append their fault flags (tag names) to. It is ``None`` everywhere else.
 #:
-#: A math error is the failing operation's alone, as CLICK's Math takes it: the
-#: operation gives 0 and the formula carries on (hardware, 2026-11-06:
-#: ``7 / 0 + 5`` and ``(7 / 0 + 1) * 5`` are 5, into a DF too, and so is
-#: ``SQRT(-4.0) + 5``).  In a ``calc`` the operation also adds its flag here:
-#: a division by zero SC40 (``fault.division_error``), a domain error SC46
-#: (``fault.math_operation_error``), an Inf or NaN into a bitwise operation
-#: or ``abs()`` of a type's bottom SC43 (``fault.out_of_range``), a
-#: :class:`QuietMathError` none; ``calc`` sets them once the formula is done.
-#: A REAL can hold +/-Inf itself (a Math overflow), so ``calc`` cannot tell a
-#: division by zero from an Inf operand afterwards.
+#: A math error affects only the operation that failed, as in CLICK's Math. The
+#: operation returns 0 and the formula carries on. Hardware, 2026-11-06: ``7 / 0 + 5``
+#: and ``(7 / 0 + 1) * 5`` are 5, into a DF too, and so is ``SQRT(-4.0) + 5``.
+#: In a ``calc`` the failing operation also adds its flag to this list:
 #:
-#: Everywhere else (a rung condition, a copy source, a forloop count, a
-#: pointer expression) an expression is permissive the same way, with no flag
-#: (pyrung's choice; CLICK has no expressions outside Math).  See
+#: - A division by zero adds SC40 (``fault.division_error``).
+#: - A domain error adds SC46 (``fault.math_operation_error``).
+#: - An Inf or NaN into a bitwise operation, or ``abs()`` of a type's bottom value,
+#:   adds SC43 (``fault.out_of_range``).
+#: - A :class:`QuietMathError` adds no flag.
+#:
+#: ``calc`` sets the flags once the formula is done. A REAL can hold +/-Inf itself
+#: (a Math overflow), so ``calc`` cannot tell a division by zero from an Inf operand
+#: afterwards.
+#:
+#: Everywhere else (a rung condition, a copy source, a forloop count, a pointer
+#: expression) an expression is permissive in the same way and sets no flag. That is
+#: pyrung's choice, because CLICK has no expressions outside Math. See
 #: :func:`_permissive`.
 CALC_FAULTS: ContextVar[list[str] | None] = ContextVar("pyrung_calc_faults", default=None)
 
@@ -59,9 +63,10 @@ MATH_OPERATION_FAULT = "fault.math_operation_error"
 
 
 def _permissive(error: Exception) -> int:
-    """The value of an operation that raised *error*: 0, its term's alone.
+    """Return 0 as the value of an operation that raised *error*.
 
-    Inside ``calc`` (:data:`CALC_FAULTS`) the error's flag is noted too.
+    The 0 replaces only that operation's term. Inside ``calc`` (:data:`CALC_FAULTS`)
+    this function also records the error's flag.
     """
     faults = CALC_FAULTS.get()
     if faults is not None:
@@ -75,27 +80,27 @@ def _permissive(error: Exception) -> int:
 
 
 class QuietMathError(ArithmeticError):
-    """A math error CLICK's Math answers with 0 and no fault flag.
+    """Signal a math error that CLICK's Math answers with 0 and no fault flag.
 
-    A MOD by 0 and ``0 ** 0`` (a CLICK read 0 and no flag).  Raised only by
-    the ops :func:`~pyrung.core.instruction.calc.calc_form` puts in a ``calc``
-    (:func:`_op_mod`, :func:`_op_pow_calc`): the operation is 0 and the formula
-    carries on, as for every math error (:data:`CALC_FAULTS`), so ``MOD(DS7, 0)
-    + 5`` and ``0 ^ 0 + 5`` are 5 (hardware, 2026-11-10).  Into a DF the 0 is
-    0.0 (``7.5 MOD 0.0`` read 0.0).  Outside ``calc``, ``%`` floors and ``0 **
-    0`` is 1, as Python's.
+    A MOD by 0 and ``0 ** 0`` are such errors (a CLICK read 0 and no flag). Only the
+    ops that :func:`~pyrung.core.instruction.calc.calc_form` puts in a ``calc`` raise
+    it (:func:`_op_mod`, :func:`_op_pow_calc`). The operation is 0 and the formula
+    carries on, as for every math error (:data:`CALC_FAULTS`). So ``MOD(DS7, 0) + 5``
+    and ``0 ^ 0 + 5`` are 5 (hardware, 2026-11-10). Into a DF the 0 is 0.0
+    (``7.5 MOD 0.0`` read 0.0). Outside ``calc``, ``%`` floors and ``0 ** 0`` is 1,
+    as in Python.
     """
 
 
-#: A CLICK Math computes in doubles: an integer step past this is rounded to one.
+#: A CLICK Math computes in doubles, so it rounds an integer step past this limit.
 DOUBLE_EXACT_LIMIT = 1 << 53
 
 
 def to_double(value: int) -> float:
-    """An integer step past :data:`DOUBLE_EXACT_LIMIT` as the double a CLICK holds.
+    """Return an integer step past :data:`DOUBLE_EXACT_LIMIT` as the double a CLICK holds.
 
-    Python rounds an int to the nearest double, as the double operation would; one
-    past the double range is +/-Inf.
+    Python rounds an int to the nearest double, as the double operation would. An int
+    past the double range becomes +/-Inf.
     """
     try:
         return float(value)
@@ -113,11 +118,11 @@ def _op_div(a: Numeric, b: Numeric) -> Numeric:
 
 
 def _op_mod(a: Numeric, b: Numeric) -> Numeric:
-    """``a MOD b`` as a CLICK's Math takes it: truncated, the sign of *a*.
+    """Return ``a MOD b`` as CLICK's Math computes it, truncated with the sign of *a*.
 
-    ``-7 MOD 2`` is -1 and ``7 MOD -2`` is 1, Int and Real alike (C's ``fmod``;
-    Python's ``%`` floors instead).  A MOD by 0 is a :class:`QuietMathError`.
-    ``calc`` runs ``%`` as this; anywhere else ``%`` is Python's.
+    ``-7 MOD 2`` is -1 and ``7 MOD -2`` is 1, for Int and Real alike. That matches C's
+    ``fmod``. Python's ``%`` floors instead. A MOD by 0 raises :class:`QuietMathError`.
+    ``calc`` runs ``%`` as this function. Anywhere else ``%`` is Python's.
     """
     if b == 0:
         raise QuietMathError("MOD by zero")
@@ -126,35 +131,34 @@ def _op_mod(a: Numeric, b: Numeric) -> Numeric:
 
 
 def _op_pow(a: Numeric, b: Numeric) -> Numeric:
-    """``a ** b``; a float result past the float range is +/-Inf (IEEE 754).
+    """Return ``a ** b``, with +/-Inf for a float result past the float range (IEEE 754).
 
-    Python raises ``OverflowError`` where ``*`` would give Inf; here
-    ``Big ** 2`` is Inf, as ``Big * Big`` is, not a math error.  The sign is
-    the IEEE one: negative only for a negative base and an odd integer
-    exponent.
+    Python raises ``OverflowError`` where ``*`` would give Inf. Here ``Big ** 2`` is
+    Inf, as ``Big * Big`` is, and it is not a math error. The sign follows IEEE. The
+    result is negative only for a negative base and an odd integer exponent.
     """
     try:
         result = a**b
     except OverflowError:
         if not (isinstance(a, float) or isinstance(b, float)):
-            raise  # an int too large for a float: in a calc 0, with SC43
+            raise  # an int too large for a float: in a calc the result is 0, with SC43
         odd = b % 2 == 1 if isinstance(b, int) else b.is_integer() and int(b) % 2 == 1
         negative = a < 0 and odd
         return -math.inf if negative else math.inf
     if isinstance(result, complex):
-        # A negative base to a fractional power (``(-8.0) ** 0.5``) has no real
-        # value: a math error, as ``sqrt(-1)`` is (calc sets SC46).
+        # A negative base to a fractional power (``(-8.0) ** 0.5``) has no real value.
+        # That is a math error, as ``sqrt(-1)`` is (calc sets SC46).
         raise MathDomainError(f"({a!r}) ** {b!r}: math domain error")
     return result
 
 
 def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
-    """``a ** b`` in a ``calc``: ``0 ^ 0`` is a :class:`QuietMathError`, and 0 to
-    a negative power is +Inf.
+    """Return ``a ** b`` as a ``calc`` computes it.
 
-    A CLICK's Math stores +Inf for ``0.0 ^ -1.0`` into a DF.  It stores 0 for
-    ``0 ^ -1 + 5`` into a DS, since the whole formula is +Inf (hardware,
-    2026-11-10).  Python raises ``ZeroDivisionError`` for both.
+    ``0 ^ 0`` raises :class:`QuietMathError`, and 0 to a negative power is +Inf.
+    CLICK's Math stores +Inf for ``0.0 ^ -1.0`` into a DF. It stores 0 for
+    ``0 ^ -1 + 5`` into a DS, because the whole formula is +Inf (hardware, 2026-11-10).
+    Python raises ``ZeroDivisionError`` for both.
     """
     if a == 0 and b <= 0:
         if b == 0:
@@ -163,17 +167,17 @@ def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
     return _op_pow(a, b)
 
 
-#: The op ``calc`` runs in place of each op of a formula (``calc_form``).
+#: Maps each op of a formula to the op that ``calc`` runs in its place (``calc_form``).
 CALC_OPS: dict[Any, Any] = {operator.mod: _op_mod, _op_pow: _op_pow_calc}
 
 
 def bit_operand(value: Numeric) -> int:
-    """``int(value)`` for an operand of a bitwise or shift operation.
+    """Return ``int(value)`` for an operand of a bitwise or shift operation.
 
-    An Inf raises ``OverflowError`` in ``int()``, and so does a NaN here
-    (``int(nan)`` raises ``ValueError``): in a ``calc`` the operation is 0 and
-    sets the out-of-range flag for either.  The compiled kernel and generated
-    CircuitPython use the ``_bit_int`` helper, which does the same.
+    ``int()`` raises ``OverflowError`` for an Inf. For a NaN it raises ``ValueError``,
+    so this function raises ``OverflowError`` for a NaN too. In a ``calc`` the operation
+    is then 0 and sets the out-of-range flag for either. The compiled kernel and the
+    generated CircuitPython use the ``_bit_int`` helper, which does the same.
     """
     if value != value:  # NaN
         raise OverflowError("cannot convert float NaN to integer")
@@ -193,11 +197,11 @@ def _op_xor(a: Numeric, b: Numeric) -> int:
 
 
 def shift_count(value: Numeric) -> int:
-    """``bit_operand(value)`` for a shift count, which must not be negative.
+    """Return ``bit_operand(value)`` for a shift count, which must not be negative.
 
-    A negative count raises ``OverflowError`` (Python raises ``ValueError``), so
-    in a ``calc`` the shift is 0 and sets the out-of-range flag, pyrung's choice.  The
-    compiled kernel and generated CircuitPython use ``_shift_count``.
+    A negative count raises ``OverflowError``, where Python raises ``ValueError``. So in
+    a ``calc`` the shift is 0 and sets the out-of-range flag. That is pyrung's choice.
+    The compiled kernel and the generated CircuitPython use ``_shift_count``.
     """
     count = bit_operand(value)
     if count < 0:
@@ -217,30 +221,36 @@ def _op_invert(a: Numeric) -> int:
     return ~bit_operand(a)
 
 
-#: The bottom of each signed range ABS cannot take, by its own op: ``calc`` swaps
-#: ``abs()`` of an Int or Dint tag for one of these.  Its error is the ABS's
-#: alone, as for every math error: ``ABS(DS1) + 1`` with DS1 = -32768 is 1 with
-#: SC43, and ``ABS(DS1)`` into a DD is 0 with SC43 (hardware, 2026-11-10).
+#: The bottom of each signed range, which ABS cannot take. ``calc`` swaps ``abs()`` of
+#: an Int or Dint tag for the op of its own type. The error affects only the ABS, as
+#: for every math error. ``ABS(DS1) + 1`` with DS1 = -32768 is 1 with SC43, and
+#: ``ABS(DS1)`` into a DD is 0 with SC43 (hardware, 2026-11-10).
 ABS_FLOORS: dict[str, int] = {"INT": -32768, "DINT": -2147483648}
 
 
 def _abs_of_int(a: Numeric) -> Numeric:
-    """ABS of an Int: ``ABS(-32768)`` has no Int, an OverflowError (in a calc the
-    ABS is 0, with SC43)."""
+    """Return the ABS of an Int.
+
+    ``ABS(-32768)`` has no Int result, so it raises ``OverflowError``. In a calc the ABS
+    is 0, with SC43.
+    """
     if a == -32768:
         raise OverflowError("ABS of -32768")
     return abs(a)
 
 
 def _abs_of_dint(a: Numeric) -> Numeric:
-    """ABS of a Dint: ``ABS(-2147483648)`` has no Dint, an OverflowError (in a calc
-    the ABS is 0, with SC43)."""
+    """Return the ABS of a Dint.
+
+    ``ABS(-2147483648)`` has no Dint result, so it raises ``OverflowError``. In a calc
+    the ABS is 0, with SC43.
+    """
     if a == -2147483648:
         raise OverflowError("ABS of -2147483648")
     return abs(a)
 
 
-#: ``abs()`` of a tag of the type named, as ``calc`` runs it.
+#: Maps a tag type name to the ``abs()`` that ``calc`` runs for a tag of that type.
 ABS_OF_TYPE: dict[str, Any] = {"INT": _abs_of_int, "DINT": _abs_of_dint}
 
 
@@ -365,11 +375,11 @@ class Expression(ABC):
     # Comparison Operators -> Condition
     # =========================================================================
     #
-    # A block element addressed at scan time (``DS[idx]``, ``DS[idx + 1]``) is
-    # not an Expression; ``_wrap`` would freeze it into a LiteralExpr that
-    # compares the ref object itself.  Return NotImplemented instead, so Python
-    # asks the ref for the reflected comparison (``expr < DS[i]`` becomes
-    # ``DS[i] > expr``), which builds an IndirectCompare condition.
+    # A block element addressed at scan time (``DS[idx]``, ``DS[idx + 1]``) is not an
+    # Expression. ``_wrap`` would freeze it into a LiteralExpr that compares the ref
+    # object itself. These methods return NotImplemented instead. Python then asks the
+    # ref for the reflected comparison (``expr < DS[i]`` becomes ``DS[i] > expr``), and
+    # that builds an IndirectCompare condition.
 
     def __eq__(self, other: object) -> ExprCompare:  # ty: ignore[invalid-method-override]
         if _is_indexed_element(other):
@@ -420,7 +430,7 @@ class Expression(ABC):
 
 
 def _is_indexed_element(value: Any) -> bool:
-    """Whether *value* is a block element addressed at scan time."""
+    """Return True if *value* is a block element addressed at scan time."""
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
     return isinstance(value, (IndirectRef, IndirectExprRef))
@@ -504,10 +514,10 @@ class BinaryExpr(Expression):
 
 
 def _calc_step(result: Numeric) -> Numeric:
-    """*result* as a ``calc`` step holds it: an integer past 2 ** 53 becomes a double.
+    """Return *result* as a ``calc`` step holds it, with an integer past 2 ** 53 as a double.
 
     A CLICK Math computes in doubles (hardware, 2026-11-05: ``a * a - (a * a - 1)``
-    with ``a`` = 2147483647 is 0).  Outside ``calc`` an integer step stays exact.
+    with ``a`` = 2147483647 is 0). Outside ``calc`` an integer step stays exact.
     """
     if (
         type(result) is int
@@ -522,9 +532,11 @@ _NEG_DOUBLE_EXACT_LIMIT = -DOUBLE_EXACT_LIMIT
 
 
 class CalcBinaryExpr(BinaryExpr):
-    """A :class:`BinaryExpr` of a ``calc`` formula, whose steps are doubles
-    (:func:`_calc_step`).  ``calc_form`` builds these, so an expression anywhere
-    else pays nothing for the check and its integer steps stay exact."""
+    """A :class:`BinaryExpr` of a ``calc`` formula, whose steps are doubles.
+
+    See :func:`_calc_step`. ``calc_form`` builds these. An expression anywhere else does
+    not pay for the check, and its integer steps stay exact.
+    """
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         left = self.left.evaluate(ctx)
@@ -567,8 +579,10 @@ class UnaryExpr(Expression):
 
 
 class CalcUnaryExpr(UnaryExpr):
-    """A :class:`UnaryExpr` of a ``calc`` formula, whose steps are doubles (as
-    :class:`CalcBinaryExpr`)."""
+    """A :class:`UnaryExpr` of a ``calc`` formula, whose steps are doubles.
+
+    It behaves as :class:`CalcBinaryExpr` does.
+    """
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         operand = self.operand.evaluate(ctx)
@@ -610,25 +624,26 @@ class ExprCompare(Condition):
 
 
 class MathDomainError(ValueError):
-    """A math function was given an operand outside its domain.
+    """Signal that a math function received an operand outside its domain.
 
-    ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, ``asin``/``acos``
-    outside -1..1.  ``calc`` turns it into CLICK's math-operation error (SC46):
-    the function is 0 and the formula carries on (``SQRT(-4.0) + 5`` is 5), the
-    flag stays on until the next Math clears it, and the PLC stays in RUN.
+    Examples are ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, and
+    ``asin``/``acos`` outside -1..1. ``calc`` turns it into CLICK's math-operation
+    error (SC46). The function is 0 and the formula carries on (``SQRT(-4.0) + 5``
+    is 5). The flag stays on until the next Math clears it, and the PLC stays in RUN.
     """
 
 
-#: Math functions with a restricted domain: the ones that can raise MathDomainError.
+#: The math functions with a restricted domain. These can raise MathDomainError.
 DOMAIN_LIMITED_MATH_FUNCS = frozenset({"sqrt", "log", "log10", "asin", "acos"})
 
 
 def math_func_value(func: Any, name: str, value: Numeric) -> Numeric:
-    """``func(value)``, IEEE 754 for a +/-Inf or NaN operand.
+    """Return ``func(value)``, with the IEEE 754 result for a +/-Inf or NaN operand.
 
-    A ``ValueError`` from one of :data:`DOMAIN_LIMITED_MATH_FUNCS` is a domain
-    error (``sqrt(-1)``, ``asin(Inf)``).  Any other function only raises for a
-    non-finite operand (``sin(Inf)``), whose IEEE result is NaN.
+    A ``ValueError`` from one of :data:`DOMAIN_LIMITED_MATH_FUNCS` is a domain error
+    (``sqrt(-1)``, ``asin(Inf)``), and this function raises :class:`MathDomainError`.
+    Any other function raises only for a non-finite operand (``sin(Inf)``). Its IEEE
+    result is NaN, and this function returns that.
     """
     try:
         return func(value)
@@ -788,7 +803,7 @@ def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
 #: Name prefix of the hidden tag each ``randint`` site reads its draw from.
 RANDINT_TAG_PREFIX = "_rand."
 
-#: Stream seed for every draw.  Fixed, so two runs of one program agree.
+#: Stream seed for every draw. It is fixed, so two runs of one program agree.
 RANDINT_SEED = 0x5EED
 
 _MASK64 = (1 << 64) - 1
@@ -804,8 +819,11 @@ def _splitmix64(x: int) -> int:
 
 
 def randint_draw(site: int, scan_id: int, lo: int, hi: int) -> int:
-    """The draw of *site* on scan *scan_id*: a pure function, so replay, seek
-    and fork reproduce it.  ``lo > hi`` draws from ``hi..lo``."""
+    """Return the draw of *site* on scan *scan_id*.
+
+    This is a pure function, so replay, seek and fork reproduce the draw. If ``lo > hi``,
+    it draws from ``hi..lo``.
+    """
     if lo > hi:
         lo, hi = hi, lo
     z = _splitmix64(_splitmix64(RANDINT_SEED ^ site) ^ (scan_id & _MASK64))
@@ -817,7 +835,7 @@ def _finite(value: Numeric) -> bool:
 
 
 def _integer_operand(operand: Expression) -> bool:
-    """Whether a ``randint`` bound is an integer literal or integer tag."""
+    """Return True if a ``randint`` bound is an integer literal or an integer tag."""
     from pyrung.core.tag import TagType
 
     if isinstance(operand, LiteralExpr):
@@ -828,19 +846,25 @@ def _integer_operand(operand: Expression) -> bool:
 
 
 def _real_tag_operand(operand: Expression) -> bool:
-    """Whether a ``randint`` bound is a bare ``Real`` tag."""
+    """Return True if a ``randint`` bound is a bare ``Real`` tag."""
     from pyrung.core.tag import TagType
 
     return isinstance(operand, TagExpr) and operand.tag.type == TagType.REAL
 
 
 def _randint_tag_name(site: int, cut: str = "cut") -> str:
-    """The draw tag of *site*; a negative one is a cut draw of ``~site``, *cut* its kind."""
+    """Return the name of the draw tag of *site*.
+
+    A negative *site* is a cut draw of ``~site``, and *cut* is the kind of cut.
+    """
     return f"{RANDINT_TAG_PREFIX}{site}" if site >= 0 else f"{RANDINT_TAG_PREFIX}{~site}.{cut}"
 
 
 def _operand_span(operand: Expression) -> tuple[int, int] | None:
-    """Lowest and highest integer a ``randint`` bound can take, if declared."""
+    """Return the lowest and highest integer that a ``randint`` bound can take.
+
+    Return ``None`` if the bound does not declare them.
+    """
     if isinstance(operand, LiteralExpr):
         return int(operand.value), int(operand.value)
     if isinstance(operand, TagExpr):
@@ -854,27 +878,30 @@ def _operand_span(operand: Expression) -> tuple[int, int] | None:
 
 
 class RandIntExpr(Expression):
-    """``randint(lo, hi)``: an integer drawn each scan, ``lo..hi`` inclusive.
+    """Draw an integer each scan, from ``lo`` to ``hi`` inclusive: ``randint(lo, hi)``.
 
-    The draw is an input, not a computation.  Each site owns a hidden external
-    tag (``_rand.<n>``) that the scan's input drain writes after patches, so a
-    ``patch()`` of that tag overrides the draw for one scan and a ``force()``
-    pins it.  Logic reads the tag, and the static facts see an external input over
-    ``lo..hi`` (inclusive), or over the hull of a bound tag's declared
-    ``min``/``max``/``choices``.  Bounds that are tags are read at the start of
-    the scan.
+    The draw is an input, not a computation. Each site owns a hidden external tag
+    (``_rand.<n>``). The scan's input drain writes that tag after patches. A ``patch()``
+    of the tag overrides the draw for one scan, and a ``force()`` pins it. Logic reads
+    the tag. The static facts see an external input over ``lo..hi`` (inclusive), or over
+    the hull of a bound tag's declared ``min``/``max``/``choices``. Bounds that are tags
+    are read at the start of the scan.
 
-    Some forms never reach the draw, as a CLICK reads them, so a ``patch()`` or
-    ``force()`` of their tag changes nothing.  A bare ``Real`` tag as a bound
-    reads 0 with no flag.  Equal bounds, constants or tags holding one value,
-    are a math error: the site reads 0, with SC46 in a ``calc``.  Any other
-    bound is read as an integer; one that evaluates to Inf or NaN makes the site
-    read 0, with SC43 in a ``calc``.  A math error of the site zeroes only the
-    site: ``randint(7, 7) + 5`` is 5 (hardware, 2026-11-05).
+    Some forms never reach the draw, as a CLICK reads them. A ``patch()`` or ``force()``
+    of their tag changes nothing.
 
-    A sibling of the other expression classes, never a subclass: no
-    ``LiteralExpr`` / ``MathFuncExpr`` arm may treat a draw as a pure function
-    of its operands.
+    - A bare ``Real`` tag as a bound reads 0 with no flag.
+    - Equal bounds, whether constants or tags holding one value, are a math error. The
+      site reads 0, with SC46 in a ``calc``.
+    - Any other bound is read as an integer. If it evaluates to Inf or NaN, the site
+      reads 0, with SC43 in a ``calc``.
+
+    A math error of the site zeroes only the site: ``randint(7, 7) + 5`` is 5
+    (hardware, 2026-11-05).
+
+    This class is a sibling of the other expression classes and never a subclass. No
+    ``LiteralExpr`` or ``MathFuncExpr`` arm may treat a draw as a pure function of its
+    operands.
     """
 
     def __init__(
@@ -885,8 +912,9 @@ class RandIntExpr(Expression):
         self.lo = lo
         self.hi = hi
         self.site = next(_randint_site_counter) if site is None else site
-        # The draw's range: the bounds themselves when literal, else the hull of
-        # what each bound tag declares (a draw never leaves min(lo, hi)..max(lo, hi)).
+        # The draw's range is the bounds themselves when they are literal. Otherwise it is
+        # the hull of what each bound tag declares. A draw never leaves
+        # min(lo, hi)..max(lo, hi).
         lo_span = _operand_span(lo)
         hi_span = _operand_span(hi)
         bounds: dict[str, Any] = {}
@@ -917,8 +945,8 @@ class RandIntExpr(Expression):
         )
         #: Whether a bound can evaluate to Inf or NaN (see :meth:`evaluate`).
         self.checks_bounds = not (_integer_operand(lo) and _integer_operand(hi))
-        #: Whether the bounds are read as the site is reached, to tell equal ones
-        #: (or Inf or NaN): every form but two integer constants.
+        #: Whether the bounds are read as the site is reached, to detect equal bounds
+        #: (or Inf or NaN). This is true for every form except two integer constants.
         self.reads_bounds = not (
             self.real_bounds
             or (
@@ -932,16 +960,15 @@ class RandIntExpr(Expression):
     def with_cut_bounds(
         self, lo: Expression, hi: Expression, *, unsigned: bool = False
     ) -> RandIntExpr:
-        """The draw a Math that cuts the bounds reads, over *lo* and *hi* as cut.
+        """Return the draw that a Math reads when it cuts the bounds to *lo* and *hi*.
 
-        The cut draw is a second site with its own tag (``expr.cut_tag``).  Each
-        cut has one draw, as a CLICK's pasted RANDs each draw their own.  This
-        expression is not touched, so a Math that keeps the constants still draws
-        over them and the export writes them.  Every Math that cuts finds the cut
-        site by name and reads the same one.  A decimal Math cuts only a bound past
-        a Dint's range, to 32 bits.  A hex Math (*unsigned*) cuts to 16 bits.  It
-        draws from its own site (``_rand.<n>.ucut``) when its cut differs from the
-        decimal one.
+        The cut draw is a second site with its own tag (``expr.cut_tag``). Each cut has
+        one draw, as each pasted RAND in CLICK draws its own. This expression is not
+        changed, so a Math that keeps the constants still draws over them, and the export
+        writes them. Every Math that cuts finds the cut site by name and reads the same
+        one. A decimal Math cuts only a bound past a Dint's range, to 32 bits. A hex Math
+        (*unsigned*) cuts to 16 bits. It draws from its own site (``_rand.<n>.ucut``)
+        when its cut differs from the decimal one.
         """
         site = ~self.site
         cut = "ucut" if unsigned else "cut"
@@ -950,28 +977,34 @@ class RandIntExpr(Expression):
 
     @property
     def cut_tag(self) -> Any:
-        """The tag of the draw a decimal Math reads, ``tag`` if no constant cuts."""
+        """Return the tag of the draw that a decimal Math reads.
+
+        This is ``tag`` if no constant is cut.
+        """
         from pyrung.core.instruction.calc import cut_int_constants
 
         return cut_int_constants(self).tag
 
     @property
     def ucut_tag(self) -> Any:
-        """The tag of the draw a hex Math reads.  It is ``cut_tag`` where the
-        unsigned cut is the signed one, and ``tag`` if no constant cuts."""
+        """Return the tag of the draw that a hex Math reads.
+
+        This is ``cut_tag`` where the unsigned cut is the signed one. It is ``tag`` if no
+        constant is cut.
+        """
         from pyrung.core.instruction.calc import calc_form
 
         return calc_form(self, "hex").tag
 
     def draw(self, ctx: ScanContext, numbers: Mapping[int, int]) -> int:
-        """This scan's draw, from the bounds as the scan starts.
+        """Return this scan's draw, from the bounds as the scan starts.
 
-        *numbers* is the program's :func:`randint_numbers`.  The draw is seeded by
-        the site's number in *numbers*, so a program draws the same values whatever
+        *numbers* is the program's :func:`randint_numbers`. The site's number in
+        *numbers* seeds the draw, so a program draws the same values whatever
         ``randint()`` calls came before it.
 
-        A site that reads no draw, or a bound that is Inf or NaN, draws the
-        tag's default; :meth:`evaluate` decides what the site reads instead.
+        A site that reads no draw, or a bound that is Inf or NaN, draws the tag's
+        default. :meth:`evaluate` decides what the site reads instead.
         """
         if self.real_bounds:
             return self.tag.default
@@ -992,8 +1025,8 @@ class RandIntExpr(Expression):
             lo = self.lo.evaluate(ctx)
             hi = self.hi.evaluate(ctx)
             if not (_finite(lo) and _finite(hi)):
-                # A bound holding Inf or NaN has no integer range: SC43 in a calc
-                # (pyrung's choice; CLICK's editor takes no such bound).
+                # A bound holding Inf or NaN has no integer range, so a calc sets SC43.
+                # That is pyrung's choice. CLICK's editor accepts no such bound.
                 return self._site_error(OUT_OF_RANGE_FAULT)
             if int(lo) == int(hi):
                 return self._site_error(MATH_OPERATION_FAULT)
@@ -1001,11 +1034,11 @@ class RandIntExpr(Expression):
 
     @staticmethod
     def _site_error(flag: str) -> int:
-        """A math error of the site: it reads 0, and in a ``calc`` *flag* is noted
-        (:data:`CALC_FAULTS`), as for any math error.
+        """Return 0 for a math error of the site.
 
-        Only the site is zeroed, the rest of the formula runs.  Outside ``calc`` no
-        flag is set, as for any math error there.
+        In a ``calc`` this records *flag* (:data:`CALC_FAULTS`), as for any math error.
+        Only the site is zeroed, and the rest of the formula runs. Outside ``calc`` it
+        sets no flag, as for any math error there.
         """
         faults = CALC_FAULTS.get()
         if faults is not None:
@@ -1017,51 +1050,56 @@ class RandIntExpr(Expression):
 
 
 def randint(lo: Expression | int | Tag, hi: Expression | int | Tag) -> RandIntExpr:
-    """Random integer from ``lo`` to ``hi`` inclusive, drawn once per scan (CLICK ``RAND``).
+    """Return a random integer from ``lo`` to ``hi`` inclusive, drawn once per scan.
 
-    Use it inside ``math()``.  Draws are deterministic per scan, so replay, seek
-    and fork see the same values; ``patch()`` or ``force()`` the site's tag
-    (``expr.tag``) to choose a draw in a test.  A bare ``Real`` tag as a bound reads
-    0 with no flag.  Equal bounds, constants or tag values, are a math error: the
-    ``randint`` reads 0, the rest of the formula runs, and a ``calc`` sets SC46.
-    A decimal Math draws over the whole bounds and stores the draw as any result,
-    so into an ``Int`` a draw outside -32768..32767 wraps and sets SC43.  A hex
-    Math cuts each constant bound to 16 bits, and that draw is its own
-    (``expr.ucut_tag``).
+    This is CLICK's ``RAND``. Use it inside ``math()``. Draws are deterministic per scan,
+    so replay, seek and fork see the same values. In a test, call ``patch()`` or
+    ``force()`` on the site's tag (``expr.tag``) to choose a draw.
+
+    A bare ``Real`` tag as a bound reads 0 with no flag. Equal bounds, whether constants
+    or tag values, are a math error. The ``randint`` reads 0, the rest of the formula
+    runs, and a ``calc`` sets SC46.
+
+    A decimal Math draws over the whole bounds and stores the draw as it stores any
+    result. Into an ``Int``, a draw outside -32768..32767 wraps and sets SC43. A hex Math
+    cuts each constant bound to 16 bits, and that draw is its own (``expr.ucut_tag``).
     """
     return RandIntExpr(_wrap(lo), _wrap(hi))
 
 
 def is_randint_tag(name: str) -> bool:
-    """Whether *name* is a ``randint`` site's hidden draw tag."""
+    """Return True if *name* is the hidden draw tag of a ``randint`` site."""
     return name.startswith(RANDINT_TAG_PREFIX)
 
 
 def any_randint_sites() -> bool:
-    """Whether any ``randint`` site is alive: a program holding one keeps it so."""
+    """Return True if any ``randint`` site is alive.
+
+    A program that holds a site keeps it alive.
+    """
     return len(_randint_sites) > 0
 
 
 def randint_sites(tag_names: Iterable[str]) -> tuple[RandIntExpr, ...]:
-    """The live ``randint`` sites among *tag_names*, in site order."""
+    """Return the live ``randint`` sites among *tag_names*, in site order."""
     sites = [_randint_sites.get(name) for name in tag_names if is_randint_tag(name)]
     return tuple(sorted((s for s in sites if s is not None), key=lambda s: s.site))
 
 
 def _base_site(site: int) -> int:
-    """The site a cut draw (``~site``) was cut from, or *site* itself."""
+    """Return the site that a cut draw (``~site``) was cut from, or *site* itself."""
     return site if site >= 0 else ~site
 
 
 def randint_numbers(
     tag_names: Iterable[str], numbered: Mapping[int, int] | None = None
 ) -> dict[int, int]:
-    """Number each ``randint`` among *tag_names* 1, 2, ... in the order given,
-    after those already *numbered*.
+    """Number each ``randint`` among *tag_names* as 1, 2, ... in the order given.
 
-    The keys are ``site`` numbers, and a cut draw takes the number of the site it
-    was cut from.  Given the tags in the order the rungs reach them, the numbers
-    come from the program alone.
+    The numbering starts after the sites that are already *numbered*. The keys are
+    ``site`` numbers, and a cut draw takes the number of the site it was cut from. If
+    you give the tags in the order that the rungs reach them, the numbers come from the
+    program alone.
     """
     numbers = dict(numbered or {})
     for name in tag_names:
@@ -1077,7 +1115,7 @@ def randint_numbers(
 
 
 def _range_dsl(block_range: BlockRange) -> str:
-    """DSL spelling of a static block range: ``DS.select(1, 10)``."""
+    """Return the DSL spelling of a static block range, such as ``DS.select(1, 10)``."""
     text = f"{block_range.block.name}.select({block_range.start}, {block_range.end})"
     if block_range.reverse_order:
         text += ".reverse()"
@@ -1085,11 +1123,11 @@ def _range_dsl(block_range: BlockRange) -> str:
 
 
 def sum_values(values: Iterable[Any]) -> Numeric:
-    """Add *values* plain left to right, as the compiled backends do (``a + b + c``).
+    """Add *values* plainly from left to right, as the compiled backends do (``a + b + c``).
 
-    Builtin ``sum()`` adds floats with compensation on Python 3.12+, so a Real
-    range sum would differ in the last bit by interpreter version and from the
-    generated code.  An empty range yields 0.
+    The builtin ``sum()`` adds floats with compensation on Python 3.12 and later. A Real
+    range sum would then differ in the last bit between interpreter versions, and from
+    the generated code. An empty range returns 0.
     """
     iterator = iter(values)
     try:
@@ -1112,25 +1150,26 @@ class SumExpr(Expression):
         return f"{_range_dsl(self.block_range)}.sum()"
 
 
-#: Range aggregates other than sum, in pyrung spelling (CLICK: MAX, MIN, MDN, AVG).
+#: The range aggregates other than sum, spelled as pyrung spells them. CLICK calls them
+#: MAX, MIN, MDN and AVG.
 RANGE_AGGREGATE_KINDS: tuple[str, ...] = ("max", "min", "median", "mean")
 
 
 def aggregate_values(kind: str, values: list[Any] | tuple[Any, ...]) -> Numeric:
-    """Compute one range aggregate over already-read member values.
+    """Compute one range aggregate over member values that are already read.
 
-    Shared by :class:`RangeAggregateExpr` and crossing forward evaluation so
-    every consumer computes the same number.  The compiled backend emits the
-    same operations inline (``_primitives.py``), in the same member order:
+    :class:`RangeAggregateExpr` and crossing forward evaluation share this function, so
+    every consumer computes the same number. The compiled backend emits the same
+    operations inline (``_primitives.py``), in the same member order:
 
     - ``max`` / ``min``: Python ``max`` / ``min``.
-    - ``mean``: left-to-right ``+`` then ``/ n`` (exact quotient; calc's
-      destination conversion decides truncation).
-    - ``median``: middle of the sorted values; for an even count, the mean of
-      the two middle values (truncated toward zero when the range is
-      integer, as on a CLICK).
+    - ``mean``: left-to-right ``+`` then ``/ n``. The quotient is exact, and calc's
+      destination conversion decides truncation.
+    - ``median``: the middle of the sorted values. For an even count it is the mean of
+      the two middle values, truncated toward zero when the range is integer, as on a
+      CLICK.
 
-    An empty range yields 0.
+    An empty range returns 0.
     """
     if not values:
         return 0
@@ -1150,18 +1189,18 @@ def aggregate_values(kind: str, values: list[Any] | tuple[Any, ...]) -> Numeric:
             return ordered[mid]
         pair = ordered[mid - 1] + ordered[mid]
         if type(pair) is int:
-            # CLICK: MDN of an integer range is an integer, the mean of the
-            # middle two truncated toward zero.
+            # CLICK: MDN of an integer range is an integer. It is the mean of the
+            # middle two values, truncated toward zero.
             return pair // 2 if pair >= 0 else -(-pair // 2)
         return pair / 2
     raise ValueError(f"Unknown range aggregate kind: {kind!r}")
 
 
 class RangeAggregateExpr(Expression):
-    """``max`` / ``min`` / ``median`` / ``mean`` of the tag values in a block range.
+    """The ``max``, ``min``, ``median`` or ``mean`` of the tag values in a block range.
 
-    A sibling of :class:`SumExpr`, not a subclass: every ``isinstance(x, SumExpr)``
-    arm computes or exports a sum, and must not see these.
+    This class is a sibling of :class:`SumExpr` and not a subclass. Every
+    ``isinstance(x, SumExpr)`` arm computes or exports a sum, and must not see these.
     """
 
     def __init__(self, kind: str, block_range: BlockRange) -> None:
@@ -1186,11 +1225,11 @@ INTEGER_TAG_TYPE_NAMES = frozenset({"BOOL", "INT", "DINT", "WORD"})
 
 
 def may_be_float(expr: Any) -> bool:
-    """False only when *expr* is integer-valued: never a float, so never Inf or NaN.
+    """Return False only when *expr* is integer-valued, so it is never Inf or NaN.
 
-    A REAL operand, a float constant, a ``/``, a ``**`` or a math function
-    can make a float, which can be Inf or NaN (``Inf - Inf``).  Anything not
-    recognised counts as one.
+    A REAL operand, a float constant, a ``/``, a ``**`` or a math function can make a
+    float, and a float can be Inf or NaN (``Inf - Inf``). This function treats anything
+    it does not recognise as a float.
     """
     from pyrung.core.tag import ImmediateRef
 
@@ -1211,18 +1250,18 @@ def may_be_float(expr: Any) -> bool:
     return True
 
 
-#: Tag type names an index may be built from: a pointer holds an address.
+#: The tag type names that an index may be built from. A pointer holds an address.
 INDEX_TAG_TYPE_NAMES = frozenset({"INT", "DINT"})
 
 
 def is_integer_index(expr: Any) -> bool:
-    """True when *expr* may index a block: built only from Int and Dint tags,
-    integer constants and integer operations.
+    """Return True if *expr* may index a block.
 
-    ``/``, ``**`` and the math functions can make a float, a ``Real``,
-    ``Word``, ``Bool`` or ``Char`` operand is not an address, and ``mean`` and
-    ``median`` of a block range can be fractional.  Anything not recognised
-    counts as not an index.
+    The expression must be built only from Int and Dint tags, integer constants and
+    integer operations. ``/``, ``**`` and the math functions can make a float. A ``Real``,
+    ``Word``, ``Bool`` or ``Char`` operand is not an address. The ``mean`` and ``median``
+    of a block range can be fractional. This function treats anything it does not
+    recognise as not an index.
     """
     from pyrung.core.tag import ImmediateRef
 

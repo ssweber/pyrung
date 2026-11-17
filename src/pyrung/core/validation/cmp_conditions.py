@@ -1,8 +1,8 @@
-"""Comparison-semantics validators: domains, monotone/reset/order/zero/stepper operands.
+"""Check comparison semantics: domains, and monotone, reset, order, zero and stepper operands.
 
-Ten rules, one pass over every comparison in every rung condition (main +
-subroutines + branches, both the ``Compare*`` leaf family and the expression-tree
-``ExprCompare``):
+Ten rules run in one pass over every comparison in every rung condition. That covers
+main, subroutines and branches, and both the ``Compare*`` leaf family and the
+expression-tree ``ExprCompare``:
 
 * ``CMP_ALWAYS_FALSE`` / ``CMP_ALWAYS_TRUE`` — a comparison has one truth value
   over complete declared or producer-derived domains. **warning** / **info**.
@@ -495,9 +495,12 @@ def _real_dest(instr: Any) -> Tag | None:
 
 
 def _computed_real_names(program: Program) -> set[str]:
-    """REAL tag names the ladder computes: a float ``math()`` result, or a ``copy()``
-    of one (to a fixed point).  A REAL only copied from constants or integer tags,
-    or never written, is not in the set."""
+    """Return the names of the REAL tags that the ladder computes.
+
+    A tag counts if it receives a float ``math()`` result, or a ``copy()`` of one,
+    followed to a fixed point. A REAL that is only copied from constants or integer
+    tags, or never written, is not in the set.
+    """
     from pyrung.core.expression import may_be_float
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
@@ -603,13 +606,13 @@ def _operand_tag(op: _Operand) -> Tag | None:
 
 
 def _tag_stays_zero(tag: Tag, graph: Any) -> bool:
-    """Whether *tag* provably remains at numeric zero inside the ladder.
+    """Return True if *tag* provably stays at numeric zero inside the ladder.
 
-    Pyrung gives every numeric tag a real zero initialization value.  The defect
-    this rule targets is narrower than ordinary "use before initialization": the
-    tag has no ladder writer at all, so that zero never changes.  A configured
-    default, a tag the outside writes (see ``ProgramGraph.written_from_outside``) or a
-    read-only zero constant carries explicit intent and is left alone.
+    pyrung gives every numeric tag a real zero initialization value. The defect that this
+    rule targets is narrower than ordinary "use before initialization". The tag has no
+    ladder writer at all, so that zero never changes. A configured default, a tag that
+    the outside writes (see ``ProgramGraph.written_from_outside``) or a read-only zero
+    constant carries explicit intent, and this rule leaves it alone.
     """
     if (
         tag.type not in _NUMERIC_TAG_TYPES
@@ -678,7 +681,7 @@ def _is_default_only_boolish_compare(cmp: _Compare, graph: Any) -> bool:
 
 
 def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
-    """``(write_site, preset_tag, instruction)`` for zero timer, counter and drum presets."""
+    """Return ``(write_site, preset_tag, instruction)`` for zero timer, counter and drum presets."""
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.drums import _TimedDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
