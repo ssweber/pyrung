@@ -1272,11 +1272,7 @@ def reset_dominance(
     from pyrung.core.condition import BitCondition, NormallyClosedCondition
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
     from pyrung.core.tag import ImmediateRef, Tag
-    from pyrung.core.validation._common import (
-        _build_tag_map,
-        _collect_write_sites,
-        _conjunction_satisfiable,
-    )
+    from pyrung.core.validation._common import _collect_write_sites, _conjunction_satisfiable
     from pyrung.core.validation.stuck_bits import _latch_reset_write_targets
 
     sites = _collect_write_sites(program, target_extractor=_latch_reset_write_targets)
@@ -1294,8 +1290,7 @@ def reset_dominance(
     if not reset_sites:
         return False
 
-    tag_map = _build_tag_map(program)
-    guard_tag_obj = tag_map.get(guard_tag)
+    guard_tag_obj = build_program_graph(program).tags.get(guard_tag)
     if guard_tag_obj is None:
         return False
 
