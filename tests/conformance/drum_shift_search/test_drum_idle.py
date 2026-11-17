@@ -1,17 +1,21 @@
 """Drum probes, a drum not reached: the ``drum_idle`` group (rungs in main).
 
-Part ``drum2`` (``suite.PARTS``).  CLICK has no nested call, so
-the group's rungs run in the main program (``in_main``), and the first case's
-drums live in a subroutine main does not call on some scans.  A drum that is
-not reached on a scan keeps its rung memory, so when it is reached again the
-rung has not "come back" and writes no row.  Each case runs a time drum and a
-time & event drum, moved to step 2 with B on (the time drum on scan 1, the other on
-scan 2, see ``test_drum_rule``), B reset on scan 3, and not reached on scans 3..4.  Snapshots as in ``test_drum_rule`` (``S`` then
-``4 * flag + 2 * B + A``, the time drum's above the time & event drum's), on
-scans 2, 4, 5 and 6: 2222, 2020 and then 2020 (Result4,
-ErrorCode) when the drums are reached again on scan 5: a reset output stays
-off.  A drum that treats the unreached scans as a false rung writes the row
-when it is reached again and reads 2222 on scan 5.
+This is part ``drum2`` (``suite.PARTS``).  CLICK has no nested call, so the group's rungs run
+in the main program (``in_main``).  The first case puts its drums in a subroutine that main
+does not call on some scans.
+
+A drum that is not reached on a scan keeps its rung memory.  When it is reached again, its
+rung has not "come back", so it writes no row.
+
+Each case runs a time drum and a time & event drum.  Both move to step 2 with B on: the time
+drum on scan 1 and the other on scan 2 (see ``test_drum_rule``).  B is reset on scan 3, and
+the drums are not reached on scans 3..4.
+
+The snapshots are as in ``test_drum_rule``: ``S`` then ``4 * flag + 2 * B + A``, with the
+time drum's digits above the time & event drum's.  They are taken on scans 2, 4, 5 and 6.
+They read 2222, 2020 and then 2020 (Result4, ErrorCode) when the drums are reached again on
+scan 5, because a reset output stays off.  A drum that treats the unreached scans as a false
+rung would write the row when it is reached again, and would read 2222 on scan 5.
 
 - ``uncalled_subroutine`` (probe): the drums are in a subroutine whose call rung
   is false on scans 3..4.
@@ -20,9 +24,10 @@ when it is reached again and reads 2222 on scan 5.
   ``loop/body_oneshot_holds_while_for_false``).
 
 A drum in a For body may be refused at paste; the group is last in the part, so
-its subroutine and rungs are the last to delete.  A STOP to RUN transition
-(does it clear the rung memory) is not probed: the harness cannot switch the
-PLC's mode.
+its subroutine and rungs are the last to delete.
+
+The probes do not test whether a STOP to RUN transition clears the rung memory, because the
+harness cannot switch the PLC's mode.
 
 The cases own C1751..C1780, T351..T358, DD681..DD688 and DS4399..DS4400
 (``memory.OWNED``).
@@ -58,8 +63,10 @@ RES = Resources(
 
 
 def _drive(slot: Any, p: Pair, skip: Any) -> None:
-    """Both drums are on step 2 by scan 2; the drums are not reached on scans 3..4,
-    when B is reset (above the drums)."""
+    """Move both drums to step 2 by scan 2.
+
+    The drums are not reached on scans 3..4.  B is reset on scan 3, above the drums.
+    """
     on_scans(slot, p.jog, 1)
     on_scans(slot, p.events[0], 2)
     with Rung(slot.Scratch >= 3, slot.Scratch <= 4):

@@ -84,10 +84,10 @@ The cases own C501..C700, timer T151..T160 and counters CT161..CT170
   rungs 2 and 3 need it on and off.  S takes a fresh snapshot for each body
   rung, so it reads as L does.  L = S {1, 0}; V {0, 1}.
 
-CLICK does not allow a box below another output on one wire: all inputs
-(pins) of a box must start from the same branch (error C000A), so a box's input wire is its own, from the rail.  No leg can read a
-row above it in the same wire; the cases that asked (a box below a latch row)
-are retired.  What sits below a box in one CLICK rung is a continued wire
+CLICK does not allow a box below another output on one wire.  All inputs (pins) of a box
+must start from the same branch (error C000A), so a box's input wire is its own, from the
+rail.  No leg can read a row above it in the same wire, so the cases that asked (a box below
+a latch row) are retired.  What sits below a box in one CLICK rung is a continued wire
 (``box_leg_reads_row_below``).
 
 Each For rung is unconditional, and its body rungs are gated instead, so no
@@ -97,7 +97,7 @@ a body rung's contacts read across iterations
 (``loop/body_rung_contact_per_iteration``).
 
 Open: a ``call()`` inside a rung, between rows.  CLICK has no nested calls and
-every case already runs inside ``Conf_SolveOrder``; it waits for a subroutine
+every case already runs inside ``Conf_SolveOrder``.  The case waits for a subroutine
 home called from main.
 """
 
@@ -159,7 +159,7 @@ for _module in ANNOTATED_MODULES:
 def solve_case(
     sentence: str, *, order_dependent: bool, snapshot: Mapping[str, int], **kw: Any
 ) -> Case:
-    """``case()``, recording whether its answer depends on solve order and its S reading."""
+    """Return ``case()`` and record whether its answer depends on solve order, and its S reading."""
     made = case(sentence, **kw)
     key = f"{GROUP}/{made.id}"
     ORDER_DEPENDENT[key] = order_dependent
@@ -329,8 +329,8 @@ def init_continued_reads_later_wire(slot):
 
 
 def prove_box_leg_reads_row_below(slot):
-    # P = C661, latched on scan 4 by a continued wire below the counter (what
-    # sits below a box in one rung is a continued wire).  The counter counts on scan 2.
+    # P = C661.  A continued wire below the counter latches it on scan 4, because what sits
+    # below a box in one rung is a continued wire.  The counter counts on scan 2.
     counter = ClickCounter(162)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch == 2):
@@ -478,7 +478,7 @@ group = Group(
 
 @pytest.fixture(scope="module")
 def results() -> dict[str, CaseResult]:
-    """Every annotated case's in-process result, keyed ``"group/id"``."""
+    """Return every annotated case's in-process result, keyed ``"group/id"``."""
     out: dict[str, CaseResult] = {}
     for g in (group, test_rung_semantics.group, *(m.group for m in ANNOTATED_MODULES)):
         for r in run(g):
@@ -503,7 +503,8 @@ def test_annotation_matches_readings(results: dict[str, CaseResult]):
     problems: list[str] = []
     for key, dependent in ORDER_DEPENDENT.items():
         r = results[key]
-        # Its fix step changes what it reads, and its snapshot moves with the fix.
+        # Skip a case with a pending fix.  The fix changes what the case reads, and its
+        # snapshot moves with the fix.
         if r.case.pending is not None:
             continue
         snapshot = SNAPSHOT[key]

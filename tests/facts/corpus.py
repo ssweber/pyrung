@@ -350,7 +350,7 @@ def down_counter_staged_by_a_copy() -> Any:
 
 @idiom
 def up_down_counter_shown() -> Any:
-    """An up/down counter whose count a copy reads.  It counts below 0 and past its preset."""
+    """A copy reads an up/down counter's count.  The counter counts below 0 and past its preset."""
     enter = Bool("BinIn", external=True)
     leave = Bool("BinOut", external=True)
     clear = Bool("BinClear", external=True)
@@ -369,7 +369,7 @@ def up_down_counter_shown() -> Any:
 
 @idiom
 def timer_accs_compared_with_each_other() -> Any:
-    """Two timers that start together, rungs that compare their Accs, and a copy of one."""
+    """Two timers start together, rungs compare their Accs, and a copy reads one of them."""
     run = Bool("Run", external=True)
     hold = Bool("HoldTrail", external=True)
     lead = Timer.clone("Lead")
@@ -872,7 +872,7 @@ def edge_on_written_bit() -> Any:
 
 @idiom
 def funcdep_follows_its_source() -> Any:
-    """Y = X + 5, rewritten on every rung that moves X."""
+    """Y = X + 5 is rewritten on every rung that moves X."""
     x = Int("Pos")
     y = Int("PosOffset")
     bump = Bool("Jog", external=True)
@@ -1080,7 +1080,7 @@ def field_value_summed_and_compared() -> Any:
 
 @idiom
 def field_count_the_ladder_clears() -> Any:
-    """A count the field sets on a linked counter, which the ladder clears on a reset button."""
+    """The field sets a count on a linked counter, and the ladder clears it on a reset button."""
     count = Int("FieldCount", link="CountEnable")
     with Program() as prog:
         with Rung(Bool("CountCmd", external=True)):
@@ -1135,7 +1135,7 @@ def received_value_the_ladder_clears() -> Any:
 
 @idiom
 def received_count_the_ladder_adds_to() -> Any:
-    """Registers a peer sends, one of which the ladder also counts up.
+    """A peer sends registers, and the ladder also counts one of them up.
 
     The peer can lower the count, so the count is no up counter.
     """
@@ -1408,7 +1408,7 @@ def pointer_write_into_a_big_real_block() -> Any:
 
 @idiom
 def pointer_write_into_a_big_int_block() -> Any:
-    """The Int form, and the element has a write of its own too."""
+    """This is the Int form, and the element also has a write of its own."""
     far = Block("FarInt", TagType.INT, 1, 2000)
     at = Int("FarIntAt", external=True)
     source = Int("FarIntSource", external=True, choices={0: "zero", 100: "hundred"})
@@ -1445,8 +1445,9 @@ def index_sum_write_into_a_big_int_block() -> Any:
 
 
 def _acknowledge_write(prefix: str, read_at: int) -> Any:
-    """A write the tumbler makes: ``math(Cmd * 10 + 2999, At)`` under ``Cmd`` 1..100, then
-    ``copy(source, far[At])``.  So the write reaches 3009..3999 and nothing else."""
+    """The tumbler makes a write: ``math(Cmd * 10 + 2999, At)`` under ``Cmd`` 1..100, then
+    ``copy(source, far[At])``.  The write reaches 3009..3999 and nothing else.
+    """
     far = Block(f"{prefix}Int", TagType.INT, 1, 4500)
     cmd = Int(f"{prefix}Cmd", external=True)
     at = Int(f"{prefix}At")
@@ -1636,7 +1637,7 @@ def text_copy_skipped_on_a_bad_digit() -> Any:
 
 @idiom
 def count_compared_with_an_hmi_target() -> Any:
-    """A count staged past its preset, compared with an HMI target that has no bounds."""
+    """A rung compares a count staged past its preset with an HMI target that has no bounds."""
     picks = Counter.clone("Picks")
     with Program() as prog:
         with Rung(Bool("LoadPicks", external=True)):
@@ -1650,7 +1651,7 @@ def count_compared_with_an_hmi_target() -> Any:
 
 @idiom
 def soak_time_compared_with_a_recipe_step() -> Any:
-    """A timer's Acc compared with the recipe time a pointer picks."""
+    """A rung compares a timer's Acc with the recipe time a pointer picks."""
     step = Int("SoakStep", external=True, min=1, max=3)
     times = Block("SoakTime", TagType.INT, 1, 3)
     soak = Timer.clone("Soak")
@@ -1668,7 +1669,7 @@ def soak_time_compared_with_a_recipe_step() -> Any:
 
 @idiom
 def counts_compared_through_their_difference() -> Any:
-    """Two counts a rung compares through their difference, both past their presets."""
+    """A rung compares two counts through their difference, both past their presets."""
     inbound, outbound = Counter.clone("Inbound"), Counter.clone("Outbound")
     with Program() as prog:
         with Rung(Bool("InPulse", external=True)):
@@ -1684,7 +1685,7 @@ def counts_compared_through_their_difference() -> Any:
 
 @idiom
 def count_compared_with_another_plus_an_offset() -> Any:
-    """A count a rung compares with another count plus a constant."""
+    """A rung compares a count with another count plus a constant."""
     fed, cut = Counter.clone("Fed"), Counter.clone("Cut")
     with Program() as prog:
         with Rung(Bool("FeedPulse", external=True)):
@@ -1700,7 +1701,7 @@ def count_compared_with_another_plus_an_offset() -> Any:
 
 @idiom
 def three_counts_kept_in_order() -> Any:
-    """Three counts a rung compares in a chain, all past their presets."""
+    """A rung compares three counts in a chain, all past their presets."""
     first, second, third = (Counter.clone(f"Stage{i}") for i in range(3))
     clear = Bool("StagesClear")
     with Program() as prog:
@@ -1719,7 +1720,7 @@ def three_counts_kept_in_order() -> Any:
 
 @idiom
 def count_with_a_preset_tag_compared_with_a_literal() -> Any:
-    """A count whose preset an HMI sets, and a rung that compares the count with 3."""
+    """An HMI sets a count's preset, and a rung compares the count with 3."""
     batch = Counter.clone("Tray")
     with Program() as prog:
         with Rung(Bool("TrayPulse", external=True)):
@@ -1735,7 +1736,7 @@ def count_with_a_preset_tag_compared_with_a_literal() -> Any:
 
 @idiom
 def level_compared_with_an_hmi_level() -> Any:
-    """An input compared with a literal and with an HMI value that has no bounds."""
+    """A rung compares an input with a literal and with an HMI value that has no bounds."""
     level = Int("TankLevel", external=True)
     with Program() as prog:
         with Rung(level > 10):
@@ -1747,7 +1748,7 @@ def level_compared_with_an_hmi_level() -> Any:
 
 @idiom
 def level_compared_with_a_table_entry() -> Any:
-    """An input compared with a literal and with the table entry a pointer picks."""
+    """A rung compares an input with a literal and with the table entry a pointer picks."""
     level = Int("BinLevel", external=True)
     entry = Int("BinEntry", external=True, min=1, max=3)
     table = Block("BinTable", TagType.INT, 1, 3)
@@ -1763,7 +1764,7 @@ def level_compared_with_a_table_entry() -> Any:
 
 @idiom
 def held_reading_compared_with_a_table_entry() -> Any:
-    """A copied reading compared with the table entry a pointer picks."""
+    """A rung compares a copied reading with the table entry a pointer picks."""
     raw = Int("ScaleRaw", external=True, min=0, max=100)
     entry = Int("ScaleEntry", external=True, min=1, max=2)
     table = Block("ScaleTable", TagType.INT, 1, 2)
@@ -1782,7 +1783,7 @@ def held_reading_compared_with_a_table_entry() -> Any:
 
 @idiom
 def recipe_mode_compared_with_a_table_entry() -> Any:
-    """A tag with ``choices=`` that a copy can set past them, compared with a table entry."""
+    """A copy can set a tag past its ``choices=``, and a rung compares it with a table entry."""
     mode = Int("RecipeMode", choices={0: "Off", 1: "Fill", 2: "Mix"})
     entry = Int("RecipeEntry", external=True, min=1, max=2)
     table = Block("RecipeTable", TagType.INT, 1, 2)
@@ -1801,7 +1802,7 @@ def recipe_mode_compared_with_a_table_entry() -> Any:
 
 @idiom
 def real_reading_compared_with_a_table_entry() -> Any:
-    """A Real input compared with the Real table entry a pointer picks."""
+    """A rung compares a Real input with the Real table entry a pointer picks."""
     entry = Int("TempEntry", external=True, min=1, max=2)
     table = Block("TempTable", TagType.REAL, 1, 2)
     with Program() as prog:
@@ -1814,7 +1815,7 @@ def real_reading_compared_with_a_table_entry() -> Any:
 
 @idiom
 def real_readings_kept_in_order() -> Any:
-    """Two Real inputs inside one band, and a rung that compares them."""
+    """Two Real inputs stay inside one band, and a rung compares them."""
     first = Real("BandA", external=True, min=0, max=1)
     second = Real("BandB", external=True, min=0, max=1)
     with Program() as prog:
@@ -1825,7 +1826,7 @@ def real_readings_kept_in_order() -> Any:
 
 @idiom
 def count_compared_with_a_real_reading() -> Any:
-    """An Int count and a Real reading inside one band, and rungs that compare them."""
+    """An Int count and a Real reading stay inside one band, and rungs compare them."""
     count = Int("BinCount", external=True)
     reading = Real("BinReading", external=True)
     with Program() as prog:
@@ -1842,7 +1843,7 @@ OPENING["count_compared_with_a_real_reading"] = ({"BinCount": 5, "BinReading": 5
 
 @idiom
 def shown_count_compared_with_an_hmi_count() -> Any:
-    """A count copied to a display tag, which a rung compares with an HMI count."""
+    """A copy puts a count in a display tag, and a rung compares it with an HMI count."""
     boxes = Counter.clone("Boxes")
     shown = Dint("BoxesShown")
     with Program() as prog:
