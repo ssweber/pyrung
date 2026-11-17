@@ -128,7 +128,7 @@ def to_conditions(
             assert node.right is not None
             right: Any = node.right.value
             if isinstance(right, str):
-                resolved = _resolve_choice_label(tags_by_name, node.tag.name, right)
+                resolved = resolve_choice_label(tags_by_name, node.tag.name, right)
                 if resolved is not None:
                     right = resolved
             ops = {
@@ -155,7 +155,7 @@ def to_conditions(
     return (result,)
 
 
-def _resolve_choice_label(
+def resolve_choice_label(
     tags: Mapping[str, Any], tag_name: str, value: str
 ) -> int | float | str | None:
     """Resolve a string value through a tag's choices map.

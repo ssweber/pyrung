@@ -46,6 +46,7 @@ from pyrung.click.codegen.utils import (
     _CLICK_HEX_RE,
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
+    _check_to_text_source,
     _hex_math_bare_numbers,
     _parse_af_args,
     _parse_operand_prefix,
@@ -382,6 +383,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append("RegisterType")
     if collection.has_subroutine:
         pass
+    if collection.has_nop:
+        click_imports.append("nop")
     if "send" in collection.used_instructions:
         click_imports.append("send")
     if "receive" in collection.used_instructions:
@@ -1116,6 +1119,10 @@ def _emit_instruction(
     if not af:
         return
 
+    if af == "NOP":
+        lines.append(f"{pad}nop()")
+        return
+
     rendered = _render_af_token(af, collection, nicknames, structured_map, call_func_map)
 
     # Handle pin chaining
@@ -1342,6 +1349,11 @@ def _render_af_token(
         return f"{py_func}()"
 
     args, kwargs = _parse_af_args(args_str)
+
+    if func_name in {"copy", "blockcopy"} and args:
+        for key, value in kwargs:
+            if key == "convert":
+                _check_to_text_source(args[0], value)
 
     if func_name == "math" and args and ("mode", "hex") in kwargs:
         args = [_hex_math_bare_numbers(args[0]), *args[1:]]

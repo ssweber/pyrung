@@ -17,7 +17,6 @@ from pyrung.circuitpy.codegen._constants import (
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
-    _bool_literal,
     _indent_body,
 )
 from pyrung.circuitpy.codegen.context import (
@@ -51,7 +50,8 @@ from pyrung.core.memory_block import (
     IndirectRef,
 )
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.time_mode import TimeUnit
+
+from ._emit import emit_if_enabled, emit_oneshot
 
 
 def _snapshot_tag_symbol(
@@ -1000,8 +1000,6 @@ def _compile_guarded_instruction(
     disabled_body: list[str] | None = None,
 ) -> list[str]:
     sp = " " * indent
-    inner = " " * (indent + 4)
-    lines: list[str] = []
     settle = _fault_follow_lines(instr, ctx)
     # A Math clears its flags on every path, so the lines go ahead of the
     # one-shot test.  Any other instruction clears them only as its body runs.
@@ -1015,48 +1013,15 @@ def _compile_guarded_instruction(
             "    pass",
         ]
     disabled = [*idle, *(disabled_body or ())]
-    enabled_literal = _bool_literal(enabled_expr)
     if getattr(instr, "oneshot", False):
         key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
-        if enabled_literal is False:
-            lines.append(f"{sp}_mem[{key!r}] = False")
-            lines.extend(f"{sp}{line}" for line in disabled)
-            return lines
-        fire = [
-            f"if not bool(_mem.get({key!r}, False)):",
-            *[f"    {line}" for line in (*run_settle, *enabled_body)],
-            f"    _mem[{key!r}] = True",
-        ]
-        if enabled_literal is True:
-            lines.extend(f"{sp}{line}" for line in (*idle, *fire))
-            return lines
-        lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{inner}_mem[{key!r}] = False")
-        lines.extend(f"{inner}{line}" for line in disabled)
-        if idle:
-            lines.append(f"{sp}else:")
-            lines.extend(f"{inner}{line}" for line in (*idle, *fire))
-        else:
-            lines.append(f"{sp}el{fire[0]}")
-            lines.extend(f"{sp}{line}" for line in fire[1:])
-        return lines
-
-    enabled_body = [*settle, *enabled_body]
-    if enabled_literal is True:
-        lines.extend(f"{sp}{line}" for line in enabled_body)
-        return lines
-    if enabled_literal is False:
-        lines.extend(f"{sp}{line}" for line in disabled)
-        return lines
-
-    lines.append(f"{sp}if {enabled_expr}:")
-    lines.extend(f"{inner}{line}" for line in enabled_body)
-    if disabled:
-        lines.append(f"{sp}else:")
-        lines.extend(f"{inner}{line}" for line in disabled)
-    return lines
+        fire = [*run_settle, *enabled_body]
+        oneshot = emit_oneshot(key, enabled_expr, fire=fire, off=disabled, before=idle)
+        return [f"{sp}{line}" for line in oneshot]
+    body = emit_if_enabled(enabled_expr, [*settle, *enabled_body], otherwise=disabled)
+    return [f"{sp}{line}" for line in body]
 
 
 def _compile_assignment_lines(
@@ -1225,22 +1190,6 @@ def _sequence_expr(values: list[int]) -> str:
     return repr(values)
 
 
-def _search_compare_expr(condition: str, left_expr: str, right_expr: str) -> str:
-    if condition == "==":
-        return f"({left_expr} == {right_expr})"
-    if condition == "!=":
-        return f"({left_expr} != {right_expr})"
-    if condition == "<":
-        return f"({left_expr} < {right_expr})"
-    if condition == "<=":
-        return f"({left_expr} <= {right_expr})"
-    if condition == ">":
-        return f"({left_expr} > {right_expr})"
-    if condition == ">=":
-        return f"({left_expr} >= {right_expr})"
-    raise ValueError(f"Unsupported search comparison: {condition!r}")
-
-
 def _pack_store_expr(value_expr: str, dest_type: str, ctx: CodegenContext) -> str:
     if dest_type == "REAL":
         ctx.mark_helper("_int_to_float_bits")
@@ -1274,21 +1223,6 @@ def _calc_store_expr(value_expr: str, dest_type: str, mode: str, ctx: CodegenCon
         ctx.mark_helper("_wrap_int")
         return f"_wrap_int(int({value_expr}), 32, True)"
     return value_expr
-
-
-def _timer_carry_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -> list[str]:
-    """This scan's time into ``_int_units`` whole units and a ``_new_frac`` remainder.
-
-    Integer nanoseconds, as ``instruction.utils.elapsed_units``.  A board's clock reads them
-    directly, and its floats are too short to hold a time.  The kernel has only ``dt``.
-    """
-    ctx.timer_unit_ns[acc.name] = unit.ns
-    dt_ns = '_dt_to_ns(_mem.get("_dt", 0.0))' if ctx.kernel_runtime else '_mem.get("_dt_ns", 0)'
-    return [
-        f'{sp}_carry = _mem.get("_frac:{acc.name}", 0) + {dt_ns}',
-        f"{sp}_int_units = _carry // {unit.ns}",
-        f"{sp}_new_frac = _carry % {unit.ns}",
-    ]
 
 
 def _load_cast_expr(value_expr: str, tag_type: str) -> str:

@@ -227,7 +227,7 @@ def _hardware_fields() -> list[tuple[str, str]]:
     fields = (
         set(hardware._WRITE_TARGET_FIELDS)
         | set(hardware._ROLE_ASSIGNMENT_FIELDS)
-        | set(hardware._MODBUS_WRITE_BANKS)
+        | set(hardware._MODBUS_BANKS)
     )
     for name, field_names in hardware._TIMER_PRESET_FIELDS.items():
         fields.update((name, field) for field in field_names)
@@ -310,7 +310,7 @@ def test_every_declared_write_is_checked_on_click(cls: type, field: str) -> None
     checked = (
         hardware._WRITE_TARGET_FIELDS
         | set(hardware._ROLE_ASSIGNMENT_FIELDS)
-        | set(hardware._MODBUS_WRITE_BANKS)
+        | set(hardware._MODBUS_BANKS)
     )
     assert (name, field) in checked, (
         f"nothing checks that CLICK can write {name}.{field}: add it to a hardware table, or to "

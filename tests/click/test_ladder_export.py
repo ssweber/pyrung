@@ -2292,6 +2292,104 @@ def test_receive_modbus_address_token():
     )
 
 
+@pytest.mark.parametrize(
+    ("target", "token"),
+    [
+        (
+            'ModbusTcpTarget("plc2", "192.168.1.2", com_port="wlan")',
+            'ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1,com_port="wlan")',
+        ),
+        (
+            'ModbusTcpTarget("plc2", "192.168.1.2", com_port="ethernet")',
+            'ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1)',
+        ),
+        (
+            'ModbusTcpTarget("plc2", "192.168.1.2", device_id=DS2420)',
+            'ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=DS2420)',
+        ),
+        (
+            'ModbusRtuTarget("vfd1", com_port="cpu3", device_id=DS7)',
+            'ModbusRtuTarget(name="vfd1",com_port="cpu3",device_id=DS7)',
+        ),
+    ],
+)
+def test_click_v4_target_forms_export(target, token):
+    """The WLAN port, CPU port 3 and a DS device ID export in laddercodec's forms."""
+    _assert_export_main_rows(
+        f"""
+        with Program() as p:
+            with Rung(X1):
+                send(target={target}, remote_start="DS1", source=DS1, sending=C1, success=C2,
+                     error=C3, exception_response=DS2)
+        """,
+        f"""
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,send(target={token},remote_start="DS1",source=DS1,sending=C1,success=C2,error=C3,exception_response=DS2)
+        """,
+    )
+
+
+@pytest.mark.parametrize("register", ["TD1", "SD50"])
+def test_device_id_outside_ds_is_refused(register):
+    """CLICK's Slave ID box takes a number or a DS address; an Int tag on TD or SD is neither."""
+    logic, mapping = build_program(
+        f"""
+        with Program() as p:
+            with Rung(X1):
+                receive(target=ModbusTcpTarget("plc2", "192.168.1.2", device_id={register}),
+                        remote_start="DS1", dest=DS1)
+        """
+    )
+    with pytest.raises(LadderExportError, match="invalid for device_id.*CLICK takes DS"):
+        pyrung_to_ladder(logic, mapping)
+
+
+@pytest.mark.parametrize("source", ["DS1", "DD1", "DH1", "5"])
+def test_to_text_exponential_from_an_integer_is_refused(source):
+    """CLICK offers Exponential Numbering only for a Real source."""
+    logic, mapping = build_program(
+        f"""
+        with Program() as p:
+            with Rung(X1):
+                copy({source}, TXT1, convert=to_text(exponential=True))
+        """
+    )
+    with pytest.raises(
+        LadderExportError,
+        match=r"CLK_COPY_CONVERTER_INCOMPATIBLE.*needs a Real source \(DF or a Real constant\)",
+    ):
+        pyrung_to_ladder(logic, mapping)
+    with pytest.raises(
+        LadderExportError, match=rf"needs a Real source \(DF or a Real constant\), got {source}\."
+    ):
+        pyrung_to_ladder(logic, mapping, validate=False)
+
+
+@pytest.mark.parametrize(
+    ("source", "rendered", "convert", "flag"),
+    [
+        ("DF1", "DF1", "to_text()", "exponential=0"),
+        ("2.5", "2.5", "to_text()", "exponential=0"),
+        ("df[DS1]", "DF[DS1]", "to_text()", "exponential=0"),
+        ("2.5", "2.5", "to_text(exponential=True)", "exponential=1"),
+        ("df[DS1]", "DF[DS1]", "to_text(exponential=True)", "exponential=1"),
+        ("DS1", "DS1", "to_text()", "suppress_zero=1"),
+        ("5", "5", "to_text()", "suppress_zero=1"),
+    ],
+)
+def test_to_text_writes_the_flag_its_source_type_has(source, rendered, convert, flag):
+    """A Real source, a constant or a pointer included, writes exponential and no other."""
+    _assert_export_main_rows(
+        f"""
+        with Program() as p:
+            with Rung(X1):
+                copy({source}, TXT1, convert={convert})
+        """,
+        f"""
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,copy({rendered},TXT1,convert=to_text({flag},termination_code=none))
+        """,
+    )
+
+
 def test_send_rtu_modbus_address_token():
     _assert_export_main_rows(
         """

@@ -9,11 +9,19 @@ that ``replay`` runs.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pyrung.dap.console import ConsoleResult, register
+from pyrung.dap.expressions import Compare
+from pyrung.dap.grammar import Slot
+from pyrung.dap.handlers.stack_variables_evaluate import condition_predicate, parse_known_condition
+
+#: A CLICK keeps a Real to about 7 significant digits, so ``assert`` takes a Real
+#: within one part in a million (or 1e-6 near zero) as equal.
+REAL_TOLERANCE = 1e-6
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,42 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
 
 
 # ---------------------------------------------------------------------------
+# Assert verb
+# ---------------------------------------------------------------------------
+
+_ASSERT_USAGE = "Usage: assert <tag> == <value>"
+
+
+@register(
+    "assert",
+    usage="assert <tag> == <value>",
+    group="capture",
+    slots=(Slot(kind="tag", label="tag"), Slot(kind="value", label="value", keyword="==")),
+)
+def _cmd_assert(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split(None, 1)
+    if len(parts) < 2:
+        raise adapter.DAPAdapterError(_ASSERT_USAGE)
+    runner = adapter._require_runner_locked()
+    state = runner.current_state
+    parsed = parse_known_condition(adapter, state, parts[1])
+    if not isinstance(parsed, Compare) or parsed.op != "==" or parsed.right is None:
+        raise adapter.DAPAdapterError(_ASSERT_USAGE)
+
+    name = parsed.tag.name
+    expected = parsed.right.value
+    actual = adapter._state_value_for_reference(state, name)
+
+    if isinstance(actual, float) and isinstance(expected, int | float):
+        matched = math.isclose(actual, expected, rel_tol=REAL_TOLERANCE, abs_tol=REAL_TOLERANCE)
+    else:
+        matched = condition_predicate(adapter, parsed)(state)
+    if not matched:
+        raise adapter.DAPAdapterError(f"assert failed: {name} = {actual!r}, expected {expected!r}")
+    return ConsoleResult(f"assert ok: {name} = {actual!r}")
+
+
+# ---------------------------------------------------------------------------
 # Replay verb
 # ---------------------------------------------------------------------------
 
@@ -175,24 +219,32 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
 
     _configure_replay_harness(adapter, harness_mode)
 
-    from pyrung.dap.console import dispatch
+    from pyrung.dap.console import dispatch, queue_stop_for_error, scan_mark, scans_ran_since
 
     executed = 0
     hit_bp = False
+    last_stop: dict[str, Any] | None = None
+    start = scan_mark(adapter)
     for lineno, cmd in commands:
         try:
             result = dispatch(adapter, cmd)
         except Exception as exc:
-            return ConsoleResult(
+            error = adapter.DAPAdapterError(
                 f"Replay error at line {lineno}: {exc}\n"
                 f"Executed {executed}/{len(commands)} command(s)"
             )
+            error.stop_queued = getattr(exc, "stop_queued", False)
+            if last_stop is not None or scans_ran_since(adapter, start):
+                # A "step" stop, never a reload's "entry", which would clear the editor's
+                # decorations.
+                queue_stop_for_error(adapter, error)
+            raise error from exc
         executed += 1
-        for event_name, _body in result.events:
+        for event_name, body in result.events:
             if event_name == "stopped":
-                hit_bp = True
-                break
-        if hit_bp:
+                last_stop = body
+        if result.hit_breakpoint:
+            hit_bp = True
             break
 
     scan_id = adapter._current_scan_id
@@ -200,11 +252,16 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
     suffix = ""
     if hit_bp:
         suffix = f" (breakpoint, {remaining} command(s) remaining)"
-    events = [("stopped", adapter._stopped_body("step"))] if hit_bp else []
+        last_stop = adapter._stopped_body("breakpoint")
+    # One stop at the end tells the client where the replay left the scan.
+    events: list[tuple[str, dict[str, Any] | None]] = (
+        [("stopped", last_stop)] if last_stop is not None else []
+    )
     return ConsoleResult(
         f"Replayed {executed}/{len(commands)} command(s), now at scan {scan_id}"
         f" [harness={harness_mode}]{suffix}",
         events=events,
+        hit_breakpoint=hit_bp,
     )
 
 

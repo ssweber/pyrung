@@ -67,11 +67,11 @@ def _runner_script() -> str:
     )
 
 
-def _setup(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+def _setup(tmp_path: Path, script: str | None = None) -> tuple[DAPAdapter, io.BytesIO]:
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script_path = tmp_path / "logic.py"
-    script_path.write_text(_runner_script(), encoding="utf-8")
+    script_path.write_text(script or _runner_script(), encoding="utf-8")
     _send_request(
         adapter, out_stream, seq=1, command="launch", arguments={"program": str(script_path)}
     )
@@ -410,9 +410,46 @@ class TestReplayVerb:
             "patch Button true\nbadcommand xyz\nstep 1\n",
         )
         resp, _ = _repl(adapter, out, f"replay {transcript}")
-        assert resp["success"] is True
-        assert "Replay error at line 2" in resp["body"]["result"]
-        assert "Executed 1/3" in resp["body"]["result"]
+        assert resp["success"] is False
+        assert "Replay error at line 2" in resp["message"]
+        assert "Executed 1/3" in resp["message"]
+
+    def test_a_failed_replay_queues_the_stop_for_the_scans_it_ran(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(tmp_path, "session.txt", "step 2\nbadcommand xyz\nstep 1\n")
+        _repl(adapter, out, f"replay {transcript}")
+        adapter._drain_internal_events()
+        stops = [
+            msg["body"]["reason"]
+            for msg in _drain_messages(out)
+            if msg.get("type") == "event" and msg.get("event") == "stopped"
+        ]
+        assert stops == ["step"]
+
+    def test_a_failed_replay_with_no_scans_queues_no_stop(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(tmp_path, "session.txt", "badcommand xyz\n")
+        _repl(adapter, out, f"replay {transcript}")
+        adapter._drain_internal_events()
+        assert not [msg for msg in _drain_messages(out) if msg.get("event") == "stopped"]
+
+    def test_a_failed_replay_after_a_reload_never_ends_on_entry(self, tmp_path: Path):
+        # An "entry" stop clears the editor's decorations, so a failed replay sends one "step".
+        for failing_line in ("run until Light within 3", "badcommand xyz"):
+            adapter, out = _setup(tmp_path)
+            transcript = _write_transcript(
+                tmp_path, "session.txt", f"step\nreload\n{failing_line}\n"
+            )
+            resp, stopped = _repl(adapter, out, f"replay {transcript}")
+            assert resp["message"].startswith("Replay error at line 3: ")
+            assert stopped == []
+            adapter._drain_internal_events()
+            stops = [
+                msg["body"]["reason"]
+                for msg in _drain_messages(out)
+                if msg.get("type") == "event" and msg.get("event") == "stopped"
+            ]
+            assert stops == ["step"], failing_line
 
     def test_replay_excluded_from_capture(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -438,6 +475,45 @@ class TestReplayVerb:
         _repl(adapter, out, "record my_action", seq=10)
         _repl(adapter, out, f"replay {transcript}", seq=11)
         assert len(adapter._capture.entries) == 2
+
+    def test_replay_runs_past_a_step_that_is_not_the_last_line(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "patch Button true\nstep 1\nrun 2\npatch Button false\nstep 1\n",
+        )
+        resp, _ = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is True
+        assert "Replayed 5/5" in resp["body"]["result"]
+        assert "breakpoint" not in resp["body"]["result"]
+        assert adapter._runner.current_state.tags["Light"] is False
+
+    def test_replay_stops_at_a_breakpoint_hit_inside_a_step(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        script = tmp_path / "logic.py"
+        _send_request(
+            adapter,
+            out,
+            seq=9,
+            command="setBreakpoints",
+            arguments={
+                "source": {"path": str(script)},
+                "breakpoints": [{"line": 9, "condition": "Light"}],
+            },
+        )
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "step 1\npatch Button true\nstep 5\npatch Button false\nstep 1\n",
+        )
+        resp, stopped = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Replayed 3/5" in result
+        assert "(breakpoint, 2 command(s) remaining)" in result
+        assert adapter._runner.current_state.tags["Light"] is True
+        assert [event["body"]["reason"] for event in stopped] == ["breakpoint"]
 
     def test_replay_reports_scan_id(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -529,3 +605,183 @@ class TestReplayHarnessModes:
         assert "harness=off" in resp["body"]["result"]
         assert adapter._harness is None
         assert adapter._runner.current_state.tags.get("Device_Fb", False) is False
+
+
+def _values_script() -> str:
+    return (
+        "from pyrung.core import Bool, Int, PLC, Program, Real, Rung, copy, out\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "light = Bool('Light')\n"
+        "temp = Real('Temp')\n"
+        "state = Int('State', choices={1: 'IDLE', 2: 'HELD'})\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        out(light)\n"
+        "        copy(2, state)\n"
+        "    with Rung(~button):\n"
+        "        copy(1, state)\n"
+        "    with Rung():\n"
+        "        copy(temp, temp)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+class TestAssertVerb:
+    def test_assert_passes_on_an_equal_value(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        _repl(adapter, out, "step", seq=11)
+        resp, _ = _repl(adapter, out, "assert Light == true", seq=12)
+        assert resp["success"] is True
+        assert resp["body"]["result"] == "assert ok: Light = True"
+
+    def test_assert_fails_naming_the_value_it_found(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        resp, _ = _repl(adapter, out, "assert Light == true")
+        assert resp["success"] is False
+        assert resp["message"] == "assert failed: Light = False, expected True"
+
+    def test_assert_takes_a_real_within_the_tolerance(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Temp 12.5000001", seq=10)
+        _repl(adapter, out, "step", seq=11)
+        resp, _ = _repl(adapter, out, "assert Temp == 12.5", seq=12)
+        assert resp["success"] is True
+        resp, _ = _repl(adapter, out, "assert Temp == 12.51", seq=13)
+        assert resp["success"] is False
+        assert "assert failed: Temp = 12.5000001" in resp["message"]
+
+    def test_assert_reads_a_choice_label(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        _repl(adapter, out, "step", seq=11)
+        assert _repl(adapter, out, "assert State == HELD", seq=12)[0]["success"] is True
+        resp, _ = _repl(adapter, out, "assert State == IDLE", seq=13)
+        assert resp["message"] == "assert failed: State = 2, expected 'IDLE'"
+
+    def test_run_until_reads_a_choice_label(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        resp, _ = _repl(adapter, out, "run until State == HELD within 5", seq=11)
+        assert resp["success"] is True
+        assert resp["body"]["result"].endswith(", State == HELD is true")
+        assert adapter._runner.current_state.tags["State"] == 2
+
+    def test_watch_reads_a_choice_label(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        _repl(adapter, out, "step", seq=11)
+
+        def watch(expression: str, seq: int) -> str:
+            messages = _send_request(
+                adapter,
+                out,
+                seq=seq,
+                command="evaluate",
+                arguments={"expression": expression, "context": "watch"},
+            )
+            return _single_response(messages)["body"]["result"]
+
+        assert watch("State == HELD", 12) == "True"
+        assert watch("State == IDLE", 13) == "False"
+        assert watch("(State != IDLE) & Light", 14) == "True"
+
+    def test_assert_names_an_unknown_tag(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        resp, _ = _repl(adapter, out, "assert Lamp == true")
+        assert resp["success"] is False
+        assert resp["message"] == "Unknown tag or memory reference: Lamp"
+
+    def test_assert_takes_only_an_equality(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        for text in ("assert", "assert Light", "assert Temp > 1"):
+            resp, _ = _repl(adapter, out, text)
+            assert resp["success"] is False
+            assert resp["message"] == "Usage: assert <tag> == <value>"
+
+    def test_a_failed_assert_stops_a_replay_at_its_line(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "patch Button true\nstep\nassert Light == true\n"
+            "patch Button false\nstep\nassert Light == true\nstep 5\n",
+        )
+        resp, _ = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is False
+        message = resp["message"]
+        assert "Replay error at line 6: assert failed: Light = False, expected True" in message
+        assert "Executed 5/7" in message
+
+    def test_a_word_that_is_no_label_is_an_error(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        for text in ("assert State == HLED", "run until State == HLED within 5"):
+            resp, _ = _repl(adapter, out, text)
+            assert resp["success"] is False
+            assert resp["message"] == "HLED is not a choice of State"
+        assert _watch(adapter, out, "State == HLED") == (False, "HLED is not a choice of State")
+
+
+def _watch(adapter: DAPAdapter, out: io.BytesIO, expression: str) -> tuple[bool, str]:
+    messages = _send_request(
+        adapter,
+        out,
+        seq=50,
+        command="evaluate",
+        arguments={"expression": expression, "context": "watch"},
+    )
+    response = _single_response(messages)
+    if response["success"]:
+        return True, response["body"]["result"]
+    return False, response["message"]
+
+
+def _udt_choices_script() -> str:
+    return (
+        "from pyrung.core import Bool, Field, Int, PLC, Program, Rung, copy, udt\n"
+        "\n"
+        "@udt()\n"
+        "class Pump:\n"
+        "    State: Int = Field(choices={1: 'IDLE', 2: 'HELD'})\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        copy(2, Pump.State)\n"
+        "    with Rung(~button):\n"
+        "        copy(1, Pump.State)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+class TestChoiceLabelOnAField:
+    def test_assert_reads_a_label_on_a_dotted_field(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        _repl(adapter, out, "step", seq=10)
+        resp, _ = _repl(adapter, out, "assert Pump.State == IDLE", seq=11)
+        assert resp["success"] is True, resp.get("message")
+        resp, _ = _repl(adapter, out, "assert Pump.State == HELD", seq=12)
+        assert resp["message"] == "assert failed: Pump.State = 1, expected 'HELD'"
+
+    def test_watch_reads_a_label_on_a_dotted_field(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        _repl(adapter, out, "step", seq=10)
+        assert _watch(adapter, out, "Pump.State == IDLE") == (True, "True")
+        assert _watch(adapter, out, "Pump.State == HELD") == (True, "False")
+
+    def test_run_until_reads_a_label_on_a_dotted_field(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        resp, _ = _repl(adapter, out, "run until Pump.State == HELD within 5", seq=11)
+        assert resp["success"] is True, resp.get("message")
+        assert resp["body"]["result"].endswith(", Pump.State == HELD is true")
+
+    def test_a_word_that_is_no_label_of_the_field_is_an_error(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _udt_choices_script())
+        resp, _ = _repl(adapter, out, "assert Pump.State == HLED")
+        assert resp["message"] == "HLED is not a choice of Pump.State"

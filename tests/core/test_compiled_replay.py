@@ -1153,6 +1153,31 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
     _assert_states_equivalent(replay, interpreted)
 
 
+@pytest.mark.parametrize("run", ["step", "run_for"])
+def test_a_math_write_to_a_read_only_system_tag_raises_in_a_run_as_in_stepping(
+    loop_from_first_scan: None, run: str
+) -> None:
+    # The kernel writes a system tag without the check that stepping makes, so a
+    # program with such a write must stay off it.
+    go = Bool("RoSysGo")
+    timer = Timer.clone("RoSysT")
+    with Program(strict=False) as program:
+        with Rung(go):
+            on_delay(timer, 100)
+        with Rung(timer.Done):
+            math(Int("RoSysA") + 7, system.sys.scan_time_max_ms)
+
+    plc = PLC(program, dt=0.01)
+    plc.patch({"RoSysGo": True})
+    with pytest.raises(ValueError, match="read-only system point"):
+        if run == "step":
+            for _ in range(30):
+                plc.step()
+        else:
+            plc.run_for(0.3)
+    assert plc.current_state.scan_id == 9
+
+
 def test_a_replay_of_a_world_the_kernel_cannot_run_lands_interpreted() -> None:
     enable = Bool("UnsupportedSeekEnable")
 

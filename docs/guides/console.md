@@ -23,7 +23,7 @@ execution:
   mode [run|stop]                                       (PLC RUN/STOP mode)
   pause
   reload
-  run <N | duration>  (e.g. 10, 500ms, 2 s)
+  run <N | duration> | run until <expression> within <N | duration>
   speed [N|max]                                         (1 = real time; 0 or max = unpaced)
   step [N]
   stop                                                  (cancels a running analysis)
@@ -59,6 +59,7 @@ analysis:
   simplified [tag]
 
 capture:
+  assert <tag> == <value>
   harness <install|remove|status>                       needs physical+link=
   record <action> | record stop
   replay <filepath> [--harness current|recorded|off]
@@ -93,6 +94,16 @@ pause                      # stop a running continue
 ```
 
 `step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `m`, `min`, `h`, and `d`, including compact compound durations such as `1h30min`.
+
+```text
+run until Done within 500          # stop on the first scan that ends with Done on
+run until Count >= 10 within 2 s   # a Watch expression, given at most 2 s
+run until State == HELD within 50  # a choice label stands for its value
+```
+
+`run until` runs whole scans until its condition holds. It runs no scan if the condition already holds. Write the condition as you would in a Watch. Past the limit, `run until` fails with an error that names the condition and how many scans it ran. A replay stops at that line.
+
+The `within` limit is required. Give it room, because the scan count to a step in a sequence can change when the program does.
 
 `mode` and `speed` set the PLC mode and the pacing. Each prints the current setting when given no argument.
 
@@ -184,6 +195,18 @@ replay session.txt --harness off              # ignore harness inputs
 ```
 
 Replay executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line. The default `current` harness mode installs the harness declared by the current program and skips recorded harness inputs. `recorded` removes the current harness and applies provenance-tagged harness inputs from the transcript. `off` removes the harness and skips those inputs.
+
+### Checks
+
+```text
+assert Light == true       # fails unless Light is on
+assert Temp == 72.5        # a Real within one part in a million passes
+assert State == HELD       # a choice label stands for its value
+```
+
+`assert` compares one tag with one value. A failed `assert` is an error that reports the value it found. A replay stops at that line. A tag the program doesn't have is an error too. So is a word that isn't one of the tag's choice labels.
+
+`assert` reads the values at the end of the last full scan, as `get` does. After a `next` into the middle of a scan, `assert` doesn't see what that scan's rungs have written so far.
 
 ## Autoharness
 

@@ -852,6 +852,8 @@ def _emit_logic_imports(
         click_parts.append("ModbusAddress")
     if refs.has_register_type:
         click_parts.append("RegisterType")
+    if refs.has_nop:
+        click_parts.append("nop")
     if "send" in refs.used_instructions:
         click_parts.append("send")
     if "receive" in refs.used_instructions:

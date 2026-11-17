@@ -11,7 +11,7 @@ from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
-from pyrung.core.tag import TagType
+from pyrung.core.tag import Tag, TagType
 
 from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _quote
@@ -58,7 +58,9 @@ class _InstructionMixin:
             source: Any,
         ) -> str: ...
         def _render_pattern(self, pattern: tuple[tuple[bool, ...], ...]) -> str: ...
-        def _render_converter(self, converter: CopyConverter) -> str: ...
+        def _render_converter(
+            self, converter: CopyConverter, instruction: Any, source_text: str, *, path: str
+        ) -> str: ...
         def _render_source_rung(self, rung: Any, *, path: str) -> list[tuple[str, ...]]: ...
 
     def _render_forloop_instruction(
@@ -318,21 +320,28 @@ class _InstructionMixin:
             convert_kw = {}
             # A plain Copy across text converts on its own; it exports as written.
             authored = getattr(instruction, "authored_convert", instruction.convert)
-            if authored is not None:
-                convert_kw["convert"] = self._render_converter(authored)
             dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
             with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
                 copy_source = self._render_operand(
                     instruction.source, path=f"{path}.source", source=instruction
                 )
+            if authored is not None:
+                convert_kw["convert"] = self._render_converter(
+                    authored, instruction, copy_source, path=f"{path}.convert"
+                )
             return self._fn("copy", copy_source, dest, **convert_kw, **oneshot_kw)
         if instruction_type == "BlockCopyInstruction":
             convert_kw = {}
+            block_source = self._render_operand(
+                instruction.source, path=f"{path}.source", source=instruction
+            )
             if instruction.convert is not None:
-                convert_kw["convert"] = self._render_converter(instruction.convert)
+                convert_kw["convert"] = self._render_converter(
+                    instruction.convert, instruction, block_source, path=f"{path}.convert"
+                )
             return self._fn(
                 "blockcopy",
-                self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
+                block_source,
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 **convert_kw,
                 **oneshot_kw,
@@ -634,7 +643,7 @@ class _InstructionMixin:
             )
         if instruction_type == "ModbusSendInstruction":
             remote_start_expr = _render_remote_start(instruction)
-            target_expr = _render_modbus_target(instruction)
+            target_expr = self._render_modbus_target(instruction, path)
             kwargs: dict[str, str] = dict(
                 target=target_expr,
                 remote_start=remote_start_expr,
@@ -648,7 +657,7 @@ class _InstructionMixin:
             return self._fn("send", **kwargs)
         if instruction_type == "ModbusReceiveInstruction":
             remote_start_expr = _render_remote_start(instruction)
-            target_expr = _render_modbus_target(instruction)
+            target_expr = self._render_modbus_target(instruction, path)
             kwargs = dict(
                 target=target_expr,
                 remote_start=remote_start_expr,
@@ -692,6 +701,38 @@ class _InstructionMixin:
                 )
         return rendered
 
+    def _render_modbus_target(self, instruction: Any, path: str) -> str:
+        """The target constructor, with a DS device ID written as its address."""
+        from pyrung.core.instruction.send_receive import ModbusRtuTarget, ModbusTcpTarget
+
+        device_id = instruction.device_id
+        if isinstance(device_id, Tag):
+            device_id_text = self._render_operand(
+                device_id, path=f"{path}.device_id", source=instruction
+            )
+        else:
+            device_id_text = str(device_id)
+        raw_target = instruction.raw_target
+        if isinstance(raw_target, ModbusRtuTarget):
+            parts = [
+                f"name={_quote(raw_target.name)}",
+                f"com_port={_quote(raw_target.com_port)}",
+                f"device_id={device_id_text}",
+            ]
+            return f"ModbusRtuTarget({','.join(parts)})"
+        if instruction.host is None:
+            return _quote(instruction.target_name)
+        parts = [
+            f"name={_quote(instruction.target_name)}",
+            f"ip={_quote(instruction.host)}",
+            f"port={instruction.port}",
+            f"device_id={device_id_text}",
+        ]
+        # Ethernet is CLICK's default port, so only WLAN is written.
+        if isinstance(raw_target, ModbusTcpTarget) and raw_target.com_port != "ethernet":
+            parts.append(f"com_port={_quote(raw_target.com_port)}")
+        return f"ModbusTcpTarget({','.join(parts)})"
+
     def _fn(self, name: str, *args: str, **kwargs: str) -> str:
         parts = list(args)
         parts.extend(f"{k}={v}" for k, v in kwargs.items())
@@ -701,32 +742,6 @@ class _InstructionMixin:
 
 
 # ---- External target / remote-start helpers ----
-def _render_modbus_target(instruction: object) -> str:
-    """Render target constructor for the ladder export."""
-    from pyrung.core.instruction.send_receive import ModbusRtuTarget
-
-    raw_target = getattr(instruction, "raw_target", None)
-    if isinstance(raw_target, ModbusRtuTarget):
-        parts = [
-            f"name={_quote(raw_target.name)}",
-            f"com_port={_quote(raw_target.com_port)}",
-            f"device_id={raw_target.device_id}",
-        ]
-        return f"ModbusRtuTarget({','.join(parts)})"
-
-    name = getattr(instruction, "target_name", "")
-    host = getattr(instruction, "host", None)
-    if host is None:
-        return _quote(name)
-    port = getattr(instruction, "port", 502)
-    device_id = getattr(instruction, "device_id", 1)
-    parts = [
-        f"name={_quote(name)}",
-        f"ip={_quote(host)}",
-        f"port={port}",
-        f"device_id={device_id}",
-    ]
-    return f"ModbusTcpTarget({','.join(parts)})"
 
 
 _984_BASES = {

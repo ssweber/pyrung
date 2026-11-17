@@ -214,6 +214,17 @@ def _status_tags(
     )
 
 
+def _device_id_value(device_id: int | Tag, ctx: ScanContext) -> int:
+    """Returns the number, or the value its DS tag holds as the request starts.
+
+    A value no device can answer to is passed on as it is.  What a CLICK does with one
+    is not yet known.
+    """
+    if isinstance(device_id, Tag):
+        return int(ctx.get_tag(device_id.name, device_id.default))
+    return device_id
+
+
 # ---------------------------------------------------------------------------
 # Instruction classes
 # ---------------------------------------------------------------------------
@@ -228,7 +239,7 @@ class ModbusSendInstruction(Instruction):
     instruction is a simulation-inert placeholder for code generation.
     """
 
-    _reads = ("source",)
+    _reads = ("source", "device_id")
     _writes = ("sending", "success", "error", "exception_response")
     _conditions = ()
     _structural_fields = ("target_name", "bank", "start", "addresses")
@@ -244,7 +255,7 @@ class ModbusSendInstruction(Instruction):
     exception_response: Tag
     host: str | None = None
     port: int = 502
-    device_id: int = 1
+    device_id: int | Tag = 1
     timeout_s: float = 1.0
     remote_address: ModbusAddress | None = None
     word_swap: bool = False
@@ -260,13 +271,15 @@ class ModbusSendInstruction(Instruction):
     def _is_live(self) -> bool:
         return self.host is not None or self.raw_target is not None
 
-    def _submit(self, source_tags: list[Tag], values: list[Any]) -> Future[_RequestResult]:
+    def _submit(
+        self, source_tags: list[Tag], values: list[Any], device_id: int
+    ) -> Future[_RequestResult]:
         if self.bank is not None:
             assert self.host is not None
             return _submit_click_send_request(
                 host=self.host,
                 port=self.port,
-                device_id=self.device_id,
+                device_id=device_id,
                 bank=self.bank,
                 addresses=self.addresses,
                 values=tuple(values),
@@ -282,7 +295,7 @@ class ModbusSendInstruction(Instruction):
             address=self.remote_address.address,
             register_type=self.remote_address.register_type,
             registers=registers,
-            device_id=self.device_id,
+            device_id=device_id,
         )
 
     @property
@@ -342,7 +355,10 @@ class ModbusSendInstruction(Instruction):
 
         source_tags = _normalize_operand_tags(self.source, ctx)
         values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
-        ctx.modbus_requests[id(self)] = _PendingRequest(future=self._submit(source_tags, values))
+        device_id = _device_id_value(self.device_id, ctx)
+        ctx.modbus_requests[id(self)] = _PendingRequest(
+            future=self._submit(source_tags, values, device_id)
+        )
         submit_writes: dict[str, Any] = {
             self.sending.name: True,
             self.success.name: False,
@@ -382,7 +398,7 @@ class ModbusReceiveInstruction(Instruction):
     instruction is a simulation-inert placeholder for code generation.
     """
 
-    _reads = ()
+    _reads = ("device_id",)
     _writes = ("dest", "receiving", "success", "error", "exception_response")
     _conditions = ()
     _structural_fields = ("target_name", "bank", "start", "addresses")
@@ -398,7 +414,7 @@ class ModbusReceiveInstruction(Instruction):
     exception_response: Tag
     host: str | None = None
     port: int = 502
-    device_id: int = 1
+    device_id: int | Tag = 1
     timeout_s: float = 1.0
     remote_address: ModbusAddress | None = None
     word_swap: bool = False
@@ -421,13 +437,13 @@ class ModbusReceiveInstruction(Instruction):
     def _is_live(self) -> bool:
         return self.host is not None or self.raw_target is not None
 
-    def _submit(self, dest_tags: list[Tag]) -> Future[_RequestResult]:
+    def _submit(self, device_id: int) -> Future[_RequestResult]:
         if self.bank is not None:
             assert self.host is not None
             return _submit_click_receive_request(
                 host=self.host,
                 port=self.port,
-                device_id=self.device_id,
+                device_id=device_id,
                 bank=self.bank,
                 start=self.start,
                 end=self.addresses[-1],
@@ -439,7 +455,7 @@ class ModbusReceiveInstruction(Instruction):
             address=self.remote_address.address,
             register_type=self.remote_address.register_type,
             count=self.register_count,
-            device_id=self.device_id,
+            device_id=device_id,
         )
 
     def _unpack_result(self, result: _RequestResult, target_tags: list[Tag]) -> tuple[Any, ...]:
@@ -546,7 +562,7 @@ class ModbusReceiveInstruction(Instruction):
 
         dest_tags = _normalize_operand_tags(self.dest, ctx)
         ctx.modbus_requests[id(self)] = _PendingRequest(
-            future=self._submit(dest_tags),
+            future=self._submit(_device_id_value(self.device_id, ctx)),
             target_tags=dest_tags,
         )
         submit_writes: dict[str, Any] = {
@@ -586,7 +602,7 @@ class ModbusReceiveInstruction(Instruction):
 
 def _resolve_target(
     target: str | ModbusTcpTarget | ModbusRtuTarget,
-) -> tuple[str, str | None, int, int, float, ModbusTcpTarget | ModbusRtuTarget | None]:
+) -> tuple[str, str | None, int, int | Tag, float, ModbusTcpTarget | ModbusRtuTarget | None]:
     """Extract connection params from a target value.
 
     Returns ``(target_name, host, port, device_id, timeout_s, raw_target)``.
@@ -755,6 +771,9 @@ def receive(
         raise TypeError(f"dest must be Tag or BlockRange, got {type(dest).__name__}")
 
     target_name, host, port, device_id, timeout_s, raw_target = _resolve_target(target)
+    if isinstance(raw_target, ModbusRtuTarget) and isinstance(device_id, int) and device_id == 0:
+        # 0 is RTU's broadcast address, which no device answers.
+        raise ValueError("receive() from an RTU device takes device_id 1..247 or a DS tag, not 0")
     bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
         remote_start, dest, count, target, is_send=False
     )

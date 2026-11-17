@@ -48,6 +48,7 @@ from .findings import (
     CLK_MATH_WIDE_CONSTANT,
     CLK_NESTED_CALL,
     CLK_NICKNAME_TOO_LONG,
+    CLK_NOP_NO_COIL,
     CLK_OUT_UNIT_UNSUPPORTED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
@@ -113,6 +114,7 @@ from .portability import (
     _evaluate_instruction_portability,
     _evaluate_math_bit_operands,
     _evaluate_nested_calls,
+    _evaluate_nop_no_coil,
     _evaluate_rand_bounds,
     _evaluate_range_aggregates,
     _evaluate_status_bit_usage,
@@ -195,17 +197,24 @@ def _iter_instruction_sites(program: Program) -> list[tuple[Any, ProgramLocation
 _STEP_LIMIT_NEAR = 0.95
 
 
-def _evaluate_step_limit(
-    program: Program, tag_map: TagMap, mode: ValidationMode
-) -> list[ClickFinding]:
-    """CLK_STEP_LIMIT: the estimated program steps exceed, or come near, CLICK's 8000."""
+def _export_bundle(program: Program, tag_map: TagMap) -> Any:
+    """The export of *program* for the findings that read its rows, or None."""
+    import warnings
+
     from pyrung.click.ladder import LadderExportError, pyrung_to_ladder
-    from pyrung.click.ladder.steps import CLICK_STEP_LIMIT, estimate_steps
 
     try:
-        bundle = pyrung_to_ladder(program, tag_map, validate=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return pyrung_to_ladder(program, tag_map, validate=False)
     except LadderExportError:
-        return []  # Not exportable: other findings say why.
+        return None  # Not exportable: the export says why.
+
+
+def _evaluate_step_limit(bundle: Any, mode: ValidationMode) -> list[ClickFinding]:
+    """CLK_STEP_LIMIT: the estimated program steps exceed, or come near, CLICK's 8000."""
+    from pyrung.click.ladder.steps import CLICK_STEP_LIMIT, estimate_steps
+
     estimate = estimate_steps(bundle)
     if estimate.total <= CLICK_STEP_LIMIT * _STEP_LIMIT_NEAR:
         return []
@@ -258,7 +267,10 @@ def validate_click_program(
     findings.extend(_evaluate_text_windows(program, mode, resolver))
     findings.extend(_evaluate_forloop_structure(program, mode))
     findings.extend(_evaluate_nested_calls(program, mode))
-    findings.extend(_evaluate_step_limit(program, tag_map, mode))
+    bundle = _export_bundle(program, tag_map)
+    if bundle is not None:
+        findings.extend(_evaluate_nop_no_coil(bundle, mode))
+        findings.extend(_evaluate_step_limit(bundle, mode))
 
     bounds = _PointerBounds(program)
     findings.extend(_evaluate_condition_pointer_past_bank(program, tag_map, bounds, mode, resolver))
@@ -366,6 +378,7 @@ __all__ = [
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
     "CLK_COMPARE_HEX_MIX",
+    "CLK_NOP_NO_COIL",
     "CLK_BANK_WRONG_ROLE",
     "CLK_COPY_BANK_INCOMPATIBLE",
     "CLK_COPY_CONVERTER_INCOMPATIBLE",

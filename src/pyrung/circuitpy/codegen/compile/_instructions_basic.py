@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-from pyrung.circuitpy.codegen._constants import (
-    _DINT_MAX,
-    _DINT_MIN,
-    _INT_MAX,
-)
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
     _coil_reset_value,
@@ -40,6 +35,20 @@ from pyrung.core.memory_block import block_room, element_names_after
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
+from ._emit import (
+    emit_acc_rest,
+    emit_cmp,
+    emit_count,
+    emit_done,
+    emit_frac,
+    emit_if_enabled,
+    emit_mem_get,
+    emit_mem_set,
+    emit_oneshot,
+    emit_rise,
+    emit_tick,
+    emit_truth,
+)
 from ._primitives import (
     _compile_assignment_lines,
     _compile_copy_source,
@@ -54,7 +63,6 @@ from ._primitives import (
     _copy_converter_target_info,
     _copy_converter_write_lines,
     _past_end_keeps,
-    _timer_carry_lines,
 )
 
 
@@ -81,9 +89,8 @@ def _compile_latch_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    lines = [f"{' ' * indent}if {enabled_expr}:"]
-    lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-    return lines
+    writes = _compile_target_write_lines(instr.target, "True", ctx, 0)
+    return [f"{' ' * indent}{line}" for line in emit_if_enabled(enabled_expr, writes, fold=False)]
 
 
 def _compile_reset_instruction(
@@ -93,9 +100,8 @@ def _compile_reset_instruction(
     indent: int,
 ) -> list[str]:
     reset_expr = _coil_reset_value(instr.target, ctx)
-    lines = [f"{' ' * indent}if {enabled_expr}:"]
-    lines.extend(_compile_target_write_lines(instr.target, reset_expr, ctx, indent + 4))
-    return lines
+    writes = _compile_target_write_lines(instr.target, reset_expr, ctx, 0)
+    return [f"{' ' * indent}{line}" for line in emit_if_enabled(enabled_expr, writes, fold=False)]
 
 
 def _compile_out_instruction(
@@ -104,44 +110,23 @@ def _compile_out_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    lines: list[str] = []
     sp = " " * indent
-    enabled_literal = _bool_literal(enabled_expr)
+    # Each range write takes the next local name, so this builds the writes in output order.
+    # A literal True enable never runs the off side, so this does not build it.
+    always = _bool_literal(enabled_expr) is True
     if instr.oneshot:
         key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
-        if enabled_literal is False:
-            lines.append(f"{sp}_mem[{key!r}] = False")
-            lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent))
-            return lines
-        if enabled_literal is True:
-            lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
-            lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-            lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
-            lines.append(f"{sp}else:")
-            lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-            return lines
-        lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
-        lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-        lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
-        lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
-        lines.append(f"{sp}else:")
-        lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-        return lines
+        off = [] if always else _compile_target_write_lines(instr.target, "False", ctx, 0)
+        fire = _compile_target_write_lines(instr.target, "True", ctx, 0)
+        held = _compile_target_write_lines(instr.target, "False", ctx, 0)
+        oneshot = emit_oneshot(key, enabled_expr, fire=fire, off=off, held=held)
+        return [f"{sp}{line}" for line in oneshot]
 
-    if enabled_literal is True:
-        return _compile_target_write_lines(instr.target, "True", ctx, indent)
-    if enabled_literal is False:
-        return _compile_target_write_lines(instr.target, "False", ctx, indent)
-
-    lines.append(f"{sp}if {enabled_expr}:")
-    lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-    lines.append(f"{sp}else:")
-    lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-    return lines
+    on = _compile_target_write_lines(instr.target, "True", ctx, 0)
+    off = [] if always else _compile_target_write_lines(instr.target, "False", ctx, 0)
+    return [f"{sp}{line}" for line in emit_if_enabled(enabled_expr, on, otherwise=off)]
 
 
 def _compile_call_instruction(
@@ -158,22 +143,29 @@ def _compile_call_instruction(
         call_expr = f"{fn}(tags)"
     else:
         call_expr = f"{fn}()"
-    enabled_literal = _bool_literal(enabled_expr)
-    if enabled_literal is False:
-        return []
-    if enabled_literal is True:
-        return [f"{sp}{call_expr}"]
-    return [f"{sp}if {enabled_expr}:", f"{sp}    {call_expr}"]
+    return [f"{sp}{line}" for line in emit_if_enabled(enabled_expr, [call_expr])]
 
 
 def _compile_return_instruction(enabled_expr: str, indent: int) -> list[str]:
     sp = " " * indent
-    enabled_literal = _bool_literal(enabled_expr)
-    if enabled_literal is False:
-        return []
-    if enabled_literal is True:
-        return [f"{sp}return"]
-    return [f"{sp}if {enabled_expr}:", f"{sp}    return"]
+    return [f"{sp}{line}" for line in emit_if_enabled(enabled_expr, ["return"])]
+
+
+def _reset_expr(
+    instr: OnDelayInstruction | CountUpInstruction | CountDownInstruction, ctx: CodegenContext
+) -> str | None:
+    if instr.reset_condition is None:
+        return None
+    return _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+        instr.reset_condition, ctx
+    )
+
+
+def _rest_or_run(reset_expr: str | None, rest: list[str], run: list[str]) -> list[str]:
+    """Lines that run *rest* on a scan the reset is on, and *run* on any other scan."""
+    if reset_expr is None:
+        return run
+    return emit_if_enabled(reset_expr, rest, otherwise=run, fold=False)
 
 
 def _compile_on_delay_instruction(
@@ -185,59 +177,25 @@ def _compile_on_delay_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    frac_key = f"_frac:{instr.accumulator.name}"
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
+    acc = instr.accumulator
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
-    lines: list[str] = []
-    if instr.reset_condition is not None:
-        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
-            instr.reset_condition, ctx
-        )
-        lines.extend(
-            [
-                f"{sp}if {reset_expr}:",
-                f'{" " * (indent + 4)}_mem["{frac_key}"] = 0',
-                f"{' ' * (indent + 4)}{done_write} = False",
-                f"{' ' * (indent + 4)}{acc_write} = 0",
-                f"{sp}else:",
-            ]
-        )
-        inner = indent + 4
-    else:
-        inner = indent
-    isp = " " * inner
-    tick = [
-        f"{' ' * (inner + 4)}_acc = int({acc_read})",
-        *_timer_carry_lines(instr.accumulator, instr.unit, ctx, " " * (inner + 4)),
-        f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{' ' * (inner + 4)}_preset = int({preset})",
+    reset_expr = _reset_expr(instr, ctx)
+    rest = emit_acc_rest(done_write, acc_write, frac=acc)
+    run = [
+        *emit_tick(acc, instr.unit, ctx, acc_read=acc_read),
+        *emit_done(
+            done_write, acc_write, ">=", preset, preset_key=_preset_key(instr, ctx), frac=acc
+        ),
     ]
-    lines.extend(
-        [
-            f"{isp}if {enabled_expr}:",
-            *tick,
-            f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
-            f"{' ' * (inner + 4)}{done_write} = (_acc >= _preset)",
-            f"{' ' * (inner + 4)}{acc_write} = _acc",
-        ]
-    )
-    if ctx.proof_metadata:
-        lines.insert(-3, f'{" " * (inner + 4)}_mem["{preset_key}"] = _preset')
-    if not instr.has_reset:
-        lines.extend(
-            [
-                f"{isp}else:",
-                f'{" " * (inner + 4)}_mem["{frac_key}"] = 0',
-                f"{' ' * (inner + 4)}{done_write} = False",
-                f"{' ' * (inner + 4)}{acc_write} = 0",
-            ]
-        )
+    otherwise = rest if reset_expr is None else []
+    run = emit_if_enabled(enabled_expr, run, otherwise=otherwise, fold=False)
+    lines = [f"{sp}{line}" for line in _rest_or_run(reset_expr, rest, run)]
     # Status bits: computed after all branches using final tag values
     done_read = _compile_value(instr.done_bit, ctx)
-    if instr.has_reset:
+    if reset_expr is not None:
         tt_expr = f"bool({enabled_expr}) and not bool({reset_expr}) and not {done_read}"
     else:
         tt_expr = f"bool({enabled_expr}) and not {done_read}"
@@ -259,9 +217,8 @@ def _compile_off_delay_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    frac_key = f"_frac:{instr.accumulator.name}"
+    acc = instr.accumulator
     armed_key = tof_armed_key(instr.accumulator.name)
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
@@ -269,37 +226,52 @@ def _compile_off_delay_instruction(
     sp4 = " " * (indent + 4)
     sp8 = " " * (indent + 8)
     sp12 = " " * (indent + 12)
+    arm = emit_mem_set(armed_key, "True", quote="double")
+    tick = emit_tick(acc, instr.unit, ctx, acc_read=None)
+    done = emit_done(
+        done_write,
+        acc_write,
+        "<",
+        preset,
+        preset_key=_preset_key(instr, ctx),
+        frac=acc,
+        paren=False,
+    )
     # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
     lines = [
-        f'{sp}_tof_armed = _mem.get("{armed_key}", False)',
+        f"{sp}_tof_armed = {emit_mem_get(armed_key, 'False')}",
         f"{sp}if {enabled_expr}:",
         f"{sp4}if not _tof_armed:",
-        f'{sp8}_mem["{armed_key}"] = True',
-        f'{sp4}_mem["{frac_key}"] = 0',
+        f"{sp8}{arm}",
+        f"{sp4}{emit_frac(acc, '0')}",
         f"{sp4}{done_write} = True",
         f"{sp4}{acc_write} = 0",
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
-        f"{sp4}if _tof_armed or {done_read} or _acc != 0:",
+        f"{sp4}if _tof_armed or {done_read} or {emit_cmp('_acc', '!=', '0', paren=False)}:",
         f"{sp8}if not _tof_armed:",
-        f'{sp12}_mem["{armed_key}"] = True',
-        *_timer_carry_lines(instr.accumulator, instr.unit, ctx, sp8),
-        f"{sp8}_acc = min(_acc + _int_units, {_INT_MAX})",
-        f"{sp8}_preset = int({preset})",
-        f'{sp8}_mem["{frac_key}"] = _new_frac',
-        f"{sp8}{done_write} = _acc < _preset",
-        f"{sp8}{acc_write} = _acc",
+        f"{sp12}{arm}",
+        *(f"{sp8}{line}" for line in (*tick, *done)),
     ]
-    if ctx.proof_metadata:
-        lines.insert(-3, f'{sp8}_mem["{preset_key}"] = _preset')
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
-    tt_expr = f"not bool({enabled_expr}) and bool({done_read})"
+    tt_expr = f"not bool({enabled_expr}) and {emit_truth(done_read)}"
     lines.extend(
         _compile_status_bit_lines(
             instr, ctx, indent, en_bit=f"bool({enabled_expr})", tt_bit=tt_expr
         )
     )
     return lines
+
+
+def _preset_key(
+    instr: OnDelayInstruction | OffDelayInstruction | CountUpInstruction | CountDownInstruction,
+    ctx: CodegenContext,
+) -> str | None:
+    """The memory key that holds a timer's or counter's preset for the prover.
+
+    It is None unless the kernel is built with ``proof_metadata``.
+    """
+    return prove_effective_preset_key(instr.done_bit.name) if ctx.proof_metadata else None
 
 
 def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list[str]:
@@ -313,8 +285,8 @@ def _count_edge_lines(name: str, key: str, input_expr: str, indent: int) -> list
     now = f"{name}_now"
     return [
         f"{sp}{now} = bool({input_expr})",
-        f"{sp}{name} = {now} and not _mem.get({key!r}, False)",
-        f"{sp}_mem[{key!r}] = {now}",
+        f"{sp}{name} = {emit_rise(now, key, cast=False)}",
+        f"{sp}{emit_mem_set(key, now)}",
     ]
 
 
@@ -327,13 +299,11 @@ def _compile_count_up_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     site = ctx.state_key_for(instr)
     up_key = f"{COUNT_UP_MEMORY}:{site}"
-    sp = " " * indent
     lines: list[str] = _count_edge_lines("_cu_edge", up_key, enabled_expr, indent)
     down_expr: str | None = None
     if instr.down_condition is not None:
@@ -343,47 +313,13 @@ def _compile_count_up_instruction(
         lines.extend(
             _count_edge_lines("_cd_edge", f"{COUNT_DOWN_MEMORY}:{site}", down_expr, indent)
         )
-    if instr.reset_condition is not None:
-        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
-            instr.reset_condition, ctx
-        )
-        lines.extend(
-            [
-                f"{sp}if {reset_expr}:",
-                f"{' ' * (indent + 4)}{done_write} = False",
-                f"{' ' * (indent + 4)}{acc_write} = 0",
-                f"{sp}else:",
-            ]
-        )
-        inner = indent + 4
-    else:
-        inner = indent
-    isp = " " * inner
-    lines.extend(
-        [
-            f"{' ' * inner}_acc = int({acc_read})",
-            f"{' ' * inner}_delta = 0",
-            f"{isp}if _cu_edge:",
-            f"{' ' * (inner + 4)}_delta += 1",
-        ]
-    )
-    if down_expr is not None:
-        lines.extend(
-            [
-                f"{isp}if _cd_edge:",
-                f"{' ' * (inner + 4)}_delta -= 1",
-            ]
-        )
-    lines.extend(
-        [
-            f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc + _delta))",
-            f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done_write} = (_acc >= _preset)",
-            f"{' ' * inner}{acc_write} = _acc",
-        ]
-    )
-    if ctx.proof_metadata:
-        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
+    rest = emit_acc_rest(done_write, acc_write)
+    run = [
+        *emit_count(acc_read, up="_cu_edge", down=None if down_expr is None else "_cd_edge"),
+        *emit_done(done_write, acc_write, ">=", preset, preset_key=_preset_key(instr, ctx)),
+    ]
+    sp = " " * indent
+    lines.extend(f"{sp}{line}" for line in _rest_or_run(_reset_expr(instr, ctx), rest, run))
     # Counter status bits: CU = enabled, CD = down condition active
     cd_expr = f"bool({down_expr})" if instr.down_condition is not None else "False"
     lines.extend(
@@ -403,42 +339,18 @@ def _compile_count_down_instruction(
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    preset_key = prove_effective_preset_key(instr.done_bit.name)
     preset = _compile_value(instr.preset, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     down_key = f"{COUNT_DOWN_MEMORY}:{ctx.state_key_for(instr)}"
-    sp = " " * indent
     lines: list[str] = _count_edge_lines("_cd_edge", down_key, enabled_expr, indent)
-    if instr.reset_condition is not None:
-        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
-            instr.reset_condition, ctx
-        )
-        lines.extend(
-            [
-                f"{sp}if {reset_expr}:",
-                f"{' ' * (indent + 4)}{done_write} = False",
-                f"{' ' * (indent + 4)}{acc_write} = 0",
-                f"{sp}else:",
-            ]
-        )
-        inner = indent + 4
-    else:
-        inner = indent
-    isp = " " * inner
-    lines.extend(
-        [
-            f"{' ' * inner}_acc = int({acc_read})",
-            f"{isp}if _cd_edge:",
-            f"{' ' * (inner + 4)}_acc -= 1",
-            f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))",
-            f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done_write} = (_acc <= _preset)",
-            f"{' ' * inner}{acc_write} = _acc",
-        ]
-    )
-    if ctx.proof_metadata:
-        lines.insert(-2, f'{" " * inner}_mem["{preset_key}"] = _preset')
+    rest = emit_acc_rest(done_write, acc_write)
+    run = [
+        *emit_count(acc_read, up=None, down="_cd_edge"),
+        *emit_done(done_write, acc_write, "<=", preset, preset_key=_preset_key(instr, ctx)),
+    ]
+    sp = " " * indent
+    lines.extend(f"{sp}{line}" for line in _rest_or_run(_reset_expr(instr, ctx), rest, run))
     # Counter status bits: CU = False (always), CD = enabled
     lines.extend(
         _compile_status_bit_lines(

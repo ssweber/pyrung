@@ -70,6 +70,8 @@ copy(DS[1], Txt[1], convert=to_binary)                         # raw byte: 123 â
 
 A `Word` is written in hex, so `to_text()` of 0x00AB is "AB", and "00AB" with `suppress_zero=False`.
 
+`exponential` applies to a `Real` source and `suppress_zero` to any other, as in CLICK's Copy dialog. A `Real` source ignores `suppress_zero`. CLICK export refuses `exponential=True` from a source that isn't a `Real`.
+
 `termination_code` appends a single ASCII character after the converted text. Pass an int (0â€“127), a one-character string, or a `$XX` hex string matching CLICK's native notation (e.g. `"$0D"` for carriage return). This matches the CLICK PLC Termination Code option (C0-1x and C2-x CPUs).
 
 ### Leading zeros with string literals

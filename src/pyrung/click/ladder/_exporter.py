@@ -170,7 +170,6 @@ class _LadderExporter(
                 if scope == "subroutine"
                 else f"main.rung[{rung_index}]"
             )
-            self._check_nop_alone(rung, path=base_path)
             rendered = self._render_source_rung(rung, path=base_path)
             try:
                 assert_no_column_a_vertical(rendered)
@@ -375,25 +374,6 @@ class _LadderExporter(
             parts = ",".join(self._condition_signature(child) for child in condition.conditions)
             return f"OR({parts})"
         return self._condition_leaf_token(condition, path="normalize.condition")
-
-    def _check_nop_alone(self, rung: Rung, *, path: str) -> None:
-        """Refuse a contact in front of NOP, which CLICK refuses (C0003, no coil).
-
-        CLICK also deletes a NOP row that shares its rung with another row.  The export draws an
-        empty rung as a CLICK rung of its own, so that cannot happen.
-        """
-        if rung._instructions or rung._branches:
-            return
-        if rung._conditions:
-            self._raise_issue(
-                path=f"{path}.condition",
-                message=(
-                    "CLICK refuses an empty rung with conditions: NOP must sit on a "
-                    "bare wire. Drop the conditions (they do nothing without an "
-                    "instruction) or give the rung an instruction."
-                ),
-                source=rung,
-            )
 
     def _export_rung(self, rung: Rung, *, path: str) -> Rung:
         """*rung* as its CLICK rung: a branching rung's leading contacts factored.

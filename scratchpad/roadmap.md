@@ -104,6 +104,16 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
       (requirement_derivation.py:211) refuses them. The records would give "reset False", and for CTU the down input.
     - The TOF profile ignores the armed memory (timers.py:301). The kernel times a TOF only while it is armed or done
       or has a nonzero Acc. So PILOT may wait on a TOF that was never armed, with Done False and Acc 0, and it never moves.
+- **Other validators read tag flags from `_build_tag_map`, which lists only contacts, `.target` and `.source`.**
+  readonly-writes moved the readonly and final checks to the tags write_sites reports. A follow-up branch does the
+  same for the rest. [nothing]
+  - Confirmed: choices_violation.py:101 and :160. `fill(9, Modes.select(1, 2))` gives no TAG_CHOICES_VIOLATION.
+  - Unprobed: stuck_bits.py:591 and :644, physical_realism.py:427 and simplified.py:1249.
+  - None of them reports a write through a pointer to a flagged slot, readonly and final included.
+    `static_write_target_tags` returns nothing for a pointer target.
+  - Other hand-kept write lists: `_common._instruction_write_targets`, `_common._resolve_tag_names` and
+    `_resolve_tag_objects`, `_written_names` in cmp_conditions.py:459-467, and `_instruction_write_targets` in
+    prove/elision/slice.py:362.
 
 #### One owner per question
 
@@ -111,7 +121,7 @@ The design review of prove/ and pilot/ (`pyrung-wt/buildbot/jobs/design-review/R
 several modules each answer their own way. A fix then lands at one caller and misses the others. Each refactor below
 gives one question one owner. All [nothing].
 
-1. **What an instruction writes.** In progress on bob/readonly-writes.
+1. **What an instruction writes.** The readonly and final checks read write_sites (readonly-writes). The other validators follow (above).
 2. **What a condition reads.** Each atom of a resolved condition carries its read set and its source condition.
    Four read sets then take the union of the atoms' reads. They are `_referenced_tags`, read_trace.py:24-102,
    query.py:332 and static_expressions.py:56. `prove/expr._eval_atom` keeps literal compares and evaluates the rest
@@ -176,6 +186,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   - `flag_boxes/ton_ctu_by_pointer` (part follow_flags) can't tell whether a TON or a CTU clears an SC44 raised
     through pointer -1. It needs another way to raise and hold SC44.
   - Re-run parts drum1, drum2, follow_timing, follow_extra and text_flasher to confirm their rewritten readings.
+  - Re-paste and re-run the `to_text()` cases in parts copy, math, system and follow_extra. Their export now
+    writes only the flag the source has, which changed their hashes.
   - Re-paste part control from the current build, which clears the false "Changed" results.
   - Unread: whether a TD write keeps any part of a ms left over, and a ladder write to the next phase's TD on the scan
     a phase ends.
@@ -185,11 +197,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
 - **`math()` of a Real into a Word.** pyrung runs it, but a CLICK refuses it. The CLICK check reports
   `CLK_MATH_MODE_MIXED`. Decide whether pyrung runs it or refuses it. [nothing]
 - **CLICK v4 send/receive forms** (laddercodec's asks, ruled for after 0.16.0). [CLICK]
-  - `com_port="wlan"` on ModbusTcpTarget (a missing com_port means Ethernet), and `"cpu3"` for RTU.
-  - `device_id` as an int or a DS address. CLICK refuses DD, DH and C there. What an out-of-range ID does at request
-    time needs a probe [PLC].
-  - `to_text` writes only the flag that applies to its source. Export refuses `exponential=True` on an integer
-    source.
+  - What a CLICK does when the DS register of a `device_id` holds an ID out of range, at request time, needs a probe
+    [PLC]. pyrung passes the value on as it is.
 
 ## 3. The recording core
 
@@ -346,6 +355,9 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
   2026-11-17). This replaces "the refusal wins". The pyrung sections of
   laddercodec's `csv-format.md` move here.
+  - Disagreements for laddercodec to fix (logged 2026-11-17): `to_text(exponential=1)` from a Real constant
+    (CLICK accepts it, case22) and from a DF pointer such as `DF[DS1]` (CLICK accepts it, clicknick
+    copy-pointer-text). laddercodec's `Copy._is_df` matches only a literal `DF<n>`.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
   finding. It waits on laddercodec's release. [nothing]
@@ -357,11 +369,17 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **Breakpoint conditions share no rule with the Watch.** `compile_condition_for_breakpoint` resolves no choice labels
+  or `Pump.State` aliases, and a condition on an unknown tag never fires. Its users are breakpoint conditions,
+  logpoint conditions and data-breakpoint conditions (monitor_data_breakpoints.py:169). They should share the Watch's
+  rule, with labels looked up at evaluation time because breakpoints outlive a reload. `to_conditions` (how() and
+  causal) resolves labels but raises KeyError on a `Pump.State` alias.
 - **Text stores.**
   - A text into a logical block mapped mid-bank should count on into the bank, as CLICK does. Today it stops at the
     block end with CLK_TEXT_PAST_BLOCK, while a windowed compare on the same tag reads on through the bank.
   - A text store in a structure field past the structure.
   - An import round trip of a compare across a UDT boundary or onto padding.
+- **A For body rung with branches imports to code that fails.** The import writes `branch()` inside `forloop()`, and the DSL refuses it ("branch() is not permitted inside forloop()"). A NOP leg beside a coil hits it, and so do two coils on branches.
 - **A PDG cached before a later TagMap goes stale** (`program._cached_graph`, pdg.py ~1819). `writers_of` keeps only
   the mapped tag while every engine writes on.
 - **The weak `_pyrung_hw_slot`** frees with the bank when the TagMap and ClickBlocks are dropped, and a store then

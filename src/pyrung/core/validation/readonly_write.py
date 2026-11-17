@@ -14,11 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.write_sites import instruction_written_tags
 from pyrung.core.validation._common import (
     WriteSite,
-    _build_tag_map,
     _collect_write_sites,
-    _resolve_tag_names,
     site_frame,
 )
 from pyrung.core.validation.display import FindingDisplay, _FindingTextMixin
@@ -26,6 +25,7 @@ from pyrung.core.validation.severity import Severity
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
+    from pyrung.core.tag import Tag
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -69,70 +69,18 @@ class ReadonlyWriteReport:
 
 
 def _any_write_targets(instr: Any) -> list[tuple[str, str]]:
-    """Return (tag_name, instruction_type) for any instruction with a write target."""
+    """Return (tag_name, instruction_type) for each tag *instr* may write by name."""
     itype = type(instr).__name__
-    from pyrung.core.instruction.out_variants import (
-        DebounceInstruction,
-        FlasherInstruction,
-        TimedInstruction,
-    )
+    return [(tag.name, itype) for tag in instruction_written_tags(instr)]
 
-    if isinstance(instr, (DebounceInstruction, FlasherInstruction, TimedInstruction)):
-        # The coil bit plus the Acc of each Timer it owns (never the Done).
-        from pyrung.core.analysis.write_sites import (
-            instruction_write_targets,
-            static_write_target_names,
-        )
 
-        return [
-            (name, itype)
-            for target in instruction_write_targets(instr)
-            for name in sorted(static_write_target_names(target))
-        ]
-
-    target = getattr(instr, "target", None)
-    if target is not None:
-        names = _resolve_tag_names(target)
-        if names:
-            return [(name, itype) for name in names]
-
-    # Timer/counter done_bit + accumulator
-    done_bit = getattr(instr, "done_bit", None)
-    accumulator = getattr(instr, "accumulator", None)
-    if done_bit is not None and accumulator is not None:
-        names = _resolve_tag_names(done_bit) + _resolve_tag_names(accumulator)
-        return [(name, itype) for name in names]
-
-    # Drum outputs + current_step + completion_flag
-    outputs = getattr(instr, "outputs", None)
-    current_step = getattr(instr, "current_step", None)
-    if outputs is not None and current_step is not None:
-        names = []
-        for t in outputs:
-            names.extend(_resolve_tag_names(t))
-        names.extend(_resolve_tag_names(current_step))
-        completion_flag = getattr(instr, "completion_flag", None)
-        if completion_flag is not None:
-            names.extend(_resolve_tag_names(completion_flag))
-        if accumulator is not None:
-            names.extend(_resolve_tag_names(accumulator))
-        return [(name, itype) for name in names]
-
-    # Shift instruction bit_range
-    bit_range = getattr(instr, "bit_range", None)
-    if bit_range is not None:
-        names = _resolve_tag_names(bit_range)
-        if names:
-            return [(name, itype) for name in names]
-
-    # Pack/unpack destination
-    destination = getattr(instr, "destination", None)
-    if destination is not None:
-        names = _resolve_tag_names(destination)
-        if names:
-            return [(name, itype) for name in names]
-
-    return []
+def _written_tags_by_name(sites: list[WriteSite]) -> dict[str, list[Tag]]:
+    """The tag objects the sites write, by name, to read their flags from."""
+    by_name: dict[str, list[Tag]] = {}
+    for instr in {id(site.instruction): site.instruction for site in sites}.values():
+        for tag in instruction_written_tags(instr):
+            by_name.setdefault(tag.name, []).append(tag)
+    return by_name
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +90,8 @@ def _any_write_targets(instr: Any) -> list[tuple[str, str]]:
 
 def validate_readonly_writes(program: Program) -> ReadonlyWriteReport:
     """Validate a Program for writes to readonly tags."""
-    tag_map = _build_tag_map(program)
     sites = _collect_write_sites(program, target_extractor=_any_write_targets)
+    written = _written_tags_by_name(sites)
 
     # Group sites by target
     sites_by_target: dict[str, list[WriteSite]] = {}
@@ -152,8 +100,7 @@ def validate_readonly_writes(program: Program) -> ReadonlyWriteReport:
 
     findings: list[ReadonlyWriteFinding] = []
     for tag_name in sorted(sites_by_target):
-        tag = tag_map.get(tag_name)
-        if tag is None or not tag.readonly:
+        if not any(tag.readonly for tag in written[tag_name]):
             continue
         target_sites = sites_by_target[tag_name]
         display = FindingDisplay(

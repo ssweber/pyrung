@@ -79,6 +79,7 @@ CLK_SEARCH_RESULT_NOT_DS = "CLK_SEARCH_RESULT_NOT_DS"
 CLK_TIMER_PRESET_TOO_LOW = "CLK_TIMER_PRESET_TOO_LOW"
 CLK_PTR_PAST_BANK = "CLK_PTR_PAST_BANK"
 CLK_COMPARE_HEX_MIX = "CLK_COMPARE_HEX_MIX"
+CLK_NOP_NO_COIL = "CLK_NOP_NO_COIL"
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,7 @@ class ClickValidationReport:
 def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:
     if mode == "strict":
         return "error"
-    if code == CLK_PROFILE_UNAVAILABLE:
+    if code in (CLK_PROFILE_UNAVAILABLE, CLK_NOP_NO_COIL):
         return "warning"
     return "hint"
 
@@ -375,6 +376,7 @@ __all__ = [
     "CLK_TIMER_PRESET_TOO_LOW",
     "CLK_PTR_PAST_BANK",
     "CLK_COMPARE_HEX_MIX",
+    "CLK_NOP_NO_COIL",
     "ClickFinding",
     "ClickValidationReport",
 ]

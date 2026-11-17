@@ -82,10 +82,11 @@ def to_text(
     Args:
         suppress_zero: When True (default), leading zeros are omitted
             (Click PLC "Suppress zero"). When False, leading zeros fill
-            the full digit width of the source data type.
+            the full digit width of the source data type. A Real
+            source ignores it.
         exponential: When True, use scientific notation
-            (Click PLC "Exponential Numbering", Option 4c). Only
-            applicable to Float sources.
+            (Click PLC "Exponential Numbering", Option 4c). Only a
+            Real source takes it. CLICK export refuses it from any other.
         termination_code: An ASCII code (int 0–127), single character,
             or ``$XX`` hex string appended after the converted text.
             Corresponds to the Click PLC "Termination Code" option

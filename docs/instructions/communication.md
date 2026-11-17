@@ -17,6 +17,20 @@ rtu_device = ModbusRtuTarget(name="sensor", serial_port="/dev/ttyUSB0", device_i
 
 For codegen-only programs (no live simulation), pass a plain string name instead.
 
+A CLICK target can also name its port and take its device ID from a register:
+
+```python
+peer = ModbusTcpTarget(name="peer", ip="192.168.1.10", com_port="wlan")
+DriveId = Int("DriveId")  # map it to a DS register
+drive = ModbusRtuTarget(name="drive", com_port="cpu3", device_id=DriveId)
+```
+
+`com_port="wlan"` sends over the CLICK's WLAN port. A TCP target with no `com_port` uses Ethernet. An RTU target takes `"cpu2"` (the default), `"cpu3"`, `"slot0_1"`, `"slot0_2"`, `"slot1_1"` or `"slot1_2"`.
+
+`device_id` is a number or a DS tag. The instruction reads the tag as each request starts, so the program can change which device it talks to. CLICK takes only a DS register there. pyrung refuses any tag but an `Int` when you build the target. CLICK export refuses an `Int` mapped outside DS.
+
+A TCP device ID runs 0..255 and an RTU one 0..247. A `receive()` from an RTU device refuses device ID 0, the broadcast address.
+
 ### Send
 
 ```python

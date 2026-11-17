@@ -280,6 +280,7 @@ class _OperandCollection:
     has_Or: bool = False
     has_And: bool = False
     has_branch: bool = False
+    has_nop: bool = False
     has_comment: bool = False
     has_subroutine: bool = False
     has_forloop: bool = False
@@ -323,6 +324,7 @@ class _FileRefs:
     has_Or: bool = False
     has_And: bool = False
     has_branch: bool = False
+    has_nop: bool = False
     has_comment: bool = False
     has_forloop: bool = False
     has_modbus_target: bool = False
