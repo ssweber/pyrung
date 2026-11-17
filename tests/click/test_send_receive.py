@@ -405,7 +405,7 @@ def test_run_click_send_request_sparse_writes_are_split_by_gap(monkeypatch: pyte
             _ = exc_type, exc, tb
 
     # The wrapper copies ClickClient into backends and never puts it back.
-    # Recording backends' value here makes the monkeypatch restore it.
+    # Setting the attribute here records its current value, so monkeypatch restores it.
     monkeypatch.setattr(click_send_receive._backends, "ClickClient", click_send_receive.ClickClient)
     monkeypatch.setattr(click_send_receive, "ClickClient", _FakeClient)
 

@@ -649,16 +649,8 @@ class TestCalcNestingDepth:
         a = Tag("A", TagType.INT)
         dest = Tag("Dest", TagType.INT)
 
-        # A binary inside a binary produces 1 level.  We need exactly 8.
-        # depth 0: a + a  (no parens)
-        # depth 1: (a + a) + a
-        # ...
-        # depth 7: 7 levels of nesting from 7 extra wraps
-        # We actually want 8 levels.  Let me re-derive:
-        # _deeply_nested_expr(tag, 0) → tag + tag → 0 levels (no child is binary)
-        # _deeply_nested_expr(tag, 1) → (tag + tag) + tag → 1 level
-        # _deeply_nested_expr(tag, N) → N levels
-        # So levels=8 → exactly 8.
+        # _deeply_nested_expr(tag, N) builds N levels of parens.  N = 0 is tag + tag, with no
+        # parens, and N = 1 is (tag + tag) + tag.  So levels=8 is exactly 8 levels.
         expr_8 = self._deeply_nested_expr(a, 8)
 
         def logic():
@@ -928,7 +920,7 @@ class TestRangeAggregateRules:
         assert not any(f.code == CLK_MATH_MEDIAN_RANGE_TOO_LARGE for f in _all_findings(report))
 
     def test_bool_range_sum_no_finding(self):
-        """SUM over bits is legal; CLICK spells it plain SUM."""
+        """SUM over bits is legal.  CLICK spells it plain SUM."""
         dest = Tag("Dest", TagType.INT)
 
         def logic():
@@ -1306,7 +1298,7 @@ class TestFunctionCallPortability:
 
 
 class TestSuggestionContent:
-    """Suggestions contain context-specific content (block names, expressions, pointer names)."""
+    """Checks that a suggestion names the block, expression or pointer that it is about."""
 
     def test_ptr_context_only_copy_mentions_block_and_pointer(self):
         Pointer = Tag("Pointer", TagType.INT)
@@ -1703,7 +1695,7 @@ class TestTimerPresetOverflow:
 
 
 class TestForLoopCountAndRandBounds:
-    """What CLICK's editor refuses: a For count outside the allowed banks, RAND bounds."""
+    """Covers the For counts and RAND bounds that CLICK's editor refuses."""
 
     @staticmethod
     def _for_count(count, mappings, mode="warn"):
@@ -1826,8 +1818,10 @@ class TestForLoopCountAndRandBounds:
 
 
 class TestCalcPlainArguments:
-    """CLICK's editor takes only a tag or a constant as an argument of RAND, LSH, RSH,
-    LRO and RRO: it refused ``RAND ( DD615 / 2 , 10 )``."""
+    """CLICK's editor accepts only a tag or a constant as an argument of one of these.
+
+    They are RAND, LSH, RSH, LRO and RRO.  It refused ``RAND ( DD615 / 2 , 10 )``.
+    """
 
     @staticmethod
     def _codes(build):
@@ -1893,8 +1887,10 @@ class TestCalcPlainArguments:
 
 
 class TestCalcWideConstant:
-    """CLICK's editor refuses a decimal Math constant past a DD's range (2026-11-11), and a
-    hex Math constant past FFFFh (laddercodec math_hex.answers.json, 2026-11-16)."""
+    """CLICK's editor refuses a decimal Math constant past a DD's range (2026-11-11).
+
+    It also refuses a hex Math constant past FFFFh (laddercodec math_hex.answers.json, 2026-11-16).
+    """
 
     @staticmethod
     def _found(build, dest_type=TagType.DINT):

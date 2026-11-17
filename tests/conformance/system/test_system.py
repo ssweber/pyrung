@@ -1,4 +1,4 @@
-"""System points a ladder reads in RUN: the ``system`` group (subroutine ``Conf_System``).
+"""Check the system points that a ladder reads in RUN: the ``system`` group (``Conf_System``).
 
 Fault flags, the scan clock and scan counter, the free-running clocks, the
 mode bits and the real-time clock.  The ladder reads them as pyrung's system
@@ -71,14 +71,15 @@ Result1 is the control, a probe right after the fault with nothing between
   any Math clears it, hex or decimal: 346, 0, 346, 0; a decimal Math only:
   346, 346, 346, 0.
 
-Scan clock and counter.  ``scan_counter_steps_by_one`` shows SD9 counts every
-scan (7 steps of one over scans 1..8), and ``scan_clock_follows_counter`` that
+Scan clock and counter.  ``scan_counter_steps_by_one`` shows that SD9 counts every
+scan (7 steps of one over scans 1..8).  ``scan_clock_follows_counter`` shows that
 SC3 toggles every scan (8 edges over 8 scans) and is on exactly when SD9 is
-even, as on a CLICK (a model with SC3 on when SD9 is odd reads Result2 = 0).  ``first_scan_counter_and_clock`` pins
-which of the two is offset: rungs outside the ``Cmd`` gate copy
-SD9 and SC3 on the first scan (SC2) into DD981..DD983, which the reset leaves
-alone.  SD9 starts at 0 with SC3 on (Result1 = 0, Result3 = 1).  SD9 starting at 1 with SC3 off, or SC3 a scan out of phase, would
-read differently.  Result2 = 1 shows the capture ran.  ``scan_counter_wraps_to_zero`` keeps
+even, as on a CLICK.  A model with SC3 on when SD9 is odd reads Result2 = 0.
+``first_scan_counter_and_clock`` pins which of the two is offset.  Rungs outside the
+``Cmd`` gate copy SD9 and SC3 on the first scan (SC2) into DD981..DD983, which the reset
+leaves alone.  SD9 starts at 0 with SC3 on (Result1 = 0, Result3 = 1).  SD9 starting at 1
+with SC3 off, or SC3 a scan out of phase, would read differently.  Result2 = 1 shows that
+the capture ran.  ``scan_counter_wraps_to_zero`` keeps
 the least SD9 seen since the first scan in DD991: SD9 wrapping from 32767 to
 0 reads Result1 = 0, one counting on into negative values (an
 unsigned 16-bit counter read as an Int) reads 1.  It only tells once the PLC
@@ -161,7 +162,7 @@ def _in_window(slot):
 
 
 def _fault_case(slot, flag, base, fault, other_kind, same_kind):
-    """A fault on scans 3, 4 and 6, then three instructions each probed by a coil.
+    """Raise a fault on scans 3, 4 and 6, then run three instructions, each probed by a coil.
 
     The probes are C<base>..C<base+2>; DD<base+9> takes the plain copy.
     Nothing records until every probe has run.
@@ -230,7 +231,7 @@ _REFAULT_FIELDS = ("Result1", "Result2", "Result3", "Result4", "ErrorCode")
 
 
 def _refault_case(slot, flag, base, fault, steps, records=None, fault_scans_only=False):
-    """The fault again before each step, the step, then a probe coil C<base+i>.
+    """Raise the fault again before each step, run the step, then set a probe coil C<base+i>.
 
     The first step is the control: nothing.  Records as in :func:`_fault_case`,
     or, given *records* (one register per step), into them over the window and
@@ -263,7 +264,7 @@ def _refault_case(slot, flag, base, fault, steps, records=None, fault_scans_only
 
 
 def _other_instructions(slot, base, timer, counter):
-    """An Out coil, an open rung over a Set coil, a TON and a CTU, each on its rung.
+    """Run an Out coil, an open rung over a Set coil, a TON and a CTU, each on its rung.
 
     C<base+5> is the Out coil, C<base+6> a bit nothing sets, C<base+7> the Set coil.
     """
