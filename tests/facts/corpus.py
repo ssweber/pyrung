@@ -1815,7 +1815,7 @@ def real_reading_compared_with_a_table_entry() -> Any:
 
 @idiom
 def real_readings_kept_in_order() -> Any:
-    """Two Real inputs stay inside one band, and a rung compares them."""
+    """A rung compares two Real inputs while both are inside one band."""
     first = Real("BandA", external=True, min=0, max=1)
     second = Real("BandB", external=True, min=0, max=1)
     with Program() as prog:
@@ -1826,7 +1826,10 @@ def real_readings_kept_in_order() -> Any:
 
 @idiom
 def count_compared_with_a_real_reading() -> Any:
-    """An Int count and a Real reading stay inside one band, and rungs compare them."""
+    """Rungs compare an Int count with a Real reading.
+
+    The first rung compares them only while both are inside one band.
+    """
     count = Int("BinCount", external=True)
     reading = Real("BinReading", external=True)
     with Program() as prog:

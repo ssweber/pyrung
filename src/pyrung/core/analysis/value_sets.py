@@ -118,7 +118,7 @@ class _ValueSets:
     """Over-approximate value sets of the tags pointers are built from.
 
     A tag's set holds its default, its initial value, every value a static writer can
-    store, and every value that an indirect write reaching its slot can store.  ``None``
+    store, and every value that an indirect write that may reach its slot can store.  ``None``
     means unbounded.  The sets are a least fixpoint.  So a pointer whose slot an indirect
     write may hit picks up the values that the write stores.
 

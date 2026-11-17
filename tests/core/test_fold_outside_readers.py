@@ -1,7 +1,7 @@
 """Scan memory the tags do not show, and who may watch a run from outside a rung.
 
-A scan depends on the tags and on the scan memory.  A program whose edge shows only in
-memory must not be repeated as if nothing moved.  A monitor, a stop predicate and a
+The tags and the scan memory decide what a scan does.  So a program whose edge shows only
+in memory must not be repeated as if nothing moved.  A monitor, a stop predicate and a
 ``when()`` read the state that a scan leaves, from outside the rungs.  They must see each
 scan that they would see if the program were stepped.  Every program here runs in the loop
 and also stepped, and the two runs must agree.

@@ -567,9 +567,9 @@ def _small_count_literal(expr: Any) -> bool:
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
-    """Wrap *compiled*, a step of a calc, in ``_dbl`` if it passes 2 ** 53 (core ``_calc_step``).
+    """Wrap *compiled*, a step of a calc, in ``_dbl`` if its value can pass 2 ** 53.
 
-    The core makes the same decision.  A step is a ``CalcBinaryExpr`` or
+    The core ``_calc_step`` makes the same decision.  A step is a ``CalcBinaryExpr`` or
     ``CalcUnaryExpr`` (what ``calc_form`` builds), or a shift in a calc.
     """
     if isinstance(expr, (BinaryExpr, UnaryExpr)):
@@ -1257,8 +1257,9 @@ def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
 def _copy_clamp_condition(value_var: str, dest_type: str, source_type: str | None) -> str | None:
     """Return the test for whether a Copy of *value_var* into *dest_type* stops at a limit.
 
-    Return None if the Copy cannot stop at a limit.  The test is true for a value that the
-    store truncates, so 32767.5 into an INT stores 32767 without clamping.  +/-Inf passes
+    Return None if the Copy cannot stop at a limit.  The test is false for a value that the
+    store only truncates.  For example, 32767.5 into an INT stores 32767 and does not count
+    as a clamp.  +/-Inf passes
     and NaN compares false, because a clamp pins Inf and stores NaN as 0.  Text converts
     in the store and never clamps here.  A Word into an INT keeps its bits.  A REAL
     register clamps into a DINT with no flag (``_copy_clamps``).

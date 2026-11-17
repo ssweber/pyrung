@@ -289,7 +289,8 @@ def _bin(bound: _Bound, name: str, left: Any, right: Any) -> Any:
             if name == "mod":
                 return left.a % divisor
             return Lin(left.a // divisor, left.b // divisor)
-        # Otherwise keep the cycles with the same quotient.  The quotient moves one way.
+        # Otherwise keep the cycles with the same quotient.  The quotient moves one way
+        # because the value does.
         quotient = _kept(bound, left, lambda value: value // divisor)
         return quotient if name == "floordiv" else Lin(left.a - quotient * divisor, left.b)
     if name == "and_" and type(left) is Lin and _whole(right):

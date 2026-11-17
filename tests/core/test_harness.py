@@ -791,7 +791,7 @@ class TestALinkChangedAcrossUnits:
         plc, En, Fb = self._linked(first)
         plc.patch({En: True})
         plc.run(12)
-        before = plc.current_state.scan_id - 1  # the tip itself already has the change
+        before = plc.current_state.scan_id - 1  # the change lands on the tip itself
         self._relink(plc, on_delay=then)
         plc.run(5)
 

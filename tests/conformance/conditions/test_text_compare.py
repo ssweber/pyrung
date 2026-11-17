@@ -1,6 +1,6 @@
 """Compare TXT against a literal and TXT against TXT: the ``text_compare`` group.
 
-The group is the part ``text_flasher``.
+The group is in the part ``text_flasher``.
 
 CLICK's Compare dialog accepts ``TXT1 = "T"`` and ``TXT1 = TXT2``.  On text it offers only =
 and not-equal.  The exporter refuses an order compare (``CLK_TEXT_ORDER_COMPARE``), so no case

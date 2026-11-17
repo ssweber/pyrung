@@ -553,9 +553,9 @@ class TestEdgeSiteMemory:
 
     @pytest.mark.parametrize("edge", [False, True], ids=["level_leg", "edge_leg"])
     def test_bare_body_helper_leg_reads_its_own_row_on_every_backend(self, monkeypatch, edge):
-        """A bare For-body instruction is a row of its own, as in CLICK.
+        """A bare For-body instruction is a row of its own.
 
-        CLICK puts a wire-only rung between For and Next. The reset leg reads Y as the body
+        In CLICK it is a wire-only rung between For and Next. The reset leg reads Y as the body
         row above it latched in the same pass, whether or not the leg has an edge contact.
         """
         from pyrung.core import Or, latch, rise
@@ -1101,7 +1101,10 @@ class TestInstructionCoverage:
         assert "run_enabled_function" in source_code
 
     def test_a_function_reading_the_math_module_by_another_name_runs(self, monkeypatch):
-        """code.py binds ``import math as pymath``, because pyrung's math() hides the module."""
+        """code.py binds ``pymath`` for a function that reads the math module by that name.
+
+        This file imports ``math as pymath`` because pyrung's math() hides the name ``math``.
+        """
         source, dest = Int("Source"), Int("Dest")
 
         def floors_half(value):
@@ -2345,10 +2348,11 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (3,) for name in results}
 
     def test_forloop_constant_and_negative_dint_counts_on_every_backend(self, monkeypatch):
-        """A forloop() reads a constant count whole, as CLICK does (hardware 2026-11-10).
+        """A forloop() reads a constant count whole and a DD count as signed.
 
         A count of 70000 runs 70000 times, not 4464. A DD of -65535 or -2 runs none, not its
-        low word. This holds on all three backends.
+        low word. A CLICK reads both counts the same way (hardware 2026-11-10). This holds on
+        all three backends.
         """
         low = Dint("Low", default=-65535)
         minus_two = Dint("MinusTwo", default=-2)
@@ -2599,9 +2603,9 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: expected for name in results}, label
 
     def test_mod_floors_and_zero_to_zero_is_one_outside_calc_on_every_backend(self, monkeypatch):
-        """CLICK's MOD and 0 ^ 0 behave as math() does.
+        """Only math() uses CLICK's MOD and CLICK's 0 ^ 0.
 
-        Anywhere else ``%`` and ``**`` are Python's, so the wrap-around index
+        Anywhere else ``%`` and ``**`` are Python's.  So the wrap-around index
         ``(P - 1) % 10 + 1`` still works.
         """
         n, z, p = Int("N", default=-3), Int("Z"), Int("P")

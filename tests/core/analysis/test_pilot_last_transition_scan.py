@@ -56,7 +56,10 @@ def _program() -> Program:
 
 
 def _replayed(plc: PLC, tag: str, start: int, end: int) -> int | None:
-    """Return the old answer, by replaying the window and comparing each state with the last."""
+    """Return the old answer.
+
+    It replays the window and compares each state with the one before it.
+    """
     states = plc.history.range(start, end + 1)
     last = None
     for previous, current in zip(states, states[1:], strict=False):

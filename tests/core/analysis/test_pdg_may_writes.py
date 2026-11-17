@@ -198,7 +198,10 @@ def test_a_copy_through_a_pointer_is_no_functional_dependency() -> None:
 
 
 def test_a_text_whose_first_character_is_overwritten_is_not_a_dead_write() -> None:
-    """Check that the copy's other characters are not dead, because a later rung reads one."""
+    """Check that a to_text() copy is not a dead write after its first character is overwritten.
+
+    Its other characters outlast the second copy into TXT1, and a later rung reads one of them.
+    """
     txt = ClickBlocks().txt
     with Program(strict=False) as logic:
         with Rung():

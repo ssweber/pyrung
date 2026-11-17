@@ -9,9 +9,10 @@ The first is its AF token.  The second is its full condition, which is the rung 
 and the enclosing branch contacts with nested AND/OR flattened.  The third is its pins.
 Every contact is named by its grid cell.  The check groups outputs by the wire they sit
 on.  Each wire of a CLICK rung is one pyrung rung, and each rung after the first uses
-``.continued()``.  The check fails in three cases.  A contact goes missing.  A contact is
-read from another cell, as when two cells with one label are folded into one
-``with branch(...)``.  An output is on another wire.
+``.continued()``.  The check fails on any difference.  For example, it fails when a
+contact goes missing, or when an output is on another wire.  It also fails when a contact
+is read from another cell, as when two cells with one label are folded into one
+``with branch(...)``.
 
 Outputs share a ``with rung(...)`` or ``with branch(...)`` only where the drawing has one
 cell that is teed off to each of them.  pyrung reads that cell once, where the group

@@ -627,7 +627,7 @@ class RungFiringTimelines(Generic[K]):
         first: int,
         gaps: list[tuple[int, int]],
     ) -> None:
-        """Count the changes that a settle added from *first* on, and turn the column Unknown.
+        """Count the changes that a settle added from *first* on, and turn Unknown at the limit.
 
         The column turns Unknown on the scan where stepping would have turned it.  *old* is
         the column before the settle.  *gaps* are the gaps after it.  The count is the same

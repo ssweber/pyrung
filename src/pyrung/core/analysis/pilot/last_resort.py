@@ -1,8 +1,9 @@
 """Try one last move when how() has no reason left to try anything: a wait, or one input.
 
 The pilot normally moves only for a reason that the trace gives it.  When it is about to
-stop, it may instead run one move with no reason at all, on a fork.  The move itself is not
-kept.  Only its result is kept: how() asks again from where the move landed, and gets there.
+stop, it may instead run one move with no reason at all, on a fork.  Then how() is asked
+again from where the move landed.  The pilot keeps the move only if that answer reaches the
+goal.
 
 A plan that needed this move says so, as a step of its own.  The answer is as real as any
 other, because the scans ran.  But it also means that the trace missed something, and that
@@ -29,7 +30,7 @@ _ASK_WALL_S = 2.0
 _WAIT_SCANS = 40000
 _FIRST_WAIT = 200
 _VALUES_PER_TAG = 8
-# A failing ask costs about as much as the search that stopped.  A move that helps has always
+# A failing ask costs about as much as the search that stopped.  So far, a move that helps has
 # been among the first few.  Each rescue seen so far took at most four asks.
 _MAX_ASKS = 5
 
