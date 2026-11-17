@@ -37,6 +37,7 @@ from pyrung.core.tag import ImmediateRef, Tag
 from ._core import _get_condition_snapshot, compile_condition
 from ._emit import (
     emit_acc_rest,
+    emit_cmp,
     emit_count,
     emit_done,
     emit_frac,
@@ -246,7 +247,7 @@ def _compile_off_delay_instruction(
         f"{sp4}{acc_write} = 0",
         f"{sp}else:",
         f"{sp4}_acc = int({acc_read})",
-        f"{sp4}if _tof_armed or {done_read} or _acc != 0:",
+        f"{sp4}if _tof_armed or {done_read} or {emit_cmp('_acc', '!=', '0', paren=False)}:",
         f"{sp8}if not _tof_armed:",
         f"{sp12}{arm}",
         *(f"{sp8}{line}" for line in (*tick, *done)),

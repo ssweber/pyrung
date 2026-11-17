@@ -42,6 +42,7 @@ from ._emit import (
     emit_reached,
     emit_rise,
     emit_tick,
+    emit_truth,
 )
 from ._primitives import (
     _compile_guarded_instruction,
@@ -213,9 +214,9 @@ def _compile_search_instruction(
         cursor_body.extend(
             [
                 f"_current_result = int({result_read})",
-                "if _current_result == 0:",
+                f"if {emit_cmp('_current_result', '==', '0', paren=False)}:",
                 "    _cursor_index = 0",
-                "elif _current_result == -1:",
+                f"elif {emit_cmp('_current_result', '==', '-1', paren=False)}:",
                 "    _cursor_index = None",
                 "else:",
             ]
@@ -224,7 +225,7 @@ def _compile_search_instruction(
             [
                 "    _cursor_index = None",
                 f"    for _idx, _addr in enumerate({range_addrs}):",
-                "        if _addr == _current_result:",
+                f"        if {emit_cmp('_addr', '==', '_current_result', paren=False)}:",
                 f"            if _idx + 1 < len({range_addrs}):",
                 "                _cursor_index = _idx + 1",
                 "            break",
@@ -370,7 +371,7 @@ def _compile_shift_instruction(
         f"_clock_prev = {emit_prev(key)}",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
-        f"    _prev_values = [bool({_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx)}) for _idx in {range_indices}]",
+        f"    _prev_values = [{emit_truth(_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx))} for _idx in {range_indices}]",
         f"    {_range_item_write_expr(range_symbol, f'{range_indices}[0]', f'bool({enabled_expr})')}",
         f"    for _pos in range(1, {shift_len_expr}):",
         f"        {_range_item_write_expr(range_symbol, f'{range_indices}[_pos]', '_prev_values[_pos - 1]')}",
@@ -429,7 +430,7 @@ def _compile_drum_instruction(
         f"_enabled = bool({enabled_expr})",
         f"_step_raw = int({_compile_value(instr.current_step, ctx)})",
         "_step = _step_raw",
-        f"_invalid = (_step < 1) or (_step > {step_count})",
+        f"_invalid = {emit_cmp('_step', '<', '1')} or {emit_cmp('_step', '>', str(step_count))}",
         "if _invalid:",
         "    _step = 1",
     ]
@@ -462,12 +463,13 @@ def _compile_drum_instruction(
     )
     lines.append(f"_reset_active = bool({reset_expr})")
 
-    flag_on = f"bool({_compile_value(instr.completion_flag, ctx)})"
+    flag_on = emit_truth(_compile_value(instr.completion_flag, ctx))
     write_row = [
         f"_row = {pattern_literal}[_step - 1]",
         *(f"{symbol} = bool(_row[{idx}])" for idx, symbol in enumerate(output_symbols)),
     ]
     move = [f"{step_write} = _step", *clear_time]
+    not_last = emit_cmp("_step", "<", str(step_count), paren=False)
 
     # One action a scan, by priority: reset (a level), a jump edge, a jog edge, own logic.
     lines.extend(
@@ -498,7 +500,7 @@ def _compile_drum_instruction(
             [
                 "elif _jog_edge:",
                 "    if not _invalid:",
-                f"        if _step < {step_count}:",
+                f"        if {not_last}:",
                 "            _step += 1",
                 *_indent_body(move, 12),
                 "            if _enabled:",
@@ -520,7 +522,7 @@ def _compile_drum_instruction(
             "        else:",
             *_indent_body(_drum_end_lines(instr, ctx), 12),
             "            if _end_met:",
-            f"                if _step < {step_count}:",
+            f"                if {not_last}:",
             "                    _step += 1",
             *_indent_body(move, 20),
             *_indent_body(write_row, 20),
@@ -532,11 +534,7 @@ def _compile_drum_instruction(
     if isinstance(instr, EventDrumInstruction):
         lines.extend(
             [
-                *emit_choose(
-                    "_step",
-                    "_event_curr",
-                    _event_drum_event_exprs(instr, ctx),
-                ),
+                *emit_choose("_step", "_event_curr", _event_drum_event_exprs(instr, ctx)),
                 emit_mem_set(f"_drum_event_prev:{key_base}", "_event_curr"),
                 emit_mem_set(f"_drum_last_step:{key_base}", "_step"),
             ]
@@ -559,11 +557,7 @@ def _drum_end_lines(
         key_base = ctx.state_key_for(instr)
         last_step = f"int({emit_mem_get(f'_drum_last_step:{key_base}', '0', quote='repr')})"
         return [
-            *emit_choose(
-                "_step",
-                "_event_curr",
-                _event_drum_event_exprs(instr, ctx),
-            ),
+            *emit_choose("_step", "_event_curr", _event_drum_event_exprs(instr, ctx)),
             # A step reached by a write to the register or a correction has spent its edge.
             f"_end_met = _event_curr and {emit_cmp('_step_raw', '==', last_step)}"
             f" and (not {emit_prev(f'_drum_event_prev:{key_base}')})",
@@ -605,14 +599,7 @@ def _drum_end_lines(
                 *_indent_body(tick, 4),
             ]
         )
-    lines.extend(
-        emit_choose(
-            "_step",
-            "_end_met",
-            _time_event_end_exprs(instr, ctx),
-        )
-    )
-    return lines
+    return [*lines, *emit_choose("_step", "_end_met", _time_event_end_exprs(instr, ctx))]
 
 
 def _drum_tick_lines(

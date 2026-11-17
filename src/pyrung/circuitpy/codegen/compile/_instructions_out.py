@@ -34,6 +34,7 @@ from ._emit import (
     emit_reached,
     emit_rise,
     emit_tick,
+    emit_truth,
 )
 from ._primitives import (
     _compile_lvalue,
@@ -70,7 +71,7 @@ def _compile_toggle_instruction(
     ]
     lines.extend(
         _compile_target_write_lines(
-            instr.target, f"not bool({_compile_value(target, ctx)})", ctx, indent + 4
+            instr.target, f"not {emit_truth(_compile_value(target, ctx))}", ctx, indent + 4
         )
     )
     lines.append(f"{sp}{emit_mem_set(key, '_en')}")
@@ -111,7 +112,7 @@ def _compile_debounce_instruction(
         f"{sp}else:",
         f"{sp4}{emit_frac_keep(instr.on_acc)}",
         # With the coil off, the off TD holds its value, including one the ladder wrote.
-        f"{sp4}if not bool({_compile_value(instr.target, ctx)}):",
+        f"{sp4}if not {emit_truth(_compile_value(instr.target, ctx))}:",
         f"{sp8}{emit_frac_keep(instr.off_acc)}",
         f"{sp4}else:",
         # The off side compares what it had reached before this scan, and not on the fall.
@@ -178,6 +179,13 @@ def _compile_flasher_instruction(
     on_write = _compile_lvalue(instr.on_acc, ctx)
     off_write = _compile_lvalue(instr.off_acc, ctx)
     target_write = _compile_lvalue(instr.target, ctx)
+    no_preset = " or ".join(
+        emit_cmp(p, "<=", "0", paren=False) for p in ("_on_preset", "_off_preset")
+    )
+
+    def phase_is(phase: int) -> str:
+        return emit_cmp("_phase", "==", str(phase), paren=False)
+
     return [
         f"{sp}if not bool({enabled_expr}):",
         f"{sp4}{emit_mem_set(phase_key, str(_FLASH_IDLE), quote='double')}",
@@ -185,30 +193,30 @@ def _compile_flasher_instruction(
         f"{sp}else:",
         f"{sp4}_on_preset = int({_compile_value(instr.on_preset, ctx)})",
         f"{sp4}_off_preset = int({_compile_value(instr.off_preset, ctx)})",
-        f"{sp4}if _on_preset <= 0 or _off_preset <= 0:",
+        f"{sp4}if {no_preset}:",
         # A preset of 0 or below holds the flasher idle and dark and freezes both accumulators.
         f"{sp8}{emit_mem_set(phase_key, str(_FLASH_IDLE), quote='double')}",
         f"{sp8}{target_write} = False",
         f"{sp4}else:",
         f"{sp8}_phase = {emit_mem_get(phase_key, str(_FLASH_IDLE))}",
-        f"{sp8}if _phase == {_FLASH_IDLE}:",
+        f"{sp8}if {phase_is(_FLASH_IDLE)}:",
         f"{sp12}_phase = {_FLASH_ON}",
         f"{sp12}{on_write} = 0",
         f"{sp12}{off_write} = 0",
         f"{sp12}{emit_frac(instr.on_acc, '0')}",
         f"{sp12}{emit_frac(instr.off_acc, '0')}",
         # The phase that starts now runs from 0, and the other's accumulator holds.
-        f"{sp8}elif _phase == {_FLASH_ON_NEXT}:",
+        f"{sp8}elif {phase_is(_FLASH_ON_NEXT)}:",
         f"{sp12}_phase = {_FLASH_ON}",
         f"{sp12}{on_write} = 0",
         f"{sp12}{emit_frac(instr.on_acc, '0')}",
-        f"{sp8}elif _phase == {_FLASH_OFF_NEXT}:",
+        f"{sp8}elif {phase_is(_FLASH_OFF_NEXT)}:",
         f"{sp12}_phase = {_FLASH_OFF}",
         f"{sp12}{off_write} = 0",
         f"{sp12}{emit_frac(instr.off_acc, '0')}",
         # The coil shows the phase that runs this scan, even one that ends on it.
-        f"{sp8}{target_write} = _phase == {_FLASH_ON}",
-        f"{sp8}if _phase == {_FLASH_ON}:",
+        f"{sp8}{target_write} = {phase_is(_FLASH_ON)}",
+        f"{sp8}if {phase_is(_FLASH_ON)}:",
         *_compile_flasher_phase(instr, True, ctx, sp12),
         f"{sp8}else:",
         *_compile_flasher_phase(instr, False, ctx, sp12),
@@ -236,7 +244,7 @@ def _compile_timed_instruction(
         f"{sp}_rose = {emit_rise('_en', rung_key)}",
         f"{sp}{emit_mem_set(rung_key, '_en')}",
         f"{sp}_t_preset = int({_compile_value(instr.on_preset, ctx)})",
-        f"{sp}_timing = bool({_compile_value(instr.target, ctx)}) and (",
+        f"{sp}_timing = {emit_truth(_compile_value(instr.target, ctx))} and (",
         f"{sp4}{emit_cmp(f'int({_compile_value(instr.timer_acc, ctx)})', '<', '_t_preset', paren=False)}",
         f"{sp})",
         f"{sp}if _rose and not _timing:",

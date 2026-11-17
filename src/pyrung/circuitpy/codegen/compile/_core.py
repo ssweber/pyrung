@@ -128,7 +128,7 @@ def _compile_edge_row(row: Any, ctx: CodegenContext, indent: int) -> list[str]:
     for key, edge in sites:
         now, was = _edge_locals(key)
         tag_expr = _snapshot_tag_symbol(edge.tag, ctx)
-        lines.append(f"{sp}{now} = bool({tag_expr})")
+        lines.append(f"{sp}{now} = {emit_truth(tag_expr)}")
         lines.append(f"{sp}{was} = {emit_prev(key, cast=False)}")
         # Stored only when it changes: an unwritten memory reads off, as in
         # the interpreter, whose state holds no entry until a contact sees on.
@@ -230,22 +230,14 @@ def _compile_box(item: Any, enabled_expr: str, ctx: CodegenContext, indent: int)
     return lines
 
 
-#: The compare classes in the order compile_condition tests them, with their operators.
+#: Each compare contact, its form through a pointer, and its operator.
 _COMPARES = (
-    (CompareEq, "=="),
-    (CompareNe, "!="),
-    (CompareLt, "<"),
-    (CompareLe, "<="),
-    (CompareGt, ">"),
-    (CompareGe, ">="),
-)
-_INDIRECT_COMPARES = (
-    (IndirectCompareEq, "=="),
-    (IndirectCompareNe, "!="),
-    (IndirectCompareLt, "<"),
-    (IndirectCompareLe, "<="),
-    (IndirectCompareGt, ">"),
-    (IndirectCompareGe, ">="),
+    (CompareEq, IndirectCompareEq, "=="),
+    (CompareNe, IndirectCompareNe, "!="),
+    (CompareLt, IndirectCompareLt, "<"),
+    (CompareLe, IndirectCompareLe, "<="),
+    (CompareGt, IndirectCompareGt, ">"),
+    (CompareGe, IndirectCompareGe, ">="),
 )
 
 
@@ -262,10 +254,11 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
         return emit_truth(_snapshot_tag_symbol(cond.tag, ctx), negate=True)
     if isinstance(cond, IntTruthyCondition):
         return emit_truth(_snapshot_tag_symbol(cond.tag, ctx), as_int=True)
-    for kind, op in _COMPARES:
-        if isinstance(cond, kind):
+    for direct, indirect, op in _COMPARES:
+        if isinstance(cond, direct | indirect):
+            left = cond.tag if isinstance(cond, direct) else cond.indirect_ref
             return emit_cmp(
-                _compile_value(cond.tag, ctx, condition=True),
+                _compile_value(left, ctx, condition=True),
                 op,
                 _compile_value(cond.value, ctx, condition=True),
             )
@@ -281,13 +274,6 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
     if isinstance(cond, FallingEdgeCondition):
         now, was = _edge_locals(edge_memory_key(cond))
         return f"({was} and not {now})"
-    for kind, op in _INDIRECT_COMPARES:
-        if isinstance(cond, kind):
-            return emit_cmp(
-                _compile_value(cond.indirect_ref, ctx, condition=True),
-                op,
-                _compile_value(cond.value, ctx, condition=True),
-            )
     if isinstance(cond, ExprCompare):
         return emit_cmp(
             compile_expression(cond.left, ctx), cond.symbol, compile_expression(cond.right, ctx)
