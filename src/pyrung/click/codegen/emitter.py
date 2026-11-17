@@ -253,8 +253,8 @@ def _generate_code(
     # Slot name overrides for nicknamed addresses inside ranges
     _emit_slot_overrides(lines, collection)
 
-    # Tag map: before the program, so a text compare built below reads the
-    # hardware slot its tag is mapped to
+    # Write the tag map before the program.  A text compare built below then reads the
+    # hardware slot that its tag is mapped to.
     lines.append("# --- Tag Map ---")
     _emit_tag_map(lines, collection)
     lines.append("")
@@ -812,10 +812,10 @@ def _emit_forloop(
     rung_number: int | None = None,
     bare: bool = False,
 ) -> int:
-    """Emit a for/next block; return the index after its next() rung.
+    """Emit a for/next block and return the index after its next() rung.
 
-    A wire-only body rung becomes a bare instruction, any other body rung a
-    ``with rung(...)`` inside the loop, and a nested for() a nested loop.
+    A wire-only body rung becomes a bare instruction.  Any other body rung becomes a
+    ``with rung(...)`` inside the loop.  A nested for() becomes a nested loop.
     """
     pad = "    " * indent
     for_rung = rungs[start_idx]
@@ -838,8 +838,8 @@ def _emit_forloop(
         count_arg = "1"
         kw_parts = []
 
-    # Emit rung with forloop; a bare nested loop has no rung of its own, so
-    # the caller passes one indent less and the header is skipped.
+    # Emit the rung with the forloop.  A bare nested loop has no rung of its own, so
+    # the caller passes one indent less and this skips the header.
     if not bare:
         _emit_rung_header(lines, for_rung, conditions_str, indent, rung_number=rung_number)
 
@@ -1010,7 +1010,7 @@ def _render_condition_tree(
     nicknames: dict[str, str] | None,
     structured_map: TagMap | None = None,
 ) -> str:
-    """Render a rung condition tree (``""`` when unconditional)."""
+    """Render a rung condition tree.  Return ``""`` when the rung is unconditional."""
     if tree is None:
         return ""
     return _render_sp_node(tree, collection, nicknames, structured_map)

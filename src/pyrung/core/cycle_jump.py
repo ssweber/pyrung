@@ -1,57 +1,61 @@
-"""How many more times the guarded loop repeats a cycle of its paths, found without running it.
+"""Predict, without running it, how many more times the guarded loop repeats a cycle of paths.
 
-Under a bang-bang hold the loop hands over between a few of its paths in the same order,
+Under a bang-bang hold, the loop hands over between a few of its paths in the same order,
 again and again.  A slow timer or the clock moves a whole number by the same amount on each
-turn of that order, and nothing else changes from one turn to the next.  This module takes
-one turn, a *cycle*, and says how many turns run exactly as it does.  The caller can then
-check that claim against the scans it runs, and later move the state that many turns at once.
+turn of that order.  Nothing else changes from one turn to the next.  This module takes one
+turn, which it calls a *cycle*, and says how many turns run exactly as that one does.  The
+caller can then check the claim against the scans it runs.  Later it can move the state
+forward by that many turns at once.
 
 Why the prediction is exact
 ---------------------------
 
-A cycle is a list of (loop path, scans) in order, and the state it starts from.  Each loop
-iteration is the scan it stands for, wherever the path's constants hold and its guards pass
-(the argument in :mod:`~pyrung.core.scan_trace`).  So a cycle that starts from a state where
-every constant holds and every guard passes, on every scan, ends in the state stepping
-would reach.
+A cycle is a list of (loop path, scans) in order, plus the state it starts from.  Each loop
+iteration is the scan it stands for, as long as the path's constants hold and its guards
+pass (the argument is in :mod:`~pyrung.core.scan_trace`).  So suppose a cycle starts from a
+state where every constant holds and every guard passes on every scan.  Then it ends in the
+state that stepping would reach.
 
-The prediction takes three steps, on values rather than on the kernel:
+The prediction works on values, not on the kernel, and takes three steps.
 
-1. Once on the state now, which gives the state one cycle later.  Each cell the cycle loads
-   either ends where it began or, as a whole number, moves by some step.  Any other change
-   declines.
-2. Once more on a symbolic state where each moving cell holds ``a + b * k`` on cycle k.  Each
-   operation of each loop iteration is done on these forms.  Adding, subtracting and
-   multiplying by a constant keep a form a form.  Each decision on a form is taken as on
-   cycle 0, and the last cycle k on which every decision so far comes out the same is kept.
-   A decision is a comparison, a truth test, ``min``, ``max``, ``abs``, a mask, or a floor
-   division or remainder by a constant.  Each decision moves with k one way only, or is an
-   equality met at one k at most, so that last k is exact.  Any other operation on a form
-   declines.  The stop predicate is asked on the values each scan would show it.
-3. The clock and RTC values come from the functions the loop uses.  The first two cycles
-   give each value as a constant or a form.  Every scan of every later cycle up to the last
-   kept is then computed, and the first that strays from its form ends the prediction one
-   cycle before it.  Up to that cycle the forms were the true values, so each decision the
-   second run took holds there.
+1. Run the cycle once on the state now.  This gives the state one cycle later.  Each cell
+   that the cycle loads either ends where it began or, as a whole number, moves by some step.
+   Any other change makes the prediction decline.
+2. Run the cycle once more on a symbolic state.  Each moving cell holds ``a + b * k`` on
+   cycle k, and each operation of each loop iteration is done on these forms.  Adding,
+   subtracting and multiplying by a constant turn a form into a form.  Each decision on a
+   form is taken as on cycle 0.  The prediction keeps the last cycle k on which every
+   decision so far comes out the same.  A decision is a comparison, a truth test, ``min``,
+   ``max``, ``abs``, a mask, or a floor division or remainder by a constant.  Each decision
+   moves with k one way only, or is an equality that holds at one k at most, so that last k
+   is exact.  Any other operation on a form makes the prediction decline.  The stop
+   predicate is asked on the values that each scan would show it.
+3. The clock and RTC values come from the functions that the loop uses.  The first two
+   cycles give each value as a constant or a form.  The prediction then computes every scan
+   of every later cycle up to the last kept one.  The first scan that strays from its form
+   ends the prediction one cycle before it.  Up to that cycle the forms were the true
+   values, so each decision that the second run took holds there.
 
-If the second run ends with each cell at its form one cycle on, then for each k up to the
-last kept, cycle k takes every decision cycle 0 takes.  So cycle k maps the state of cycle k
-to that of cycle k + 1, and by induction each of those cycles runs as cycle 0 does.  A path's
-constant on a cell no path of the cycle writes holds on every cycle once it holds now.
+Suppose the second run ends with each cell at its form one cycle on.  Then for each k up to
+the last kept cycle, cycle k takes every decision that cycle 0 takes.  So cycle k maps the
+state of cycle k to the state of cycle k + 1, and by induction each of those cycles runs as
+cycle 0 does.  A path's constant on a cell that no path of the cycle writes holds on every
+cycle once it holds now.
 
 Why a jump lands where stepping does
 ------------------------------------
 
-A run jumps only at the start of a cycle k the prediction covers, and first checks that
-each cell there holds its form on k.  It then skips the cycles from k to the last kept, as far
-as the next checkpoint goes, so each checkpoint still holds a state a scan left.
+A run jumps only at the start of a cycle k that the prediction covers, and it first checks
+that each cell there holds its form on k.  It then skips the cycles from k to the last kept
+one, or as far as the next checkpoint.  So each checkpoint still holds a state that a scan
+left.
 
 - Each moving cell takes its form on the cycle it lands on.  Every other cell already holds
-  the value the prediction found for it.
+  the value that the prediction found for it.
 - The timestamp adds dt once for each scan skipped, in order, as the loop adds it.  So the
-  float is the one stepping reaches.
-- The scan hooks read their cells between scans.  The jump declines if one of those moves,
-  so the hooks stay quiet on every scan skipped, as they were on the cycles run.
+  float is the one that stepping reaches.
+- The scan hooks read their cells between scans.  The jump declines if one of those cells
+  moves.  So the hooks stay quiet on every scan skipped, as they were on the cycles run.
 - The stop predicate said no on every scan of the cycles kept.
 - The records of the skipped cycles go in as a repeat of the last cycle.  The repeat reads
   the last few cycles of the records, so a jump waits until three cycles of this prediction
@@ -77,7 +81,7 @@ from pyrung.core.scan_trace import (
 )
 from pyrung.core.system_points import clock_high
 
-# The most times one prediction asks the stop predicate about values that move.
+# The most times that one prediction asks the stop predicate about moving values.
 MAX_ASKS = 65536
 # A prediction declines if it would ask the stop predicate about a moving value more than once
 # in this many scans of the cycle.  A handover between paths counts as SEGMENT_SCANS scans,
@@ -85,12 +89,12 @@ MAX_ASKS = 65536
 MOVING_ASKS_SHARE = 4
 SEGMENT_SCANS = 8
 ASKS_TOO_OFTEN = "the stop predicate reads a value that moves on most scans"
-# The compiled iterations kept for each path, one for each set of locals that hold forms.
+# The most compiled iterations kept for each path, one for each set of locals with forms.
 MAX_VARIANTS = 8
 
 
 class Lin:
-    """The whole number ``a + b * k`` on cycle k.  ``b`` is never 0."""
+    """A whole number that equals ``a + b * k`` on cycle k.  ``b`` is never 0."""
 
     __slots__ = ("a", "b")
 
@@ -106,11 +110,11 @@ class Lin:
 
 
 class Unsupported(Exception):
-    """An operation on a form that this module does not reason about."""
+    """Raised for an operation on a form that this module cannot reason about."""
 
 
 class _Bound:
-    """The last cycle on which every decision taken so far comes out as on cycle 0."""
+    """Hold the last cycle on which every decision so far comes out as on cycle 0."""
 
     __slots__ = ("last",)
 
@@ -127,7 +131,7 @@ def _whole(value: Any) -> bool:
 
 
 def _first_equal(x: Lin, value: Any) -> int | None:
-    """The first cycle k >= 1 on which *x* equals *value*, or None if it never does."""
+    """Return the first cycle k >= 1 on which *x* equals *value*, or None if never."""
     if type(value) is float:
         if not value.is_integer():
             return None
@@ -145,7 +149,7 @@ _ORDER = {"lt": operator.lt, "le": operator.le, "gt": operator.gt, "ge": operato
 
 
 def _decide(bound: _Bound, x: Lin, name: str, value: Any) -> bool:
-    """Compare *x* with a constant, as on cycle 0, and keep the cycles that agree."""
+    """Compare *x* with a constant as on cycle 0, and keep only the cycles that agree."""
     if name in ("eq", "ne"):
         equal = x.a == value
         if equal:
@@ -162,10 +166,10 @@ def _decide(bound: _Bound, x: Lin, name: str, value: Any) -> bool:
 
 
 def _kept(bound: _Bound, x: Lin, monotone: Callable[[int], Any]) -> Any:
-    """``monotone(x)`` on cycle 0, keeping the cycles on which it is the same.
+    """Return ``monotone(x)`` on cycle 0, and keep only the cycles on which it is the same.
 
-    *monotone* must never go back as its argument moves one way.  x moves one way too, so
-    the cycles that agree with cycle 0 come first, and a bisection finds the last of them.
+    *monotone* must never go back as its argument moves one way.  x also moves one way, so
+    the cycles that agree with cycle 0 come first.  A bisection finds the last of them.
     """
     first = monotone(x.a)
     last = bound.last
@@ -281,16 +285,16 @@ def _bin(bound: _Bound, name: str, left: Any, right: Any) -> Any:
     if name in ("floordiv", "mod") and type(left) is Lin and _whole(right) and int(right):
         divisor = int(right)
         if left.b % divisor == 0:
-            # The quotient moves by a whole step, and the remainder stays.
+            # The quotient moves by a whole step and the remainder stays the same.
             if name == "mod":
                 return left.a % divisor
             return Lin(left.a // divisor, left.b // divisor)
-        # Otherwise keep the cycles with the same quotient.  It moves one way, as the value does.
+        # Otherwise keep the cycles with the same quotient.  The quotient moves one way.
         quotient = _kept(bound, left, lambda value: value // divisor)
         return quotient if name == "floordiv" else Lin(left.a - quotient * divisor, left.b)
     if name == "and_" and type(left) is Lin and _whole(right):
         mask = int(right)
-        # A mask of low bits keeps a value from 0 up to the mask as it is.
+        # A mask of low bits leaves a value from 0 up to the mask unchanged.
         if mask >= 0 and (mask + 1) & mask == 0 and 0 <= left.a <= mask:
             _decide(bound, left, "ge", 0)
             _decide(bound, left, "le", mask)
@@ -336,7 +340,7 @@ def _call(bound: _Bound, name: str, *arguments: Any) -> Any:
         return Lin(-first.a, -first.b)
     if name in ("min", "max") and len(arguments) == 2:
         left, right = arguments
-        # Python's min keeps the first unless the second is less.
+        # Python's min returns the first argument unless the second is less.
         take_right = _cmp(bound, "lt" if name == "min" else "gt", right, left)
         return right if take_right else left
     raise Unsupported(f"{name}() of a form")
@@ -409,7 +413,7 @@ def _deferred(node: ast.expr) -> ast.expr:
 
 
 class _Rewrite(ast.NodeTransformer):
-    """Each operation of a loop expression as a call that also takes forms."""
+    """Rewrite each operation of a loop expression as a call that accepts forms."""
 
     def __init__(self, names: frozenset[str]) -> None:
         self._names = names
@@ -531,7 +535,10 @@ class Iteration:
         return function(S, T, R)
 
     def _variant(self, moving: frozenset[str]) -> Callable[..., bool]:
-        """The iteration for when the locals in *moving* hold forms.  Raises Unsupported."""
+        """Compile the iteration for when the locals in *moving* hold forms.
+
+        Raise Unsupported if an operation cannot be done on a form.
+        """
         shape, names = self.shape, self._names
         lines = ["def _iteration(S, T, R):"]
         namespace: dict[str, Any] = dict(shape.constants)
@@ -542,7 +549,7 @@ class Iteration:
             lines.append(f"    {local} = T.get({local!r})")
         for local, _field in shape.rtc:
             lines.append(f"    {local} = T.get({local!r})")
-        # The locals that may hold a form.  Any operation on one of them may give a form.
+        # The locals that may hold a form.  An operation on one of them may produce a form.
         tainted = set(moving)
         for op, uses in self._body:
             on_form = bool(uses & tainted)
@@ -565,7 +572,7 @@ class Iteration:
             )
             lines.append(f"    {targets}, = {values},")
         lines.append("    return True")
-        # The loop's own names, so an operation spelled as the loop spells it means the same.
+        # The loop's own names, so that an operation spelled as in the loop means the same.
         namespace.update(math=math, same=same, clock_high=clock_high)
         namespace.update(
             _truth=_truth, _cmp=_cmp, _bin=_bin, _unary=_unary, _call=_call, _or=_or, _and=_and
@@ -576,13 +583,13 @@ class Iteration:
 
 
 def iteration_of(shape: LoopShape) -> Iteration:
-    """*shape*'s iteration, to run on values and forms."""
+    """Return the iteration of *shape*, to run on values and forms."""
     return Iteration(shape)
 
 
 @dataclass(frozen=True)
 class Step:
-    """A path's iteration, its constants and its scans, for one segment of a cycle."""
+    """One segment of a cycle: a path's iteration, its constants and its scan count."""
 
     iteration: Iteration
     constants: tuple[tuple[tuple[Any, ...], Any], ...]
@@ -592,7 +599,7 @@ class Step:
 
 @dataclass
 class Prediction:
-    """How many cycles run as the first does, and where they leave each cell."""
+    """Say how many cycles run as the first does, and where they leave each cell."""
 
     cycles: int
     period: int
@@ -602,7 +609,7 @@ class Prediction:
     segment_ends: list[dict[tuple[Any, ...], Any]]
 
     def cell_at(self, cell: tuple[Any, ...], k: int) -> Any:
-        """The cell's value at the start of cycle *k*."""
+        """Return the value of *cell* at the start of cycle *k*."""
         step = self.steps.get(cell)
         return self.start[cell] if step is None else self.start[cell] + step * k
 
@@ -612,7 +619,7 @@ def _value_at(value: Any, k: int) -> Any:
 
 
 class _TimeTable:
-    """The clock and RTC values each scan of each cycle shows, as constants or forms."""
+    """Hold the clock and RTC values that each scan of each cycle shows."""
 
     def __init__(
         self,
@@ -662,7 +669,7 @@ class _TimeTable:
         return True
 
     def confirm(self, last: int) -> int:
-        """The last cycle up to *last* on which every clock and RTC value lies on its form."""
+        """Return the last cycle up to *last* on which every clock and RTC value fits its form."""
         if not self._moves or last < 2:
             return last
         checks = [
@@ -722,11 +729,11 @@ def predict(
     stop_cells: frozenset[tuple[Any, ...]],
     least: int = 1,
 ) -> Prediction | str:
-    """How many of the next *horizon* cycles run as the next one does, or why none can be told.
+    """Return how many of the next *horizon* cycles run as the next one does, or why not.
 
     *read_cell* reads the state now, at the start of the cycle.  *stops* is the stop
-    predicate, given the values of those of *stop_cells* the cycle loads.  If the cap on asks
-    leaves fewer than *least* cycles, the prediction declines.
+    predicate.  It is given the values of those *stop_cells* that the cycle loads.  If the cap
+    on asks leaves fewer than *least* cycles, the prediction declines.
     """
     cells: dict[tuple[Any, ...], None] = {}
     for step in steps:
@@ -778,17 +785,17 @@ def predict(
                 return "a cell does not move by the same step each cycle"
         elif type(value) is Lin or not same(value, after_one[cell]):
             return "a cell does not move by the same step each cycle"
-    # Each cut keeps the cycles before some cycle, so the cuts can come in any order.  These
-    # two cost a call for each cycle, so they come last, after the cheap cuts.
+    # Each cut keeps the cycles before some cycle, so the cuts can come in any order.  The
+    # last two cuts cost a call for each cycle, so they come after the cheap cuts.
     last = bound.last
     period = sum(step.count for step in steps)
     if len(asked.moving) * MOVING_ASKS_SHARE > period + SEGMENT_SCANS * len(steps):
-        # Stepping such a cycle asks the predicate about as often as a jump would.  It costs
-        # little more than those asks, unless the loop hands over between paths often.
+        # Stepping such a cycle asks the predicate about as often as a jump would.  Stepping
+        # costs little more than those asks, unless the loop hands over between paths often.
         return ASKS_TOO_OFTEN
     if asked.moving:
-        # The predicate is asked once a cycle for each value it is shown that moves.  The cap
-        # keeps one prediction's asks short, and the run polls its limits between predictions.
+        # The predicate is asked once a cycle for each moving value it is shown.  The cap
+        # keeps the asks of one prediction few.  The run polls its limits between predictions.
         asks_allow = MAX_ASKS // len(asked.moving) - 1
         if asks_allow < last:
             if asks_allow + 1 < least:
@@ -801,7 +808,7 @@ def predict(
 
 
 class _Asked:
-    """The stop predicate, and the values it is shown that move with the cycle."""
+    """Hold the stop predicate and the values it is shown that move with the cycle."""
 
     def __init__(
         self, stops: Callable[[Mapping[tuple[Any, ...], Any]], bool], cells: frozenset[Any]
@@ -811,11 +818,11 @@ class _Asked:
         self.moving: dict[tuple[tuple[Any, int, int], ...], dict[tuple[Any, ...], Any]] = {}
 
     def keeps_going(self, state: dict[tuple[Any, ...], Any]) -> bool:
-        """False if the predicate stops the run on this scan of cycle 0."""
+        """Return False if the predicate stops the run on this scan of cycle 0."""
         shown = {cell: state[cell] for cell in self.cells}
         if not any(type(value) is Lin for value in shown.values()):
             return not self.stops(shown)
-        # The predicate is asked for each cycle once the other cuts are known.
+        # The predicate is asked about each cycle after the other cuts are known.
         key = tuple(
             (cell, value.a, value.b) if type(value) is Lin else (cell, value, 0)
             for cell, value in shown.items()
@@ -824,7 +831,7 @@ class _Asked:
         return True
 
     def last_running(self, last: int) -> int:
-        """The last cycle up to *last* on which the predicate stops no scan."""
+        """Return the last cycle up to *last* on which the predicate stops no scan."""
         for k in range(last + 1):
             for shown in self.moving.values():
                 if self.stops({cell: _value_at(value, k) for cell, value in shown.items()}):
@@ -841,7 +848,7 @@ def _run(
     asked: _Asked,
     ends: list[dict[tuple[Any, ...], Any]] | None,
 ) -> bool:
-    """Run one cycle on *state*.  False if cycle 0 itself leaves the loop."""
+    """Run one cycle on *state*.  Return False if cycle 0 itself leaves the loop."""
     position = 0
     for step in steps:
         iteration = step.iteration
@@ -867,7 +874,7 @@ def _run(
 
 
 def _holds(bound: _Bound, value: Any, expected: Any) -> bool:
-    """Whether a constant holds on cycle 0, keeping the cycles on which it still does."""
+    """Return whether a constant holds on cycle 0, and keep the cycles where it still does."""
     if type(value) is not Lin:
         return same(value, expected)
     if type(expected) is not int or value.a != expected:

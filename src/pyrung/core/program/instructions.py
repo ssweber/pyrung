@@ -352,7 +352,8 @@ def unpack_to_words(source: Any, word_block: Any, *, oneshot: bool = False) -> N
     )
 
 
-# Standard ``math`` names that pyrung exports its own version of, for an expression.
+# The standard ``math`` names for which pyrung exports its own version, for use in
+# an expression.
 _PYRUNG_MATH_NAMES = {
     "pi": "PI",
     **{
@@ -375,10 +376,10 @@ _PYRUNG_MATH_NAMES = {
 
 
 class _MathInstruction:
-    """Math instruction (CLICK's Math).
+    """Add CLICK's Math instruction to the rung.
 
-    Evaluates an expression and stores the result in dest, with
-    truncation to the destination tag's bit width (modular wrapping).
+    Evaluate an expression and store the result in dest, truncated to the
+    destination tag's bit width (modular wrapping).
 
     Key differences from copy():
     - Truncates result to destination tag's type width
@@ -399,7 +400,7 @@ class _MathInstruction:
         The dest tag.
 
     The name hides the standard ``math`` module in a file that imports
-    both; ``math.<name>`` then says what to use instead.
+    both.  Then ``math.<name>`` raises an error that says what to use instead.
     """
 
     __name__ = "math"
@@ -412,11 +413,11 @@ class _MathInstruction:
         return "<pyrung instruction math>"
 
     def __reduce__(self) -> str:
-        # Pickled by name, as the module-level instance it is.
+        # Pickle by name, because this is the module-level instance.
         return "math"
 
     if not TYPE_CHECKING:
-        # At runtime only: a type checker still reports ``math.isclose`` as
+        # This runs at runtime only.  A type checker still reports ``math.isclose`` as
         # an unknown attribute, which is the earlier hint.
 
         def __getattr__(self, name: str) -> Any:
@@ -445,7 +446,7 @@ inferred from the tags read.
 
 
 def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
-    """Deprecated: use ``math()``, CLICK's name for the Math instruction."""
+    """Deprecated.  Use ``math()``, CLICK's name for the Math instruction."""
     warnings.warn(
         "calc() is now math(), CLICK's name for the Math instruction; "
         "calc() will be removed in a later release",

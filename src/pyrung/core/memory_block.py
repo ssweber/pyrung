@@ -259,28 +259,29 @@ _TYPE_DEFAULTS: dict[TagType, Any] = {
 
 
 class PastBankError(IndexError):
-    """A pointer past the end of its block.
+    """Raised for a pointer past the end of its block.
 
-    Not an address error: instructions raise no flag for it.  A read gives the
+    This is not an address error, and instructions set no flag for it.  A read returns the
     type's zero and a write is dropped.
     """
 
 
 def _store_block(tag: Tag) -> tuple[Block, int] | None:
-    """The block and address a store of several elements from *tag* counts in.
+    """Return the block and address that a store of several elements from *tag* counts in.
 
-    In order: the block that made the tag (``_pyrung_home_block``, which a bank
-    reading it as a mapped slot does not move); else the bank slot a tag was mapped
-    onto (``_pyrung_hw_slot``, from ``Tag.map_to`` or a TagMap); else the block it
-    is stamped with.  So how the bank was read before does not matter.  ``None``
-    for a tag in no block, and for a field of a UDT or named array, whose block is
-    the field's own and not the memory the structure lies in.
+    The function tries three sources in order.  First the block that made the tag
+    (``_pyrung_home_block``), which a bank does not move when it reads the tag as a mapped
+    slot.  Then the bank slot that the tag was mapped onto (``_pyrung_hw_slot``, from
+    ``Tag.map_to`` or a TagMap).  Last the block that the tag is stamped with.  So it does
+    not matter how the bank was read before.  Return ``None`` for a tag in no block.  Also
+    return ``None`` for a field of a UDT or named array, because the block of such a field
+    is the field's own and not the memory that the structure lies in.
     """
     block = getattr(tag, "_pyrung_home_block", None)
     addr = getattr(tag, "_pyrung_home_addr", None)
     if block is None:
         hw_slot = getattr(tag, "_pyrung_hw_slot", None)
-        # Held weakly: once the bank is gone, nothing maps the tag there.
+        # The bank is held weakly.  Once it is gone, nothing maps the tag there.
         if hw_slot is not None and hw_slot[0]() is not None:
             block, addr = hw_slot[0](), hw_slot[1]
         else:
@@ -294,13 +295,13 @@ def _store_block(tag: Tag) -> tuple[Block, int] | None:
 
 
 def block_positions(tag: Tag | None) -> tuple[tuple[Block, int], ...]:
-    """Each block element that *tag* is, as ``(block, address)``.
+    """Return each block element that *tag* is, as ``(block, address)``.
 
     A write through a pointer into any of them stores into *tag*.  They are the block
-    that made the tag and the bank slot it was mapped onto (``_pyrung_hw_slot``), as
+    that made the tag and the bank slot that it was mapped onto (``_pyrung_hw_slot``), as
     ``_store_block`` reads them.  Both are set when the tag is made or mapped.  So the
-    answer is the same before and after a run reads the bank.  A tag with neither gives
-    the block it is stamped with.
+    answer is the same before and after a run reads the bank.  A tag with neither gets
+    the block that it is stamped with.
     """
     found: list[tuple[Block, int]] = []
     home = getattr(tag, "_pyrung_home_block", None)
@@ -308,7 +309,7 @@ def block_positions(tag: Tag | None) -> tuple[tuple[Block, int], ...]:
     if isinstance(home, Block) and isinstance(home_addr, int):
         found.append((home, home_addr))
     hw_slot = getattr(tag, "_pyrung_hw_slot", None)
-    # Held weakly: once the bank is gone, nothing maps the tag there.
+    # The bank is held weakly.  Once it is gone, nothing maps the tag there.
     bank = hw_slot[0]() if hw_slot is not None else None
     if isinstance(bank, Block) and isinstance(hw_slot[1], int):
         found.append((bank, hw_slot[1]))
@@ -321,9 +322,9 @@ def block_positions(tag: Tag | None) -> tuple[tuple[Block, int], ...]:
 
 
 def block_room(tag: Tag) -> int | None:
-    """How many elements *tag*'s block holds from *tag* to its end, *tag* included.
+    """Return how many elements *tag*'s block holds from *tag* to its end, *tag* included.
 
-    ``None`` for a tag ``_store_block`` finds in no block.
+    Return ``None`` for a tag that ``_store_block`` finds in no block.
     """
     found = _store_block(tag)
     if found is None:
@@ -333,20 +334,20 @@ def block_room(tag: Tag) -> int | None:
 
 
 def elements_that_fit(tag: Tag, count: int) -> int:
-    """How many of *count* consecutive elements from *tag* on are in its block.
+    """Return how many of *count* consecutive elements from *tag* on are in its block.
 
     A store of several elements (a text, its digits) writes the ones that fit and
-    drops the rest, with no flag, as a write past the end of the block is dropped.
-    Every engine counts the elements here (``block_room``).
+    drops the rest with no flag, as it drops any write past the end of the block.
+    Every engine counts the elements with this function (``block_room``).
     """
     room = block_room(tag)
     return count if room is None else min(count, room)
 
 
 def _element_at(block: Block, addr: int) -> Tag:
-    # The tag mapped onto the address, as ``block[addr]`` gives it, is returned as
-    # it is: ``_get_tag`` would stamp it with this block (``_annotate_tag``).  An
-    # address nothing is mapped onto gets this block's own tag, made and cached as
+    # Return the tag mapped onto the address as it is, the way ``block[addr]`` does.
+    # ``_get_tag`` would stamp it with this block (``_annotate_tag``).  For an address
+    # that nothing is mapped onto, return this block's own tag, made and cached as
     # ``block[addr]`` makes it.
     mapped = block._mapped_tags.get(addr)
     return mapped if mapped is not None else block._get_tag(addr)
@@ -358,10 +359,11 @@ def _element_name(block: Block, addr: int) -> str:
 
 
 def elements_after(tag: Tag, count: int) -> list[Tag] | None:
-    """The block elements after *tag*, up to *count* elements from *tag* on in all.
+    """Return the block elements after *tag*, up to *count* elements from *tag* on in all.
 
-    Each is the tag that holds its address: a slot's own name, or a tag mapped
-    onto it (``map_to``).  ``None`` for a tag ``block_room`` does not count in.
+    Each element is the tag that holds its address.  That is the slot's own tag, or a tag
+    mapped onto the slot (``map_to``).  Return ``None`` for a tag that ``block_room`` does
+    not count in.
     """
     found = _store_block(tag)
     if found is None:
@@ -371,7 +373,7 @@ def elements_after(tag: Tag, count: int) -> list[Tag] | None:
 
 
 def element_names_after(tag: Tag, count: int) -> list[str] | None:
-    """The names of ``elements_after(tag, count)``, without making the tags."""
+    """Return the names of ``elements_after(tag, count)`` without making the tags."""
     found = _store_block(tag)
     if found is None:
         return None
@@ -442,7 +444,8 @@ class Block:
     # block is mapped onto a hardware bank range. The bank owns the register;
     # this block is a named window into it.
     _hw_alias: dict[int, tuple[Block, int]] = field(default_factory=dict, repr=False)
-    # Bumped whenever a slot's name can have changed, for whatever indexes slots by name.
+    # Counts every time a slot's name may have changed.  Whatever indexes slots by name
+    # reads it.
     _slot_names_changed: int = field(default=0, init=False, repr=False, compare=False)
     _factory_given: dict[int, Any] = field(
         default_factory=dict, init=False, repr=False, compare=False
@@ -470,10 +473,11 @@ class Block:
     _pyrung_field_uom: str | None = field(default=None, init=False, repr=False)
     _pyrung_click_bg_color: str | None = field(default=None, init=False, repr=False)
     # A Copy whose source pointer is past the end writes nothing (CLICK's DS, DH, DF
-    # and TXT); otherwise the read is the type's zero.  Set by the dialect's banks.
+    # and TXT).  Otherwise the read is the type's zero.  The dialect's banks set this.
     _past_end_keeps: bool = field(default=False, init=False, repr=False, compare=False)
 
-    # Weak: a Block must not outlive its program just for being listed here.
+    # The set is weak, so that listing a Block here does not keep it alive after its
+    # program is gone.
     _all_instances: ClassVar[weakref.WeakSet[Block]] = weakref.WeakSet()
 
     def __post_init__(self):
@@ -541,9 +545,9 @@ class Block:
             )
 
     def _tag_at(self, addr: int) -> LiveTag:
-        """``block[addr]`` for pyrung's own code.
+        """Return ``block[addr]`` for pyrung's own code.
 
-        A runner built later does not learn of a slot asked for here.
+        A runner that is built later does not learn of a slot that is asked for here.
         """
         self._validate_address(addr)
         return self._get_tag(addr)
@@ -668,7 +672,7 @@ class Block:
         return retentive, default
 
     def _factory_default(self, addr: int) -> Any:
-        """What the factory gives a slot, asked once however often the answer is wanted.
+        """Return what the factory gives a slot.  The factory is asked once for each slot.
 
         Before it answers a slot, the factory answers each lower slot, in address order.
         A slot's own default or mapping only decides whether its answer is used.  So a
@@ -690,7 +694,7 @@ class Block:
         return self._factory_given[addr]
 
     def _slot_asks_factory(self, addr: int) -> bool:
-        """Whether making this slot into a tag would ask the factory for its default."""
+        """Return whether making this slot into a tag would ask the factory for its default."""
         return (
             self.default_factory is not None
             and addr not in self._tag_cache
@@ -733,9 +737,9 @@ class Block:
         )
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
-        # Only a slot the user's code indexed or mapped refuses a reset.  A tag a scan or an
-        # analysis made takes the reset in place (``_drop_slot_config``), so whether a reset
-        # works never depends on what ran.
+        # Only a slot that the user's code indexed or mapped refuses a reset.  A tag that a
+        # scan or an analysis made takes the reset in place (``_drop_slot_config``).  So
+        # whether a reset works never depends on what ran.
         if addr in self._tag_cache and (addr in self._indexed or addr in self._mapped_tags):
             raise ValueError(
                 f"Cannot {action} {self.name}[{addr}] after tag materialization. "
@@ -745,8 +749,8 @@ class Block:
     def _drop_slot_config(self, addr: int) -> None:
         """Clear a slot's overrides, and give a tag already made for it what it inherits.
 
-        Setting a field changes such a tag in place (``_apply_slot_override``), and so does
-        this, so the tag holds what a tag made after the reset would hold.
+        Setting a field changes such a tag in place (``_apply_slot_override``).  This method
+        does the same.  So the tag holds what a tag made after the reset would hold.
         """
         entry = self._slot_config.pop(addr, None)
         tag = self._tag_cache.get(addr)
@@ -1024,7 +1028,7 @@ class Block:
             )
 
     def _element_or_none(self, addr: int) -> Tag | None:
-        """The element at *addr*, or ``None`` if *addr* is outside the block.
+        """Return the element at *addr*, or ``None`` if *addr* is outside the block.
 
         A rung condition reads an element outside the block as the type's
         zero (see ``IndirectRef.read_ctx``).
@@ -1670,16 +1674,16 @@ class IndirectRef:
         return self.block._get_tag(ptr_value)
 
     def address_ctx(self, ctx: ScanContext | ConditionView) -> int:
-        """The address the pointer holds this scan."""
+        """Return the address that the pointer holds this scan."""
         return int(ctx.get_tag(self.pointer.name, self.pointer.default))
 
     def read_ctx(self, ctx: ScanContext | ConditionView) -> Any:
-        """The element's value as a rung condition reads it.
+        """Return the element's value as a rung condition reads it.
 
         An address outside the block reads as the type's zero (``0``,
-        ``0.0``, ``False``) with no fault flag: a condition never stops the
-        scan.  Instructions resolve through ``resolve_ctx`` instead: below the
-        block they set the address-error flag, past it they read the type's
+        ``0.0``, ``False``) with no fault flag.  A condition never stops the
+        scan.  Instructions resolve through ``resolve_ctx`` instead.  Below the
+        block they set the address-error flag.  Past the block they read the type's
         zero and drop a write, with no flag (``PastBankError``).
         """
         tag = self.block._element_or_none(self.address_ctx(ctx))
@@ -1775,17 +1779,20 @@ class IndirectExprRef:
         return self.block._get_tag(addr)
 
     def address_ctx(self, ctx: ScanContext | ConditionView) -> int:
-        """The address the expression gives this scan."""
+        """Return the address that the expression gives this scan."""
         return int(self.expr.evaluate(ctx))
 
     def read_ctx(self, ctx: ScanContext | ConditionView) -> Any:
-        """The element's value as a rung condition reads it (see ``IndirectRef.read_ctx``)."""
+        """Return the element's value as a rung condition reads it.
+
+        This works as ``IndirectRef.read_ctx`` does.
+        """
         tag = self.block._element_or_none(self.address_ctx(ctx))
         if tag is None:
             return self.block._type_default()
         return ctx.get_tag(tag.name, tag.default)
 
-    # Comparisons build the same conditions as ``IndirectRef``'s.  Without
+    # These comparisons build the same conditions as ``IndirectRef``'s.  Without
     # them, ``DS[idx + 1] == 5`` fell back to the dataclass ``__eq__`` and
     # produced a plain ``bool``.
 

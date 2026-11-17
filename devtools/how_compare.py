@@ -83,22 +83,23 @@ FIELDS = (
     "step_reach",
     "cause",
 )
-# Names an expected line may give.  `run` is an ABORT or SETUP_ERROR row; `flags` a flag new to
-# the tree; `row` a missing row (never explainable).
+# The names that an expected line may give.  `run` means an ABORT or SETUP_ERROR row.
+# `flags` means a flag that is new to the tree.  `row` means a missing row, which no
+# expected line can explain.
 EXPECT_FIELDS = (*FIELDS, "run", "flags")
 BAD_STATUS = ("ABORT", "SETUP_ERROR")
 
 
 def bob_runner() -> str:
-    """The bob plugin's bounded runner, found through Claude Code's list of installed plugins."""
+    """Return the bob plugin's bounded runner, found in Claude Code's list of installed plugins."""
     listing = os.path.join(os.path.expanduser("~"), ".claude", "plugins", "installed_plugins.json")
     try:
         with open(listing, encoding="utf-8") as fh:
             entries = json.load(fh)["plugins"]["bob@bob"]
     except (OSError, ValueError, KeyError, TypeError):
         entries = []
-    # Prefer this repo's install. Its project is the main checkout, which a worktree is not, so
-    # compare against the checkout that owns the git directory.
+    # Prefer this repo's install.  The install's project is the main checkout, and a worktree
+    # is not that checkout.  So compare against the checkout that owns the git directory.
     common = subprocess.run(
         ["git", "-C", REPO, "rev-parse", "--path-format=absolute", "--git-common-dir"],
         capture_output=True,
@@ -160,7 +161,7 @@ def resolve(spec: str, cache: str) -> tuple[str, str]:
 
 
 def run_side(label: str, tree: str, out: str, opts) -> int:
-    """Run the worker until every row is there; returns the number of restarts."""
+    """Run the worker until every row is there.  Return the number of restarts."""
     if os.path.exists(out):
         os.remove(out)
     deadline = time.monotonic() + opts.timeout
@@ -242,7 +243,7 @@ def really_reached(row: dict) -> bool:
 
 
 def load_expected(path: str | None) -> list[tuple[str, tuple[str, ...] | None, str]]:
-    """Lines of `<glob>[:field,...]  # reason`; blank lines and lines starting with # are skipped."""
+    """Parse lines of `<glob>[:field,...]  # reason`.  Skip blank lines and # lines."""
     if not path:
         return []
     try:
@@ -278,7 +279,7 @@ def load_expected(path: str | None) -> list[tuple[str, tuple[str, ...] | None, s
 
 
 def run_kind(row: dict) -> str:
-    """What happened to a row that did not produce an answer, without the varying numbers."""
+    """Return what happened to a row that gave no answer, leaving out the varying numbers."""
     status = row.get("status")
     if status == "ABORT":
         return f"ABORT:{row.get('reason')}"
@@ -485,8 +486,9 @@ def main() -> int:
     gone = [c for c in names_ok if kinds[c][0] - kinds[c][1]]
     if gone:
         print(f"FLAGS ON BASE ONLY (gone on the tree): {gone}")
-    # the last resort: a REACHED that leaned on one move no reason pointed to.  Reported, never
-    # held: a tree whose trace leads further shows here as fewer, one that leads less as more.
+    # The last resort is a REACHED that leaned on one move that no reason pointed to.  This
+    # section only reports it and never holds the train.  A tree whose trace leads further
+    # shows fewer of them, and a tree whose trace leads less shows more.
     print()
     lean_b = [c for c in reach_b if b[c].get("last_resort")]
     lean_n = [c for c in reach_n if n[c].get("last_resort")]
