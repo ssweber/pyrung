@@ -962,7 +962,10 @@ class TestOutVariants:
 
 
 def test_timer_done_and_acc_must_share_one_number():
-    """Check that CLICK names one timer (or counter) number, so T5 with TD7 cannot be stored."""
+    """Check that validation reports a timer whose T and TD numbers differ.
+
+    CLICK names one timer (or counter) number for both.  So CLICK cannot store T5 with TD7.
+    """
     from pyrung import debounce
     from pyrung.click.validation import CLK_TIMER_PAIR_MISMATCH
 

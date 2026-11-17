@@ -66,8 +66,8 @@ TimeUnit.Td.ns = 86_400_000_000_000
 
 # How far a dt may move to become whole nanoseconds.  A clock read as a float carries
 # noise of a fraction of a nanosecond.  At a scan of a millisecond that is well under
-# this.  Moving 2**-20 s, which is 953.67 ns, would change it by 3 parts in 10000, and
-# that would lose time.
+# this.  A dt of 2**-20 s is 953.67 ns.  Rounding it to 954 ns would move it by 3 parts
+# in 10000, and that would lose time.
 _WHOLE_NS_WITHIN = 1e-6
 
 

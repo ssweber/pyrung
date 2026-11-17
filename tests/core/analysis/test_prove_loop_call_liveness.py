@@ -2,8 +2,9 @@
 
 Whether a subroutine's writes happen at all depends on the guard of every call on a path
 into it. Three things used to go wrong. The caller map behind input-liveness pruning skipped
-calls in forloop bodies. It gave a write in a subroutine that another subroutine calls only
-the conditions of its own call site. The upstream slice of the PDG stopped one caller up.
+calls in forloop bodies. For a subroutine that another subroutine calls, the map attached to
+each write in it only the conditions of the subroutine's own call site. The upstream slice
+of the PDG stopped one caller up.
 
 An indirect comparison (``DS[P] != 0``, or a loop counting ``DS[P]``) lowers to an atom that
 names neither the pointer nor the elements. The inputs of the guard were then pruned as dead,

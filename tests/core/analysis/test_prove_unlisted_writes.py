@@ -239,8 +239,8 @@ def test_a_branch_keeps_the_bounds_of_its_rung() -> None:
 
 def test_a_ladder_write_past_a_declared_bound_still_counts() -> None:
     # A CLICK stores 50 in At, past its max of 10.  pyrung stores it too and only reports it.
-    # A plain big[At] lists 0..10 from the declared bounds (_indirect_ref_tags). This
-    # write goes through an index expression, which lists no targets.
+    # A plain big[At] lists 0..10 from the declared bounds (_indirect_ref_tags). So
+    # this test writes through an index expression, which lists no targets.
     big = Block("Big", TagType.INT, 1, 2000)
     at = Int("BoundedAt", min=0, max=10)
     with Program(strict=False) as prog:

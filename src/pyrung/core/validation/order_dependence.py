@@ -371,7 +371,7 @@ class _RowBuilder:
                 )
                 self._walk_body_rung(body_rung, location, number, body, loops)
             # A bare body instruction reads its legs at its own row, so it needs no sequence
-            # of its own.  Only note a loop nested in it.
+            # of its own.  Note the instruction only if it is itself a For loop.
             for item in loop.body:
                 if not isinstance(item, RungLogic):
                     self._note_loop(item, location, loops)

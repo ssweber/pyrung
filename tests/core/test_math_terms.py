@@ -68,7 +68,10 @@ DINT_TOP = Dint("DintTop")
 
 
 def _past_doubles() -> Any:
-    """Return a product of 34 factors of 2 ** 31 - 1, a double past 2 ** 53, Inf past 2 ** 1024."""
+    """Return the product of 34 factors of 2 ** 31 - 1.
+
+    As the product grows, it becomes a double past 2 ** 53 and then Inf past 2 ** 1024.
+    """
     return reduce(mul, [DINT_TOP] * 34)
 
 
@@ -88,7 +91,7 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "mod_zero": (lambda: SEVEN_INT % ZERO_INT + 5, Int, 5, set()),
     "zero_to_zero": (lambda: ZERO**ZERO + 5, Dint, 5, set()),
     # 0 to a negative power is +Inf, not an error, so the formula is +Inf. An integer
-    # register stores 0 with SC43. A Real stores +Inf (read 2026-11-10).
+    # register stores 0 and a Real stores +Inf. Both set SC43 (read 2026-11-10).
     "zero_to_minus_one": (lambda: ZERO**-1 + 5, Dint, 0, {43}),
     "zero_to_minus_one_real": (lambda: ZERO**-1 + 5, Real, float("inf"), {43}),
     "abs_int_bottom": (lambda: abs(INT_BOTTOM) + 1, Int, 1, {43}),
