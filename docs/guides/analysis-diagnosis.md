@@ -25,7 +25,7 @@ plc = PLC(logic, initial_state=SystemState().with_tags(tags))
 
 ## `why()` — what's blocking this?
 
-`why()` walks the program graph backward from a tag and explains how it reached its current value from the snapshot. A write through a pointer with no declared bounds, into a block of more than 1000 elements, is the one exception. For that write, `why()` reads the scan history to see where it stored. When the history cannot say, or the rung is off, `why()` steps the next scan on a throwaway copy of the PLC to see where the write stores. The copy takes the pending forces and patches. The PLC itself does not change.
+`why()` walks the program graph backward from a tag and explains how it reached its current value from the snapshot. There is one exception: a write through a pointer with no declared bounds, into a block of more than 1000 elements. For that write, `why()` reads the scan history to see where it stored. If the history cannot say, or the rung is off, `why()` steps the next scan on a throwaway copy of the PLC and sees where the write stores. The copy takes the pending forces and patches. The PLC itself does not change.
 
 ```python
 from pyrung import Bool, And, PLC, Program, rung, out, latch, reset
@@ -185,7 +185,11 @@ plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, t
 plc.how(State == RUNNING, avoid=State == FAULTED)
 ```
 
-Momentary commands are treated as actions, not just settled states. `avoid=C_Complete` will not *press* `C_Complete` even though the command settles back to rest a scan later. A condition-like avoided state that the path enters transiently is excluded too. A Python callable is not checked on the repeated scans of a long wait. Use a condition when every scan must be constrained. `rise()` and `fall()` are transition predicates rather than states and are not accepted by `avoid=`.
+`how()` treats a momentary command as an action, not just a settled state. `avoid=C_Complete` will not *press* `C_Complete`, even though the command settles back to rest a scan later. It also excludes a path that enters an avoided state for only a moment.
+
+`how()` does not check a Python callable on the repeated scans of a long wait. Use a condition when every scan must be constrained.
+
+`avoid=` rejects `rise()` and `fall()`, because they are transition predicates and not states.
 
 Pass more than one condition, as a tuple or list, for a **union of exclusions**. Each is avoided independently.
 
