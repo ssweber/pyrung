@@ -18,6 +18,7 @@
 #### Check a recording
 
 - The console's `assert Tag == value` checks a tag, and a failed `assert` stops a replay at its line.
+- The console's `run until <condition> within <N | duration>` runs until the condition holds, and fails past the limit.
 
 ### Behaviour changes
 

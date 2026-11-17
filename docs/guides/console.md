@@ -23,7 +23,7 @@ execution:
   mode [run|stop]                                       (PLC RUN/STOP mode)
   pause
   reload
-  run <N | duration>  (e.g. 10, 500ms, 2 s)
+  run <N | duration> | run until <expression> within <N | duration>
   speed [N|max]                                         (1 = real time; 0 or max = unpaced)
   step [N]
   stop                                                  (cancels a running analysis)
@@ -94,6 +94,15 @@ pause                      # stop a running continue
 ```
 
 `step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `m`, `min`, `h`, and `d`, including compact compound durations such as `1h30min`.
+
+```text
+run until Done within 500          # stop on the first scan that ends with Done on
+run until Count >= 10 within 2 s   # a Watch expression, given at most 2 s
+```
+
+`run until` runs whole scans until its condition holds, and runs none if it already holds. It takes the same conditions as a Watch or a breakpoint condition. Past its limit, it fails with an error that names the condition and how far it ran, so a replay stops there.
+
+The `within` limit is required. Give it room, because the scan count to a step in a sequence can change when the program does.
 
 `mode` and `speed` set the PLC mode and the pacing. Each prints the current setting when given no argument.
 
