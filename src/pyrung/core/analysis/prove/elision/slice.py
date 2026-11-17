@@ -51,6 +51,16 @@ Soundness notes:
   condition behaviour.
 * Drum and shift instructions carry cross-scan memory that is not modelled; a
   candidate whose slice depends on one bails conservatively (kept stateful).
+* Some instructions read a field only on some of the scans they run, as their
+  own memory, their own step or the values they read decide
+  (``_state_decided_read_fields``).  A time drum reads the preset of the step
+  it times, and only once its rung was on the scan before.  The scans here
+  start every instruction's memory at its default, so they may never see that
+  read.  So each such instruction the check's scans run counts as reading
+  every tag those fields name (``_EntryRead``).  A tag the scan wrote before
+  the instruction ran is no entry read.
+* A continuous search reads its own result to resume after it.  That result
+  goes to the full check, as a timer's accumulator does.
 * An unclassified tag (no inferrable domain) in the closure also bails.
 
 Anything that cannot be partitioned, or whose cross product exceeds the cap,
@@ -61,11 +71,18 @@ sound; it only costs aggressiveness.
 from __future__ import annotations
 
 import itertools
+import threading
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pdg import ProgramGraph, _extract_write_targets
+from pyrung.core.analysis.pdg import (
+    ProgramGraph,
+    _extract_tag_names,
+    _extract_write_targets,
+    unbounded_read_names,
+)
 from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.condition import (
     AllCondition,
@@ -76,11 +93,25 @@ from pyrung.core.condition import (
 )
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.executor import execute_program
-from pyrung.core.instruction.advanced import ShiftInstruction
+from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
+from pyrung.core.instruction.calc import CalcInstruction
+from pyrung.core.instruction.coils import LatchInstruction, OutInstruction, ResetInstruction
 from pyrung.core.instruction.control import (
     FOR_COUNT_MASK_16,
+    BreakInstruction,
+    CallInstruction,
+    ContinueInstruction,
+    EnabledFunctionCallInstruction,
     ForLoopInstruction,
+    FunctionCallInstruction,
+    ReturnInstruction,
     for_count_mask,
+)
+from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+from pyrung.core.instruction.data_transfer import (
+    BlockCopyInstruction,
+    CopyInstruction,
+    FillInstruction,
 )
 from pyrung.core.instruction.drums import (
     EventDrumInstruction,
@@ -93,6 +124,15 @@ from pyrung.core.instruction.out_variants import (
     TimedInstruction,
     ToggleInstruction,
 )
+from pyrung.core.instruction.packing import (
+    PackBitsInstruction,
+    PackTextInstruction,
+    PackWordsInstruction,
+    UnpackToBitsInstruction,
+    UnpackToWordsInstruction,
+)
+from pyrung.core.instruction.send_receive import ModbusReceiveInstruction, ModbusSendInstruction
+from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 from pyrung.core.rung import Rung
 from pyrung.core.site_memory import EDGE_MEMORY, site_table_of
 from pyrung.core.state import SystemState
@@ -111,6 +151,58 @@ _SLICE_COMBO_CAP = 1024
 
 # Fixed scan timestep, mirroring the traced elision scans.
 _SLICE_DT = 0.010
+
+# The fields each instruction reads only on some of the scans it runs, as its own
+# memory, its own step or the values it reads decide.  The scans here start that
+# state at its default, so they may never see the read.  A class listed with no
+# fields reads its fields as its rung and its index tags pick.  The check's scans
+# try each value of those.  A class not listed counts all of its fields.
+_STATE_DECIDED_READS: dict[type, tuple[str, ...]] = {
+    # A drum reads its current step's preset and event, and its jump step on a jump edge.
+    TimeDrumInstruction: ("presets", "jump_step"),
+    TimeEventDrumInstruction: ("presets", "jump_step", "events"),
+    EventDrumInstruction: ("jump_step", "events"),
+    # An off-delay reads its preset only once it has been on.
+    OffDelayInstruction: ("preset",),
+    # A debounce reads each preset in only one state of its rung and target.
+    DebounceInstruction: ("on_preset", "off_preset"),
+    # A search stops at its first match, and a continuous one starts after its last result.
+    SearchInstruction: ("value", "search_range"),
+    ShiftInstruction: ("bit_range",),
+    # A send reads its source only when no request is pending, and only in live I/O.
+    ModbusSendInstruction: ("source",),
+    **dict.fromkeys(
+        (
+            OnDelayInstruction,
+            CountUpInstruction,
+            CountDownInstruction,
+            FlasherInstruction,
+            TimedInstruction,
+            ToggleInstruction,
+            CopyInstruction,
+            BlockCopyInstruction,
+            FillInstruction,
+            CalcInstruction,
+            PackBitsInstruction,
+            PackWordsInstruction,
+            PackTextInstruction,
+            UnpackToBitsInstruction,
+            UnpackToWordsInstruction,
+            FunctionCallInstruction,
+            EnabledFunctionCallInstruction,
+            ForLoopInstruction,
+            OutInstruction,
+            LatchInstruction,
+            ResetInstruction,
+            CallInstruction,
+            ReturnInstruction,
+            BreakInstruction,
+            ContinueInstruction,
+            ModbusReceiveInstruction,
+        ),
+        (),
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +232,65 @@ class _WriteBeforeReadContext(ScanContext):
         if name == self._watched and name not in self._tags_pending:
             self.entry_read_seen = True
         return super().get_tag(name, default)
+
+
+class _EntryRead:
+    """Stands in for one instruction's ``execute`` while the check's scans run.
+
+    The instruction counts as reading each tag its state-decided fields name
+    before it runs.  So the check sees a read that the instruction's own memory
+    would pick on another scan.  Any other context runs the instruction as is.
+    """
+
+    __slots__ = ("_instr", "_names")
+
+    def __init__(self, instr: Any, names: frozenset[str]) -> None:
+        self._instr = instr
+        self._names = names
+
+    def __call__(self, ctx: ScanContext, enabled: bool) -> None:
+        instr = self._instr
+        if (
+            isinstance(ctx, _WriteBeforeReadContext)
+            and ctx._watched in self._names
+            and ctx._watched not in ctx._tags_pending
+            and (enabled or not instr.is_inert_when_disabled())
+        ):
+            ctx.entry_read_seen = True
+        type(instr).execute(instr, ctx, enabled)
+
+
+# Two checks of one program must not swap the same instruction's ``execute`` at once.
+_ENTRY_READS_LOCK = threading.RLock()
+
+
+@contextmanager
+def _entry_reads(instrs: tuple[Any, ...], names: Mapping[int, frozenset[str]]) -> Iterator[bool]:
+    """Install :class:`_EntryRead` on each of *instrs* for the scans of one check.
+
+    Yields False when an instruction already has an ``execute`` of its own, or
+    cannot take one.  The check then keeps the tag.
+    """
+    if not instrs:
+        yield True
+        return
+    with _ENTRY_READS_LOCK:
+        installed: list[Any] = []
+        try:
+            for instr in instrs:
+                if "execute" in getattr(instr, "__dict__", {}):
+                    yield False
+                    return
+                try:
+                    instr.execute = _EntryRead(instr, names[id(instr)])
+                except AttributeError:
+                    yield False
+                    return
+                installed.append(instr)
+            yield True
+        finally:
+            for instr in installed:
+                del instr.execute
 
 
 class _WBRConditionView(ConditionView):
@@ -256,6 +407,48 @@ def _collect_hidden_memory_info(
     return frozenset(drum_shift_writes), tuple(oneshot_key_writes)
 
 
+def _state_decided_read_fields(instr: Any) -> tuple[str, ...]:
+    """The fields of *instr* that :data:`_STATE_DECIDED_READS` names, by its class."""
+    cls = type(instr)
+    fields = _STATE_DECIDED_READS.get(cls)
+    if fields is None:
+        return (*getattr(cls, "_reads", ()), *getattr(cls, "_conditions", ()))
+    return fields
+
+
+def _collect_state_decided_reads(
+    program: Program, graph: ProgramGraph
+) -> tuple[dict[str, tuple[Any, ...]], dict[int, frozenset[str]]]:
+    """The tags each instruction may read on a scan the slice checks never show.
+
+    Returns ``(readers, names)``.  *readers* maps a tag to the instructions that
+    may read it so, and *names* maps ``id(instr)`` to the tags it may read so.  A
+    read through an index with no declared bounds counts where *graph* found it
+    can reach.
+    """
+    readers: dict[str, list[Any]] = defaultdict(list)
+    names: dict[int, frozenset[str]] = {}
+    for instr in _iter_program_instructions(program):
+        found: set[str] = set()
+        for field_name in _state_decided_read_fields(instr):
+            value = getattr(instr, field_name, None)
+            found |= _extract_tag_names(value, {}) | unbounded_read_names(value, graph)
+        if found and id(instr) not in names:
+            names[id(instr)] = frozenset(found)
+            for name in found:
+                readers[name].append(instr)
+    return {name: tuple(instrs) for name, instrs in readers.items()}, names
+
+
+def _continuous_search_results(program: Program) -> frozenset[str]:
+    """The result of each continuous search, which the search reads to resume after it."""
+    return frozenset(
+        instr.result.name
+        for instr in _iter_program_instructions(program)
+        if isinstance(instr, SearchInstruction) and instr.continuous
+    )
+
+
 def _collect_edge_tags(program: Program) -> frozenset[str]:
     """Collect tags referenced by explicit rise()/fall() conditions anywhere.
 
@@ -360,8 +553,13 @@ class _SliceElision:
         # counter's accumulator, a drum's step).  Def-use chains leave these
         # exclusive reads out, so the fast path would take a timer's
         # accumulator, which its own tick reads every scan, for scan-local.
+        # A continuous search reads its result back the same way, to resume after it.
         self.self_read_tags: frozenset[str] = frozenset().union(
             *(node.exclusive_reads for node in graph.rung_nodes)
+        ) | _continuous_search_results(program)
+        # The instructions that may read a tag on a scan their own memory decides.
+        self.state_decided_readers, self.state_decided_names = _collect_state_decided_reads(
+            program, graph
         )
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
@@ -564,6 +762,24 @@ class _SliceElision:
                 return False
 
         # Step 5: one natural scan per combination.
+        with self._entry_reads(candidate) as installed:
+            return installed and self._each_scan_writes_first(
+                candidate, tag, var_kinds, var_names, domains
+            )
+
+    def _entry_reads(self, candidate: str) -> Any:
+        """:func:`_entry_reads` for the instructions that may read *candidate* on another scan."""
+        return _entry_reads(self.state_decided_readers.get(candidate, ()), self.state_decided_names)
+
+    def _each_scan_writes_first(
+        self,
+        candidate: str,
+        tag: Tag,
+        var_kinds: list[str],
+        var_names: list[str],
+        domains: list[tuple[Any, ...]],
+    ) -> bool:
+        """One natural scan from each combination writes *candidate* before any read of it."""
         x_default = tag.default
         for combo in itertools.product(*domains):
             tag_values: dict[str, Any] = {}
@@ -678,16 +894,19 @@ class _SliceElision:
             domains.append(tuple(domain))
 
         x_default = graph.tags[candidate].default
-        for combo in itertools.product(*domains):
-            tag_values = dict(zip(names, combo, strict=True))
-            if x_default is not None:
-                tag_values[candidate] = x_default
-            state = SystemState().with_tags(tag_values) if tag_values else SystemState()
-            ctx = _WriteBeforeReadContext(state, candidate)
-            ctx.set_memory("_dt", _SLICE_DT)
-            self.program._call_subroutine_ctx(sub, ctx)
-            if ctx.entry_read_seen:
+        with self._entry_reads(candidate) as installed:
+            if not installed:
                 return False
+            for combo in itertools.product(*domains):
+                tag_values = dict(zip(names, combo, strict=True))
+                if x_default is not None:
+                    tag_values[candidate] = x_default
+                state = SystemState().with_tags(tag_values) if tag_values else SystemState()
+                ctx = _WriteBeforeReadContext(state, candidate)
+                ctx.set_memory("_dt", _SLICE_DT)
+                self.program._call_subroutine_ctx(sub, ctx)
+                if ctx.entry_read_seen:
+                    return False
         return True
 
     def _edge_memory_keys(self, tags: set[str]) -> tuple[str, ...] | None:
