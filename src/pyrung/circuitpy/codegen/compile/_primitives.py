@@ -53,7 +53,7 @@ from pyrung.core.memory_block import (
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 
-from ._emit import emit_frac_get, emit_mem_get, emit_mem_set
+from ._emit import emit_frac_get, emit_mem_get, emit_oneshot
 
 
 def _snapshot_tag_symbol(
@@ -1022,27 +1022,11 @@ def _compile_guarded_instruction(
         key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
-        if enabled_literal is False:
-            lines.append(f"{sp}{emit_mem_set(key, 'False')}")
-            lines.extend(f"{sp}{line}" for line in disabled)
-            return lines
-        fire = [
-            f"if not bool({emit_mem_get(key, 'False')}):",
-            *[f"    {line}" for line in (*run_settle, *enabled_body)],
-            f"    {emit_mem_set(key, 'True')}",
-        ]
-        if enabled_literal is True:
-            lines.extend(f"{sp}{line}" for line in (*idle, *fire))
-            return lines
-        lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{inner}{emit_mem_set(key, 'False')}")
-        lines.extend(f"{inner}{line}" for line in disabled)
-        if idle:
-            lines.append(f"{sp}else:")
-            lines.extend(f"{inner}{line}" for line in (*idle, *fire))
-        else:
-            lines.append(f"{sp}el{fire[0]}")
-            lines.extend(f"{sp}{line}" for line in fire[1:])
+        enabled = enabled_expr if enabled_literal is None else enabled_literal
+        oneshot = emit_oneshot(
+            key, enabled, fire=[*run_settle, *enabled_body], off=disabled, before=idle
+        )
+        lines.extend(f"{sp}{line}" for line in oneshot)
         return lines
 
     enabled_body = [*settle, *enabled_body]

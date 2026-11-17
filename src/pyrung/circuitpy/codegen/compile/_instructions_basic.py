@@ -40,7 +40,7 @@ from pyrung.core.memory_block import block_room, element_names_after
 from pyrung.core.tag import ImmediateRef, Tag
 
 from ._core import _get_condition_snapshot, compile_condition
-from ._emit import emit_frac, emit_mem_get, emit_mem_set, emit_prev_store, emit_rise
+from ._emit import emit_frac, emit_mem_get, emit_mem_set, emit_oneshot, emit_prev_store, emit_rise
 from ._primitives import (
     _compile_assignment_lines,
     _compile_copy_source,
@@ -112,26 +112,16 @@ def _compile_out_instruction(
         key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
-        if enabled_literal is False:
-            lines.append(f"{sp}{emit_mem_set(key, 'False')}")
-            lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent))
-            return lines
-        if enabled_literal is True:
-            lines.append(f"{sp}if not bool({emit_mem_get(key, 'False')}):")
-            lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-            lines.append(f"{' ' * (indent + 4)}{emit_mem_set(key, 'True')}")
-            lines.append(f"{sp}else:")
-            lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-            return lines
-        lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f"{' ' * (indent + 4)}{emit_mem_set(key, 'False')}")
-        lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-        lines.append(f"{sp}elif not bool({emit_mem_get(key, 'False')}):")
-        lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-        lines.append(f"{' ' * (indent + 4)}{emit_mem_set(key, 'True')}")
-        lines.append(f"{sp}else:")
-        lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-        return lines
+        # Written in the order the output reads them, since a range write takes the next name.
+        off, fire, held = [], [], []
+        if enabled_literal is not True:
+            off = _compile_target_write_lines(instr.target, "False", ctx, 0)
+        if enabled_literal is not False:
+            fire = _compile_target_write_lines(instr.target, "True", ctx, 0)
+            held = _compile_target_write_lines(instr.target, "False", ctx, 0)
+        enabled = enabled_expr if enabled_literal is None else enabled_literal
+        oneshot = emit_oneshot(key, enabled, fire=fire, off=off, held=held)
+        return [f"{sp}{line}" for line in oneshot]
 
     if enabled_literal is True:
         return _compile_target_write_lines(instr.target, "True", ctx, indent)

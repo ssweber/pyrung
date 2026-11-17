@@ -11,6 +11,7 @@ the output does not change.  A ``quote`` of ``"double"`` writes a memory key as
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Literal
 
 from pyrung.core.tag import Tag
@@ -74,3 +75,35 @@ def emit_rise(now: str, key: str, *, cast: bool = True, paren: bool = False) -> 
     if paren:
         not_prev = f"({not_prev})"
     return f"{now} and {not_prev}"
+
+
+def _indented(lines: Sequence[str]) -> list[str]:
+    return [f"    {line}" for line in lines]
+
+
+def emit_oneshot(
+    key: str,
+    enabled: str | bool,
+    *,
+    fire: Sequence[str],
+    off: Sequence[str],
+    held: Sequence[str] = (),
+    before: Sequence[str] = (),
+) -> list[str]:
+    """A one-shot that runs *fire* on the first enabled scan, at no indent.
+
+    *off* runs while the rung is off, and *held* runs on each later enabled scan.  *before*
+    runs on every enabled scan ahead of the test.  A literal *enabled* (``True`` or
+    ``False``) leaves the rung test out.
+    """
+    if enabled is False:
+        return [emit_prev_store(key, "False"), *off]
+    fired = [f"if not {emit_prev(key)}:", *_indented([*fire, emit_prev_store(key, "True")])]
+    if held:
+        fired += ["else:", *_indented(held)]
+    if enabled is True:
+        return [*before, *fired]
+    lines = [f"if not ({enabled}):", *_indented([emit_prev_store(key, "False"), *off])]
+    if before:
+        return [*lines, "else:", *_indented([*before, *fired])]
+    return [*lines, f"el{fired[0]}", *fired[1:]]
