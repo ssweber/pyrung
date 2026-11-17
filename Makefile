@@ -11,7 +11,7 @@ DOCS_ADDR ?= localhost:8000
 PYTEST_WORKERS ?= 6
 PYTEST_PARALLEL = -n $(PYTEST_WORKERS) --dist=loadfile --max-worker-restart=0
 
-.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-bytecode test-conformance test-conformance-repeat conformance-export conformance-workspace watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check
+.PHONY: default install lint test test-prove test-pilot test-tumbler test-fold test-fold-new test-bytecode test-conformance test-conformance-repeat conformance-export conformance-workspace render-corpus render-compare watch-pilot-burner watch-pilot-completed test-hypothesis test-integration test-fuzz verify upgrade build clean docs-clean docs-generated-clean docs-generate docs-serve docs-build docs-check
 
 default: install verify
 
@@ -79,6 +79,14 @@ conformance-export:
 # Regenerate src/plc/ in the conformance ClickNick workspace, for Preview Changes.
 conformance-workspace:
 	uv run python -m tests.conformance.suite $(if $(PART),--part $(PART)) --workspace $(or $(WORKSPACE),tests/conformance/workspace)
+
+# Render the codegen's output for a fixed corpus (devtools/render_corpus.py): run it on the base
+# and on a branch, then compare.  A codegen refactor that must change no byte compares equal.
+render-corpus:
+	uv run python devtools/render_corpus.py render $(or $(OUT),build/render-corpus) $(if $(ONLY),--only $(ONLY))
+
+render-compare:
+	uv run python devtools/render_corpus.py compare $(A) $(B)
 
 watch-pilot-burner:
 	uv run python devtools/watch_pilot_decisions.py --target y_BurnerLoop --no-avoid --max-scans 20000 --wall-budget 240 --stall-budget 30 --output-budget 30 --memory-budget-mb 4096
