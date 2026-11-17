@@ -1,4 +1,4 @@
-"""CLICK text, pack_text, search-cursor and integer MDN semantics, one scan per scenario."""
+"""Tests for CLICK text, pack_text, search-cursor and integer MDN semantics, one scan each."""
 
 from __future__ import annotations
 

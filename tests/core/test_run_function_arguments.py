@@ -1,4 +1,4 @@
-"""What a ``run_function`` is handed and what it returns land as stepping lands them, on every path."""
+"""A ``run_function`` receives and returns the same values as stepping does, on every path."""
 
 from __future__ import annotations
 
@@ -391,7 +391,7 @@ class TestConstants:
             assert runner.current_state.tags["C"] == 4
 
     def test_code_py_takes_one_list_handed_twice_and_two_equal_lists(self):
-        """One object is one binding, and two equal lists are two: the text says each."""
+        """One object is one binding, and two equal lists are two bindings.  The text says each."""
 
         def bump(v, m):
             m[0] += 1

@@ -1,18 +1,17 @@
-"""What the grey-area probes share: a one-scan gate, reading a value as a class.
+"""Helpers that the grey-area probes share: a one-scan gate and reading a value as a class.
 
 The probes of ``test_word_store.py``, ``test_real_bits.py`` and so on ask what a
 CLICK does where pyrung only assumes.  A case runs its op once, on the scan its
 ``Cmd`` arrives, and reads what it needs on the rungs right below it, before
 ``Fired`` goes up.  SC40, SC43 and SC44 follow the last Copy or Math (recorded,
-``system``), so a flag is read on the rung right after the op it asks about and
+``system``).  So a case reads a flag on the rung right after the op it asks about, and
 nothing from another case can show.
 
-Most values read back as a class, 1 for the first reading the case names, 2 for
-the second and so on, 0 for anything else: a Word or a Real does not fit a slot's
-Int whatever a Copy does with it, and how a Word comes out of a Copy is itself
-one of the questions.  SC46 stays on until a Math clears it, so another case's
-op can leave it on.  A case that reads it uses :class:`GuardedProbes`, which
-waits for a scan the flag starts off.
+Most values read back as a class: 1 for the first reading the case names, 2 for
+the second and so on, and 0 for anything else.  A Word or a Real does not fit a slot's
+Int whatever a Copy does with it.  How a Word comes out of a Copy is itself one of the
+questions.  SC46 stays on until a Math clears it, so another case's op can leave it on.
+A case that reads it uses :class:`GuardedProbes`, which waits for a scan the flag starts off.
 """
 
 from __future__ import annotations
@@ -29,12 +28,12 @@ from tests.conformance.memory import ClickTimer, td
 
 
 def once(slot: Any) -> tuple[Any, Any]:
-    """The contacts of a rung that runs on one scan: ``Cmd`` is in, ``Fired`` not yet."""
+    """Return the contacts of a rung that runs on one scan: ``Cmd`` is in, ``Fired`` not yet."""
     return (slot.Cmd != 0, slot.Fired == 0)
 
 
 def finish(slot: Any) -> None:
-    """Raise ``Fired``: the case's last rung."""
+    """Raise ``Fired`` in the case's last rung."""
     with Rung(*once(slot)):
         copy(1, slot.Fired)
 
@@ -47,7 +46,7 @@ def class_of(slot: Any, value: Any, readings: Sequence[Any], into: Any) -> None:
 
 
 def flag_bit(slot: Any, flag: Any, into: Any, bit: int = 1) -> None:
-    """Add *bit* to ``into`` when *flag* is on: the rung right after the op it asks about."""
+    """Add *bit* to ``into`` when *flag* is on.  Use it on the rung right after the op."""
     with Rung(*once(slot), flag):
         math(into + bit, into)
 
@@ -57,14 +56,16 @@ _CANDIDATES: list[range] = []
 
 
 def between(*values: int) -> range:
-    """Every candidate reading of a field, so that none is asserted."""
+    """Return every candidate reading of a field, so that none is asserted."""
     candidates = range(min(values), max(values) + 1)
     _CANDIDATES.append(candidates)
     return candidates
 
 
 def asks_for_a_reading(case: Case) -> bool:
-    """A field of *case* came from :func:`between`: a pass answers nothing, what it read does.
+    """Return whether a field of *case* came from :func:`between`.
+
+    A pass answers nothing in that case.  What the case read does answer.
 
     Not every range: ``system/rtc_seconds_advance`` asserts one.
     """
@@ -72,7 +73,10 @@ def asks_for_a_reading(case: Case) -> bool:
 
 
 def reading_lines(results: Iterable[CaseResult]) -> list[str]:
-    """A ``read`` line for each case asking for a reading: the report prints one only on a FAIL."""
+    """Return a ``read`` line for each case asking for a reading.
+
+    The report prints one only on a FAIL.
+    """
     return [f"read {r.group}/{r.case.id} {r.actual}" for r in results if asks_for_a_reading(r.case)]
 
 
@@ -112,7 +116,7 @@ def record_readings(path: str | Path, results: Iterable[CaseResult], *, on: str)
 
 
 def _toml(value: Any) -> str:
-    """*value* as a TOML inline value.  It takes str, int, bool, list and dict only."""
+    """Return *value* as a TOML inline value.  It accepts only str, int, bool, list and dict."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -201,14 +205,14 @@ class GuardedProbes:
 
 
 def ms_clock(slot: Any, n: int, preset: int = 5000) -> Any:
-    """A TON of *n* from ``Cmd``: its TD is the case's clock, in ms."""
+    """Add a TON of *n* from ``Cmd``.  Its TD is the case's clock, in ms."""
     with Rung(slot.Cmd != 0):
         on_delay(ClickTimer(n), preset)
     return td[n]
 
 
 def in_window(slot: Any, clock: Any, low: int, high: int) -> tuple[Any, ...]:
-    """The conditions of a rung true from *low* up to *high* ms on *clock*, until ``Fired``."""
+    """Return the conditions of a rung true from *low* to *high* ms on *clock*, until ``Fired``."""
     return (*once(slot), clock >= low, clock < high)
 
 

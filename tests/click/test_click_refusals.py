@@ -1,7 +1,7 @@
 """Export findings for forms CLICK v4's editor dialogs refuse (checked by hand, 2026-11-06).
 
-Each refused form is a finding that export refuses unless allowed; each accepted form
-next to it (checked the same day) gets none.
+Each refused form is a finding, and export refuses it unless you allow it.  Each accepted
+form next to it (checked the same day) gets no finding.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _program(body) -> Program:
 
 
 def _found(body, code: str, tag_map: TagMap | None = None) -> list:
-    """The findings of *code*, strict mode, each with ASCII text."""
+    """Return the findings of *code* in strict mode, and check each has ASCII text."""
     report = validate_click_program(_program(body), tag_map or TagMap(), mode="strict")
     found = [f for f in report.errors if f.code == code]
     for finding in found:
@@ -61,8 +61,9 @@ def _found(body, code: str, tag_map: TagMap | None = None) -> list:
 def _export_refuses(
     body, code: str, tag_map: TagMap | None = None, allowed: tuple[str, ...] = ()
 ) -> None:
-    """Export refuses *code*, and passes once it is allowed (with *allowed*, the
-    other findings of the form)."""
+    """Check that export refuses *code* and passes once it is allowed.
+
+    *allowed* lists the other findings of the form, which are allowed in both runs."""
     prog, tag_map = _program(body), tag_map or TagMap()
     with pytest.raises(LadderExportError, match=code):
         pyrung_to_ladder(prog, tag_map, allow=allowed)
@@ -465,7 +466,7 @@ def test_a_hex_compare_in_a_forloop_body_and_a_counter_reset_is_refused():
 
 
 # --- For count ------------------------------------------------------------------------
-# The editor refuses a negative constant count; pyrung's forloop() already refuses any
+# The editor refuses a negative constant count.  pyrung's forloop() already refuses any
 # constant below 1 (tests/core/test_forloop.py), so there is no finding to add.
 
 
