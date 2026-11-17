@@ -179,6 +179,7 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
 
     executed = 0
     hit_bp = False
+    last_stop: dict[str, Any] | None = None
     for lineno, cmd in commands:
         try:
             result = dispatch(adapter, cmd)
@@ -188,11 +189,11 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
                 f"Executed {executed}/{len(commands)} command(s)"
             )
         executed += 1
-        for event_name, _body in result.events:
+        for event_name, body in result.events:
             if event_name == "stopped":
-                hit_bp = True
-                break
-        if hit_bp:
+                last_stop = body
+        if result.hit_breakpoint:
+            hit_bp = True
             break
 
     scan_id = adapter._current_scan_id
@@ -200,11 +201,16 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
     suffix = ""
     if hit_bp:
         suffix = f" (breakpoint, {remaining} command(s) remaining)"
-    events = [("stopped", adapter._stopped_body("step"))] if hit_bp else []
+        last_stop = adapter._stopped_body("breakpoint")
+    # One stop at the end tells the client where the replay left the scan.
+    events: list[tuple[str, dict[str, Any] | None]] = (
+        [("stopped", last_stop)] if last_stop is not None else []
+    )
     return ConsoleResult(
         f"Replayed {executed}/{len(commands)} command(s), now at scan {scan_id}"
         f" [harness={harness_mode}]{suffix}",
         events=events,
+        hit_breakpoint=hit_bp,
     )
 
 

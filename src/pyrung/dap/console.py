@@ -32,6 +32,9 @@ class ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
     #: Extra fields for the evaluate response body, for clients that read data.
     body: dict[str, Any] = field(default_factory=dict)
+    #: True when a breakpoint ended the command early. ``replay`` stops on it. Every step
+    #: sends a "stopped" event, so the event alone can't tell a breakpoint apart.
+    hit_breakpoint: bool = False
 
 
 @dataclass(frozen=True)
@@ -331,6 +334,7 @@ def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(
         f"Stepped {scans_completed} scan(s), now at scan {scan_id}{suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
+        hit_breakpoint=hit_bp,
     )
 
 
@@ -377,6 +381,7 @@ def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:
     return ConsoleResult(
         f"Ran {scans} cycle(s), now at scan {scan_id}{suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
+        hit_breakpoint=hit_bp,
     )
 
 
@@ -412,6 +417,7 @@ def _run_duration(adapter: Any, runner: Any, seconds: float) -> ConsoleResult:
     return ConsoleResult(
         f"Ran {scans} scan(s) ({elapsed:.3f}s elapsed){suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
+        hit_breakpoint=hit_bp,
     )
 
 

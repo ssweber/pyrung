@@ -439,6 +439,45 @@ class TestReplayVerb:
         _repl(adapter, out, f"replay {transcript}", seq=11)
         assert len(adapter._capture.entries) == 2
 
+    def test_replay_runs_past_a_step_that_is_not_the_last_line(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "patch Button true\nstep 1\nrun 2\npatch Button false\nstep 1\n",
+        )
+        resp, _ = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is True
+        assert "Replayed 5/5" in resp["body"]["result"]
+        assert "breakpoint" not in resp["body"]["result"]
+        assert adapter._runner.current_state.tags["Light"] is False
+
+    def test_replay_stops_at_a_breakpoint_hit_inside_a_step(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        script = tmp_path / "logic.py"
+        _send_request(
+            adapter,
+            out,
+            seq=9,
+            command="setBreakpoints",
+            arguments={
+                "source": {"path": str(script)},
+                "breakpoints": [{"line": 9, "condition": "Light"}],
+            },
+        )
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "step 1\npatch Button true\nstep 5\npatch Button false\nstep 1\n",
+        )
+        resp, stopped = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Replayed 3/5" in result
+        assert "(breakpoint, 2 command(s) remaining)" in result
+        assert adapter._runner.current_state.tags["Light"] is True
+        assert [event["body"]["reason"] for event in stopped] == ["breakpoint"]
+
     def test_replay_reports_scan_id(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
         transcript = _write_transcript(
