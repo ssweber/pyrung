@@ -14,11 +14,11 @@ flag it reads is off just before the op (:func:`_probe`). One bit (``now``) come
 that scan only. Another bit (``taken``) latches so the op runs once. An op whose flag an
 earlier op of the same scan left on waits for the next scan.
 
-SC40, SC43 and SC44 are mostly off already, because each op starts with a Copy. SC46
-stays on to the end of the scan once a Math error raises it. There the gate is what
-makes a probe of SC46 read its own op. Two flags after one op are two probes, each
-running the op again, because on a CLICK the Math that records the first would clear the
-second.
+SC40, SC43 and SC44 are mostly off already. Each op starts with a Copy, and a Copy
+clears SC43 and SC44. SC46 stays on to the end of the scan once a Math error raises it.
+There the gate is what makes a probe of SC46 read its own op. Two flags after one op
+are two probes, each running the op again, because on a CLICK the Math that records the
+first would clear the second.
 
 Inf and NaN are staged on scan 2 (``_stage_inf``), before any probe. Every case has a
 40-scan window. That is more than every probe of the group needs when each waits for the

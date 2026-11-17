@@ -660,10 +660,11 @@ def _stepping_end(segments: list[_Segment], first: int, length: int, stop: int) 
 
 
 def _end_steps(one: _Segment, other: _Segment) -> tuple[int, ...] | None:
-    """Return how far each whole number moved from *one* to *other*.
+    """Return how far each end value moved from *one* to *other*, in the order of *one*.
 
-    Return None if the paths or counts differ, or if any end value changed other than by a
-    whole-number step.
+    An int moves by the difference.  Any other value that is the same at both ends moves 0.
+    Return None if the paths or counts differ, or if a value changed and is not an int at
+    both ends.
     """
     if one.path is not other.path or one.count != other.count:
         return None

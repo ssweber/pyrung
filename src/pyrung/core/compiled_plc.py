@@ -883,8 +883,9 @@ class CompiledPLC:
         # Every way into a scan comes through here first, before it moves anything.
         if self._kernel_pass_open:
             raise refused_inside_its_own_scan()
-        # A runner's states walk one recording, and a restart ends a recording.  So a stop
-        # inside the recording scanned on until a later call (runner._reset_recording).
+        # An exact-anchor PLC never restarts.  A replay walks the scans of one recording,
+        # and a runner's restart starts a new recording (runner._reset_recording).  So no
+        # recording holds a restart.
         if not self._running and not self._exact_anchor:
             self._stop_to_run_transition()
 

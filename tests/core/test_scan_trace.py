@@ -500,7 +500,10 @@ def _corpus_rtc_apply_date() -> None:
 
 
 def _corpus_rtc_apply_held() -> None:
-    """Apply the clock on every scan. The hook is never quiet, so no scan reaches the loop."""
+    """Apply the clock on every scan once the timer is done.
+
+    From then on the hook is never quiet, so no scan reaches the loop.
+    """
     with Rung(Run):
         on_delay(T, 1_000)
     with Rung(T.Done):
@@ -634,8 +637,9 @@ CORPUS: dict[str, tuple[Callable[[], None], float, list[tuple[float, dict[Any, A
     ),
 }
 
-# Cases where the loop may run no scans at all. rtc_apply_held applies the clock on every
-# scan, so no scan reaches the loop.
+# Cases where the loop may run no scans at all. rtc_apply_held steps interpreted until a
+# tag it writes first appears. Once its timer is done, it applies the clock on every scan,
+# and the loop declines a scan whose system hooks are not quiet.
 _NO_COVERAGE_EXPECTED: frozenset[str] = frozenset({"rtc_apply_held"})
 
 

@@ -293,10 +293,10 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return value",
         "",
     ],
-    # A failing operation in a calc's formula is 0.  It appends its flag's code
-    # (40 SC40, 43 SC43, 46 SC46) to the calc's *flags*.  The calc sets those flags
-    # after the formula, so the rest of the formula still runs (core CALC_FAULTS).
-    # Outside a calc, *flags* is None.
+    # A failing operation in a calc's formula is 0, and the rest of the formula still
+    # runs (core CALC_FAULTS).  The operation appends its flag's code (40 SC40,
+    # 43 SC43, 46 SC46) to the calc's *flags*.  The calc sets those flags after the
+    # formula.  Outside a calc, *flags* is None.
     "_term_fail": [
         "def _term_fail(flags, code):",
         "    if flags is not None:",

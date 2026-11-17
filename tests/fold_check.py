@@ -199,10 +199,12 @@ def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
     The twin would go on from the run's count. The test therefore clears that state, steps its
     own runner and passes it to the compare function that this yields. The block's last compare
     must be of where its run got to, even if the block raises, and it must be of another
-    runner. State, scan and runner are compared as a twin's would be. Only *plc* is let off, and
-    only the twin. *plc* still lands on the scans asked of it, and other runners in the block
-    stay checked.  tests/test_fold_check_stop.py pins the tests using this, and the summary
-    lists them.
+    runner. State, scan and runner are compared as a twin's would be.
+
+    Inside the block, fold-check makes no twin for *plc*. It still checks that each run of
+    *plc* lands on the scans asked of it, and it checks the other runners in the block as
+    usual.  tests/test_fold_check_stop.py pins the tests using this, and the summary lists
+    them.
     """
     start = plc._state.scan_id
     block = _OwnTwin(plc, start, _rtc_at_the_start(plc, start), plc._scan_log)

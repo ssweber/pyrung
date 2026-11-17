@@ -423,8 +423,8 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
 
 
 #: Raw memory of the groups in parts that have memory of their own (``suite.APART_PARTS``).
-#: These parts share nothing with :data:`OWNED`, which has no room left.  A project never
-#: holds them together with the groups in :data:`OWNED`.
+#: :data:`OWNED` has no room left.  These ranges may repeat addresses in :data:`OWNED`, so a
+#: project never holds these parts together with the groups in :data:`OWNED`.
 OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "unit_pairs": {"T": range(1, 11)},
     "unit_minute": {"T": range(11, 21)},

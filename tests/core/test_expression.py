@@ -873,7 +873,8 @@ class TestRangeAggregateExpr:
         assert _eval_in(self.DS.select(1, 3).median(), self.VALUES) == 3
 
     def test_median_even_count_of_integers_truncates_toward_zero(self):
-        # sorted: -7, 3, 4, 10 -> (3 + 4) / 2 = 3.5, which is 3 on a CLICK because it is an integer
+        # sorted: -7, 3, 4, 10 -> (3 + 4) / 2 = 3.5. The median of Ints is an integer on a
+        # CLICK, so the result is 3.
         assert _eval_in(self.DS.select(1, 4).median(), self.VALUES) == 3
         assert _eval_in(self.DS.select(1, 2).median(), {"DS1": -9, "DS2": -2}) == -5
 

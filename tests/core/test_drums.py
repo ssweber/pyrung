@@ -704,7 +704,7 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["Y1"] is False
 
-    # When enabled again, the drum is still complete, because the jump left its outputs off.
+    # When enabled again, the drum is still complete. The jump left its outputs off.
     runner.patch({"Enable": True, "Jump": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
