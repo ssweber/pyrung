@@ -232,9 +232,12 @@ DOUBLE_WRITERS_ON_PURPOSE = {"rungs/last_rung_wins_shared_coil"}
 
 
 def test_one_always_writing_instruction_to_a_bit() -> None:
-    """A second Out rung turns the bit off on the first's scans, and every target agrees,
-    so nothing else fails: ``coils/edge_behind_open_contact`` could not tell its answers
-    apart this way.  CLICK warns (C1001) at paste, which is too late."""
+    """Check that no case writes one bit with two always-writing instructions.
+
+    A second Out rung turns the bit off on the first's scans.  Every target agrees on that,
+    so nothing else fails.  ``coils/edge_behind_open_contact`` could not tell its answers
+    apart this way.  CLICK warns (C1001) at paste, which is too late.
+    """
     doubled: list[str] = []
     for group in suite.ALL_GROUPS:
         for c in group.cases:
@@ -374,7 +377,7 @@ def test_in_process_only_cases_are_left_out_of_the_program() -> None:
 def test_export_writes_main_one_subroutine_per_group_and_nicknames(tmp_path) -> None:
     build = suite.build()
     rungs = build.group("rungs")
-    # The whole suite is more than one CLICK project holds: it exports, with a warning.
+    # The whole suite is more than one CLICK project can hold.  It still exports, with a warning.
     with pytest.warns(UserWarning, match="CLK_STEP_LIMIT"):
         out = build.export(tmp_path / "conformance")
     main = (out / "main.csv").read_text(encoding="utf-8")
@@ -624,7 +627,7 @@ def test_a_case_asking_for_a_reading_is_on_no_confirmed_record() -> None:
 
 def test_pending_case_is_a_strict_xfail_on_pyrung() -> None:
     # pyrung reads 7.  A pending case expecting 8 (CLICK's answer) passes as XFAIL
-    # in-process; once pyrung reads what it expects, it fails until the marker goes.
+    # in-process.  Once pyrung reads what it expects, the case fails until the marker goes.
     missing = case("CLICK reads 8", ladder=_prove_constant, expect={"Result1": 8}, pending="S2")
     (result,) = run(Group("g", [missing]))
     assert result.passed and result.xfail
@@ -904,9 +907,12 @@ def test_an_in_main_helper_changes_only_the_hash_of_the_case_that_defines_it() -
 
 
 def test_flag_raising_probes_run_after_every_group_that_reads_a_fault_flag() -> None:
-    """The store probes and flag probes raise SC40/SC43/SC44/SC46 on purpose; a flag
-    stays up to scan end, so a group after them would read them (found by the gate on
-    text/to_binary).  ``past_write`` is last so a part can leave it out."""
+    """Check that the flag-raising probes run after every group that reads a fault flag.
+
+    The store probes and flag probes raise SC40/SC43/SC44/SC46 on purpose.  A flag stays
+    up to scan end, so a group after them would read them (found by the gate on
+    text/to_binary).  ``past_write`` is last so a part can leave it out.
+    """
     assert [g.name for g in suite.ALL_GROUPS[-3:]] == [
         "store_probe",
         "flag_probe",
