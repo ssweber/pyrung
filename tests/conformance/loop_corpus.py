@@ -3,11 +3,12 @@
 ``run_for()`` and ``run_until()`` must equal stepping, in whole state and scan count, or decline.
 The suite's in-process runner, ``pyrung.conformance.run``, drives its programs with ``plc.step()``,
 and ``SimServer`` free-runs a realtime PLC, which is not fixed-step.  So no conformance program
-reached the loop.  This drives them the way a case is driven (``Cmd`` written, run, read), by long
-runs, each through ``tests/fold_check.py``'s ``_checked``: a stepped twin scan by scan, stops asked
-on the twin, the runner around the state, history and the scans past the landing.  Where a case
-records an expectation the run has to meet it too, as ``run()`` judges it, ``pending`` included: so
-loop, stepping and recorded all agree.
+reached the loop.  This module drives them the way a case is driven (``Cmd`` written, run, read),
+with long runs.  Each run goes through ``tests/fold_check.py``'s ``_checked``.  That checks a
+stepped twin scan by scan, stops asked on the twin, the runner around the state, history and the
+scans past the landing.  Where a case records an expectation, the run has to meet it too, as
+``run()`` judges it, ``pending`` included.  So the loop, stepping and the recorded expectation
+all agree.
 
 :class:`Tally` counts what ran where, so a corpus that stopped reaching the loop says so.
 """
@@ -40,7 +41,7 @@ CaseFilter = Callable[[Group, Case], bool]
 
 @contextmanager
 def fine_loop() -> Iterator[None]:
-    """As ``--fold-check`` runs the loop: every run in it, a few scans a firing, strictly."""
+    """Patch the loop as ``--fold-check`` runs it: every run in it, few scans a firing, strict."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(compiled_run, "INTERPRETED_PREFIX", 1)
         patch.setattr(scan_trace, "MIN_RUN_SCANS", 1)
@@ -52,7 +53,7 @@ def fine_loop() -> Iterator[None]:
 
 @contextmanager
 def production_constants() -> Iterator[None]:
-    """A run as a user gets it: an interpreted prefix, then the loop with no firing limit."""
+    """Patch the loop as a user gets it: an interpreted prefix, then the loop, no firing limit."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(compiled_run, "INTERPRETED_PREFIX", 1000)
         patch.setattr(scan_trace, "MIN_RUN_SCANS", 1000)
@@ -79,7 +80,7 @@ class Subject:
 
 
 def subject_of(chosen: Sequence[tuple[Group, Sequence[Case]]], label: str) -> Subject:
-    """*chosen* as one program, shaped as ``build_program`` shapes a part, on packed slots."""
+    """Return *chosen* as one program, shaped as ``build_program`` shapes a part, packed slots."""
     slots = {group.name: make_slot(len(cases), name=group.title) for group, cases in chosen}
 
     def emit(group: Group, cases: Sequence[Case]) -> None:
@@ -115,18 +116,18 @@ def case_alone(group: Group, case: Case) -> Subject:
 
 
 def on_hardware(group: Group, case: Case) -> bool:
-    """A case a part as built holds, and whose program the corpus runs."""
+    """Return True when a part as built holds the case, so the corpus runs its program."""
     return not case.in_process_only
 
 
 def picks(part: str, keep: CaseFilter) -> list[tuple[Group, list[Case]]]:
-    """The cases of *part* that *keep* takes, by group, for :func:`subject_of`."""
+    """Return the cases of *part* that *keep* accepts, by group, for :func:`subject_of`."""
     kept = [(group, [c for c in group.cases if keep(group, c)]) for group in suite.groups(part)]
     return [(group, cases) for group, cases in kept if cases]
 
 
 def subject_of_build(build: Any, label: str) -> Subject:
-    """A ``ConformanceProgram``: the program a part loads on a CLICK."""
+    """Return a Subject for a ``ConformanceProgram``, the program a part loads on a CLICK."""
     return Subject(
         label,
         build.program,
@@ -139,7 +140,7 @@ def subject_of_build(build: Any, label: str) -> Subject:
 
 
 def whole_run_decline(program: Program) -> str | None:
-    """Why the loop refuses every run of *program* (``ScanLoop._program_blocker``), or None."""
+    """Return why the loop refuses every run of *program* (``_program_blocker``), or None."""
     kernel = PLC(program, dt=DT)._compiled_replay_supported_kernel()
     assert kernel is not None
     if randint_sites(kernel.referenced_tags):
@@ -157,7 +158,7 @@ _NOT_CHECKED = (*fold_check._SKIPS_LISTED_BY_TEST, "skipped:")
 
 @dataclass
 class Tally:
-    """What the runs of one test did: where their scans ran, and what kept them out of the loop."""
+    """Counts what the runs of one test did: where their scans ran, and what kept them out."""
 
     subjects: int = 0
     runs: int = 0
@@ -221,12 +222,12 @@ def assert_nothing_found(tally: Tally) -> None:
 
 
 def assert_every_run_checked(tally: Tally) -> None:
-    """A run the twin left out, or a stop it could not be asked about, would be a run not checked."""
+    """Fail if a run went unchecked: one the twin left out, or a stop it could not be asked of."""
     assert not tally.not_checked, tally.not_checked
 
 
 def assert_the_loop_ran(tally: Tally, at_least: float) -> None:
-    """A corpus outside the loop proves nothing."""
+    """Fail if too few scans ran in the loop.  A corpus outside the loop proves nothing."""
     assert tally.loop_share >= at_least, (
         f"only {tally.loop_share:.0%} of the scans ran in the loop, at least {at_least:.0%} "
         f"expected:\n{tally.report()}"
@@ -260,7 +261,7 @@ def cases_of(part: str) -> list[tuple[Group, Case]]:
 
 
 def check_each_case_alone(part: str) -> None:
-    """Loop, stepping and ``expect`` agree on each case of *part*, and the loop did run."""
+    """Check that loop, stepping and ``expect`` agree on each case of *part*, and the loop ran."""
     tally = Tally()
     subjects: dict[str, Subject] = {}
     with fine_loop():
@@ -273,7 +274,8 @@ def check_each_case_alone(part: str) -> None:
     assert_nothing_found(tally)
     assert_the_loop_ran(tally, MIN_LOOP_SHARE_ALONE)
     assert_every_run_checked(tally)
-    # A part's share hides one case: alone, only a program the loop refuses whole stays out of it.
+    # A part's share can hide one case.  Run alone, only a program that the loop refuses whole
+    # stays out of the loop.
     newly_out = [
         label
         for label in tally.never_in_the_loop
@@ -283,7 +285,7 @@ def check_each_case_alone(part: str) -> None:
 
 
 class Driver:
-    """One PLC on one subject, driven by long runs each compared with a stepped twin."""
+    """Drives one PLC on one subject with long runs, each compared with a stepped twin."""
 
     def __init__(self, subject: Subject, tally: Tally, dt: float = DT) -> None:
         self.subject = subject
@@ -301,7 +303,9 @@ class Driver:
         self.tally.note_run(self.plc.current_state.scan_id - start, before, checked_before)
 
     def run_scans(self, scans: int) -> None:
-        """``run_for()``, for exactly *scans*: half a scan short so float drift cannot add one."""
+        """Call ``run_for()`` for exactly *scans* scans, asking for half a scan less so that
+        float drift cannot add one.
+        """
         if scans <= 0:
             return
         seconds = (scans - 0.5) * self.dt
@@ -330,7 +334,7 @@ class Driver:
         self.plc.patch({e.fields.Cmd.name: 1 for e in ready})
 
     def _run_to_each_fired(self, ready: Sequence[Entry], scans: int) -> None:
-        """*scans* in all, by a ``run_until()`` on the ``Fired`` of each case not yet fired."""
+        """Run *scans* scans in all, with ``run_until()`` on the ``Fired`` of each unfired case."""
         left = scans
         while left > 0:
             tags = self.plc.current_state.tags
@@ -345,10 +349,10 @@ class Driver:
     # --- The drills --------------------------------------------------------------------
 
     def judged_passes(self, idle: int = 0) -> None:
-        """``run()``'s two passes and its verdict, on long runs: ``run_for()``, then the stops.
+        """Run ``run()``'s two passes and give its verdict, on long runs: ``run_for()``, then stops.
 
-        With *idle*, a settled stretch after each read and an idle one before each ``Cmd``,
-        as over the wire, where a case is read however late the scans come.
+        With *idle*, add a settled stretch after each read and an idle one before each ``Cmd``.
+        That is how it goes over the wire, where a case is read however late the scans come.
         """
         outcomes: dict[str, list[tuple[dict[str, int], bool]]] = {}
         for to_each_fired in (False, True):
@@ -375,7 +379,7 @@ class Driver:
         assert not missed, "the loop run misses what is recorded:\n" + "\n".join(missed)
 
     def chopped_and_cut_short(self, settle: int = 100, idle: int = 100) -> None:
-        """Long stretches, a run cut in pieces (each a new loop), and ``Cmd`` taken away early."""
+        """Drive long stretches, a run cut in pieces (each a new loop), and an early Cmd drop."""
         self.run_scans(settle)
         self._reset()
         self.run_scans(idle)
@@ -393,7 +397,7 @@ class Driver:
         self._reset()
 
     def stop_on_what_it_writes(self, limit: int = 3) -> None:
-        """``run_until()`` on the tags a case writes, in every form a stop can take."""
+        """Call ``run_until()`` on the tags a case writes, in every form a stop can take."""
         known = self.plc._known_tags_by_name
         written = {name for e in self.subject.entries for name in footprint(e.case)[1]}
         tags = [known[name] for name in sorted(written) if name in known]
@@ -425,7 +429,7 @@ class Driver:
         self.run_scans(3)
 
     def restarted(self) -> None:
-        """A run after STOP -> RUN, and after a reboot: a first scan the loop has to refuse."""
+        """Run after STOP -> RUN and after a reboot.  Each starts with a scan the loop refuses."""
         for restart in (self._stop_and_run, self.plc.reboot):
             restart()
             self.run_scans(20)
@@ -438,7 +442,7 @@ class Driver:
         self.plc.start()
 
     def across_rtc_rollovers(self) -> None:
-        """The year's last second, then a leap day's: every RTC field moves in the run."""
+        """Run across the year's last second, then a leap day's, so every RTC field moves."""
         self.plc.set_rtc(datetime(2031, 12, 31, 23, 59, 59))
         self.run_scans(round(2.0 / self.dt))
         ready = self._reset()
@@ -447,7 +451,7 @@ class Driver:
         self.run_scans(round(1.5 / self.dt))
 
     def long_wait(self, scans: int) -> None:
-        """All slots idle, then every case on, for *scans* each."""
+        """Leave all slots idle for *scans* scans, then turn every case on for *scans* scans."""
         ready = self._reset()
         self.run_scans(scans)
         self._command(ready)
@@ -456,7 +460,10 @@ class Driver:
 
 
 def every_drill(subject: Subject, tally: Tally) -> None:
-    """What ``PYRUNG_LOOP_CORPUS_DEEP`` runs: other time steps cross a timer's limits sooner."""
+    """Run every drill, as ``PYRUNG_LOOP_CORPUS_DEEP`` does.
+
+    Other time steps cross a timer's limits sooner.
+    """
     with fine_loop():
         tally.add(subject, lambda d: d.judged_passes(idle=100))
         tally.add(subject, Driver.chopped_and_cut_short)
@@ -470,10 +477,10 @@ def every_drill(subject: Subject, tally: Tally) -> None:
 
 
 def assert_equals_stepping(plc: PLC, run: Callable[[], Any], times: int = 1) -> None:
-    """*run*, *times* over, on *plc* against the same scans stepped on a twin, in whole state.
+    """Run *run* *times* times on *plc* and compare the whole state with a twin that stepped.
 
-    A compiled run is compared where it lands, and a draw over few values can land on what it
-    should be by chance: *times* is what keeps such a difference from passing.
+    A compiled run is compared where it lands.  A draw over few values can land on the right
+    result by chance.  Repeating the run *times* times keeps such a difference from going unnoticed.
     """
     twin = fold_check._twin(plc)
     for _ in range(times):
