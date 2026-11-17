@@ -75,11 +75,12 @@ TIMER_ACC_MAX = 32767
 
 
 def plant_timer(delay_ms: int) -> tuple[int, str, int]:
-    """``(preset, unit, ms per unit)`` for a plant timer that waits *delay_ms*.
+    """Return ``(preset, unit, ms per unit)`` for a plant timer that waits *delay_ms*.
 
     A timer's accumulator stops at 32767 of its unit, so a preset past that is never
-    done.  This takes the finest unit the delay fits in, rounding up to a whole one:
-    milliseconds up to 32.767 s, then seconds, minutes, hours and days.
+    done.  This picks the finest unit that the delay fits in and rounds the delay up to
+    a whole count.  The units run from milliseconds (up to 32.767 s) through seconds,
+    minutes and hours to days.
     """
     for unit, unit_ms in _TIMER_UNITS_MS:
         preset = -(-delay_ms // unit_ms)
@@ -91,10 +92,10 @@ def plant_timer(delay_ms: int) -> tuple[int, str, int]:
 
 
 def coil_timer(on_ms: int, off_ms: int) -> tuple[int, int, str, int]:
-    """``(on preset, off preset, unit, ms per unit)`` for a plant coil's two timers.
+    """Return ``(on preset, off preset, unit, ms per unit)`` for a plant coil's two timers.
 
-    A CLICK coil counts both its timers in one unit, so this takes the finest unit
-    both delays fit in (see :func:`plant_timer`), each rounded up to a whole one.
+    A CLICK coil counts both its timers in one unit.  This picks the finest unit that
+    both delays fit in (see :func:`plant_timer`) and rounds each delay up to a whole count.
     """
     for unit, unit_ms in _TIMER_UNITS_MS:
         on_preset, off_preset = -(-on_ms // unit_ms), -(-off_ms // unit_ms)
@@ -106,22 +107,22 @@ def coil_timer(on_ms: int, off_ms: int) -> tuple[int, int, str, int]:
 
 
 def plant_unit_ms(unit: str) -> int:
-    """Milliseconds in one count of a plant timer's *unit*."""
+    """Return the milliseconds in one count of a plant timer's *unit*."""
     return dict(_TIMER_UNITS_MS)[unit]
 
 
 def plant_acc_name(stem: str, fb_name: str, unit: str) -> str:
-    """The accumulator of a plant timer on *fb_name* that counts in *unit*.
+    """Return the accumulator name of a plant timer on *fb_name* that counts in *unit*.
 
-    A count means nothing without its unit, so a delay in another unit counts in another
-    tag, and any state reads the same whichever coupling runs on it, a fork from before
-    the link changed included.  Milliseconds have the plain name.
+    A count means nothing without its unit, so each unit has its own accumulator tag.
+    Any state then reads the same whichever coupling runs on it, including a fork from
+    before the link changed.  Milliseconds use the plain name.
     """
     return _acc_name_in(unit, stem, fb_name)
 
 
 def plant_acc_registers(stem: str, fb_name: str) -> tuple[tuple[str, int], ...]:
-    """Each accumulator a plant timer on *fb_name* could count in, and its ms per unit."""
+    """Return each accumulator a plant timer on *fb_name* could count in, with its ms per unit."""
     return tuple((_acc_name_in(unit, stem, fb_name), ms) for unit, ms in _TIMER_UNITS_MS)
 
 
@@ -144,10 +145,10 @@ def bool_feedback_rungs(
 
         Rung(enable): debounce(fb_tag, on=(on timer, on_delay), off=(off timer, off_delay))
 
-    ``fb_tag`` turns on once the enable has held for ``on_delay`` and off once it has
-    been off for ``off_delay``, so a dip shorter than ``off_delay`` keeps it on.  Like
-    CLICK's, the off side compares a scan after the fall, so ``fb_tag`` drops a scan
-    later than an off-delay timer of the same preset would.  ``on_done`` and
+    ``fb_tag`` turns on once the enable has been on for ``on_delay``.  It turns off once
+    the enable has been off for ``off_delay``, so a dip shorter than ``off_delay`` keeps
+    it on.  The off side compares a scan after the fall, as CLICK does.  So ``fb_tag``
+    drops a scan later than an off-delay timer of the same preset would.  ``on_done`` and
     ``off_done`` only name the two timers.  Both presets count in the unit
     :func:`coil_timer` picks.
     """
@@ -284,9 +285,10 @@ def timed_feedback_rungs(
 
         Rung(enable): timed(fb_tag, timer, on_ms, maintained=maintained)
 
-    Each rise of the enable turns ``fb_tag`` on for ``on_ms``.  Maintained, it then
-    follows the enable.  As on a CLICK, the rise's scan counts toward the time, so an
-    on time of a scan or less gives no pulse.  ``timer_done`` only names the timer.
+    Each rise of the enable turns ``fb_tag`` on for ``on_ms``.  If ``maintained`` is
+    set, ``fb_tag`` then follows the enable.  As on a CLICK, the scan of the rise counts
+    toward the time, so an on time of one scan or less produces no pulse.
+    ``timer_done`` only names the timer.
     The preset counts in the unit :func:`plant_timer` picks.
     """
     from pyrung.core.instruction.out_variants import TimedInstruction
@@ -309,7 +311,7 @@ def toggle_feedback_rungs(*, enable: Condition, fb_tag: Tag) -> list[Rung]:
 
         Rung(enable): toggle(fb_tag)
 
-    Each rise of the enable flips ``fb_tag``, which keeps its value in between.
+    Each rise of the enable flips ``fb_tag``.  It holds its value between rises.
     """
     from pyrung.core.instruction.out_variants import ToggleInstruction
 
@@ -352,13 +354,13 @@ def conditional_hold_rung(
 ) -> Rung:
     """Build a multi-rule hold: drive ``dest`` to the last active rule's value.
 
-    Each ``(value, guard)`` rule drives ``value`` while its ``guard`` holds; a
-    later active rule wins, and with no rule active ``dest`` keeps its value.
-    Every guard means the state the bracket starts from.  The rules compile
-    like :func:`guarded_copy_rung`'s, so a liveness oscillator's "drive True
-    while ``dest != True``" + "drive False while ``dest != False``" is one row
+    Each ``(value, guard)`` rule drives ``value`` while its ``guard`` holds.  A
+    later active rule wins.  With no rule active, ``dest`` keeps its value.
+    Every guard reads the state the bracket starts from.  The rules compile
+    the way :func:`guarded_copy_rung`'s do.  So a liveness oscillator's "drive True
+    while ``dest != True``" and "drive False while ``dest != False``" become one row
     that reads ``dest`` before it writes it, and ``dest`` flips every scan.
-    Values must be constants, as there.
+    Values must be constants, as in :func:`guarded_copy_rung`.
 
     A single rule is better expressed by :func:`copy_hold_rung`; this is for the
     multi-rule (oscillating) case.
@@ -373,8 +375,8 @@ def guarded_copy_rung(
 
     A Boolean destination returns to ``False`` when none of its rules is
     active; a non-Boolean destination keeps its prior (plant-supplied) value.
-    Every guard means the state the bracket starts from, before any of its
-    writes, including a guard that reads the destination it drives.
+    Every guard reads the state the bracket starts from, before any of its
+    writes.  That includes a guard that reads the destination it drives.
 
     Every value must be a constant (``bool``, ``int``, ``float`` or ``str``).
     A tag or expression value would be read when the scan reaches its
@@ -467,11 +469,11 @@ _EXACT_FLIPS = {
 
 
 def _simplified(condition: Any) -> Any:
-    """*condition* without terms that cannot change it, or *condition* as it was.
+    """Return *condition* without terms that cannot change it, or *condition* unchanged.
 
     Combining rules can leave terms a ladder programmer would cut. One is a contact already
     required beside an Or that contains it. Another is a branch that needs a contact the rest
-    of the rung has open. Only exact rules are used, so the rung does the same:
+    of the rung has open. Only exact rules are used, so the rung behaves the same:
 
     - the rules of ``simplified.simplify``
     - inside an And, each part may assume the contacts beside it are closed
@@ -588,10 +590,10 @@ def _simplified(condition: Any) -> Any:
 
 
 def _without_spare_nan_checks(condition: Any) -> Any:
-    """*condition* without an ``X == X`` that an ordered compare on ``X`` beside it implies.
+    """Return *condition* without an ``X == X`` that an ordered compare on ``X`` beside it implies.
 
     ``X == X`` is False at NaN, and so is ``X < 5``. Combining the complements of a NaN
-    check leaves a spare ``X == X`` behind.
+    check can leave a spare ``X == X`` behind.
     """
     from pyrung.core.condition import (
         AllCondition,
@@ -632,7 +634,7 @@ def _without_spare_nan_checks(condition: Any) -> Any:
 
 
 def _flattened(condition: Any) -> Any:
-    """*condition* as the same logic with no And directly inside an And, nor Or inside an Or."""
+    """Return *condition* as the same logic with no And inside an And and no Or inside an Or."""
     from pyrung.core.condition import AllCondition, AnyCondition
 
     kind = type(condition)
@@ -645,7 +647,7 @@ def _flattened(condition: Any) -> Any:
 
 
 def _may_be_nan(operand: Any) -> bool:
-    """True when *operand* can read as NaN, so a compare on it has no plain opposite.
+    """Return True when *operand* can read as NaN, so a compare on it has no plain opposite.
 
     These can read as NaN:
 
@@ -682,22 +684,22 @@ def _may_be_nan(operand: Any) -> bool:
 
 
 def _nan_free(compare: Any) -> bool:
-    """True when neither side of *compare* can be NaN.
+    """Return True when neither side of *compare* can be NaN.
 
-    ``R < 5`` and ``R >= 5`` are both False when ``R`` holds NaN, so one is the other's
+    ``R < 5`` and ``R >= 5`` are both False when ``R`` holds NaN. So one is the other's
     complement only when no side can be NaN.
     """
     return not (_may_be_nan(compare.tag) or _may_be_nan(compare.value))
 
 
 def _condition_complement(condition: Any) -> Any | None:
-    """The exact complement of *condition* in contact form, or ``None``.
+    """Return the exact complement of *condition* in contact form, or ``None``.
 
     Compares, contacts and INT truthiness have a complement contact.  ``And`` and
     ``Or`` complement by De Morgan, and a condition may supply ``_complement()``.
     ``R < 5`` and ``R >= 5`` are both False when ``R`` holds NaN, so the complement of
-    ``R < 5`` is ``Or(R >= 5, R != R)``.  The conditions below have no complement, so the
-    caller puts the rule on a bit instead:
+    ``R < 5`` is ``Or(R >= 5, R != R)``.  The conditions below have no complement.  The
+    function returns ``None`` for them, and the caller puts the rule on a bit instead:
 
     - an edge contact, which keeps memory of its own
     - an ordered compare against a NaN constant
@@ -793,7 +795,7 @@ class _DestRules:
         )
 
     def deciding(self, *, keep: bool) -> list[tuple[Any, Any]]:
-        """The rules that can decide the value, in order."""
+        """Return the rules that can decide the value, in order."""
         rules = [(value, guard) for value, guard in self.rules if guard is not _NEVER]
         unguarded = [index for index, (_value, guard) in enumerate(rules) if guard is _ALWAYS]
         if unguarded:
@@ -864,7 +866,7 @@ def _guarded_rows(
     deciding = {name: group.deciding(keep=keep) for name, group in groups.items()}
 
     def single_row(group: _DestRules, value: Any, guard: Any) -> Rung | None:
-        """The one row a lone rule needs, or None when its guard must go on a bit."""
+        """Return the one row a lone rule needs, or None when its guard must go on a bit."""
         dest = group.dest
         if not group.coil:
             if not keep and dest.type == TagType.BOOL:
@@ -888,11 +890,11 @@ def _guarded_rows(
         return _rung_holding(None if power is _ALWAYS else power, OutInstruction(dest))
 
     def merged_row(name: str, group: _DestRules, kept: list[tuple[Any, Any]]) -> Rung | None:
-        """The tag's rules as one row of contacts in series, or None when they need bits.
+        """Return the tag's rules as one row of contacts in series, or None when they need bits.
 
-        A row reads its contacts when the scan reaches it, after the rows above have
-        written.  So the row stands in for the bits only when it reads no other tag the
-        rung writes.
+        A row reads its contacts when the scan reaches it, after the rows above it have
+        written.  So the row can stand in for the bits only when it reads no other tag
+        that the rung writes.
         """
         others = set(groups) - {name}
         if any(guard_reads[id(guard)] & others for _value, guard in kept):
@@ -1006,9 +1008,9 @@ def _guarded_rows(
 
 
 def _is_series(condition: Any) -> bool:
-    """True when *condition* is contacts and plain compares in series, with no ``Or``.
+    """Return True when *condition* is contacts and plain compares in series, with no ``Or``.
 
-    Only these lower to the exact simplifier, so a series of them was simplified exactly.
+    Only these lower to the exact simplifier, so the simplifier handled a series of them exactly.
     """
     from pyrung.core.condition import (
         AllCondition,
@@ -1068,13 +1070,13 @@ def _render_row(row: Rung) -> tuple[str, str]:
 
 
 def bracket_lines(rung: Rung, writes: Iterable[str] | None = None) -> tuple[str, ...]:
-    """The rows of a rung built here, as pyrung source, read off the rung itself.
+    """Return the rows of a rung built here as pyrung source, read off the rung itself.
 
     The text comes from the rung that runs, not from the rules it was built from, so the two
-    cannot disagree.  With *writes*, only the rows writing those tags are printed, and above them
-    the bit rows they read.  A row's comment prints above it, once for a run of rows with the
-    same comment.  Rows that share a condition print under one ``with rung(...)`` line unless a
-    comment comes between them.
+    cannot disagree.  If you pass *writes*, only the rows that write those tags are printed,
+    with the bit rows they read above them.  A row's comment prints above it, once for a run
+    of rows with the same comment.  Rows that share a condition print under one
+    ``with rung(...)`` line unless a comment comes between them.
     """
     rows = list(rung._branches)
     if writes is not None:

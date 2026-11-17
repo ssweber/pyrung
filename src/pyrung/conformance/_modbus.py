@@ -68,7 +68,7 @@ class ScanTimeError(ConformanceError):
 
 
 def scan_limit_note(part: str | None, limit: int | None, longest_ms: int) -> str | None:
-    """The line that says *longest_ms* passed the scan limit (``None``: it did not)."""
+    """Return the line that says *longest_ms* passed the scan limit, or ``None`` if it did not."""
     if limit is None or longest_ms <= limit:
         return None
     name = f"part {part}" if part else "this program"
@@ -93,10 +93,10 @@ def check_scan_time(build: ConformanceProgram, longest_ms: int) -> None:
 
 
 def note_failures(results: list[CaseResult], note: str) -> list[CaseResult]:
-    """*results* with *note* added to every failed case.
+    """Return *results* with *note* added to every failed case.
 
-    On pyrung's own targets a slow host makes a long scan, which is no reason to void the
-    run.  The note says why a case may have failed.
+    On pyrung's own targets a slow host can make a long scan. That is no reason to void the
+    run, so the note tells you why a case may have failed.
     """
     return [
         r
@@ -157,16 +157,17 @@ class SimServer:
     """pyrung's soft PLC running a conformance program, served over Modbus TCP.
 
     The PLC free-runs in ``realtime`` mode on its own thread, one scan every
-    *scan_period* seconds of wall clock, so timers see wall-clock time as on a
-    CLICK, except that one scan advances them by at most *max_scan_dt*
-    seconds: a stall of this machine (the scan thread waiting longer than that
-    for the CPU) does not become a scan longer than any CLICK's, which would
-    step over a case's timing windows.  ``None`` lets the whole gap through.
-    Modbus writes become patches applied at the start of the next
-    scan.  The Modbus server refuses a write to SC50 (the STOP command) with
-    exception code 2, so only a case's rung can stop the PLC.  A PLC in
-    STOP does not scan.  The sim keeps serving Modbus and stays in STOP.  Use
-    as a context manager.  :attr:`endpoint` is where to connect.
+    *scan_period* seconds of wall clock.  Timers see wall-clock time as on a
+    CLICK, except that one scan advances them by at most *max_scan_dt* seconds.
+    If this machine stalls (the scan thread waits longer than that for the CPU),
+    the stall does not become a scan longer than any CLICK's, which would step
+    over a case's timing windows.  ``None`` lets the whole gap through.
+
+    Modbus writes become patches that the next scan applies at its start.  The
+    Modbus server refuses a write to SC50 (the STOP command) with exception code
+    2, so only a case's rung can stop the PLC.  A PLC in STOP does not scan.  The
+    sim keeps serving Modbus and stays in STOP.  Use it as a context manager.
+    :attr:`endpoint` is where to connect.
     """
 
     def __init__(
@@ -425,11 +426,11 @@ def _select(build: ConformanceProgram, groups: Iterable[str] | None) -> set[str]
 
 
 def read_program_hash(endpoint: Endpoint | str, *, timeout: float = 10.0) -> int:
-    """The layout hash in ``DS1`` of the conformance program running at *endpoint*.
+    """Return the layout hash in ``DS1`` of the conformance program running at *endpoint*.
 
-    Programs built from different groups have different hashes, so this tells
-    which build is loaded (a suite too big for one CLICK project loads in
-    parts) before choosing one to run.
+    Programs built from different groups have different hashes. The hash tells you
+    which build is loaded before you choose one to run. A suite too big for one
+    CLICK project loads in parts, so more than one build can exist.
 
     Raises:
         ConformanceError: The endpoint is unreachable or ``DS1`` stays 0.
@@ -457,16 +458,16 @@ def wait_for_scan_counter_wrap(
 ) -> int:
     """Wait until the scan counter SD9 at *endpoint* has passed 32767.
 
-    A probe of what SD9 does after 32767 can only tell once it has got there.
-    SD9 has passed it when a read is lower than the one before (it wrapped,
+    A probe of what SD9 does after 32767 can only run once SD9 has got there.
+    SD9 has passed 32767 when a read is lower than the one before it (it wrapped,
     to 0 or negative) or is outside 0..32767 (it counts on, read signed or
-    unsigned).  A PLC that passed it long ago wraps again within one lap,
-    so this waits at most one lap: 32768 scans, 5.5 minutes at 10 ms.
+    unsigned).  A PLC that passed 32767 long ago wraps again within one lap, so
+    this waits at most one lap: 32768 scans, or 5.5 minutes at 10 ms.
 
     Args:
-        timeout: Seconds to wait.  ``None``: half again the time the lap
-            should take at the scan rate measured over the first second, plus
-            30 s.
+        timeout: Seconds to wait.  ``None`` waits half again the time that the
+            lap should take at the scan rate measured over the first second,
+            plus 30 s.
         report: Called with one line saying how long the wait should take.
 
     Returns:
@@ -517,7 +518,7 @@ def wait_for_scan_counter_wrap(
 
 
 def scan_counter_wrapped(previous: int, current: int) -> bool:
-    """Whether two SD9 reads, *previous* then *current*, show it passed 32767."""
+    """Return True when two SD9 reads, *previous* then *current*, show it passed 32767."""
     return current < previous or not 0 <= current <= 32767
 
 
@@ -690,7 +691,7 @@ async def _drive(
 
 
 def _reset_done(g: GroupBuild, index: int, regs: dict[int, int]) -> bool:
-    """The case's reset ran: ``Ready`` is up while ``Cmd`` and ``Fired`` read 0."""
+    """Return True when the case's reset ran: ``Ready`` is up and ``Cmd`` and ``Fired`` read 0."""
     return (
         regs[g.register(index, "Ready")] != 0
         and regs[g.register(index, "Cmd")] == 0
@@ -699,7 +700,7 @@ def _reset_done(g: GroupBuild, index: int, regs: dict[int, int]) -> bool:
 
 
 async def _read_system_bits(client: Any, groups: Sequence[GroupBuild]) -> dict[str, int]:
-    """Every system bit (``"SC46"``) a case of *groups* expects, as 0/1."""
+    """Read every system bit (``"SC46"``) that a case of *groups* expects, as 0 or 1."""
     addresses = sorted({a for g in groups for _, c in g.cases for a in c.expect_system})
     return {a: int(bool(await client.sc[int(a[2:])])) for a in addresses}
 
@@ -714,7 +715,7 @@ async def _read_spans(client: Any, groups: Sequence[GroupBuild]) -> list[int]:
 
 
 def _by_register(groups: Sequence[GroupBuild], values: list[int]) -> dict[int, int]:
-    """Key a :func:`_read_spans` result by DS register."""
+    """Return a :func:`_read_spans` result keyed by DS register."""
     out: dict[int, int] = {}
     pos = 0
     for g in groups:

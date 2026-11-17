@@ -51,8 +51,8 @@ from pyrung.circuitpy.codegen.render_modbus import (
 )
 from pyrung.core.system_points import system
 
-#: The free-running clocks and their half periods in ms.  A clock reads on in
-#: the odd half periods since RUN started, as core's ``clock_high`` has it.
+#: The free-running clocks and their half periods in ms.  A clock reads on during
+#: the odd half periods since RUN started, as core's ``clock_high`` does.
 _CLOCK_HALF_PERIOD_MS = (
     (system.sys.clock_10ms.name, 5),
     (system.sys.clock_100ms.name, 50),
@@ -95,7 +95,7 @@ def _system_first_needed(ctx: CodegenContext) -> bool:
 
 
 def _stop_command_used(ctx: CodegenContext) -> bool:
-    """Whether the code carries SC50, so a rung can put it in STOP.
+    """Return True when the code carries SC50, so a rung can put it in STOP.
 
     A Modbus write to SC50 is refused, so only a rung stops the code.  A math
     error (SC46) does not stop the code, as it does not stop a CLICK.
@@ -104,16 +104,16 @@ def _stop_command_used(ctx: CodegenContext) -> bool:
 
 
 def _stop_hold_needed(ctx: CodegenContext) -> bool:
-    """Whether the code needs ``_stop_hold`` to stay in STOP after the STOP command.
+    """Return True when the code needs ``_stop_hold`` to stay in STOP after the STOP command.
 
-    The hold keeps STOP while the RUN/STOP switch reads RUN, until the switch
-    reads STOP.  Without a switch, nothing but a restart leaves STOP.
+    The hold keeps the code in STOP while the RUN/STOP switch reads RUN, until the
+    switch reads STOP.  Without a switch, only a restart leaves STOP.
     """
     return ctx.runstop is not None and _stop_command_used(ctx)
 
 
 def _mode_state_needed(ctx: CodegenContext) -> bool:
-    """Whether the code has a STOP mode (``_mode_run``, ``_force_outputs_off``)."""
+    """Return True when the code has a STOP mode (``_mode_run``, ``_force_outputs_off``)."""
     return ctx.runstop is not None or _stop_command_used(ctx)
 
 
@@ -133,10 +133,10 @@ def _render_stop_lines(ctx: CodegenContext, sp: str) -> list[str]:
 
 
 def _render_stop_command_take_lines(ctx: CodegenContext, indent: int) -> list[str]:
-    """Start of a RUN scan: take the STOP command (SC50) a rung wrote.
+    """Render the start of a RUN scan, which takes the STOP command (SC50) that a rung wrote.
 
-    As core's ``_process_mode_commands``: SC50 clears, this scan runs with
-    SC11 off, and the code is in STOP at its end
+    This follows core's ``_process_mode_commands``.  SC50 clears and this scan runs with
+    SC11 off.  The code is in STOP at the end of the scan
     (:func:`_render_stop_command_end_lines`).
     """
     cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
@@ -152,7 +152,7 @@ def _render_stop_command_take_lines(ctx: CodegenContext, indent: int) -> list[st
 
 
 def _render_stop_command_end_lines(ctx: CodegenContext, indent: int) -> list[str]:
-    """End of a RUN scan that took the STOP command: the code is in STOP."""
+    """Render the end of a RUN scan that took the STOP command, which puts the code in STOP."""
     if ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG) is None:
         return []
     sp = " " * indent
@@ -160,10 +160,10 @@ def _render_stop_command_end_lines(ctx: CodegenContext, indent: int) -> list[str
 
 
 def _render_system_point_state_lines(ctx: CodegenContext) -> list[str]:
-    """Module-level state behind the derived system points the program uses.
+    """Render the module-level state behind the derived system points that the program uses.
 
     As in core, the scan counter and the clocks count from the first scan in
-    RUN, and a STOP->RUN transition starts them again.
+    RUN.  A STOP->RUN transition starts them again.
     """
     lines: list[str] = []
     if _system_scan_count_needed(ctx):
@@ -197,13 +197,13 @@ def _render_system_point_reset_lines(ctx: CodegenContext) -> list[str]:
 
 
 def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[str]:
-    """Derived system points for the scan about to run, as core resolves them.
+    """Render the derived system points for the scan about to run, as core resolves them.
 
     These are the scan counter (SD9, ``scan_id % 32768``) and the scan clock
     (SC3, on when SD9 is even). Then come the first-scan bit and the
-    free-running clocks over the time of the RUN scans before this one (0 on
+    free-running clocks, which use the time of the RUN scans before this one (0 on
     the first scan, so every clock starts off). Last are the scan time (SD10)
-    and the RTC. The fault flags carry from the scan before.
+    and the RTC. The fault flags keep their values from the scan before.
     """
     sp = " " * indent
     lines: list[str] = []
@@ -221,9 +221,8 @@ def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[st
         lines.append(f"{sp}{first_scan} = _sys_first")
     clocks = _system_clock_symbols(ctx)
     if clocks:
-        # Integer ms from the scan's monotonic_ns() reading: a float
-        # monotonic() loses ms resolution within hours on CircuitPython's
-        # 30-bit floats.
+        # Use integer ms from the scan's monotonic_ns() reading.  A float monotonic()
+        # loses ms resolution within hours on CircuitPython's 30-bit floats.
         lines.extend(
             [
                 f"{sp}if _sys_first:",
@@ -251,7 +250,7 @@ def _render_system_point_scan_lines(ctx: CodegenContext, indent: int) -> list[st
 
 
 def _render_system_point_advance_lines(ctx: CodegenContext, indent: int) -> list[str]:
-    """After a scan in RUN: step the scan counter, drop the first-scan bit."""
+    """Render the end of a RUN scan: step the scan counter and clear the first-scan bit."""
     sp = " " * indent
     lines: list[str] = []
     if _system_scan_count_needed(ctx):
@@ -275,7 +274,10 @@ def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
 
 
 def _render_slot_runs(symbol: str, runs: list[tuple[int, int, str]], indent: str = "") -> list[str]:
-    """Assign each ``(first index, stop index, literal)``; a run of 3 or more is one loop."""
+    """Render an assignment for each ``(first index, stop index, literal)``.
+
+    A run of 3 or more slots becomes one loop.
+    """
     lines: list[str] = []
     for first, stop, literal in runs:
         if stop - first < 3:
@@ -289,7 +291,7 @@ def _render_slot_runs(symbol: str, runs: list[tuple[int, int, str]], indent: str
 def _render_block_power_on_lines(
     symbol: str, binding: BlockBinding, literals: dict[int, str], indent: str = ""
 ) -> list[str]:
-    """Seed the given slots; contiguous equal values are one run."""
+    """Render the power-on seeds for the given slots.  Contiguous equal values form one run."""
     runs: list[tuple[int, int, str]] = []
     for addr, literal in literals.items():
         index = addr - binding.start
@@ -301,17 +303,18 @@ def _render_block_power_on_lines(
 
 
 def _render_block_run_reset_lines(binding: BlockBinding, ctx: CodegenContext) -> list[str]:
-    """Put a block's non-retentive slots back at their power-on values, for a STOP->RUN.
+    """Render lines that reset a block's non-retentive slots to power-on values on STOP->RUN.
 
-    Every slot, not just the named ones: a pointer can have written any of them.  An
-    input block is left alone, as this scan's read has already filled it.
+    This covers every slot, not just the named ones, because a pointer can have
+    written any of them.  An input block is left alone, because this scan's read has
+    already filled it.
     """
     if binding.direction == "input":
         return []
     base = binding.block.retentive
     overrides = ctx.block_retentive_overrides(binding)
-    # Runs of cleared indexes.  The block's own flag covers every slot not overridden,
-    # so a big block costs a line per override, not a line per slot.
+    # Runs of cleared indexes.  The block's own flag covers every slot without an override,
+    # so a big block costs one line per override, not one line per slot.
     runs: list[tuple[int, int, str]] = []
     zero = repr(_TYPE_DEFAULTS[binding.tag_type])
     first = 0
@@ -357,10 +360,10 @@ def _render_run_transition_reset_lines(ctx: CodegenContext) -> list[str]:
 
 
 def _render_stop_output_clear_lines(ctx: CodegenContext) -> tuple[list[str], list[str]]:
-    """Clear the output arrays for the write that turns the modules off.
+    """Render lines that clear the output arrays for the write that turns the modules off.
 
-    Returns the lines before that write and the lines after it: a retentive slot's
-    value outlives STOP, in its array, though its output is off.
+    Returns the lines before that write and the lines after it.  A retentive slot's
+    value stays in its array through STOP, though its output is off.
     """
     lines: list[str] = []
     restore_lines: list[str] = []
@@ -391,7 +394,7 @@ def _render_stop_output_clear_lines(ctx: CodegenContext) -> tuple[list[str], lis
 
 
 def _section(label: str) -> str:
-    """Build a fixed-width 80-char ASCII section header."""
+    """Return a fixed-width 80-char ASCII section header."""
     prefix = f"# -- {label} "
     return prefix + "-" * max(0, 80 - len(prefix))
 
@@ -431,7 +434,7 @@ def _runtime_import_names(ctx: CodegenContext) -> set[str]:
 
 
 def _render_runtime_wiring(ctx: CodegenContext) -> list[str]:
-    """Emit assignment lines that wire code.py functions into pyrung_rt slots."""
+    """Return assignment lines that wire code.py functions into pyrung_rt slots."""
     lines: list[str] = ["", "# -- Wire runtime " + "-" * 60]
     if ctx.modbus_server is not None:
         lines.extend(
@@ -631,7 +634,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     lines.extend(
         [
             "_mem = {}",
-            # Scan time in integer ns: a float monotonic() loses ms resolution
+            # Keep scan time in integer ns.  A float monotonic() loses ms resolution
             # within hours on CircuitPython's 30-bit floats.
             "_last_scan_ns = time.monotonic_ns()",
             "_scan_overrun_count = 0",
@@ -805,8 +808,8 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
         symbol = ctx.symbol_for_tag(tag)
         value_expr = symbol
         if tag.type.name == "REAL":
-            # JSON has no Inf or NaN: save one as its str ("inf", "nan"), which
-            # the load's float() parses back.  ``x - x == 0`` only when finite.
+            # JSON has no Inf or NaN, so save one as its str ("inf", "nan").  The load's
+            # float() parses that back.  ``x - x == 0`` only when x is finite.
             value_expr = f"({symbol} if {symbol} - {symbol} == 0 else str({symbol}))"
         lines.extend(
             [
@@ -1015,7 +1018,7 @@ def _render_embedded_functions(ctx: CodegenContext) -> list[str]:
         lines.append("")
         return lines
     lines.extend(ctx.function_constant_lines())
-    # A function that imports the math module under another name reads it by that name.
+    # A function that imports the math module under another name uses it by that name.
     lines.extend(f"{alias} = math" for alias in sorted(ctx.math_aliases))
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
@@ -1183,7 +1186,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         "while True:",
         "    scan_start_ns = time.monotonic_ns()",
         "    _sd_write_status = False",
-        # dt in seconds, as core's timers take it, from the exact ns difference.
+        # dt in seconds, as core's timers expect it, computed from the exact ns difference.
         "    _dt_ns = scan_start_ns - _last_scan_ns",
         "    dt = _dt_ns / 1000000000",
         "    _last_scan_ns = scan_start_ns",
@@ -1223,9 +1226,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             "    _read_inputs()",
         ]
     )
-    # The RUN scan: the STOP command a rung wrote last scan is taken first
-    # (core's on_scan_start), and that command puts the code in STOP at its
-    # end.
+    # The RUN scan takes the STOP command that a rung wrote last scan first, as core's
+    # on_scan_start does.  That command puts the code in STOP at the end of the scan.
     run_scan_lines = [
         *_render_stop_command_take_lines(ctx, 8),
         *_render_system_point_scan_lines(ctx, 8),
@@ -1259,9 +1261,9 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
         else:
             lines.append("    _desired_run = (not bool(_runstop_debounced))")
         if _stop_hold_needed(ctx):
-            # The STOP command put the code in STOP; the hold keeps STOP
-            # while the switch says RUN.  The switch reading STOP releases
-            # it, and its next RUN resets the tags, as core's STOP->RUN.
+            # The STOP command put the code in STOP.  The hold keeps it there while
+            # the switch reads RUN.  When the switch reads STOP, the hold releases,
+            # and the next RUN resets the tags, as core's STOP->RUN does.
             lines.extend(
                 [
                     "    if _stop_hold:",
@@ -1276,7 +1278,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "    if _desired_run != _mode_run:",
                 "        if _desired_run:",
                 "            _reset_for_run_transition()",
-                # The first RUN scan times the loop pass it runs in, as core's
+                # The first RUN scan times the loop pass it runs in, because core's
                 # first scan after start() advances by a full dt.
                 '            _mem["_dt"] = dt',
                 '            _mem["_dt_ns"] = _dt_ns',
@@ -1288,8 +1290,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             ]
         )
         if mode_switch_symbol is not None:
-            # SC10 is the switch itself, set after the STOP->RUN reset: on in
-            # RUN even while cmd_mode_stop holds the PLC in STOP.
+            # SC10 is the switch itself and is set after the STOP->RUN reset.  It is on
+            # in RUN even while cmd_mode_stop holds the PLC in STOP.
             switch_run = (
                 "bool(_runstop_debounced)"
                 if ctx.runstop.run_when_high
@@ -1308,8 +1310,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             ]
         )
     elif not _stop_command_used(ctx):
-        # No RUN/STOP switch: the code is always in RUN, as core's mode bits
-        # read with no mode change (SC10 and SC11 on).
+        # With no RUN/STOP switch the code is always in RUN.  Core's mode bits read the
+        # same when the mode never changes (SC10 and SC11 on).
         for symbol in (mode_switch_symbol, mode_run_symbol):
             if symbol is not None:
                 lines.append(f"    {symbol} = True")
@@ -1323,8 +1325,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             ]
         )
     else:
-        # No RUN/STOP switch, but the STOP command still stops the code, as on
-        # a CLICK; with no switch to turn back to RUN, only a restart does.
+        # With no RUN/STOP switch, the STOP command still stops the code, as on a CLICK.
+        # Nothing can switch it back to RUN, so only a restart does.
         if mode_switch_symbol is not None:
             lines.append(f"    {mode_switch_symbol} = True")
         lines.append("    if _mode_run:")
@@ -1357,8 +1359,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             symbol = ctx.symbol_for_tag(tag)
             saved = f'_ret_snapshot.get("{name}")'
             if tag.type.name == "REAL":
-                # NaN != NaN: a REAL that was NaN when saved and is NaN still
-                # is not dirty, or it would be resaved every interval.
+                # NaN != NaN.  A REAL that was NaN when saved and is still NaN is not
+                # dirty, or the code would save it again every interval.
                 dirty_parts.append(
                     f"({symbol} != {saved} and ({symbol} == {symbol} or {saved} == {saved}))"
                 )

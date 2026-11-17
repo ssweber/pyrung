@@ -1,7 +1,7 @@
-"""forloop body items as CLICK rungs.
+"""Export forloop body items as CLICK rungs.
 
 Between For and Next, CLICK holds a run of rungs.  A bare body instruction is a
-wire-only rung; a body ``Rung`` (its local contacts only) and a nested forloop
+wire-only rung.  A body ``Rung`` (with its local contacts only) and a nested forloop
 (a For rung of its own) export through the ordinary rung path.
 """
 
@@ -14,12 +14,12 @@ from pyrung.core.rung import Rung
 
 
 def is_own_rung(item: Any) -> TypeGuard[Rung | ForLoopInstruction]:
-    """Whether a loop body item exports as a rung of its own."""
+    """Return True when a loop body item exports as a rung of its own."""
     return isinstance(item, (Rung, ForLoopInstruction))
 
 
 def loop_item_rung(item: Rung | ForLoopInstruction) -> Rung:
-    """A standalone rung for one body item, carrying only its own contacts."""
+    """Return a standalone rung for one body item, with only its own contacts."""
     if isinstance(item, ForLoopInstruction):
         shadow = Rung(source_file=item.source_file, source_line=item.source_line)
         shadow.add_instruction(item)
