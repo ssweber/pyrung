@@ -98,8 +98,7 @@ class _LadderExporter(
 
     def export(self, *, validate: bool = True, allow: Collection[str] = ()) -> LadderBundle:
         try:
-            if validate:
-                self._run_precheck(allow)
+            pending = self._run_precheck(allow) if validate else []
 
             # Main scope always ends with an explicit end() rung.
             rendered_main_rows, main_sources = self._render_scope(
@@ -144,6 +143,7 @@ class _LadderExporter(
                 subroutine_sources.append((subroutine_name, tuple(sources)))
 
             summary = self._build_summary()
+            self._give_precheck_warnings(pending)
             return LadderBundle(
                 main_rows=tuple(main_rows),
                 subroutine_rows=tuple(subroutine_rows),

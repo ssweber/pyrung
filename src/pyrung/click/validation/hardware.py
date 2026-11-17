@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Any
 
 from pyclickplc.banks import BANKS
 
-from pyrung.click.capabilities import CONVERTER_COMPATIBILITY, single_register_fill_dest
+from pyrung.click.capabilities import (
+    CONVERTER_COMPATIBILITY,
+    HEX_CONSTANT_BANKS,
+    single_register_fill_dest,
+)
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.conversions import (
@@ -27,6 +31,7 @@ from .findings import (
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
+    CLK_COPY_WIDE_CONSTANT,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_MATH_DEST_BANK,
     CLK_OUT_UNIT_UNSUPPORTED,
@@ -167,6 +172,13 @@ def _evaluate_write_targets(
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
         resolution = resolver.resolve_operand_slots(getattr(instruction, field_name))
+        # A Fill of one register exports as a Copy, so the Copy's write rules apply.
+        written_by = (instruction_type, field_name)
+        if (
+            instruction_type == "FillInstruction"
+            and single_register_fill_dest(instruction.dest) is not None
+        ):
+            written_by = ("CopyInstruction", "target")
 
         if resolution.unresolved:
             findings.append(_unresolved_finding(location, mode, "mapping missing or ambiguous"))
@@ -179,7 +191,7 @@ def _evaluate_write_targets(
                 )
                 continue
 
-            if not profile.is_writable(slot.memory_type, slot.address):
+            if not profile.field_writable(*written_by, slot.memory_type, slot.address):
                 location_text = _format_location(location)
                 findings.append(
                     ClickFinding(
@@ -371,6 +383,45 @@ def _exponential_from_an_integer(
     ]
 
 
+def _wide_constant_into_hex(
+    instruction_type: str,
+    value: Any,
+    dest_memory_types: tuple[str, ...],
+    dest_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """CLK_COPY_WIDE_CONSTANT: a CLICK hex constant is 0h..FFFFh, so the export refuses a
+    constant into DH, XD or YD outside -32768..65535 (it writes -32768..-1 as its 16 bits)."""
+    if isinstance(value, ImmediateRef):
+        value = value.value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return []
+    if isinstance(value, float) and not value.is_integer():
+        return []
+    if -32768 <= value <= 65535:
+        return []
+    hex_banks = [
+        memory_type for memory_type in dest_memory_types if memory_type in HEX_CONSTANT_BANKS
+    ]
+    if not hex_banks:
+        return []
+    verb = "fill" if instruction_type == "FillInstruction" else "copy"
+    location_text = _format_location(dest_location)
+    return [
+        ClickFinding(
+            code=CLK_COPY_WIDE_CONSTANT,
+            severity=_route_severity(CLK_COPY_WIDE_CONSTANT, mode),
+            message=(
+                f"{verb}({value!r}, ...) into {', '.join(hex_banks)} at {location_text} has a "
+                "constant that does not fit in 16 bits. A CLICK hex constant is 0h..FFFFh, so "
+                "the export refuses it."
+            ),
+            location=location_text,
+            suggestion="Write the constant as its 16-bit value, 0..65535 (0h..FFFFh).",
+        )
+    ]
+
+
 def _evaluate_copy_compatibility(
     instruction: Any,
     base_location: ProgramLocation,
@@ -410,6 +461,11 @@ def _evaluate_copy_compatibility(
     if operation in _CONSTANT_COPY_VERBS and copy_source_kind(source) == LITERAL:
         findings.extend(
             _constant_into_bit(operation, source, dest_memory_types, dest_location, mode)
+        )
+        findings.extend(
+            _wide_constant_into_hex(
+                instruction_type, source, dest_memory_types, dest_location, mode
+            )
         )
     findings.extend(
         _exponential_from_an_integer(instruction, source, source_resolution, source_location, mode)
@@ -596,13 +652,11 @@ def _evaluate_search_banks(
     return findings
 
 
-# The banks CLICK v4's Math dialog takes as its Result (checked in the editor,
-# 2026-11-06): DS, DD, DF, TD, CTD, and DH in a hex Math.  A decimal Math into
-# DH is refused (the dialog answer of 2026-11-06).  A Word destination makes the
-# Math decimal only when an operand is not a Word, a mixed Math that
-# CLK_MATH_MODE_MIXED flags (``infer_calc_mode`` in calc.py), so DH stays in the
-# table and the mixed Math gets its own finding.
-_MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "DH")
+# The banks CLICK v4's Math dialog takes as its Result (its Address Picker, 2026-11-16).
+# A decimal Math takes DS, DD, DF, TD, CTD and the writable SD.  A hex Math takes DH and YD.
+# The table needs no mode, because a Result in the other mode's bank makes a mixed Math.
+# CLK_MATH_MODE_MIXED flags that (``infer_calc_mode`` in calc.py).
+_MATH_DEST_BANKS = ("DS", "DD", "DF", "TD", "CTD", "SD", "DH", "YD")
 
 
 def _evaluate_math_dest_bank(
@@ -612,8 +666,8 @@ def _evaluate_math_dest_bank(
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
     """CLK_MATH_DEST_BANK: a math() into a bank CLICK's Math Result does not take
-    (a bit, XD, YD, SD, TXT).  An unresolved destination is reported by the
-    write-target check."""
+    (a bit, XD, TXT).  An unresolved destination, and an SD CLICK does not let a
+    program write, are reported by the write-target check."""
     if type(instruction).__name__ != "CalcInstruction":
         return []
     resolution = resolver.resolve_operand_slots(instruction.dest)
@@ -628,7 +682,7 @@ def _evaluate_math_dest_bank(
             severity=_route_severity(CLK_MATH_DEST_BANK, mode),
             message=(
                 f"math() into {', '.join(bad)} at {location_text}; CLICK's Math takes a "
-                "Result in DS, DD, DF, TD or CTD, or DH in a hex Math."
+                "Result in DS, DD, DF, TD, CTD or SD, or DH or YD in a hex Math."
             ),
             location=location_text,
             suggestion=(
@@ -715,6 +769,58 @@ def _fewest_elements_written(instruction: Any) -> _Written | None:
     return None if fixed is None else _Written(fixed[0] + tail, fixed[1])
 
 
+def _saved_constant_length(value: Any) -> int | None:
+    """How many characters CLICK saves for a Copy's constant, outer quotes left out.
+
+    CLICK sets a text Copy's end address from this length, not from the text it writes
+    (1.5 into TXT1 ends at TXT3).  Text and a whole number count in the export's
+    spelling, which is CLICK's saved form.  A doubled quote counts twice, so "A""B"
+    ends at TXT4 (clicknick ``buildbot/jobs/lc-diff-click/RESULTS9-10.md``).
+
+    A Real keeps at most 7 digits, so 3.4028235E+38 saves as 3.402823E+38.  From 1e7
+    up CLICK saves a Real in E form, 123456789.0 as 1.234568E+08 and 1e10 as 1E+10
+    (RESULTS9-10).  The export still spells those positionally, so this counts
+    CLICK's E form.  No CLICK answer covers a smaller Real's E form, so a smaller Real
+    counts in the export's spelling.
+    """
+    from pyrung.click.ladder.translator import _float32, click_real_literal
+
+    if isinstance(value, ImmediateRef):
+        value = value.value
+    if isinstance(value, str):
+        return len(value.replace('"', '""'))
+    if isinstance(value, bool):
+        return 1
+    if isinstance(value, int):
+        return len(str(value))
+    if isinstance(value, float):
+        text = click_real_literal(value)
+        if text is None:
+            return None
+        f32 = _float32(value)
+        if f32 is not None and abs(f32) >= 1e7:
+            text = f"{f32:.7G}"
+        return len(text)
+    return None
+
+
+def constant_text_past_txt(instruction: Any, address: int) -> int | None:
+    """How many characters CLICK saves for a text Copy's constant into TXT *address*,
+    when they run past TXT1000, else ``None``.
+
+    CLICK's Copy dialog refuses that store (OBJ-003).  CLICK's Copy accepts a register
+    source, which saves no end address, so a register source is not judged here.
+    """
+    if copy_source_kind(instruction.source) != LITERAL:
+        return None
+    if _fewest_elements_written(instruction) is None:
+        return None
+    length = _saved_constant_length(instruction.source)
+    if length is None or address + length - 1 <= BANKS["TXT"].max_addr:
+        return None
+    return length
+
+
 def _evaluate_text_past_bank(
     instruction: Any,
     base_location: ProgramLocation,
@@ -724,10 +830,12 @@ def _evaluate_text_past_bank(
     """CLK_TEXT_PAST_BANK and CLK_TEXT_PAST_BLOCK: a Copy by address whose text runs
     past the end of its bank, or of its own block while the bank goes on.
 
-    pyrung writes the elements its block holds and drops the rest.  Past the bank
-    it warns, as the store is one a CLICK takes; past a block mapped inside a bank
-    it warns that a CLICK writes on into the bank where pyrung stops.  Only a store
-    whose shortest text runs past is reported.
+    pyrung writes the elements its block holds and drops the rest.  A constant into TXT
+    that runs past the bank as written is refused, since CLICK's Copy refuses it
+    (OBJ-003).  Any other store past the bank warns.  CLICK's Copy accepts a register
+    source, which saves no end address.  Past a block mapped inside a bank it warns that
+    a CLICK writes on into the bank where pyrung stops.  Only a store whose shortest
+    text runs past is reported.
     """
     if type(instruction).__name__ != "CopyInstruction":
         return []
@@ -737,7 +845,7 @@ def _evaluate_text_past_bank(
     if not isinstance(target, Tag):
         return []
     written = _fewest_elements_written(instruction)
-    if written is None or written.count < 2:
+    if written is None:
         return []
     resolution = resolver.resolve_operand_slots(target)
     if resolution.unresolved or len(resolution.slots) != 1:
@@ -748,12 +856,36 @@ def _evaluate_text_past_bank(
         return []
     count = written.count
     bank_room = bank.max_addr - slot.address + 1
-    block_room_ = block_room(target)
     location_text = _format_location(_instruction_location(base_location, "instruction.target"))
     memory_type = slot.memory_type
     start = f"{memory_type}{slot.address}"
-    what = "characters" if memory_type == "TXT" else "elements"
     severity = "error" if mode == "strict" else "warning"
+
+    saved = constant_text_past_txt(instruction, slot.address) if memory_type == "TXT" else None
+    if saved is not None:
+        lowest = bank.max_addr - max(saved, count) + 1
+        named = target.name if target.name == start else f"{target.name} ({start})"
+        return [
+            ClickFinding(
+                code=CLK_TEXT_PAST_BANK,
+                severity=severity,
+                message=(
+                    f"copy() into {named} at {location_text} has a {saved}-character "
+                    f"constant, which runs past {memory_type}{bank.max_addr} at the end of the "
+                    "bank. CLICK's Copy refuses it (OBJ-003), so the export refuses it."
+                ),
+                location=location_text,
+                suggestion=(
+                    f"Start it at {memory_type}{lowest} or lower to keep {written.kept()}."
+                    if lowest >= bank.min_addr
+                    else None
+                ),
+            )
+        ]
+    if count < 2:
+        return []
+    block_room_ = block_room(target)
+    what = "characters" if memory_type == "TXT" else "elements"
 
     if block_room_ is not None and block_room_ < min(count, bank_room):
         home = _store_block(target)

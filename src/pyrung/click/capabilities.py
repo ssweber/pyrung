@@ -88,6 +88,21 @@ LADDER_WRITABLE_SD: frozenset[int] = frozenset(
     }
 )
 
+# CLICK's Out coil takes more SC than the other write fields (its Address Picker, CLICK v4,
+# 2026-11-16).  Set and Reset were not asked, so they keep LADDER_WRITABLE_SC.
+OUT_COIL_WRITABLE_SC: frozenset[int] = LADDER_WRITABLE_SC | frozenset(
+    {162, 165, 168, 171, 303, 304, 305, 306, 323, 324, 325, 326}
+)
+
+# Write fields that take more of a bank than LADDER_BANK_CAPABILITIES allows.  Each maps
+# (instruction, field) -> {bank: the addresses it takes, or None for all of them}.
+# CLICK's Copy and its hex Math write YD, and its Block copy and Fill do not.
+FIELD_WRITABLE: dict[tuple[str, str], dict[str, frozenset[int] | None]] = {
+    ("OutInstruction", "target"): {"SC": OUT_COIL_WRITABLE_SC},
+    ("CopyInstruction", "target"): {"YD": None},
+    ("CalcInstruction", "dest"): {"YD": None},
+}
+
 LADDER_BANK_CAPABILITIES: dict[str, BankCapability] = {
     "X": BankCapability(writable=False),
     "Y": BankCapability(writable=True),
@@ -135,8 +150,8 @@ _SINGLE_REGISTER_DESTS: frozenset[str] = frozenset(
     {"DS", "DD", "DH", "DF", "YD", "TD", "CTD", "SD", "TXT"}
 )
 
-_BLOCK_REGISTER_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "YD", "TD", "CTD"})
-_BLOCK_TXT_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF"})
+_BLOCK_REGISTER_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "YD", "TD", "CTD", "SD"})
+_BLOCK_TXT_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "TXT"})
 
 _FILL_REGISTER_DESTS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "YD", "TD", "CTD", "SD"})
 
@@ -270,6 +285,18 @@ class ClickHardwareProfile:
             return False
         return address in capability.writable_subset
 
+    def field_writable(
+        self, instruction_type: str, field_name: str, memory_type: str, address: int | None
+    ) -> bool:
+        """True when *field_name* of *instruction_type* may write this address."""
+        if self.is_writable(memory_type, address):
+            return True
+        extra = FIELD_WRITABLE.get((instruction_type, field_name), {})
+        if memory_type not in extra:
+            return False
+        subset = extra[memory_type]
+        return subset is None or (address is not None and address in subset)
+
     def valid_for_role(self, memory_type: str, role: InstructionRole) -> bool:
         if memory_type not in BANKS:
             raise KeyError(f"Unknown bank: {memory_type!r}")
@@ -324,6 +351,8 @@ __all__ = [
     "BankCapability",
     "LADDER_WRITABLE_SC",
     "LADDER_WRITABLE_SD",
+    "OUT_COIL_WRITABLE_SC",
+    "FIELD_WRITABLE",
     "LADDER_BANK_CAPABILITIES",
     "INSTRUCTION_ROLE_COMPATIBILITY",
     "CONVERTER_COMPATIBILITY",

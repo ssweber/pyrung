@@ -189,6 +189,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   - Re-paste and re-run the `to_text()` cases in parts copy, math, system and follow_extra. Their export now
     writes only the flag the source has, which changed their hashes.
   - Re-paste part control from the current build, which clears the false "Changed" results.
+  - Re-run `word_store/word_literals`. Its 70000 halves were removed, since the export refuses them now, so it needs
+    one CLICK run to confirm it again.
   - Unread: whether a TD write keeps any part of a ms left over, and a ladder write to the next phase's TD on the scan
     a phase ends.
   - Read the stores that pyrung models but no CLICK has recorded. These are a Copy of NaN or +/-Inf into an Int or a
@@ -374,6 +376,29 @@ All [nothing] unless marked.
   logpoint conditions and data-breakpoint conditions (monitor_data_breakpoints.py:169). They should share the Watch's
   rule, with labels looked up at evaluation time because breakpoints outlive a reload. `to_conditions` (how() and
   causal) resolves labels but raises KeyError on a `Pump.State` alias.
+- **Export a fraction constant into DH or YD.** CLICK accepts `copy(1.5, DH1)` (copy_single answers). What it stores
+  there is unread. [PLC]
+- **A plain number constant into TXT.** `copy(-5, txt[1000])` with no `convert` skips the TXT1000 check, and the
+  runtime stores the raw number in the Char, where CLICK stores the digits (RESULTS6 row 5). laddercodec will refuse a
+  bare number->TXT Copy with no converter, so the export must always write the converter. A plain number constant
+  into TXT should:
+  - export with the converter written out, as CLICK saves it. An int gets `to_text(suppress_zero=True)` (2227=1), and
+    a real gets `to_text()`, since CLICK refuses suppress zero for a real.
+  - run as that converter, so the simulator stores the digits.
+  - take the TXT1000 check. [nothing]
+- **Spell a Real of 1e7 and up as CLICK saves it.** CLICK saves 123456789.0 as `1.234568E+08`, 12345678.0 as
+  `1.234568E+07` and 1e10 as `1E+10` (clicknick `lc-diff-click/RESULTS9-10.md`). CLICK writes it in E form with up to
+  7 significant digits (`%.7G`). `click_real_literal` writes `123456800.0`, `12345680.0` and `10000000000.0`, and
+  `3.0E+38` where CLICK would save `3E+38`. The TXT1000 check already counts CLICK's form. Changing the export moves
+  the hashes of the conformance cases with such constants:
+  - `copy(1.0e10, df[196])` in `copy/test_copy_more.py`, and the 1.0e10 in `copy/test_real_text.py:103`.
+  - `copy(16777216.0, df[63])` and the `3.0e38` constants in `copy/test_real_bits.py`.
+  - The `3.0e38` constants in `copy/test_word_floor.py` and `math/test_agg_more.py`.
+  - The +-1.0e10 in `math/test_math_more.py:118-119` and the +-3.0e38 compares in `math/test_math_terms.py:148-149`.
+    [nothing]
+- **Copy Binary (`convert=to_binary`) on the type-7 pairs:** CTD to and from DF, a Real into DD or CTD, 32768 or 65536
+  into DF. CLICK runs them (RESULTS6). pyrung faults and writes nothing, and its validation passes the constant-source
+  forms. [nothing]
 - **Text stores.**
   - A text into a logical block mapped mid-bank should count on into the bank, as CLICK does. Today it stops at the
     block end with CLK_TEXT_PAST_BLOCK, while a windowed compare on the same tag reads on through the bank.

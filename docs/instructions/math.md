@@ -24,7 +24,7 @@ The expression comes first and the destination second, as in every pyrung instru
 
 ## Wide constants
 
-CLICK's editor refuses a whole-number constant outside −2147483648..2147483647 in any Math. A hex-mode Math (only `Word` tags) reads a constant as its low 16 bits, so write it as 0..65535. CLICK validation reports both (`CLK_MATH_WIDE_CONSTANT`).
+CLICK's editor refuses a whole-number constant outside −2147483648..2147483647 in any Math. A hex-mode Math (only `Word` tags) takes a whole number from 0 to 65535. pyrung writes −32768..−1 there as its 16 bits, so −1 exports as FFFFh. CLICK validation reports any other constant (`CLK_MATH_WIDE_CONSTANT`). The export refuses any other hex-mode constant even when that finding is allowed, since no CLICK hex constant holds it.
 
 ## REAL range and precision
 
@@ -112,13 +112,13 @@ math(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan 
 - A float or expression bound is read as an integer, so `randint(2.5, 2.9)` has equal bounds.
 - A draw outside the destination's range wraps and sets `system.fault.out_of_range`, as any `math()` result does.
 
-CLICK's editor takes only an integer constant or an `Int`/`Dint` address as a bound. CLICK validation refuses:
+A decimal Math takes an integer constant or a DS or DD tag as a bound. A hex Math takes an integer constant or a DH tag. CLICK validation refuses:
 
-- any other bound: a `Real` tag, a float constant, a bit, a `Word` or text (`CLK_RAND_BOUND_TYPE`)
+- any other bound: a `Real` tag, a float constant, a bit, a TD, CTD, SD, XD or YD tag, a DH tag in a decimal Math, or text (`CLK_RAND_BOUND_TYPE`)
 - equal constant bounds (`CLK_RAND_EQUAL_BOUNDS`)
 - a bound that is an expression, such as `randint(0, N / 2)` (`CLK_MATH_ARG_NOT_PLAIN`)
 
-Use constants or an `Int`/`Dint` tag as bounds. Compute an expression bound into a tag in a `math()` above. For a one-value draw, use a plain constant.
+Use constants or a DS or DD tag as bounds. Compute an expression bound into a tag in a `math()` above. For a one-value draw, use a plain constant.
 
 Draws are deterministic, so a run replays the same sequence. A test chooses a draw through the call's hidden tag, as it sets any input:
 
@@ -149,7 +149,7 @@ In pyrung the aggregates work anywhere an expression does (`copy()` sources, run
 
 | Finding | Rule |
 |---------|------|
-| `CLK_MATH_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). |
+| `CLK_MATH_RANGE_NOT_CONTIGUOUS` | The range must map to consecutive addresses, low to high (drop `.reverse()`). A range that starts at XD0 or YD0 must end there, since CLICK's XD0:XD1 also holds XD0u. |
 | `CLK_MATH_RANGE_MIXED_BANKS` | Both ends must be in the same bank. |
 | `CLK_MATH_MEDIAN_RANGE_TOO_LARGE` | `MDN` covers at most 1024 bytes: 512 DS/DH or 256 DD/DF. |
 | `CLK_MATH_BIT_RANGE_AGGREGATE` | `MAX`, `MIN`, `MDN` and `AVG` refuse a bit range (X, Y, C, T, CT, SC); `SUM` accepts one. |

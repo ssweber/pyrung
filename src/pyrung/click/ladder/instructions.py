@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from pyrung.click.capabilities import single_register_fill_dest
+from pyrung.click.validation.hardware import constant_text_past_txt
 from pyrung.core.condition import Condition
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
+from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.tag import Tag, TagType
@@ -16,8 +19,27 @@ from pyrung.core.tag import Tag, TagType
 from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _quote
 
+_WHOLE_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
+
+
+def _exported_converter(instruction: Any) -> CopyConverter | None:
+    """The converter a Copy is written with.
+
+    CLICK saves a Copy of a number register into TXT with its conversion, and the dialog
+    starts on Copy Value with Suppress zero.  So a plain Copy of an Int, Dint or Word into
+    text writes the ``to_text()`` it runs.  Any other plain Copy exports as written.
+    """
+    authored = getattr(instruction, "authored_convert", instruction.convert)
+    if authored is not None:
+        return authored
+    if copy_source_kind(instruction.source) in _WHOLE_NUMBER_TYPES:
+        return instruction.convert
+    return None
+
 
 # ---- Instruction token mixin ----
+
+
 class _InstructionMixin:
     """Render instruction objects into Click-compatible output tokens."""
 
@@ -46,7 +68,7 @@ class _InstructionMixin:
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
         def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
         def _hex_constants(
-            self, mode: Literal["wrap", "exact"] | None
+            self, mode: Literal["word", "exact"] | None
         ) -> AbstractContextManager[None]: ...
         @staticmethod
         def _is_hex_bank_operand(rendered: str) -> bool: ...
@@ -259,9 +281,27 @@ class _InstructionMixin:
                 source=instruction,
             )
         dest = self._render_operand(tag, path=f"{path}.dest", source=instruction)
-        with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+        with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
             source = self._render_operand(value, path=f"{path}.value", source=instruction)
         return self._fn("copy", source, dest, **oneshot_kw)
+
+    def _refuse_constant_text_past_txt(self, instruction: Any, dest: str, *, path: str) -> None:
+        # CLICK's Copy refuses a constant past TXT1000 (OBJ-003). So the export refuses it
+        # even when CLK_TEXT_PAST_BANK is allowed.
+        match = re.fullmatch(r"TXT(\d+)", dest)
+        if match is None:
+            return
+        count = constant_text_past_txt(instruction, int(match.group(1)))
+        if count is not None:
+            self._raise_issue(
+                path=path,
+                message=(
+                    f"copy() into {dest} has a {count}-character constant, which runs past "
+                    "TXT1000. CLICK's Copy refuses it (OBJ-003), so this cannot be written "
+                    "in CLICK."
+                ),
+                source=instruction,
+            )
 
     def _instruction_token(self, instruction: Any, *, path: str) -> str:
         # Dispatch by runtime type name to avoid importing all instruction classes.
@@ -318,16 +358,16 @@ class _InstructionMixin:
             )
         if instruction_type == "CopyInstruction":
             convert_kw = {}
-            # A plain Copy across text converts on its own; it exports as written.
-            authored = getattr(instruction, "authored_convert", instruction.convert)
+            converter = _exported_converter(instruction)
             dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
-            with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+            self._refuse_constant_text_past_txt(instruction, dest, path=f"{path}.dest")
+            with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
                 copy_source = self._render_operand(
                     instruction.source, path=f"{path}.source", source=instruction
                 )
-            if authored is not None:
+            if converter is not None:
                 convert_kw["convert"] = self._render_converter(
-                    authored, instruction, copy_source, path=f"{path}.convert"
+                    converter, instruction, copy_source, path=f"{path}.convert"
                 )
             return self._fn("copy", copy_source, dest, **convert_kw, **oneshot_kw)
         if instruction_type == "BlockCopyInstruction":
@@ -353,17 +393,16 @@ class _InstructionMixin:
                     instruction, single, path=path, oneshot_kw=oneshot_kw
                 )
             dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
-            with self._hex_constants("wrap" if self._is_hex_bank_operand(dest) else None):
+            with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
                 fill_value = self._render_operand(
                     instruction.value, path=f"{path}.value", source=instruction
                 )
             return self._fn("fill", fill_value, dest, **oneshot_kw)
         if instruction_type == "CalcInstruction":
-            # Export the formula as written, since a hex CLICK Math cuts its constants itself.
             expression = instruction.source_expression
             mode = infer_calc_mode(expression, instruction.dest).mode
             # Hex-mode Math reads every constant as hex (shift counts too).
-            with self._hex_constants("wrap" if str(mode) == "hex" else None):
+            with self._hex_constants("word" if str(mode) == "hex" else None):
                 formula = self._render_operand(
                     expression,
                     path=f"{path}.expression",

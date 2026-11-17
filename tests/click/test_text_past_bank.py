@@ -2,8 +2,13 @@
 CLK_TEXT_PAST_BLOCK: one whose text runs past the end of a block mapped inside the
 bank, where pyrung stops and a CLICK writes on.
 
-pyrung writes what fits and drops the rest; the findings warn, and export renders
-the store and warns rather than refusing it.
+A constant copied past TXT1000 is refused by validation, and by export even when
+allowed. CLICK's Copy refuses it (OBJ-003). CLICK's Copy accepts a register source,
+which saves no end address, so any other store warns.
+
+CLICK's answers are in clicknick ``buildbot/jobs/copy-encodings/RESULTS.md`` and
+``buildbot/jobs/lc-diff-click/RESULTS8.md``.  CLICK counts a constant as it saves it,
+not the text the Copy writes, so 1.5 into TXT1 ends at TXT3.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import warnings
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder, validate_click_program
+from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK
 from pyrung.core import Block, Program, Real, TagType, rung, to_text, to_value
 from pyrung.core.program import copy
@@ -57,13 +63,6 @@ _AT = "at main.rung[0].instruction[0](CopyInstruction).instruction.target"
             id="plain_real",
         ),
         pytest.param(
-            lambda level: copy("ABCDEFG", txt[997]),
-            f"copy() into TXT997 {_AT} writes 7 characters, "
-            "past TXT1000 at the end of the bank: the last 3 are dropped.",
-            "Start it at TXT994 or lower to keep every one.",
-            id="literal",
-        ),
-        pytest.param(
             lambda level: copy(ds[1], txt[997], convert=to_text(suppress_zero=False)),
             f"copy() into TXT997 {_AT} writes 5 characters or more, "
             "past TXT1000 at the end of the bank: all but the first 4 are dropped.",
@@ -76,13 +75,6 @@ _AT = "at main.rung[0].instruction[0](CopyInstruction).instruction.target"
             "past TXT1000 at the end of the bank: all but the first 11 are dropped.",
             "Start it at TXT988 or lower to keep the first 13.",
             id="exponential",
-        ),
-        pytest.param(
-            lambda level: copy(12345, txt[997], convert=to_text()),
-            f"copy() into TXT997 {_AT} writes 5 characters, "
-            "past TXT1000 at the end of the bank: the last one is dropped.",
-            "Start it at TXT996 or lower to keep every one.",
-            id="literal_number",
         ),
         pytest.param(
             lambda level: copy("1234", ds[4499], convert=to_value),
@@ -100,6 +92,123 @@ def test_a_text_that_always_runs_past_the_bank_warns(store, message, suggestion)
     assert finding.message.isascii() and (finding.suggestion or "").isascii()
     assert finding.message == message
     assert finding.suggestion == suggestion
+
+
+_REFUSED = (
+    "which runs past TXT1000 at the end of the bank. CLICK's Copy refuses it (OBJ-003), so "
+    "the export refuses it."
+)
+
+
+@pytest.mark.parametrize(
+    ("store", "message", "suggestion"),
+    [
+        pytest.param(
+            lambda level: copy("ABCDEFG", txt[997]),
+            f"copy() into TXT997 {_AT} has a 7-character constant, {_REFUSED}",
+            "Start it at TXT994 or lower to keep every one.",
+            id="literal",
+        ),
+        pytest.param(
+            lambda level: copy(12345, txt[997], convert=to_text()),
+            f"copy() into TXT997 {_AT} has a 5-character constant, {_REFUSED}",
+            "Start it at TXT996 or lower to keep every one.",
+            id="literal_number",
+        ),
+        pytest.param(
+            lambda level: copy(1.5, txt[999], convert=to_text()),
+            f"copy() into TXT999 {_AT} has a 3-character constant, {_REFUSED}",
+            "Start it at TXT992 or lower to keep every one.",
+            id="literal_real",
+        ),
+    ],
+)
+def test_a_constant_that_runs_past_txt1000_is_refused_even_when_allowed(store, message, suggestion):
+    prog, mapping, report = _report(store)
+    (finding,) = _found(report)
+    assert finding.message == message
+    assert finding.suggestion == suggestion
+    assert [f.severity for f in _found(validate_click_program(prog, mapping, mode="strict"))] == [
+        "error"
+    ]
+    for allow in ((), (CLK_TEXT_PAST_BANK,)):
+        with warnings.catch_warnings():
+            # The refusal comes with no warning before it.
+            warnings.simplefilter("error")
+            with pytest.raises(LadderExportError, match=r"runs past TXT1000\. CLICK's Copy"):
+                pyrung_to_ladder(prog, mapping, allow=allow)
+
+
+@pytest.mark.parametrize(
+    ("store", "start"),
+    [
+        pytest.param(lambda level: copy(1.5, txt[995], convert=to_text()), 995, id="real"),
+        pytest.param(
+            lambda level: copy(5, txt[997], convert=to_text(suppress_zero=False)),
+            997,
+            id="zeros",
+        ),
+        pytest.param(
+            lambda level: copy(5, txt[1000], convert=to_text(termination_code=0)),
+            1000,
+            id="termination",
+        ),
+    ],
+)
+def test_a_constant_typed_within_txt1000_only_warns(store, start):
+    # CLICK sets the end address from the constant as it saves it (1.5 into TXT1 ends at
+    # TXT3), so these fit.  pyrung writes past TXT1000 and drops the rest.
+    prog, mapping, report = _report(store)
+    (finding,) = _found(report)
+    assert finding.message.startswith(f"copy() into TXT{start} {_AT} writes ")
+    assert "dropped." in finding.message
+    with pytest.warns(UserWarning, match=CLK_TEXT_PAST_BANK):
+        bundle = pyrung_to_ladder(prog, mapping)
+    assert any(f"TXT{start}" in cell for row in bundle.main_rows for cell in row)
+
+
+@pytest.mark.parametrize(
+    ("store", "refused"),
+    [
+        # RESULTS9-10.md: a doubled quote counts twice, so 'A"B' saves 4 characters.
+        pytest.param(lambda level: copy('A"B', txt[998]), True, id="quote-at-998"),
+        pytest.param(lambda level: copy('A"B', txt[997]), False, id="quote-at-997"),
+        # RESULTS9-10.md: 123456789.0 saves as 1.234568E+08, 12 characters.
+        pytest.param(
+            lambda level: copy(123456789.0, txt[990], convert=to_text()), True, id="real-at-990"
+        ),
+        pytest.param(
+            lambda level: copy(123456789.0, txt[989], convert=to_text()), False, id="real-at-989"
+        ),
+    ],
+)
+def test_a_constant_counts_as_click_saves_it(store, refused):
+    # A constant that ends at TXT1000 fits (RESULTS8.md: "AB" into TXT999 ends there).
+    prog, mapping, report = _report(store)
+    refusals = [f for f in _found(report) if "CLICK's Copy refuses it" in f.message]
+    assert bool(refusals) is refused
+    if refused:
+        with pytest.raises(LadderExportError, match=r"runs past TXT1000\. CLICK's Copy"):
+            pyrung_to_ladder(prog, mapping, allow=(CLK_TEXT_PAST_BANK,))
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pyrung_to_ladder(prog, mapping)
+
+
+def test_a_constant_past_txt1000_through_a_mapped_block_is_refused():
+    msg = Block("M", TagType.CHAR, 1, 4)
+    with Program(strict=False) as prog:
+        with rung():
+            copy("ABCDEFG", msg[1])
+    mapping = TagMap([msg.map_to(txt.select(995, 998))], include_system=False)
+    report = validate_click_program(prog, mapping)
+    (finding,) = [f for f in report.warnings if f.code in (CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK)]
+    assert finding.code == CLK_TEXT_PAST_BANK
+    assert finding.message.startswith("copy() into M1 (TXT995) at ")
+    assert "has a 7-character constant" in finding.message
+    with pytest.raises(LadderExportError, match=r"runs past TXT1000\. CLICK's Copy"):
+        pyrung_to_ladder(prog, mapping, allow=(CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK))
 
 
 @pytest.mark.parametrize(
@@ -125,6 +234,19 @@ def test_export_warns_and_renders_the_store():
     with pytest.warns(UserWarning, match=CLK_TEXT_PAST_BANK):
         bundle = pyrung_to_ladder(prog, mapping)
     assert any("TXT995" in cell for row in bundle.main_rows for cell in row)
+
+
+def test_a_register_past_txt1000_warns_and_exports():
+    # RESULTS8.md: CLICK's Copy accepts DS1 -> TXT997 with Do not suppress zero, and
+    # saves no end address for it.
+    prog, mapping, report = _report(
+        lambda level: copy(ds[1], txt[997], convert=to_text(suppress_zero=False))
+    )
+    (finding,) = _found(report)
+    assert finding.severity == "warning"
+    with pytest.warns(UserWarning, match=CLK_TEXT_PAST_BANK):
+        bundle = pyrung_to_ladder(prog, mapping)
+    assert any("TXT997" in cell for row in bundle.main_rows for cell in row)
 
 
 def test_export_of_a_text_that_fits_does_not_warn():

@@ -19,6 +19,7 @@ from .findings import (
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONSTANT_INTO_BIT,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
+    CLK_COPY_WIDE_CONSTANT,
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_EXPR_ONLY_IN_MATH,
     CLK_FORLOOP_COUNT_BANK,
@@ -284,7 +285,7 @@ def validate_click_program(
         findings.extend(_evaluate_timer_preset_floor(instruction, base_location, mode))
         findings.extend(_evaluate_out_variant_unit(instruction, base_location, mode))
         findings.extend(_evaluate_forloop_count(instruction, base_location, mode, resolver))
-        findings.extend(_evaluate_rand_bounds(instruction, base_location, mode))
+        findings.extend(_evaluate_rand_bounds(instruction, base_location, mode, resolver))
         findings.extend(_evaluate_math_bit_operands(instruction, base_location, mode))
         findings.extend(_evaluate_wide_constants(instruction, base_location, mode))
         findings.extend(_evaluate_text_past_bank(instruction, base_location, mode, resolver))
@@ -408,6 +409,7 @@ __all__ = [
     "CLK_TEXT_PAST_BLOCK",
     "CLK_TEXT_WINDOW_NOT_CONTIGUOUS",
     "CLK_COPY_CONSTANT_INTO_BIT",
+    "CLK_COPY_WIDE_CONSTANT",
     "CLK_MATH_BIT_OPERAND",
     "CLK_MATH_DEST_BANK",
     "CLK_SEARCH_RANGE_BANK",

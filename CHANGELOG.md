@@ -31,6 +31,19 @@
 
 - Ladder export writes a rung whose contacts feed only a NOP, as a CLICK does. CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes back as `nop()` in a `branch()`.
 
+#### Ladder export accepts what CLICK's editor accepts
+
+- `out()` on the SC bits CLICK's Out coil takes, such as SC162 and SC303.
+- `math()` into an SD that CLICK lets a program write, such as SD29, SD61 and SD147.
+- A hex `math()` into YD.
+- A `copy()` into YD of an integer or a number register, or of TXT with `to_value` or `to_ascii`.
+- `blockcopy()` from DS, DD, DH, DF or SD into an SD that CLICK lets a program write, such as SD31..SD32.
+- `blockcopy()` from TXT into TXT.
+- `SUM` over XD or YD in a hex `math()`, such as `xd.select(1, 4).sum()`.
+- A negative constant down to -32768 in a hex `math()`, written as its 16 bits (-1 is FFFFh).
+- `randint()` with DH bounds in a hex `math()`.
+- A `copy()` of an `Int`, `Dint` or `Word` into a TXT with no `convert`, which exports as `to_text()`.
+
 ### Behaviour changes
 
 - `ModbusRtuTarget` refuses a `device_id` above 247, the last Modbus RTU device address (it took up to 255).
@@ -41,6 +54,16 @@
   Drop `exponential=True`. An integer source takes `suppress_zero` only.
 - `validate("click")` reports `CLK_NOP_NO_COIL` for a rung whose contacts feed only a NOP (CLICK's Syntax Check error C0003).
   Give the rung an output, or remove its contacts.
+- A `copy()` of an `Int`, `Dint` or `Word` into a `Char` with no `convert` writes its digits, as `to_text()` does and as a CLICK does (it stored the number).
+  Pass `convert=to_binary` to store the number as one character.
+- CLICK validation refuses a `randint()` bound in TD, CTD or SD, as CLICK's editor does (it accepted an `Int` or `Dint` tag mapped there).
+  Copy the bound into a DS or DD tag first.
+- CLICK export refuses a hex `math()` constant past 16 bits even with `allow=` (it wrote the low 16 bits, so 70000 became 1170h).
+  Write the 16-bit value you mean instead.
+- CLICK export refuses a constant outside -32768..65535 in a `copy()` or `fill()` into DH, XD or YD (it wrote the low 16 bits, so 70000 became 4464).
+  Write the 16-bit value you mean instead.
+- CLICK export refuses a `copy()` into TXT whose constant runs past TXT1000 as written, such as `copy("AB", txt[1000])` (it warned and wrote the copy).
+  `allow=` does not lift it. Start the copy low enough to fit the constant.
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
   Look a point up by its new name, or by its tag such as `system.fault.plc_error`. A nickname file row with the old name loads and is ignored.
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).

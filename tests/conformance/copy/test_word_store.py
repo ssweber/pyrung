@@ -24,10 +24,9 @@ other value; SC43 bits are read on the rung after each op.
   0.  Clamp: 32767, 32767, SC43 on (Result3 = 1).
 - ``fill_into_word``: a Fill from a register into Words.  DS -1, DD 70000, DF -1.6.  CLICK: 1, 2,
   1, 0, the Copy's rule.  Wrap with no flag: 1, 1, 1, 0.  Clamp: 2, 2, 2 with whichever flags.
-- ``word_literals`` (last of the group: the editor may refuse a constant out of a Word's range at
-  paste, and a refusal costs only this case): the constants -1 and 70000 into a Word by Copy
-  (Result1, Result2) and by Fill (Result3, Result4), SC43 in ErrorCode bits 1, 2, 4, 8.  Wrap with
-  no flag (CLICK): 1, 1, 1, 1, 0.  Clamp: 2, 2, 2, 2.
+- ``word_literals``: the constant -1 into a Word by Copy (Result1) and by Fill (Result3), SC43
+  in ErrorCode bits 1 and 4.  Wrap with no flag (CLICK): 1, 1, 0.  Clamp: 2, 2.  The export
+  refuses a constant past 16 bits into a DH, so 70000 has no case.
 
 A Math into a Word is hex mode, in ``hex_math``.  Each case owns ten of DD810.., a few of DF434..
 and of DH422..; DS4312..DS4315 are the Block copies' Ints.
@@ -200,18 +199,10 @@ def prove_word_literals(slot):
         copy(-1, dh[458])
     flag_bit(slot, SC43, slot.ErrorCode, 1)
     with Rung(*once(slot)):
-        copy(70000, dh[459])
-    flag_bit(slot, SC43, slot.ErrorCode, 2)
-    with Rung(*once(slot)):
         fill(-1, dh.select(460, 461))
     flag_bit(slot, SC43, slot.ErrorCode, 4)
-    with Rung(*once(slot)):
-        fill(70000, dh.select(462, 463))
-    flag_bit(slot, SC43, slot.ErrorCode, 8)
     class_of(slot, dh[458], BELOW, slot.Result1)
-    class_of(slot, dh[459], [4464, 65535, PRESET], slot.Result2)
     class_of(slot, dh[461], BELOW, slot.Result3)
-    class_of(slot, dh[463], [4464, 65535, PRESET], slot.Result4)
     finish(slot)
 
 
@@ -275,13 +266,12 @@ group = Group(
             probe="does a Fill into Words wrap or clamp, and is SC43 raised",
         ),
         case(
-            "The constants -1 and 70000 into a Word wrap with no flag, by Copy (Result1, Result2 "
-            "= 1) and by Fill (Result3, Result4 = 1), SC43 off (ErrorCode = 0); the editor may "
-            "refuse them at paste",
+            "The constant -1 into a Word wraps with no flag, by Copy (Result1 = 1) and by "
+            "Fill (Result3 = 1), SC43 off (ErrorCode = 0)",
             ladder=prove_word_literals,
             init=init_word_literals,
-            expect={"Result1": 1, "Result2": 1, "Result3": 1, "Result4": 1, "ErrorCode": 0},
-            probe="does the editor take these constants; do they wrap or clamp",
+            expect={"Result1": 1, "Result3": 1, "ErrorCode": 0},
+            probe="does the constant -1 into a Word wrap or clamp",
         ),
     ],
 )
