@@ -80,7 +80,7 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - `writable_slots` (crossings/indirect_dest.py) takes an `external` root's default as its only value. It also leaves
     out a literal-only root's default. Its region can miss addresses the pointer reaches. Today it only removes levers.
   - `_ValueSets._indexed_values` takes an element's default when the element is missing from the tag table, even
-    when a write through a pointer reaches it. The pointer-range lint and `_UnboundedReads` use it.
+    when a write through a pointer reaches it. The pointer-range lint uses it.
 - **A slot with a mapped tag and a name override has two names.** `_effective_slot_name` (memory_block.py)
   gives the override. The runtime stores under the mapped tag's name (`_get_tag`). So a caller that looks a
   store up by `_effective_slot_name` may miss the mapped tag. These callers do that.
@@ -90,9 +90,6 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - input_overrides.py:251 and :393
   The fix is in memory_block.py. Either one name wins everywhere, or the second assignment is refused. [nothing]
 - **System tags pyrung never writes.** On a CLICK, `fault.plc_error` (SC19) and `fault.code` (SD1) change, and the firmware version (SD5-SD8) is not 0. pyrung leaves them at 0, so the facts hold them at 0. A run on pyrung refutes nothing. Decide whether pyrung sets them, and then add them to `RUNTIME_VALUES`.
-- **Left over from the search deletion.**
-  - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
-    were the search's. Only tests pass them now. The `indirect_reach` maps they fill are then always empty. [nothing]
 - **Declared `min`/`max`/`choices` on a tag the ladder writes.** Decide what they mean there. Sam deferred the decision. [Sam]
 - **Instruction relations recorded by the codegen** (the bindings). One codegen writes both the compiled kernel and
   the CircuitPython code. Each of its helpers records what its piece of code reads, writes and compares. prove/ and

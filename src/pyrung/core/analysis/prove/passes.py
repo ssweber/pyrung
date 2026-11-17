@@ -109,12 +109,7 @@ class _PassContext:
 
 
 def _pass_build_graph(ctx: _PassContext) -> None:
-    ctx.graph = build_program_graph(
-        ctx.program,
-        observed_system=frozenset(),
-        observed_tags=(),
-        unbounded_index_reads=False,
-    )
+    ctx.graph = build_program_graph(ctx.program)
     ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph)
     ctx.receive_dest_names = frozenset(_collect_receive_dest_names(ctx.program))
 
@@ -270,28 +265,26 @@ def _writers_all_unconditional(
         rung = scope_rungs[y_node.rung_index]
         if rung._conditions:
             return False
-        if not _writes_run_when_powered(rung._instructions, y_name, graph.indirect_reach):
+        if not _writes_run_when_powered(rung._instructions, y_name):
             return False
     return True
 
 
-def _instructions_write(instructions: Iterable[Any], name: str, reach: Any) -> bool:
+def _instructions_write(instructions: Iterable[Any], name: str) -> bool:
     """Whether any of *instructions*, forloop bodies included, writes *name*."""
     from pyrung.core.instruction.control import ForLoopInstruction
 
     from .absorb import _all_write_targets
 
     for instr in instructions:
-        if any(target == name for target, _itype in _all_write_targets(instr, reach)):
+        if any(target == name for target, _itype in _all_write_targets(instr)):
             return True
-        if isinstance(instr, ForLoopInstruction) and _instructions_write(
-            instr.instructions, name, reach
-        ):
+        if isinstance(instr, ForLoopInstruction) and _instructions_write(instr.instructions, name):
             return True
     return False
 
 
-def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any) -> bool:
+def _writes_run_when_powered(instructions: Iterable[Any], name: str) -> bool:
     """Every write of *name* among *instructions* runs on each scan their rung is on.
 
     A rung's contacts are not all that decide whether a write on it runs.  A
@@ -312,7 +305,7 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any)
 
     for instr in instructions:
         if isinstance(instr, ForLoopInstruction):
-            if not _instructions_write(instr.instructions, name, reach):
+            if not _instructions_write(instr.instructions, name):
                 continue
             count = instr.count
             literal = isinstance(count, int) and not isinstance(count, bool)
@@ -320,9 +313,9 @@ def _writes_run_when_powered(instructions: Iterable[Any], name: str, reach: Any)
                 return False
             if for_loop_iterations(count, for_count_mask(count)) == 0:
                 return False
-            if not _writes_run_when_powered(instr.instructions, name, reach):
+            if not _writes_run_when_powered(instr.instructions, name):
                 return False
-        elif getattr(instr, "_oneshot", False) and _instructions_write((instr,), name, reach):
+        elif getattr(instr, "_oneshot", False) and _instructions_write((instr,), name):
             return False
     return True
 
@@ -372,7 +365,7 @@ def _is_sequential_unconditional_same_scope(
         rung = scope_rungs[y_node.rung_index]
         if rung._conditions:
             return False
-        if not _writes_run_when_powered(rung._instructions, y_name, graph.indirect_reach):
+        if not _writes_run_when_powered(rung._instructions, y_name):
             return False
 
     x_in_scope = [
@@ -423,7 +416,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         admissible.update(ctx._elided_tags)
 
     for instr in walk_instructions(ctx.program):
-        targets = [name for name, _itype in _all_write_targets(instr, ctx.graph.indirect_reach)]
+        targets = [name for name, _itype in _all_write_targets(instr)]
         if not targets:
             continue
         fwd = extract_forward_affine(instr)
@@ -479,7 +472,7 @@ def _pass_detect_functional_dependencies(ctx: _PassContext) -> None:
         # forloop that may skip it), so X never moves without Y following.
         contained = x_writers <= y_writers and all(
             (rung := resolve_rung(ctx.program, ctx.graph.rung_nodes[i])) is not None
-            and _writes_run_when_powered(rung._instructions, y_name, ctx.graph.indirect_reach)
+            and _writes_run_when_powered(rung._instructions, y_name)
             for i in x_writers
         )
         if not contained:
@@ -515,10 +508,7 @@ def _pass_detect_init_constants(ctx: _PassContext) -> None:
     from .absorb import _all_write_targets
     from .expr import _edge_source_tags
 
-    reach = ctx.graph.indirect_reach
-    all_sites = _collect_write_sites(
-        ctx.program, target_extractor=lambda instr: _all_write_targets(instr, reach)
-    )
+    all_sites = _collect_write_sites(ctx.program, target_extractor=_all_write_targets)
     sites_by_target: dict[str, list[Any]] = {}
     for site in all_sites:
         sites_by_target.setdefault(site.target_name, []).append(site)
@@ -575,9 +565,7 @@ def _get_structural_domain_info(
     """
     if ctx._structural_domain_info is None:
         assert ctx.graph is not None and ctx.all_exprs is not None
-        literal_write_domains = _collect_literal_write_domains(
-            ctx.program, ctx.graph.tags, ctx.graph.indirect_reach
-        )
+        literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
         ctx._structural_domain_info = _collect_structural_domain_info(
             ctx.program,
             ctx.graph,

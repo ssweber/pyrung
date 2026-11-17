@@ -1461,9 +1461,7 @@ class WriteRecorder:
                     seen.setdefault(name, self.scan)
 
 
-def declared_writes(
-    instr: Any, tags: Mapping[str, Any], reach: Mapping[int, tuple[str, ...]]
-) -> Callable[[str], bool]:
+def declared_writes(instr: Any, tags: Mapping[str, Any]) -> Callable[[str], bool]:
     """Whether the facts list a tag as one *instr* writes.
 
     The list holds the tags ``absorb._all_write_targets`` gives the facts, the names
@@ -1477,14 +1475,14 @@ def declared_writes(
     from pyrung.core.tag import ImmediateRef
 
     names = set(instruction_fault_writes(instr))
-    names.update(name for name, _kind in _all_write_targets(instr, reach))
+    names.update(name for name, _kind in _all_write_targets(instr))
     blocks: set[str] = set()
     for target in instruction_write_targets(instr):
         names |= static_write_target_names(target)
         if isinstance(target, ImmediateRef):
             target = target.value
         indirect = (IndirectRef, IndirectExprRef, IndirectBlockRange)
-        if isinstance(target, indirect) and not _expand_indirect_tag_names(target, reach):
+        if isinstance(target, indirect) and not _expand_indirect_tag_names(target):
             blocks.add(target.block.name)
 
     def covers(name: str) -> bool:
@@ -1513,9 +1511,8 @@ def _judge_declared_writes(
     Returns each instruction class that has writes in ``write_sites`` and that no run saw
     write.  A class the recorder can't see shows up there, not as a pass.
     """
-    reach = judge.facts.pdg.indirect_reach
     for instr, written in recorder.writes.values():
-        covers = declared_writes(instr, tags, reach)
+        covers = declared_writes(instr, tags)
         judge.tally.note("declared writes")
         missing = sorted((scan, name) for name, scan in written.items() if not covers(name))
         if missing:

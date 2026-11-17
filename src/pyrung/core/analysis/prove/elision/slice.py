@@ -82,7 +82,6 @@ from pyrung.core.analysis.pdg import (
     _extract_tag_names,
     _extract_write_targets,
     continuous_search_results,
-    unbounded_read_names,
 )
 from pyrung.core.analysis.write_sites import instruction_write_targets
 from pyrung.core.condition import (
@@ -419,14 +418,12 @@ def _state_decided_read_fields(instr: Any) -> tuple[str, ...]:
 
 
 def _collect_state_decided_reads(
-    program: Program, graph: ProgramGraph
+    program: Program,
 ) -> tuple[dict[str, tuple[Any, ...]], dict[int, frozenset[str]]]:
     """The tags each instruction may read on a scan the slice checks never show.
 
     Returns ``(readers, names)``.  *readers* maps a tag to the instructions that
-    may read it so, and *names* maps ``id(instr)`` to the tags it may read so.  A
-    read through an index with no declared bounds counts where *graph* found it
-    can reach.
+    may read it so, and *names* maps ``id(instr)`` to the tags it may read so.
     """
     readers: dict[str, list[Any]] = defaultdict(list)
     names: dict[int, frozenset[str]] = {}
@@ -434,7 +431,7 @@ def _collect_state_decided_reads(
         found: set[str] = set()
         for field_name in _state_decided_read_fields(instr):
             value = getattr(instr, field_name, None)
-            found |= _extract_tag_names(value, {}) | unbounded_read_names(value, graph)
+            found |= _extract_tag_names(value, {})
         if found and id(instr) not in names:
             names[id(instr)] = frozenset(found)
             for name in found:
@@ -551,9 +548,7 @@ class _SliceElision:
             *(node.exclusive_reads for node in graph.rung_nodes)
         ) | continuous_search_results(program)
         # The instructions that may read a tag on a scan their own memory decides.
-        self.state_decided_readers, self.state_decided_names = _collect_state_decided_reads(
-            program, graph
-        )
+        self.state_decided_readers, self.state_decided_names = _collect_state_decided_reads(program)
         self.edge_tags = _collect_edge_tags(program)
         self.caller_condition_reads = _collect_caller_condition_reads(graph)
         # The checks run scans on the interpreter, which has no iteration cap:

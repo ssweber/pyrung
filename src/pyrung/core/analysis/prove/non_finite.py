@@ -104,7 +104,7 @@ def non_finite_reals(
 
     writers: dict[str, list[Any]] = {}
     for instr in walk_instructions(program):
-        for target, _kind in _all_write_targets(instr, graph.indirect_reach):
+        for target, _kind in _all_write_targets(instr):
             if target in moving:
                 writers.setdefault(target, []).append(instr)
 
