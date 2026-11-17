@@ -153,7 +153,9 @@ class TestArithmeticInARung:
         assert plan.status is PlanStatus.REACHED, plan.reason
 
     def test_a_writer_whose_guard_reads_a_tag_through_arithmetic_is_not_dead(self) -> None:
-        """No Lvl gives ``Lvl == Sp + 2`` while Sp is 30.  SetSp copies 1 into Sp, and Lvl 3 then does.
+        """No Lvl value satisfies ``Lvl == Sp + 2`` while Sp is 30.
+
+        SetSp copies 1 into Sp, and Lvl 3 then satisfies it.
 
         Reading Sp at its value now once judged the latch's guard dead, and how() stopped.
         """
@@ -200,7 +202,7 @@ class TestTargetForms:
         return program, watch, other, hit
 
     def test_a_tag_operand_no_rung_uses_is_a_clear_error(self) -> None:
-        """Its value could be a default, a force or a patch: no literal stands in for it."""
+        """Its value could be a default, a force or a patch, so no literal can stand in for it."""
         program, watch, _other, _hit = self._program()
         setpoint = Int("Sp", default=500)
         with pytest.raises(ValueError, match="compared with Sp, and no rung uses that tag"):

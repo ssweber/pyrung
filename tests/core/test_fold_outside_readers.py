@@ -1,9 +1,10 @@
 """Scan memory the tags do not show, and who may watch a run from outside a rung.
 
-A scan is a function of the tags and the scan memory, so a program whose edge shows only in
+A scan depends on the tags and on the scan memory.  A program whose edge shows only in
 memory must not be repeated as if nothing moved.  A monitor, a stop predicate and a
-``when()`` read the state a scan leaves, from outside the rungs, and must see each scan they
-would see stepped.  Every program here runs in the loop and stepped, and the two must agree.
+``when()`` read the state that a scan leaves, from outside the rungs.  They must see each
+scan that they would see if the program were stepped.  Every program here runs in the loop
+and also stepped, and the two runs must agree.
 """
 
 from __future__ import annotations
@@ -124,7 +125,10 @@ def _one_shot_copy_wrapping() -> None:
 
 
 def _transient(fire: Body) -> Body:
-    """*fire* sets ``F`` on the scan after ``G`` raises ``A``; a rung below clears it."""
+    """Return a body where *fire* sets ``F`` on the scan after ``G`` raises ``A``.
+
+    A rung below clears ``F``.
+    """
 
     def body() -> None:
         _timer()
@@ -175,8 +179,10 @@ def _shift_clock_edge() -> None:
 
 
 class TestAProbeThatLeftMemoryBehind:
-    """Each scan fires an edge the tags do not show: it restores them, so only the
-    memory says the next scan is not a repeat of it."""
+    """Each scan fires an edge that the tags do not show, because it restores them.
+
+    Only the memory says the next scan is not a repeat of it.
+    """
 
     @pytest.mark.parametrize(
         "body",

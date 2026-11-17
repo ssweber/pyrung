@@ -1,6 +1,6 @@
-"""``send()`` to a CLICK DF sends an Inf or a NaN as a CLICK holds it.
+"""``send()`` to a CLICK DF writes an Inf or a NaN in the form a CLICK stores it.
 
-A CLICK holds +Inf and -Inf as their own bits and every NaN as 0xFFFF:0xFFFF.
+A CLICK stores +Inf and -Inf as their own bits and every NaN as 0xFFFF:0xFFFF.
 A local soft PLC stands in for the peer.  Its provider keeps each value it is given, so the
 test reads the bits that reached it.
 """

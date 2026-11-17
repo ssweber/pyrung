@@ -1,21 +1,22 @@
 """Timers in different units with one delay are Done on one scan: the ``unit_pairs`` group
 (subroutine ``Conf_UnitPairs``, part ``units``).
 
-Over the wire time is the wall clock, so a case cannot choose a scan's length, or count
-what a scan a timer should end on.  It asks the relation instead, which holds or not
-whatever a scan takes: two timers on one rung, one in seconds and one in milliseconds, get
-the same time on every scan.  A rung below them latches ``Result1`` on any scan one is Done
-and the other is not, so ``Result1`` says "they ever differed" and is expected off;
-``Result2`` says both got there, and ``Fired`` goes up with it.
+Over the wire, time is the wall clock.  A case cannot choose how long a scan lasts, so it
+cannot count the scan on which a timer should end.  It asks about a relation instead, one
+that holds whatever a scan takes: two timers on one rung, one in seconds and one in
+milliseconds, get the same time on every scan.  A rung below them latches ``Result1`` on any
+scan where one timer is Done and the other is not.  So ``Result1`` means "they ever
+differed", and the case expects it off.  ``Result2`` means both timers got there, and
+``Fired`` goes up with it.
 
-On a real CLICK this asks whether all units come off one clock, which a program can lean
-on.  A CLICK that reads ``Result1 = 1`` has not failed: that is the answer, and it goes to
+On a real CLICK, the case asks whether all units come off one clock, which a program can rely
+on.  If a CLICK reads ``Result1 = 1``, it has not failed.  That is the answer, and it goes to
 the user.
 
-In process ``DT`` is 10 ms, where the seconds pairs have always agreed, so these cases pin
-that they stay so; the pair that has told the units apart is in ``test_unit_minute.py``.
+In process, ``DT`` is 10 ms and the seconds pairs have always agreed.  These cases pin that
+they keep agreeing.  The pair that has told the units apart is in ``test_unit_minute.py``.
 A timer whose count is a sum of float fractions of its unit ends a scan late wherever that
-sum falls short, and a pair of them differs here for that one scan.
+sum falls short.  A pair of them differs here for that one scan.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ Timed = tuple[int, int, str]
 
 
 def pair_on_one_rung(slot: Any, one: Timed, other: Timed) -> None:
-    """Result1 = the two ever differed on a scan; Result2 = both Done, and ``Fired``."""
+    """Set Result1 if the timers ever differ, and set Result2 and ``Fired`` once both are Done."""
     first, second = ClickTimer(one[0]), ClickTimer(other[0])
     with Rung(slot.Cmd != 0):
         on_delay(first, preset=one[1], unit=one[2])

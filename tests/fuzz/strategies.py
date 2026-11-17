@@ -93,9 +93,11 @@ def counter_presets() -> st.SearchStrategy[int]:
 
 
 def count_down_presets() -> st.SearchStrategy[int]:
-    """A down counter starts at 0 and is Done at ``Acc <= preset``: a negative
-    preset is the one it counts toward; 0 and a positive one are Done from
-    the first scan."""
+    """Draw a down-counter preset.
+
+    A down counter starts at 0 and is Done once ``Acc <= preset``.  A negative preset is one
+    that the counter counts toward.  A preset of 0 or above is Done from the first scan.
+    """
     boundary = st.sampled_from([-10, -5, -1, -1, 0, 1])
     return st.one_of(boundary, boundary, st.integers(-10, 5))
 
