@@ -1,6 +1,7 @@
-"""What leaves a fault flag on, read by a coil: the ``flag_steps`` and ``flag_reads`` groups.
+"""Check what leaves a fault flag on when a coil reads it.
 
-Parts ``follow2_flags`` (``flag_steps``) and ``follow2_values`` (``flag_reads``, its first group).
+The groups are ``flag_steps`` and ``flag_reads``.  They belong to the parts ``follow2_flags``
+(``flag_steps``) and ``follow2_values`` (``flag_reads``, its first group).
 
 ``flag_boxes/boxes_by_pointer`` (31/0/0/7) reads SC44 off after a Search, a Shift, a Drum, a TON
 and a CTU, and ``ton_ctu_by_pointer``'s control (1/1/1) reads it off too.
@@ -10,10 +11,10 @@ CTU.  One construction explains all of it (H).  ``flag_boxes`` reads a flag with
 Maths on false rungs.  H says a Math on a false rung clears SC44.  Every reading with no false
 Math between the raise and the read finds the flag on.
 
-So here every flag is read by an Out coil on the rung right after the step, with nothing between
-raise, step and read.  The coils are recorded into the slot (a Pack, or a Copy) only once every
-probe of the scan has run, the layout of ``system/address_flag_vs_other_instructions``.  A CLICK agrees with H in
-every case.
+So here an Out coil reads every flag on the rung right after the step.  Nothing sits between the
+raise, the step and the read.  The coils are recorded into the slot (a Pack, or a Copy) only once
+every probe of the scan has run.  ``system/address_flag_vs_other_instructions`` has the same
+layout.  A CLICK agrees with H in every case.
 
 ``flag_steps`` (F1), one case a flag.  The flag is raised on scans 3 and 4 right before each step,
 and the step's coil is a bit of Result1 (scan 3) and Result2 (scan 4), set when the flag is still
@@ -113,13 +114,13 @@ def _in_window(slot: Any) -> tuple[Any, ...]:
 
 
 def _read(slot: Any, flag: Any, coil: Any) -> None:
-    """The coil read: *coil* on while *flag* is, right after the step."""
+    """Turn *coil* on while *flag* is on, right after the step."""
     with Rung(*_in_window(slot), flag):
         out(coil)
 
 
 def _pack(slot: Any, scan: int, first: int, last: int, field: Any) -> None:
-    """*field* = the coils C<first>..C<last> as bits, on *scan*, below every probe."""
+    """Pack the coils C<first>..C<last> into *field* as bits on *scan*, below every probe."""
     with Rung(slot.Cmd != 0, slot.Scratch == scan):
         pack_bits(c.select(first, last), field)
 
@@ -128,10 +129,10 @@ def _pack(slot: Any, scan: int, first: int, last: int, field: Any) -> None:
 
 
 class _Steps:
-    """A case's memory, cut for the ten steps of ``flag_steps``.
+    """Holds a case's memory, cut for the ten steps of ``flag_steps``.
 
-    C<base>..C<base+9> are the coils, C<base+10>.. the steps' own bits; DS<ds>.. the steps'
-    registers and DD<dd>.. their sinks.
+    C<base>..C<base+9> are the coils, and C<base+10>.. are the steps' own bits.  DS<ds>..
+    are the steps' registers, and DD<dd>.. are their sinks.
     """
 
     def __init__(self, base: int, ds_base: int, dd_base: int, timer: int, counter: int) -> None:
@@ -155,11 +156,11 @@ class _Steps:
     ZERO, GOOD, MATH, COPY, CONTACT, RANGE, RESULT, STEP = 0, 1, 2, 3, 4, 5, 9, 10
 
     def good_target(self) -> int:
-        """The DD the good pointer names: the last of the case's DDs."""
+        """Return the DD that the good pointer names, which is the last of the case's DDs."""
         return self.dd[3]
 
     def steps(self, slot: Any, flag: Any) -> list[Callable[[], None] | None]:
-        """None, four false rungs, then five boxes enabled over the window."""
+        """Return the ten steps: None, four false rungs, then five boxes enabled over the window."""
         never = slot.Scratch == NEVER
 
         def false_math() -> None:
@@ -233,7 +234,10 @@ def _flag_steps(
     steps: list[Callable[[], None] | None],
     coils: range,
 ) -> None:
-    """Before each step the raise, after it the coil; the coils recorded below them all."""
+    """Raise the flag before each step and read it with a coil after the step.
+
+    The coils are recorded below all of them.
+    """
     count_scans(slot)
     for step, coil in zip(steps, coils, strict=True):
         with Rung(*_raising(slot)):
@@ -369,13 +373,13 @@ def prove_unpowered_division(slot: Any) -> None:
     zero, clean = ds[3979], ds[3980]
     never = slot.Scratch == NEVER
     count_scans(slot)
-    # Scan 3: SC40 settled by a clean Math, then the division on a false rung.
+    # Scan 3: a clean Math settles SC40, then the division runs on a false rung.
     with Rung(slot.Cmd != 0, slot.Scratch == 3):
         math(slot.Scratch + 1, clean)
     with Rung(never):
         math(1 / zero, dd[111])
     _read(slot, SC40, clean_coil)
-    # Scan 4: SC40 raised by a true division, then the division on a false rung.
+    # Scan 4: a true division raises SC40, then the division runs on a false rung.
     with Rung(slot.Cmd != 0, slot.Scratch == 4):
         math(1 / zero, dd[112])
     with Rung(never):

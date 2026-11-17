@@ -53,7 +53,7 @@ def test_unselected_seed_departure_does_not_start_independent_blocker_search() -
     assert finished["reached"] is False
     assert "No productive next action" in finished["reason"]
 
-    # The last resort may try the guard with no reason, and a plan that needs it says so.
+    # The last resort may try the guard without a stated reason.  A plan that needs it names it.
     plan = pilot_how(PLC(program), target, max_scans=40)
     assert plan.reachable
     assert plan.last_resort.tag == "StartupGuard"

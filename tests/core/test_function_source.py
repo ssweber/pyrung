@@ -1,4 +1,7 @@
-"""A code.py embeds a function's text, which must be the function. A kernel calls the function."""
+"""Check that a code.py embeds the text of a function, and that the text is the function.
+
+A kernel calls the function.
+"""
 
 from __future__ import annotations
 
@@ -45,7 +48,7 @@ def _run(program, *, stepped: bool) -> PLC:
 
 
 def _seeks_as_it_ran(program, tag: str = "B") -> int:
-    """The tag after a run, a stepped twin and a cold seek: all three are the same."""
+    """Return a tag after a run, and check that a stepped twin and a cold seek agree on it."""
     ran = _run(program, stepped=False)
     twin = _run(program, stepped=True)
     assert ran.state.tags[tag] == twin.state.tags[tag]
@@ -122,8 +125,9 @@ def test_code_py_carries_the_same_string(fn, name):
     assert _from_code_py(fn, name) == {"out": 11}
 
 
-# Python 3.12 inlines list, dict and set comprehensions into the function's own code (each was a
-# nested code object). A generator expression stays nested. The comparison walks both shapes.
+# Python 3.12 inlines list, dict and set comprehensions into the function's own code.  Each
+# used to be a nested code object.  A generator expression stays nested.  The comparison
+# walks both shapes.
 def _list_comprehension(v):
     return {"out": sum([x % 7 for x in range(v % 5)])}
 
@@ -232,7 +236,10 @@ def test_the_format_builtin_stays_with_the_original():
 
 
 def test_a_method_of_an_import_is_the_function(tmp_path, monkeypatch):
-    """``import math`` out of sight compiles ``math.floor(v)`` differently: it means the same."""
+    """Check that ``import math`` out of sight compiles ``math.floor(v)`` differently.
+
+    The call still means the same.
+    """
     module, _ = _import(
         tmp_path,
         monkeypatch,
@@ -331,7 +338,7 @@ def test_a_kernel_calls_a_function_named_like_what_it_calls(tmp_path, monkeypatc
 
 
 def _stores_two_ways(fn):
-    """A program whose generated code clamps a copy and wraps a calc, and calls *fn*."""
+    """Build a program whose generated code clamps a copy, wraps a calc and calls *fn*."""
     with Program(strict=False) as program:
         with Rung():
             math(A + 1, A)
@@ -350,7 +357,10 @@ def _generates(program, *, force_runtime: bool):
 
 @pytest.mark.parametrize("name", ["_store_int", "_wrap_int"])
 def test_a_kernel_keeps_its_helper_and_calls_a_function_named_like_it(tmp_path, monkeypatch, name):
-    """No def lands over the helper a kernel stores with: it has no def of the function."""
+    """Check that no def lands over the helper that a kernel stores with.
+
+    The kernel has no def of the function.
+    """
     module, _ = _import(tmp_path, monkeypatch, f"def {name}(v):\n    return {{'out': 99}}\n")
     program = _stores_two_ways(getattr(module, name))
 
@@ -361,7 +371,10 @@ def test_a_kernel_keeps_its_helper_and_calls_a_function_named_like_it(tmp_path, 
 
 
 def test_a_kernel_calls_a_function_named_like_another_functions_symbol(tmp_path, monkeypatch):
-    """``_fn_other`` is the symbol that calls ``other``: each symbol is its own function."""
+    """Check that each symbol is its own function.
+
+    ``_fn_other`` is the symbol that calls ``other``.
+    """
     module, _ = _import(
         tmp_path,
         monkeypatch,
@@ -411,7 +424,7 @@ def test_a_function_with_a_name_of_its_own_embeds(tmp_path, monkeypatch, name):
 
 
 def test_two_functions_may_share_a_name(tmp_path, monkeypatch):
-    """Each symbol is bound to its own function."""
+    """Check that each symbol is bound to its own function."""
     first, _ = _import(tmp_path, monkeypatch, "def same(v):\n    return {'out': 1}\n")
     second, _ = _import(tmp_path, monkeypatch, "def same(v):\n    return {'out': 2}\n")
     program = _program(first.same, second.same)
@@ -422,7 +435,10 @@ def test_two_functions_may_share_a_name(tmp_path, monkeypatch):
 
 
 def test_a_name_only_code_py_binds_leaves_the_kernel_alone(tmp_path, monkeypatch):
-    """A code.py imports ``time``, so a def there would be lost.  A kernel has no def."""
+    """Check that a name that only code.py binds leaves the kernel alone.
+
+    A code.py imports ``time``, so a def there would be lost.  A kernel has no def.
+    """
     module, _ = _import(tmp_path, monkeypatch, "def time(v):\n    return {'out': 99}\n")
     program = _program(module.time)
 

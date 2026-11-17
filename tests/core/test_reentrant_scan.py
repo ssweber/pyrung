@@ -1,7 +1,7 @@
 """A ``run_function`` that scans, stops or reboots the PLC running it raises, on both backends.
 
-The refusal sits around the user's callable, not around the scan: a paused ``scan_steps``
-generator lies between prepare and commit, and stepping beside it stays legal.
+The refusal applies while the user's callable runs, not during the whole scan.  A paused
+``scan_steps`` generator sits between prepare and commit.  Stepping beside it stays legal.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def make(request: pytest.FixtureRequest) -> Callable[..., Any]:
 
 
 class Call:
-    """What the program's callable does on its next call: nothing, until a test says."""
+    """A callable that does nothing on its next call until a test sets ``action``."""
 
     def __init__(self) -> None:
         self.action: Callable[[], Any] | None = None
@@ -80,7 +80,10 @@ class Call:
 
 
 def _program(call: Call) -> Program:
-    """The review's case: the callable sits below a write its scan owes, above the count."""
+    """Build the review's case.
+
+    The callable sits below a write that its scan owes and above the count.
+    """
     with Program(strict=False) as program:
         with Rung(Cnt == 3):
             copy(5, X)
@@ -180,7 +183,11 @@ def test_both_paths_raise_the_same_words():
 
 
 def test_the_review_case_leaves_nothing_to_diverge(make):
-    """A scan that wrote X and stepped its PLC published X=0 and read X=5 ever after."""
+    """Check that a refused scan leaves no trace.
+
+    Without the refusal, a scan that wrote X and stepped its PLC published X=0.  It then
+    read X=5 ever after.
+    """
     plc, call = _built(make)
     plain, _ = _built(make)
     plc.run(3)
@@ -189,7 +196,7 @@ def test_the_review_case_leaves_nothing_to_diverge(make):
     _refused_scan(plc, call, SCANNERS["step"])
     assert _tags(plc) == _tags(plain)
 
-    # Nothing of the refused scan stays behind: the same scan then runs as it would have.
+    # The refused scan leaves nothing behind, so the same scan then runs as it would have.
     plc.step()
     plain.step()
     assert _tags(plc) == _tags(plain)
@@ -199,7 +206,10 @@ def test_the_review_case_leaves_nothing_to_diverge(make):
 
 
 def test_a_callable_that_swallows_the_refusal_changes_nothing(make):
-    """The refusal comes before the inner scan touches anything, a queued patch included."""
+    """Check that the refusal comes before the inner scan touches anything.
+
+    A queued patch counts as something.
+    """
     plc, call = _built(make)
     plain, plain_call = _built(make)
     plc.run(3)
@@ -220,7 +230,10 @@ def test_a_callable_that_swallows_the_refusal_changes_nothing(make):
 
 
 def test_a_callable_in_a_subroutine_is_refused(make):
-    """A body below a call is in the same scan, and a kernel knows it calls one."""
+    """Check that a callable in a subroutine is refused.
+
+    A body below a call is in the same scan, and a kernel knows that it calls a function.
+    """
     call = Call()
     with Program(strict=False) as program:
         with Rung():
@@ -236,7 +249,10 @@ def test_a_callable_in_a_subroutine_is_refused(make):
 
 
 def test_a_kernel_says_whether_it_calls_a_function():
-    """The marker is skipped on the word of this flag, so a body must never be left out."""
+    """Check that a kernel reports whether it calls a function.
+
+    The scan skips the marker when this flag is False, so a body must never be left out.
+    """
     with Program(strict=False) as plain:
         with Rung():
             math(Cnt + 1, Cnt)
@@ -266,7 +282,7 @@ def test_a_callable_may_not_stop_or_reboot_its_plc(make, act):
     assert plc.current_state is before
     assert plc.mode == "run"
 
-    # Nothing of it stays behind: the same scan then runs as it would have.
+    # The refused scan leaves nothing behind, so the same scan then runs as it would have.
     plc.step()
     plain.step()
     assert _tags(plc) == _tags(plain)
@@ -306,10 +322,12 @@ def test_lifecycle_refusal_in_a_kernels_plant_pass(act):
 
 @lifecycle
 def test_a_long_run_raises_on_a_lifecycle_call_too(act):
-    """No kernel can run this body, so stepped is the path; jit=True takes it past the gate.
+    """Check that a long run raises on a lifecycle call.
 
-    Stepped here because --fold-check's twin runs the same closure, whose ``plc`` is then
-    another PLC, on which the call is legal.  The gate itself is tested above.
+    No kernel can run this body, so the run is stepped, and ``jit=True`` takes it past the
+    gate.  The run is stepped here because the twin of --fold-check runs the same closure.
+    There ``plc`` is another PLC, and the call is legal on it.  The gate itself is tested
+    above.
     """
 
     def inner(c: int) -> dict[str, int]:
@@ -382,7 +400,10 @@ def test_lifecycle_calls_beside_a_paused_or_abandoned_scan_stay_legal(act, debug
 
 @pytest.mark.parametrize("debug", [False, True], ids=["scan_steps", "scan_steps_debug"])
 def test_a_paused_scans_callable_may_not_stop_it_even_once_stopped(debug):
-    """The refusal doesn't depend on the mode: a stopped PLC's paused scan gets the same answer."""
+    """Check that the refusal does not depend on the mode.
+
+    A stopped PLC's paused scan gets the same answer.
+    """
     plc, call = _built(BACKENDS["interpreted"])
     plc.run(3)
     gen = plc.debug.scan_steps_debug() if debug else plc.debug.scan_steps()
@@ -397,7 +418,11 @@ def test_a_paused_scans_callable_may_not_stop_it_even_once_stopped(debug):
 
 
 def test_a_commit_callback_may_stop_the_plc():
-    """After the commit, as it always was: the scan stands and the mode is STOP."""
+    """Check a commit callback that stops the PLC.
+
+    The callback runs after the commit, as it always did.  The scan stands and the mode is
+    STOP.
+    """
     plc, _call = _built(BACKENDS["interpreted"])
     fired: list[int] = []
 
@@ -416,7 +441,11 @@ def test_a_commit_callback_may_stop_the_plc():
 
 
 def test_a_commit_callback_may_reboot_the_plc():
-    """After the commit, as it always was: a battery keeps the tags and the scan id restarts."""
+    """Check a commit callback that reboots the PLC.
+
+    The callback runs after the commit, as it always did.  A battery keeps the tags, and the
+    scan id restarts.
+    """
     plc, _call = _built(BACKENDS["interpreted"])
     fired: list[int] = []
 
@@ -441,7 +470,7 @@ def _set_battery(plc: Any, value: bool) -> None:
     plc.battery_present = value
 
 
-# True is what it already holds: the refusal doesn't depend on the value changing.
+# True is the value the battery already has.  The refusal does not depend on the value changing.
 battery_values = pytest.mark.parametrize("value", [False, True], ids=["removed", "unchanged"])
 
 
@@ -547,7 +576,7 @@ zero_length = pytest.mark.parametrize("act", ZERO_LENGTH.values(), ids=ZERO_LENG
 
 @zero_length
 def test_a_run_of_no_scans_is_refused_inside_a_callable(make, act):
-    """Both backends answer the call, not the number of scans it would have run."""
+    """Check that both backends answer the call, not the number of scans it would have run."""
     plc, call = _built(make)
     plc.run(3)
     before = plc.current_state
@@ -569,7 +598,7 @@ def test_a_run_of_no_scans_outside_a_callable_is_a_no_op(make, act):
 
 
 def test_start_in_run_mode_stays_a_no_op_inside_a_callable(make):
-    """start() doesn't scan, and in RUN it does nothing."""
+    """Check that start() does not scan, and does nothing in RUN."""
     plc, call = _built(make)
     plain, _ = _built(make)
     plc.run(3)
@@ -581,7 +610,10 @@ def test_start_in_run_mode_stays_a_no_op_inside_a_callable(make):
 
 
 def test_a_commit_callback_may_step_the_plc():
-    """A callback runs after the commit, with no callable running, so it is no scan inside a scan."""
+    """Check that a callback is not a scan inside a scan.
+
+    It runs after the commit, with no callable running.
+    """
     plc, _call = _built(BACKENDS["interpreted"])
     plain, _ = _built(BACKENDS["interpreted"])
     stepped = []
@@ -654,7 +686,10 @@ def test_callable_may_step_a_different_plc(make, inner_backend):
 
 
 def test_callable_may_step_another_plc_of_the_same_program():
-    """The marker is on the PLC, not on the instruction or the program they share."""
+    """Check that the marker belongs to the PLC.
+
+    It does not belong to the instruction or the program that PLCs share.
+    """
     call = Call()
     program = _program(call)
     one, other = PLC(program, dt=0.01), PLC(program, dt=0.01)
@@ -730,7 +765,7 @@ def test_stepping_beside_a_paused_scan_stays_legal(debug):
     plain.step()
     assert _tags(plc) == _tags(plain)
 
-    # And the paused scan, begun before that step, still finishes on the scan it began from.
+    # The paused scan began before that step.  It still finishes on the scan it began from.
     for _ in gen:
         pass
     assert plc.current_state.scan_id == 3
@@ -754,7 +789,7 @@ def test_abandoning_a_paused_scan_leaves_the_plc_free(debug):
 
 @pytest.mark.parametrize("debug", [False, True], ids=["scan_steps", "scan_steps_debug"])
 def test_a_paused_scans_own_callable_is_refused(debug):
-    """A paused scan's own callable hits the refusal as any scan's does."""
+    """Check that the callable of a paused scan hits the refusal like any other scan."""
     plc, call = _built(BACKENDS["interpreted"])
     plc.run(3)
     before = plc.current_state
@@ -801,7 +836,7 @@ def test_committing_a_prepared_scan_from_inside_a_callable_is_refused():
 
 
 def _self_stepper(fires_at: int) -> tuple[PLC, Any]:
-    """A plain closure over its PLC, firing on a scan past the interpreted prefix."""
+    """Check a plain closure over its PLC that fires on a scan past the interpreted prefix."""
 
     def inner(c: int) -> dict[str, int]:
         if c == fires_at:
@@ -826,7 +861,10 @@ def _self_stepper(fires_at: int) -> tuple[PLC, Any]:
     ids=["run_for", "run_until"],
 )
 def test_a_long_run_stays_interpreted_and_raises_on_the_scan_stepping_does(monkeypatch, long_run):
-    """A callable that can reach its PLC can't pass the gate, so no kernel or loop runs it."""
+    """Check that a callable that can reach its PLC cannot pass the gate.
+
+    So no kernel or loop runs it.
+    """
     monkeypatch.setattr(compiled_run, "INTERPRETED_PREFIX", 2)
     plc, inner = _self_stepper(fires_at=20)
     assert not _may_be_called_again(inner)
