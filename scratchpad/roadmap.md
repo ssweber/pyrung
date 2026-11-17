@@ -156,6 +156,9 @@ All [nothing].
   that is gone becomes whatever now names its old address. Recordings hold names: the nickname, or the display
   address where there is none.
 - Declining ClickNick's setup prompt means no recording.
+- Breakpoint conditions (`compile_condition_for_breakpoint`) resolve no choice labels or `Pump.State` aliases, and an
+  unknown tag never fires. They should share the Watch's rule, with labels looked up at evaluation time because
+  breakpoints outlive a reload. [nothing]
 
 ## 4. One door
 

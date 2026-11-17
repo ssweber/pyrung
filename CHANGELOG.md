@@ -17,8 +17,8 @@
 
 #### Check a recording
 
-- The console's `assert Tag == value` checks a tag, and a failed `assert` stops a replay at its line.
-- The console's `run until <condition> within <N | duration>` runs until the condition holds, and fails past the limit.
+- The console's `assert Tag == value` checks one tag. A replay stops at the first failed check.
+- The console's `run until <condition> within <N | duration>` runs scans until the condition holds. It fails if the limit comes first.
 
 ### Behaviour changes
 
@@ -38,6 +38,7 @@
 ### Fixes
 
 - The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
+- A `replay` that stops on a failed line answers with an error (it answered as a success), so `pyrung live` exits 1 and a `;` chain stops.
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).

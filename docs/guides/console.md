@@ -101,7 +101,7 @@ run until Count >= 10 within 2 s   # a Watch expression, given at most 2 s
 run until State == HELD within 50  # a choice label stands for its value
 ```
 
-`run until` runs whole scans until its condition holds, and runs none if it already holds. It takes the same conditions as a Watch or a breakpoint condition. Past its limit, it fails with an error that names the condition and how far it ran, so a replay stops there.
+`run until` runs whole scans until its condition holds. It runs no scan if the condition already holds. Write the condition as you would in a Watch. Past the limit, `run until` fails with an error that names the condition and the scans it ran. A replay stops at that line.
 
 The `within` limit is required. Give it room, because the scan count to a step in a sequence can change when the program does.
 
@@ -204,9 +204,9 @@ assert Temp == 72.5        # a Real within one part in a million passes
 assert State == HELD       # a choice label stands for its value
 ```
 
-`assert` compares one tag with one value. A failed `assert` is an error, so a replay stops at that line and reports the value it found. A tag the program doesn't have is an error too.
+`assert` compares one tag with one value. A failed `assert` is an error that reports the value it found. A replay stops at that line. A tag the program doesn't have is an error too. So is a word that isn't one of the tag's choice labels.
 
-`assert` reads the values the last full scan left, as `get` does. After a `next` into the middle of a scan, it doesn't see the rungs that scan has run so far.
+`assert` reads the values at the end of the last full scan, as `get` does. After a `next` into the middle of a scan, `assert` doesn't see what that scan's rungs have written so far.
 
 ## Autoharness
 
