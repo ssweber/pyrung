@@ -157,7 +157,7 @@ def test_self_comparison_punts_on_open_domain() -> None:
 
 def test_closed_nan_self_comparison_preserves_ieee_behavior() -> None:
     nan = float("nan")
-    # NaN is no REAL default (out of range), but raw bits (pack_bits) can make one.
+    # NaN is out of range for a REAL default, but raw bits (pack_bits) can make one.
     value = Real("Value", choices={nan: "not-a-number"}, external=True)
     with Program() as program:
         with Rung(value == value):

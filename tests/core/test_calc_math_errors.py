@@ -1,9 +1,9 @@
-"""calc math-domain errors: 0 in the destination, SC46 on until the next Math, PLC in RUN.
+"""A Math domain error writes 0 to the destination, keeps SC46 on and leaves the PLC in RUN.
 
 CLICK's help: "SC46 _Math_Operation_Error: Data Registers used in the Math
 formula have Invalid values.  SC50 is turned to ON, the PLC is put in Stop
 Mode."  The hardware does not stop (conformance ``math_error``).  SC46 stays on
-until the next Math the scan reaches clears it, in this scan or a later one
+until the next Math that the scan reaches clears it, in this scan or a later one
 (conformance ``flag_carry``, ``flag_reads/math_after_sqrt``).  SC50 stays off
 and the PLC keeps running.  The ``runner_factory`` cases run on the
 interpreter and the compiled kernel (and assert they agree under

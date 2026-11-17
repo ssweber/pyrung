@@ -1,13 +1,16 @@
 """Store probes: the ``store_probe`` group (subroutine ``Conf_StoreProbe``).
 
-The last group of part ``math`` (``suite.PARTS``): the editor may refuse a RAND bound form at paste.  What a RAND, a Math of NaN, a
-Copy of an infinity stores and which fault flag follows, for the
-stores that no CLICK reading backs.  Each case probes as the
-``faults`` group does (an op once, on the first scan from 3 on which the flag
-it reads is off just before it, a flag after an op read by running it again;
-every case has a 40-scan window).  A random draw asserts its range, not a
-value.  An expectation is what pyrung reads where no CLICK reading backs it.  ``non_finite_into_word`` and ``real_into_text_and_fill``
-expect what a CLICK does.
+This is the last group of part ``math`` (``suite.PARTS``). The CLICK editor may refuse a
+RAND bound form at paste.
+
+The group probes what a RAND, a Math of NaN and a Copy of an infinity store, and which
+fault flag follows. It covers the stores that no CLICK reading backs. Each case probes
+as the ``faults`` group does. An op runs once, on the first scan from 3 on which the
+flag it reads is off just before it. A flag that follows an op is read by running the
+op again. Every case has a 40-scan window. A random draw asserts its range, not a value.
+
+An expectation is what pyrung reads where no CLICK reading backs it.
+``non_finite_into_word`` and ``real_into_text_and_fill`` expect what a CLICK does.
 
 - ``rand_int_cuts`` (probe): what a RAND into an Int does with constant bounds
   past 16 bits.  A CLICK draws over the whole bounds, and the Int keeps the low
@@ -124,10 +127,10 @@ def _stage(slot, *instructions):
 
 
 def _end(slot):
-    """The scans after the window: read the destinations back (idempotent).
+    """Read the destinations back on the scans after the window. Reading is idempotent.
 
-    Not gated on ``Cmd`` or ``Fired``: ``Scratch`` is 0 while idle, and a compare
-    contact costs 3 steps of the part's budget.
+    The rungs are not gated on ``Cmd`` or ``Fired``, because ``Scratch`` is 0 while idle
+    and a compare contact costs 3 steps of the part's budget.
     """
     return (slot.Scratch > WINDOW,)
 
@@ -183,8 +186,8 @@ def prove_rand_other_stores(slot):
 
     def word_op():
         copy(99, word)
-        # The export refuses a hex Math constant past 16 bits, so the Word gets the
-        # bounds as pasted, RAND ( 1170h , 1172h ).
+        # The export refuses a hex Math constant past 16 bits. The Word therefore gets
+        # the bounds as pasted, RAND ( 1170h , 1172h ).
         math(randint(4464, 4466), word)
 
     def real_op():
@@ -233,7 +236,7 @@ def prove_rand_tag_bounds(slot):
 
 
 def _code_pair(first, second, into, scratch):
-    """*into* = 128 * the code of text *first* + the code of text *second*."""
+    """Set *into* to 128 * the code of text *first* + the code of text *second*."""
     copy(first, scratch[0], convert=to_ascii)
     copy(second, scratch[1], convert=to_ascii)
     math(scratch[0] * 128 + scratch[1], into)
@@ -278,7 +281,7 @@ def prove_inf_and_nan_to_text(slot):
 
 
 def _class_of(value, readings, into, end):
-    """*into* = the first reading whose value *value* equals, 5 if none."""
+    """Set *into* to the first reading whose number equals *value*, or to 5 if none does."""
     with Rung(*end):
         copy(5, into)
     for number, reading in readings:
