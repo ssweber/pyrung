@@ -26,8 +26,8 @@ class TimeUnit(Enum):
     """Timer time units.
 
     The accumulator stores integer values in the specified unit.  Elapsed time
-    counts in whole nanoseconds, ``ns`` to a unit (see :func:`dt_to_ns`), so the
-    scan a timer is done on does not depend on the unit it counts in.
+    counts in whole nanoseconds, with ``ns`` nanoseconds to a unit (see :func:`dt_to_ns`).
+    So the scan a timer is done on does not depend on the unit it counts in.
     """
 
     Tms = "milliseconds"  # 1 unit = 1 ms, multiply dt by 1000
@@ -41,8 +41,8 @@ class TimeUnit(Enum):
     def dt_to_units(self, dt_seconds: float) -> float:
         """Convert dt in seconds to timer units, as an estimate of a timer's rate.
 
-        Timers themselves count through :func:`dt_to_ns`: this float loses time
-        when summed.
+        Timers themselves count through :func:`dt_to_ns`, because this float loses
+        time when summed.
         """
         match self:
             case TimeUnit.Tms:
@@ -65,20 +65,21 @@ TimeUnit.Td.ns = 86_400_000_000_000
 
 
 # How far a dt may move to become whole nanoseconds.  A clock read as a float carries
-# noise of a fraction of a nanosecond, which at a scan of a millisecond is well under this;
-# 2**-20 s, 953.67 ns, moves by 3 parts in 10000, and that would be time lost.
+# noise of a fraction of a nanosecond.  At a scan of a millisecond that is well under
+# this.  Moving 2**-20 s, which is 953.67 ns, would change it by 3 parts in 10000, and
+# that would lose time.
 _WHOLE_NS_WITHIN = 1e-6
 
 
 @lru_cache(maxsize=64)
 def dt_to_ns(dt_seconds: float) -> int | Fraction:
-    """The time a scan of *dt_seconds* takes, in nanoseconds, with nothing lost in a sum.
+    """Return the time a scan of *dt_seconds* takes, in nanoseconds, with nothing lost in a sum.
 
-    A dt written as a decimal is that many whole nanoseconds, the float's own rounding
-    gone: 0.1 is 100_000_000.  One too fine for that which is a plain ratio (1/3, 1/1024)
-    stays that ratio exactly, as a ``Fraction``.  A measured dt, whose last digits are
-    float noise, is the nearest whole nanosecond where that barely moves it.  Anything
-    else is the float's own value, exactly, as a ``Fraction``.
+    A dt written as a decimal becomes that many whole nanoseconds, with the float's own
+    rounding gone: 0.1 is 100_000_000.  A dt that is too fine for that and is a plain
+    ratio (1/3, 1/1024) stays that ratio exactly, as a ``Fraction``.  A measured dt,
+    whose last digits are float noise, becomes the nearest whole nanosecond where that
+    barely moves it.  Any other dt is the float's own value, exactly, as a ``Fraction``.
     """
     exact = Fraction(dt_seconds).limit_denominator(1_000_000)
     if float(exact) == dt_seconds:

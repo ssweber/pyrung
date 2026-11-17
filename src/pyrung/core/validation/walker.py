@@ -369,14 +369,14 @@ def walk_rung_operands(
 ) -> None:
     """Call *visit* on each operand the *rungs* run, in a fixed order, once each.
 
-    The walk the compiled kernel takes its tags from: rung conditions, each
-    instruction's declared fields (an instruction declaring none, its public
+    The compiled kernel takes its tags from this walk.  It covers rung conditions, each
+    instruction's declared fields (an instruction that declares none gives its public
     attributes), branches, an instruction's nested ``instructions`` and a for-loop's
     body rung conditions.  An operand is a ``Tag``, a pointer (``IndirectRef``,
-    ``IndirectExprRef``), or a range (``BlockRange``, ``IndirectBlockRange``); a
-    pointer's or an indirect range's own operands are visited after it, and a static
-    range is left to *visit*.  A calc's ``source_expression`` is no declared field:
-    what it names runs only where something else runs it.
+    ``IndirectExprRef``), or a range (``BlockRange``, ``IndirectBlockRange``).  The walk
+    visits a pointer's or an indirect range's own operands after it, and leaves a static
+    range to *visit*.  A calc's ``source_expression`` is no declared field.  What it
+    names runs only where something else runs it.
 
     *on_instruction*, when given, is called on each instruction the walk enters, a
     branch's and a nested one included, before its operands.

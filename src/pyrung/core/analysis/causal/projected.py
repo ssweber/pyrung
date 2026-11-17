@@ -214,7 +214,7 @@ def _condition_relation(
     seen_moves: set[tuple[str, Any]] = set()
 
     def add_move(tag: str, value: Any, source: str) -> None:
-        # Each NaN hashes apart, so every NaN shares one key.
+        # Different NaN objects would hash apart, so every NaN maps to one shared key.
         key = (tag, _NAN_KEY if _values_equal(value, _NAN) else value)
         if key in seen_moves or _values_equal(state.tags.get(tag), value):
             return

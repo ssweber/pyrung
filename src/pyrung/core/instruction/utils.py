@@ -19,11 +19,11 @@ if TYPE_CHECKING:
 
 
 def elapsed_units(carry: Any, dt: float, unit: TimeUnit) -> tuple[int, int | Fraction]:
-    """This scan's *dt*, added to what ``_frac:<acc>`` carries: whole units and what is left.
+    """Add this scan's *dt* to what ``_frac:<acc>`` carries, and return whole units and the rest.
 
     The carry is the nanoseconds since the accumulator's last whole unit, so no time is lost
-    however many scans it takes to make a unit.  It is a fraction of a unit (a float) in
-    memory saved before carries were nanoseconds.
+    however many scans it takes to make a unit.  Memory saved before carries were
+    nanoseconds holds the carry as a fraction of a unit (a float).
     """
     if carry.__class__ is float:
         carry = round(carry * unit.ns)
@@ -35,11 +35,11 @@ def guard_oneshot_execution(func: F) -> F:
 
     An instruction that runs clears the flags in its ``_fault_follows`` as it
     starts, before it reads anything.  A raise in its body sets them again.  A
-    source that names one of those flags reads it as off.  One with
-    ``_fault_settles_idle`` (a Math) clears them on a scan it is reached but
-    does not run too, with its rung false or as a one-shot that does not fire
-    (CLICK, ``flag_steps``, ``flag_reads/oneshot_held``).  Any other leaves
-    them then.
+    source that names one of those flags reads it as off.  An instruction with
+    ``_fault_settles_idle`` (a Math) also clears them on a scan where it is reached but
+    does not run, either because its rung is false or because it is a one-shot that
+    does not fire (CLICK, ``flag_steps``, ``flag_reads/oneshot_held``).  Any other
+    instruction leaves them set on such a scan.
     """
 
     @wraps(func)
@@ -99,11 +99,11 @@ def to_condition(obj: Any) -> Any:
 
 
 def instruction_condition_view(ctx: ScanContext, instr: Any) -> ConditionView:
-    """The condition view box *instr* reads its helper pins from, taken at box entry.
+    """Return the condition view that box *instr* reads its helper pins from, taken at box entry.
 
     A box reads its enable and all its pins at one moment, as it starts and
-    before any write of its own, whether or not it is enabled: the view is
-    frozen there, so no pin sees the box's own Done/Acc/step writes, and it
+    before any write of its own, whether or not it is enabled.  The view is
+    frozen there.  No pin sees the box's own Done/Acc/step writes, and every pin
     sees every write of the rows above the box.  The box's edge pins are
     scanned (their memory stored) as the view is taken.  Call it before the
     box writes anything.
