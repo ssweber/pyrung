@@ -270,18 +270,18 @@ _CLOCK_HALF_PERIODS = {
 
 # A clock toggles when ``floor(timestamp / half_period)`` increments.  The
 # timestamp is *meant* to advance on the dt grid, but it accumulates rounding
-# error scan-by-scan, so it can sit just below a grid-aligned ``k * half_period``
+# error scan by scan.  It can then sit just below a grid-aligned ``k * half_period``
 # boundary (e.g. 16.74999999999982 vs 16.75 at a counter Done that lands on a clock
-# edge).  Snapping ``t / half_period`` up by a tiny epsilon before flooring lands
-# on the phase whenever the timestamp sits on — or a rounding step below — an
-# exact boundary.  The epsilon is far above realistic accumulation drift yet far
-# below the smallest per-scan ratio step (``dt / half_period``), so it never snaps
-# a genuine mid-interval grid point across a boundary.
+# edge).  Adding a tiny epsilon to ``t / half_period`` before flooring gives the right
+# phase when the timestamp sits exactly on a boundary, or a rounding step below it.
+# The epsilon is far above realistic accumulation drift and far below the smallest
+# per-scan ratio step (``dt / half_period``).  So it never moves a genuine mid-interval
+# grid point across a boundary.
 _CLOCK_SNAP_EPS = 1e-7
 
 
 def clock_phase(timestamp: float, half_period: float) -> int:
-    """Half-periods elapsed at *timestamp*, robust to float drift."""
+    """Return the half-periods elapsed at *timestamp*, tolerating float drift."""
     return math.floor(timestamp / half_period + _CLOCK_SNAP_EPS)
 
 
@@ -590,12 +590,11 @@ class SystemPointRuntime:
         return True, 0
 
     def scan_start_is_quiet(self, tags: Mapping[str, Any], memory: Mapping[str, Any]) -> bool:
-        """Whether :meth:`on_scan_start` would change nothing on a kernel's state.
+        """Return whether :meth:`on_scan_start` would change nothing on a kernel's state.
 
-        Every status and command tag it clears is bound and False, every
-        fault flag is bound, and no memory default is missing.  A compiled scan
-        asks this first because the check costs a few C calls and the hook
-        about twenty Python ones.
+        That holds when every status and command tag it clears is bound and False, every
+        fault flag is bound, and no memory default is missing.  A compiled scan asks this
+        first.  The check costs a few C calls, and the hook itself about twenty Python ones.
         """
         try:
             values = _SCAN_START_TAGS(tags)
@@ -612,7 +611,7 @@ class SystemPointRuntime:
         )
 
     def scan_end_is_quiet(self, tags: Mapping[str, Any], dt: float) -> bool:
-        """Whether :meth:`on_scan_end` would change nothing for a scan of *dt*."""
+        """Return whether :meth:`on_scan_end` would change nothing for a scan of *dt*."""
         low = tags.get(_SCAN_TIME_MIN_NAME)
         high = tags.get(_SCAN_TIME_MAX_NAME)
         if type(low) is not int or type(high) is not int:
@@ -664,8 +663,8 @@ class SystemPointRuntime:
             ctx.set_memory(_SD_ERROR_CODE_KEY, _SD_ERROR_NONE)
 
     def _clear_transient_status(self, ctx: ScanContext) -> None:
-        # A CLICK carries a fault flag raised by the last Math of a scan into
-        # the next (``flag_carry``), so the flags are only bound here.
+        # A CLICK carries a fault flag raised by the last Math of a scan into the next
+        # (``flag_carry``).  So this binds the flags and does not clear them.
         unbound = {name: False for name in _FAULT_FLAG_NAMES if not _raw_has_tag(ctx, name)}
         if unbound:
             ctx._set_tags_internal(unbound)

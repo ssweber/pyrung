@@ -61,7 +61,7 @@ class OccurrenceBoundary:
 
 
 class UnaddressableBoundaryError(ValueError):
-    """A patch boundary that names more than one occurrence in a scan."""
+    """Raised when a patch boundary names more than one occurrence in a scan."""
 
 
 @dataclass(frozen=True)
@@ -205,8 +205,8 @@ class _CounterfactualPatchObserver:
         for patch, enabled in zip(matching, active, strict=True):
             if enabled:
                 before = ctx._get_tag_internal(patch.dest)
-                # Written before the row's view is taken (the executor opens
-                # the rung scope first), so the row -- a rung or a branch --
+                # The patch is written before the row's view is taken, because the executor
+                # opens the rung scope first.  So the row, whether a rung or a branch,
                 # reads the hypothetical value like any write above it.
                 ctx.set_tag(patch.dest, patch.value)
                 self.applications.append(

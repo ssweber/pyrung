@@ -40,21 +40,21 @@ _OPERAND_PATTERN = (
 _OPERAND_RE = re.compile(_OPERAND_PATTERN)
 
 # Quoted text is skipped whole, so a text constant such as ``"C1"`` never reads
-# as an address.  Raw CSV doubles its quotes and treats backslash as plain; the
-# Python-rendered form uses backslash escapes.
+# as an address.  Raw CSV doubles its quotes and treats backslash as plain.
+# The Python-rendered form uses backslash escapes.
 _CSV_OPERAND_OR_TEXT_RE = re.compile(rf'"(?:[^"]|"")*"|(?P<operand>{_OPERAND_PATTERN})')
 _PY_OPERAND_OR_TEXT_RE = re.compile(rf'"(?:[^"\\]|\\.)*"|(?P<operand>{_OPERAND_PATTERN})')
 
 
 def _operand_matches(text: str) -> Iterator[re.Match[str]]:
-    """Operand matches in raw CSV ``text``, leaving out anything inside quoted text."""
+    """Yield the operand matches in raw CSV ``text``, skipping anything inside quoted text."""
     for match in _CSV_OPERAND_OR_TEXT_RE.finditer(text):
         if match.group("operand") is not None:
             yield match
 
 
 def _sub_operands(text: str, replace: Callable[[str], str]) -> str:
-    """Replace each operand in Python-rendered ``text``; quoted text is untouched."""
+    """Replace each operand in Python-rendered ``text``, and leave quoted text untouched."""
     return _PY_OPERAND_OR_TEXT_RE.sub(
         lambda m: replace(m.group("operand")) if m.group("operand") is not None else m.group(0),
         text,
@@ -68,11 +68,11 @@ _RANGE_RE = re.compile(
 
 
 def _ascending_range_str(range_str: str) -> str:
-    """``C1018..C1011`` -> ``C1011..C1018``; ascending ranges pass through.
+    """Turn ``C1018..C1011`` into ``C1011..C1018``, and return an ascending range unchanged.
 
-    CLICK's shift register allows an end below the start (it then shifts
-    downward); pyrung spells that window ``.reverse()``, so range metadata is
-    kept under the ascending key.
+    CLICK's shift register allows an end below the start, and it then shifts downward.
+    pyrung spells that window ``.reverse()``, so it keeps range metadata under the
+    ascending key.
     """
     match = _RANGE_RE.fullmatch(range_str)
     if match is None or match.group(1) != match.group(3):
