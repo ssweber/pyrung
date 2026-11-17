@@ -79,10 +79,10 @@ def conditional_write_edge_read(pool: TagPool) -> list[RungSpec] | None:
 
 def dynamic_preset(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #4: copy(src, preset_tag) + on_delay(T, preset_tag)."""
-    if not pool.timers or not pool.writable_numeric():
+    if not pool.timers or not pool.writable_preset_tags():
         return None
     timer = pool.timers[0]
-    preset_tag = pool.writable_numeric()[0]
+    preset_tag = pool.writable_preset_tags()[0]
     return [
         RungSpec(
             conditions=[CondSpec(kind="bit", tag=pool.all_conditions()[0])],
@@ -748,10 +748,12 @@ def chain_tail_preset(pool: TagPool) -> list[RungSpec] | None:
     The tail of a copy/calc chain is consumed as a timer preset.
     """
     writable_nums = pool.writable_numeric()
-    if not pool.timers or len(writable_nums) < 2:
+    presets = pool.writable_preset_tags()
+    if not pool.timers or len(writable_nums) < 2 or not presets:
         return None
     timer = pool.timers[0]
-    a, b = writable_nums[0], writable_nums[1]
+    b = presets[0]
+    a = next(t for t in writable_nums if t is not b)
     cond = pool.all_conditions()[0]
     return [
         RungSpec(

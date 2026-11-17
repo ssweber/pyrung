@@ -8,7 +8,20 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import Phase, given, note, settings
 
-from pyrung.core import PLC, Block, Bool, CompiledPLC, Program, Rung, TagType, Word, copy, math
+from pyrung.core import (
+    PLC,
+    Block,
+    Bool,
+    CompiledPLC,
+    Dint,
+    Program,
+    Rung,
+    TagType,
+    Word,
+    copy,
+    math,
+    search,
+)
 
 from .conftest import DT, PARITY_SCANS, PROFILE
 from .minimize import minimize
@@ -81,12 +94,12 @@ def test_engine_parity(data):
                     except Exception:
                         return False
 
+                note(f"scan={scan} timestamps={i_state.timestamp!r} {c_state.timestamp!r}")
+                note(f"diff: {diff}")
                 spec = minimize(spec, _check_parity)
                 code = format_parity_reproducer(spec, scan, input_history, diff)
                 note(f"\n--- Reproducer ---\n{code}")
                 path = write_reproducer(code, "parity")
-                if path is None:
-                    return
                 note(f"Written to {path}")
                 raise AssertionError(f"Found a parity bug, see the reproducer:\n  {path}")
     finally:
@@ -122,3 +135,28 @@ def test_indirect_copy_tag_materialization():
     c_state = compiled.current_state
     assert dict(i_state.tags) == dict(c_state.tags)
     assert dict(i_state.memory) == dict(c_state.memory)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "PLC holds a slot the program writes as DS[1] but no rung uses, and CompiledPLC does not "
+        "(tests/fuzz/reproducers/parity_20261117_indexed_unused_slot.py)"
+    ),
+)
+def test_unused_indexed_slot_parity():
+    DS = Block("DS", TagType.INT, 1, 7)
+    D0 = Dint("D0")
+    B1 = Bool("B1")
+    DS[1]
+
+    with Program(strict=False) as logic:
+        with Rung():
+            search(DS.select(6, 7) != -66, result=D0, found=B1)
+
+    interpreted = PLC(logic, dt=DT)
+    compiled = CompiledPLC(logic, dt=DT)
+    interpreted.step()
+    compiled.step()
+
+    assert dict(interpreted.current_state.tags) == dict(compiled.current_state.tags)

@@ -456,9 +456,9 @@ def instruction_specs(
         )
     elif kind == "on_delay":
         timer = draw(st.sampled_from(pool.timers))
-        use_tag_preset = has_numeric and draw(st.integers(0, 4)) == 0
+        use_tag_preset = bool(pool.preset_tags()) and draw(st.integers(0, 4)) == 0
         if use_tag_preset:
-            preset = draw(st.sampled_from(pool.all_numeric()))
+            preset = draw(st.sampled_from(pool.preset_tags()))
         else:
             preset = draw(timer_presets())
         has_reset = has_bool and draw(st.integers(0, 4)) == 0
@@ -470,9 +470,9 @@ def instruction_specs(
         )
     elif kind == "off_delay":
         timer = draw(st.sampled_from(pool.timers))
-        use_tag_preset = has_numeric and draw(st.integers(0, 4)) == 0
+        use_tag_preset = bool(pool.preset_tags()) and draw(st.integers(0, 4)) == 0
         if use_tag_preset:
-            preset = draw(st.sampled_from(pool.all_numeric()))
+            preset = draw(st.sampled_from(pool.preset_tags()))
         else:
             preset = draw(timer_presets())
         unit = draw(timer_units()) if draw(st.integers(0, 3)) == 0 else "ms"
@@ -610,7 +610,7 @@ def instruction_specs(
         )
     elif kind == "indirect_copy":
         blk = pool.int_block
-        ptr = draw(st.sampled_from(pool.int_tags)) if pool.int_tags else blk[blk.start]
+        ptr = draw(st.sampled_from(pool.int_tags)) if pool.int_tags else blk._tag_at(blk.start)
         use_offset = draw(st.booleans())
         offset = draw(st.integers(0, 2)) if use_offset else 0
         is_source = draw(st.booleans())

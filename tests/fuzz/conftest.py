@@ -17,7 +17,8 @@ MAX_EXAMPLES = int(os.environ.get("FUZZ_MAX_EXAMPLES", "200"))
 DT = 0.010
 PARITY_SCANS = int(os.environ.get("FUZZ_SCANS", "50"))
 
-# Each profile sets max_examples per test and a deadline per example (ms) as the hard cap.
+# Each profile sets max_examples per test and a deadline per example (ms). The gate bound is
+# 400 examples x 60 s per test. The stage stays under 5 minutes because it measures 2 to 3 minutes.
 GATE_MAX_EXAMPLES = 400
 GATE_DEADLINE_MS = 60_000
 
