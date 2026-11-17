@@ -38,7 +38,7 @@ class ReachChain:
 
 
 def _instructions_have_return(instructions: list[Any] | tuple[Any, ...]) -> bool:
-    """Whether a return sits among these instructions or in bare loop-body items."""
+    """Return whether a return sits among these instructions or in bare loop-body items."""
     from pyrung.core.instruction.control import ForLoopInstruction, ReturnInstruction
 
     for instruction in instructions:
@@ -69,7 +69,7 @@ def _return_guard_exprs_in_rung(rung: Rung) -> tuple[Any, ...]:
     if _instructions_have_return(rung._instructions):
         guards.append(_negated_rung_guard(rung))
 
-    # A forloop body rung carries the loop rung's conditions first, so its own
+    # A forloop body rung carries the loop rung's conditions first.  So its own
     # SP tree is the full path to a return inside it.
     def _body_rung_guards(instructions: list[Any]) -> None:
         for instruction in instructions:

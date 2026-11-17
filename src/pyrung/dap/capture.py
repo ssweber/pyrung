@@ -19,8 +19,8 @@ from pyrung.dap.expressions import Compare
 from pyrung.dap.grammar import Slot
 from pyrung.dap.handlers.stack_variables_evaluate import condition_predicate, parse_known_condition
 
-#: A CLICK keeps a Real to about 7 significant digits, so ``assert`` takes a Real
-#: within one part in a million (or 1e-6 near zero) as equal.
+#: A CLICK keeps a Real to about 7 significant digits.  So ``assert`` treats two Reals
+#: as equal when they are within one part in a million (or 1e-6 near zero).
 REAL_TOLERANCE = 1e-6
 
 
@@ -36,18 +36,18 @@ class CaptureEntry:
 
 @dataclass(frozen=True)
 class ProvenanceLine:
-    """A transcript line split into provenance and console command."""
+    """A transcript line, split into its provenance and its console command."""
 
     source: str | None
     command: str
 
 
 def parse_provenance_line(line: str) -> ProvenanceLine:
-    """Parse ``source: command`` transcript lines.
+    """Parse a ``source: command`` transcript line.
 
-    Sources may themselves contain colons, as in
+    A source can contain colons, as in
     ``harness:analog:thermal: patch TankTemp 2.0``.  Splitting on the
-    final ``": "`` preserves the full provenance source.
+    final ``": "`` keeps the full provenance source.
     """
 
     stripped = line.strip()
@@ -235,8 +235,8 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
             )
             error.stop_queued = getattr(exc, "stop_queued", False)
             if last_stop is not None or scans_ran_since(adapter, start):
-                # A "step" stop, never a reload's "entry", which would clear the editor's
-                # decorations.
+                # Queue a "step" stop and never a reload's "entry" stop, because an "entry"
+                # stop would clear the editor's decorations.
                 queue_stop_for_error(adapter, error)
             raise error from exc
         executed += 1
@@ -278,7 +278,8 @@ def _parse_replay_args(rest: str) -> tuple[str, str]:
     return rest, mode
 
 
-#: Bench-link verbs change the harness wiring; replayed only with the current harness.
+#: Bench-link verbs change the harness wiring.  A replay runs them only with the current
+#: harness.
 _LINK_VERBS = frozenset({"link", "unlink", "restore", "links"})
 
 
@@ -296,7 +297,7 @@ def _replay_commands(lines: list[str], *, harness_mode: str) -> list[tuple[int, 
             continue
         verb = parsed.command.split(maxsplit=1)[0].lower()
         if verb in _LINK_VERBS and harness_mode != "current":
-            # Recorded feedback already reflects the wiring, and "off" means no harness.
+            # Recorded feedback already reflects the wiring.  "off" means no harness.
             continue
         commands.append((i + 1, parsed.command))
     return commands

@@ -1,4 +1,4 @@
-"""Selection and reporting for a target route."""
+"""Select and report a target route."""
 
 from __future__ import annotations
 

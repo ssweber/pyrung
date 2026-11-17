@@ -126,11 +126,11 @@ def _compile_expression_impl(
 ) -> str:
     """Return a Python expression string with explicit parentheses.
 
-    An operation that can fail is 0 and the rest runs, as the core's: it goes
-    through ``_permissive_op``, ``_permissive_math`` or a helper of its own.
-    *strict* is for calc, where the operation also appends its flag's code to
-    the calc's ``_calc_flags`` (:data:`CALC_FLAGS`, core ``CALC_FAULTS``),
-    which the calc sets after the formula; nothing in the formula raises.
+    An operation that can fail gives 0 and the rest runs, as in the core.  Such an
+    operation goes through ``_permissive_op``, ``_permissive_math`` or a helper of its
+    own.  Pass *strict* for a calc.  Then each failing operation also appends its flag's
+    code to the calc's ``_calc_flags`` (:data:`CALC_FLAGS`, core ``CALC_FAULTS``).  The
+    calc sets those flags after the formula, and nothing in the formula raises.
     """
     if isinstance(expr, TagExpr):
         return _snapshot_tag_symbol(
@@ -162,15 +162,16 @@ def _compile_expression_impl(
         if (not strict or not isinstance(expr, CalcBinaryExpr)) and (
             _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
         ):
-            # Outside calc; in one, a randint() bound (calc_form keeps its ops).
+            # This applies outside a calc.  In a calc it applies only to a randint()
+            # bound, because calc_form keeps its ops.
             symbol = {"%": "mod", "**": "pow0"}[expr.symbol] if calc_op else expr.symbol
             return _permissive_op(symbol, left, right, ctx, flags)
         if expr.symbol in _BITWISE_SYMBOLS:
             if _binary_may_raise(expr) or (strict and _may_be_double(left, right)):
-                # A calc's: an Inf or NaN operand, or a negative shift count, is
-                # 0 with SC43.  A calc's integer step past 2 ** 53 is a double
-                # (_dbl), which may be Inf or NaN too (lsh(1, 2000)); an operand
-                # with none is an integer of at most 2 ** 53, so int() is safe.
+                # In a calc, an Inf or NaN operand or a negative shift count gives 0
+                # with SC43.  A calc's integer step past 2 ** 53 is a double (_dbl).
+                # Such a double may be Inf or NaN too, as in lsh(1, 2000).  An operand
+                # without _dbl is an integer of at most 2 ** 53, so int() is safe.
                 compiled = _permissive_op(expr.symbol, left, right, ctx, flags)
                 return _calc_step(expr, compiled, ctx, strict)
             left_int = _bit_int_expr(expr.left, left, ctx)
@@ -179,8 +180,8 @@ def _compile_expression_impl(
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
         if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
-            # A calc's ** (core _op_pow_calc): 0 ^ 0 is 0 with no flag, 0 to a
-            # negative power is +Inf, and a complex result is 0 with SC46.
+            # A calc's ** follows core _op_pow_calc.  0 ^ 0 is 0 with no flag.  0 to
+            # a negative power is +Inf.  A complex result is 0 with SC46.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             ctx.mark_helper("_pow_calc")
@@ -191,10 +192,10 @@ def _compile_expression_impl(
             or _may_be_float(expr.right)
             or (strict and _may_be_double(left, right))
         ):
-            # _pow gives +/-Inf for a float overflow, as the core's _op_pow, and
-            # raises _MathDomainError for a complex result; an integer power is
-            # exact and never overflows.  A calc's stepped double (_dbl) is a
-            # float: lsh(1, 1000) ** 2 is Inf, not an OverflowError.
+            # _pow returns +/-Inf for a float overflow, as the core's _op_pow does.
+            # It raises _MathDomainError for a complex result.  An integer power is
+            # exact and never overflows.  A calc's stepped double (_dbl) is a float,
+            # so lsh(1, 1000) ** 2 is Inf and not an OverflowError.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
             return _calc_step(expr, f"_pow({left}, {right})", ctx, strict)
@@ -203,14 +204,16 @@ def _compile_expression_impl(
             and expr.symbol == "%"
             and not (_non_negative(expr.left) and _positive_literal(expr.right))
         ):
-            # A calc's MOD truncates (the dividend's sign) and a MOD by 0 is 0
-            # with no flag, as the core's _op_mod; Python's % floors.
+            # A calc's MOD truncates, so the result has the sign of the dividend.
+            # A MOD by 0 is 0 with no flag.  Both follow the core's _op_mod.  Python's
+            # % floors instead.
             ctx.mark_helper("_mod")
             return f"_mod({left}, {right})"
         if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
-            # A calc's division by 0 is 0 with SC40.  By a tag, the test is
-            # inline, unless the dividend appends flags of its own, which a
-            # skipped dividend would lose; else a helper reads the divisor once.
+            # A calc's division by 0 is 0 with SC40.  If the divisor is a tag, the
+            # zero test is inline.  The exception is a dividend that appends flags of
+            # its own, because a skipped dividend would lose them.  Otherwise a helper
+            # reads the divisor once.
             ctx.mark_helper("_term_fail")
             if isinstance(expr.right, TagExpr) and not _appends_flags(left):
                 compiled = (
@@ -235,8 +238,8 @@ def _compile_expression_impl(
         if expr.symbol == "abs":
             floor = _abs_floor(expr)
             if floor is not None:
-                # abs() of an Int or Dint tag in a calc (calc_form): the bottom of
-                # the range is 0, with SC43.
+                # In a calc, abs() of an Int or Dint tag (see calc_form) turns the
+                # bottom of the range into 0, with SC43.
                 ctx.mark_helper("_abs_int")
                 ctx.mark_helper("_term_fail")
                 return f"_abs_int({inner}, {floor}, {flags})"
@@ -252,8 +255,8 @@ def _compile_expression_impl(
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
         # _math_func passes a non-finite operand through, as MathFuncExpr.evaluate
-        # does; _permissive_math also gives 0 for a domain error (SC46 in a
-        # calc) and for an integer too large for a float (SC43).
+        # does.  _permissive_math also gives 0 for a domain error (SC46 in a calc)
+        # and for an integer too large for a float (SC43).
         operand = _compile_expression_impl(
             expr.operand,
             ctx,
@@ -324,10 +327,10 @@ def _compile_expression_impl(
         return f"({' + '.join(terms)})"
 
     if isinstance(expr, RandIntExpr):
-        # As RandIntExpr.evaluate: a bare Real tag as a bound reads 0, and equal
-        # bounds, or one holding Inf or NaN, make the site 0.  In a calc the site
-        # appends its flag to the calc's _calc_flags (CALC_FLAGS), as any failing
-        # operation does: only the site is zeroed.
+        # This follows RandIntExpr.evaluate.  A bare Real tag as a bound reads 0.
+        # Equal bounds, or a bound that holds Inf or NaN, make the site 0.  In a calc
+        # the site appends its flag to the calc's _calc_flags (CALC_FLAGS), as any
+        # failing operation does.  Only the site is zeroed.
         if expr.real_bounds:
             return "0"
         flags = CALC_FLAGS if strict else "None"
@@ -392,7 +395,7 @@ def _compile_expression_impl(
 
 
 def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
-    """Inline ``max``/``min``/``median``/``mean`` over a static range.
+    """Return inline code for ``max``/``min``/``median``/``mean`` over a static range.
 
     Mirrors :func:`pyrung.core.expression.aggregate_values` operation for
     operation (same member order, same left-to-right sum), so the interpreted
@@ -453,7 +456,7 @@ _CALC_FLAGS_RE = re.compile(rf"\b{CALC_FLAGS}\b")
 
 
 def _appends_flags(compiled: str) -> bool:
-    """Whether the compiled calc code *compiled* can append to :data:`CALC_FLAGS`."""
+    """Return whether the compiled calc code *compiled* can append to :data:`CALC_FLAGS`."""
     return _CALC_FLAGS_RE.search(compiled) is not None
 
 
@@ -461,13 +464,13 @@ _DOUBLE_RE = re.compile(r"\b_dbl\(")
 
 
 def _may_be_double(*compiled: str) -> bool:
-    """Whether a compiled calc operand can hold a double from an integer step.
+    """Return whether a compiled calc operand can hold a double from an integer step.
 
-    A calc's integer step past 2 ** 53 is a double (:func:`_calc_step`, ``_dbl``),
-    and so may be +/-Inf or NaN (``lsh(1, 2000)``, Inf - Inf), where
-    :func:`_may_be_float` sees an integer.  ``int()`` of one raises, so a bitwise,
-    shift or address use of such an operand needs its guard, and a float's ``**``
-    raises past the float range, so a power of one needs ``_pow``.  An integer
+    A calc's integer step past 2 ** 53 is a double (:func:`_calc_step`, ``_dbl``).
+    Such a double may be +/-Inf or NaN, as in ``lsh(1, 2000)`` or Inf - Inf, where
+    :func:`_may_be_float` sees an integer.  ``int()`` of one raises.  So a bitwise,
+    shift or address use of such an operand needs its guard.  A float's ``**`` raises
+    past the float range, so a power of such an operand needs ``_pow``.  An integer
     operand without ``_dbl`` is at most 2 ** 53 in size.
     """
     return any(_DOUBLE_RE.search(code) is not None for code in compiled)
@@ -478,14 +481,14 @@ _UNSIGNED_TYPES = frozenset({TagType.BOOL, TagType.WORD})
 
 
 def _non_negative(expr: Any) -> bool:
-    """Whether *expr* is a non-negative constant or a Bool or Word tag."""
+    """Return whether *expr* is a non-negative constant or a Bool or Word tag."""
     if isinstance(expr, LiteralExpr):
         return expr.value >= 0
     return isinstance(expr, TagExpr) and expr.tag.type in _UNSIGNED_TYPES
 
 
 def _abs_floor(expr: UnaryExpr) -> int | None:
-    """The range bottom an ``abs()`` that calc_form swapped (ABS_OF_TYPE) refuses."""
+    """Return the range bottom that an ``abs()`` swapped by calc_form (ABS_OF_TYPE) refuses."""
     for type_name, op in ABS_OF_TYPE.items():
         if expr.op is op:
             return ABS_FLOORS[type_name]
@@ -503,10 +506,10 @@ _TYPE_BOUNDS = {
 
 
 def _int_bound(expr: Any) -> float:
-    """A bound on the magnitude of *expr* when it is an integer (inf if unknown).
+    """Return a bound on the magnitude of *expr* when it is an integer (inf if unknown).
 
-    A step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl`` in a
-    calc, as the core's ``_calc_step``; a float result needs no bound (0).
+    In a calc, a step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl``,
+    as in the core's ``_calc_step``.  A float result needs no bound, so its bound is 0.
     """
     if isinstance(expr, bool):
         return 1
@@ -524,7 +527,8 @@ def _int_bound(expr: Any) -> float:
         if symbol in ("+", "-"):
             return left + right
         if symbol == "*":
-            # A 0 bound is a 0 or a float: so is the product (and inf * 0 is NaN).
+            # A 0 bound means a 0 or a float.  The product is then a 0 or a float too,
+            # and inf * 0 is NaN.
             return 0 if left == 0 or right == 0 else left * right
         if symbol == "/":
             return 0
@@ -563,10 +567,10 @@ def _small_count_literal(expr: Any) -> bool:
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
-    """*compiled*, a step of a calc, as a double past 2 ** 53 (core ``_calc_step``).
+    """Wrap *compiled*, a step of a calc, in ``_dbl`` if it passes 2 ** 53 (core ``_calc_step``).
 
-    As the core decides it: a ``CalcBinaryExpr`` or ``CalcUnaryExpr`` (what
-    ``calc_form`` builds), or a shift in a calc.
+    The core makes the same decision.  A step is a ``CalcBinaryExpr`` or
+    ``CalcUnaryExpr`` (what ``calc_form`` builds), or a shift in a calc.
     """
     if isinstance(expr, (BinaryExpr, UnaryExpr)):
         stepped = isinstance(expr, (CalcBinaryExpr, CalcUnaryExpr))
@@ -579,7 +583,7 @@ def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> s
 
 
 def _binary_may_raise(expr: BinaryExpr) -> bool:
-    """Whether *expr* can raise on a math error (and so, outside calc, give 0).
+    """Return whether *expr* can raise on a math error (and so, outside calc, give 0).
 
     A division by a non-zero constant, a power with a non-negative integer
     constant exponent (positive in a calc), a bitwise operation on integers and a shift by a
@@ -635,7 +639,7 @@ def _small_shift_literal(expr: Any) -> bool:
 
 
 def _shift_count_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
-    """A shift count; a negative one raises OverflowError (core ``shift_count``)."""
+    """Return a shift count.  A negative one raises OverflowError (core ``shift_count``)."""
     if _non_negative_literal(expr):
         return compiled
     ctx.mark_helper("_bit_int")
@@ -646,11 +650,11 @@ def _shift_count_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
 def _permissive_op(
     op: str, left: str, right: str, ctx: CodegenContext, flags: str | None = None
 ) -> str:
-    """``_permissive_op(op, left, right)``: the operation, or 0 for a math error.
+    """Return ``_permissive_op(op, left, right)``, which gives the operation or 0 on a math error.
 
     The core's expressions give 0 where an operation raises (``_permissive`` in
     pyrung.core.expression).  In a calc (*flags*, :data:`CALC_FLAGS`) the
-    error's flag is appended too.
+    error's flag is also appended.
     """
     ctx.mark_helper("_bit_int")
     ctx.mark_helper("_shift_count")
@@ -668,7 +672,7 @@ _may_be_float = may_be_float
 
 
 def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
-    """``int(compiled)`` for a bitwise or shift operand.
+    """Return ``int(compiled)`` for a bitwise or shift operand.
 
     An operand that may be NaN goes through ``_bit_int``, which raises
     ``OverflowError`` for NaN as ``int()`` does for Inf (the core's
@@ -791,7 +795,7 @@ def _compute_sequential_reloads(
     ctx: CodegenContext,
     following_names: list[str] | None = None,
 ) -> list[tuple[int, str]] | None:
-    """The referenced scalars a store of several elements from *target_name* writes.
+    """Return the referenced scalars that a store of several elements from *target_name* writes.
 
     *following_names* are the elements after the target in its block
     (``element_names_after``); a tag in no block counts on by name.
@@ -838,10 +842,10 @@ def _compute_sequential_reloads(
 
 
 def _counted_names(following_names: list[str]) -> tuple[str, int, int] | None:
-    """The ``prefix``, base and width most of *following_names* count on from.
+    """Return the ``prefix``, base and width that most of *following_names* count on from.
 
-    Offset 1 is ``f"{prefix}{base + 1:0{width}d}"``.  Tried from the first, middle
-    and last name, as one of them may be a named slot or a mapped tag.
+    Offset 1 is ``f"{prefix}{base + 1:0{width}d}"``.  The function tries the first, middle
+    and last name, because one of them may be a named slot or a mapped tag.
     """
     best: tuple[int, tuple[str, int, int]] | None = None
     for offset in sorted({1, (len(following_names) + 1) // 2, len(following_names)}):
@@ -862,20 +866,20 @@ def _counted_names(following_names: list[str]) -> tuple[str, int, int] | None:
 
 
 def _counted_name_expr(prefix: str, base: int, width: int) -> str:
-    """Kernel source for the name ``f"{prefix}{base + _seq_i:0{width}d}"``.
+    """Return kernel source for the name ``f"{prefix}{base + _seq_i:0{width}d}"``.
 
-    The prefix is a user's block name, so it goes in as a literal (``repr``), never
-    into an f-string, where a brace, a backslash or a quote would change it.
+    The prefix is a user's block name.  It goes in as a literal (``repr``) and never into
+    an f-string, where a brace, a backslash or a quote would change it.
     """
     number = f'f"{{{base} + _seq_i}}"' if width <= 1 else f'f"{{{base} + _seq_i:0{width}d}}"'
     return f"{prefix!r} + {number}"
 
 
 def _kernel_following_store_lines(values_var: str, following_names: list[str]) -> list[str]:
-    """The kernel's stores of the elements after a static target, by their names.
+    """Return the kernel's stores of the elements after a static target, by their names.
 
-    Most of them count on by address; the rest (a named slot, a tag mapped onto
-    the address) are listed.
+    Most names are counted on from the address.  The rest are listed.  These are a named
+    slot and a tag mapped onto the address.
     """
     if not following_names:
         return []
@@ -981,11 +985,12 @@ def _copy_converter_write_lines(
 
 
 def _fault_follow_lines(instr: Any, ctx: CodegenContext) -> list[str]:
-    """Clear *instr*'s followed flags as it starts, before it reads: a raise in its body sets them.
+    """Return the lines that clear *instr*'s followed flags when it starts, before it reads.
 
-    A source naming one of the flags reads it off.  The lines run each scan the
-    instruction runs.  For a Math they also run on a scan its rung is false or
-    its one-shot does not fire (``guard_oneshot_execution``).
+    A raise in the instruction's body sets the flags again.  A source naming one of the
+    flags reads it off.  The lines run on each scan that the instruction runs.
+    For a Math they also run on a scan where its rung is false or its one-shot does not
+    fire (``guard_oneshot_execution``).
     """
     return [f"{ctx.symbol_if_referenced(name)} = False" for name in instr._fault_follows]
 
@@ -1002,7 +1007,7 @@ def _compile_guarded_instruction(
     sp = " " * indent
     settle = _fault_follow_lines(instr, ctx)
     # A Math clears its flags on every path, so the lines go ahead of the
-    # one-shot test.  Any other instruction clears them only as its body runs.
+    # one-shot test.  Any other instruction clears its flags only as its body runs.
     idle = settle if instr._fault_settles_idle else []
     run_settle = [] if instr._fault_settles_idle else settle
     if ctx.used_indirect_blocks:
@@ -1250,13 +1255,13 @@ def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
 
 
 def _copy_clamp_condition(value_var: str, dest_type: str, source_type: str | None) -> str | None:
-    """The test that a Copy of *value_var* into *dest_type* stops at a limit, if it can.
+    """Return the test for whether a Copy of *value_var* into *dest_type* stops at a limit.
 
-    It holds what the store truncates: 32767.5 into an INT stores 32767 without
-    clamping.  +/-Inf passes and NaN compares false, as a clamp pins Inf and
-    stores NaN as 0.  Text converts in the store and never clamps here, a Word
-    into an INT keeps its bits, and a REAL register clamps into a DINT with no
-    flag (``_copy_clamps``).
+    Return None if the Copy cannot stop at a limit.  The test is true for a value that the
+    store truncates, so 32767.5 into an INT stores 32767 without clamping.  +/-Inf passes
+    and NaN compares false, because a clamp pins Inf and stores NaN as 0.  Text converts
+    in the store and never clamps here.  A Word into an INT keeps its bits.  A REAL
+    register clamps into a DINT with no flag (``_copy_clamps``).
     """
     bounds = {"INT": (-32768, 32767), "DINT": (-2147483648, 2147483647)}.get(dest_type)
     if bounds is None or source_type == "CHAR":
@@ -1383,7 +1388,7 @@ def _compile_condition_element_read(
     ctx: CodegenContext,
     block_snapshots: dict[int, str] | None,
 ) -> str:
-    """A rung condition's read of ``block[addr]``: outside the block it reads 0, no flag."""
+    """Return a rung condition's read of ``block[addr]``.  Outside the block it reads 0, no flag."""
     index_expr = f"{ctx.use_condition_index_block(binding.block_id)}(int({addr_expr}))"
     return _element_read_or_default(block, binding, index_expr, ctx, block_snapshots)
 
@@ -1395,21 +1400,27 @@ def _compile_source_element_read(
     ctx: CodegenContext,
     block_snapshots: dict[int, str] | None,
 ) -> str:
-    """An instruction's read of ``block[addr]``: past the block 0, no flag; below it
-    the address-error flag and an IndexError (``_read_index_*``)."""
+    """Return an instruction's read of ``block[addr]``.
+
+    Past the block it reads 0 with no flag.  Below the block it sets the address-error
+    flag and raises an IndexError (``_read_index_*``).
+    """
     index_expr = f"{ctx.use_read_index_block(binding.block_id)}(int({addr_expr}))"
     return _element_read_or_default(block, binding, index_expr, ctx, block_snapshots)
 
 
 def _past_end_keeps(value: Any) -> bool:
-    """True for a pointer into a bank whose Copy writes nothing past its end."""
+    """Return True for a pointer into a bank whose Copy writes nothing past its end."""
     return isinstance(value, (IndirectRef, IndirectExprRef)) and value.block._past_end_keeps
 
 
 def _compile_copy_source(value: Any, ctx: CodegenContext) -> str:
-    """A Copy's source, as :func:`_compile_value` reads it, except a pointer into a bank
-    whose Copy writes nothing past its end (``Block._past_end_keeps``): past the end it
-    raises IndexError with no flag (``_resolve_index_*``), and the guard drops the copy."""
+    """Return a Copy's source, read as :func:`_compile_value` reads it.
+
+    A pointer into a bank whose Copy writes nothing past its end (``Block._past_end_keeps``)
+    is the exception.  Past the end, such a pointer raises IndexError with no flag
+    (``_resolve_index_*``), and the guard drops the copy.
+    """
     if not _past_end_keeps(value):
         return _compile_value(value, ctx)
     binding = ctx.block_bindings.get(id(value.block))
@@ -1477,10 +1488,11 @@ def _compile_value(
     strict: bool = False,
     condition: bool = False,
 ) -> str:
-    """*value* as a Python expression; *strict* for calc (see _compile_expression_impl).
+    """Return *value* as a Python expression.
 
-    *condition* for a rung condition's operand: an indexed element outside its
-    block reads as 0, with no fault flag.
+    Pass *strict* for a calc (see _compile_expression_impl).  Pass *condition* for a rung
+    condition's operand.  Then an indexed element outside its block reads as 0, with no
+    fault flag.
     """
     if isinstance(value, ImmediateRef):
         value = value.value
