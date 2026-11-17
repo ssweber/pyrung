@@ -23,6 +23,11 @@ The parts ``units``, ``fixed_scan``, ``text_flasher``, ``follow_flags``, ``follo
 their own (``APART_PARTS``), apart from the whole suite;
 ``fixed_scan`` is run with CLICK's fixed scan on, and its export says how.
 
+Picked cases load as one project with every case rung in main (``build_main``), for
+ClickNick's PLC queue.  Each keeps its slot and its hash::
+
+    make conformance-export CASES=word_store,drum/events_are_edges OUT=path/to/dir
+
 Regenerate the ClickNick workspace's ``src/plc/`` (for Preview Changes) with::
 
     make conformance-workspace
@@ -417,6 +422,35 @@ PART_STEP_BUDGET = 7500
 FOLLOW_RUNG_LIMIT = 150
 
 
+_PAST_BANK = (
+    "it writes past the DD bank. A run cut off can leave DD1531 holding 5, and a later "
+    "faults/pointer_past_bank_lands then fails"
+)
+
+#: Groups whose cases cannot be picked to run in main (``build_main``), and why.  A group
+#: that main calls more than once a scan, and a case that runs in-process only, are refused
+#: without an entry here.
+MAIN_REFUSED: dict[str, str] = {
+    "ret_branch": "its Return must end a subroutine, and main has none to end",
+    "boot_read": "a person boots the PLC between its runs",
+    "rtc_set": "it moves the PLC's clock, and a run cut off leaves it moved for a person to set",
+    "flag_scan": (
+        "it reads fault flags across a scan, so its reading depends on the rungs of part "
+        "boot around it (flag_carry asks the same alone)"
+    ),
+    "fixed_scan": "a person turns on CLICK's fixed scan before it runs",
+    "for_signed": "it stops the PLC on its watchdog unless a person sets that to 10000 ms",
+    "modbus_raw": "test_raw_requests drives it, and it writes outside its own memory",
+    "past_write": _PAST_BANK,
+    "past_clean": _PAST_BANK,
+}
+
+#: Groups whose cases can be picked only with no case of another group, and why.
+MAIN_ALONE: dict[str, str] = {
+    "for_wide": "its scans of over a second are past the 50 ms every other case assumes",
+}
+
+
 def groups(part: str | None = None) -> list[Group]:
     """Every group of *part* (``None``: the whole suite), in ``ALL_GROUPS`` order."""
     if part is None:
@@ -492,7 +526,8 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
         where = " or ".join(f"part {p}" for p in candidates)
         raise BuildMismatchError(
             f"{endpoint} runs program layout {found}; {asked} {are} in {layouts}. "
-            f"Load {where} (make conformance-export PART={'|'.join(map(str, candidates))})."
+            f"Load {where} (make conformance-export PART={'|'.join(map(str, candidates))}). "
+            f"{_PICK_HINT}"
         )
     known: list[str] = []
     for part in [*PARTS, *APART_PARTS, None]:
@@ -503,8 +538,167 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
     raise BuildMismatchError(
         f"{endpoint} runs program layout {found}; the suite is layout {', '.join(known)}. "
         f"Export the part again (make conformance-export "
-        f"PART={'|'.join([*PARTS, *APART_PARTS])}) and load it."
+        f"PART={'|'.join([*PARTS, *APART_PARTS])}) and load it. {_PICK_HINT}"
     )
+
+
+def parse_picks(text: str) -> list[str]:
+    """The entries of a pick: ``group`` or ``group/id``, split at commas.
+
+    An entry ``@path`` reads more entries from that file, one or more a line, with ``#``
+    starting a comment.
+
+    Raises:
+        ValueError: A pick file cannot be read.
+    """
+    entries: list[str] = []
+    for raw in text.split(","):
+        entry = raw.strip()
+        if entry.startswith("@"):
+            path = Path(entry[1:])
+            try:
+                text_of_file = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"Cannot read the pick file {path}: {exc.strerror}") from None
+            for line in text_of_file.splitlines():
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    entries.extend(parse_picks(line))
+        elif entry:
+            entries.append(entry)
+    return entries
+
+
+def main_refusal(group: Group, case_id: str | None = None) -> str | None:
+    """Why *group*, or its case *case_id*, cannot be picked to run in main, or ``None`` when it can."""
+    if group.name in MAIN_REFUSED:
+        return MAIN_REFUSED[group.name]
+    if group.calls != 1:
+        return (
+            f"main calls {group.subroutine} {group.calls} times a scan, and its cases count calls"
+        )
+    if all(c.in_process_only is not None for c in group.cases):
+        return "it runs in-process only"
+    if case_id is not None:
+        c = next(c for c in group.cases if c.id == case_id)
+        if c.in_process_only is not None:
+            return f"it runs in-process only: {c.in_process_only}"
+    return None
+
+
+def main_refusals() -> dict[str, str]:
+    """Every case that cannot be picked to run in main, as ``group/id``, and why."""
+    return {
+        f"{g.name}/{c.id}": reason
+        for g in (*ALL_GROUPS, *APART_GROUPS)
+        for c in g.cases
+        if (reason := main_refusal(g, c.id)) is not None
+    }
+
+
+def pick(entries: list[str]) -> tuple[list[Group], dict[str, frozenset[str]]]:
+    """The groups of a pick, in the order main runs them, and the ids picked in each.
+
+    An entry is ``group/id`` for one case or ``group`` for every case of the group (its
+    in-process-only cases are reported skipped, as in a part).  A group picked whole has no
+    entry in the ids.  Groups run in ``ALL_GROUPS`` (or ``APART_GROUPS``) order and cases in
+    group order, whatever the order of *entries*.
+
+    Raises:
+        ValueError: An entry names no group or case, a case cannot run in main
+            (``main_refusal``), groups of the whole suite are mixed with groups on memory of
+            their own, groups of two parts apart are mixed, or a group that must run alone
+            (``MAIN_ALONE``) has company.
+    """
+    known = {g.name: g for g in (*ALL_GROUPS, *APART_GROUPS)}
+    # Group name -> picked case ids, or None for every case.
+    chosen: dict[str, set[str] | None] = {}
+    unknown: list[str] = []
+    for entry in entries:
+        name, _, case_id = entry.partition("/")
+        group = known.get(name)
+        if group is None or (case_id and all(c.id != case_id for c in group.cases)):
+            unknown.append(entry)
+        elif not case_id:
+            chosen[name] = None
+        elif name not in chosen:
+            chosen[name] = {case_id}
+        elif (ids := chosen[name]) is not None:
+            ids.add(case_id)
+    if unknown:
+        raise ValueError(f"No conformance group or case {', '.join(unknown)}")
+    if not chosen:
+        raise ValueError("Pick at least one case, as group/id or as a group for all its cases.")
+
+    refused: list[str] = []
+    for name, ids in chosen.items():
+        for case_id in sorted(ids) if ids is not None else [None]:
+            reason = main_refusal(known[name], case_id)
+            if reason is not None:
+                label = f"{name}/{case_id}" if case_id else name
+                refused.append(f"{label}: {reason}")
+    if refused:
+        raise ValueError("These cannot run in main:\n  " + "\n  ".join(refused))
+
+    apart_names = {g.name for g in APART_GROUPS}
+    apart = sorted(name for name in chosen if name in apart_names)
+    if apart and len(apart) != len(chosen):
+        own = "are on memory of their own" if len(apart) > 1 else "is on memory of its own"
+        raise ValueError(
+            f"{', '.join(apart)} {own}, "
+            "apart from the whole suite. Pick them in a project of their own."
+        )
+    parts = sorted({p for p, held in APART_PARTS.items() if set(apart) & set(held.groups)})
+    if len(parts) > 1:
+        raise ValueError(
+            f"Cases of parts {', '.join(parts)} are picked together. Each part on memory of "
+            "its own was read on a CLICK alone, and a case may need its part's company. "
+            "Pick from one of them at a time."
+        )
+    for name, reason in MAIN_ALONE.items():
+        if name in chosen and len(chosen) > 1:
+            raise ValueError(f"Pick {name} alone, since {reason}.")
+
+    order = APART_GROUPS if apart else ALL_GROUPS
+    picked = [g for g in order if g.name in chosen]
+    return picked, {name: frozenset(ids) for name, ids in chosen.items() if ids is not None}
+
+
+def build_main(entries: list[str]) -> ConformanceProgram:
+    """The picked cases (``pick``) as one project whose case rungs all run in main.
+
+    Each case keeps its manifest slot, so its registers, and the hash a CLICK confirms,
+    are those of its part.
+
+    Raises:
+        ValueError: The pick is refused (``pick``), or it takes more than
+            ``PART_STEP_BUDGET`` CLICK steps.
+    """
+    from pyrung.click.ladder import estimate_steps, pyrung_to_ladder
+
+    picked, only = pick(entries)
+    names = {g.name for g in picked}
+    apart = bool(names & {g.name for g in APART_GROUPS})
+    owners = {**PARTS, **{p: a.groups for p, a in APART_PARTS.items()}}
+    limit = max(scan_limit_ms(p) for p, held in owners.items() if names & set(held))
+    program = build_program(
+        picked,
+        load_manifest(APART_MANIFEST_PATH if apart else MANIFEST_PATH),
+        scan_limit_ms=limit,
+        main=True,
+        only=only,
+    )
+    steps = estimate_steps(pyrung_to_ladder(program.program, program.tag_map, validate=False))
+    if steps.total > PART_STEP_BUDGET:
+        raise ValueError(
+            f"The pick takes about {steps.total} CLICK steps, over the {PART_STEP_BUDGET} a "
+            "project may take. Pick fewer cases."
+        )
+    return program
+
+
+#: What a run that finds a project of picked cases needs.
+_PICK_HINT = "A project of picked cases runs with the same pick in CASES=, not GROUP=."
 
 
 def _holding(names: list[str]) -> list[str | None]:
@@ -539,6 +733,26 @@ def _print_layout(program: ConformanceProgram) -> None:
         )
 
 
+def _export_main(program: ConformanceProgram, out_dir: str, spec: str) -> int:
+    from pyrung.click.ladder import estimate_steps, pyrung_to_ladder
+
+    out = program.export(out_dir)
+    bundle = pyrung_to_ladder(program.program, program.tag_map, validate=False)
+    steps = estimate_steps(bundle).total
+    rungs = sum(row[0] == "R" for row in bundle.main_rows)
+    print(
+        f"Wrote {out} (cases in main, layout {program.program_hash} in DS1, scans of at most "
+        f"{program.scan_limit_ms} ms, about {steps} steps, {rungs} rungs in main)"
+    )
+    for g in program.groups:
+        ids = ", ".join(c.id for _, c in g.cases)
+        print(f"  {g.name}: hash {g.group_hash} in DS{g.hash_register}, {ids}")
+    for name, c in program.skipped:
+        print(f"  {name}/{c.id}: in-process only, left out")
+    print(f"Run it with the same pick: make test-conformance PLC=... CASES={spec}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m tests.conformance.suite",
@@ -554,12 +768,28 @@ def main(argv: list[str]) -> int:
         metavar="DIR",
         help=f"replace DIR/src/plc (default {WORKSPACE_PATH})",
     )
-    parser.add_argument(
+    chosen = parser.add_mutually_exclusive_group()
+    chosen.add_argument(
         "--part",
         choices=sorted([*PARTS, *APART_PARTS]),
         help="only that part's groups, as its own CLICK project (default: the whole suite)",
     )
+    chosen.add_argument(
+        "--cases",
+        metavar="PICK",
+        help="only these cases, every rung in main: group/id or group, comma-separated, "
+        "@file for a file of them",
+    )
     args = parser.parse_args(argv)
+    if args.cases is not None:
+        if args.workspace is not None:
+            parser.error("--cases writes a project of its own. Give an out_dir, not --workspace.")
+        try:
+            program = build_main(parse_picks(args.cases))
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        return _export_main(program, args.out_dir, args.cases)
     program = build(args.part)
     label = f"part {args.part}, layout" if args.part else "layout"
     note = fixed_scan_note(args.part)
