@@ -25,6 +25,7 @@ from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
 from ._emit import (
+    emit_cmp,
     emit_frac,
     emit_frac_keep,
     emit_mem_get,
@@ -50,6 +51,11 @@ def _tick_lines(acc: Tag, unit: TimeUnit, ctx: CodegenContext, sp: str) -> list[
     """Advance *acc* by this scan's dt into ``_acc``; leave the remainder in ``_new_frac``."""
     tick = emit_tick(acc, unit, ctx, read="inline", acc_read=_compile_value(acc, ctx))
     return [f"{sp}{line}" for line in tick]
+
+
+def _reached(acc: str, preset: str) -> str:
+    """True once *acc* has reached *preset*."""
+    return emit_cmp(acc, ">=", preset, paren=False)
 
 
 def _compile_toggle_instruction(
@@ -105,7 +111,7 @@ def _compile_debounce_instruction(
         f"{sp4}{emit_frac(instr.off_acc, '0', quote='double')}",
         f"{sp4}{on_write} = _acc",
         f"{sp4}{off_write} = 0",
-        f"{sp4}if _acc >= int({_compile_value(instr.on_preset, ctx)}):",
+        f"{sp4}if {_reached('_acc', f'int({_compile_value(instr.on_preset, ctx)})')}:",
         f"{sp8}{target_write} = True",
         f"{sp}else:",
         f"{sp4}{emit_frac_keep(instr.on_acc)}",
@@ -114,8 +120,11 @@ def _compile_debounce_instruction(
         f"{sp8}{emit_frac_keep(instr.off_acc)}",
         f"{sp4}else:",
         # The off side compares what it had reached before this scan, and not on the fall.
-        f"{sp8}_timed_out = not _was and int({_compile_value(instr.off_acc, ctx)})"
-        f" >= int({_compile_value(instr.off_preset, ctx)})",
+        f"{sp8}_timed_out = not _was and "
+        + _reached(
+            f"int({_compile_value(instr.off_acc, ctx)})",
+            f"int({_compile_value(instr.off_preset, ctx)})",
+        ),
         *_tick_lines(instr.off_acc, instr.unit, ctx, sp8),
         f"{sp8}{emit_frac(instr.off_acc, '_new_frac', quote='double')}",
         f"{sp8}{off_write} = _acc",
@@ -149,7 +158,7 @@ def _compile_flasher_phase(
     return [
         *_tick_lines(acc, instr.unit, ctx, sp),
         f"{sp}{_compile_lvalue(acc, ctx)} = _acc",
-        f"{sp}if _acc >= {limit}:",
+        f"{sp}if {_reached('_acc', limit)}:",
         f"{sp4}_phase = {other_phase}",
         f"{sp4}{emit_frac(instr.on_acc, '0', quote='double')}",
         f"{sp4}{emit_frac(instr.off_acc, '0', quote='double')}",
@@ -224,7 +233,8 @@ def _compile_timed_instruction(
     rung_key = f"_timed_rung:{ctx.state_key_for(instr)}"
     target_write = _compile_lvalue(instr.target, ctx)
     acc_write = _compile_lvalue(instr.timer_acc, ctx)
-    timing_target = "(_acc < _t_preset or _en)" if instr.maintained else "(_acc < _t_preset)"
+    timing = emit_cmp("_acc", "<", "_t_preset", paren=False)
+    timing_target = f"({timing} or _en)" if instr.maintained else f"({timing})"
     held_target = "_en" if instr.maintained else "False"
     return [
         f"{sp}_en = bool({enabled_expr})",
@@ -232,7 +242,7 @@ def _compile_timed_instruction(
         f"{sp}{emit_prev_store(rung_key, '_en')}",
         f"{sp}_t_preset = int({_compile_value(instr.on_preset, ctx)})",
         f"{sp}_timing = bool({_compile_value(instr.target, ctx)}) and (",
-        f"{sp4}int({_compile_value(instr.timer_acc, ctx)}) < _t_preset",
+        f"{sp4}{emit_cmp(f'int({_compile_value(instr.timer_acc, ctx)})', '<', '_t_preset', paren=False)}",
         f"{sp})",
         f"{sp}if _rose and not _timing:",
         f"{sp4}_timing = True",

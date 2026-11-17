@@ -33,6 +33,7 @@ from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._emit import (
+    emit_cmp,
     emit_frac,
     emit_mem_get,
     emit_mem_set,
@@ -51,7 +52,6 @@ from ._primitives import (
     _copy_clamp_condition,
     _range_item_read_expr,
     _range_item_write_expr,
-    _search_compare_expr,
 )
 
 
@@ -199,7 +199,7 @@ def _compile_search_instruction(
     found_write = _compile_lvalue(instr.found, ctx)
     value_expr = _compile_value(instr.value, ctx)
     range_type = _range_type_name(instr.search_range)
-    compare_expr = _search_compare_expr(instr.condition, "_candidate", "_rhs")
+    compare_expr = emit_cmp("_candidate", instr.condition, "_rhs")
     static_len = _static_range_length(instr.search_range)
     miss_body = [f"{result_write} = -1", f"{found_write} = False"]
 
@@ -268,7 +268,7 @@ def _compile_search_instruction(
             "    for _start in range(_cursor_index, _last_start + 1):",
             "        _candidate = ''.join(str("
             f"{_range_item_read_expr(instr.search_range, range_symbol, f'{range_indices}[_start + _off]', ctx)}) for _off in range(_window_len))",
-            f"        if ({'(_candidate == _rhs)' if instr.condition == '==' else '(_candidate != _rhs)'}):",
+            f"        if ({compare_expr}):",
             "            _matched = _start",
             "            break",
             "    if _matched is None:",
@@ -570,6 +570,7 @@ def _drum_end_lines(
     """Own logic off the return scan: tick if the step has a time, and set ``_end_met``."""
     if isinstance(instr, EventDrumInstruction):
         key_base = ctx.state_key_for(instr)
+        last_step = f"int({emit_mem_get(f'_drum_last_step:{key_base}', '0')})"
         return [
             *_compile_step_selector_lines(
                 step_var="_step",
@@ -577,7 +578,7 @@ def _drum_end_lines(
                 value_exprs=_event_drum_event_exprs(instr, ctx),
             ),
             # A step reached by a write to the register or a correction has spent its edge.
-            f"_end_met = _event_curr and (_step_raw == int({emit_mem_get(f'_drum_last_step:{key_base}', '0')}))"
+            f"_end_met = _event_curr and {emit_cmp('_step_raw', '==', last_step)}"
             f" and (not {emit_prev(f'_drum_event_prev:{key_base}')})",
         ]
 
@@ -636,7 +637,7 @@ def _drum_end_lines(
 
 
 #: A timed step ends once its Acc reaches the preset this scan reads.
-_TIME_UP = "_acc >= _limit"
+_TIME_UP = emit_cmp("_acc", ">=", "_limit", paren=False)
 
 
 def _drum_tick_lines(

@@ -93,7 +93,7 @@ from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 
-from ._emit import emit_prev, emit_prev_store
+from ._emit import emit_cmp, emit_prev, emit_prev_store, emit_truth
 from ._primitives import (
     CALC_FLAGS,
     _appends_flags,
@@ -231,6 +231,25 @@ def _compile_box(item: Any, enabled_expr: str, ctx: CodegenContext, indent: int)
     return lines
 
 
+#: The compare classes in the order compile_condition tests them, with their operators.
+_COMPARES = (
+    (CompareEq, "=="),
+    (CompareNe, "!="),
+    (CompareLt, "<"),
+    (CompareLe, "<="),
+    (CompareGt, ">"),
+    (CompareGe, ">="),
+)
+_INDIRECT_COMPARES = (
+    (IndirectCompareEq, "=="),
+    (IndirectCompareNe, "!="),
+    (IndirectCompareLt, "<"),
+    (IndirectCompareLe, "<="),
+    (IndirectCompareGt, ">"),
+    (IndirectCompareGe, ">="),
+)
+
+
 def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
     """Return a Python boolean expression string.
 
@@ -239,41 +258,18 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
     """
 
     if isinstance(cond, BitCondition):
-        return f"bool({_snapshot_tag_symbol(cond.tag, ctx)})"
+        return emit_truth(_snapshot_tag_symbol(cond.tag, ctx))
     if isinstance(cond, NormallyClosedCondition):
-        return f"(not bool({_snapshot_tag_symbol(cond.tag, ctx)}))"
+        return emit_truth(_snapshot_tag_symbol(cond.tag, ctx), negate=True)
     if isinstance(cond, IntTruthyCondition):
-        return f"(int({_snapshot_tag_symbol(cond.tag, ctx)}) != 0)"
-    if isinstance(cond, CompareEq):
-        return (
-            f"({_compile_value(cond.tag, ctx, condition=True)}"
-            f" == {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, CompareNe):
-        return (
-            f"({_compile_value(cond.tag, ctx, condition=True)}"
-            f" != {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, CompareLt):
-        return (
-            f"({_compile_value(cond.tag, ctx, condition=True)}"
-            f" < {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, CompareLe):
-        return (
-            f"({_compile_value(cond.tag, ctx, condition=True)}"
-            f" <= {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, CompareGt):
-        return (
-            f"({_compile_value(cond.tag, ctx, condition=True)}"
-            f" > {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, CompareGe):
-        return (
-            f"({_compile_value(cond.tag, ctx, condition=True)}"
-            f" >= {_compile_value(cond.value, ctx, condition=True)})"
-        )
+        return emit_truth(_snapshot_tag_symbol(cond.tag, ctx), as_int=True)
+    for kind, op in _COMPARES:
+        if isinstance(cond, kind):
+            return emit_cmp(
+                _compile_value(cond.tag, ctx, condition=True),
+                op,
+                _compile_value(cond.value, ctx, condition=True),
+            )
     if isinstance(cond, AllCondition):
         parts = [compile_condition(child, ctx) for child in cond.conditions]
         return "(" + " and ".join(parts) + ")" if parts else "True"
@@ -286,40 +282,16 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
     if isinstance(cond, FallingEdgeCondition):
         now, was = _edge_locals(edge_memory_key(cond))
         return f"({was} and not {now})"
-    if isinstance(cond, IndirectCompareEq):
-        return (
-            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
-            f" == {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, IndirectCompareNe):
-        return (
-            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
-            f" != {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, IndirectCompareLt):
-        return (
-            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
-            f" < {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, IndirectCompareLe):
-        return (
-            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
-            f" <= {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, IndirectCompareGt):
-        return (
-            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
-            f" > {_compile_value(cond.value, ctx, condition=True)})"
-        )
-    if isinstance(cond, IndirectCompareGe):
-        return (
-            f"({_compile_value(cond.indirect_ref, ctx, condition=True)}"
-            f" >= {_compile_value(cond.value, ctx, condition=True)})"
-        )
+    for kind, op in _INDIRECT_COMPARES:
+        if isinstance(cond, kind):
+            return emit_cmp(
+                _compile_value(cond.indirect_ref, ctx, condition=True),
+                op,
+                _compile_value(cond.value, ctx, condition=True),
+            )
     if isinstance(cond, ExprCompare):
-        return (
-            f"({compile_expression(cond.left, ctx)} "
-            f"{cond.symbol} {compile_expression(cond.right, ctx)})"
+        return emit_cmp(
+            compile_expression(cond.left, ctx), cond.symbol, compile_expression(cond.right, ctx)
         )
 
     raise NotImplementedError(f"Unsupported condition type: {type(cond).__name__}")

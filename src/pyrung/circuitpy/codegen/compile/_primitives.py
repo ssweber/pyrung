@@ -1210,22 +1210,6 @@ def _sequence_expr(values: list[int]) -> str:
     return repr(values)
 
 
-def _search_compare_expr(condition: str, left_expr: str, right_expr: str) -> str:
-    if condition == "==":
-        return f"({left_expr} == {right_expr})"
-    if condition == "!=":
-        return f"({left_expr} != {right_expr})"
-    if condition == "<":
-        return f"({left_expr} < {right_expr})"
-    if condition == "<=":
-        return f"({left_expr} <= {right_expr})"
-    if condition == ">":
-        return f"({left_expr} > {right_expr})"
-    if condition == ">=":
-        return f"({left_expr} >= {right_expr})"
-    raise ValueError(f"Unsupported search comparison: {condition!r}")
-
-
 def _pack_store_expr(value_expr: str, dest_type: str, ctx: CodegenContext) -> str:
     if dest_type == "REAL":
         ctx.mark_helper("_int_to_float_bits")

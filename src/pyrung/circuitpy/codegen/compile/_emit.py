@@ -208,8 +208,7 @@ def emit_done(
     if preset_key is not None:
         lines.append(emit_mem_set(preset_key, "_preset", quote="double"))
     lines.extend(then)
-    compare = f"_acc {op} _preset"
-    lines.append(f"{done} = ({compare})" if paren else f"{done} = {compare}")
+    lines.append(f"{done} = {emit_cmp('_acc', op, '_preset', paren=paren)}")
     lines.append(f"{acc} = _acc")
     return lines
 
@@ -220,3 +219,25 @@ def emit_timer_clear(
     """Lines that set *done* to *done_value* and *acc* to 0, and clear *frac*'s fraction."""
     lines = [emit_frac(frac, "0", quote="double")] if frac is not None else []
     return [*lines, f"{done} = {done_value}", f"{acc} = 0"]
+
+
+COMPARE_OPS = ("==", "!=", "<", "<=", ">", ">=")
+
+
+def emit_cmp(left: str, op: str, right: str, *, paren: bool = True) -> str:
+    """The compare *left* *op* *right*, in brackets unless ``paren=False``."""
+    if op not in COMPARE_OPS:
+        raise ValueError(f"Unsupported comparison: {op!r}")
+    compare = f"{left} {op} {right}"
+    return f"({compare})" if paren else compare
+
+
+def emit_truth(value: str, *, as_int: bool = False, negate: bool = False) -> str:
+    """*value* as a contact reads it.
+
+    A bit reads as ``bool(value)``, or ``(not bool(value))`` with *negate*.  A number
+    (``as_int``) is true when it is not 0.
+    """
+    if as_int:
+        return emit_cmp(f"int({value})", "!=", "0")
+    return f"(not bool({value}))" if negate else f"bool({value})"
