@@ -895,7 +895,7 @@ def _unresolved_producer_goals(
     """Detach bounded exact writers for a value unavailable in this World."""
 
     from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+    from pyrung.core.analysis.prove.expr import _atom_reads, _eval_expr_from_state
     from pyrung.core.analysis.simplified import (
         And,
         Atom,
@@ -929,6 +929,10 @@ def _unresolved_producer_goals(
         return ()
     if not facts or len(facts) > limit or projection is None:
         return ()
+
+    def _observed_whole(atom: Any, observed: dict[str, Any]) -> bool:
+        reads = _atom_reads(atom)
+        return reads is not None and reads <= observed.keys()
 
     def alternatives(expr: Any) -> tuple[tuple[Any, ...], ...] | None:
         if isinstance(expr, Const):
@@ -992,15 +996,7 @@ def _unresolved_producer_goals(
             alternative
             for alternative in guard_alternatives
             if alternative
-            and all(
-                atom.tag in observed
-                and (
-                    not atom.operand_is_tag
-                    or isinstance(atom.operand, str)
-                    and atom.operand in observed
-                )
-                for atom in alternative
-            )
+            and all(_observed_whole(atom, observed) for atom in alternative)
             and any(_eval_expr_from_state(atom, observed) is False for atom in alternative)
         )
         if not exact_alternatives:

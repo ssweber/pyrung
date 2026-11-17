@@ -19,10 +19,7 @@ from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.static_expressions import (
     caller_guard_context,
 )
-from pyrung.core.analysis.pilot.static_expressions import (
-    simplified_expr_tags as _simplified_expr_tags,
-)
-from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+from pyrung.core.analysis.prove.expr import _atom_reads, _eval_expr_from_state, _referenced_tags
 from pyrung.core.analysis.simplified import And, Atom, Const, Or, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
     _extract_condition_values,
@@ -62,10 +59,8 @@ def _guard_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
     shared partial-eval walk (``core/analysis/partial_eval.py``); the prover's
     twin is ``_known_eval_atom`` in ``prove/expr.py``.
     """
-    tags = {atom.tag}
-    if atom.operand_is_tag:
-        tags.add(atom.operand)
-    if tags <= known.keys():
+    reads = _atom_reads(atom)
+    if reads is not None and reads <= known.keys():
         return _eval_expr_from_state(atom, known)
     return None
 
@@ -127,7 +122,7 @@ def _reduce_guard_by_pin(
     terms = list(guard_expr.terms) if isinstance(guard_expr, And) else [guard_expr]
     kept: list[Any] = []
     for term in terms:
-        if _simplified_expr_tags(term) == {src_tag}:
+        if _referenced_tags(term) == {src_tag}:
             decided = _eval_expr_from_state(term, overlay)
             if decided is False:
                 return _GUARD_CONTRADICTION

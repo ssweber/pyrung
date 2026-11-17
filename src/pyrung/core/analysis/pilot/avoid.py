@@ -77,7 +77,9 @@ def _avoid_weighed_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
         for member in members
         # A condition reads a tag it cannot see as violated, where a callable raises.  Both
         # are a check with no answer for this state, whichever form it was written in.
-        if all(tag in snap for tag in member.tags) and _member_weighed(member.pred, snap)
+        if member.tags is not None
+        and all(tag in snap for tag in member.tags)
+        and _member_weighed(member.pred, snap)
     )
 
 

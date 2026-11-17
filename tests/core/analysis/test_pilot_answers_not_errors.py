@@ -130,6 +130,22 @@ class TestArithmeticInARung:
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
 
+    def test_a_writer_whose_guard_reads_a_tag_through_arithmetic_is_not_dead(self) -> None:
+        """No Lvl gives ``Lvl == Sp + 2`` while Sp is 30.  SetSp copies 1 into Sp, and Lvl 3 then does.
+
+        Reading Sp at its value now once judged the latch's guard dead, and how() stopped.
+        """
+        level = Int("Lvl", external=True, min=0, max=5)
+        setpoint = Int("Sp", default=30)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("SetSp", external=True)):
+                copy(1, setpoint)
+            with Rung(level == setpoint + 2):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
+
     def test_a_goal_holding_arithmetic_twice_keeps_one(self) -> None:
         """Merging goals once hashed each value, and an expression has no hash."""
         from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec

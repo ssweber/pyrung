@@ -356,8 +356,9 @@ def guard_verdict(
     - :data:`GUARD_SAT` — a concrete satisfying assignment exists (or the
       fully-pinned guard is definitely ``True``).
     - :data:`GUARD_PUNT` — undecidable (a ``None`` term — ``rise``/``fall``, a
-      stale calc-result), or a free tag has no known finite domain, or the
-      enumeration guardrails are exceeded.  Never a rejection, but distinct from
+      stale calc-result), or a free tag has no known finite domain, or an atom
+      reads a tag it cannot name (a pointer element), or the enumeration
+      guardrails are exceeded.  Never a rejection, but distinct from
       ``SAT`` so the caller can flag a frontier gated by a genuinely-unreadable
       guard (the skiff's escalation signal).
 
@@ -367,12 +368,15 @@ def guard_verdict(
     prover-owned complete domains. Missing completeness returns
     :data:`GUARD_PUNT` even when a softer plausible domain can be inferred.
     """
-    from pyrung.core.analysis.pilot.static_expressions import simplified_expr_tags
-    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state, _referenced_tags
 
     domains = domains or {}
     overlay_base = {**snapshot, **fixed}
-    free = sorted(simplified_expr_tags(expr) - set(fixed))
+    reads = _referenced_tags(expr)
+    if reads is None:
+        # A tag no domain lists would be read at its value now.  That can make a live guard look dead.
+        return GUARD_PUNT
+    free = sorted(reads - set(fixed))
 
     if not free:
         # Fully pinned — ``False`` is a proof of unsat; ``True`` a proof of sat;

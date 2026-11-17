@@ -2873,7 +2873,7 @@ def _lowest_held(
     """The lowest value *name* can hold.
 
     That is its type's lowest value, or 0 for an Acc that only counts up from values no lower
-    than 0.  None for a type with no lowest value.
+    than 0.  It is None for a type with no lowest value.
     """
     from pyrung.core.instruction.counters import CountDownInstruction
     from pyrung.core.validation._common import walk_instructions

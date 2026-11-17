@@ -184,21 +184,46 @@ def _eval_expr_from_state(expr: Expr | ArithAtom, state: Mapping[str, Any]) -> b
     return None
 
 
-def _referenced_tags(expr: Expr) -> frozenset[str]:
-    """Collect all tag names still referenced in an expression."""
-    tags: set[str] = set()
-    _walk_tags(expr, tags)
-    return frozenset(tags)
+def _atom_reads(atom: Atom) -> frozenset[str] | None:
+    """The tags :func:`_eval_atom_from_state` reads to decide *atom*.
+
+    A reader that pins or enumerates an atom's tags needs all of them.  A tag it misses
+    is read at its value now, as if it could not change.  So an arithmetic operand gives
+    the tags it reads.  None means the atom reads a tag it cannot name, such as a pointer
+    element.  No domain lists that tag, so no reader may decide the atom.
+    """
+    if atom.unsupported is not None or atom.indirect_ref is not None:
+        return None
+    operand = atom.operand
+    if atom.operand_is_tag:
+        return frozenset((atom.tag, operand))
+    if isinstance(operand, Expression):
+        from pyrung.core.analysis.sp_values import _expr_tag_names
+
+        names = _expr_tag_names(operand)
+        return None if names is None else frozenset((atom.tag, *names))
+    if operand is None or isinstance(operand, (bool, int, float, str)):
+        return frozenset((atom.tag,))
+    return None
 
 
-def _walk_tags(expr: Expr, out: set[str]) -> None:
+def _referenced_tags(expr: Expr | ArithAtom) -> frozenset[str] | None:
+    """The tags :func:`_eval_expr_from_state` reads, or None when one atom reads a tag it cannot name."""
     if isinstance(expr, Atom):
-        out.add(expr.tag)
-        if expr.operand_is_tag:
-            out.add(expr.operand)
-    elif isinstance(expr, (And, Or)):
-        for t in expr.terms:
-            _walk_tags(t, out)
+        return _atom_reads(expr)
+    if isinstance(expr, Const):
+        return frozenset()
+    if isinstance(expr, ArithAtom):
+        return frozenset((expr.left, expr.right))
+    if isinstance(expr, (And, Or)):
+        tags: set[str] = set()
+        for term in expr.terms:
+            reads = _referenced_tags(term)
+            if reads is None:
+                return None
+            tags |= reads
+        return frozenset(tags)
+    return None
 
 
 def _edge_source_tags(program: Any) -> frozenset[str]:
