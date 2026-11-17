@@ -93,6 +93,59 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
 - **Left over from the search deletion.**
   - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
     were the search's. Only tests pass them now. The `indirect_reach` maps they fill are then always empty. [nothing]
+- **Declared `min`/`max`/`choices` on a tag the ladder writes.** Decide what they mean there. Sam deferred the decision. [Sam]
+- **Instruction relations recorded by the codegen** (the bindings). One codegen writes both the compiled kernel and
+  the CircuitPython code. Each of its helpers records what its piece of code reads, writes and compares. prove/ and
+  pilot/ then read those records in place of their hand-kept lists for each instruction. The design is
+  `pyrung-wt/buildbot/jobs/bindings/EMIT-DESIGN.md`.
+  - Steps 0 and 1a are in progress on bob/emit-helpers. Step 0 is a script that renders a corpus of programs. Step 1a
+    moves the raw code strings into shared helpers, with byte-identical output. [nothing]
+  - Step 2 onward waits for Sam's nod on the size. The design estimates about 1,600 to 2,100 lines of package and
+    codegen code, plus tests. [Sam]
+  - Two gaps the records close (`bindings/CONSUMERS.md` 1.2 and 1.3, migration step 2).
+    - CTU and CTD declare no `completion_controls` (counters.py:152 and :266), so pilot's `_completion_branch_error`
+      (requirement_derivation.py:211) refuses them. The records would give "reset False", and for CTU the down input.
+    - The TOF profile ignores the armed memory (timers.py:301). The kernel times a TOF only while it is armed or done
+      or has a nonzero Acc. So PILOT may wait on a TOF that was never armed, with Done False and Acc 0, and it never moves.
+
+#### One owner per question
+
+The design review of prove/ and pilot/ (`pyrung-wt/buildbot/jobs/design-review/REPORT.md`) found questions that
+several modules each answer their own way. A fix then lands at one caller and misses the others. Each refactor below
+gives one question one owner. All [nothing].
+
+1. **What an instruction writes.** In progress on bob/readonly-writes.
+2. **What a condition reads.** Each atom of a resolved condition carries its read set and its source condition.
+   Four read sets then take the union of the atoms' reads. They are `_referenced_tags`, read_trace.py:24-102,
+   query.py:332 and static_expressions.py:56. `prove/expr._eval_atom` keeps literal compares and evaluates the rest
+   through the source condition, so 5 leaf evaluators become one. runner.py:850-933 gets simpler, and `ArithAtom`
+   goes. This refactor lands after bob/compared-tags, which it conflicts with.
+3. **What values a declaration allows.** `value_domains.declared_value_domain` (:16) is the owner. It gains
+   `with_default=` and `max_values=`, and gives None for a Real. It replaces `classify._declared_domain` (:834, 12
+   callers), `validation/_common._tag_domain_values` (:925), `pilot/skiff._declared_domain` (:489) and
+   `_ValueSets.declared` (value_sets.py:393). They disagree today on empty choices and on caps. classify's copy has no Real check.
+   Its callers at classify.py:3187, :3348, :3352, :3497 and :3510 may give a Real whole numbers. This refactor lands after bob/compared-tags and
+   bob/pdg-leftovers.
+4. **Whether a write runs on every scan.** `pdg.unconditional_write_before_read` (:562) splits into
+   `scan_local(tag)` and `power_on_value_unread(tag)`. `_extract_rung_node` (:1351) leaves oneshot writes out of
+   `sure_writes`. `runs_every_scan(node)` reads `_always_run_subroutines` (:1937). The patches at slice.py:594 and
+   :826 and why.py:134-139 go. This refactor lands last, after the codegen records each instruction's reads of its own state.
+5. **Whether a tag is an input.** `ProgramGraph.source_of(tag)` is the owner. It answers CONSTANT, OUTSIDE, LADDER
+   or LADDER_UNLISTED. `classify_tags` (pdg.py:1766) derives `TagRole.INPUT` from it. The readers are
+   trace.py:1346 and :2154, program_facts.py:231, awaited_actions.py:405 and dataview.py:252. Today an input is any
+   tag that is read and not in `writers_of`. So `.inputs()` lists an internal `Mode` with default 2 that nothing
+   writes. No order set.
+6. **What values a pointer takes.** One builder makes a pointer's value set. pointer_range.py:50 reads no rung
+   guards, so it may report a false CLK_PTR_PAST_BANK. No order set.
+7. **Where the program walkers live.** They move to `core/program/walk.py`. That breaks the import cycle between
+   `analysis/` and `validation/` (49 and 29 import lines). No order set.
+8. **What an id in pilot is.** NewType ids replace `tuple[Any, ...]`. pilot has 220 such fields, and 131 of them
+   are ids. No order set.
+9. **Whether two values match, and which rung writes a tag.** `sp_values` becomes public, because 58 modules
+   import `_values_match`. `_writer_for_tag` (sp_values.py:209) returns the first writer in a rung, but the scan
+   keeps the last. It also caches on `Rung` with setattr. No order set.
+10. **What each stage of a search does.** `_search_events` (pilot.py:580-1775) does all of them in 1,196 lines,
+    nested 8 deep. Split it into its stages. No order set.
 
 ### 1c. The public surface
 
@@ -110,13 +163,13 @@ level, and validation gets one public module. ClickNick's test of its named impo
 - Add `.git-blame-ignore-revs` with that commit, and a check in `devtools/semantic_lint.py` that refuses a new
   `with Rung(` in tests.
 
-## 2. CLICK-match fixes and the watchdog
+## 2. CLICK-match fixes
 
 The 2026-11-10 readings shipped in 0.16.0. The conformance page lists two known differences: 64-bit Reals (step 5)
 and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
 
-- **A watchdog stop.** Past a generous iteration cap, a scan stops with a watchdog error in the interpreter, the
-  kernel and the CircuitPython code instead of hanging. CLICK's default watchdog is 200 ms. [nothing]
+- **No watchdog stop for now** (Sam, 2026-11-17). A cheap CLICK validation finding could estimate a For loop's work
+  (iterations x body) and warn past a threshold. [nothing]
 - **The hardware round at the end of this step.** [PLC]
   - modbus_raw probes, with no ladder change. FC15 across the Y gap (Y115..Y202) skips reserved coils and stores named
     ones. FC05 to a reserved coil (Y117) answers 02. A read past XD8/YD8 answers 02. A read in an X gap (units 17..32)
@@ -285,12 +338,17 @@ Sam agreed to these on 2026-11-15. The gate fixes are step 0 above.
 
 Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
-- **laddercodec as a dependency, in three steps.**
-  1. Dev-only. Pass pyrung's CSV export through laddercodec's `read_csv` and list the disagreements.
-  2. Runtime, when the first duplicated rule table is deleted.
-  3. pyrung's CLICK codegen reads laddercodec's objects.
-  Where the two disagree, laddercodec's rule wins by default. The pyrung sections of laddercodec's `csv-format.md`
-  move here. [nothing]
+- **laddercodec as a dependency, in three steps.** They follow the plan's order (Sam, 2026-11-16). Before them, a
+  dev-only diff on bob/lc-diff lists where pyrung's export and rules disagree with laddercodec's. [nothing]
+  1. Validation on laddercodec (plan item 2, step 2). It waits for laddercodec's release with `FieldError`. laddercodec
+     becomes a runtime dependency here.
+     - Each case where pyrung becomes more permissive is logged in `pyrung-wt/buildbot/jobs/lc-diff/PERMISSIVE.md`.
+       laddercodec's CLICK checks test each one against CLICK before the PR merges (Sam, 2026-11-17).
+  2. Export through laddercodec (plan step 5).
+  3. Import reads laddercodec's objects (plan step 6).
+  Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
+  2026-11-17). This replaces "the refusal wins". The pyrung sections of
+  laddercodec's `csv-format.md` move here.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
   finding. It waits on laddercodec's release. [nothing]

@@ -3,6 +3,7 @@
 
 worktree_root = "../pyrung-wt"              # `run.py worktree new NAME` -> <worktree_root>/NAME
 procs_dir = "../pyrung-wt/buildbot/procs"   # one file per live bounded run (`run.py ps`), and the slot locks
+jobs_dir = "../pyrung-wt/buildbot/jobs"     # job notes, writable by the read-only agents
 base = "origin/main"                        # new worktrees start here, with no upstream
 branch_prefix = "bob/"                      # ... on branch <prefix><name>
 # Cap per run, all its processes (Windows Job Object). 0 = no cap. The largest gate stage peaks
