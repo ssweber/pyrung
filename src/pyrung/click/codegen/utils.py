@@ -303,6 +303,30 @@ def _render_to_text(args_str: str) -> str:
     return f"to_text({', '.join(rendered)})"
 
 
+def _check_to_text_source(source: str, convert: str) -> None:
+    """Refuse ``to_text(exponential=1)`` from an integer source, as export does.
+
+    CLICK offers Exponential Numbering only for a Real source.  A DF pointer and a Real
+    constant count as one.
+    """
+    to_text = _TO_TEXT_RE.fullmatch(convert)
+    if to_text is None or dict(_parse_af_args(to_text.group(1))[1]).get("exponential") != "1":
+        return
+    if source.startswith("DF"):
+        return
+    try:
+        float(source)
+    except ValueError:
+        pass
+    else:
+        if not source.lstrip("+-").isdigit():
+            return
+    raise ValueError(
+        "to_text(exponential=True) needs a Real source (DF or a Real constant), "
+        f"got copy source {source}."
+    )
+
+
 def _sub_operand_kwarg(
     key: str,
     value: str,

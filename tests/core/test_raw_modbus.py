@@ -156,6 +156,75 @@ class TestModbusRtuTarget:
             ModbusRtuTarget("meter", "/dev/ttyUSB0", baudrate=0)
 
 
+class TestCLICKV4TargetForms:
+    """CLICK v4's port and Slave ID forms; where CLICK or laddercodec refuses one, so does pyrung."""
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda device_id: ModbusTcpTarget("peer", "10.0.0.2", device_id=device_id),
+            lambda device_id: ModbusRtuTarget("drive", device_id=device_id),
+        ],
+        ids=["tcp", "rtu"],
+    )
+    def test_targets_with_a_tag_device_id_compare_by_tag_type_and_name(self, make):
+        same = make(Int("Id"))
+        assert same == make(Int("Id"))
+        assert hash(same) == hash(make(Int("Id")))
+        assert same != make(Int("Other"))
+        assert same != make(1)
+        assert same in [make(1), make(Int("Id"))]
+        assert len({same, make(Int("Id")), make(1), make(1)}) == 2
+
+    def test_tcp_com_port_defaults_to_ethernet_and_takes_wlan(self):
+        assert ModbusTcpTarget("peer", "10.0.0.2").com_port == "ethernet"
+        assert ModbusTcpTarget("peer", "10.0.0.2", com_port="wlan").com_port == "wlan"
+
+    def test_tcp_com_port_refuses_a_serial_port(self):
+        with pytest.raises(ValueError, match="com_port must be one of"):
+            ModbusTcpTarget("peer", "10.0.0.2", com_port="cpu2")
+
+    def test_rtu_takes_cpu3(self):
+        assert ModbusRtuTarget("vfd", com_port="cpu3").com_port == "cpu3"
+
+    @pytest.mark.parametrize("target", [ModbusTcpTarget, ModbusRtuTarget])
+    def test_device_id_takes_an_int_tag(self, target):
+        slave = Int("Slave")
+        args = ("peer", "10.0.0.2") if target is ModbusTcpTarget else ("vfd",)
+        assert target(*args, device_id=slave).device_id is slave
+
+    @pytest.mark.parametrize("make_tag", [Dint, Bool, lambda name: Tag(name, TagType.WORD)])
+    @pytest.mark.parametrize("target", [ModbusTcpTarget, ModbusRtuTarget])
+    def test_device_id_refuses_a_dd_dh_or_c_tag(self, target, make_tag):
+        args = ("peer", "10.0.0.2") if target is ModbusTcpTarget else ("vfd",)
+        with pytest.raises(TypeError, match=r"device_id must be an int 0\.\.\d+ or a DS tag"):
+            target(*args, device_id=make_tag("Slave"))
+
+    def test_device_id_refuses_a_bool_value(self):
+        with pytest.raises(TypeError, match="device_id must be an int"):
+            ModbusTcpTarget("peer", "10.0.0.2", device_id=True)
+
+    def test_tcp_device_id_runs_to_255(self):
+        assert ModbusTcpTarget("peer", "10.0.0.2", device_id=255).device_id == 255
+        with pytest.raises(ValueError, match=r"0\.\.255"):
+            ModbusTcpTarget("peer", "10.0.0.2", device_id=256)
+
+    def test_rtu_device_id_runs_to_247(self):
+        assert ModbusRtuTarget("vfd", device_id=247).device_id == 247
+        with pytest.raises(ValueError, match=r"0\.\.247"):
+            ModbusRtuTarget("vfd", device_id=248)
+
+    def test_rtu_receive_refuses_device_id_0(self):
+        from pyrung.core.instruction.send_receive import receive, send
+
+        target = ModbusRtuTarget("vfd", device_id=0)
+        with Program():
+            with Rung():
+                send(target=target, remote_start=ModbusAddress(400001), source=Int("Out"))
+                with pytest.raises(ValueError, match="device_id 1..247 or a DS tag, not 0"):
+                    receive(target=target, remote_start=ModbusAddress(400001), dest=Int("In"))
+
+
 # ---------------------------------------------------------------------------
 # Register count calculation
 # ---------------------------------------------------------------------------

@@ -170,8 +170,10 @@ _STATE_DECIDED_READS: dict[type, tuple[str, ...]] = {
     # A search stops at its first match, and a continuous one starts after its last result.
     SearchInstruction: ("value", "search_range"),
     ShiftInstruction: ("bit_range",),
-    # A send reads its source only when no request is pending, and only in live I/O.
-    ModbusSendInstruction: ("source",),
+    # A send reads its source and device ID, and a receive its device ID, only as a request
+    # starts, in live I/O.
+    ModbusSendInstruction: ("source", "device_id"),
+    ModbusReceiveInstruction: ("device_id",),
     **dict.fromkeys(
         (
             OnDelayInstruction,
@@ -199,7 +201,6 @@ _STATE_DECIDED_READS: dict[type, tuple[str, ...]] = {
             ReturnInstruction,
             BreakInstruction,
             ContinueInstruction,
-            ModbusReceiveInstruction,
         ),
         (),
     ),

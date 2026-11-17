@@ -52,7 +52,7 @@ from pyrung.core.expression import (
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.storage import BLANK_CHAR
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
@@ -495,12 +495,28 @@ class _TranslatorMixin:
             source=source,
         )
 
-    def _render_converter(self, converter: CopyConverter) -> str:
+    def _render_converter(
+        self, converter: CopyConverter, instruction: Any, source_text: str, *, path: str
+    ) -> str:
         if converter.mode == "text":
+            # CLICK offers Exponential Numbering for a Real source and Suppress Zero for
+            # an integer one, so only that one flag is written.
+            if _operand_type(instruction.source) is TagType.REAL:
+                flag = {"exponential": _bool_bit(bool(converter.exponential))}
+            elif converter.exponential:
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        "to_text(exponential=True) needs a Real source (DF or a Real "
+                        f"constant), got {source_text}. An integer source takes suppress_zero only."
+                    ),
+                    source=instruction,
+                )
+            else:
+                flag = {"suppress_zero": _bool_bit(bool(converter.suppress_zero))}
             return self._fn(
                 "to_text",
-                suppress_zero=_bool_bit(bool(converter.suppress_zero)),
-                exponential=_bool_bit(bool(converter.exponential)),
+                **flag,
                 termination_code="none"
                 if converter.termination_code is None
                 else f"${converter.termination_code:02X}",
@@ -844,6 +860,22 @@ def click_real_literal(value: float) -> str | None:
 def _quote(value: str) -> str:
     escaped = value.replace('"', '""')
     return f'"{escaped}"'
+
+
+def _operand_type(operand: Any) -> TagType | None:
+    """The tag type of a copy operand.
+
+    A pointer has its block's type, and a float constant counts as a Real.
+    """
+    if isinstance(operand, ImmediateRef):
+        operand = operand.value
+    if isinstance(operand, Tag):
+        return operand.type
+    if isinstance(operand, (BlockRange, IndirectBlockRange, IndirectRef, IndirectExprRef)):
+        return operand.block.type
+    if isinstance(operand, float):
+        return TagType.REAL
+    return None
 
 
 def _bool_bit(value: bool) -> str:

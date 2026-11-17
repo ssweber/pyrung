@@ -46,6 +46,7 @@ from pyrung.click.codegen.utils import (
     _CLICK_HEX_RE,
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
+    _check_to_text_source,
     _hex_math_bare_numbers,
     _parse_af_args,
     _parse_operand_prefix,
@@ -1342,6 +1343,11 @@ def _render_af_token(
         return f"{py_func}()"
 
     args, kwargs = _parse_af_args(args_str)
+
+    if func_name in {"copy", "blockcopy"} and args:
+        for key, value in kwargs:
+            if key == "convert":
+                _check_to_text_source(args[0], value)
 
     if func_name == "math" and args and ("mode", "hex") in kwargs:
         args = [_hex_math_bare_numbers(args[0]), *args[1:]]

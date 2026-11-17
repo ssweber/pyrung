@@ -186,6 +186,8 @@ CircuitPython code generation supports Modbus TCP only, not RTU (serial).
 | `device_id` | `int` | `1` | Modbus unit ID (0–255) |
 | `timeout_ms` | `int` | `1000` | Per-transaction timeout |
 
+The P1AM takes neither a DS tag as `device_id` nor `com_port="wlan"`. `ModbusClientConfig` refuses both.
+
 Unlike the CLICK dialect's threaded `send`/`receive`, the CircuitPython versions generate a non-blocking state machine. Each transaction advances one step per scan (connect, send request, wait for response, apply result). The scan loop is never blocked. Status tags (`sending`/`receiving`, `success`, `error`, `exception_response`) update as the transaction progresses. When the rung condition goes false, status tags reset to defaults.
 
 ## Which registers the server serves

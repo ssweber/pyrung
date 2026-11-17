@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import textwrap
 import warnings
 from itertools import product
@@ -2655,6 +2656,28 @@ class TestRoundTrip:
         exec_with_source(ladder_to_pyrung(bundle), ns)
         assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
 
+    @pytest.mark.parametrize(
+        "target",
+        [
+            'ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1, com_port="wlan")',
+            'ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=DS2420)',
+            'ModbusRtuTarget(name="vfd1", com_port="cpu3", device_id=DS7)',
+        ],
+    )
+    def test_click_v4_target_forms_round_trip(self, target):
+        """The WLAN port, CPU port 3 and a DS device ID survive export and import."""
+        call = (
+            f'receive(target={target}, remote_start="DS1", dest=DS1, receiving=C1, '
+            "success=C2, error=C3, exception_response=DS2)"
+        )
+        _assert_codegen_body(f"with rung(X1):\n    {call}", f"with rung(X001):\n    {call}")
+
+        logic, mapping = build_program(f"with rung(X1):\n    {call}")
+        bundle = pyrung_to_ladder(logic, mapping)
+        ns: dict = {}
+        exec_with_source(ladder_to_pyrung(bundle), ns)
+        assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
+
     def test_event_drum_jump_step_is_keyword(self):
         """A drum's jump pin imports as .jump(cond, step=...); step is keyword-only."""
         _assert_codegen_body(
@@ -2679,35 +2702,76 @@ class TestRoundTrip:
         assert pyrung_to_ladder(ns["logic"], ns["mapping"]).main_rows == bundle.main_rows
 
     @pytest.mark.parametrize(
-        ("source", "generated"),
+        ("source_operand", "source", "generated"),
         [
-            ("to_text()", "to_text(suppress_zero=True, exponential=False)"),
+            ("DS1", "to_text()", "to_text(suppress_zero=True)"),
+            ("DS1", "to_text(suppress_zero=False)", "to_text(suppress_zero=False)"),
             (
-                "to_text(suppress_zero=False, exponential=True)",
-                "to_text(suppress_zero=False, exponential=True)",
-            ),
-            (
+                "DS1",
                 'to_text(termination_code="$0D")',
-                'to_text(suppress_zero=True, exponential=False, termination_code="$0D")',
+                'to_text(suppress_zero=True, termination_code="$0D")',
             ),
             (
+                "DS1",
                 "to_text(termination_code=19)",
-                'to_text(suppress_zero=True, exponential=False, termination_code="$13")',
+                'to_text(suppress_zero=True, termination_code="$13")',
             ),
+            # A DF source writes only exponential; suppress_zero does not apply to it.
+            ("DF1", "to_text(suppress_zero=False)", "to_text(exponential=False)"),
+            ("DF1", "to_text(exponential=True)", "to_text(exponential=True)"),
+            ("2.5", "to_text()", "to_text(exponential=False)"),
         ],
     )
-    def test_copy_to_text(self, source, generated):
-        """to_text options survive export + import, including CLICK's termination_code=none."""
+    def test_copy_to_text(self, source_operand, source, generated):
+        """to_text writes the one flag its source has, and keeps CLICK's termination_code=none."""
         _assert_codegen_body(
             f"""
             with rung(X1):
-                copy(DS1, TXT1, convert={source})
+                copy({source_operand}, TXT1, convert={source})
             """,
             f"""
             with rung(X001):
-                copy(DS1, TXT1, convert={generated})
+                copy({source_operand}, TXT1, convert={generated})
             """,
         )
+
+    @pytest.mark.parametrize(
+        ("source", "refused"),
+        [
+            ("DS1", True),
+            ("DD1", True),
+            ("DH1", True),
+            ("5", True),
+            # A Real constant and a DF pointer are Real sources.
+            ("2.5", False),
+            ("DF[DS1]", False),
+            ("DF1", False),
+        ],
+    )
+    def test_import_refuses_to_text_exponential_from_an_integer(self, source, refused):
+        """CLICK offers Exponential Numbering only for a DF source, so import refuses it elsewhere."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        af = f"copy({source},TXT1,convert=to_text(exponential=1,termination_code=none))"
+        bundle = LadderBundle(
+            main_rows=(header, tuple(_make_row("R", {0: "X001"}, af))),
+            subroutine_rows=(),
+        )
+        if refused:
+            with pytest.raises(
+                ValueError,
+                match=rf"needs a Real source \(DF or a Real constant\), got copy source {re.escape(source)}\.",
+            ):
+                ladder_to_pyrung(bundle)
+        else:
+            assert "to_text(exponential=True)" in ladder_to_pyrung(bundle)
 
     def test_send_block_range(self):
         """Send with BlockRange source round-trips through DS1..DS3."""
