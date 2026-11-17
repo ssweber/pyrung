@@ -31,6 +31,8 @@ Groups (the brief for this tool, written after two branches regressed how() unse
                body-rung contact the body writes), and a producer in a subroutine the For calls
     system     a copy of a system tag the runtime writes (the scan counter, an RTC field),
                compared with a value the runtime gives it
+    preset     a negative preset, written as a literal and as a tag: a counter held in
+               reset, the same counter staged below its preset, an on-delay
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
 and never reuse it, because two runs are compared by name.
@@ -53,6 +55,7 @@ from pyrung import (  # noqa: E402
     And,
     Block,
     Bool,
+    Counter,
     Dint,
     Int,
     Or,
@@ -62,6 +65,7 @@ from pyrung import (  # noqa: E402
     Timer,
     call,
     copy,
+    count_up,
     fill,
     forloop,
     latch,
@@ -1702,3 +1706,64 @@ _add(
     "system/copy of the rtc hour reaches 13",
     _copied_system_tag(system.rtc.hour, 13, datetime(2026, 6, 15, 13, 30, 20)),
 )
+
+
+# --------------------------------------------------------------------------- preset
+
+
+def _negative_preset_counter(literal, *, stage):
+    """A counter with a preset of -5 is done at Acc 0, as soon as its reset lets go.
+
+    With *stage* a rung first copies -10 into the Acc, so five counts are needed.
+    """
+
+    def build():
+        pulse, rst = Bool("Pulse", external=True), Bool("Rst", external=True)
+        stage_in = Bool("Stage", external=True)
+        preset = Int("Preset", default=-5)
+        ctr = Counter.clone("NegCtr")
+        with Program(strict=False) as prog:
+            with Rung(stage_in):
+                copy(-10, ctr.Acc)
+            with Rung(pulse):
+                count_up(ctr, -5 if literal else preset).reset(rst)
+        plc = PLC(prog, dt=0.01)
+        if stage:
+            plc.patch({"Stage": True})
+            plc.step()
+            plc.patch({"Stage": False})
+        else:
+            plc.patch({"Rst": True})
+        plc.step()
+        return dict(plc=plc, targets=(ctr.Done,), goal=_tag_goal(ctr.Done))
+
+    return build
+
+
+def _negative_preset_on_delay(literal):
+    def build():
+        run = Bool("Run", external=True)
+        preset = Int("Preset", default=-5)
+        timer = Timer.clone("NegTon")
+        with Program(strict=False) as prog:
+            with Rung(run):
+                on_delay(timer, -5 if literal else preset, "s")
+        plc = PLC(prog, dt=0.01)
+        plc.step()
+        return dict(plc=plc, targets=(timer.Done,), goal=_tag_goal(timer.Done))
+
+    return build
+
+
+for _kind, _literal in (("literal", True), ("tag", False)):
+    _add(
+        "preset",
+        f"preset/counter -5 {_kind} held in reset",
+        _negative_preset_counter(_literal, stage=False),
+    )
+    _add(
+        "preset",
+        f"preset/counter -5 {_kind} staged at -10",
+        _negative_preset_counter(_literal, stage=True),
+    )
+    _add("preset", f"preset/on delay -5 s {_kind}", _negative_preset_on_delay(_literal))
