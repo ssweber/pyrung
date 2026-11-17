@@ -1,4 +1,4 @@
-"""CircuitPySim.stop() survives a temp directory Windows holds a moment."""
+"""Check that CircuitPySim.stop() survives a temp directory that Windows holds for a moment."""
 
 from __future__ import annotations
 

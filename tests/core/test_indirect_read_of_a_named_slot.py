@@ -1,12 +1,13 @@
-"""A pointer reads the same memory a slot's name writes, whatever compiled first.
+"""Test that a pointer reads the same memory that a slot's name writes, whatever compiled first.
 
-A slot of a block can carry a name of its own: ``Tag.map_to``, ``Block.map_to``,
-``slot(name=...)`` or a tag of the same spelling.  Memory is keyed by name, so the
-name and ``block[pointer]`` are one cell in the interpreter.  Code generation used
-to learn the name from ``Block._tag_cache``, which holds only the slots something
-has indexed so far: a kernel (or generated code) compiled before a scan reached the
-slot through the pointer kept the name in a scalar of its own and the slot in the
-block array, and read a blank through the pointer.
+A slot of a block can have a name of its own: ``Tag.map_to``, ``Block.map_to``,
+``slot(name=...)`` or a tag of the same spelling. Memory is keyed by name, so the name and
+``block[pointer]`` are one cell in the interpreter.
+
+Code generation used to learn the name from ``Block._tag_cache``. That cache holds only the
+slots that something has indexed so far. Suppose a kernel (or generated code) was compiled
+before a scan reached the slot through the pointer. It kept the name in a scalar of its own
+and the slot in the block array, so it read a blank through the pointer.
 """
 
 from __future__ import annotations
@@ -85,7 +86,7 @@ def _program(name_slot: Any, *, pointer: int = 3) -> Program:
 
 
 def _recording(program: Program, arrivals: dict[int, dict[str, int]] | None = None) -> list[dict]:
-    """The tags as a stepped twin recorded them, by scan id."""
+    """Return the tags as a stepped twin recorded them, by scan id."""
     plc = PLC(program, dt=0.010)
     recorded = [dict(plc.state.tags)]
     for scan in range(SCANS):
@@ -99,8 +100,8 @@ def _recording(program: Program, arrivals: dict[int, dict[str, int]] | None = No
 def _assert_replay_equals_stepping(plc: PLC, recorded: list[dict[str, Any]]) -> None:
     assert isinstance(plc._compiled_replay_supported_kernel(), CompiledKernel)
     assert plc._initial_scan_id == 0
-    # Scan 0 ran nothing: a replay seeds the fault flags a recording only has from
-    # scan 1 on.  What the recording holds it must still hold.
+    # Scan 0 ran nothing. A replay seeds the fault flags that a recording only has from
+    # scan 1 on. The replay must still hold everything that the recording holds.
     assert {name: plc.replay_to(0).state.tags[name] for name in recorded[0]} == recorded[0]
     for scan_id in range(1, len(recorded)):
         assert dict(plc.replay_to(scan_id).state.tags) == recorded[scan_id], scan_id

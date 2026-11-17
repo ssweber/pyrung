@@ -1,9 +1,9 @@
-"""Drum probes, where the rules stop: ``drum_close`` (``Conf_DrumClose``).
+"""Probe where the drum rules stop: ``drum_close`` (``Conf_DrumClose``).
 
-Part ``drum2`` (``suite.PARTS``).  ``test_drum_settle`` shows that a drum takes
-no event or time end on the scan its rung returns, that a completed drum's own time and
-event do nothing, and that its accumulator holds.  These cases ask where those rules stop.  Snapshots as in ``test_drum_settle``, the first drum named
-above the other.
+Part ``drum2`` (``suite.PARTS``). ``test_drum_settle`` shows three rules. A drum takes no
+event or time end on the scan its rung returns. The time and event of a completed drum do
+nothing. Its accumulator holds. These cases ask where those rules stop.
+Snapshots are the same as in ``test_drum_settle``, with the first drum named above the other.
 
 - ``return_scan_ticks``: paused on scans 3..4 with Acc 1000 staged on a time drum and a timed
   time & event drum: Acc - 1000 is 0 on the return scan (Result2, Result3), which times
@@ -65,7 +65,7 @@ _DDS = range(754, 810)
 
 @dataclass(frozen=True)
 class Rig:
-    """The tags of a case: up to four drums (:meth:`side`), each with its step, Acc and state."""
+    """Holds the tags of a case: up to four drums (:meth:`side`), each with step, Acc and state."""
 
     slot: Any
     index: int
@@ -77,7 +77,7 @@ class Rig:
         return Side(ds[_STEPS[i]], td[_TDS[i]], a, b, flag, dd[_DDS[8 * self.index + which]])
 
     def spare_dd(self, which: int) -> Any:
-        """A DD of the case's own, for :func:`moves`."""
+        """Return a DD that belongs to this case, for :func:`moves`."""
         return dd[_DDS[8 * self.index + 4 + which]]
 
 
@@ -86,7 +86,7 @@ def rig(slot: Any, index: int) -> Rig:
 
 
 def _over(slot: Any, s: Side, scan: int, into: Any) -> None:
-    """*into* = Acc - 1000 on scan *scan*.  Below the drum."""
+    """Set *into* to Acc - 1000 on scan *scan*, in a rung below the drum."""
     with Rung(slot.Scratch == scan):
         math(s.acc - 1000, into)
 
@@ -208,7 +208,7 @@ def prove_return_scan_moves(slot):
     count_scans(slot)
     # Result1 holds the jump step, 1 (a DS address).
     put(slot, 1, 1, slot.Result1)
-    # Paused on scans 3..4 and 6..7, by one rung: a second Out on the bit would turn it off.
+    # One rung pauses the drum on scans 3..4 and 6..7. A second Out on the bit would turn it off.
     with Rung(slot.Scratch >= 3, slot.Scratch <= 7, slot.Scratch != 5):
         out(pause)
     pause_on(slot, pause_last, 3, 4)
@@ -346,7 +346,7 @@ def test_drum_close():
 
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
 def test_te_acc_by_step_kind_at_any_scan(monkeypatch, dt):
-    """A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms."""
+    """Run the case at several scan times. A CLICK scans in about 1 ms, the soft PLC in 10-40 ms."""
     monkeypatch.setattr(runner_module, "DT", dt)
     cases = [c for c in group.cases if c.id == "te_acc_by_step_kind"]
     assert len(cases) == 1
