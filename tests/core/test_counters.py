@@ -41,7 +41,7 @@ class TestCountUpInstruction:
     def test_count_up_counts_rising_edges(self, runner_factory):
         """CTU counts the rising edges of its rung, not the scans it is true.
 
-        Click behavior: a held input counts once; it must go false and true
+        Click behavior: a held input counts once.  It must go false and true
         again to count again.
         """
         PartSensor = Bool("PartSensor")
@@ -312,8 +312,8 @@ class TestCountDownInstruction:
         """CTD done bit is ON while accumulator <= preset.
 
         Click behavior: a down counter starts at 0, so with a positive preset
-        it is done from its first scan; staged above the preset, it is done
-        once it counts down to it.
+        it is done from its first scan.  If it is staged above the preset, it
+        is done once it counts down to the preset.
         """
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
