@@ -32,6 +32,18 @@ from pyrung.core.kernel import prove_effective_preset_key
 from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
+from ._emit import (
+    emit_choose,
+    emit_cmp,
+    emit_frac,
+    emit_mem_get,
+    emit_mem_set,
+    emit_prev,
+    emit_reached,
+    emit_rise,
+    emit_tick,
+    emit_truth,
+)
 from ._primitives import (
     _compile_guarded_instruction,
     _compile_lvalue,
@@ -42,8 +54,6 @@ from ._primitives import (
     _copy_clamp_condition,
     _range_item_read_expr,
     _range_item_write_expr,
-    _search_compare_expr,
-    _timer_carry_lines,
 )
 
 
@@ -191,7 +201,7 @@ def _compile_search_instruction(
     found_write = _compile_lvalue(instr.found, ctx)
     value_expr = _compile_value(instr.value, ctx)
     range_type = _range_type_name(instr.search_range)
-    compare_expr = _search_compare_expr(instr.condition, "_candidate", "_rhs")
+    compare_expr = emit_cmp("_candidate", instr.condition, "_rhs")
     static_len = _static_range_length(instr.search_range)
     miss_body = [f"{result_write} = -1", f"{found_write} = False"]
 
@@ -204,9 +214,9 @@ def _compile_search_instruction(
         cursor_body.extend(
             [
                 f"_current_result = int({result_read})",
-                "if _current_result == 0:",
+                f"if {emit_cmp('_current_result', '==', '0', paren=False)}:",
                 "    _cursor_index = 0",
-                "elif _current_result == -1:",
+                f"elif {emit_cmp('_current_result', '==', '-1', paren=False)}:",
                 "    _cursor_index = None",
                 "else:",
             ]
@@ -215,7 +225,7 @@ def _compile_search_instruction(
             [
                 "    _cursor_index = None",
                 f"    for _idx, _addr in enumerate({range_addrs}):",
-                "        if _addr == _current_result:",
+                f"        if {emit_cmp('_addr', '==', '_current_result', paren=False)}:",
                 f"            if _idx + 1 < len({range_addrs}):",
                 "                _cursor_index = _idx + 1",
                 "            break",
@@ -260,7 +270,7 @@ def _compile_search_instruction(
             "    for _start in range(_cursor_index, _last_start + 1):",
             "        _candidate = ''.join(str("
             f"{_range_item_read_expr(instr.search_range, range_symbol, f'{range_indices}[_start + _off]', ctx)}) for _off in range(_window_len))",
-            f"        if ({'(_candidate == _rhs)' if instr.condition == '==' else '(_candidate != _rhs)'}):",
+            f"        if ({compare_expr}):",
             "            _matched = _start",
             "            break",
             "    if _matched is None:",
@@ -358,17 +368,17 @@ def _compile_shift_instruction(
         *range_setup,
         *empty_check,
         f"_clock_curr = {clock_expr}",
-        f"_clock_prev = bool(_mem.get({key!r}, False))",
+        f"_clock_prev = {emit_prev(key)}",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
-        f"    _prev_values = [bool({_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx)}) for _idx in {range_indices}]",
+        f"    _prev_values = [{emit_truth(_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx))} for _idx in {range_indices}]",
         f"    {_range_item_write_expr(range_symbol, f'{range_indices}[0]', f'bool({enabled_expr})')}",
         f"    for _pos in range(1, {shift_len_expr}):",
         f"        {_range_item_write_expr(range_symbol, f'{range_indices}[_pos]', '_prev_values[_pos - 1]')}",
         f"if {reset_expr}:",
         f"    for _idx in {range_indices}:",
         f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
-        f"_mem[{key!r}] = _clock_curr",
+        emit_mem_set(key, "_clock_curr"),
     ]
     range_flush = _compile_range_flush(instr.bit_range, range_symbol, ctx)
     if range_flush:
@@ -379,20 +389,6 @@ def _compile_shift_instruction(
             ]
         )
     return [" " * indent + line for line in lines]
-
-
-def _compile_step_selector_lines(
-    *,
-    step_var: str,
-    target_var: str,
-    value_exprs: list[str],
-) -> list[str]:
-    lines: list[str] = []
-    for idx, expr in enumerate(value_exprs, start=1):
-        branch = "if" if idx == 1 else "elif"
-        lines.append(f"{branch} {step_var} == {idx}:")
-        lines.append(f"    {target_var} = {expr}")
-    return lines
 
 
 def _compile_drum_instruction(
@@ -425,7 +421,7 @@ def _compile_drum_instruction(
     if not isinstance(instr, EventDrumInstruction):
         clear_time = [
             f"{_compile_lvalue(instr.accumulator, ctx)} = 0",
-            f"_mem[{f'_frac:{instr.accumulator.name}'!r}] = 0",
+            emit_frac(instr.accumulator, "0", quote="repr"),
         ]
     complete = [f"{flag_write} = True", *(f"{symbol} = False" for symbol in output_symbols)]
 
@@ -434,7 +430,7 @@ def _compile_drum_instruction(
         f"_enabled = bool({enabled_expr})",
         f"_step_raw = int({_compile_value(instr.current_step, ctx)})",
         "_step = _step_raw",
-        f"_invalid = (_step < 1) or (_step > {step_count})",
+        f"_invalid = {emit_cmp('_step', '<', '1')} or {emit_cmp('_step', '>', str(step_count))}",
         "if _invalid:",
         "    _step = 1",
     ]
@@ -446,7 +442,7 @@ def _compile_drum_instruction(
         lines.extend(
             [
                 f"_jump_curr = bool({jump_expr})",
-                f"_jump_edge = _jump_curr and (not bool(_mem.get({jump_prev_key!r}, False)))",
+                f"_jump_edge = {emit_rise('_jump_curr', jump_prev_key, paren=True)}",
                 "if _jump_edge:",
                 f"    _jump_target = int({_compile_value(instr.jump_step, ctx)})",
             ]
@@ -459,7 +455,7 @@ def _compile_drum_instruction(
         lines.extend(
             [
                 f"_jog_curr = bool({jog_expr})",
-                f"_jog_edge = _jog_curr and (not bool(_mem.get({jog_prev_key!r}, False)))",
+                f"_jog_edge = {emit_rise('_jog_curr', jog_prev_key, paren=True)}",
             ]
         )
     reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
@@ -467,12 +463,13 @@ def _compile_drum_instruction(
     )
     lines.append(f"_reset_active = bool({reset_expr})")
 
-    flag_on = f"bool({_compile_value(instr.completion_flag, ctx)})"
+    flag_on = emit_truth(_compile_value(instr.completion_flag, ctx))
     write_row = [
         f"_row = {pattern_literal}[_step - 1]",
         *(f"{symbol} = bool(_row[{idx}])" for idx, symbol in enumerate(output_symbols)),
     ]
     move = [f"{step_write} = _step", *clear_time]
+    not_last = emit_cmp("_step", "<", str(step_count), paren=False)
 
     # One action a scan, by priority: reset (a level), a jump edge, a jog edge, own logic.
     lines.extend(
@@ -503,7 +500,7 @@ def _compile_drum_instruction(
             [
                 "elif _jog_edge:",
                 "    if not _invalid:",
-                f"        if _step < {step_count}:",
+                f"        if {not_last}:",
                 "            _step += 1",
                 *_indent_body(move, 12),
                 "            if _enabled:",
@@ -520,12 +517,12 @@ def _compile_drum_instruction(
             "    if _invalid:",
             f"        {step_write} = 1",
             f"    if not {flag_on}:",
-            f"        if not bool(_mem.get({rung_prev_key!r}, False)):",
+            f"        if not {emit_prev(rung_prev_key)}:",
             *_indent_body(write_row, 12),
             "        else:",
             *_indent_body(_drum_end_lines(instr, ctx), 12),
             "            if _end_met:",
-            f"                if _step < {step_count}:",
+            f"                if {not_last}:",
             "                    _step += 1",
             *_indent_body(move, 20),
             *_indent_body(write_row, 20),
@@ -537,20 +534,16 @@ def _compile_drum_instruction(
     if isinstance(instr, EventDrumInstruction):
         lines.extend(
             [
-                *_compile_step_selector_lines(
-                    step_var="_step",
-                    target_var="_event_curr",
-                    value_exprs=_event_drum_event_exprs(instr, ctx),
-                ),
-                f"_mem[{f'_drum_event_prev:{key_base}'!r}] = _event_curr",
-                f"_mem[{f'_drum_last_step:{key_base}'!r}] = _step",
+                *emit_choose("_step", "_event_curr", _event_drum_event_exprs(instr, ctx)),
+                emit_mem_set(f"_drum_event_prev:{key_base}", "_event_curr"),
+                emit_mem_set(f"_drum_last_step:{key_base}", "_step"),
             ]
         )
-    lines.append(f"_mem[{rung_prev_key!r}] = _enabled and (not _reset_active)")
+    lines.append(emit_mem_set(rung_prev_key, "_enabled and (not _reset_active)"))
     if has_jump:
-        lines.append(f"_mem[{jump_prev_key!r}] = _jump_curr")
+        lines.append(emit_mem_set(jump_prev_key, "_jump_curr"))
     if has_jog:
-        lines.append(f"_mem[{jog_prev_key!r}] = _jog_curr")
+        lines.append(emit_mem_set(jog_prev_key, "_jog_curr"))
 
     return [" " * indent + line for line in lines]
 
@@ -562,15 +555,12 @@ def _drum_end_lines(
     """Own logic off the return scan: tick if the step has a time, and set ``_end_met``."""
     if isinstance(instr, EventDrumInstruction):
         key_base = ctx.state_key_for(instr)
+        last_step = f"int({emit_mem_get(f'_drum_last_step:{key_base}', '0', quote='repr')})"
         return [
-            *_compile_step_selector_lines(
-                step_var="_step",
-                target_var="_event_curr",
-                value_exprs=_event_drum_event_exprs(instr, ctx),
-            ),
+            *emit_choose("_step", "_event_curr", _event_drum_event_exprs(instr, ctx)),
             # A step reached by a write to the register or a correction has spent its edge.
-            f"_end_met = _event_curr and (_step_raw == int(_mem.get({f'_drum_last_step:{key_base}'!r}, 0)))"
-            f" and (not bool(_mem.get({f'_drum_event_prev:{key_base}'!r}, False)))",
+            f"_end_met = _event_curr and {emit_cmp('_step_raw', '==', last_step)}"
+            f" and (not {emit_prev(f'_drum_event_prev:{key_base}')})",
         ]
 
     preset_exprs = [
@@ -580,55 +570,36 @@ def _drum_end_lines(
     tick = _drum_tick_lines(instr, ctx)
     if isinstance(instr, TimeDrumInstruction):
         lines = [
-            *_compile_step_selector_lines(
-                step_var="_step",
-                target_var="_limit",
-                value_exprs=[expr for expr in preset_exprs if expr is not None],
-            ),
+            *emit_choose("_step", "_limit", [expr for expr in preset_exprs if expr is not None]),
             *tick,
         ]
         if ctx.proof_metadata:
             preset_key = prove_effective_preset_key(instr.completion_flag.name)
-            lines.append(f"_mem[{preset_key!r}] = _limit")
-        lines.append(f"_end_met = {_TIME_UP}")
+            lines.append(emit_mem_set(preset_key, "_limit"))
+        lines.append(f"_end_met = {emit_reached('_acc', '_limit')}")
         return lines
 
     lines = []
     timed_steps = sum(expr is not None for expr in preset_exprs)
     if timed_steps == len(preset_exprs):
         lines.extend(
-            _compile_step_selector_lines(
-                step_var="_step",
-                target_var="_limit",
-                value_exprs=[expr for expr in preset_exprs if expr is not None],
-            )
+            emit_choose("_step", "_limit", [expr for expr in preset_exprs if expr is not None])
         )
         lines.extend(tick)
     elif timed_steps:
         lines.extend(
             [
                 "_limit = None",
-                *_compile_step_selector_lines(
-                    step_var="_step",
-                    target_var="_limit",
-                    value_exprs=[expr if expr is not None else "None" for expr in preset_exprs],
+                *emit_choose(
+                    "_step",
+                    "_limit",
+                    [expr if expr is not None else "None" for expr in preset_exprs],
                 ),
                 "if _limit is not None:",
                 *_indent_body(tick, 4),
             ]
         )
-    lines.extend(
-        _compile_step_selector_lines(
-            step_var="_step",
-            target_var="_end_met",
-            value_exprs=_time_event_end_exprs(instr, ctx),
-        )
-    )
-    return lines
-
-
-#: A timed step ends once its Acc reaches the preset this scan reads.
-_TIME_UP = "_acc >= _limit"
+    return [*lines, *emit_choose("_step", "_end_met", _time_event_end_exprs(instr, ctx))]
 
 
 def _drum_tick_lines(
@@ -636,18 +607,12 @@ def _drum_tick_lines(
 ) -> list[str]:
     """Add this scan's time to Acc; the step's preset, ``_limit``, is the tick's limit."""
     acc_write = _compile_lvalue(instr.accumulator, ctx)
-    lines = [f"_acc = int({_compile_value(instr.accumulator, ctx)})"]
-    frac_key = f"_frac:{instr.accumulator.name}"
+    acc_read = _compile_value(instr.accumulator, ctx)
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
-    lines.extend(
-        [
-            *_timer_carry_lines(instr.accumulator, instr.unit, ctx, ""),
-            f"_mem[{frac_key!r}] = _new_frac",
-            f"_acc = min(_acc + _int_units, {max_acc})",
-        ]
+    tick = emit_tick(
+        instr.accumulator, instr.unit, ctx, acc_read=acc_read, max_acc=max_acc, frac_first=True
     )
-    lines.append(f"{acc_write} = _acc")
-    return lines
+    return [*tick, f"{acc_write} = _acc"]
 
 
 def _event_drum_event_exprs(instr: EventDrumInstruction, ctx: CodegenContext) -> list[str]:
@@ -670,7 +635,7 @@ def _time_event_end_exprs(
     for preset, event in zip(instr.presets, instr.events, strict=True):
         parts: list[str] = []
         if preset is not None:
-            parts.append(f"({_TIME_UP})")
+            parts.append(f"({emit_reached('_acc', '_limit')})")
         if event is not None:
             if snapshots is not None:
                 parts.append(f"bool({next(snapshots)})")
