@@ -74,12 +74,12 @@ def _with_call_names(node: ast.With) -> set[str]:
 
 
 def _is_rung_context(node: ast.With) -> bool:
-    """True if the with-statement opens a rung scope (``with rung(...):``)."""
+    """Return True if the with-statement opens a rung scope (``with rung(...):``)."""
     return not _with_call_names(node).isdisjoint(("rung", "Rung", "RungContext"))
 
 
 def _is_forloop_context(node: ast.With) -> bool:
-    """True if the with-statement opens a forloop body, which holds rungs."""
+    """Return True if the with-statement opens a forloop body, which holds rungs."""
     return "forloop" in _with_call_names(node)
 
 
@@ -122,7 +122,7 @@ def _warn_check_skipped(target: str, reason: Exception) -> None:
     """Warn and skip strict checking when the source exists but cannot be checked.
 
     Code with no source at all (``exec`` of a string, the REPL) skips the check
-    quietly instead: there is nothing to inspect, so there is nothing to warn about.
+    quietly instead.  There is nothing to inspect, so there is nothing to warn about.
     """
     warnings.warn(
         f"Unable to perform strict DSL control-flow check for {target}: {reason}",

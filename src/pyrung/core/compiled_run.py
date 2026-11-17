@@ -1,21 +1,20 @@
 """Long ``run_for()`` / ``run_until()`` runs through the compiled kernel.
 
-Nothing is skipped: every scan executes, so a run cannot land anywhere stepping
-would not.  A run starts interpreted and moves to the kernel only once it has
-run long enough for that to pay.  It stays interpreted when something has to
-watch each scan (a ``when()``, a monitor, a callable stop predicate), when the
-program has no kernel (a ``run_function`` a kernel cannot copy among the reasons),
-and while a kernel could not say what the scan adds to the state: a rung may store
-a default into a tag the state does not have yet.
+This skips nothing.  Every scan executes, so a run cannot land anywhere that stepping
+would not.  A run starts interpreted and moves to the kernel only once it has run long
+enough for that to pay.  It stays interpreted when something has to watch each scan (a
+``when()``, a monitor, a callable stop predicate).  It stays interpreted when the program
+has no kernel, for example because it has a ``run_function`` that a kernel cannot copy.
+It also stays interpreted for as long as a kernel cannot say what a scan adds to the
+state.  A rung may store a default into a tag that the state does not have yet.
 
-Compiled scans record no causal timelines.  Their range goes in the runner's
-unrecorded scans, and the first question that reaches one steps it again.
+Compiled scans record no causal timelines.  The runner lists their range as unrecorded
+scans.  The first question that reaches one of those scans steps it again.
 
-Between real scans, the guarded loop of :mod:`pyrung.core.scan_trace` runs the
-scans that repeat the one before.  Its scans end in the same kernel state a real
-scan would leave, so everything here treats them alike: a compiled stop predicate
-and the bounds watch are guards inside it, which fail before the scan that would
-matter commits.
+Between real scans, the guarded loop of :mod:`pyrung.core.scan_trace` runs the scans that
+repeat the one before.  Its scans end in the same kernel state that a real scan would
+leave.  So everything here treats them alike.  A compiled stop predicate and the bounds
+watch are guards inside the loop.  They fail before the scan that would matter commits.
 """
 
 from __future__ import annotations
@@ -49,10 +48,10 @@ LOOP_OBSERVERS: list[Callable[[PLC, SystemState], None]] = []
 def _stepped_scans_until(
     start: float, target: float, dt: float, *, max_scans: int = 5_000_000
 ) -> int | None:
-    """How many fixed-step scans carry a clock from *start* past *target*.
+    """Return how many fixed-step scans carry a clock from *start* past *target*.
 
-    Counted by adding *dt* the way stepping does, so float drift lands the same.
-    None when *dt* cannot get there or the count would take over *max_scans*.
+    The count adds *dt* the way stepping does, so float drift comes out the same.  Return
+    None when *dt* cannot get there or the count would exceed *max_scans*.
     """
     if dt <= 0 or not math.isfinite(dt) or (target - start) / dt > max_scans:
         return None
@@ -67,8 +66,8 @@ def _stepped_scans_until(
 def _replace_tip_state(runner: PLC, state: SystemState) -> None:
     """Install *state* as the tip without a scan.
 
-    Keeps the runner's plain-dict read mirror of the tip tags while *state* has the
-    tip's tags; any other change drops the mirror (the next scan rebuilds it).
+    Keep the runner's plain-dict read mirror of the tip tags while *state* has the tip's
+    tags.  Any other change drops the mirror.  The next scan rebuilds it.
     """
     if runner._state_tags_read_cache_state is runner._state:
         if state.tags is runner._state.tags:
@@ -117,8 +116,8 @@ def run_scans(
 ) -> SystemState:
     """Run *scans* scans, or until *predicate* holds on a committed scan.
 
-    *compiled_predicate* says *predicate* depends only on the state it is
-    handed.  A callable cannot promise that, so it keeps the run interpreted.
+    *compiled_predicate* says that *predicate* depends only on the state it is handed.
+    A plain callable cannot promise that, so it keeps the run interpreted.
     """
     if not jit_stats.ACTIVE:
         return _run_scans(plc, scans, predicate, compiled_predicate, None)
@@ -200,9 +199,9 @@ def _run_compiled(
 ) -> int:
     """Run up to *budget* kernel scans; return the scans left to step interpreted.
 
-    A scan that raises, or that may have written a value outside a tag's bounds,
-    is undone: the tip stays at the last state materialized and the scans from
-    there on step interpreted, which raises or warns exactly as stepping does.
+    The run undoes a scan that raises, or that may have written a value outside a tag's
+    bounds.  The tip stays at the last state materialized, and the scans from there on step
+    interpreted.  That raises or warns exactly as stepping does.
     """
     start = plc._state
     first_scan_id = start.scan_id + 1
@@ -345,13 +344,13 @@ class _BoundsWatch:
 def _install(
     plc: PLC, replay: CompiledPLC, state: SystemState, first_scan_id: int | None = None
 ) -> None:
-    """Make *state* the tip, with all a commit leaves on the runner.
+    """Make *state* the tip and leave the runner as a commit would.
 
-    Its RTC applies are recorded under their own scans, it is cached, checkpointed
-    on its interval, history is trimmed, and the run flags read from it.  Applies of
-    scans past *state* wait: if those scans are undone, the replay's goes with them.
-    The scans from *first_scan_id* ran with no records.  They are noted before the trim,
-    so the trim takes the ones before the oldest kept scan.
+    The replay's RTC applies are recorded under their own scans.  The state is cached and
+    checkpointed on its interval.  History is trimmed, and the run flags are read from the
+    state.  Applies of scans past *state* wait.  If those scans are undone, the replay's
+    applies go with them.  The scans from *first_scan_id* ran with no records.  They are
+    noted before the trim, so the trim removes the ones before the oldest kept scan.
     """
     previous_tip = plc._state.scan_id
     applied = replay.rtc_applied or []

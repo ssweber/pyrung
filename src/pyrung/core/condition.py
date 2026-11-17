@@ -44,12 +44,12 @@ class Condition(ABC):
 
     source_file: str | None = None
     source_line: int | None = None
-    # Edge contacts: the site key ``bind_sites`` stamps (``e{N}``); see
+    # Edge contacts only: the site key that ``bind_sites`` stamps (``e{N}``).  See
     # :mod:`pyrung.core.site_memory`.
     _site_key: str | None = None
     _site_program_owned: bool = False
-    # The binding that stamped ``_site_key`` (a ``Program``, or one token for
-    # every binding no program owns); another binding copies the object first.
+    # The binding that stamped ``_site_key``.  It is a ``Program``, or one token shared by
+    # every binding that no program owns.  Another binding copies the object first.
     _site_owner: object | None = None
 
     @abstractmethod
@@ -269,15 +269,15 @@ class NormallyClosedCondition(Condition):
 
 
 class _EdgeCondition(Condition):
-    """An edge contact: a site with memory of its own (``_edge:e{N}``).
+    """Represent an edge contact, a site with memory of its own (``_edge:e{N}``).
 
-    The memory holds the bit as this contact last saw it, stored whenever the
-    contact's row is scanned, powered or not, and off at RUN (CLICK).  Two
-    contacts on one tag, the same contact in a subroutine called twice, or in a
-    For body on successive iterations each compare against their own last
-    look.  The row stores the memory after taking its condition view
-    (:func:`pyrung.core.site_memory.scan_edge_frame`), so ``evaluate()`` only
-    reads: the bit and the memory both come from the view.
+    The memory holds the bit as this contact last saw it.  The row stores it whenever the
+    contact's row is scanned, powered or not.  The memory is off at RUN, as in CLICK.  Two
+    contacts on one tag each compare against their own last look.  So does the same contact
+    in a subroutine called twice, and the same contact in a For body on successive
+    iterations.  The row stores the memory after it takes its condition view
+    (:func:`pyrung.core.site_memory.scan_edge_frame`).  So ``evaluate()`` only reads.  The
+    bit and the memory both come from the view.
     """
 
     _memory_key: str | None = None
@@ -307,7 +307,7 @@ class _EdgeCondition(Condition):
 
 
 class RisingEdgeCondition(_EdgeCondition):
-    """Rising edge: the bit is on and was off when this contact last saw it."""
+    """Rising edge contact.  It is true when the bit is on and was off at its last look."""
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         current, previous = self._edges(ctx)
@@ -315,7 +315,7 @@ class RisingEdgeCondition(_EdgeCondition):
 
 
 class FallingEdgeCondition(_EdgeCondition):
-    """Falling edge: the bit is off and was on when this contact last saw it."""
+    """Falling edge contact.  It is true when the bit is off and was on at its last look."""
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         current, previous = self._edges(ctx)
@@ -328,7 +328,7 @@ class FallingEdgeCondition(_EdgeCondition):
 #
 # The left operand is a block element addressed at scan time: an IndirectRef
 # (``block[pointer_tag]``) or an IndirectExprRef (``block[expr]``).  Both
-# read through ``read_ctx``: an address outside the block reads as 0, with no
+# read through ``read_ctx``.  An address outside the block reads as 0, with no
 # fault flag.
 
 
@@ -526,25 +526,25 @@ class AnyCondition(Condition):
 
 
 def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | None:
-    """``txt[771] == "AB"``: a CHAR of a block against a longer literal, as CLICK reads it.
+    """Return the condition that CLICK reads for a CHAR compared with a longer literal.
 
-    CLICK compares the literal over the TXT and the ones after it, one character
-    each, so the compare is the And of each character's (``!=``: the Or of each
-    ``!=``), and every analysis reads it as that.  The compare as written is kept
-    on it as ``_text_window``, for the exporter (:func:`text_window_of`).  ``None``
-    for any other compare, and where the block ends before the literal does.
+    An example is ``txt[771] == "AB"``.  CLICK compares the literal over the TXT and the
+    ones after it, one character each.  So the compare is the And of each character's
+    compare (for ``!=``, the Or of each ``!=``), and every analysis reads it that way.  The
+    compare as written is kept on the result as ``_text_window``, for the exporter
+    (:func:`text_window_of`).  Return ``None`` for any other compare, and where the block
+    ends before the literal does.
 
-    A tag mapped onto a bank slot reads the slots after the one it was mapped
-    to, ``bank[addr + 1]`` on, whichever tags hold them; the mapping is recorded
-    when it is made (``Tag.map_to``, ``Block.map_to``, a TagMap), so how the
-    bank was read before does not matter.  A tag with no mapping reads the next
-    elements of the block that declared it, or, in a ``named_array``, the next
-    slots of its layout (the other fields of the instance first), and a
-    ``Char`` of no block is compared as written.
+    A tag mapped onto a bank slot reads the slots after the one it was mapped to,
+    ``bank[addr + 1]`` on, whichever tags hold them.  The mapping is recorded when it is
+    made (``Tag.map_to``, ``Block.map_to``, a TagMap), so how the bank was read before does
+    not matter.  A tag with no mapping reads the next elements of the block that declared
+    it.  In a ``named_array``, it reads the next slots of its layout instead, with the other
+    fields of the instance first.  A ``Char`` of no block is compared as written.
 
-    A logical compare mapped before the program is built is CLICK-exact, with
-    no finding.  One mapped after the program is built reads the layout, and
-    export refuses it where it differs (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
+    A logical compare mapped before the program is built is CLICK-exact, with no finding.
+    One mapped after the program is built reads the layout, and export refuses it where it
+    differs (``CLK_TEXT_WINDOW_NOT_CONTIGUOUS``).
     """
     from pyrung.core.tag import TagType
 
@@ -580,11 +580,11 @@ def text_window_condition(tag: Tag, value: Any, *, equal: bool) -> Condition | N
 
 
 def _text_window_tags(block: Any, addr: int, length: int) -> list[Tag] | None:
-    """The *length* Chars from ``block[addr]`` on, in the order they map to TXT."""
+    """Return the *length* Chars from ``block[addr]`` on, in the order they map to TXT."""
     runtime = getattr(block, "_pyrung_structure_runtime", None)
     if getattr(block, "_pyrung_structure_kind", None) != "named_array" or runtime is None:
         return [block._tag_at(addr + offset) for offset in range(length)]
-    # Instance-major: each instance takes ``stride`` slots, its fields first in order.
+    # The layout is instance-major.  Each instance takes ``stride`` slots, with its fields first.
     fields: tuple[str, ...] = runtime._field_order
     stride: int = runtime.stride
     start = (addr - 1) * stride + fields.index(block._pyrung_structure_field)
@@ -598,7 +598,7 @@ def _text_window_tags(block: Any, addr: int, length: int) -> list[Tag] | None:
 
 
 def text_window_of(condition: Condition) -> Condition:
-    """*condition* as written: the one compare of a :func:`text_window_condition`."""
+    """Return *condition* as written, the one compare of a :func:`text_window_condition`."""
     return getattr(condition, "_text_window", condition)
 
 
