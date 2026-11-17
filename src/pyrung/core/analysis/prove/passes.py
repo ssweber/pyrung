@@ -285,9 +285,7 @@ def _instructions_write(instructions: Iterable[Any], name: str) -> bool:
 
 
 def _writes_run_when_powered(instructions: Iterable[Any], name: str) -> bool:
-    """Return True when every write of *name* among *instructions* runs on each scan.
-
-    The write runs on each scan that its rung is on.
+    """Return True when every write of *name* among *instructions* runs whenever its rung is on.
 
     A rung's contacts are not all that decide whether a write on it runs.  A
     oneshot write runs only on the rung's rising edge.  A forloop body runs only

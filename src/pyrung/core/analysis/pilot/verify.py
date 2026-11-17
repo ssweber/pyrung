@@ -3,8 +3,9 @@
 ``verify_gates`` applies avoid and target checks, rejects spins and structural
 dead ends, and delegates motion attribution and progress classification to
 ``outcome.py``. It then decides whether that classified landing may revisit an
-executable world. It rejects a trace-setup step, as it lands, when a
-counter-input transition raises the input without a count or clears a count.
+executable world. When a trace-setup step under a counter-input transition
+lands, it rejects the step if the step raised the input without a count or
+cleared a count.
 
 ``verify_gates`` reports a suspicious excursion to the drive loop without
 performing runtime investigation. Recovery converts any exact correction
@@ -690,8 +691,9 @@ def _verify_gates(
                 avoid_names=settled,
             )
         for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
-            # Some trials keep their source here.  That is the values they stood on before
-            # any scan, which may be behind how()'s start.  It holds no scan that they ran.
+            # Some trials keep their source snapshot here.  The source is the state that the
+            # trial started from, before it ran any scan.  It may be older than how()'s start,
+            # and it shows no scan that the trial ran.
             wink = (
                 _avoid_weighed_after_clear(ctx.avoid_pred, frame.snap, snap)
                 if snap is trial.source_snap

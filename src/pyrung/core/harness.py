@@ -337,7 +337,10 @@ class Harness:
         self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
 
     def install(self) -> None:
-        """Put the plant on the runner and settle each feedback whose enable is on."""
+        """Put the plant on the runner.
+
+        Each feedback whose enable is on starts as if the enable had been on for a long time.
+        """
         self._install()
         self._settle()
 
@@ -466,7 +469,10 @@ class Harness:
         self.set_overrides({**self._overrides, **dict.fromkeys(tags)})
 
     def declared(self) -> tuple[Coupling, ...]:
-        """Return the couplings that the program declares, before overrides."""
+        """Return the couplings that the program declares with ``physical=`` and ``link=``.
+
+        Overrides do not change this list.
+        """
         return tuple(self._declared)
 
     @property
@@ -525,7 +531,7 @@ class Harness:
             )
 
     def _plant_timers(self) -> Iterator[tuple[str, str, str]]:
-        """Return ``(stem, feedback, unit)`` for each plant timer that the couplings run."""
+        """Yield ``(stem, feedback, unit)`` for each plant timer that the couplings run."""
         for c in self._bool_couplings:
             unit = coil_timer(c.on_delay_ms, c.off_delay_ms)[2]
             yield "__cpl_on", c.fb_name, unit
@@ -767,9 +773,10 @@ class Harness:
         """Return the profile for a timed or toggle feedback, which changes when its enable rises.
 
         The coil's own profile always asks for a pulse.  So a rung that needs the
-        enable on beside the feedback found no plan in it.  This profile holds an enable
-        that is off on, which gives the rise, as it does for a flasher's enable.  It pulses
-        an enable that is on, which takes a fall first.  A timed pulse ends by itself.  A
+        enable on beside the feedback found no plan in it.  If the enable is off, this
+        profile holds it on, which gives the rise.  The pulse-train profile holds a
+        flasher's enable on in the same way.  If the enable is on, this profile pulses
+        it, which takes a fall first.  A timed pulse ends by itself.  A
         maintained pulse ends once the enable is held off.  An on time of a scan or
         less gives no pulse, so there is no plan to turn it on.
         """

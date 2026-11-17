@@ -90,7 +90,8 @@ def set_mode_locked(
 
     Setting ``run`` while in STOP performs the STOP -> RUN transition without
     executing a scan.  The transition resets non-retentive values and clears
-    forces and patches.  So the first scan sees the overrides given here.
+    forces and patches.  The overrides given here are applied after the
+    transition and before any scan, so the first scan sees them.
     """
     runner = adapter._require_runner_locked()
     if mode == "stop":
@@ -244,8 +245,9 @@ def resolve_target_locked(adapter: Any, target: str) -> str:
     A tag name wins over an address, so tags named like addresses keep working
     (codegen names un-nicknamed operands ``X003``).  A Click address ("X001",
     "ds10") resolves through the session TagMap and the project's Click bank
-    blocks.  Any other target is unknown, because forcing or patching it would
-    only create a tag that the program never reads.
+    blocks.  The function raises ``DAPAdapterError`` for any other target.  It
+    refuses the target because forcing or patching it would only create a tag
+    that the program never reads.
     """
     runner = adapter._require_runner_locked()
     if (

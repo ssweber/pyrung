@@ -755,7 +755,10 @@ class _SliceElision:
             )
 
     def _entry_reads(self, candidate: str) -> Any:
-        """Return :func:`_entry_reads` for the instructions that may read *candidate* later."""
+        """Return :func:`_entry_reads` for the readers of *candidate*.
+
+        The readers are the instructions that may read *candidate* on another scan.
+        """
         return _entry_reads(self.state_decided_readers.get(candidate, ()), self.state_decided_names)
 
     def _each_scan_writes_first(

@@ -102,9 +102,9 @@ class Group:
     Pass ``in_main=True`` to run the cases' rungs in the main program instead.  A
     case can then ``call()`` a subroutine that it defines itself.  CLICK has no
     nested calls, so a call has to start in main.  The case ladder opens
-    ``with subroutine("Conf_<Name>...")`` for the helper.  The group has no
-    ``Conf_<Name>`` subroutine of its own. It goes in a part of its own, and its
-    rungs are re-pasted into main, not into a subroutine.
+    ``with subroutine("Conf_<Name>...")`` for the helper.  With ``in_main=True``,
+    the group has no ``Conf_<Name>`` subroutine of its own.  It goes in a part of
+    its own, and its rungs are re-pasted into main, not into a subroutine.
     """
 
     name: str

@@ -458,7 +458,7 @@ def wait_for_scan_counter_wrap(
 ) -> int:
     """Wait until the scan counter SD9 at *endpoint* has passed 32767.
 
-    A probe of what SD9 does after 32767 can only run once SD9 has got there.
+    A probe of what SD9 does after 32767 can only give an answer once SD9 has got there.
     SD9 has passed 32767 when a read is lower than the one before it (it wrapped,
     to 0 or negative) or is outside 0..32767 (it counts on, read signed or
     unsigned).  A PLC that passed 32767 long ago wraps again within one lap, so

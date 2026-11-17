@@ -187,9 +187,10 @@ def _check_operands(
 def _carry_goal_tags(setup: _drive_setup.DriveSetup, conditions: tuple[Any, ...]) -> None:
     """Register each tag of the goal with the search.
 
-    A pointer or a range can write a slot without naming it.  The search also registers an
-    operand tag whose only value came from a patch or force by name.  A rung that the search
-    adds then compares with the tag, not with its name.
+    The function does this because a pointer or a range can write a slot without naming
+    it.  The search also registers an operand tag whose only value came from a patch or
+    force by name.  A rung that the search adds then compares with the tag, not with its
+    name.
     """
     from pyrung.core.tag import Tag
 
@@ -307,7 +308,11 @@ _Options = ParamSpec("_Options")
 def _says_modbus_is_not_simulated(
     how: Callable[Concatenate[PLC, _Options], Plan],
 ) -> Callable[Concatenate[PLC, _Options], Plan]:
-    """Mark the plan for a program with send() or receive() to say that how() ran none of them."""
+    """Wrap *how* so that its plan names the tags that a Modbus device supplies.
+
+    Those names tell the reader of the plan that how() ran none of the program's send() and
+    receive() instructions.  ``modbus_levers`` is None if the program has neither.
+    """
 
     @wraps(how)
     def said(plc: PLC, *args: _Options.args, **kwargs: _Options.kwargs) -> Plan:

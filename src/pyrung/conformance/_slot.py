@@ -2,7 +2,7 @@
 
 DS1..DS10 are the program header. Each group owns a block of DS registers starting at
 its ``base``. The first 10 registers are the group header. Slot N of the group then
-lives at ``base + 10*N`` .. ``base + 10*N + 7``.
+lives at ``base + 10*N`` .. ``base + 10*N + 8``.
 """
 
 from __future__ import annotations

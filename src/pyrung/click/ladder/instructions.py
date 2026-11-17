@@ -259,8 +259,8 @@ class _InstructionMixin:
         """Render a Fill of one register as the Copy that CLICK accepts in its place.
 
         The Copy must store what the Fill stores. The export refuses a text value of
-        several characters, because it would fill several TXT. It also refuses a Copy
-        across text, because that converts.
+        several characters, because it would fill several TXT. It also refuses a value
+        that would need a Copy between text and a number, because that Copy converts.
         """
         value = instruction.value
         if isinstance(value, str) and len(value) > 1 and tag.type == TagType.CHAR:
@@ -734,7 +734,8 @@ class _InstructionMixin:
     def _render_status_bits(self, instruction: Any, busy_name: str, path: str) -> dict[str, str]:
         """Return the status keyword arguments of a Send or Receive.
 
-        A status bit on a hidden tag was left off, and the export leaves it off.
+        If the caller did not pass a status bit, pyrung gave it a hidden tag.  The export
+        leaves that bit out.
         """
         rendered: dict[str, str] = {}
         for name in (busy_name, "success", "error", "exception_response"):

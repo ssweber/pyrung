@@ -358,8 +358,8 @@ def break_guard_holds(
     The function reads the guard (a branch's inherited contacts and its own) on one trial
     view.  The levers that it varies are steerable inputs, which no instruction writes.
     So every contact reads them alike.  The other reads keep the values in ``snap`` and
-    ``fixed``.  A program-written read that an earlier instruction changes is read as the
-    caller gives it.
+    ``fixed``.  If an earlier instruction changes a tag that the program writes, the
+    function still reads the value that the caller passed in, not the changed value.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
 

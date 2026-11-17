@@ -270,7 +270,7 @@ def render(out: Path, only: str | None = None) -> dict[str, float]:
 def _export(ref: str) -> Path:
     """Return a tree with REF's ``src`` and ``tests``, and this tree's corpus scripts.
 
-    REF is exported once per commit.
+    The export is cached by commit, so each commit is exported once.
     """
     found = subprocess.run(
         ["git", "-C", str(ROOT), "rev-parse", "--verify", f"{ref}^{{commit}}"],

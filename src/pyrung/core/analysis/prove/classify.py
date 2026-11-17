@@ -1048,8 +1048,9 @@ def _stored_domain(
         storage = copy_store_transform(target.type, source)
     else:
         storage = calc_store_transform(target.type, calc_mode)
-    # dict.fromkeys removes duplicates and keeps the order.  It runs in linear time, which
-    # matters because a domain can hold thousands of values.
+    # dict.fromkeys removes duplicates and keeps the order.  Of equal values, such as 1 and
+    # 1.0, it keeps the first.  It runs in linear time, which matters because a domain can
+    # hold thousands of values.
     if storage is None:
         return tuple(dict.fromkeys(domain))
     low, high = storage.lower, storage.upper
@@ -1128,8 +1129,8 @@ def _interval_bounds(
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
     except (ArithmeticError, ValueError):
         return None
-    # A calc's 0 ** -1 gives a corner of +Inf or NaN.  An integer stores 0 for it,
-    # and the corners do not bound 0.
+    # A corner can be +Inf or NaN, for example from a calc's 0 ** -1.  An integer stores 0
+    # for it, and the corners do not bound 0.
     if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
         return None
     return (min(corners), max(corners))
@@ -2753,7 +2754,10 @@ def _close_tag_comparisons(
 
 
 def _accumulator_names(program: Program) -> set[str]:
-    """Return the tags that an instruction times or counts in.  They move on from any value."""
+    """Return the tags that an instruction times or counts in.
+
+    The instruction moves such a tag on from whatever value is stored in it.
+    """
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
 
