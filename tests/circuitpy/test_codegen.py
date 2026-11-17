@@ -169,8 +169,10 @@ class _IdleBase:
 
 
 def _on_every_backend(program: Program, monkeypatch, watch, *, scans: int) -> dict[str, tuple]:
-    """*watch*'s values after *scans* scans on the interpreter, the compiled
-    kernel and the generated CircuitPython, keyed by backend."""
+    """Return *watch*'s values after *scans* scans on each backend, keyed by backend.
+
+    The backends are the interpreter, the compiled kernel and the generated CircuitPython.
+    """
     results: dict[str, tuple] = {}
     for name, cls in (("interpreted", PLC), ("compiled", CompiledPLC)):
         plc = cls(program)
@@ -551,10 +553,11 @@ class TestEdgeSiteMemory:
 
     @pytest.mark.parametrize("edge", [False, True], ids=["level_leg", "edge_leg"])
     def test_bare_body_helper_leg_reads_its_own_row_on_every_backend(self, monkeypatch, edge):
-        """A bare For-body instruction is a row of its own (CLICK: a wire-only
-        rung between For and Next): its reset leg reads Y as latched by the
-        body row above it in the same pass, whether or not the leg holds an
-        edge contact."""
+        """A bare For-body instruction is a row of its own, as in CLICK.
+
+        CLICK puts a wire-only rung between For and Next. The reset leg reads Y as the body
+        row above it latched in the same pass, whether or not the leg has an edge contact.
+        """
         from pyrung.core import Or, latch, rise
 
         y = Bool("Y")
@@ -620,10 +623,10 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        # A domain error gives 0, so sqrt goes through _permissive_math, which in
-        # a calc appends SC46 to _calc_flags; a function with no domain error is
-        # _math_func.  A division by a variable goes through _permissive_op
-        # outside calc; in one (calc_form) it tests the divisor inline.
+        # A domain error gives 0, so sqrt goes through _permissive_math. In a calc,
+        # _permissive_math appends SC46 to _calc_flags. A function with no domain error uses
+        # _math_func. Outside calc, a division by a variable goes through _permissive_op.
+        # Inside calc (calc_form), the division tests the divisor inline.
         from pyrung.core.instruction.calc import calc_form
 
         assert "_math_func(math.sin, " in compile_expression(sin(a), ctx, strict=True)
@@ -767,8 +770,10 @@ class TestInstructionCoverage:
         assert "_frac:" in result.code
 
     def test_off_delay_codegen_keeps_timing_at_done_false_acc_zero(self):
-        """The TOF rests at Done False, Acc 0 only until it is first enabled
-        (``_tof_armed:<Acc>``), as in the interpreter."""
+        """The TOF rests at Done False, Acc 0 only until it is first enabled.
+
+        The generated code tracks this with ``_tof_armed:<Acc>``, as the interpreter does.
+        """
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         with Program(strict=False) as prog:
@@ -1030,9 +1035,11 @@ class TestInstructionCoverage:
         assert "\n    else:\n    _cond_snap_" not in compiled.source
 
     def test_helper_legs_bind_at_their_box(self):
-        """A box's helper legs bind just before its code, as the box starts:
-        they read live, so they see the writes of the wires above the box; a
-        bare For-body box binds them the same way on each pass."""
+        """A box's helper legs bind just before its code, as the box starts.
+
+        The legs read live values, so they see what the wires above the box wrote. A bare
+        For-body box binds its legs the same way on each pass.
+        """
         a, b, d, e = Bool("A"), Bool("B"), Bool("D"), Bool("E")
         c1, c2, c3 = Counter.clone("C1"), Counter.clone("C2"), Counter.clone("C3")
         with Program(strict=False) as prog:
@@ -1056,7 +1063,7 @@ class TestInstructionCoverage:
         assert len(legs) == 3
         leg_c1, leg_c2, leg_c3 = legs
         assert at("_t_B = True") < leg_c1 < at("_t_C1_Acc = _acc") < leg_c2 < at("_t_C2_Acc = _acc")
-        # The leg on B reads the B the out() above wrote: the box reads its pins
+        # The leg on B reads the B that the out() above wrote, because the box reads its pins
         # as it starts.
         assert lines[leg_c2].endswith(" = bool(_t_B)")
         assert at("_t_D = True") < leg_c3 < at("_t_C3_Acc = _acc")
@@ -1094,7 +1101,7 @@ class TestInstructionCoverage:
         assert "run_enabled_function" in source_code
 
     def test_a_function_reading_the_math_module_by_another_name_runs(self, monkeypatch):
-        """``import math as pymath`` (pyrung's math() hides the module): code.py binds it."""
+        """code.py binds ``import math as pymath``, because pyrung's math() hides the module."""
         source, dest = Int("Source"), Int("Dest")
 
         def floors_half(value):
@@ -1182,14 +1189,14 @@ class TestPersistenceWatchdogAndDiagnostics:
                 copy(1, step)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
-        # NVM dirty flag path tries .bak
+        # The NVM dirty flag path tries .bak.
         assert '_MEMORY_BAK_PATH = "/sd/memory.json.bak"' in source_code
         assert "open(_MEMORY_BAK_PATH" in source_code
         assert 'print("Retentive memory recovered from backup")' in source_code
         assert (
             'print("Retentive load skipped: interrupted save, no backup available")' in source_code
         )
-        # Normal path falls back to .bak when primary fails
+        # The normal path falls back to .bak when the primary file fails.
         assert "Retentive memory loaded from backup" in source_code
 
     def test_auto_save_globals_emitted(self):
@@ -1221,7 +1228,10 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "save_memory()" in source_code
 
     def test_save_memory_writes_an_inf_real_as_json(self):
-        """A REAL holding Inf or NaN saves as its str, valid JSON the load's float() parses."""
+        """A REAL holding Inf or NaN saves as its str, which is valid JSON.
+
+        The load's float() parses that text.
+        """
         import json
 
         hw = P1AM()
@@ -1244,7 +1254,10 @@ class TestPersistenceWatchdogAndDiagnostics:
             assert loaded == value or (pymath.isnan(value) and pymath.isnan(loaded))
 
     def test_auto_save_dirty_check_treats_a_saved_nan_real_as_clean(self):
-        """NaN != NaN: a REAL saved as NaN and NaN still must not resave every interval."""
+        """A REAL saved as NaN that is still NaN must not resave every interval.
+
+        The check needs care because NaN != NaN.
+        """
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         level = Real("Level")
@@ -1295,7 +1308,7 @@ class TestPersistenceWatchdogAndDiagnostics:
             pass
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
-        # save_memory() should appear before print("Mode: STOP")
+        # save_memory() must appear before print("Mode: STOP").
         stop_idx = source_code.index('print("Mode: STOP")')
         save_before_stop = source_code.rfind("save_memory()", 0, stop_idx)
         assert save_before_stop != -1
@@ -1307,14 +1320,14 @@ class TestPersistenceWatchdogAndDiagnostics:
         with Program(strict=False) as prog:
             pass
 
-        # Default should include RunStopConfig behavior
+        # The default includes the RunStopConfig behavior.
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "_mode_run" in source_code
         assert "_runstop_debounced" in source_code
         assert 'print("Mode: RUN")' in source_code
         assert 'print("Mode: STOP")' in source_code
 
-        # Explicit runstop=None should NOT include it
+        # An explicit runstop=None leaves it out.
         source_no_rs = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None).code
         assert "_runstop_debounced" not in source_no_rs
 
@@ -1384,7 +1397,7 @@ class TestIOMappingAndBranching:
         a_idx = next(i for i, line in enumerate(lines) if f"{a_sym} = True" in line)
         b_idx = next(i for i, line in enumerate(lines) if f"{b_sym} = True" in line)
         c_idx = next(i for i, line in enumerate(lines) if f"{c_sym} = True" in line)
-        # The branch is solved when the solve reaches it, after the row above.
+        # The solve reaches the branch after the row above it, and solves the branch then.
         assert a_idx < branch_idx < b_idx < c_idx
 
     @pytest.mark.parametrize(
@@ -1617,16 +1630,19 @@ class TestBoardPeripheralsAndRunStop:
     def test_non_finite_bitwise_operand_is_zero_and_sc43_on_every_backend(
         self, monkeypatch, label, make, operand
     ):
-        """A NaN or Inf REAL in a bitwise or shift op stores 0 with SC43, and the
-        scan runs on: core interpreter, compiled kernel and generated CircuitPython."""
+        """A NaN or Inf REAL in a bitwise or shift op stores 0 and sets SC43.
+
+        The scan runs on. This holds on the core interpreter, the compiled kernel and the
+        generated CircuitPython.
+        """
         big = Real("Big", default=3.0e38)
         inf = Real("InfR")
         odd = Real("OddR")
         dest = Int("Dest", default=7)
         after = Bool("After")
         with Program(strict=False) as prog:
-            # Scan 0 builds the operand (setting SC43); scan 1 starts with SC43
-            # off, so the flag on scan 1 is the bitwise op's.
+            # Scan 0 builds the operand and sets SC43. Scan 1 starts with SC43 off,
+            # so the flag on scan 1 comes from the bitwise op.
             with Rung(system.sys.first_scan):
                 math(big * 10, inf)
                 math(inf - inf if operand == "nan" else inf + 0, odd)
@@ -1641,8 +1657,10 @@ class TestBoardPeripheralsAndRunStop:
 
     @staticmethod
     def _non_finite_real(operand: str) -> tuple[Real, list]:
-        """A Real that scan 0 sets to +Inf, -Inf or NaN (SC43 on scan 0 only),
-        and the calcs that set it; a REAL literal cannot be Inf or NaN."""
+        """Return a Real that scan 0 sets to +Inf, -Inf or NaN, and the calcs that set it.
+
+        SC43 is set on scan 0 only. A REAL literal cannot be Inf or NaN, so calcs build it.
+        """
         big = Real("Big", default=3.0e38)
         inf = Real("InfR")
         r = Real("R", default=3.0)
@@ -1654,7 +1672,10 @@ class TestBoardPeripheralsAndRunStop:
     def test_math_non_finite_into_an_integer_is_zero_on_every_backend(
         self, monkeypatch, operand, flagged, dest_tag
     ):
-        """A Math of +/-Inf into an integer stores 0 with SC43; of NaN, 0 with no flag."""
+        """A Math of +/-Inf into an integer stores 0 and sets SC43.
+
+        A Math of NaN stores 0 and sets no flag.
+        """
         r, setup = self._non_finite_real(operand)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
@@ -1671,7 +1692,10 @@ class TestBoardPeripheralsAndRunStop:
     def test_math_non_finite_into_a_real_is_kept_on_every_backend(
         self, monkeypatch, operand, flagged
     ):
-        """A Math of +/-Inf into a Real keeps it with SC43; of NaN, keeps it with no flag."""
+        """A Math of +/-Inf into a Real keeps the Real and sets SC43.
+
+        A Math of NaN keeps the Real and sets no flag.
+        """
         r, setup = self._non_finite_real(operand)
         dest = Real("Dest", default=7.0)
         with Program(strict=False) as prog:
@@ -1705,9 +1729,12 @@ class TestBoardPeripheralsAndRunStop:
     def test_copy_non_finite_on_every_backend(
         self, monkeypatch, operand, dest_tag, stored, flagged
     ):
-        """A Copy of +/-Inf clamps with SC43 on an INT, and with none on a DINT (as a Real past
-        it, ``flag_probe/bulk_ops_clear_flags``) or a WORD (CLICK: 65535 and 32768); NaN
-        stores 0 with none."""
+        """A Copy of +/-Inf clamps and sets SC43 on an INT.
+
+        It clamps with no flag on a DINT, as it does for a Real past the DINT range
+        (``flag_probe/bulk_ops_clear_flags``). It also clamps with no flag on a WORD
+        (CLICK: 65535 and 32768). A Copy of NaN stores 0 with no flag.
+        """
         r, setup = self._non_finite_real(operand)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
@@ -1739,8 +1766,11 @@ class TestBoardPeripheralsAndRunStop:
     def test_copy_clamp_flag_on_every_backend(
         self, monkeypatch, source_tag, value, dest_tag, stored, flagged
     ):
-        """A Copy raises SC43 when the store stops at a limit: not on a truncation, a wrap, a
-        WORD's clamp, or a REAL's clamp into a DINT (CLICK: DF 1.0E+10 into a DD)."""
+        """A Copy sets SC43 when the store stops at a limit.
+
+        It sets no flag on a truncation, a wrap, a WORD's clamp, or a REAL's clamp into a DINT
+        (CLICK: DF 1.0E+10 into a DD).
+        """
         source = source_tag("Source", default=value)
         dest = dest_tag("Dest", default=7)
         with Program(strict=False) as prog:
@@ -1752,7 +1782,7 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize("literal,stored,flagged", [(40000, 32767, True), (5, 5, False)])
     def test_copy_literal_clamp_flag_on_every_backend(self, monkeypatch, literal, stored, flagged):
-        """A literal source clamps and flags as a tag does."""
+        """A literal source clamps and sets the flag, as a tag source does."""
         dest = Int("Dest", default=7)
         with Program(strict=False) as prog:
             with Rung():
@@ -1788,7 +1818,7 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: expected for name in results}
 
     def test_blockcopy_real_into_dint_clamps_with_no_flag_on_every_backend(self, monkeypatch):
-        """A Real clamps into a Dint with no SC43, as a single Copy's does (CLICK)."""
+        """A Real clamps into a Dint with no SC43, as a single Copy does (CLICK)."""
         source = Block("SrcR", TagType.REAL, 1, 2)
         dest = Block("DstD", TagType.DINT, 1, 2)
         first, second = Dint("First"), Dint("Second")
@@ -1809,7 +1839,7 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (2147483647, -2147483648, False) for name in results}
 
     def test_fill_clamps_and_raises_the_flag_on_every_backend(self, monkeypatch):
-        """A Fill stops at the limit and raises SC43, as a single Copy's clamp does."""
+        """A Fill stops at the limit and sets SC43, as the clamp of a single Copy does."""
         source = Dint("Source", default=40000)
         dest = Block("DstB", TagType.INT, 1, 2)
         first, second = Int("First"), Int("Second")
@@ -1864,7 +1894,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_non_finite_real_into_a_char_is_zero_on_every_backend(
         self, monkeypatch, store, operand
     ):
-        """No flag and no raise, and the rung runs on."""
+        """The store sets no flag and raises no error, and the rung runs on."""
         r, setup = self._non_finite_real(operand)
         chars = Block("Txt", TagType.CHAR, 1, 2)
         reals = Block("Vals", TagType.REAL, 1, 2)
@@ -1889,7 +1919,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_copy_of_a_non_finite_real_into_a_lone_char_keeps_it_on_every_backend(
         self, monkeypatch, operand
     ):
-        """A plain Copy of a Real into text writes its text, which one CHAR cannot hold."""
+        """A plain Copy of a Real into text writes the Real's text, which a CHAR cannot hold."""
         r, setup = self._non_finite_real(operand)
         ch = Char("Ch", default="A")
         with Program(strict=False) as prog:
@@ -1913,8 +1943,10 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: ("A", False, True, False) for name in results}
 
     def test_a_copy_of_a_real_into_a_txt_writes_its_digits_on_every_backend(self, monkeypatch):
-        """CLICK's plain Copy of a DF into a TXT is ``to_text()``; of the TXT into a number,
-        ``to_value``."""
+        """CLICK's plain Copy of a DF into a TXT is ``to_text()``.
+
+        Its plain Copy of a TXT into a number is ``to_value``.
+        """
         r = Real("R", default=66.5)
         chars = Block("Txt", TagType.CHAR, 1, 12)
         digit = Int("Digit", default=99)
@@ -1933,8 +1965,10 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_copy_of_a_whole_number_into_a_txt_writes_its_digits_on_every_backend(
         self, monkeypatch
     ):
-        """CLICK's dialog stores a Copy of a DS into a TXT as Copy Value with Suppress zero
-        (clicknick copy-encodings, the DS source rows), which is ``to_text()``."""
+        """CLICK's dialog stores a Copy of a DS into a TXT as Copy Value with Suppress zero.
+
+        That encoding is ``to_text()`` (clicknick copy-encodings, the DS source rows).
+        """
         n = Int("N", default=-42)
         h = Word("H", default=0xAB)
         chars = Block("Txt", TagType.CHAR, 1, 12)
@@ -1954,7 +1988,10 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
-        """A code needs an integer: the TXT stays as it was, with SC43, and the rung runs on."""
+        """A code needs an integer, so the TXT stays as it was and SC43 is set.
+
+        The rung runs on.
+        """
         r, setup = self._non_finite_real(operand)
         ch = Char("Ch", default="A")
         after = Bool("After")
@@ -1972,7 +2009,7 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_non_finite_randint_bound_reads_zero_on_every_backend(self, monkeypatch, operand):
-        """A randint() of a Real reads 0 with no flag, whatever the Real holds."""
+        """A randint() of a Real reads 0 and sets no flag, whatever the Real holds."""
         from pyrung.core import randint
 
         r, setup = self._non_finite_real(operand)
@@ -2007,7 +2044,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_equal_randint_constants_are_a_math_error_on_every_backend(
         self, monkeypatch, bounds, dest_tag
     ):
-        """0 with SC46 alone, and the rung runs on."""
+        """Equal bounds store 0 and set SC46 only. The rung runs on."""
         from pyrung.core import randint
 
         dest = dest_tag("Dest", default=7)
@@ -2033,7 +2070,7 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (0, False, False, False) for name in results}
 
     def test_randint_constants_stay_whole_into_an_int_on_every_backend(self, monkeypatch):
-        """Into an Int the draw is 70000..70002, which wraps to 4464..4466 with SC43."""
+        """The draw is 70000..70002. Into an Int it wraps to 4464..4466 and sets SC43."""
         from pyrung.core import randint
 
         dest = Int("Dest", default=7)
@@ -2048,7 +2085,7 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize("narrow_first", [True, False], ids=["narrow_first", "wide_first"])
     def test_one_randint_into_both_widths_on_every_backend(self, monkeypatch, narrow_first):
-        """The Int wraps the draw with SC43, which the Dint Math clears when it runs last."""
+        """The Int wraps the draw and sets SC43. The Dint Math clears SC43 when it runs last."""
         from pyrung.core import randint
 
         roll = randint(70000, 70002)
@@ -2108,7 +2145,10 @@ class TestBoardPeripheralsAndRunStop:
     def test_float_literal_randint_bounds_draw_on_every_backend(
         self, monkeypatch, bounds, low, high, equal
     ):
-        """Each bound is read as an integer: equal ones are a math error, 0 with SC46."""
+        """Each bound is read as an integer.
+
+        Equal bounds are a math error that stores 0 and sets SC46.
+        """
         from pyrung.core import randint
 
         dest = Int("Dest", default=9)
@@ -2134,7 +2174,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_domain_error_in_a_randint_bound_on_every_backend(
         self, monkeypatch, make, tag_type, held, dest
     ):
-        """Inside calc the bound is read too: 0 with SC46, and the scan runs on."""
+        """Inside calc the bound is read too. The result is 0 with SC46, and the scan runs on."""
         from pyrung.core import randint
 
         n = tag_type("N", default=held)
@@ -2152,7 +2192,7 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (0, True, True) for name in results}
 
     def test_a_domain_error_in_a_randint_bound_outside_calc_on_every_backend(self, monkeypatch):
-        """Outside calc the same bound reads 0 with no flag."""
+        """Outside calc the same bound reads 0 and sets no flag."""
         from pyrung.core import randint
 
         n = Int("N", default=-1)
@@ -2182,8 +2222,11 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_computed_randint_bound_on_every_backend(self, monkeypatch, operand):
-        """pyrung's choice: the site is 0, with SC43 in a calc (the rest of the
-        formula runs, as for any randint() math error), with no flag outside one."""
+        """pyrung's choice: the site is 0.
+
+        In a calc it also sets SC43, and the rest of the formula runs, as for any randint()
+        math error. Outside a calc it sets no flag.
+        """
         from pyrung.core import randint
 
         r, setup = self._non_finite_real(operand)
@@ -2223,8 +2266,10 @@ class TestBoardPeripheralsAndRunStop:
     def test_non_finite_forloop_count_runs_none_and_sc43_on_every_backend(
         self, monkeypatch, operand
     ):
-        """pyrung's choice: a forloop() whose REAL count holds Inf or NaN runs no
-        iteration and sets SC43, and the scan runs on, on all three backends."""
+        """pyrung's choice: a forloop() whose REAL count holds Inf or NaN runs no iteration.
+
+        It sets SC43 and the scan runs on. This holds on all three backends.
+        """
         r, setup = self._non_finite_real(operand)
         hits = Int("Hits")
         after = Bool("After")
@@ -2255,8 +2300,11 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (6, False) for name in results}
 
     def test_forloop_count_is_read_as_unsigned_of_its_width_on_every_backend(self, monkeypatch):
-        """A DD count is read whole (65537 runs 65537, hardware 2026-11-05) and a DS
-        count as unsigned 16-bit (-32768 runs 32768), on all three backends."""
+        """A forloop() reads a DD count whole and a DS count as unsigned 16-bit.
+
+        A DD of 65537 runs 65537 times (hardware 2026-11-05). A DS of -32768 runs 32768 times.
+        This holds on all three backends.
+        """
         wide = Dint("Wide", default=65537)
         narrow = Int("Narrow", default=-32768)
         wide_hits = Dint("WideHits")
@@ -2273,8 +2321,12 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (65537, 32768) for name in results}
 
     def test_forloop_dint_count_of_zero_or_below_runs_none_on_every_backend(self, monkeypatch):
-        """A DD count is read signed: -1 runs none (hardware 2026-11-06), and so do the
-        most negative Dint and a DD element of -1, on all three backends; 3 still runs 3."""
+        """A forloop() reads a DD count as signed.
+
+        A count of -1 runs no iteration (hardware 2026-11-06). The most negative Dint and a DD
+        element of -1 also run none. A count of 3 still runs 3 times. This holds on all three
+        backends.
+        """
         minus_one = Dint("MinusOne", default=-1)
         lowest = Dint("Lowest", default=-2147483648)
         longs = Block("Longs", TagType.DINT, 1, 2)
@@ -2293,9 +2345,11 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (3,) for name in results}
 
     def test_forloop_constant_and_negative_dint_counts_on_every_backend(self, monkeypatch):
-        """A constant count is read whole, so 70000 runs 70000 (not 4464), and a DD of
-        -65535 or -2 runs none (not its low word), as a CLICK reads them (hardware
-        2026-11-10), on all three backends."""
+        """A forloop() reads a constant count whole, as CLICK does (hardware 2026-11-10).
+
+        A count of 70000 runs 70000 times, not 4464. A DD of -65535 or -2 runs none, not its
+        low word. This holds on all three backends.
+        """
         low = Dint("Low", default=-65535)
         minus_two = Dint("MinusTwo", default=-2)
         whole, signed = Dint("Whole"), Dint("Signed")
@@ -2336,9 +2390,11 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_math_error_outside_calc_is_zero_with_no_flag_on_every_backend(
         self, monkeypatch, label, make
     ):
-        """pyrung's choice: outside calc an expression is permissive.  The
-        operation that hits a math error gives 0, nothing raises and no flag is
-        set, in a rung condition, a copy source and a forloop count alike."""
+        """pyrung's choice: outside calc an expression is permissive.
+
+        The operation that hits a math error gives 0. Nothing raises and no flag is set. This
+        holds in a rung condition, a copy source and a forloop count alike.
+        """
         i = Int("I", default=4)
         z = Int("Z")
         big = Real("Big", default=3.0e38)
@@ -2384,7 +2440,7 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (True, 0, True, False, False) for name in results}
 
     def test_a_float_overflow_in_a_condition_stays_inf_on_every_backend(self, monkeypatch):
-        """Plain IEEE results pass through: only an operation that raises is 0."""
+        """Plain IEEE results pass through. Only an operation that raises gives 0."""
         big = Real("Big", default=3.0e38)
         hit = Bool("Hit")
         with Program(strict=False) as prog:
@@ -2445,8 +2501,10 @@ class TestBoardPeripheralsAndRunStop:
     def test_an_integer_too_large_for_a_float_is_zero_outside_calc_on_every_backend(
         self, monkeypatch, label, make
     ):
-        """An exact integer power is fine until it meets a float; outside calc
-        that operation gives 0 with no flag."""
+        """An exact integer power is fine until it meets a float.
+
+        Outside calc, the operation that meets a float gives 0 and sets no flag.
+        """
         e = Int("E", default=1100)
         bd = Dint("BD", default=2_000_000_000)
         expr = make(e, bd)
@@ -2461,9 +2519,9 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (hit, copied, *self._FAULTS), scans=1)
         assert results == {name: (True, 0.0, False, False, False) for name in results}, label
 
-    #: What each _HUGE calc stores into a Real: a calc step is a double, so the
-    #: integer past the double range is Inf (SC43 into a Real), sin(Inf) NaN (no
-    #: flag), atan(Inf) pi / 2.
+    #: What each _HUGE calc stores into a Real. A calc step is a double, so the integer
+    #: past the double range is Inf (SC43 into a Real). sin(Inf) is NaN with no flag.
+    #: atan(Inf) is pi / 2.
     _HUGE_IN_CALC = {
         "sin_of_pow": (pymath.nan, False),
         "atan_of_pow": (pymath.atan(pymath.inf), False),
@@ -2486,10 +2544,10 @@ class TestBoardPeripheralsAndRunStop:
             assert stored == value or (pymath.isnan(value) and pymath.isnan(stored)), label
             assert faults == [False, flagged, False], label
 
-    #: (label, formula of (n, d, z, w, r), destination type, stored, flags as
-    #: (SC40, SC43, SC46)) with n = -7, d = 2147483647, z = 0, w = 0x8001, r = -7.5.
-    #: As a CLICK's Math reads them (hardware, 2026-11-05, the wide constants 2026-11-11).
-    #: A constant past a Dint is cut to 32 bits, as a pasted one ran.
+    #: Each row is (label, formula of (n, d, z, w, r), destination type, stored, flags as
+    #: (SC40, SC43, SC46)), with n = -7, d = 2147483647, z = 0, w = 0x8001, r = -7.5.
+    #: The rows are what a CLICK's Math does (hardware 2026-11-05, the wide constants
+    #: 2026-11-11). A constant past a Dint is cut to 32 bits, as a pasted one ran.
     _CLICK_MATH = [
         ("double_steps", lambda n, d, z, w, r: d * d - (d * d - 1), Dint, 0, (0, 0, 0)),
         ("mod_int", lambda n, d, z, w, r: n % 2, Int, -1, (0, 0, 0)),
@@ -2541,8 +2599,11 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: expected for name in results}, label
 
     def test_mod_floors_and_zero_to_zero_is_one_outside_calc_on_every_backend(self, monkeypatch):
-        """CLICK's MOD and 0 ^ 0 are math()'s: anywhere else ``%`` and ``**`` are
-        Python's, so the wrap-around index ``(P - 1) % 10 + 1`` still works."""
+        """CLICK's MOD and 0 ^ 0 behave as math() does.
+
+        Anywhere else ``%`` and ``**`` are Python's, so the wrap-around index
+        ``(P - 1) % 10 + 1`` still works.
+        """
         n, z, p = Int("N", default=-3), Int("Z"), Int("P")
         odd, zero_power = Bool("Odd"), Bool("ZeroPower")
         copied, indexed = Int("Copied", default=99), Int("Indexed", default=99)
@@ -2564,8 +2625,10 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize("default", [300000007, 10**17 + 1])
     def test_a_real_given_an_int_holds_a_float_on_every_backend(self, monkeypatch, default):
-        """An int default or patch of a Real is stored as a float, so the Real's
-        steps are doubles everywhere and no backend needs to step it as one."""
+        """An int default or patch of a Real is stored as a float.
+
+        So the Real's steps are doubles everywhere, and no backend needs to step it as one.
+        """
         r = Real("R", default=default)
         dest = Dint("Dest", default=99)
         assert type(r.default) is float
@@ -2583,8 +2646,11 @@ class TestBoardPeripheralsAndRunStop:
             assert plc.current_state.tags["Dest"] == 0
 
     def test_a_huge_real_power_outside_calc_is_inf_on_every_backend(self, monkeypatch):
-        """A Real given 10**30 holds 1e30: its tenth power is Inf, not an int too
-        large for a float that a division turns into an OverflowError."""
+        """A Real given 10**30 holds 1e30, so its tenth power is Inf.
+
+        It is not an int too large for a float, which a division would turn into an
+        OverflowError.
+        """
         r = Real("R", default=10**30)
         copied = Real("Copied", default=7.0)
         hit = Bool("Hit")
@@ -2632,9 +2698,11 @@ class TestBoardPeripheralsAndRunStop:
 
     @pytest.mark.parametrize(("label", "make"), _COMPLEX, ids=[label for label, _ in _COMPLEX])
     def test_a_complex_power_is_a_math_error_on_every_backend(self, monkeypatch, label, make):
-        """pyrung's choice: a negative base to a fractional power has no real
-        value, so it is a math error, as sqrt(-1) is: 0 with no flag outside
-        calc, 0 with math_operation_error (SC46) in calc."""
+        """pyrung's choice: a negative base to a fractional power is a math error.
+
+        It has no real value, and neither does sqrt(-1). The result is 0 with no flag outside
+        calc, and 0 with math_operation_error (SC46) in calc.
+        """
         n = Real("N", default=-8.0)
         h = Real("H", default=0.5)
         hit = Bool("Hit")
@@ -2664,8 +2732,10 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_negative_shift_count_in_calc_is_zero_and_sc43_on_every_backend(
         self, monkeypatch, label, make
     ):
-        """pyrung's choice: a shift by a negative count stores 0 and sets
-        out_of_range (SC43), as a bitwise operation on Inf does."""
+        """pyrung's choice: a shift by a negative count stores 0 and sets out_of_range (SC43).
+
+        A bitwise operation on Inf does the same.
+        """
         w = Word("W", default=0x00F0)
         c = Int("C", default=-1)
         dest = Word("Dest", default=7)
@@ -2759,11 +2829,11 @@ class TestBoardPeripheralsAndRunStop:
             result.code, monkeypatch, stub_base, runtime_source=result.runtime, scans=2
         )
         ctx = _context_for_program(prog, hw)
-        # Every scan runs the logic: the root is 0 and sets SC46 again (it
-        # clears at each scan start), and the output stays on.
+        # Every scan runs the logic. The root is 0 and sets SC46 again, because SC46 clears at
+        # each scan start. The output stays on.
         assert namespace[ctx.symbol_for_tag(dest)] == 0.0
         assert namespace[ctx.symbol_for_tag(system.fault.math_operation_error)] is True
-        # No scan is in STOP: the outputs are never forced off.
+        # No scan is in STOP, so the outputs are never forced off.
         assert (2, 1) in stub_base.discrete_writes
         assert stub_base.discrete_writes[-1] == (2, 1)
         assert (2, 0) not in stub_base.discrete_writes
@@ -2848,7 +2918,8 @@ class TestCopyConverterCodegen:
         assert ch_values[9] == "{"
 
     def test_blockcopy_converter_failure_sets_fault_and_skips_the_bad_character(self, monkeypatch):
-        # CLICK writes the others and leaves the bad character's slot ("1A3" over 9s: 1, 9, 3).
+        # CLICK writes the other characters and leaves the bad character's slot alone.
+        # "1A3" over 9s gives 1, 9, 3.
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         ch = Block("CH", TagType.CHAR, 1, 10)
@@ -2901,8 +2972,8 @@ class TestCopyConverterCodegen:
         assert namespace[fault_seen_symbol] is True
 
     def test_ascii_code_of_unwritten_char_writes_zero(self, monkeypatch):
-        # A TXT nothing wrote holds NUL, as in the core engine: its ASCII code
-        # is 0 and overwrites the destination instead of leaving it alone.
+        # A TXT that nothing wrote holds NUL, as in the core engine. Its ASCII code is 0,
+        # and it overwrites the destination instead of leaving it alone.
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         ch = Block("CH", TagType.CHAR, 1, 12)
@@ -2949,8 +3020,8 @@ class TestCopyConverterCodegen:
         assert ch_values[10] == "\x00"
 
     def test_ascii_code_of_blanked_char_writes_zero(self, monkeypatch):
-        # A TXT blanked by fill("") or reset() holds NUL, as in the core engine:
-        # its ASCII code is 0 and overwrites the destination.
+        # A TXT blanked by fill("") or reset() holds NUL, as in the core engine. Its ASCII
+        # code is 0, and it overwrites the destination.
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         ch = Block("CH", TagType.CHAR, 1, 12)
@@ -3005,8 +3076,8 @@ class TestCopyConverterCodegen:
         ("saved", "expected"), [("", "\x00"), (5, "\x00"), ("A", "A"), ("\x00", "\x00")]
     )
     def test_retentive_load_of_blank_char_is_nul(self, saved, expected):
-        # memory.json from an older build may hold "" (or junk) for a TXT; the
-        # load gives NUL, the only blank a TXT has.
+        # A memory.json from an older build may hold "" (or junk) for a TXT. The load
+        # turns that into NUL, which is the only blank a TXT has.
         from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
 
         assert eval(_load_cast_expr("saved", "CHAR"), {"saved": saved}) == expected
@@ -3137,7 +3208,7 @@ class TestGeneratedSourceSmoke:
 
         with Program(strict=False) as prog:
             with Rung(enable):
-                # Empty CHAR slot parses as empty text and should fault (not crash scan).
+                # An empty CHAR slot parses as empty text. It must set the fault, not crash.
                 pack_text(txt.select(1, 1), parsed, allow_whitespace=True)
             with Rung(system.fault.out_of_range):
                 out(fault_seen)
@@ -3214,11 +3285,13 @@ class TestGeneratedSourceSmoke:
 
 
 class TestRuntimeSplit:
-    """Verify the pyrung_rt / code.py split produces correct output shapes."""
+    """Checks that the pyrung_rt / code.py split produces correct output shapes."""
 
     def test_modbus_program_produces_nonempty_runtime(self):
-        """Traffic-light-style Modbus program: runtime is non-empty and
-        code.py is significantly smaller than the single-file baseline."""
+        """A traffic-light-style Modbus program has a non-empty runtime.
+
+        Its code.py is significantly smaller than the single-file baseline.
+        """
         from pyrung.circuitpy import ModbusClientConfig, ModbusServerConfig
         from pyrung.click import ClickBlocks, ModbusTcpTarget, TagMap, receive
         from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
@@ -3295,17 +3368,17 @@ class TestRuntimeSplit:
 
         code_lines = result.code.strip().splitlines()
         runtime_lines = result.runtime.strip().splitlines()
-        # code.py should be smaller than a single-file version: the runtime
-        # absorbs helpers + Modbus infrastructure, so code.py < 67% of total.
-        # (The TagMap serves every system point, so code.py also derives
-        # SD9, the clocks and the RTC each scan.)
+        # code.py must be smaller than a single-file version. The runtime absorbs the helpers
+        # and the Modbus infrastructure, so code.py is under 67% of the total. The TagMap
+        # serves every system point, so code.py also derives SD9, the clocks and the RTC
+        # each scan.
         total = len(code_lines) + len(runtime_lines)
         assert len(code_lines) < total * 0.67, (
             f"code.py should be <67% of total ({len(code_lines)}/{total})"
         )
 
     def test_non_modbus_program_produces_empty_runtime(self):
-        """Neopixel-style program (no Modbus, no slots): runtime is empty."""
+        """A Neopixel-style program with no Modbus and no slots has an empty runtime."""
         State = Char("State", default="r")
 
         with Program(strict=False) as prog:
@@ -3322,7 +3395,7 @@ class TestRuntimeSplit:
         assert "import pyrung_rt" not in result.code
 
     def test_both_generated_files_compile(self):
-        """Both code.py and pyrung_rt.py must be valid Python."""
+        """Both code.py and pyrung_rt.py are valid Python."""
         from pyrung.circuitpy import ModbusServerConfig
         from pyrung.click import ClickBlocks, TagMap
 
@@ -3342,14 +3415,14 @@ class TestRuntimeSplit:
             tag_map=TagMap({flag: c[1]}),
         )
 
-        # generate_circuitpy already compiles internally, but verify here too
+        # generate_circuitpy already compiles internally. Compile here too to check it.
         compile(result.code, "code.py", "exec")
         compile(result.runtime, "pyrung_rt.py", "exec")
 
 
 class TestRandIntCodegen:
     def test_randint_draws_on_the_board(self):
-        """The board has no replay: randint calls random.randint, and imports random."""
+        """The board has no replay, so randint calls random.randint and imports random."""
         from pyrung.core import randint
 
         hw = P1AM()
@@ -3376,7 +3449,7 @@ class TestRandIntCodegen:
 
 class TestRangeAggregateCodegen:
     def test_aggregates_emit_inline_without_statistics(self):
-        """CircuitPython has no statistics module: max/min/median/mean are inline."""
+        """CircuitPython has no statistics module, so max, min, median and mean are inline."""
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         vals = Block("Vals", TagType.INT, 1, 4)

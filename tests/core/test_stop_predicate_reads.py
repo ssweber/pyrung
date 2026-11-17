@@ -1,8 +1,9 @@
-"""What a traced stop predicate read, by every way into a state, and what a coast does with it.
+"""Pin what a traced stop predicate records as read, by every way into a state.
 
-A coast skips judging an opaque predicate only while nothing it read moves, so a read that
-goes unrecorded is a false landing.  The loop's soundness argument rests on this list, and a
-predicate that reads only tags has to stay in the loop.
+The tests also pin what a coast does with those reads. A coast skips judging an opaque
+predicate only while nothing it read moves. So a read that goes unrecorded is a false
+landing. The loop's soundness argument rests on this list. A predicate that reads only tags
+has to stay in the loop.
 """
 
 from __future__ import annotations
@@ -138,7 +139,10 @@ def test_the_state_and_map_say_they_are_the_real_ones() -> None:
 
 
 class _Key(str):
-    """As ``class K(str, Enum)`` is: it finds its tag, and prints as no tag's name."""
+    """A str that behaves like a ``class K(str, Enum)`` member.
+
+    It finds its tag, and it prints as no tag's name.
+    """
 
     def __str__(self) -> str:
         return "no tag's name"
@@ -203,7 +207,7 @@ def test_the_tip_comes_back_when_the_predicate_raises() -> None:
 
 
 def _stepped_until(predicate: Any) -> PLC:
-    # A scan first, as a coast does: it does not judge the state it starts from.
+    # Run a scan first, as a coast does. A coast does not judge the state it starts from.
     plc = _plc()
     for _ in range(SCANS):
         plc.step()
@@ -358,7 +362,8 @@ def test_what_evolving_a_traced_state_makes_answers_as_the_real_one_does() -> No
 
 
 def test_a_predicate_hashing_the_state_lands_as_stepping() -> None:
-    # String hashes are salted per process, so it may not hit: the two must agree either way.
+    # String hashes are salted per process, so the predicate may not hit. The two must agree
+    # either way.
     def predicate(s: Any) -> bool:
         return hash(s) % 997 == 0
 
