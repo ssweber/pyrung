@@ -21,16 +21,16 @@ COMPILES = 2 if FOLD_CHECK else 1
 
 @pytest.fixture(autouse=True)
 def production(monkeypatch: pytest.MonkeyPatch) -> None:
-    """As a user runs, with an interpreted prefix and then the loop with no firing limit."""
+    """Run as a user does: an interpreted prefix, then the loop with no firing limit."""
     monkeypatch.setattr(compiled_run, "INTERPRETED_PREFIX", 1000)
     monkeypatch.setattr(scan_trace, "MIN_RUN_SCANS", 1000)
     monkeypatch.setattr(scan_trace, "BURST_SIZES", None)
-    # A collector PYRUNG_JIT_STATS started would count these runs too.
+    # A collector that PYRUNG_JIT_STATS started would count these runs too.
     monkeypatch.setattr(jit_stats, "ACTIVE", [])
 
 
 def _timer(preset_ms: int) -> PLC:
-    """A timer that runs while Go is on, and N set to 5 once it is done."""
+    """Return a PLC with a timer that runs while Go is on, and sets N to 5 once it is done."""
     with Program(strict=False) as program:
         with Rung(Go):
             on_delay(T, preset_ms, "ms")
@@ -66,8 +66,8 @@ def test_a_run_past_its_prefix_runs_in_the_loop_to_its_end() -> None:
     assert (stats.stretches, stats.stretched_scans, stats.could_have_run) == (1, 1999, 1999)
     assert stats.left_by == {"the run's end": 1}
     costs = {name: count for name, (count, _seconds) in stats.costs.items()}
-    # A compile reuses the code and the parse of an earlier one with the same source, and
-    # then counts no Python compile and no parse.
+    # A compile reuses the code and the parse of an earlier compile with the same source.
+    # Then it counts no Python compile and no parse.
     reused = {"compile: python compile", "parse the kernel source"}
     # The loop function returns at each checkpoint, so the run may call it more than once.
     assert costs.pop("loop") >= 1
@@ -89,8 +89,9 @@ def test_a_guard_that_fails_ends_its_stretch_and_is_named() -> None:
     with jit_stats.collect() as stats:
         plc.run_for(40)  # 4000 scans
     assert plc.state.tags[N.name] == 5
-    # The first path runs until the timer is done, and a guard sends it out.  The scan it
-    # refused runs compiled, the next is traced and checked, and a second path runs to the end.
+    # The first path runs until the timer is done, and then a guard sends it out.  The scan
+    # that the guard refused runs compiled.  The next scan is traced and checked, and a
+    # second path runs to the end.
     assert stats.scans == {"interpreted": 1000, "compiled": 3, "loop": 2997}
     assert stats.stretches == 2
     assert stats.stretched_scans == stats.could_have_run == 2997
@@ -116,8 +117,8 @@ def test_scans_a_run_takes_back_count_where_they_run_again() -> None:
     assert sum(stats.scans[where] for where in ("loop", "compiled", "interpreted")) == 3000
     if FOLD_CHECK:
         return  # fold-check's observer settles each firing, so nothing is taken back
-    # A real scan takes Lim past 50 at scan 1551, and the run takes back the scans since
-    # its checkpoint at scan 1400.  They run again interpreted.
+    # A real scan takes Lim past 50 at scan 1551.  The run then takes back the scans since
+    # its checkpoint at scan 1400, and those scans run again interpreted.
     assert stats.scans == {"interpreted": 2601, "compiled": 1, "loop": 398, "undone": 149}
     assert (stats.stretches, stats.stretched_scans) == (1, 398)
     assert stats.left_by == {"a scan the run took back": 1}
