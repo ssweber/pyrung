@@ -380,7 +380,7 @@ def _oscillation_fed_counter(
 
 
 class TestEdgeCounter:
-    """Check a counter under an oscillation.
+    """Checks a counter under an oscillation.
 
     The counter counts the rises of its input, so it moves one count a period.  A coast
     lands it where stepping does.
@@ -614,7 +614,7 @@ def _assert_history_matches(folded: PLC, ref: PLC) -> None:
 
 
 class TestClockMirrors:
-    """Check clock mirrors with readers on and off.  A coast must never leave one stale."""
+    """Checks clock mirrors with readers on and off.  A coast must never leave one stale."""
 
     @staticmethod
     def _plc(prog: Program, **patch: object) -> PLC:
@@ -752,7 +752,7 @@ class TestClockMirrors:
 
 
 class TestAcrossAClamp:
-    """Check that a coast across a timer's clamp lands on the same tip as stepping."""
+    """Checks that a coast across a timer's clamp lands on the same tip as stepping."""
 
     @pytest.mark.parametrize("unit", ["s", "ms"])
     def test_budget_end_matches_stepping(self, unit: str) -> None:
@@ -784,7 +784,7 @@ class TestAcrossAClamp:
 
 
 class TestReadsTheIntegerAccumulator:
-    """Check that a rung reads a timer's integer accumulator, not its fractional progress.
+    """Checks that a rung reads a timer's integer accumulator, not its fractional progress.
 
     A seconds timer at 2.07 s reads 2.  So ``Acc > 2`` is still ahead of it and must end
     the stretch.  Without that, the tumbler's rotate step transition came 11 scans late.
@@ -862,7 +862,7 @@ def _assert_same_tags(plc: PLC, ref: PLC) -> None:
 
 
 class TestDrumStep:
-    """Check a drum that reads its preset from the step it sees.
+    """Checks a drum that reads its preset from the step it sees.
 
     That step may not be the step a scan boundary shows.
     """
@@ -964,7 +964,7 @@ class TestDrumStep:
 
 
 class TestWrittenInputs:
-    """Check the same read with the tag written around it.
+    """Checks the same read with the tag written around it.
 
     A scan boundary shows one value, and the reader reads another.
     """
@@ -1082,7 +1082,7 @@ class TestWrittenInputs:
 
 
 class TestInputWrites:
-    """Check a tag that a rung may read between writes.
+    """Checks a tag that a rung may read between writes.
 
     The tag is written directly, through a pointer, or only on some scans of an oscillation.
     """

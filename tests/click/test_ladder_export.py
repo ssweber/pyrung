@@ -2565,7 +2565,7 @@ def test_branch_rendered_height_over_32_rows_raises_clear_error():
 
 
 class TestContinuedExport:
-    """Export each continued rung as a CLICK rung of its own, as CLICK's syntax check draws it."""
+    """Each continued rung exports as a CLICK rung of its own, as CLICK's syntax check draws it."""
 
     def test_continued_rung_is_its_own_click_rung(self):
         _assert_export_main_rows(
