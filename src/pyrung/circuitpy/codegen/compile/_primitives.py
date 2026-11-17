@@ -52,7 +52,7 @@ from pyrung.core.memory_block import (
 )
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
-from ._emit import emit_oneshot
+from ._emit import emit_if_enabled, emit_oneshot
 
 
 def _snapshot_tag_symbol(
@@ -1001,7 +1001,6 @@ def _compile_guarded_instruction(
     disabled_body: list[str] | None = None,
 ) -> list[str]:
     sp = " " * indent
-    inner = " " * (indent + 4)
     lines: list[str] = []
     settle = _fault_follow_lines(instr, ctx)
     # A Math clears its flags on every path, so the lines go ahead of the
@@ -1029,18 +1028,9 @@ def _compile_guarded_instruction(
         return lines
 
     enabled_body = [*settle, *enabled_body]
-    if enabled_literal is True:
-        lines.extend(f"{sp}{line}" for line in enabled_body)
-        return lines
-    if enabled_literal is False:
-        lines.extend(f"{sp}{line}" for line in disabled)
-        return lines
-
-    lines.append(f"{sp}if {enabled_expr}:")
-    lines.extend(f"{inner}{line}" for line in enabled_body)
-    if disabled:
-        lines.append(f"{sp}else:")
-        lines.extend(f"{inner}{line}" for line in disabled)
+    lines.extend(
+        f"{sp}{line}" for line in emit_if_enabled(enabled_expr, enabled_body, otherwise=disabled)
+    )
     return lines
 
 

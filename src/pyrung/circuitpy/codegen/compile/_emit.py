@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 from pyrung.circuitpy.codegen._constants import _DINT_MAX, _DINT_MIN, _INT_MAX
+from pyrung.circuitpy.codegen._util import _bool_literal
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
@@ -241,3 +242,35 @@ def emit_truth(value: str, *, as_int: bool = False, negate: bool = False) -> str
     if as_int:
         return emit_cmp(f"int({value})", "!=", "0")
     return f"(not bool({value}))" if negate else f"bool({value})"
+
+
+def emit_choose(by: str, dst: str, values: Sequence[str]) -> list[str]:
+    """Lines that set *dst* to the value at place *by* in *values*, counting from 1.
+
+    Any other *by* leaves *dst* as it was.
+    """
+    lines: list[str] = []
+    for place, value in enumerate(values, start=1):
+        branch = "if" if place == 1 else "elif"
+        lines += [f"{branch} {by} == {place}:", f"    {dst} = {value}"]
+    return lines
+
+
+def emit_if_enabled(
+    enabled: str, body: Sequence[str], *, otherwise: Sequence[str] = (), fold: bool = True
+) -> list[str]:
+    """*body* under the rung test *enabled*, and *otherwise* under its ``else``.
+
+    With *fold*, a literal ``True`` or ``False`` enable leaves the test out and keeps only
+    the branch that runs.  The timers and the latch and reset coils write ``if True:``
+    (``fold=False``).
+    """
+    literal = _bool_literal(enabled) if fold else None
+    if literal is True:
+        return list(body)
+    if literal is False:
+        return list(otherwise)
+    lines = [f"if {enabled}:", *_indented(body)]
+    if otherwise:
+        lines += ["else:", *_indented(otherwise)]
+    return lines

@@ -33,6 +33,7 @@ from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._emit import (
+    emit_choose,
     emit_cmp,
     emit_frac,
     emit_mem_get,
@@ -395,12 +396,7 @@ def _compile_step_selector_lines(
     target_var: str,
     value_exprs: list[str],
 ) -> list[str]:
-    lines: list[str] = []
-    for idx, expr in enumerate(value_exprs, start=1):
-        branch = "if" if idx == 1 else "elif"
-        lines.append(f"{branch} {step_var} == {idx}:")
-        lines.append(f"    {target_var} = {expr}")
-    return lines
+    return emit_choose(step_var, target_var, value_exprs)
 
 
 def _compile_drum_instruction(

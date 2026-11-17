@@ -39,6 +39,7 @@ from ._emit import (
     emit_count,
     emit_done,
     emit_frac,
+    emit_if_enabled,
     emit_mem_get,
     emit_mem_set,
     emit_oneshot,
@@ -87,9 +88,8 @@ def _compile_latch_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    lines = [f"{' ' * indent}if {enabled_expr}:"]
-    lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-    return lines
+    writes = _compile_target_write_lines(instr.target, "True", ctx, 0)
+    return [f"{' ' * indent}{line}" for line in emit_if_enabled(enabled_expr, writes, fold=False)]
 
 
 def _compile_reset_instruction(
@@ -99,9 +99,8 @@ def _compile_reset_instruction(
     indent: int,
 ) -> list[str]:
     reset_expr = _coil_reset_value(instr.target, ctx)
-    lines = [f"{' ' * indent}if {enabled_expr}:"]
-    lines.extend(_compile_target_write_lines(instr.target, reset_expr, ctx, indent + 4))
-    return lines
+    writes = _compile_target_write_lines(instr.target, reset_expr, ctx, 0)
+    return [f"{' ' * indent}{line}" for line in emit_if_enabled(enabled_expr, writes, fold=False)]
 
 
 def _compile_out_instruction(
@@ -110,7 +109,6 @@ def _compile_out_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    lines: list[str] = []
     sp = " " * indent
     enabled_literal = _bool_literal(enabled_expr)
     if instr.oneshot:
@@ -128,16 +126,12 @@ def _compile_out_instruction(
         oneshot = emit_oneshot(key, enabled, fire=fire, off=off, held=held)
         return [f"{sp}{line}" for line in oneshot]
 
-    if enabled_literal is True:
-        return _compile_target_write_lines(instr.target, "True", ctx, indent)
-    if enabled_literal is False:
-        return _compile_target_write_lines(instr.target, "False", ctx, indent)
-
-    lines.append(f"{sp}if {enabled_expr}:")
-    lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-    lines.append(f"{sp}else:")
-    lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
-    return lines
+    on, off = [], []
+    if enabled_literal is not False:
+        on = _compile_target_write_lines(instr.target, "True", ctx, 0)
+    if enabled_literal is not True:
+        off = _compile_target_write_lines(instr.target, "False", ctx, 0)
+    return [f"{sp}{line}" for line in emit_if_enabled(enabled_expr, on, otherwise=off)]
 
 
 def _compile_call_instruction(
@@ -154,22 +148,12 @@ def _compile_call_instruction(
         call_expr = f"{fn}(tags)"
     else:
         call_expr = f"{fn}()"
-    enabled_literal = _bool_literal(enabled_expr)
-    if enabled_literal is False:
-        return []
-    if enabled_literal is True:
-        return [f"{sp}{call_expr}"]
-    return [f"{sp}if {enabled_expr}:", f"{sp}    {call_expr}"]
+    return [f"{sp}{line}" for line in emit_if_enabled(enabled_expr, [call_expr])]
 
 
 def _compile_return_instruction(enabled_expr: str, indent: int) -> list[str]:
     sp = " " * indent
-    enabled_literal = _bool_literal(enabled_expr)
-    if enabled_literal is False:
-        return []
-    if enabled_literal is True:
-        return [f"{sp}return"]
-    return [f"{sp}if {enabled_expr}:", f"{sp}    return"]
+    return [f"{sp}{line}" for line in emit_if_enabled(enabled_expr, ["return"])]
 
 
 def _compile_on_delay_instruction(
@@ -210,11 +194,9 @@ def _compile_on_delay_instruction(
             then=[emit_frac(acc, "_new_frac", quote="double")],
         ),
     ]
-    lines.append(f"{isp}if {enabled_expr}:")
-    lines.extend(f"{isp}    {line}" for line in run)
-    if not instr.has_reset:
-        lines.append(f"{isp}else:")
-        lines.extend(f"{isp}    {line}" for line in clear)
+    otherwise = () if instr.has_reset else clear
+    run_or_clear = emit_if_enabled(enabled_expr, run, otherwise=otherwise, fold=False)
+    lines.extend(f"{isp}{line}" for line in run_or_clear)
     # Status bits: computed after all branches using final tag values
     done_read = _compile_value(instr.done_bit, ctx)
     if instr.has_reset:
@@ -245,37 +227,30 @@ def _compile_off_delay_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
     sp = " " * indent
-    sp4 = " " * (indent + 4)
-    sp8 = " " * (indent + 8)
-    sp12 = " " * (indent + 12)
+    arm = ["if not _tof_armed:", f"    {emit_mem_set(armed_key, 'True', quote='double')}"]
+    on = [*arm, *emit_timer_clear(done_write, acc_write, frac=acc, done_value="True")]
+    timing = [
+        *arm,
+        *emit_tick(acc, instr.unit, ctx, read="caller"),
+        *emit_done(
+            done_write,
+            acc_write,
+            "<",
+            preset,
+            preset_key=_preset_key(instr, ctx),
+            paren=False,
+            then=[emit_frac(acc, "_new_frac", quote="double")],
+        ),
+    ]
+    off = [
+        f"_acc = int({acc_read})",
+        f"if _tof_armed or {done_read} or _acc != 0:",
+        *(f"    {line}" for line in timing),
+    ]
     # A TOF never enabled rests at Done False, Acc 0 (see tof_armed_key).
     lines = [
         f"{sp}_tof_armed = {emit_mem_get(armed_key, 'False', quote='double')}",
-        f"{sp}if {enabled_expr}:",
-        f"{sp4}if not _tof_armed:",
-        f"{sp8}{emit_mem_set(armed_key, 'True', quote='double')}",
-        *(
-            f"{sp4}{line}"
-            for line in emit_timer_clear(done_write, acc_write, frac=acc, done_value="True")
-        ),
-        f"{sp}else:",
-        f"{sp4}_acc = int({acc_read})",
-        f"{sp4}if _tof_armed or {done_read} or _acc != 0:",
-        f"{sp8}if not _tof_armed:",
-        f"{sp12}{emit_mem_set(armed_key, 'True', quote='double')}",
-        *(f"{sp8}{line}" for line in emit_tick(acc, instr.unit, ctx, read="caller")),
-        *(
-            f"{sp8}{line}"
-            for line in emit_done(
-                done_write,
-                acc_write,
-                "<",
-                preset,
-                preset_key=_preset_key(instr, ctx),
-                paren=False,
-                then=[emit_frac(acc, "_new_frac", quote="double")],
-            )
-        ),
+        *(f"{sp}{line}" for line in emit_if_enabled(enabled_expr, on, otherwise=off, fold=False)),
     ]
     # TOF status bits: EN = enabled, TT = not enabled and done (timing while off)
     tt_expr = f"not bool({enabled_expr}) and bool({done_read})"

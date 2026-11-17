@@ -10,7 +10,6 @@ from pyrung.circuitpy.codegen._constants import (
     _FAULT_MATH_OPERATION_ERROR_TAG,
 )
 from pyrung.circuitpy.codegen._util import (
-    _bool_literal,
     _indent_body,
     _source_location,
     _store_coerce_expr,
@@ -93,7 +92,7 @@ from pyrung.core.site_memory import edge_memory_key, edge_rows
 from pyrung.core.storage import REAL_MAX
 from pyrung.core.tag import ImmediateRef, Tag
 
-from ._emit import emit_cmp, emit_prev, emit_prev_store, emit_truth
+from ._emit import emit_cmp, emit_if_enabled, emit_prev, emit_prev_store, emit_truth
 from ._primitives import (
     CALC_FLAGS,
     _appends_flags,
@@ -871,10 +870,4 @@ def _compile_loop_body(
 
 
 def _compile_loop_exit_instruction(keyword: str, enabled_expr: str, indent: int) -> list[str]:
-    sp = " " * indent
-    enabled_literal = _bool_literal(enabled_expr)
-    if enabled_literal is False:
-        return []
-    if enabled_literal is True:
-        return [f"{sp}{keyword}"]
-    return [f"{sp}if {enabled_expr}:", f"{sp}    {keyword}"]
+    return [f"{' ' * indent}{line}" for line in emit_if_enabled(enabled_expr, [keyword])]
