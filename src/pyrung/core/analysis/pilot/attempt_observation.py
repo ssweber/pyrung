@@ -353,7 +353,7 @@ def _route_blocker_crossings(
             continue
         crossings: list[_RouteBlockerCrossing] = []
         predicate_tags = _referenced_tags(predicate)
-        # A predicate reading a tag it cannot name may cross on any scan, so each is replayed.
+        # A predicate that reads a tag it cannot name may cross on any scan, so replay every scan.
         replay_scan_ids = (
             tuple(sorted(set(exact_scan_ids)))
             if predicate_tags is None

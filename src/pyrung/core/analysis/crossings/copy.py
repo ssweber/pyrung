@@ -167,9 +167,10 @@ def _dest_tag(instr: Any, dest_name: str, ctx: CrossingContext) -> Any | None:
 def _stored_literal(
     instr: Any, dest_name: str, value: Any, ctx: CrossingContext, source: Any = LITERAL
 ) -> Any:
-    """Apply the instruction's concrete destination-storage semantics.
+    """Apply the instruction's concrete destination-storage semantics to *value*.
 
-    *source* is the store's ``copy_source_kind``: a constant, or a readonly tag's type.
+    *source* is the store's ``copy_source_kind``.  It is a constant, or the type of a
+    readonly tag.
     """
     dest = _dest_tag(instr, dest_name, ctx)
     if dest is None:
