@@ -33,7 +33,8 @@ from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
 from tests.core.test_indirect_expr_compare import _StubBase
 
-# After the prefix, a long run goes interpreted, so the rest of it runs in the loop.
+# A long run takes its first scans interpreted. LOOP_SCANS runs well past them, so the
+# rest of the run is in the loop.
 LOOP_SCANS = 2000
 STEPPED_SCANS = 6
 

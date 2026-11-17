@@ -236,8 +236,9 @@ def test_the_format_builtin_stays_with_the_original():
 
 
 def test_a_method_of_an_import_is_the_function(tmp_path, monkeypatch):
-    """Check that ``import math`` out of sight compiles ``math.floor(v)`` differently.
+    """Check that the text of a function that calls ``math.floor(v)`` is the function.
 
+    The ``import math`` is out of sight of the text, so Python compiles the call differently.
     The call still means the same.
     """
     module, _ = _import(

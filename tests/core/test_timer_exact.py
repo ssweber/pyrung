@@ -357,7 +357,10 @@ def test_generated_code_sums_uneven_scans_with_no_loss() -> None:
     result = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
 
     class Uneven(_BoardClock):
-        """Reads whole ticks of 1/32768 s, as a SAMD51 does, in truncated ns."""
+        """Reads whole ticks of 1/32768 s, as a SAMD51 does, in truncated ns.
+
+        The number of ticks in a scan varies from scan to scan.
+        """
 
         ticks = 0
 
@@ -486,7 +489,10 @@ def test_non_decimal_dt_is_exact(engine: Any, dt: float, scans_per_second: int) 
 @pytest.mark.parametrize("kind", ["on", "off", "drum"])
 @pytest.mark.parametrize("dt", [1 / 3, 1 / 60, 1 / 1024, 2**-20])
 def test_a_long_run_at_a_dt_of_no_whole_ns_declines_the_loop(kind: str, dt: float) -> None:
-    """Past the prefix, no scan runs in the loop, and the result is still exact."""
+    """At the production settings, no scan past the prefix runs in the loop.
+
+    The result is still exact.
+    """
     preset, unit = (10, "Tms") if dt == 2**-20 else (3, "Ts")
     prog = PROGRAMS[kind](preset, unit)
     scans = compiled_run.INTERPRETED_PREFIX + 2500

@@ -286,7 +286,10 @@ def _row(cells: list[str], af: str = "", *, marker: str = "") -> tuple[str, ...]
 def test_the_drawing_rule_refuses_a_vertical_after_a_wire_in_a(
     rung: list[tuple[str, ...]],
 ) -> None:
-    """Reject a vertical after a wire in A. CLICK draws each rail item as a rung of its own."""
+    """Check that the drawing rule rejects a vertical after a wire in A.
+
+    CLICK draws each item on the rail as a rung of its own, so a wire in A never splits.
+    """
     with pytest.raises(AssertionError):
         check_rung(rung)
 

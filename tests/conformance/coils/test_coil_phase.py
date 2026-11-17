@@ -113,7 +113,7 @@ def _flash(
     on: tuple[int, Any],
     off: tuple[int, Any],
 ) -> tuple[Any, Any]:
-    """Run a flasher from ``Cmd``, trace it over the window and return its TDs on the last scan."""
+    """Add a flasher on ``Cmd`` and trace it over the window. Return its on and off TD tags."""
     count_scans(slot, FLASH_WINDOW)
     with Rung(slot.Cmd != 0):
         flasher(coil, on=(ClickTimer(on[0]), on[1]), off=(ClickTimer(off[0]), off[1]))

@@ -20,8 +20,8 @@ its own (``Scratch`` is the scan), and its read is a Math that adds a bit to a
 result.  The cases leave a flag up at the end of the scan, so the group runs after
 every group that reads one (``suite.ALL_GROUPS``).
 
-On scan 2, a pointer of -1 and a DF of 1.0E+10 (for the clamp) are staged in slot fields.
-CLICK accepts a pointer in a Single Copy or a Pack/Unpack tab only.
+On scan 2, a pointer of -1 is staged in a slot field, and a DF of 1.0E+10 is staged for the
+clamp.  CLICK accepts a pointer only in a Single Copy or a Pack/Unpack tab.
 
 - ``bulk_ops_clear_flags`` (probe): does a Block copy, Fill, Pack (bits, words, text)
   or Unpack (bits, words) that succeeds clear a flag a Copy raised?  Only a single

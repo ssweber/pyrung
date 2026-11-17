@@ -94,7 +94,8 @@ class TestBoolFeedbackIsADebounce:
         """on=100 ms and off=50 ms at 10 ms scans: an on-delay feeding an off-delay dropped it."""
         plc, btn = _pair(Physical("Dev", on_delay="100ms", off_delay="50ms"), debounce, 100, 50)
         fb, _coil = _drive(plc, btn, [True] * 20 + [False] * dip + [True] * 25)
-        # On after 10 held scans, plus one more scan because the plant reads the command late.
+        # The plant reads Cmd a scan late, on scan 2.  The on side reaches 100 ms on scan 11,
+        # so Fb is off for the first 10 scans.
         assert _bits(fb) == "." * 10 + "#" * (35 + dip)
 
     def test_a_dip_as_long_as_the_off_delay_drops_it(self) -> None:

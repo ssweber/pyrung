@@ -5,8 +5,8 @@ an *indicator*. An indicator is an ``out()`` bit on rungs of plain contacts. All
 sit below its writers, and they write nothing but indicators. The guard does not watch an
 indicator, and each landing rebuilds it. Anything else that a clock-driven tag reaches keeps
 the clock a bound. That covers a second clock on a rung, a comparison, a latch, a copy and a
-subroutine that the clock gates. Blink indicators are common and cheap, so they stay in the
-loop.
+subroutine that the clock-driven tag gates. Blink indicators are common and cheap, so they
+stay in the loop.
 """
 
 from __future__ import annotations

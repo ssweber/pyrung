@@ -1913,7 +1913,7 @@ class TestBlockCopyTextModes:
         assert new_state.tags["DS3"] == 3
 
     def test_blockcopy_to_value_failure_sets_out_of_range_and_skips_the_bad_character(self):
-        """Our reading of CLICK: the bad slot keeps its old value and the others are written."""
+        """On a real CLICK, the bad slot keeps its old value and the other slots are written."""
         from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import BlockCopyInstruction
 

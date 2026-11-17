@@ -407,7 +407,10 @@ def _interpreted(program: Program, inputs: tuple[Tag, ...], watch: tuple[Tag, ..
 
 @pytest.mark.parametrize("case", list(_CASES), ids=list(_CASES))
 def test_immediate_operand_reads_as_the_plain_one(case):
-    """The interpreter gives the same answer for the wrapped program as for the plain one."""
+    """The interpreter gives the same answer for the wrapped program as for the plain one.
+
+    The other backends are checked against the interpreter's answer for the wrapped program.
+    """
     _hw, prog, inputs, watch = _CASES[case]()
     _hw, plain, plain_inputs, plain_watch = _CASES[case](wrap=lambda value: value)
     assert _interpreted(prog, inputs, watch) == _interpreted(plain, plain_inputs, plain_watch)

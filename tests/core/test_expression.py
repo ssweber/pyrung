@@ -747,7 +747,7 @@ class TestExpressionEdgeCases:
         """Make calc run CLICK's MOD and ``**``, while the expression keeps Python's.
 
         CLICK's MOD truncates, and MOD by 0 gives 0 with no flag. 0 ** 0 also gives 0 with no
-        flag. The expression itself keeps Python's ``%`` and ``**``.
+        flag.
         """
         from pyrung.core.instruction.calc import calc_form
 
