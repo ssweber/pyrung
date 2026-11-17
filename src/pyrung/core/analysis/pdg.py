@@ -61,7 +61,7 @@ class IndirectWriteRef:
 
 @dataclass(frozen=True)
 class PointerUse:
-    """One indexed access ``block[scale * pointer + offset]``.
+    """Record one indexed access ``block[scale * pointer + offset]``.
 
     ``DS[Ptr]`` is ``scale=1, offset=0``; ``DS[Ptr + 2]`` and ``DS[4 - Ptr]``
     are the affine forms ``_indirect_affine`` accepts.
@@ -75,11 +75,11 @@ class PointerUse:
     offset: int = 0
 
     def address(self, value: Any) -> int:
-        """The block address the access resolves to when the pointer is *value*."""
+        """Return the block address that the access resolves to when the pointer is *value*."""
         return int(self.scale * value + self.offset)
 
     def pointer_span(self) -> tuple[int, int]:
-        """The pointer values whose address lands in ``start..end``."""
+        """Return the pointer values whose address lands in ``start..end``."""
         if self.scale == 1:
             return self.start - self.offset, self.end - self.offset
         return self.offset - self.end, self.offset - self.start
@@ -126,11 +126,11 @@ class RungNode:
 
     @property
     def sure_writes(self) -> frozenset[str]:
-        """The tags the node writes every time it runs.
+        """Return the tags that the node writes every time it runs.
 
-        An analysis that asks whether a rung always writes a tag reads this.  It
-        leaves out the fault flags, which most instructions only ever set, and the
-        writes in ``may_writes``.
+        An analysis that asks whether a rung always writes a tag reads this.  The result
+        leaves out the writes in ``may_writes`` and the fault flags.  Most instructions
+        only ever set a fault flag.
         """
         return self.writes - self.may_writes
 
@@ -240,7 +240,7 @@ class ProgramGraph:
         return build_program_graph(program)
 
     def node_writes(self, node: RungNode) -> frozenset[str]:
-        """Tags *node* writes: its destinations plus the fault flags that count."""
+        """Return the destinations of *node* and the fault flags that count as its writes."""
         if node.implicit_writes and self.fault_writes:
             return node.writes | (node.implicit_writes & self.fault_writes)
         return node.writes
@@ -376,7 +376,7 @@ class ProgramGraph:
         return tag is not None and tag_written_from_outside(tag)
 
     def unlisted_writers_of(self, tag_name: str) -> frozenset[int]:
-        """The nodes whose write through a pointer may store into ``tag_name`` unlisted.
+        """Return the nodes whose write through a pointer may store into ``tag_name`` unlisted.
 
         A write through a pointer with no declared bounds, into a block of more than 1000
         elements, names none of its targets.  ``writers_of`` and the facts' writer lists
@@ -394,7 +394,7 @@ class ProgramGraph:
     def pointer_writers_of(
         self, tag_name: str, blocks: Collection[Block] | None = None
     ) -> frozenset[int]:
-        """The nodes whose unlisted write through a pointer can store into ``tag_name``.
+        """Return the nodes whose unlisted write through a pointer can store into ``tag_name``.
 
         It answers "could this write have stored into the tag, whatever its pointer
         held?".  A patch or a force can put any value in a pointer, so every write into a
@@ -417,11 +417,11 @@ class ProgramGraph:
     def tag_positions(
         self, tag_name: str, blocks: Collection[Block]
     ) -> frozenset[tuple[Block, int]]:
-        """Each ``(block, address)`` in *blocks* where a store reaches ``tag_name``.
+        """Return each ``(block, address)`` in *blocks* that a store reaches for ``tag_name``.
 
-        They are the elements the tag is (``block_positions``), and the addresses whose
-        slot name is the tag's name.  The runtime stores by the name the bank gives the
-        address.  So a store also reaches a tag mapped onto a second slot, or a plain tag
+        These are the elements that the tag occupies (``block_positions``) and the addresses
+        whose slot name is the tag's name.  The runtime stores by the name that the bank
+        gives the address.  So a store also reaches a tag mapped onto a second slot, or a plain tag
         named like a slot.  A block with a custom ``address_formatter`` and more than
         ``_MAX_BLOCK_SCAN`` elements is not scanned.  There every tag counts as reached,
         at the block's first address and at each address an unlisted write reaches.
@@ -445,7 +445,7 @@ class ProgramGraph:
         return block.address_formatter is not None and block.end - block.start + 1 > _MAX_BLOCK_SCAN
 
     def _unscanned_positions(self, block: Block) -> set[tuple[Block, int]]:
-        """The positions in a block too large to scan where a store may reach any tag."""
+        """Return the positions in a block too large to scan where a store may reach any tag."""
         found: set[tuple[Block, int]] = {(block, block.start)}
         for _node, reach in self.unlisted_writes.get(block, ()):
             if reach is not None:
@@ -453,7 +453,7 @@ class ProgramGraph:
         return found
 
     def _slot_addresses(self, block: Block, name: str) -> frozenset[int]:
-        """The addresses of *block* whose slot name is *name*, as the bank resolves them now.
+        """Return the addresses of *block* whose slot name is *name*, as the bank resolves them now.
 
         A slot's name is its override, else its mapped tag's name, else the default
         ``<block><address>``.  The first two are read from the few slots that have them.
@@ -493,7 +493,7 @@ class ProgramGraph:
         return frozenset(found)
 
     def unlisted_writers_at(self, block: Block, addr: int) -> frozenset[int]:
-        """The nodes whose write through a pointer may store into ``block[addr]`` unlisted."""
+        """Return the nodes whose pointer write may store into ``block[addr]`` unlisted."""
         return frozenset(
             node
             for node, reach in self.unlisted_writes.get(block, ())
@@ -501,13 +501,14 @@ class ProgramGraph:
         )
 
     def unlisted_written(self) -> frozenset[str]:
-        """Every tag of the graph that :meth:`unlisted_writers_of` names a writer for."""
+        """Return every tag of the graph that :meth:`unlisted_writers_of` names a writer for."""
         if not self.unlisted_writes:
             return frozenset()
         return frozenset(name for name in self.tags if self.unlisted_writers_of(name))
 
     def all_writers_of(self, tag_name: str) -> frozenset[int]:
-        """The nodes that may write ``tag_name``: ``writers_of`` and :meth:`unlisted_writers_of`.
+        """Return the nodes that may write ``tag_name``.  These are ``writers_of`` plus
+        :meth:`unlisted_writers_of`.
 
         It answers "which rungs can write the tag, from the program alone?".  A static
         answer asks this.
@@ -515,7 +516,8 @@ class ProgramGraph:
         return self.writers_of.get(tag_name, frozenset()) | self.unlisted_writers_of(tag_name)
 
     def writers_in_any_run_of(self, tag_name: str) -> frozenset[int]:
-        """The nodes that may write ``tag_name``: ``writers_of`` and :meth:`pointer_writers_of`.
+        """Return the nodes that may write ``tag_name``.  These are ``writers_of`` plus
+        :meth:`pointer_writers_of`.
 
         It answers "which rungs could have written the tag in a run, whatever a patch or a
         force put in a pointer?".  A walk over a recorded run asks this, and keeps a rung
@@ -524,7 +526,7 @@ class ProgramGraph:
         return self.writers_of.get(tag_name, frozenset()) | self.pointer_writers_of(tag_name)
 
     def may_be_written(self, tag_name: str) -> bool:
-        """Whether a rung may write ``tag_name``, listed in ``writers_of`` or not."""
+        """Return whether a rung may write ``tag_name``, whether ``writers_of`` lists it or not."""
         return bool(self.writers_of.get(tag_name)) or bool(self.unlisted_writers_of(tag_name))
 
     def is_physical_output(self, tag_name: str) -> bool:
@@ -584,7 +586,7 @@ class ProgramGraph:
         return edges
 
     def unconditional_write_before_read(self, tag_name: str) -> bool:
-        """True when def-use chains prove unconditional write-before-read.
+        """Return True when def-use chains prove unconditional write-before-read.
 
         The entry version must have no readers (no read precedes the first
         write in program order) *and* the first write must be unconditional.
@@ -948,11 +950,11 @@ def _indirect_ref_tags(
 
 
 def _indirect_affine(expr: Any) -> tuple[Tag, int, int] | None:
-    """``(pointer, scale, offset)`` when *expr* is ``scale * pointer + offset``.
+    """Return ``(pointer, scale, offset)`` when *expr* is ``scale * pointer + offset``.
 
-    Accepts a bare tag and the single-tag forms of ``extract_affine_expression``
-    with an integer offset; ``None`` for anything else (``Ptr * 2``,
-    ``Ptr + Other``), whose addresses no pointer range bounds.
+    It accepts a bare tag and the single-tag forms of ``extract_affine_expression``
+    with an integer offset.  It returns ``None`` for anything else (``Ptr * 2``,
+    ``Ptr + Other``), because no pointer range bounds those addresses.
     """
     from pyrung.core.expression import TagExpr
 
@@ -973,7 +975,7 @@ def _indirect_affine(expr: Any) -> tuple[Tag, int, int] | None:
 
 
 def _indirect_expr_tags(block: Block, expr: Any) -> list[Tag] | None:
-    """The bounded tags ``block[expr]`` can touch, or ``None`` when unbounded."""
+    """Return the bounded tags ``block[expr]`` can touch, or ``None`` when unbounded."""
     affine = _indirect_affine(expr)
     if affine is None:
         return None
@@ -1351,7 +1353,7 @@ def _extract_instruction_event(
 
 
 def _instruction_may_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
-    """The tags *instr* may leave alone when it runs, though it can write them.
+    """Return the tags that *instr* may leave alone when it runs, though it can write them.
 
     Two kinds of write reach a tag only for some values.  A pointer, or a range
     with a pointer at an end, writes one of the elements it can reach.  A
@@ -1382,12 +1384,12 @@ def _extract_instruction_writes(
 
     Declared writes, declared status fields, and static sequential-copy fan-out
     come from :mod:`write_sites`.  This PDG-specific layer retains indirect
-    address reads and conservative regions.  Returns
+    address reads and conservative regions.  It returns
     ``(writes, reads, implicit_writes)``.  The implicit writes are the fault
-    flags the instruction can set (``_fault_writes``); they stay out of the
-    node's ``writes`` (an instruction's declared destinations) and count in
+    flags the instruction can set (``_fault_writes``).  They stay out of the
+    node's ``writes`` (an instruction's declared destinations).  They count in
     ``writers_of``, the def-use chains and the cones for the flags a rung reads
-    (``ProgramGraph.fault_writes``), so ``Rung(fault.division_error)`` depends
+    (``ProgramGraph.fault_writes``).  So ``Rung(fault.division_error)`` depends
     on the divisor.
     """
     writes: set[str] = set()
@@ -1424,8 +1426,8 @@ def _rung_condition_reads(
 ) -> frozenset[str]:
     """Extract rung condition reads.
 
-    Branch rungs store inherited parent conditions first; ``local_only=True``
-    returns just the branch-local slice, read when the solve reaches the branch.
+    Branch rungs store their inherited parent conditions first.  ``local_only=True``
+    returns just the branch-local slice, which the solve reads when it reaches the branch.
     """
     conditions = (
         rung._conditions[rung._branch_condition_start :] if local_only else rung._conditions
@@ -1580,7 +1582,7 @@ def _build_def_use_chains(
 
 
 def continuous_search_results(program: Program) -> frozenset[str]:
-    """The result of each continuous search, which the search reads to resume after it.
+    """Return the result tag of each continuous search.  The search reads it to resume.
 
     The def-use chains leave that read out, so a reader that trusts
     ``ProgramGraph.unconditional_write_before_read`` excludes these tags itself.
@@ -1697,7 +1699,7 @@ def _augment_return_early_guards(
 
 
 def _rung_tree_node_indices(rung: Rung, node_index_by_rung: dict[int, int]) -> list[int]:
-    """PDG node indices of a top-level rung and its branches, at any depth."""
+    """Return the PDG node indices of a top-level rung and its branches, at any depth."""
     out = [node_index_by_rung[id(rung)]]
     for branch in rung._branches:
         out.extend(_rung_tree_node_indices(branch, node_index_by_rung))
@@ -1705,12 +1707,12 @@ def _rung_tree_node_indices(rung: Rung, node_index_by_rung: dict[int, int]) -> l
 
 
 def _nodes_after_first_return(rung: Rung, node_index_by_rung: dict[int, int]) -> frozenset[int]:
-    """Nodes of *rung*'s tree with an item a return earlier in the rung can skip.
+    """Return the nodes of *rung*'s tree with an item that a return earlier can skip.
 
-    The rung's items run in source order, a branch's in place (its contacts
-    were read up front, with the rung's).  Everything after the first item
-    that holds a return is skipped when it fires; a loop holding one can also
-    skip its own body's later iterations, so the loop counts as after it.
+    The rung's items run in source order.  A branch runs in place, and its contacts
+    were read up front, with the rung's.  When a return fires, it skips everything after
+    the first item that holds a return.  A loop that holds a return can also skip the
+    later iterations of its own body, so the loop counts as after it.
     """
     from pyrung.core.rung import Rung as RungClass
 
@@ -1735,7 +1737,7 @@ def _nodes_after_first_return(rung: Rung, node_index_by_rung: dict[int, int]) ->
 
 
 def _items_hold_return(items: Any) -> bool:
-    """Whether a return sits among *items*, in a rung among them or in a loop body."""
+    """Return whether a return sits among *items*, in a rung among them or in a loop body."""
     from pyrung.core.instruction.control import ReturnInstruction
     from pyrung.core.rung import Rung as RungClass
 
@@ -1751,17 +1753,17 @@ def _items_hold_return(items: Any) -> bool:
 
 
 def _rung_has_return(rung: Rung) -> bool:
-    """Whether ``return_early()`` sits anywhere in the rung: its own items,
+    """Return whether ``return_early()`` sits anywhere in the rung: its own items,
     its branches (at any depth), or a loop body in either."""
     return _rung_return_condition_reads(rung, {}) is not None
 
 
 def _rung_return_condition_reads(rung: Rung, tag_refs: dict[str, Tag]) -> frozenset[str] | None:
-    """Reads that decide whether a ``return_early()`` in this rung fires.
+    """Return the reads that decide whether a ``return_early()`` in this rung fires.
 
-    ``None`` when the rung holds no return.  A return can sit in the rung's
+    Return ``None`` when the rung holds no return.  A return can sit in the rung's
     own items, in a branch at any depth, or in a loop body (a bare item or a
-    body rung) in either; the reads are the conditions on the path to each
+    body rung) in either.  The reads are the conditions on the path to each
     one.  A branch's conditions hold its parents' first, so its full reads
     are its path.  A loop holding a return adds its count (a count of 0 runs
     no iteration) and every body rung's contacts (a ``break_loop()`` or
@@ -2133,7 +2135,7 @@ def _named_write_dests(instr: Any) -> list[str]:
 def _build_writer_instrs(program: Program) -> dict[str, list[Any]]:
     """Map each named-``Tag`` destination to the instructions that write it.
 
-    Consumed by the indirect-destination region crossing to hop an affine pointer
+    The indirect-destination region crossing reads this map to hop an affine pointer
     (``math(root ± k)``) back to its root and read that root's literal-write
     domain.  Whole-program (main + branches + subroutines + ForLoop bodies)."""
     from pyrung.core.validation._common import walk_instructions
@@ -2243,7 +2245,7 @@ _UnlistedWrite = tuple[int, Any, Any]
 
 
 class _UnlistedReach:
-    """The addresses a write through a pointer can reach, from what the program stores in it.
+    """Compute the addresses a write through a pointer can reach from what the program stores in it.
 
     A pointer holds its power-on value and what its writers store.  A writer stores under
     its own rung's comparisons, so ``math(Cmd * 10 + 2999, Idx)`` under ``Cmd >= 1, Cmd <=
@@ -2265,7 +2267,7 @@ class _UnlistedReach:
     def narrow(
         self, writes: list[_UnlistedWrite]
     ) -> dict[Block, tuple[tuple[int, frozenset[int] | None], ...]]:
-        """*writes* by block, each with the addresses it can reach (None: all of them).
+        """Return *writes* grouped by block, each with the addresses it can reach (None means all).
 
         A write that reaches no address stays, with an empty reach.  A patch or a force on
         its pointer can still aim it into the block.
@@ -2323,7 +2325,7 @@ class _UnlistedReach:
         )
 
     def addresses(self, instr: Any, dest: Any) -> frozenset[int] | None:
-        """The in-block addresses *instr* can write through *dest*, or None for all of them."""
+        """Return the in-block addresses *instr* can write through *dest*, or None for all."""
         if self._sets is None:
             self._sets = self._build()
         if isinstance(dest, IndirectRef) and dest.pointer.name in self._outside:
@@ -2340,7 +2342,7 @@ class _UnlistedReach:
 
 
 def _declared_reach(dest: IndirectRef) -> frozenset[int]:
-    """The addresses of ``block[Ptr]`` that the pointer's declared bounds allow.
+    """Return the addresses of ``block[Ptr]`` that the pointer's declared bounds allow.
 
     These are the elements ``_indirect_ref_tags`` lists.  A ladder write past the bounds
     would reach others (roadmap 1b).
@@ -2360,7 +2362,7 @@ def _declared_reach(dest: IndirectRef) -> frozenset[int]:
 
 
 def _listed_by_declared_bounds(dest: Any) -> bool:
-    """Whether the facts' writer lists name what *dest* writes in a block past the cap.
+    """Return whether the facts' writer lists name what *dest* writes in a block past the cap.
 
     They follow a plain pointer's ``choices=``, or a ``min=``/``max=`` span of 1000
     addresses or fewer (``prove.classify._expand_indirect_tag_names``), and

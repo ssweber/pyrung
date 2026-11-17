@@ -62,8 +62,8 @@ LIMITS = CoastLimits()
 # A bearing coast gets a generous budget of its own — timer dwell is waiting,
 # not searching, so it does not consume the pilot's iteration budget.
 _COAST_BUDGET = 10_000
-# The search work left, ten seeks that count scans, below which a wait counts scans whatever
-# holds it: a max_scans this small asks for a small search, not a long wait.
+# Below this much search work left (ten seeks that count scans), a wait counts scans whatever
+# holds it.  A max_scans this small asks for a small search, not a long wait.
 _LEDGER_FOR_A_LONG_WAIT = 10 * _COAST_BUDGET // STRETCH_SCANS_PER_UNIT
 
 
@@ -169,7 +169,7 @@ class CoastReceipt:
 
 
 def _trigger_reads(triggers: Iterable[CoastTrigger]) -> frozenset[str] | None:
-    """The tags every armed trigger reads, or None if one will not say.
+    """Return the tags that every armed trigger reads, or None if one will not say.
 
     Watched tags count: an avoid's predicate reads the member's tags, and a
     predicate that fails in a loop scan takes that for False.
@@ -197,9 +197,9 @@ class CoastSession:
 
     plc: PLC
     kind: str = "coast"
-    # A live wait may count what its scans cost, as the ledger does, rather than the scans:
-    # see :meth:`loop_scans_per_unit`.  A recorded replay's budget is history, not an allowance,
-    # so it stays in scans.
+    # A live wait may count what its scans cost, as the ledger does, instead of counting
+    # scans.  See :meth:`loop_scans_per_unit`.  A recorded replay's budget is history, not
+    # an allowance, so it stays in scans.
     waits_on_work: bool = False
     # Armed pens: tag -> last recorded value.  A pen is a nonterminal,
     # re-arming change recorder — the literal trend-recorder pen.  During a
@@ -361,13 +361,14 @@ class CoastSession:
         )
 
     def loop_scans_per_unit(self) -> int:
-        """How many loop scans a unit of this session's seek budget pays for.
+        """Return how many loop scans a unit of this session's seek budget pays for.
 
-        A wait under the plan's own holds is one the plan committed to, so how long its timers
-        run is not what should end it: one unit per ``STRETCH_SCANS_PER_UNIT``, the ledger's own
-        charge, with the wall clock and the memory cap bounding it.  Any other wait counts scans:
-        it may be a program that never does what is asked, and the search has other moves.  A
-        small ledger counts scans too: one fruitless wait at this price would spend it whole.
+        A wait under the plan's own holds is one that the plan committed to.  How long its
+        timers run should not end it.  It costs one unit per ``STRETCH_SCANS_PER_UNIT`` scans,
+        the ledger's own charge, and the wall clock and the memory cap bound it.  Any other
+        wait counts scans.  It may be a program that never does what is asked, and the search
+        has other moves.  A small ledger counts scans too, because one fruitless wait at this
+        price would spend it whole.
         """
         synthesis = self.plc._synthesis
         if not self.waits_on_work or synthesis is None or not getattr(synthesis, "holds", ()):
@@ -380,8 +381,8 @@ class CoastSession:
     def seek(self, triggers: Iterable[CoastTrigger], *, budget: int) -> CoastReceipt:
         """Coast until the first armed terminal trigger fires; return the receipt.
 
-        Each scan runs, in :func:`~pyrung.core.coast_run.coast_until`, and *budget*
-        counts them: a seek that nothing ends lands where stepping would time out.  See
+        :func:`~pyrung.core.coast_run.coast_until` runs each scan, and *budget* counts
+        them.  A seek that nothing ends lands where stepping would time out.  See
         :meth:`loop_scans_per_unit` for the seek that counts what they cost instead.
         """
         plc = self.plc

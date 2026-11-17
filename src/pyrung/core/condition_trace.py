@@ -83,7 +83,7 @@ class ConditionTraceEngine:
 
     @staticmethod
     def _element_label(ref: IndirectRef | IndirectExprRef, ctx: ScanContext) -> str:
-        """The element's tag name, or its address marked out of range (reads as 0)."""
+        """Return the element's tag name, or its address marked out of range (reads as 0)."""
         addr = ref.address_ctx(ctx)
         target = ref.block._element_or_none(addr)
         if target is None:
@@ -131,7 +131,7 @@ class ConditionTraceEngine:
     def _evaluate_text_window(
         self, window: Any, written: Any, ctx: ScanContext | ConditionView
     ) -> tuple[bool, list[dict[str, Any]]]:
-        """``Txt[1] == "AB"`` as written: the window's characters against the literal."""
+        """Return ``Txt[1] == "AB"`` as written: the window's characters against the literal."""
         text = "".join(
             str(ctx.get_tag(child.tag.name, child.tag.default)) for child in window.conditions
         )
