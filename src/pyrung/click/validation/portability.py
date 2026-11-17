@@ -95,7 +95,7 @@ if TYPE_CHECKING:
 
 
 def _block_offset(block_name: str, tag_map: TagMap) -> int:
-    """The block's start in its bank minus its logical start, 0 for an unmapped block."""
+    """Return the block's start in its bank minus its logical start, or 0 for an unmapped block."""
     entry = tag_map._block_entry_by_name(block_name) if block_name else None
     if entry is None:
         return 0
@@ -373,7 +373,10 @@ def _evaluate_immediate_coil_target(
 def _evaluate_immediate_contacts(
     program: Any, tag_map: TagMap, mode: ValidationMode, resolver: _ResolutionCache
 ) -> list[ClickFinding]:
-    """An immediate NO/NC contact must read an input mapped to X: CLICK offers it on X only."""
+    """Report each immediate NO/NC contact that reads an input not mapped to X.
+
+    CLICK offers an immediate contact on X only.
+    """
     from pyrung.core.condition import (
         AllCondition,
         AnyCondition,
@@ -393,7 +396,8 @@ def _evaluate_immediate_contacts(
             out.append(condition._resolved_tag)
 
     def walk(rung: Any, location: ProgramLocation, *, loops: bool = True) -> None:
-        # iter_loop_body_rungs yields nested loops' rungs too: walk those without it.
+        # iter_loop_body_rungs also yields the rungs of nested loops.  Walk those with
+        # loops=False.
         wrapped: list[Tag] = []
         for condition in rung._conditions[rung._branch_condition_start :]:
             contacts(condition, wrapped)
@@ -563,12 +567,12 @@ _CLICK_MAX_PAREN_DEPTH = 8
 
 
 def _is_negative_operand(expr: Any) -> bool:
-    """A right operand the translator parenthesizes for its sign.
+    """Return True for a right operand that the translator wraps in parentheses for its sign.
 
     ``DS1 + ( -5 )`` for a literal, ``DS1 * ( 0 - DS2 )`` for a negation.
 
-    Counts a negative literal even in hex mode, where it renders unsigned
-    (``FFFFh``) and gets no parens; that only overstates the depth.
+    A negative literal counts here even in hex mode, where it renders unsigned
+    (``FFFFh``) and gets no parentheses. That only overstates the depth.
     """
     if isinstance(expr, UnaryExpr):
         return expr.symbol == "-"
@@ -589,11 +593,11 @@ def _expr_paren_depth(expr: Any) -> int:
     if isinstance(expr, (TagExpr, LiteralExpr)):
         return 0
 
-    # Range aggregates: SUM ( a : b ), MAX ( a : b ), ... — one paren level
+    # Range aggregates: SUM ( a : b ), MAX ( a : b ), ... add one paren level.
     if isinstance(expr, (SumExpr, RangeAggregateExpr)):
         return 1
 
-    # RAND ( lo , hi ) — one paren level
+    # RAND ( lo , hi ) adds one paren level.
     if isinstance(expr, RandIntExpr):
         return max(_expr_paren_depth(expr.lo), _expr_paren_depth(expr.hi)) + 1
 
@@ -700,28 +704,27 @@ def _walk_mode_violations(
 # ---------------------------------------------------------------------------
 # Range aggregates: SUM / MAX / MIN / MDN / AVG ( first : last )
 # ---------------------------------------------------------------------------
-# CLICK's object error table: the range must be ordered Low:High (OBJ-1014),
-# both ends in the same address block (OBJ-1015), and an MDN range is limited
-# to 1024 bytes (OBJ-1013).  The exporter writes ``FUNC ( first : last )`` from
-# the range's first and last mapped tag, so every member in between must map
-# to the addresses CLICK will read.
+# CLICK's object error table requires the range to be ordered Low:High (OBJ-1014) and both
+# ends to be in the same address block (OBJ-1015). It limits an MDN range to 1024 bytes
+# (OBJ-1013). The exporter writes ``FUNC ( first : last )`` from the range's first and last
+# mapped tag. Every member in between must therefore map to the addresses CLICK will read.
 
 _BIT_BANKS = frozenset({"X", "Y", "C", "T", "CT", "SC"})
 # SUM reads X, Y, C, T, SC, DS, DD, DF, TD, CTD, SD in decimal mode and DH, XD, YD in hex
-# mode.  Only these two banks are out in both.  A bank in the wrong mode needs no check here:
-# TagMap ties a tag's type to its bank, and a mixed math() gets CLK_MATH_MODE_MIXED.
+# mode. CT and TXT are unavailable in both modes. A bank in the wrong mode needs no check
+# here. TagMap ties a tag's type to its bank, and a mixed math() gets CLK_MATH_MODE_MIXED.
 _NO_SUM_BANKS = frozenset({"CT", "TXT"})
 # Banks whose CLICK address space has slot gaps (X001..X016, X101..X116, ...).
 _SLOTTED_BANKS = frozenset({"X", "Y"})
 _MDN_MAX_BYTES = 1024
 _BANK_BYTES: dict[str, int] = {"DD": 4, "DF": 4, "CTD": 4}
-# XD and YD hold XD0, XD0u, then XD1..XD8 at MDB addresses 0, 1, then 2, 4, .. 16.  A range
-# from XD0 on to XD1 therefore holds XD0u, which a pyrung block of XD never holds.
+# CLICK's XD and YD banks run XD0, XD0u, then XD1..XD8, at MDB addresses 0, 1, then 2, 4, .. 16.
+# A CLICK range from XD0 on to XD1 therefore includes XD0u, which a pyrung XD block never has.
 _WORD_IO_BANKS = frozenset({"XD", "YD"})
 
 
 def _next_address(bank: str, address: int) -> int:
-    """The MDB address after *address* in *bank*'s CLICK address space."""
+    """Return the MDB address that follows *address* in *bank*'s CLICK address space."""
     if bank in _WORD_IO_BANKS and address >= 2:
         return address + 2
     return address + 1
@@ -835,9 +838,11 @@ def _evaluate_range_aggregates(
 
 
 def _collect_bit_operands(expr: Any, out: list[Tag], seen: set[int]) -> None:
-    """Each Bool tag *expr* reads as an operand, outside a range aggregate (whose
-    rules, SUM over bits included, are :func:`_evaluate_range_aggregates`') and a
-    RAND (a bit bound is ``CLK_RAND_BOUND_TYPE``)."""
+    """Append to *out* each Bool tag that *expr* reads as an operand.
+
+    Range aggregates are skipped, because :func:`_evaluate_range_aggregates` checks them,
+    SUM over bits included. RAND is skipped too: a bit bound there is ``CLK_RAND_BOUND_TYPE``.
+    """
     if isinstance(expr, ImmediateRef):
         expr = expr.value
     if isinstance(expr, Tag):
@@ -859,8 +864,11 @@ def _collect_bit_operands(expr: Any, out: list[Tag], seen: set[int]) -> None:
 def _evaluate_math_bit_operands(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
-    """CLK_MATH_BIT_OPERAND: CLICK's Math editor refuses a bit in its formula, except
-    in a SUM over a bit range (checked in the v4 editor, 2026-11-06)."""
+    """Report a bit operand in a math() formula as CLK_MATH_BIT_OPERAND.
+
+    CLICK's Math editor refuses a bit in its formula, except in a SUM over a bit range
+    (checked in the v4 editor, 2026-11-06).
+    """
     if type(instruction).__name__ != "CalcInstruction":
         return []
     bits: list[Tag] = []
@@ -1018,7 +1026,10 @@ def _text_order_compares(condition: Any, out: list[str]) -> None:
 
 
 def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[ClickFinding]:
-    """CLICK's Compare offers only = and != on text (TXT)."""
+    """Report each <, <=, > or >= compare on a Char operand.
+
+    CLICK's Compare offers only = and != on text (TXT).
+    """
     findings: list[ClickFinding] = []
 
     def _walk_rung(rung: Any, location_str: str) -> None:
@@ -1055,11 +1066,11 @@ def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[Cl
 
 
 def _text_literal_compares(condition: Any, out: list[tuple[Any, list[Tag]]]) -> None:
-    """Collect each ``==``/``!=`` of a Char with a longer literal, and the Chars pyrung reads.
+    """Append to *out* each ``==``/``!=`` of a Char with a longer literal, with the Chars read.
 
-    A text window (``txt[1] == "AB"``) reads the Chars that follow in its block
-    (``text_window_condition``); any other such compare reads its one Char
-    against the whole literal.
+    pyrung reads the Chars that follow in the block for a text window
+    (``txt[1] == "AB"``, see ``text_window_condition``). Any other such compare reads
+    its one Char against the whole literal.
     """
     from pyrung.core.condition import CompareEq, CompareNe, Condition, text_window_of
 
@@ -1092,10 +1103,11 @@ _TXT_LAST = 1000
 def _evaluate_text_windows(
     program: Any, mode: ValidationMode, resolver: _ResolutionCache
 ) -> list[ClickFinding]:
-    """A CLICK compares a longer literal over a TXT and the TXTs after it.
+    """Report a text compare that pyrung and CLICK read differently.
 
-    pyrung compares the Chars that follow in the Char's block, so the two agree
-    only where those are mapped to the next TXT addresses, one for each character.
+    CLICK compares a longer literal against a TXT and the TXTs after it. pyrung compares
+    the Chars that follow in the Char's block. The two agree only where those Chars are
+    mapped to the next TXT addresses, one for each character.
     """
     from pyrung.core.validation.render import render_condition
 
@@ -1144,8 +1156,8 @@ def _evaluate_text_windows(
             )
         )
 
-    # A timer's or counter's enable (and a drum's, an enabled call's) holds the
-    # rung's own conditions again, so each compare is checked once, where first met.
+    # The enable condition of a timer, counter, drum or enabled call repeats the rung's own
+    # conditions. Track the compares already seen so each is checked once, where first met.
     seen: set[int] = set()
 
     def _walk_rung(rung: Any, location_str: str) -> None:
@@ -1179,9 +1191,10 @@ _NUMERIC_COMPARE_BANKS = frozenset({"TD", "CTD", "DS", "DD", "DF", "SD"})
 def _evaluate_compare_hex_mix(
     program: Any, mode: ValidationMode, resolver: _ResolutionCache
 ) -> list[ClickFinding]:
-    """CLICK's Compare dialog pairs a hex operand (XD, YD, DH) only with another hex one.
+    """Report a compare that pairs a hex operand (XD, YD, DH) with a decimal one.
 
-    CLICK's editor refuses that pair. A pasted rung skips the check.
+    CLICK's Compare dialog pairs a hex operand only with another hex one, and its editor
+    refuses any other pair. A pasted rung skips the check.
     """
     from pyrung.core.condition import Condition
     from pyrung.core.validation.render import render_condition
@@ -1371,11 +1384,10 @@ _MAX_CLICK_FORLOOP_DEPTH = 3
 
 
 def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[ClickFinding]:
-    """CLICK's For/Next rules that pyrung's core does not enforce.
+    """Report the CLICK For/Next rules that pyrung's core does not enforce.
 
-    Loops nest at most three deep counting the loops of subroutines called
-    inside a loop (C010D); only the outermost For may be one-shot; RETURN may
-    not sit between For and Next.
+    Loops nest at most three deep, counting the loops of subroutines called inside a loop
+    (C010D). Only the outermost For may be one-shot. RETURN may not sit between For and Next.
     """
     findings: list[ClickFinding] = []
     scopes: dict[str | None, list[Any]] = {None: list(program.rungs)}
@@ -1385,7 +1397,7 @@ def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[Clic
         scope = "main" if sub is None else f"subroutine '{sub}'"
         return f"{scope} rung {rung_index + 1}"
 
-    # Deepest loop nesting each scope reaches, counting into its calls.
+    # The deepest loop nesting each scope reaches, counting the subroutines it calls.
     depth_memo: dict[str | None, int] = {}
 
     def _loop_depth(instructions: Any, depth: int, active: frozenset[str]) -> int:
@@ -1459,7 +1471,7 @@ def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[Clic
     return findings
 
 
-# The memory types a CLICK For takes its count from (besides a constant).
+# The memory types that a CLICK For accepts as its count, besides a constant.
 _FORLOOP_COUNT_BANKS = ("DS", "DD", "TD", "CTD", "SD")
 
 
@@ -1469,7 +1481,10 @@ def _evaluate_forloop_count(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """A For count takes a constant, DS, DD, TD, CTD or SD; a pasted DF stops the PLC."""
+    """Report a For count that is not a constant, DS, DD, TD, CTD or SD.
+
+    A pasted DF count stops the PLC.
+    """
     if not isinstance(instruction, ForLoopInstruction):
         return []
     count = instruction.count
@@ -1509,7 +1524,10 @@ def _collect_rands(expr: Any, out: list[RandIntExpr], seen: set[int]) -> None:
 def _collect_plain_arg_sites(
     expr: Any, out: list[tuple[str, tuple[Any, ...]]], seen: set[int]
 ) -> None:
-    """Each RAND, LSH, RSH, LRO and RRO in *expr*, with its arguments (``<<``/``>>`` as LSH/RSH)."""
+    """Append to *out* each RAND, LSH, RSH, LRO or RRO in *expr* with its arguments.
+
+    A ``<<`` or ``>>`` counts as LSH or RSH.
+    """
     if id(expr) in seen or not isinstance(expr, Expression):
         return
     seen.add(id(expr))
@@ -1523,10 +1541,10 @@ def _collect_plain_arg_sites(
         _collect_plain_arg_sites(child, out, seen)
 
 
-# The banks CLICK's RAND takes as a bound (laddercodec editor_grids, 2026-11-16).  A decimal
+# The banks that CLICK's RAND accepts as a bound (laddercodec editor_grids, 2026-11-16). A decimal
 # Math refuses TD, CTD and SD, and a hex Math refuses XD and YD (OBJ-1002).
 _RAND_BOUND_BANKS = {"decimal": frozenset({"DS", "DD"}), "hex": frozenset({"DH"})}
-# The tag types of those banks, for a bound the tag map does not map.
+# The tag types of those banks. They apply to a bound that the tag map does not map.
 _RAND_BOUND_TYPES = {
     "decimal": frozenset({TagType.INT, TagType.DINT}),
     "hex": frozenset({TagType.WORD}),
@@ -1534,7 +1552,10 @@ _RAND_BOUND_TYPES = {
 
 
 def _is_bad_bound_type(bound: Any, *, hex_mode: bool, resolver: _ResolutionCache) -> bool:
-    """RAND takes an integer constant, a DS or DD tag, or a DH tag in a hex Math."""
+    """Return True if *bound* is not valid for RAND.
+
+    RAND accepts an integer constant, a DS or DD tag, or a DH tag in a hex Math.
+    """
     kind = "hex" if hex_mode else "decimal"
     if isinstance(bound, TagExpr):
         slot = resolver.resolve_direct_tag(bound.tag)
@@ -1550,9 +1571,12 @@ def _evaluate_rand_bounds(
     mode: ValidationMode,
     resolver: _ResolutionCache,
 ) -> list[ClickFinding]:
-    """CLICK's editor takes only an integer constant or a DS or DD tag as a RAND bound
-    (a DH tag in a hex Math), refuses equal constant bounds, and an expression as
-    an argument of RAND, LSH, RSH, LRO or RRO."""
+    """Report each RAND bound and each Math argument that CLICK's editor refuses.
+
+    The editor accepts only an integer constant or a DS or DD tag as a RAND bound (a DH tag
+    in a hex Math). It refuses equal constant bounds. It also refuses an expression as an
+    argument of RAND, LSH, RSH, LRO or RRO.
+    """
     if type(instruction).__name__ != "CalcInstruction":
         return []
     location_text = _format_location(_instruction_location(base_location, "instruction.expression"))
@@ -1617,10 +1641,10 @@ def _evaluate_rand_bounds(
 def _collect_wide_constants(
     expr: Any, out: list[int | float], seen: set[int], *, low: int, high: int, whole: bool
 ) -> None:
-    """Each integer constant in *expr* outside *low*..*high*, a RAND's bounds included.
+    """Append to *out* each integer constant in *expr* outside *low*..*high*.
 
-    With *whole*, a float constant counts as its integer, and one with a fraction is
-    collected too, since a hex Math takes only whole numbers.
+    A RAND's bounds are included. With *whole*, a float constant is checked as its integer.
+    A float with a fraction is collected too, because a hex Math takes only whole numbers.
     """
     if isinstance(expr, bool):
         return
@@ -1639,8 +1663,8 @@ def _collect_wide_constants(
         _collect_wide_constants(expr.value, out, seen, low=low, high=high, whole=whole)
         return
     for child in vars(expr).values():
-        # Only subexpressions: a constant is a LiteralExpr (an int attribute, such
-        # as a RAND's site number, is not one).
+        # Recurse into subexpressions only. A constant is a LiteralExpr, and an int attribute
+        # such as a RAND's site number is not a constant.
         if isinstance(child, Expression):
             _collect_wide_constants(child, out, seen, low=low, high=high, whole=whole)
 
@@ -1648,11 +1672,11 @@ def _collect_wide_constants(
 def _evaluate_wide_constants(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
-    """A Math constant CLICK's editor refuses.
+    """Report a Math constant that CLICK's editor refuses.
 
-    A decimal Math takes a constant in a DD's range (2026-11-11).  A hex Math takes a
-    whole number in 0h..FFFFh (2026-11-16).  pyrung writes -32768..-1 there as its 16
-    bits, so -1 is FFFFh, the value pyrung's own hex Math reads.
+    A decimal Math accepts a constant in a DD's range (2026-11-11). A hex Math accepts a
+    whole number in 0h..FFFFh (2026-11-16). pyrung writes -32768..-1 there as its 16 bits.
+    So -1 is FFFFh, the value that pyrung's own hex Math reads.
     """
     if type(instruction).__name__ != "CalcInstruction":
         return []
@@ -1690,7 +1714,10 @@ def _evaluate_wide_constants(
 
 
 def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFinding]:
-    """CLICK has no nested subroutine calls: a ``call()`` may sit in main only."""
+    """Report a ``call()`` inside a subroutine.
+
+    CLICK has no nested subroutine calls, so a ``call()`` may sit in main only.
+    """
     findings: list[ClickFinding] = []
     for sub_name, rungs in program.subroutines.items():
         for rung_index, rung in enumerate(rungs):
@@ -1722,13 +1749,14 @@ def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFind
 
 
 def _evaluate_nop_no_coil(bundle: Any, mode: ValidationMode) -> list[ClickFinding]:
-    """CLK_NOP_NO_COIL: a NOP behind contacts that no output shares, one finding per rung.
+    """Report a NOP behind contacts that no output shares, as CLK_NOP_NO_COIL, once per rung.
 
-    CLICK keeps the rung when it is pasted, but its Syntax Check reports C0003 for it,
-    on a wire or a branch beside a coil too.  A NOP on a coil's net with no contact of
-    its own, or fed by a bare wire, gets no error.  The export decides which contacts
-    the NOP shares with a coil, so this reads the rung as the export draws it, from the
-    *bundle* of the export.  Rungs are CLICK rungs, which can differ from pyrung rungs.
+    CLICK keeps the rung when it is pasted, but its Syntax Check reports C0003 for it. It
+    reports the same for a NOP on a wire or a branch beside a coil. A NOP on a coil's net
+    with no contact of its own, or fed by a bare wire, gets no error. The export decides
+    which contacts the NOP shares with a coil. This function therefore reads each rung as
+    the export draws it, from the *bundle* of the export. Those are CLICK rungs, which can
+    differ from pyrung rungs.
     """
     import warnings
 

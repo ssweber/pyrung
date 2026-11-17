@@ -769,13 +769,13 @@ def _oscillating_rungs(
 
 
 def _away_value(source: Any, value: Any, resting: Any) -> Any:
-    """A value other than *value* that *source* may hold, or ``None``.
+    """Return a value other than *value* that *source* may hold, or ``None``.
 
-    The resting value first, then the default, 0, 1 and the neighbours of
-    *value* (for a CHAR: blank, then ``"A"``/``"B"``), then the declared
-    ``choices``/``min``/``max``; a value outside the tag's declared domain is
-    never driven.  ``None`` when the domain has no other value: the driver
-    cannot alternate.
+    The candidates are tried in this order: the resting value, the default, 0, 1
+    and the neighbours of *value* (for a CHAR: blank, then ``"A"``/``"B"``), then
+    the declared ``choices``/``min``/``max``.  A value outside the tag's declared
+    domain is never driven.  Return ``None`` when the domain has no other value,
+    because then the driver cannot alternate.
     """
     choices = getattr(source, "choices", None)
     lo, hi = getattr(source, "min", None), getattr(source, "max", None)

@@ -22,12 +22,12 @@ if TYPE_CHECKING:
 
 
 def _value_a_type_holds(tag_type: TagType, value: Any, what: str) -> Any:
-    """What a tag of *tag_type* holds when a patch or force writes *value*.
+    """Return what a tag of *tag_type* stores when a patch or force writes *value*.
 
-    The value is stored as a ``copy()`` stores it: a tag holds its own type, so it can
-    always serve it (a Modbus read packs by the tag's type, and a float into an INT
-    raises there).  A value no store of that type can make sense of is refused rather
-    than guessed at, as is a finite REAL no float32 holds.
+    The value is stored as a ``copy()`` stores it.  A tag holds its own type, so it can
+    always serve it: a Modbus read packs by the tag's type, and a float into an INT
+    raises there.  This function refuses a value that no store of that type can make
+    sense of, rather than guessing.  It also refuses a finite REAL that no float32 holds.
     """
     if tag_type is TagType.CHAR:
         held = store_char(value)
@@ -37,7 +37,7 @@ def _value_a_type_holds(tag_type: TagType, value: Any, what: str) -> Any:
     if not isinstance(value, bool | int | float):
         raise ValueError(f"{what}: {tag_type.name} holds a number, not {value!r}")
     if tag_type is TagType.REAL:
-        # +/-Inf and NaN are accepted: a REAL holds them (a Math overflow stores
+        # Accept +/-Inf and NaN.  A REAL can hold them (a Math overflow stores
         # +/-Inf), so a patch or force can put one back.
         check_real_value(value, what, allow_non_finite=True)
     transform = copy_store_transform(tag_type)
@@ -45,7 +45,7 @@ def _value_a_type_holds(tag_type: TagType, value: Any, what: str) -> Any:
 
 
 def refuses_value(tag: Tag, value: Any) -> bool:
-    """Whether a patch of *tag* with *value* raises."""
+    """Return True if a patch of *tag* with *value* raises."""
     try:
         _value_a_type_holds(tag.type, value, "candidate")
     except ValueError:
@@ -54,18 +54,19 @@ def refuses_value(tag: Tag, value: Any) -> bool:
 
 
 def held_candidates(tag: Tag, values: Iterable[Any]) -> set[Any]:
-    """What *tag* holds of the *values* an analysis would try on it.
+    """Return what *tag* holds of the *values* that an analysis would try on it.
 
     A candidate comes off a rung or a ``choices=`` as written, and the tag may not
     hold that.  A number is mapped to what its store holds rather than dropped, so
     the values around a literal keep both sides of a compare: ``I > 3.5`` splits into
-    3 and 4.  A finite REAL past float32 range maps to +/-Inf, which a REAL holds and
-    which is past that literal too, though a patch refuses the literal itself.  What
-    no store of the type can make sense of (``"AB"`` on a CHAR, ``"x"`` on an INT) is
-    dropped: no scan can see the tag hold it.  A number a REAL holds as an equal float
-    stays as it was given: a ``-1`` on a REAL is not rewritten to ``-1.0`` in what a plan
-    or a witness reports.  Anywhere else the candidate is the stored value, so ``3.0`` on
-    an INT is 3.
+    3 and 4.  A finite REAL past float32 range maps to +/-Inf.  A REAL holds +/-Inf,
+    and it is past that literal too, though a patch refuses the literal itself.
+
+    A value that no store of the type can make sense of is dropped, because no scan
+    can see the tag hold it.  Examples are ``"AB"`` on a CHAR and ``"x"`` on an INT.
+    A number that a REAL holds as an equal float stays as it was given: a ``-1`` on a
+    REAL is not rewritten to ``-1.0`` in what a plan or a witness reports.  Anywhere
+    else the candidate is the stored value, so ``3.0`` on an INT is 3.
     """
     held: set[Any] = set()
     for value in values:
@@ -87,23 +88,23 @@ class _RungsWalked(NamedTuple):
 
 
 def _randint_sites_run(rungs: Iterable[Any]) -> tuple[tuple[RandIntExpr, ...], dict[int, int]]:
-    """The ``randint`` sites the *rungs* run, in site order: the compiled kernel's.
+    """Return the ``randint`` sites that the *rungs* run, in site order, as the kernel does.
 
-    It also returns the number each site draws by (``randint_numbers``), counted in
+    It also returns the number that each site draws by (``randint_numbers``), counted in
     the order the walk meets them.
 
-    Found by name, from the tags the kernel's own walk reaches (``walk_rung_operands``):
-    a draw's tag inside a formula, or ``expr.tag`` read straight off a rung.  That walk
-    takes a calc's formula as it runs, not its ``source_expression``: a hex calc runs a
-    cut draw in its place (``RandIntExpr.with_cut_bounds``), so the uncut site it names
-    runs only where some other rung runs it, as a decimal Math that keeps the constants
-    does.
+    The sites are found by name, from the tags that the kernel's own walk reaches
+    (``walk_rung_operands``): a draw's tag inside a formula, or ``expr.tag`` read straight
+    off a rung.  That walk takes a calc's formula as it runs, not its ``source_expression``.
+    A hex calc runs a cut draw in place of the uncut one (``RandIntExpr.with_cut_bounds``).
+    So the uncut site that the calc names runs only where some other rung runs it, as a
+    decimal Math that keeps the constants does.
     """
     from pyrung.core.expression import is_randint_tag, randint_numbers, randint_sites
     from pyrung.core.validation.walker import walk_rung_operands
 
-    # In the order the walk meets them, as the kernel's tags are: a ``.cut`` and a
-    # ``.ucut`` site share a site number, and draw in that order on both.
+    # Keep the order in which the walk meets them, as the kernel's tags do.  A ``.cut`` and
+    # a ``.ucut`` site share a site number, and they draw in that order on both.
     names: dict[str, None] = {}
 
     def visit(value: Any) -> None:
@@ -165,14 +166,15 @@ def _addresses_that_declare(block: Any) -> list[int]:
 class TagsRungsReach:
     """The tags a program's rungs name, and the block slots a range or pointer reaches.
 
-    What a tag patched by name holds comes from here, on either engine, and so does what a
-    reset keeps and whose limits and plants count.  It is read off the rungs alone: a
+    What a tag patched by name holds comes from here, on either engine.  So does what a
+    reset keeps, and whose limits and plants count.  It is read off the rungs alone.  A
     ``select()`` or a ``Block[Pointer]`` names only its block, whose slots stay lazy until
-    something asks for one, and something having asked says nothing about this program.
-    Nothing here makes a slot into a tag unless a tag is what was asked for: a slot's
-    factory may count its calls or refuse an address, and a slot not yet a tag can still
-    be configured.  Walked the first time it is asked, and shared with forks, which skip
-    the walk.
+    something asks for one.  An earlier request for a slot says nothing about this program.
+
+    Nothing here makes a slot into a tag unless the caller asked for a tag.  A slot's
+    factory may count its calls or refuse an address, and a slot that is not yet a tag can
+    still be configured.  The rungs are walked the first time a caller asks.  Forks share
+    the result and skip the walk.
     """
 
     __slots__ = (
@@ -218,15 +220,16 @@ class TagsRungsReach:
         return {*self._slots_by_name(), *self._named()}
 
     def refusal_of(self, name: str) -> Exception | None:
-        """What a slot's factory raises for it, if *name* is a slot its factory refuses."""
+        """Return what a slot's factory raises for it, if *name* is a slot that it refuses."""
         slot = self._slots_by_name().get(name)
         return None if slot is None else _refusal(*slot)
 
     def holds(self, name: str) -> bool:
-        """Whether *name* is reached, and not a slot its factory refuses.
+        """Return True if *name* is reached and is not a slot that its factory refuses.
 
-        Only the factory can say.  It is asked in address order, up to this slot, so a factory
-        that counts gives the slots what reading them in order gives, and no tag is made.
+        Only the factory can say.  It is asked in address order, up to this slot.  A factory
+        that counts therefore gives each slot what reading the slots in order would give.
+        No tag is made.
         """
         slot = self._slots_by_name().get(name)
         if slot is None:
@@ -241,7 +244,10 @@ class TagsRungsReach:
         return refusal is None
 
     def refused(self) -> set[str]:
-        """The slots reached that their factories refuse, every factory asked as ``holds`` asks."""
+        """Return the reached slots that their factories refuse.
+
+        Every factory is asked as ``holds`` asks it.
+        """
         self._slots_by_name()
         found: set[str] = set()
         for block, addresses in self._reached or ():
@@ -252,7 +258,7 @@ class TagsRungsReach:
         return found
 
     def made(self, name: str) -> Tag | None:
-        """The tag for *name* if there already is one.  Asks nothing."""
+        """Return the tag for *name* if there already is one.  Ask no factory."""
         slot = self._slots_by_name().get(name)
         if slot is not None:
             return slot[0]._tag_cache.get(slot[1])
@@ -265,9 +271,9 @@ class TagsRungsReach:
         return set()
 
     def declared(self) -> dict[str, Tag]:
-        """The slots reached that declare limits, choices or a plant.
+        """Return the reached slots that declare limits, choices or a plant.
 
-        Only these become tags here: the rest of a block stays lazy, and a slot can be
+        Only these become tags here.  The rest of a block stays lazy, and a slot can be
         configured until something asks for it.
         """
         found: dict[str, Tag] = {}
@@ -286,7 +292,7 @@ class TagsRungsReach:
         return found
 
     def declared_with(self, known: Mapping[str, Tag]) -> dict[str, Tag]:
-        """The slots that declare, and of *known* the tags more than a cached slot put there."""
+        """Return the slots that declare, plus the tags of *known* that no block cache put there."""
         beyond = {tag.name for tag in self.walk().beyond_rungs}
         return {
             **self.declared(),
@@ -300,9 +306,9 @@ class TagsRungsReach:
         *,
         preserve_retentive: bool,
     ) -> None:
-        """Add to *rebuilt* the reached retentive slots a reset keeps the value of.
+        """Add to *rebuilt* the value of each reached retentive slot that a reset keeps.
 
-        One it does not keep is left out: it holds its default, and stays lazy.
+        A slot that a reset does not keep is left out.  It holds its default and stays lazy.
         """
         if not preserve_retentive:
             return
@@ -336,13 +342,13 @@ class TagsRungsReach:
         return self._walked
 
     def randint_sites(self) -> tuple[RandIntExpr, ...]:
-        """The ``randint`` sites the rungs run, in site order: the draws a scan makes.
+        """Return the ``randint`` sites that the rungs run, in site order: the draws a scan makes.
 
-        A CLICK draws once per RAND a Math runs, so a site only the written formula of a
-        calc names (the uncut one of a cut draw) draws nothing, and its tag holds what was
-        last put there, as the compiled run's does.  Each draw depends only on its site's
-        number and the scan.  A site left out of the draws still has a number (an uncut site
-        takes its cut's), so no other site's values move.
+        A CLICK draws once per RAND that a Math runs.  A site that only the written formula
+        of a calc names (the uncut one of a cut draw) therefore draws nothing.  Its tag
+        holds what was last put there, as the compiled run's does.  Each draw depends only
+        on its site's number and the scan.  A site left out of the draws still has a number
+        (an uncut site takes its cut's), so no other site's values move.
         """
         if self._randint_run is None:
             from pyrung.core.expression import any_randint_sites, is_randint_tag
@@ -350,8 +356,8 @@ class TagsRungsReach:
             if not any_randint_sites() or not any(
                 is_randint_tag(tag.name) for tag in self.walk().named
             ):
-                # No draw is alive anywhere, or these rungs name none (that walk reaches
-                # every tag the operand walk does): no second walk.
+                # Skip the second walk when no draw is alive anywhere, or when these rungs
+                # name none.  The first walk reaches every tag that the operand walk does.
                 self._randint_run = ()
                 return self._randint_run
             rungs: list[Any] = list(self._logic)
@@ -362,7 +368,7 @@ class TagsRungsReach:
         return self._randint_run
 
     def randint_numbers(self) -> dict[int, int]:
-        """Each site's number for its draw (``randint_numbers``), from the rungs alone."""
+        """Return each site's number for its draw (``randint_numbers``), from the rungs alone."""
         self.randint_sites()
         return self._randint_numbers
 
@@ -376,7 +382,7 @@ class TagsRungsReach:
         return self._named_by_name
 
     def _slots_by_name(self) -> dict[str, tuple[Any, int]]:
-        """(block, address) by name, of each slot reached.  Asks no block for a tag."""
+        """Return (block, address) by name for each slot reached.  Ask no block for a tag."""
         if self._reached is None:
             by_block: dict[int, tuple[Any, set[int]]] = {}
             for use in self.walk().block_uses:
@@ -399,12 +405,12 @@ class TagsRungsReach:
 
 
 class TagsKnownOrReached(Mapping[str, "Tag"]):
-    """``plc.tags``: the tags a runner knows, and what its rungs reach, read as asked.
+    """``plc.tags``: the tags a runner knows, plus what its rungs reach, made as you read them.
 
-    A slot its block's factory refuses is not in it.  Reading a slot makes it a tag, and so
-    does what asks for the tags themselves (``copy()``, ``|``, ``values()``, ``items()``).
-    Names alone (``in``, iterating, ``len()``, ``reversed()``) make none, and ``repr()`` asks
-    no factory either.
+    A slot that its block's factory refuses is not in it.  Reading a slot makes it a tag.
+    So does any call that asks for the tags themselves (``copy()``, ``|``, ``values()``,
+    ``items()``).  Asking for names alone (``in``, iterating, ``len()``, ``reversed()``)
+    makes none, and ``repr()`` asks no factory either.
     """
 
     __slots__ = ("_known", "_reach")
@@ -460,7 +466,7 @@ class TagsKnownOrReached(Mapping[str, "Tag"]):
 
 
 class InputOverrideManager:
-    """Encapsulates one-shot patches and persistent force overrides."""
+    """Hold one-shot patches and persistent force overrides."""
 
     def __init__(
         self,
@@ -511,8 +517,8 @@ class InputOverrideManager:
         if tag_type is None and self._known_type is not None:
             tag_type = self._known_type(name)
         if tag_type is None:
-            # A name no rung reads has no type here.  Only a CHAR can be written "":
-            # a blank stores NUL.
+            # A name that no rung reads has no type here.  Only a CHAR can be written "",
+            # and a blank stores NUL.
             return store_char(value)
         return _value_a_type_holds(tag_type, value, f"{method}() of {name}")
 
@@ -525,11 +531,11 @@ class InputOverrideManager:
         self._pending_patches.update(self._normalize_tag_updates(tags, method="patch"))
 
     def restore_patch(self, recorded: Mapping[str, bool | int | float | str]) -> None:
-        """Queue a patch from a scan log: what it recorded is what that scan was given.
+        """Queue a patch from a scan log, using the values that the log recorded for that scan.
 
-        Judged when it was made, under what the runner knew by that name then.  A replay
-        may know more (a kernel knows every slot of a range), so judging it again would
-        turn a replayed scan into a different scan.
+        The patch was checked when it was made, against what the runner knew by that name
+        then.  A replay may know more (a kernel knows every slot of a range).  Checking it
+        again would turn a replayed scan into a different scan.
         """
         self._pending_patches.update(recorded)
 
@@ -576,8 +582,10 @@ class InputOverrideManager:
         return False, None
 
     def apply_pre_scan(self, ctx: ScanContext) -> dict[str, bool | int | float | str]:
-        """Drain patches and apply forces.  Returns a copy of the patches
-        that were drained this scan (empty if none), for the recorder.
+        """Drain patches and apply forces.
+
+        Return a copy of the patches drained this scan, or an empty dict if there were
+        none, for the recorder.
         """
         drained: dict[str, bool | int | float | str] = {}
         if self._pending_patches:
@@ -599,8 +607,8 @@ class InputOverrideManager:
         """Write this scan's ``randint`` draws after the drain.
 
         A site whose tag was patched this scan or is forced keeps that value
-        (the test override).  Draws are a pure function of the scan id, so they
-        are not recorded: replay recomputes them.  Returns the drawn names.
+        (the test override).  Draws are a pure function of the scan id.  They
+        are not recorded, because replay recomputes them.  Return the drawn names.
         """
         draws = {
             site.tag.name: site.draw(ctx, numbers)

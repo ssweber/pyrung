@@ -1,11 +1,12 @@
-"""Out coil variant crossings (toggle / debounce / flasher / timed) — fall through.
+"""Register fall-through crossings for the out coil variants: toggle, debounce, flasher, timed.
 
-None of the variants is "coil == rung": toggle flips on an edge, debounce and
-flasher time in hidden phases, timed drops while its rung is still true.  So
-they must not inherit ``OutCrossing`` (they are not ``OutInstruction``
-subclasses), and their ``forward`` stays ``UNKNOWN``: ``sp_values`` and PILOT's
-multi-target proof trust any exact value it returns.  Their reverses fall
-through until the prior-scan rung and phase timers are representable.
+No variant is "coil == rung".  Toggle flips on an edge.  Debounce and flasher
+time in hidden phases.  Timed drops while its rung is still true.  So the
+variants must not inherit ``OutCrossing`` (they are not ``OutInstruction``
+subclasses).  Their ``forward`` stays ``UNKNOWN``, because ``sp_values`` and
+PILOT's multi-target proof trust any exact value that ``forward`` returns.
+Their reverses fall through until the prior-scan rung and the phase timers are
+representable.
 """
 
 from __future__ import annotations

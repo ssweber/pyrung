@@ -125,10 +125,10 @@ _DEST_PATHS = {"instruction.dest", "instruction.target"}
 def _bank_pointer_advice(
     block_name: str, index_dsl: str, tag_map: TagMap, *, dest: bool = False
 ) -> str | None:
-    """How to reach ``block_name[index_dsl]`` through a bare CLICK bank pointer.
+    """Return advice on reaching ``block_name[index_dsl]`` through a bare CLICK bank pointer.
 
-    CLICK takes only ``BANK[pointer]``, so the block's offset goes into the pointer.
-    Returns None when the block is not mapped onto one bank.
+    CLICK accepts only ``BANK[pointer]``, so the block's offset goes into the pointer.
+    Return None when the block is not mapped onto one bank.
     """
     entry = tag_map._block_entry_by_name(block_name)
     if entry is None:
