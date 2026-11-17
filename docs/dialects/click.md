@@ -501,7 +501,7 @@ with rung():
 
 Both forms produce identical CSV output.
 
-A NOP has to sit alone on a bare wire, so the exporter refuses an empty rung with conditions (`with rung(C1): pass`).
+An empty rung with conditions (`with rung(C1): pass`) exports as the contacts in front of a NOP. CLICK keeps that rung. Its Syntax Check reports it as C0003, "There is no Coil instruction in the rung". Validation reports the rung as `CLK_NOP_NO_COIL`. Export writes it and warns.
 
 ### Boxes with pins
 

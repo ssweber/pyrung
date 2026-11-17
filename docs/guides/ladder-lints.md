@@ -265,3 +265,5 @@ logic.validate("circuitpy", hw=hw, mode="strict")
 ```
 
 The dialect forms check whether a program can run on that target. They do not also run the ladder lints. See [CLICK PLC validation](../dialects/click.md#validation) and [CircuitPython validation](../dialects/circuitpy.md#validation) for their rule sets.
+
+`validate("click")` reports `CLK_NOP_NO_COIL` for a rung whose contacts feed only a NOP (`with rung(C1): pass`, or a `nop()` in a `branch(C2)` beside a coil). CLICK's Syntax Check reports it as C0003. Export writes the rung and warns. pyrung cannot draw a bare wire in parallel with a contact, so CLICK's C0002 "Short circuit error" has no finding.

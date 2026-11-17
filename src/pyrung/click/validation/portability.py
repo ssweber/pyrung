@@ -60,6 +60,7 @@ from .findings import (
     CLK_MATH_SUM_BANK_NOT_AVAILABLE,
     CLK_MATH_WIDE_CONSTANT,
     CLK_NESTED_CALL,
+    CLK_NOP_NO_COIL,
     CLK_PTR_BLOCK_OFFSET,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
@@ -1671,6 +1672,65 @@ def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFind
                         ),
                     )
                 )
+    return findings
+
+
+def _evaluate_nop_no_coil(bundle: Any, mode: ValidationMode) -> list[ClickFinding]:
+    """CLK_NOP_NO_COIL: a NOP behind contacts that no output shares, one finding per rung.
+
+    CLICK keeps the rung when it is pasted, but its Syntax Check reports C0003 for it,
+    on a wire or a branch beside a coil too.  A NOP on a coil's net with no contact of
+    its own, or fed by a bare wire, gets no error.  The export decides which contacts
+    the NOP shares with a coil, so this reads the rung as the export draws it, from the
+    *bundle* of the export.  Rungs are CLICK rungs, which can differ from pyrung rungs.
+    """
+    import warnings
+
+    from pyrung.click.codegen.analyzer import _analyze_rungs
+    from pyrung.click.codegen.parser import _parse_rows
+    from pyrung.click.codegen.shaping import NOP
+
+    findings: list[ClickFinding] = []
+    scopes = [
+        ("main", bundle.main_rows),
+        *((f"subroutine '{n}'", r) for n, r in bundle.subroutine_rows),
+    ]
+    for where, rows in scopes:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                analyzed = _analyze_rungs(_parse_rows(rows))
+        except ValueError:
+            continue
+        number = 0
+        reported = False
+        for piece in analyzed:
+            if not piece.is_continued:
+                number += 1
+                reported = False
+            has_output = any(i.af_token != NOP for i in piece.instructions)
+            exposed = any(
+                i.af_token == NOP
+                and (i.branch_tree is not None or (not has_output and piece.condition_tree))
+                for i in piece.instructions
+            )
+            if not exposed or reported:
+                continue
+            reported = True
+            location = f"{where} CLICK rung {number}"
+            findings.append(
+                ClickFinding(
+                    code=CLK_NOP_NO_COIL,
+                    severity=_route_severity(CLK_NOP_NO_COIL, mode),
+                    message=(
+                        f"The {location} has a NOP behind contacts that no output "
+                        "shares. CLICK's Syntax Check reports it as C0003, There is no Coil "
+                        "instruction in the rung."
+                    ),
+                    location=location,
+                    suggestion="Remove the NOP, or give it an output.",
+                )
+            )
     return findings
 
 

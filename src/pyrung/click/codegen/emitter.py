@@ -383,6 +383,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append("RegisterType")
     if collection.has_subroutine:
         pass
+    if collection.has_nop:
+        click_imports.append("nop")
     if "send" in collection.used_instructions:
         click_imports.append("send")
     if "receive" in collection.used_instructions:
@@ -1115,6 +1117,10 @@ def _emit_instruction(
     af = instr.af_token
 
     if not af:
+        return
+
+    if af == "NOP":
+        lines.append(f"{pad}nop()")
         return
 
     rendered = _render_af_token(af, collection, nicknames, structured_map, call_func_map)

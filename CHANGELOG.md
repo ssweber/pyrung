@@ -27,6 +27,10 @@
   - `ModbusRtuTarget(com_port="cpu3")` talks over CPU port 3.
   - `device_id` takes a DS tag, which the instruction reads as each request starts.
 
+#### CLICK export and import
+
+- Ladder export writes a rung whose contacts feed only a NOP, as a CLICK does. CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes back as `nop()` in a `branch()`.
+
 ### Behaviour changes
 
 - `ModbusRtuTarget` refuses a `device_id` above 247, the last Modbus RTU device address (it took up to 255).
@@ -35,6 +39,8 @@
   Use 1..247.
 - CLICK export refuses `to_text(exponential=True)` from an integer source (it exported it). Importing a ladder CSV refuses it too.
   Drop `exponential=True`. An integer source takes `suppress_zero` only.
+- `validate("click")` reports `CLK_NOP_NO_COIL` for a rung whose contacts feed only a NOP (CLICK's Syntax Check error C0003).
+  Give the rung an output, or remove its contacts.
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
   Look a point up by its new name, or by its tag such as `system.fault.plc_error`. A nickname file row with the old name loads and is ignored.
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
