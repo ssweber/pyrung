@@ -56,6 +56,8 @@ def check_real_value(value: Any, what: str, *, allow_non_finite: bool = False) -
             return
         if allow_non_finite and isinstance(value, float) and not math.isfinite(value):
             return
+        if isinstance(value, float) and math.isnan(value):
+            raise ValueError(f"{what} is NaN. A REAL constant or default cannot be NaN.")
         raise ValueError(
             f"{what}: {value!r} is outside the REAL range -3.4028235E+38..3.4028235E+38"
         )

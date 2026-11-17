@@ -582,8 +582,8 @@ def test_time_event_drum_requires_reset_builder() -> None:
     ("presets", "events", "match"),
     [
         ([100, None], [None, None], "step 2 needs a preset, an event, or both"),
-        ([100, 200], [None], "events count"),
-        ([100, 200, 300], [None, None], "presets count"),
+        ([100, 200], [None], "has 2 steps but 1 events"),
+        ([100, 200, 300], [None, None], "has 2 steps but 3 presets"),
     ],
 )
 def test_time_event_drum_rejects_bad_steps(

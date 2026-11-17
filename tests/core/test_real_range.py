@@ -137,10 +137,17 @@ def test_copy_into_real_at_the_limit_is_kept(runner_factory):
     assert plc.current_state.tags["Dest"] == -REAL_MAX
 
 
-@pytest.mark.parametrize("value", [3.5e38, -1e39, float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("value", [3.5e38, -1e39, float("inf"), float("-inf")])
 def test_out_of_range_default_is_refused(value):
     with pytest.raises(ValueError, match="outside the REAL range"):
         Real("X", default=value)
+
+
+def test_nan_default_is_refused():
+    with pytest.raises(
+        ValueError, match="Tag 'X': default is NaN. A REAL constant or default cannot be NaN."
+    ):
+        Real("X", default=float("nan"))
 
 
 def test_out_of_range_block_default_is_refused():

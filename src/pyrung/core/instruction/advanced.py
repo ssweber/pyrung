@@ -105,14 +105,17 @@ class SearchInstruction(OneShotMixin, Instruction):
             )
         if not isinstance(comparison.search_range, (BlockRange, IndirectBlockRange)):
             raise TypeError(
-                "search() comparison must use a .select() range "
-                "(BlockRange or IndirectBlockRange), "
-                f"got {type(comparison.search_range).__name__}"
+                "search() comparison must use a .select() range, "
+                f"got {type(comparison.search_range).__name__}."
             )
         if found.type != TagType.BOOL:
-            raise TypeError(f"search found tag must be BOOL, got {found.type.name}")
+            raise TypeError(
+                f"search() found= must be a BOOL tag. {found.name} is {found.type.name}."
+            )
         if result.type not in {TagType.INT, TagType.DINT}:
-            raise TypeError(f"search result tag must be INT or DINT, got {result.type.name}")
+            raise TypeError(
+                f"search() result= must be an INT or DINT tag. {result.name} is {result.type.name}."
+            )
 
         OneShotMixin.__init__(self, oneshot)
         self.condition = comparison.operator

@@ -123,8 +123,9 @@ def _validate_function_call(
             signature.bind(*bind_args, **bind_kwargs)
         except TypeError as exc:
             raise TypeError(
-                f"{func_name}() ins keys {sorted(ins.keys())} incompatible with "
-                f"{getattr(fn, '__name__', repr(fn))!r} signature"
+                f"{func_name}() ins keys {sorted(ins.keys())} do not match the parameters of "
+                f"{getattr(fn, '__name__', repr(fn))!r}. Name each key after a parameter of "
+                "the function."
             ) from exc
 
     if outs is not None and not isinstance(outs, dict):
@@ -556,8 +557,8 @@ def _loop_exit_context(func_name: str) -> tuple[Any, str | None, int | None]:
     ctx, source_file, source_line = _capture_instruction_context(func_name, source_depth=4)
     if getattr(ctx, "_loop", None) is None:
         raise RuntimeError(
-            f"{func_name}() must be inside a conditioned body rung of a forloop: "
-            "with forloop(...): with Rung(...): ..."
+            f"{func_name}() works only inside a forloop. Put it in a Rung with a contact in "
+            f"the loop body, as in: with forloop(...): with Rung(...): {func_name}()"
         )
     body_rung = ctx._rung
     if len(body_rung._conditions) <= body_rung._branch_condition_start:

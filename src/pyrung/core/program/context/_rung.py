@@ -115,20 +115,20 @@ class Rung:
         pending = self._pending_required_builder
         if pending is not None:
             _, existing = pending
-            raise RuntimeError(f"{existing} must be completed before starting {descriptor}.")
+            raise RuntimeError(f"Finish {existing} before you start {descriptor}.")
         self._pending_required_builder = (id(builder), descriptor)
 
     def _assert_pending_required_builder_owner(self, builder: object, method_name: str) -> None:
         pending = self._pending_required_builder
         if pending is None:
             raise RuntimeError(
-                f"{method_name}() called on a builder that is not pending in this flow."
+                f"You called .{method_name}() on an instruction chain that is already finished. "
+                "Call each chained method once, before .reset()."
             )
         pending_id, descriptor = pending
         if pending_id != id(builder):
             raise RuntimeError(
-                f"{descriptor} must be completed before calling {method_name}() "
-                "on a different builder."
+                f"Finish {descriptor} before you call .{method_name}() on another instruction."
             )
 
     def _clear_pending_required_builder(self, builder: object) -> None:
@@ -140,14 +140,14 @@ class Rung:
         if pending is None:
             return
         _, descriptor = pending
-        raise RuntimeError(f"{descriptor} must be completed before calling {next_action}().")
+        raise RuntimeError(f"Finish {descriptor} before you call {next_action}().")
 
     def _assert_required_builders_resolved(self, scope_name: str) -> None:
         pending = self._pending_required_builder
         if pending is None:
             return
         _, descriptor = pending
-        raise RuntimeError(f"{descriptor} must be completed before exiting {scope_name} flow.")
+        raise RuntimeError(f"Finish {descriptor} before the {scope_name} block ends.")
 
     def __enter__(self) -> Rung:
         _push_rung_context(self)
@@ -193,7 +193,9 @@ def comment(text: str) -> None:
     if prog is None:
         raise RuntimeError("comment() must be used inside a Program context")
     if prog._pending_comment is not None:
-        raise RuntimeError("comment() already set; missing a Rung after the previous comment()?")
+        raise RuntimeError(
+            "comment() was called twice with no Rung between them. Put a Rung after each comment()."
+        )
     text = textwrap.dedent(text).strip()
     if len(text) > _MAX_COMMENT_LENGTH:
         raise ValueError(f"Rung comment is {len(text)} chars, max is {_MAX_COMMENT_LENGTH}.")

@@ -549,7 +549,7 @@ class TestNames:
         program = _always_called(fn, ins={"v": A}, outs={key: B}, enabled=enabled)
         prefix = "run_enabled_function" if enabled else "run_function"
         fn_name = fn.__name__
-        expected = f"{prefix}: {fn_name!r} missing key {key!r}; got []"
+        expected = f"{prefix}: {fn_name!r} returned no {key!r} key. It returned the keys []."
         with pytest.raises(KeyError) as raised:
             _run_on(program, engine, (B,), monkeypatch)
         assert raised.value.args[0] == expected

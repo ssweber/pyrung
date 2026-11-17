@@ -811,7 +811,7 @@ class TestStrictDslControlFlowGuard:
 
         monkeypatch.setattr(validation_module.inspect, "getsourcelines", _unparsable_source)
 
-        with pytest.warns(RuntimeWarning, match="Unable to perform strict DSL control-flow check"):
+        with pytest.warns(RuntimeWarning, match="pyrung skipped the strict check of"):
             with program_module.Program() as logic:
                 with program_module.Rung(Enable):
                     program_module.out(Light)

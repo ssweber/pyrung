@@ -1458,6 +1458,23 @@ def _scope_reach_chains(program: Program) -> dict[str, tuple[tuple[Condition, ..
 # ---------------------------------------------------------------------------
 
 
+def rung_path(subroutine: str | None, rung_index: int) -> str:
+    """Return the head of a location path, ``main.rung[1]`` or ``subroutine[name].rung[1]``.
+
+    The rung counts from 1, as every rung number a user reads does. *rung_index* counts
+    from 0.
+    """
+    if subroutine is None:
+        return f"main.rung[{rung_index + 1}]"
+    return f"subroutine[{subroutine}].rung[{rung_index + 1}]"
+
+
+def rung_label(subroutine: str | None, rung_index: int) -> str:
+    """Return ``main rung 1`` or ``subroutine 'name' rung 1`` for a 0-based *rung_index*."""
+    scope = "main" if subroutine is None else f"subroutine '{subroutine}'"
+    return f"{scope} rung {rung_index + 1}"
+
+
 def compact_location(
     scope: FactScope,
     subroutine: str | None,

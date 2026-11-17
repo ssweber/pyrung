@@ -867,7 +867,7 @@ class TestCounterConditionTypeGuards:
 
         with Program():
             with Rung(Enable):
-                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     count_up(Counter[1], preset=5).reset(ResetValue)
 
     def test_count_up_down_rejects_int_tag(self):
@@ -877,7 +877,7 @@ class TestCounterConditionTypeGuards:
 
         with Program():
             with Rung(Enable):
-                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     count_up(Counter[1], preset=5).down(DownValue).reset(Reset)
 
     def test_count_down_reset_rejects_int_tag(self):
@@ -886,7 +886,7 @@ class TestCounterConditionTypeGuards:
 
         with Program():
             with Rung(Enable):
-                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     count_down(Counter[1], preset=5).reset(ResetValue)
 
 

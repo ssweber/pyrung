@@ -78,9 +78,15 @@ def test_timer_clone_nickname_overrides_require_singleton():
         Timer.clone("Timers", count=2, nicknames={"Done": "TimerDone"})
 
 
-@pytest.mark.parametrize("nicknames", [{"Other": "Name"}, {"Done": ""}])
-def test_timer_clone_rejects_invalid_nickname_overrides(nicknames):
-    with pytest.raises(ValueError, match="Timer/Counter nickname"):
+@pytest.mark.parametrize(
+    ("nicknames", "message"),
+    [
+        ({"Other": "Name"}, "nickname only on Done and Acc, not on Other"),
+        ({"Done": ""}, "Timer/Counter nickname for Done must be a non-empty string"),
+    ],
+)
+def test_timer_clone_rejects_invalid_nickname_overrides(nicknames, message):
+    with pytest.raises(ValueError, match=message):
         Timer.clone("InvalidTimer", nicknames=nicknames)
 
 
@@ -1097,7 +1103,7 @@ class TestTimerConditionTypeGuards:
 
         with Program():
             with Rung(Enable):
-                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     on_delay(Timer[1], preset=100).reset(ResetValue)
 
 
@@ -1453,14 +1459,14 @@ class TestRetentiveDefaults:
         assert pool[2].Acc.retentive is True
 
     def test_clone_rejects_unknown_retentive_field(self):
-        with pytest.raises(ValueError, match="Unknown Timer/Counter retentive fields: EN"):
+        with pytest.raises(ValueError, match="retentive only on Done and Acc, not on EN"):
             Timer.clone("BadTimer", retentive={"EN": True})
 
     def test_clone_sets_field_comments(self):
         noted = Timer.clone("NotedTimer", comments={"Acc": "Elapsed cure time"})
         assert noted.Acc.comment == "Elapsed cure time"
         assert not noted.Done.comment
-        with pytest.raises(ValueError, match="Unknown Timer/Counter comment fields: EN"):
+        with pytest.raises(ValueError, match="comment only on Done and Acc, not on EN"):
             Timer.clone("BadTimer", comments={"EN": "x"})
         with pytest.raises(ValueError, match="comment overrides require count=1"):
             Timer.clone("NotedPool", count=3, comments={"Acc": "x"})

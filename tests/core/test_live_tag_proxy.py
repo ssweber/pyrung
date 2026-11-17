@@ -22,10 +22,10 @@ from pyrung.core import (
 def test_live_value_requires_active_runner_scope() -> None:
     flag = Bool("Flag")
 
-    with pytest.raises(RuntimeError, match="active runner"):
+    with pytest.raises(RuntimeError, match="only inside a .with PLC"):
         _ = flag.value
 
-    with pytest.raises(RuntimeError, match="active runner"):
+    with pytest.raises(RuntimeError, match="only inside a .with PLC"):
         flag.value = True
 
 
@@ -152,5 +152,5 @@ def test_patch_accepts_tag_keys_string_keys_and_mixed_keys() -> None:
 def test_patch_rejects_invalid_key_types() -> None:
     runner = PLC(logic=[])
 
-    with pytest.raises(TypeError, match="str or Tag"):
+    with pytest.raises(TypeError, match="takes a tag name or a Tag"):
         runner.patch({1: True})

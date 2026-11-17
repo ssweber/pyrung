@@ -85,8 +85,8 @@ def to_condition(obj: Any) -> Any:
             if value.type == TagType.BOOL:
                 return BitCondition(value)
             raise TypeError(
-                f"Non-BOOL tag '{value.name}' cannot be used directly as condition. "
-                "Use comparison operators: tag == value, tag > 0, etc."
+                f"Tag '{value.name}' is {value.type.name}, so it cannot be a condition by "
+                "itself. Compare it instead, as in tag == value or tag > 0."
             )
         raise TypeError(f"Expected Condition or Tag, got {type(value)}")
 

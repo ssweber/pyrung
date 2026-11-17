@@ -17,6 +17,7 @@ from typing import Any, Literal, cast
 
 from pyrsistent import PMap
 
+from pyrung.core._messages import read_only_system_point
 from pyrung.core.context import ScanContext, refused_inside_its_own_scan, same_stored_value
 from pyrung.core.expression import randint_numbers, randint_sites
 from pyrung.core.input_overrides import InputOverrideManager, TagsRungsReach
@@ -134,13 +135,13 @@ class _KernelRuntimeContext:
 
     def set_tag(self, name: str, value: Any) -> None:
         if name in READ_ONLY_SYSTEM_TAG_NAMES:
-            raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+            raise ValueError(read_only_system_point(name))
         self._write(name, value)
 
     def set_tags(self, updates: dict[str, Any]) -> None:
         for name in updates:
             if name in READ_ONLY_SYSTEM_TAG_NAMES:
-                raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+                raise ValueError(read_only_system_point(name))
         for name, value in updates.items():
             self._write(name, value)
 

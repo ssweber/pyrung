@@ -87,7 +87,7 @@ def test_tag_type_class_rejects_multi_instance_struct_choices():
     class SortState:
         IDLE: Int = 0  # ty: ignore[invalid-assignment]
 
-    with pytest.raises(TypeError, match="count=1"):
+    with pytest.raises(TypeError, match="its count is 1"):
         Int("Mode", choices=cast(Any, SortState))
 
 
@@ -142,7 +142,7 @@ def test_named_array_resolves_primitive_and_string_base_types():
 
 
 def test_udt_rejects_invalid_annotation():
-    with pytest.raises(TypeError, match="not supported"):
+    with pytest.raises(TypeError, match="is not a tag type"):
 
         @udt(count=1)
         class Bad:
@@ -180,7 +180,7 @@ def test_char_comparison_normalizes_empty_string(op, expected_operand):
 
 
 def test_named_array_rejects_invalid_base_type():
-    with pytest.raises(TypeError, match="not supported"):
+    with pytest.raises(TypeError, match="is not a tag type"):
 
         @named_array(list[int], count=1)
         class Bad:

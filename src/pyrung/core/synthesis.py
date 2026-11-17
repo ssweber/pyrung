@@ -87,7 +87,8 @@ def plant_timer(delay_ms: int) -> tuple[int, str, int]:
         if preset <= TIMER_ACC_MAX:
             return preset, unit, unit_ms
     raise ValueError(
-        f"a feedback delay of {delay_ms} ms is longer than a timer can count (32767 days)"
+        f"A feedback delay of {delay_ms} ms is longer than a timer can count. The longest "
+        "delay is 32767 days."
     )
 
 
@@ -102,7 +103,8 @@ def coil_timer(on_ms: int, off_ms: int) -> tuple[int, int, str, int]:
         if max(on_preset, off_preset) <= TIMER_ACC_MAX:
             return on_preset, off_preset, unit, unit_ms
     raise ValueError(
-        f"a feedback delay of {max(on_ms, off_ms)} ms is longer than a timer can count (32767 days)"
+        f"A feedback delay of {max(on_ms, off_ms)} ms is longer than a timer can count. The "
+        "longest delay is 32767 days."
     )
 
 

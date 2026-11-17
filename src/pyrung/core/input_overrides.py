@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple
 
+from pyrung.core._messages import read_only_system_point
 from pyrung.core.instruction.conversions import copy_store_transform
 from pyrung.core.storage import check_real_value, store_char, store_real, store_value
 from pyrung.core.tag import Tag as TagClass
@@ -492,7 +493,7 @@ class InputOverrideManager:
             return tag.name
         if isinstance(tag, str):
             return tag
-        raise TypeError(f"{method}() keys must be str or Tag, got {type(tag).__name__}")
+        raise TypeError(f"{method}() takes a tag name or a Tag, got {type(tag).__name__}.")
 
     def _normalize_tag_updates(
         self,
@@ -506,7 +507,7 @@ class InputOverrideManager:
         for key, value in tags.items():
             name = self._normalize_tag_name(key, method=method)
             if self._is_read_only(name):
-                raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+                raise ValueError(read_only_system_point(name))
             normalized[name] = self._held(key, name, value, method=method)
         return normalized
 
@@ -540,15 +541,15 @@ class InputOverrideManager:
         self._pending_patches.update(recorded)
 
     def add_force(self, tag: str | Tag, value: bool | int | float | str) -> None:
-        name = self._normalize_tag_name(tag, method="add_force")
+        name = self._normalize_tag_name(tag, method="force")
         if self._is_read_only(name):
-            raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+            raise ValueError(read_only_system_point(name))
         self._forces[name] = self._held(tag, name, value, method="force")
 
     def remove_force(self, tag: str | Tag) -> None:
-        name = self._normalize_tag_name(tag, method="remove_force")
+        name = self._normalize_tag_name(tag, method="unforce")
         if name not in self._forces:
-            raise KeyError(name)
+            raise KeyError(f"Tag '{name}' is not forced.")
         del self._forces[name]
 
     def clear_forces(self) -> None:

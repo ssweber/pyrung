@@ -98,11 +98,9 @@ class Rung:
         if terminal is not None:
             if terminal.has_pins() and not self._loop_capture:
                 raise RuntimeError(_box_shares_rung(terminal, instruction, self._in_loop_body))
-            terminal_name = type(terminal).__name__
-            current_name = type(instruction).__name__
             raise RuntimeError(
-                f"{terminal_name} is terminal in this flow and must be last; "
-                f"cannot add instruction {current_name}."
+                f"{_dsl_label(terminal)} ends its rung, so {_dsl_label(instruction)} cannot "
+                f"follow it. Move {_dsl_label(instruction)} to a rung of its own."
             )
         if not self._loop_capture:
             if self._pin_box is not None:
@@ -142,10 +140,9 @@ class Rung:
             other = branch._first_output()
             if terminal.has_pins() and other is not None:
                 raise RuntimeError(_box_shares_rung(terminal, other, self._in_loop_body))
-            terminal_name = type(terminal).__name__
             raise RuntimeError(
-                f"{terminal_name} is terminal in this flow and must be last; "
-                "cannot add branch(...)."
+                f"{_dsl_label(terminal)} ends its rung, so a branch(...) cannot follow it. "
+                "Move the branch(...) to a rung of its own."
             )
         if self._tree_outputs and branch._tree_outputs:
             if self._pin_box is not None:
@@ -320,17 +317,33 @@ _DSL_NAMES = {
 }
 
 
-def _dsl_label(instruction: Instruction | None) -> str:
-    """Return ``count_up() (line 12)``, the instruction as its author wrote it."""
-    if instruction is None:  # pragma: no cover - defensive
-        return "the other output"
-    class_name = type(instruction).__name__
+def dsl_call(instruction: object) -> str:
+    """Return ``count_up()``, the call that the author wrote to build *instruction*.
+
+    *instruction* is an instruction or the name of its class. Messages print this
+    instead of the class name, which the author never typed. An instruction class
+    from outside pyrung keeps its class name, because no pyrung call builds it.
+    """
+    if isinstance(instruction, str):
+        class_name = instruction
+    else:
+        class_name = type(instruction).__name__
+        if not type(instruction).__module__.startswith("pyrung."):
+            return class_name
     name = _DSL_NAMES.get(class_name)
     if name is None:
         stem = class_name.removesuffix("Instruction")
         name = "".join(f"_{ch.lower()}" if ch.isupper() else ch for ch in stem).lstrip("_")
+    return f"{name}()"
+
+
+def _dsl_label(instruction: Instruction | None) -> str:
+    """Return ``count_up() (line 12)``, the instruction as its author wrote it."""
+    if instruction is None:  # pragma: no cover - defensive
+        return "the other output"
     line = getattr(instruction, "source_line", None)
-    return f"{name}() (line {line})" if line is not None else f"{name}()"
+    call = dsl_call(instruction)
+    return f"{call} (line {line})" if line is not None else call
 
 
 def _box_shares_rung(box: Instruction, other: Instruction | None, in_loop_body: bool) -> str:

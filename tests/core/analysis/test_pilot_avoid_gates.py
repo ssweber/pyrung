@@ -257,7 +257,7 @@ def test_edge_sensitive_avoid_is_rejected_clearly() -> None:
     prog, target, _mid = _folded_wink_program()
     trigger = Bool("EdgeAvoid")
 
-    with pytest.raises(ValueError, match=r"avoid=.*rise\(\)/fall\(\)"):
+    with pytest.raises(ValueError, match=r"avoid= cannot use rise\(\) or fall\(\)"):
         PLC(prog, dt=0.010).how(target, avoid=rise(trigger), max_scans=2000)
 
 
