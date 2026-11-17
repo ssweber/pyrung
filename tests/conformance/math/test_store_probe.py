@@ -21,8 +21,8 @@ expect what a CLICK does.
   bits, signed, read 0 for the second and third, equal after the cut, with
   SC46 (Result4 = 6) and no SC43.  A draw that clamps reads 32767 or -32768.
 - ``rand_other_stores`` (probe): RAND ( 70000 , 70002 ) into a Dint is not cut,
-  70000..70002 (Result1 = 0..2 over 70000), into a Word the exported hex
-  bounds are 1170h..1172h, 4464..4466 (Result2), and into a Real 70000..70002
+  70000..70002 (Result1 = 0..2 over 70000), into a Word RAND ( 1170h , 1172h ),
+  the 16 bits of those bounds, 4464..4466 (Result2), and into a Real 70000..70002
   (Result3 = 0..2 over 70000).  RAND ( 70000 , 70000 ) into a Dint is a math
   error, 0 (Result4; 32767 if it draws 70000).  Flags in ErrorCode: SC43 after
   the Dint (bit 1), the Word (bit 2), the Real (bit 4), and SC46 and SC43 after
@@ -183,7 +183,9 @@ def prove_rand_other_stores(slot):
 
     def word_op():
         copy(99, word)
-        math(randint(70000, 70002), word)
+        # The export refuses a hex Math constant past 16 bits, so the Word gets the
+        # bounds as pasted, RAND ( 1170h , 1172h ).
+        math(randint(4464, 4466), word)
 
     def real_op():
         copy(99.0, real)
