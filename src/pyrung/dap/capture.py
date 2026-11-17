@@ -219,11 +219,12 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
 
     _configure_replay_harness(adapter, harness_mode)
 
-    from pyrung.dap.console import dispatch, queue_stop_for_error
+    from pyrung.dap.console import dispatch, queue_stop_for_error, scan_mark, scans_ran_since
 
     executed = 0
     hit_bp = False
     last_stop: dict[str, Any] | None = None
+    start = scan_mark(adapter)
     for lineno, cmd in commands:
         try:
             result = dispatch(adapter, cmd)
@@ -232,9 +233,10 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
                 f"Replay error at line {lineno}: {exc}\n"
                 f"Executed {executed}/{len(commands)} command(s)"
             )
-            # A "step" stop, never a reload's "entry", which would clear the editor's decorations.
             error.stop_queued = getattr(exc, "stop_queued", False)
-            if last_stop is not None:
+            if last_stop is not None or scans_ran_since(adapter, start):
+                # A "step" stop, never a reload's "entry", which would clear the editor's
+                # decorations.
                 queue_stop_for_error(adapter, error)
             raise error from exc
         executed += 1

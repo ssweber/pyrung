@@ -463,6 +463,70 @@ class TestRunUntil:
         ]
 
 
+def _setup_failing_scan(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+    # The third scan raises partway, after Ticks reaches 3.
+    script = (
+        "from pyrung.core import Int, PLC, Program, Rung, math, run_function\n"
+        "\n"
+        "ticks = Int('Ticks')\n"
+        "\n"
+        "def boom(t):\n"
+        "    raise RuntimeError('boom')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        math(ticks + 1, ticks)\n"
+        "    with Rung(ticks >= 3):\n"
+        "        run_function(boom, ins={'t': ticks})\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    path = _write_script(tmp_path, "failing.py", script)
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(path)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
+class TestAScanThatRaises:
+    def _queued_stops(self, adapter: DAPAdapter, out: io.BytesIO) -> list[str]:
+        adapter._drain_internal_events()
+        return [event["body"]["reason"] for event in _stopped_events(_drain_messages(out))]
+
+    def test_step_queues_a_stop_for_the_scans_it_ran(self, tmp_path: Path):
+        adapter, out = _setup_failing_scan(tmp_path)
+        resp, stopped = _repl(adapter, out, "step 5")
+        assert resp["success"] is False
+        assert stopped == []
+        assert adapter._runner.current_state.scan_id == 2
+        assert self._queued_stops(adapter, out) == ["step"]
+
+    def test_run_queues_a_stop_for_the_scans_it_ran(self, tmp_path: Path):
+        adapter, out = _setup_failing_scan(tmp_path)
+        resp, _ = _repl(adapter, out, "run 5")
+        assert resp["success"] is False
+        assert self._queued_stops(adapter, out) == ["step"]
+
+    def test_a_replay_whose_first_line_fails_queues_one_stop(self, tmp_path: Path):
+        adapter, out = _setup_failing_scan(tmp_path)
+        transcript = tmp_path / "session.txt"
+        transcript.write_text("step 5\n", encoding="utf-8")
+        resp, stopped = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is False
+        assert resp["message"].startswith("Replay error at line 1: ")
+        assert stopped == []
+        assert self._queued_stops(adapter, out) == ["step"]
+
+    def test_a_step_that_fails_on_its_first_scan_queues_no_stop(self, tmp_path: Path):
+        adapter, out = _setup_failing_scan(tmp_path)
+        _repl(adapter, out, "step 2")
+        resp, _ = _repl(adapter, out, "step")
+        assert resp["success"] is False
+        assert self._queued_stops(adapter, out) == []
+
+
 # ---------------------------------------------------------------------------
 # Cause / Effect / Recovers
 # ---------------------------------------------------------------------------

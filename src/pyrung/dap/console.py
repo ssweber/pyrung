@@ -9,7 +9,8 @@ acquire it.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -322,12 +323,13 @@ def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     adapter._assert_can_step_locked()
     scans_completed = 0
     hit_bp = False
-    for _ in range(n):
-        _advance_one_full_scan(adapter)
-        scans_completed += 1
-        if adapter._current_rung_hits_breakpoint_locked():
-            hit_bp = True
-            break
+    with stop_if_scans_ran(adapter):
+        for _ in range(n):
+            _advance_one_full_scan(adapter)
+            scans_completed += 1
+            if adapter._current_rung_hits_breakpoint_locked():
+                hit_bp = True
+                break
 
     scan_id = adapter._current_scan_id
     suffix = " (breakpoint)" if hit_bp else ""
@@ -356,14 +358,15 @@ def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
             "Usage: run <cycles> or run <duration> (e.g. run 10, run 500ms), "
             "or run until <expression> within <cycles or duration>"
         )
-    if parts[1].lower() == "until":
-        return _run_until(adapter, expression.strip().split(None, 2)[2:])
-    cycles, seconds = _run_limit(adapter, parts[1:])
-    adapter._assert_can_step_locked()
-    runner = adapter._require_runner_locked()
-    if cycles is not None:
-        return _run_cycles(adapter, runner, cycles)
-    return _run_duration(adapter, runner, seconds)
+    with stop_if_scans_ran(adapter):
+        if parts[1].lower() == "until":
+            return _run_until(adapter, expression.strip().split(None, 2)[2:])
+        cycles, seconds = _run_limit(adapter, parts[1:])
+        adapter._assert_can_step_locked()
+        runner = adapter._require_runner_locked()
+        if cycles is not None:
+            return _run_cycles(adapter, runner, cycles)
+        return _run_duration(adapter, runner, seconds)
 
 
 def _run_limit(adapter: Any, tokens: list[str]) -> tuple[int | None, float]:
@@ -419,12 +422,9 @@ def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
         out_of_time = cycles is None and runner.current_state.timestamp >= start_time + seconds
         if out_of_scans or out_of_time:
             elapsed = runner.current_state.timestamp - start_time
-            error = adapter.DAPAdapterError(
+            raise adapter.DAPAdapterError(
                 f"run until: {condition} still false after {scans} scan(s) ({elapsed:.3f}s)"
             )
-            if scans:
-                queue_stop_for_error(adapter, error)
-            raise error
         _advance_one_full_scan(adapter)
         scans += 1
         if adapter._current_rung_hits_breakpoint_locked():
@@ -442,15 +442,44 @@ def _run_until(adapter: Any, rest: list[str]) -> ConsoleResult:
 
 
 def queue_stop_for_error(adapter: Any, error: Any) -> None:
-    """Queue a "stopped" event for the scans a failing command ran, and mark *error* as done so.
+    """Queue a "stopped" event for the scans a failing command ran.
 
-    An error answer carries no events, so without the stop the client's view stays on the
-    old scan. The mark keeps a ``replay`` around the command from queuing a second stop.
+    The mark on *error* stops a surrounding ``replay`` from queuing a second one.
     """
     if getattr(error, "stop_queued", False):
         return
     adapter._enqueue_internal_event("stopped", adapter._stopped_body("step"))
     error.stop_queued = True
+
+
+def scan_mark(adapter: Any) -> tuple[Any, int | None]:
+    """Record the last finished scan, so a caller can later tell whether any scan has run since.
+
+    The runner is part of the mark because a ``reload`` replaces it and may restart the count.
+    """
+    runner = adapter._runner
+    return runner, None if runner is None else runner.current_state.scan_id
+
+
+def scans_ran_since(adapter: Any, mark: tuple[Any, int | None]) -> bool:
+    runner, scan_id = scan_mark(adapter)
+    return runner is not mark[0] or scan_id != mark[1]
+
+
+@contextmanager
+def stop_if_scans_ran(adapter: Any) -> Iterator[None]:
+    """Queue a stop when a command fails after it ran scans.
+
+    An error answer carries no events, so without the stop the client's view stays on the
+    old scan.
+    """
+    mark = scan_mark(adapter)
+    try:
+        yield
+    except Exception as exc:
+        if scans_ran_since(adapter, mark):
+            queue_stop_for_error(adapter, exc)
+        raise
 
 
 def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:
