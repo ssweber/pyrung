@@ -248,7 +248,9 @@ def why_cause(
 
 
 class _PointerWriters:
-    """The writes through a pointer listing no targets that write a tag, as ``(node, uncertain)``.
+    """Find the writes through a pointer listing no targets that write a tag.
+
+    Each write comes back as ``(node, uncertain)``.
 
     The scan history decides when it can, and otherwise a trial run of the next scan
     does.  A rung counts as a certain writer of the tag in three cases:
@@ -310,16 +312,16 @@ class _PointerWriters:
 
 @dataclass
 class _Aims:
-    """Where one run of a rung's writes through a pointer aim."""
+    """Record where one run of a rung's writes through a pointer aims."""
 
     #: Each tag a write aims at, with the tags its pointer reads.
     hits: dict[str, frozenset[str]] = field(default_factory=dict)
-    #: A write's pointer may move before the write runs, or the write sits in a loop.
+    #: True when a write's pointer may move before the write runs, or the write sits in a loop.
     unsure: bool = False
 
 
 def _rung_aims(rung: Rung, nodes: Mapping[tuple[int, ...], int], view: Any) -> dict[int, _Aims]:
-    """Where each write through a pointer aims, for each part of *rung* in *nodes*.
+    """Return where each write through a pointer aims, for each part of *rung* in *nodes*.
 
     *nodes* maps a branch path in *rung* to the node of that part.  The walk reads each
     pointer in *view*, the state as the rung starts.  An earlier write in the rung can move
@@ -348,7 +350,7 @@ def _rung_aims(rung: Rung, nodes: Mapping[tuple[int, ...], int], view: Any) -> d
         )
 
     def targets(dest: Any) -> list[str] | None:
-        """The tags *dest* writes, or None when its pointer may have moved."""
+        """Return the tags that *dest* writes, or None if its pointer may have moved."""
         if isinstance(dest, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
             if lost or pointer_reads(dest) & written:
                 return None
@@ -407,7 +409,7 @@ def _rung_aims(rung: Rung, nodes: Mapping[tuple[int, ...], int], view: Any) -> d
 
 
 class _Trial:
-    """What a trial run of the next scan says about the writes through a pointer.
+    """Answer questions about the writes through a pointer, using a trial run of the next scan.
 
     The trial runs at most once per ``why()``, and only when a question needs it.
     """
@@ -433,7 +435,7 @@ class _Trial:
         return self._ran
 
     def stores(self, node_idx: int, tag_name: str, value: Any) -> bool:
-        """Whether *node_idx* stores *value* into *tag_name* in the trial."""
+        """Return whether *node_idx* stores *value* into *tag_name* in the trial."""
         from pyrung.core.analysis.observed import writer_runs_for_node
 
         runs = self._runs()
@@ -442,7 +444,7 @@ class _Trial:
         return bool(writer_runs_for_node(self._pdg, self._program, node_idx, tag_name, value, runs))
 
     def aims_at(self, node_idx: int, tag_name: str) -> tuple[bool, bool]:
-        """Whether a run of *node_idx* aims at *tag_name*, and whether a run is unsure.
+        """Return whether a run of *node_idx* aims at *tag_name*, and whether a run is unsure.
 
         Each write's pointer is read as its rung starts in the trial.  A rung the trial
         did not reach is unsure.  That is a subroutine no rung called, or every rung when
@@ -483,7 +485,7 @@ class _Trial:
 
 
 def _distinct_steps(steps: list[ChainStep]) -> list[ChainStep]:
-    """*steps* without the repeats that a second walk of a tag adds."""
+    """Return *steps* without the repeats that a second walk of a tag adds."""
     seen: set[tuple[Any, ...]] = set()
     kept: list[ChainStep] = []
     for step in steps:
@@ -504,7 +506,7 @@ def _distinct_steps(steps: list[ChainStep]) -> list[ChainStep]:
 def _uncertain_roots(
     certain: list[Transition], alternatives: list[Transition], maybes: list[Transition]
 ) -> list[Transition]:
-    """The chain's ``ambiguous_roots``, which ``CausalChain.confidence`` counts.
+    """Return the chain's ``ambiguous_roots``, which ``CausalChain.confidence`` counts.
 
     *alternatives* stay as listed, repeats and all.  Each tag of *maybes* is added once,
     unless another path also reached it as a root.

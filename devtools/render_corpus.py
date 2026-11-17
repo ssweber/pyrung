@@ -79,14 +79,14 @@ _WORDS = (
 
 
 def _slug(label: str) -> str:
-    """*label* as a file name.  Each operator becomes a word, so two labels never share one."""
+    """Return *label* as a file name.  Each operator becomes a word, so no two labels share one."""
     for text, word in _WORDS:
         label = label.replace(text, word)
     return _UNSAFE.sub("_", label).strip("_")
 
 
 def _corpus(only: str | None) -> Iterator[tuple[str, Callable[[], Any]]]:
-    """``(relative directory, build)`` for each program.
+    """Yield ``(relative directory, build)`` for each program.
 
     *build* returns a Program, or a conformance build, which carries its own TagMap.
     """
@@ -165,9 +165,9 @@ def _code_py(built: Any) -> Any:
 
 
 def _meta(kernel: Any) -> str:
-    """The fields of *kernel* that a kernel run reads besides its source, one line each.
+    """Return the fields of *kernel* that a kernel run reads besides its source, one per line.
 
-    The sets and ``timer_unit_ns`` are sorted, since their order means nothing.
+    The sets and ``timer_unit_ns`` are sorted, because their order means nothing.
     ``referenced_tags`` and ``block_specs`` keep their order.
     """
     fields = {
@@ -203,7 +203,10 @@ def _write(path: Path, text: str) -> None:
 
 
 def _pyrung_here() -> Path:
-    """Where pyrung was imported from.  It must be this tree's ``src``, or the render stops."""
+    """Return where pyrung was imported from.
+
+    It must be this tree's ``src``, or the render stops.
+    """
     import pyrung
 
     found = Path(pyrung.__file__).resolve().parent
@@ -265,7 +268,10 @@ def render(out: Path, only: str | None = None) -> dict[str, float]:
 
 
 def _export(ref: str) -> Path:
-    """REF's ``src`` and ``tests``, exported once per commit, plus this tree's corpus scripts."""
+    """Return a tree with REF's ``src`` and ``tests``, and this tree's corpus scripts.
+
+    REF is exported once per commit.
+    """
     found = subprocess.run(
         ["git", "-C", str(ROOT), "rev-parse", "--verify", f"{ref}^{{commit}}"],
         capture_output=True,
@@ -281,11 +287,11 @@ def _export(ref: str) -> Path:
             capture_output=True,
             check=True,
         )
-        shutil.rmtree(tree, ignore_errors=True)  # a half-extracted earlier try
+        shutil.rmtree(tree, ignore_errors=True)  # remove a half-extracted tree from an earlier try
         tree.mkdir(parents=True)
         with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
             tar.extractall(tree, filter="data")
-        (tree / ".complete").write_text(sha)  # last, so a crash never looks done
+        (tree / ".complete").write_text(sha)  # write this last, so a crash never looks done
     (tree / "devtools").mkdir(exist_ok=True)
     for name in ("render_corpus.py", "render_corpus_programs.py"):
         shutil.copyfile(ROOT / "devtools" / name, tree / "devtools" / name)
@@ -309,7 +315,7 @@ def _sums(root: Path) -> str:
 
 
 def compare(a: Path, b: Path) -> list[str]:
-    """The files that differ between renders *a* and *b*, or are in only one."""
+    """Return the files that differ between renders *a* and *b*, or that are in only one."""
     files_a, files_b = _files(a), _files(b)
     problems = [f"only in {a}: {rel}" for rel in sorted(files_a.keys() - files_b.keys())]
     problems += [f"only in {b}: {rel}" for rel in sorted(files_b.keys() - files_a.keys())]
