@@ -1,7 +1,7 @@
-"""The conformance cases as programs for the facts check, each case alone on its slot.
+"""Turn the conformance cases into programs for the facts check, each case alone on its slot.
 
-A case runs the way the harness runs it.  ``Cmd`` goes to 0 until the case reports
-``Ready``, then to 1 for the case's scans and a few more.  Then ``RandomInputs`` toggles
+A case runs the way the harness runs it.  ``Cmd`` is 0 until the case reports
+``Ready``, then goes to 1 for the case's scans and a few more.  Then ``RandomInputs`` toggles
 ``Cmd`` at random, so a case also starts, stops and restarts at scans the harness never
 picks.  The harness writes ``Cmd`` from outside, so the check marks it
 ``external`` while the facts are built.  Every other tag a case reads is the case's own.
@@ -42,7 +42,7 @@ LEFT_OUT = {
 
 
 def cases() -> list[tuple[Group, Case]]:
-    """Every case of the suite and its parts apart, but the ones :data:`LEFT_OUT` names."""
+    """Return every case of the suite and of its parts apart, except those in :data:`LEFT_OUT`."""
     found = []
     for group in [*suite.ALL_GROUPS, *suite.APART_GROUPS]:
         for case in group.cases:
@@ -54,7 +54,10 @@ def cases() -> list[tuple[Group, Case]]:
 
 @contextmanager
 def _external(tag: Tag) -> Iterator[None]:
-    """*tag* marked external, as a TagMap marks a tag something outside writes."""
+    """Mark *tag* external while the block runs.
+
+    A TagMap marks a tag the same way when something outside writes it.
+    """
     was = tag.external
     object.__setattr__(tag, "external", True)
     note_metadata_edit()
@@ -89,7 +92,10 @@ def check_case(group: Group, case: Case) -> Report:
 
 
 def prior_text(label: str) -> str:
-    """The facts how() reads for the case *label*, one per line, every set sorted."""
+    """Return the facts that how() reads for the case *label*, one per line.
+
+    Every set is sorted.
+    """
     (subject,) = [
         loop_corpus.case_alone(group, case)
         for group, case in cases()
@@ -105,7 +111,7 @@ def prior_text(label: str) -> str:
 
 
 def _sorted(value: Any) -> Any:
-    """*value* with each dict and set as a list sorted by repr, so no hash order shows."""
+    """Return *value* with each dict and set as a list sorted by repr, so no hash order shows."""
     if isinstance(value, dict):
         return sorted(((_sorted(k), _sorted(v)) for k, v in value.items()), key=repr)
     if isinstance(value, (set, frozenset)):

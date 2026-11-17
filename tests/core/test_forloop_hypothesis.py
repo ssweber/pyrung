@@ -1,17 +1,18 @@
-"""Property test: For/Next with body rungs, Break, Continue and nesting.
+"""Check For/Next with body rungs, Break, Continue and nesting, as a property test.
 
-A random loop nest (up to three deep) is built into a pyrung program and run
-by a plain-Python interpreter of the same tree.  The tree mixes bare body
+The test builds a random loop nest (up to three deep) into a pyrung program and runs
+a plain-Python interpreter on the same tree.  The tree mixes bare body
 instructions (implicit always-true rungs) with conditioned body rungs holding
 ``break_loop()`` / ``continue_loop()``, ``out()`` coils and ``calc`` increments, read
 back from tags the body wrote on earlier iterations.  The interpreter and the
 compiled kernel must both match the model on every scan, and each other.
 
-Rules the model encodes (hardware-recorded in ``tests/conformance/program_control/test_loop.py``
-and ``test_for_count.py``): a For whose rung is false skips its body, so
-coils hold; the count is read as unsigned 16-bit and a count of 0 runs no
-iteration; Break leaves the innermost loop, Continue skips the rest of the
-iteration; a body rung reads its contacts afresh on every iteration.
+The model encodes these rules, which were recorded on hardware in
+``tests/conformance/program_control/test_loop.py`` and ``test_for_count.py``.
+- A For whose rung is false skips its body, so coils hold.
+- The count is read as unsigned 16-bit, and a count of 0 runs no iteration.
+- Break leaves the innermost loop, and Continue skips the rest of the iteration.
+- A body rung reads its contacts afresh on every iteration.
 """
 
 from __future__ import annotations
@@ -92,7 +93,7 @@ def _leaf(draw):
 
 @st.composite
 def _body(draw, levels: int, counter: list):
-    """A loop body, *levels* loops deep (>= 1); ids come from *counter*."""
+    """Draw a loop body, *levels* loops deep (>= 1).  Ids come from *counter*."""
     items: list = []
     kinds = ["inc", "out", "rung", "rung"] + (["loop"] if levels < MAX_DEPTH else [])
     for _ in range(draw(st.integers(1, 4))):
