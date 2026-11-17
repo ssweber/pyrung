@@ -104,6 +104,16 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
       (requirement_derivation.py:211) refuses them. The records would give "reset False", and for CTU the down input.
     - The TOF profile ignores the armed memory (timers.py:301). The kernel times a TOF only while it is armed or done
       or has a nonzero Acc. So PILOT may wait on a TOF that was never armed, with Done False and Acc 0, and it never moves.
+- **Other validators read tag flags from `_build_tag_map`, which lists only contacts, `.target` and `.source`.**
+  readonly-writes moved the readonly and final checks to the tags write_sites reports. A follow-up branch does the
+  same for the rest. [nothing]
+  - Confirmed: choices_violation.py:101 and :160. `fill(9, Modes.select(1, 2))` gives no TAG_CHOICES_VIOLATION.
+  - Unprobed: stuck_bits.py:591 and :644, physical_realism.py:427 and simplified.py:1249.
+  - None of them reports a write through a pointer to a flagged slot, readonly and final included.
+    `static_write_target_tags` returns nothing for a pointer target.
+  - Other hand-kept write lists: `_common._instruction_write_targets`, `_common._resolve_tag_names` and
+    `_resolve_tag_objects`, `_written_names` in cmp_conditions.py:459-467, and `_instruction_write_targets` in
+    prove/elision/slice.py:362.
 
 #### One owner per question
 
@@ -111,7 +121,7 @@ The design review of prove/ and pilot/ (`pyrung-wt/buildbot/jobs/design-review/R
 several modules each answer their own way. A fix then lands at one caller and misses the others. Each refactor below
 gives one question one owner. All [nothing].
 
-1. **What an instruction writes.** In progress on bob/readonly-writes.
+1. **What an instruction writes.** The readonly and final checks read write_sites (readonly-writes). The other validators follow (above).
 2. **What a condition reads.** Each atom of a resolved condition carries its read set and its source condition.
    Four read sets then take the union of the atoms' reads. They are `_referenced_tags`, read_trace.py:24-102,
    query.py:332 and static_expressions.py:56. `prove/expr._eval_atom` keeps literal compares and evaluates the rest
