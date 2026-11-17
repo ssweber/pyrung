@@ -1332,7 +1332,7 @@ class TestBranch:
         assert runner.current_state.tags["Light"] is False  # Rung false now
 
     def test_branch_reads_its_contacts_when_the_solve_reaches_it(self, runner_factory):
-        """A branch's contacts read live, after the rows above it have written."""
+        """Check that a branch reads its contacts after the rows above it have written."""
         from pyrung.core.program import Program, Rung, branch, latch, out
 
         Step = Int("Step")
@@ -1343,8 +1343,8 @@ class TestBranch:
         with Program() as logic:
             with Rung(Step == 0):
                 out(Light1)
-                # This write happens before the branch in source order, so
-                # the branch reads it (the live row solve, as a CLICK does).
+                # This write comes before the branch in source order, so the branch
+                # reads the new value. A CLICK solves its rows live in the same way.
                 latch(AutoMode)
                 with branch(AutoMode):
                     out(Light2)
@@ -1358,7 +1358,10 @@ class TestBranch:
         assert runner.current_state.tags["Light2"] is True
 
     def test_trunk_power_is_held_for_the_rows_below(self, runner_factory):
-        """The trunk is solved once: a write that clears its contact leaves its rows powered."""
+        """Check that a write that clears the trunk's contact leaves its rows powered.
+
+        The trunk is solved once.
+        """
         from pyrung.core.program import Program, Rung, branch, copy, out
 
         Step = Int("Step")
@@ -1680,8 +1683,10 @@ class TestNestedBranches:
         assert runner.current_state.tags["Trace"] == 1234
 
     def test_nested_branch_conditions_read_live(self, runner_factory):
-        """A branch's contacts at every nesting depth read when the solve
-        reaches them, so they see the writes of the rows above."""
+        """Check that a branch at any nesting depth reads its contacts when the solve reaches it.
+
+        It therefore sees the writes of the rows above it.
+        """
         from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
@@ -1690,8 +1695,8 @@ class TestNestedBranches:
 
         with Program() as logic:
             with Rung(A):
-                # This latch writes Flag before the nested branch is reached
-                # in source order, so the nested branch reads Flag True.
+                # This latch writes Flag before the solve reaches the nested branch in
+                # source order, so the nested branch reads Flag as True.
                 latch(Flag)
                 with branch(A):
                     with branch(Flag):
@@ -1705,8 +1710,10 @@ class TestNestedBranches:
         assert runner.current_state.tags["Light"] is True
 
     def test_live_reads_apply_across_all_nesting_levels(self, runner_factory):
-        """A nested branch's condition sees the writes of its parent's rows and
-        of the trunk's rows above it."""
+        """Check that a nested branch's condition sees two kinds of write.
+
+        These are the writes of its parent's rows, and the writes of the trunk's rows above it.
+        """
         from pyrung.core.program import Program, Rung, branch, latch, out
 
         A = Bool("A")
@@ -1716,14 +1723,14 @@ class TestNestedBranches:
 
         with Program() as logic:
             with Rung(A):
-                latch(Flag)  # mutates Flag early in source order
+                latch(Flag)  # writes Flag early in source order
                 with branch(B):
-                    latch(Deep)  # mutates Deep inside parent branch
+                    latch(Deep)  # writes Deep inside the parent branch
                     with branch(Flag):
-                        # Flag was written by the trunk row above
+                        # The trunk row above wrote Flag.
                         out(Bool("L1"))
                     with branch(Deep):
-                        # Deep was written by the parent branch's row above
+                        # The parent branch's row above wrote Deep.
                         out(Bool("L2"))
 
         runner = runner_factory(logic)

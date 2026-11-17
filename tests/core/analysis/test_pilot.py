@@ -1819,7 +1819,10 @@ def test_detect_opaque_pipeline():
 
 
 def test_single_calc_source_multi_tag_constant_base():
-    """_single_calc_source hops through math(CmdReg + Base, Pointer) when Base is constant."""
+    """Check that _single_calc_source hops through math(CmdReg + Base, Pointer).
+
+    It hops when Base is constant.
+    """
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.static_expressions import (
@@ -1853,7 +1856,7 @@ def test_single_calc_source_multi_tag_constant_base():
 
 
 def test_single_calc_source_rejects_two_mutable_tags():
-    """_single_calc_source rejects math(A + B, Pointer) when both A and B are mutable."""
+    """Check that _single_calc_source rejects math(A + B, Pointer) when both A and B are mutable."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.static_expressions import (
         single_calc_source as _single_calc_source,
