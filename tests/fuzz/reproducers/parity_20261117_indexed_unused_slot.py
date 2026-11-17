@@ -7,7 +7,7 @@ def test_reproducer():
     DS = Block("DS", TagType.INT, 1, 7)
     D0 = Dint("D0")
     B1 = Bool("B1")
-    DS[1]
+    DS[1]  # noqa: B018  (the touch is the case)
 
     with Program(strict=False) as logic:
         with Rung():

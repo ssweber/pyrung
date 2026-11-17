@@ -18,8 +18,10 @@ DT = 0.010
 PARITY_SCANS = int(os.environ.get("FUZZ_SCANS", "50"))
 
 # Each profile sets max_examples per test and a deadline per example (ms). The gate bound is
-# 400 examples x 60 s per test. The stage stays under 5 minutes because it measures 2 to 3 minutes.
+# 400 examples x 60 s per test, with 200 programs for parity. A run on 6 workers measured 104 s.
 GATE_MAX_EXAMPLES = 400
+# Parity steps two engines for PARITY_SCANS scans per program, so it gets fewer programs.
+GATE_PARITY_EXAMPLES = 200
 GATE_DEADLINE_MS = 60_000
 
 settings.register_profile(
@@ -34,4 +36,6 @@ settings.register_profile(
     deadline=GATE_DEADLINE_MS,
     suppress_health_check=[HealthCheck.too_slow],
 )
-PROFILE = "fuzz-gate" if os.environ.get("FUZZ_PROFILE") == "gate" else "fuzz-long"
+_GATE = os.environ.get("FUZZ_PROFILE") == "gate"
+PROFILE = "fuzz-gate" if _GATE else "fuzz-long"
+PARITY_EXAMPLES = GATE_PARITY_EXAMPLES if _GATE else MAX_EXAMPLES

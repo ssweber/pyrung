@@ -23,7 +23,7 @@ from pyrung.core import (
     search,
 )
 
-from .conftest import DT, PARITY_SCANS, PROFILE
+from .conftest import DT, PARITY_EXAMPLES, PARITY_SCANS, PROFILE
 from .minimize import minimize
 from .reproducer import format_parity_reproducer, write_reproducer
 from .strategies import build_program, program_specs
@@ -42,7 +42,11 @@ def _diff_dicts(left: dict, right: dict) -> str:
 
 @pytest.mark.fuzz
 @given(data=st.data())
-@settings(settings.get_profile(PROFILE), phases=[Phase.explicit, Phase.reuse, Phase.generate])
+@settings(
+    settings.get_profile(PROFILE),
+    max_examples=PARITY_EXAMPLES,
+    phases=[Phase.explicit, Phase.reuse, Phase.generate],
+)
 def test_engine_parity(data):
     try:
         spec = data.draw(program_specs())
@@ -148,7 +152,7 @@ def test_unused_indexed_slot_parity():
     DS = Block("DS", TagType.INT, 1, 7)
     D0 = Dint("D0")
     B1 = Bool("B1")
-    DS[1]
+    DS[1]  # noqa: B018  (the touch is the case)
 
     with Program(strict=False) as logic:
         with Rung():
