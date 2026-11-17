@@ -25,7 +25,7 @@ plc = PLC(logic, initial_state=SystemState().with_tags(tags))
 
 ## `why()` — what's blocking this?
 
-`why()` walks the program graph backward from a tag and explains how it reached its current value using only the snapshot.
+`why()` walks the program graph backward from a tag and explains how it reached its current value from the snapshot. A write through a pointer with no declared bounds, into a block of more than 1000 elements, is the one exception. For that write, `why()` reads the scan history to see where it stored. When the history cannot say, or the rung is off, `why()` steps the next scan on a throwaway copy of the PLC to see where the write stores. The copy takes the pending forces and patches. The PLC itself does not change.
 
 ```python
 from pyrung import Bool, And, PLC, Program, rung, out, latch, reset
@@ -94,7 +94,7 @@ Without history, `why()` can't distinguish triggers from enablers. It reports ev
 
 ## Force and re-query
 
-`why()` is stateless. Change the snapshot and you get a new answer. Use `force()` to test hypotheses:
+`why()` reads the current state each time you call it. Change the state and you get a new answer. Use `force()` to test hypotheses:
 
 ```python
 plc.why(ConveyorMotor)    # "blocked EstopOK" — is that the only problem?

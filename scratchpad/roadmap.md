@@ -72,15 +72,29 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   through such a pointer reaches only the listed elements there too (`_declared_reach` in pdg.py). Without that, the
   tumbler's `AlmHistorian__*_idx` writes reach all of DS, and the tumbler loses 1100 levers. [nothing]
 - **Unchecked leads from over-cap-writes.** [nothing]
-  - `causal/why.py` and the `cause()`/`effect()` walks read `writers_of` and never ask
-    `ProgramGraph.unlisted_writers_of`. So they miss a write through a pointer that lists no targets.
-  - `causal/recorded.py:1370` (`_resolve_indirect_writers`) matches a tag to a write through a pointer by
-    `_pyrung_block_addr` alone. That address moves when a run resolves a mapped slot. `Logi5` mapped onto bank 1005
-    gives 5 before and 1005 after. So the walk can miss the write before the slot is resolved.
+  - `causal/projected.py` (`cause(tag, to=)` and `effect(tag, to=)`) still reads `writers_of` alone. So it calls an
+    element that only a write through a pointer reaches unreachable, and it takes such an element in a contact for an
+    input.
   - `writable_slots` (crossings/indirect_dest.py) takes an `external` root's default as its only value. It also leaves
     out a literal-only root's default. Its region can miss addresses the pointer reaches. Today it only removes levers.
   - `_ValueSets._indexed_values` takes an element's default when the element is missing from the tag table, even
     when a write through a pointer reaches it. The pointer-range lint uses it.
+  - A `forloop()` index makes `cause()` slow. With `copy(Src, Big[idx + 1])` and `copy(Big[idx + 1], Dst[idx +
+    3001])` over 2000 elements, `cause("Dst4500")` takes 35 s and 2004 steps (2.2 s with `deep=False`). The step for
+    the index takes every element the loop reads as a held enabler. An index occurrence's footprint should not make
+    every element read an enabler.
+  - why() with no scan history loses a write through a pointer that a patch or a force once aimed at the tag,
+    after the pointer moved on. It reads where the pointer aims in the state, and otherwise only where the
+    program's own values can aim it. `PLC.why()` reads the scan history and sees the write.
+  - why() repeats a tag in `conjunctive_roots` when two pointer writers that the scan history confirms both reach
+    it. Two listed writers already did this.
+  - why() shows no step for a writer in an unconditional `Rung()`. `_walk_backward` skips a rung with no condition
+    tree (`if sp_tree is None: continue`), so its write and the tags it reads drop out of the chain.
+  - No test pins the absence fallback of PILOT on a never-written element of a block of more than 1000 elements.
+    The guard cuts (`_precise_causes`) also offer the lever in every how() program tried. A unit test like
+    `test_pilot_absence_root.py`, where only the absence fallback offers the lever, would pin it.
+  - The VS Code extension does not show uncertain steps. `renderStep` (historyPanel.js) ignores `step.uncertain`, so
+    a `why()` step marked `?` looks certain there.
 - **A slot with a mapped tag and a name override has two names.** `_effective_slot_name` (memory_block.py)
   gives the override. The runtime stores under the mapped tag's name (`_get_tag`). So a caller that looks a
   store up by `_effective_slot_name` may miss the mapped tag. These callers do that.

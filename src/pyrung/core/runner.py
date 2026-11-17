@@ -56,6 +56,7 @@ from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.rung_firings import (
     _UNKNOWN_VALUE,
     SETTLE_SCAN_LIMIT,
+    WHY_SETTLE_SCAN_LIMIT,
     RungFiringTimelines,
     SearchQuestionRefused,
     UnrecordedScansError,
@@ -2567,12 +2568,16 @@ class PLC:
         asked = self._unrecorded_in(first, last)
         if not asked:
             return
-        # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
-        scans = sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
+        scans = self._settle_cost(asked)
         if scans > SETTLE_SCAN_LIMIT and not at_any_cost:
             raise self._refusal(asked[0][1][0], asked[-1][1][1], scans)
         for owner, (start, end) in asked:
             owner._settle_window(start, end, self._search_limits())
+
+    @staticmethod
+    def _settle_cost(asked: list[tuple[PLC, tuple[int, int]]]) -> int:
+        # What it costs is the steps from the checkpoint, and a long stretch keeps few of them.
+        return sum(end - owner._replay_anchor_scan(start - 1) for owner, (start, end) in asked)
 
     def _unrecorded_in(
         self, first: int | None = None, last: int | None = None
@@ -2648,6 +2653,11 @@ class PLC:
         tag, using the current state as evidence. Terminates at external
         inputs. Active forces on tags in the chain are named in it.
 
+        For a write through a pointer that lists no targets, it reads the scan
+        history to see whether the write stored the tag's value.  When the history
+        cannot say, or the rung does not conduct, it runs the next scan on a throwaway
+        copy of the PLC to see where the write stores.
+
         Multiple tags produce one unified tree — a single explanation
         consistent with all observations.
 
@@ -2664,14 +2674,99 @@ class PLC:
         from pyrung.core.analysis.causal import why_cause
 
         resolved = [self._normalize_tag_name(t, method="why") for t in tags]
+        pdg = self._ensure_pdg()
         return why_cause(
             logic=self._logic,
             state=self._state,
             tags=resolved,
-            pdg=self._ensure_pdg(),
+            pdg=pdg,
             program=self._program,
             forces=self._forces,
+            pointer_write=self._recorded_pointer_write(pdg, self._state.scan_id),
+            trial_scan=self._trial_scan_runs,
         )
+
+    def _trial_scan_runs(self, state: SystemState | None = None) -> tuple[RungRun, ...] | None:
+        """Run the next scan on a throwaway copy of this PLC, and return its rung runs in order.
+
+        The copy starts from *state* (the current one by default) with the pending forces
+        and patches, as the next scan would.  This PLC never sees it.  It answers None when
+        no scan can run here, or when the scan raises.
+        """
+        if self._program is None or not self._running or self._user_calls_running:
+            return None
+        start = self._state if state is None else state
+        trial = self._fork_from_reconstructed_state(
+            start,
+            rtc_at_state=self._rtc_at_sim_time(start.timestamp),
+            forces=self._forces,
+            replay_mode=False,
+        )
+        trial._pending_patches.update(self._pending_patches)
+        trial._last_step_time = self._last_step_time
+        captured: list[ConditionViewCapture] = []
+        try:
+            trial._run_single_scan(
+                consume_pause_request=False,
+                capture_execution=True,
+                capture_sink=lambda _scan_id, capture: captured.append(capture),
+            )
+        except Exception:
+            # A function the program calls may raise.  why() then answers without the trial.
+            return None
+        return captured[0].runs if captured else None
+
+    def _recorded_pointer_write(
+        self, pdg: Any, scan_id: int
+    ) -> Callable[[int, str, Any], bool | None] | None:
+        """Read from the scan history whether a write through a pointer writes a tag's value.
+
+        why() asks it about a node, a tag and the tag's value at *scan_id*, as it asks a listed
+        writer.  It answers True when the node stored the value at the tag's last change, or
+        stored it again on its latest run since then.  It answers False when the node did
+        neither.  It answers None when the history cannot say: the value was there before
+        the history starts, or the scans are too many to step again.
+        """
+        program = self._program
+        if program is None or not pdg.unlisted_writes:
+            return None
+        from pyrung.core.analysis.observed import writer_runs_for_node
+
+        settled: list[bool] = []
+
+        def stored_at(node_idx: int, tag_name: str, value: Any, scan: int) -> bool | None:
+            try:
+                runs = self._replay_rung_runs_at(scan)
+            except UnrecordedScansError:
+                return None
+            return bool(writer_runs_for_node(pdg, program, node_idx, tag_name, value, runs))
+
+        def pointer_write(node_idx: int, tag_name: str, value: Any) -> bool | None:
+            if not settled:
+                asked = self._unrecorded_in(None, scan_id)
+                settled.append(self._settle_cost(asked) <= WHY_SETTLE_SCAN_LIMIT)
+                if settled[0]:
+                    self._settle_compiled_ranges(None, scan_id)
+            if not settled[0]:
+                return None
+            change = self._causal_last_committed_transition_before(tag_name, scan_id + 1)
+            changed_at = -1 if change is None else change.scan_id
+            node = pdg.rung_nodes[node_idx]
+            ids = frozenset({RungId(node.subroutine, node.rung_index)})
+            last = self._node_latest_firing_at_or_before(ids, scan_id)
+            if last is not None and last >= changed_at:
+                if stored_at(node_idx, tag_name, value, last):
+                    return True
+                if last == changed_at:
+                    return False
+            if change is None:
+                return None
+            if last is None or last < changed_at:
+                # The node did not run in the scan of the change.
+                return False
+            return stored_at(node_idx, tag_name, value, changed_at)
+
+        return pointer_write
 
     def how(
         self,
@@ -5418,6 +5513,11 @@ class PLC:
                     rung.evaluate(ctx)
                 finally:
                     ctx._finish_rung_capture(i, journal)
+
+        if capture is not None and ctx._state_tags_read is self._state_tags_read_cache:
+            # The capture's views read the scan's start from this dict, after the scan too.
+            # The commit updates the cache in place, so it gets a copy to update instead.
+            self._state_tags_read_cache = ctx._state_tags_read = dict(ctx._state_tags_read)
 
         def _retain_capture_before_callbacks() -> None:
             assert capture is not None
