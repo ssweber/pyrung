@@ -27,6 +27,7 @@ from pyrung.core.analysis.sp_values import (
     _written_value_for_tag,
 )
 from pyrung.core.crossing import Affine, AffineCmp, Cmp, Constraint, Eq, Literal
+from pyrung.core.expression import Expression
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -52,6 +53,9 @@ def _atom_target(
             except TypeError:
                 return None
             return (atom.tag, operand)
+        if isinstance(atom.operand, Expression):
+            # ``A == B + 2`` names no value for A until a scan reads B.
+            return None
         return (atom.tag, atom.operand)
     if form == "rise":
         return (atom.tag, True)

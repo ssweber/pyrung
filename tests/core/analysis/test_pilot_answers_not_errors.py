@@ -82,6 +82,20 @@ class TestArithmeticInARung:
         assert plan.fork is not None
         assert plan.fork.state.tags[hit.name]
 
+    @pytest.mark.parametrize("form", ["ge", "eq"])
+    def test_a_tag_compared_with_arithmetic(self, form: str) -> None:
+        """``Acc == Limit + 10`` once raised a TypeError from inside how()."""
+        watch = Timer.clone("Watch")
+        limit = Int("Limit", default=20)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("Enable", external=True)):
+                on_delay(watch, 1000)
+            with Rung(watch.Acc >= limit + 1 if form == "ge" else watch.Acc == limit + 10):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
+
     def test_packml_with_an_avoid_on_a_state_it_starts_in(self) -> None:
         plc = PLC(packml, dt=0.01)
         plan = plc.how(
