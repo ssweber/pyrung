@@ -4434,18 +4434,20 @@ class PLC:
         self._set_rtc_and_record(self._normalize_rtc_datetime(value), self._state.timestamp)
 
     def _set_time_mode(self, mode: TimeMode, *, dt: float = 0.010) -> None:
-        """Set the time mode (internal, used by fork)."""
+        """Set the time mode (internal, used by fork, reload and a replay before its first scan)."""
         self._time_mode = mode
         self._dt = dt
         if mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
         # Reinitialize scan log so ``dts`` is present in REALTIME and absent
-        # in FIXED_STEP.  Only called early in fork() so the log is empty
+        # in FIXED_STEP.  Only called before any scan, so the log is empty
         # and no recorded history is lost.
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
         self._checkpoints = {}
         self._epoch_caches.on_recording_reset()
-        self._forces_last_recorded = dict(self._input_overrides.forces)
+        # The new log holds no force record, so the next scan must write the forces
+        # already set. Otherwise a replay of history runs those scans unforced.
+        self._forces_last_recorded = {}
 
     @staticmethod
     def _apply_runtime_memory_flags(
