@@ -162,7 +162,7 @@ def run(cases: Sequence[Case] | Group, *, scan_limit_ms: int | None = None) -> l
 def _reset(plc: Any, slot: _NamedArrayRuntime, indexes: Collection[int]) -> set[int]:
     """Zero every slot, as the wire harness does, and scan until each reports ``Ready``.
 
-    A case that stopped the PLC (SC50, the STOP command) leaves it in STOP: put
+    A case that stopped the PLC (SC50, the STOP command) leaves it in STOP.  Put
     it back in RUN first, as the operator of a real CLICK does by hand.
     Returns the slots that never reported ``Ready``.
     """
@@ -184,8 +184,9 @@ def _fire(
 ) -> dict[int, tuple[dict[str, int], bool]]:
     """Write ``Cmd = 1`` to *indexes*, run the longest case's scans, read their slots.
 
-    A PLC in STOP does not scan: once a case stops it, the harness stops
-    stepping (``step()`` would put it back in RUN) and reads what it left.
+    A PLC in STOP does not scan.  Once a case stops it, the harness stops
+    stepping, because ``step()`` would put it back in RUN.  The harness then reads
+    what the case left.
     """
     if not indexes:
         return {}
@@ -198,7 +199,7 @@ def _fire(
 
 
 def read_slot(plc: Any, fields: Any, c: Case) -> tuple[dict[str, int], bool]:
-    """What case *c* left in its slot's *fields*, and whether it fired."""
+    """Return what case *c* left in its slot's *fields*, and whether it fired."""
     state = plc.current_state
     tags = state.tags
     actual = {f: tags.get(getattr(fields, f).name, 0) for f in c.expect}
@@ -209,7 +210,7 @@ def read_slot(plc: Any, fields: Any, c: Case) -> tuple[dict[str, int], bool]:
 
 
 def _edge_tags(plc: PLC) -> dict[str, str]:
-    """Each edge contact's memory key (``_edge:e{N}``) -> the tag the contact reads."""
+    """Return each edge contact's memory key (``_edge:e{N}``) mapped to the tag it reads."""
     table = plc._site_table
     if table is None:
         return {}
@@ -222,12 +223,12 @@ def _diff(
     kept: Collection[str],
     edge_tags: Mapping[str, str] | None = None,
 ) -> dict[str, tuple]:
-    """Tags and instruction memory that differ between two states, as ``key -> (now, fresh)``.
+    """Return the tags and memory that differ between two states, as ``key -> (now, fresh)``.
 
-    System tags, pyrung's internal tags (a leading ``_``), system memory and
-    *kept* tags are skipped, and so is memory keyed by a system or kept tag (a
-    timer's ``_frac:TD1``), or an edge contact's memory (``_edge:e{N}``, mapped
-    to its tag by *edge_tags*) on a system or kept tag: a clock's edge
+    The comparison skips system tags, pyrung's internal tags (a leading ``_``), system
+    memory and *kept* tags.  It also skips memory keyed by a system or kept tag, such as a
+    timer's ``_frac:TD1``.  It skips an edge contact's memory (``_edge:e{N}``, mapped to
+    its tag by *edge_tags*) when that tag is a system or kept tag.  A clock's edge
     history moves with time, not with any case.
     """
     edge_tags = edge_tags or {}
@@ -253,7 +254,8 @@ def _diff(
 def assert_all_passed(results: list[CaseResult]) -> None:
     """Raise ``AssertionError`` listing stale groups and every case that ran and failed.
 
-    In-process-only skips pass; a stale group fails (its cases did not run).
+    A case skipped in-process only passes.  A stale group fails, because its cases did
+    not run.
     """
     lines: list[str] = []
     stale_seen: set[str] = set()
@@ -278,13 +280,13 @@ def assert_all_passed(results: list[CaseResult]) -> None:
 def format_report(
     results: Sequence[CaseResult], confirmations: Mapping[str, Confirmation] | None = None
 ) -> str:
-    """One ASCII line per case, then totals.
+    """Return one ASCII line per case, then totals.
 
-    Each line has the status (PASS, XFAIL for a ``pending`` case that misses
-    CLICK's expectation as it must, FAIL, SKIP, STALE), whether the case has
-    passed on a CLICK as it is now (*confirmations*, see ``_confirm.py``), the
-    pending step and the probe question; a FAIL or XFAIL line is followed by
-    what the case read, and a FAIL line by its note (such as "timed out at step 1").
+    Each line has the status, whether the case has passed on a CLICK as it is now
+    (*confirmations*, see ``_confirm.py``), the pending step and the probe question.
+    The status is PASS, FAIL, SKIP, STALE, or XFAIL for a ``pending`` case that misses
+    CLICK's expectation as it must.  A FAIL or XFAIL line is followed by what the case
+    read.  A FAIL line is also followed by its note, such as "timed out at step 1".
     """
     confirmations = confirmations or {}
     lines: list[str] = []

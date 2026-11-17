@@ -25,12 +25,12 @@ if TYPE_CHECKING:
 
 
 def case_label(group: str, c: Case) -> str:
-    """``group/id``, or the bare id for a case outside a group."""
+    """Return ``group/id``, or the bare id for a case outside a group."""
     return f"{group}/{c.id}" if group else c.id
 
 
 def case_comment(group: str, c: Case) -> str:
-    """The comment on a case's first rung: its id, its sentence, and what it expects.
+    """Return the comment on a case's first rung: its id, its sentence, and what it expects.
 
     It is part of the exported ladder, so it is part of the group hash: editing
     a sentence makes the group stale on the PLC until it is pushed again.
@@ -59,7 +59,7 @@ def _conditions(value: Any) -> tuple[Any, ...]:
 
 
 def footprint(c: Case) -> tuple[frozenset[str], frozenset[str]]:
-    """The tags case *c* reads or writes, and the ones it writes, outside its slot.
+    """Return the tags case *c* reads or writes outside its slot, and the ones it writes.
 
     System tags and pyrung's internal tags (a leading ``_``) are left out.  So are the
     characters a ``to_text()`` copy of a tag may write past its first.  The analyses
