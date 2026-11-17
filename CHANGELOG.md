@@ -54,12 +54,9 @@
 - `program.check()` no longer reports these findings on a system tag that the PLC sets, such as `rtc.hour` or `sys.scan_counter`:
   - It has no writer.
   - A preset stays 0.
-- `program.check()` now reports every write to a `readonly=True` tag and every second writer of a `final=True` tag. It missed these writes:
-  - `math()`, `fill()`, `blockcopy()`, `search()`, `send()` and `receive()`.
-  - The pack and unpack instructions, and the outputs of `run_function()` and `run_enabled_function()`.
-  - Each tag of a timer, counter or drum, a `shift()` range, and the Acc of `debounce()`, `flasher()` and `timed()`.
-- `run_for()` and `run_until()` now raise at any instruction that stores into a read-only system point, such as a `math()`, as stepping does (they ran on past some of them).
-- A harness link now refuses a feedback tag that any instruction writes, such as a `math()` (it accepted some of them).
+- `program.check()` now reports a write by any instruction to a `readonly=True` tag, and a second writer of a `final=True` tag (it saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`).
+- `run_for()` and `run_until()` now raise when an instruction such as `math()` stores into a read-only system point, as stepping does (they stored the value and went on).
+- A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
 
 ## v0.16.0 (2026-11-14)
 

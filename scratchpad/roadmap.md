@@ -90,6 +90,16 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
 - **Left over from the search deletion.**
   - `build_program_graph(unbounded_index_reads=, observed_system=, observed_tags=)` and `_UnboundedReads` in pdg.py
     were the search's. Only tests pass them now. The `indirect_reach` maps they fill are then always empty. [nothing]
+- **Other validators read tag flags from `_build_tag_map`, which lists only contacts, `.target` and `.source`.**
+  readonly-writes moved the readonly and final checks to the tags write_sites reports. A follow-up branch does the
+  same for the rest. [nothing]
+  - Confirmed: choices_violation.py:101 and :160. `fill(9, Modes.select(1, 2))` gives no TAG_CHOICES_VIOLATION.
+  - Unprobed: stuck_bits.py:591 and :644, physical_realism.py:427 and simplified.py:1249.
+  - None of them reports a write through a pointer to a flagged slot, readonly and final included.
+    `static_write_target_tags` returns nothing for a pointer target.
+  - Other hand-kept write lists: `_common._instruction_write_targets`, `_common._resolve_tag_names` and
+    `_resolve_tag_objects`, `_written_names` in cmp_conditions.py:459-467, and `_instruction_write_targets` in
+    prove/elision/slice.py:362.
 
 ### 1c. The public surface
 

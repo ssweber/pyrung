@@ -231,17 +231,18 @@ def _copy_fanout(instr: Any) -> _Fanout:
     return (), ()
 
 
-def instruction_write_targets(instr: Any) -> tuple[Any, ...]:
+def instruction_write_targets(instr: Any, *, status: bool = True) -> tuple[Any, ...]:
     """Return every declared or statically derived write destination.
 
     Static ranges remain ranges so PDG extraction can retain range grouping.
     Indirect references and indirect ranges remain unresolved so PDG extraction
-    can preserve address reads and conservative region attribution.
+    can preserve address reads and conservative region attribution.  With
+    *status* false, the instruction's own status fields (a timer's EN and TT)
+    are left out.
     """
     cls = type(instr)
-    fields = tuple(
-        dict.fromkeys((*getattr(cls, "_writes", ()), *getattr(cls, "_status_fields", ())))
-    )
+    status_fields = getattr(cls, "_status_fields", ()) if status else ()
+    fields = tuple(dict.fromkeys((*getattr(cls, "_writes", ()), *status_fields)))
     targets: list[Any] = []
     for field_name in fields:
         targets.extend(_iter_target_leaves(getattr(instr, field_name, None)))
@@ -291,10 +292,10 @@ def static_write_target_names(target: Any) -> frozenset[str]:
     return frozenset(tag.name for tag in static_write_target_tags(target))
 
 
-def instruction_written_tags(instr: Any) -> tuple[Tag, ...]:
+def instruction_written_tags(instr: Any, *, status: bool = True) -> tuple[Tag, ...]:
     """Each tag *instr* may write at a static address, once, in declaration order."""
     tags: dict[str, Tag] = {}
-    for target in instruction_write_targets(instr):
+    for target in instruction_write_targets(instr, status=status):
         for tag in static_write_target_tags(target):
             tags.setdefault(tag.name, tag)
     return tuple(tags.values())

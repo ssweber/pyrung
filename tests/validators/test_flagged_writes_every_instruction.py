@@ -1,7 +1,7 @@
 """Every instruction that writes a tag is seen by the readonly and final checks.
 
-The same writes gate the compiled kernel: a program that writes a read-only system tag
-runs interpreted, so the write raises as it does when stepping.
+A program that writes a read-only system tag stays off the compiled kernel, so the write
+raises as it does when stepping.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from pyrung.core import (
     Block,
     Bool,
     Char,
+    Counter,
     Dint,
     Int,
     Program,
@@ -26,8 +27,10 @@ from pyrung.core import (
     Rung,
     Tag,
     TagType,
+    Timer,
     Word,
     blockcopy,
+    call,
     copy,
     count_down,
     count_up,
@@ -49,6 +52,7 @@ from pyrung.core import (
     run_function,
     search,
     shift,
+    subroutine,
     system,
     time_drum,
     time_event_drum,
@@ -60,6 +64,7 @@ from pyrung.core import (
 from pyrung.core.instruction.base import Instruction
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send
 from pyrung.core.runner import _program_writes_read_only_system_tags
+from pyrung.core.validation.duplicate_out import COIL_CONFLICTING_OUTPUT
 from pyrung.core.validation.final_writers import TAG_FINAL_MULTIPLE_WRITERS
 from pyrung.core.validation.readonly_write import TAG_READONLY_WRITE
 
@@ -79,7 +84,7 @@ _SYSTEM_TAGS = {
     TagType.REAL: system.sys.dt,
 }
 
-#: The fields a user cannot point at a tag of their own: pyrung names the loop index.
+#: pyrung names the loop index itself, so no user tag can be one.
 _NOT_A_USER_TAG = {("ForLoopInstruction", "idx_tag")}
 
 
@@ -99,6 +104,11 @@ class Case:
     @property
     def id(self) -> str:
         return f"{self.instruction}.{self.field}"
+
+    @property
+    def status(self) -> bool:
+        """A timer's or counter's own status bit, which the final check leaves to its owner."""
+        return self.field in {"en_bit", "tt_bit", "cu_bit", "cd_bit"}
 
 
 def _en(name: str) -> Bool:
@@ -456,8 +466,74 @@ def test_a_write_to_a_readonly_tag_is_reported(case: Case) -> None:
 @pytest.mark.parametrize("case", ALL_CASES, ids=lambda case: case.id)
 def test_two_writes_to_a_final_tag_are_reported(case: Case) -> None:
     w, name = _flagged(case, final=True)
-    report = _program(case.build, w, times=2).check(select={TAG_FINAL_MULTIPLE_WRITERS})
+    if case.status:
+        program = _program(case.build, w)
+        with program:
+            with Rung(Bool("Status_Out_En")):
+                out(w)
+    else:
+        program = _program(case.build, w, times=2)
+    report = program.check(select={TAG_FINAL_MULTIPLE_WRITERS})
     assert name in {finding.target_name for finding in report.findings}
+
+
+# The built-in Timer's EN and TT and Counter's CU and CD are final.  A timer or counter
+# used twice is COIL_CONFLICTING_OUTPUT's to judge, which allows callers that exclude
+# each other, so the final check does not count its status bits.
+ReuseT = Timer.clone("ReuseT")
+ReuseC = Counter.clone("ReuseC")
+ReuseState = Int("ReuseState")
+
+
+def _timer_and_counter() -> None:
+    with Rung(Bool("Reuse_Run")):
+        on_delay(ReuseT, 100)
+    with Rung(Bool("Reuse_Up")):
+        count_up(ReuseC, 5).reset(Bool("Reuse_Reset"))
+
+
+def _findings(program: Program) -> list[tuple[str, str]]:
+    return sorted((finding.code, finding.target_name) for finding in program.check().findings)
+
+
+def test_a_timer_and_counter_in_subroutines_that_exclude_each_other_pass() -> None:
+    with Program() as program:
+        with Rung(ReuseState == 1):
+            call("reuse_a")
+        with Rung(ReuseState == 2):
+            call("reuse_b")
+        with subroutine("reuse_a"):
+            _timer_and_counter()
+        with subroutine("reuse_b"):
+            _timer_and_counter()
+
+    assert _findings(program) == []
+
+
+def test_a_timer_and_counter_used_twice_in_main_conflict_on_done_and_acc_only() -> None:
+    with Program() as program:
+        _timer_and_counter()
+        _timer_and_counter()
+
+    assert _findings(program) == [
+        (COIL_CONFLICTING_OUTPUT, ReuseC.Acc.name),
+        (COIL_CONFLICTING_OUTPUT, ReuseC.Done.name),
+        (COIL_CONFLICTING_OUTPUT, ReuseT.Acc.name),
+        (COIL_CONFLICTING_OUTPUT, ReuseT.Done.name),
+    ]
+
+
+def test_an_out_to_a_status_bit_beside_its_timer_or_counter_is_a_second_writer() -> None:
+    with Program() as program:
+        _timer_and_counter()
+        with Rung(Bool("Reuse_Manual")):
+            out(ReuseT.EN)
+            out(ReuseC.CU)
+
+    assert _findings(program) == [
+        (TAG_FINAL_MULTIPLE_WRITERS, ReuseC.CU.name),
+        (TAG_FINAL_MULTIPLE_WRITERS, ReuseT.EN.name),
+    ]
 
 
 @pytest.mark.parametrize(

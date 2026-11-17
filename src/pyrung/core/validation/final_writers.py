@@ -7,8 +7,9 @@ ladder. ``final`` means exactly one writer — no mutual-exclusivity exemption.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.write_sites import instruction_written_tags
 from pyrung.core.validation._common import (
     WriteSite,
     _collect_write_sites,
@@ -57,6 +58,12 @@ class FinalWritersReport:
         return f"{len(self.findings)} final multiple-writer violation(s)."
 
 
+def _status_only_names(instr: Any) -> frozenset[str]:
+    """The tags *instr* writes only through its own status fields, such as a timer's EN."""
+    every = {tag.name for tag in instruction_written_tags(instr)}
+    return frozenset(every - {tag.name for tag in instruction_written_tags(instr, status=False)})
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -78,6 +85,10 @@ def validate_final_writers(program: Program) -> FinalWritersReport:
             continue
         target_sites = sites_by_target[tag_name]
         if len(target_sites) <= 1:
+            continue
+        if all(tag_name in _status_only_names(s.instruction) for s in target_sites):
+            # COIL_CONFLICTING_OUTPUT judges a timer or counter used twice, and it
+            # allows callers that exclude each other.
             continue
         display = FindingDisplay(
             code=TAG_FINAL_MULTIPLE_WRITERS,
