@@ -606,7 +606,7 @@ class TestDroppedContactValidation:
         from pyrung.click.codegen.analyzer import _analyze_rungs
 
         rung = self._dropped_or_rung()
-        with pytest.warns(UserWarning, match="drops contact"):
+        with pytest.warns(UserWarning, match="connects to no output"):
             analyzed = _analyze_rungs([rung])
 
         # X001 survives; the dangling X002 is omitted from the logic.
@@ -722,8 +722,8 @@ class TestDroppedContactValidation:
             source = bundle
 
         match = (
-            r'^Subroutine "Worker", rung 2: Rung drops condition\(s\) present '
-            r"in the source but not connected into any output: X004 \(row 1\)\."
+            r'^Subroutine "Worker", rung 2: The rung has contacts that connect to no '
+            r"output: X004 \(row 1\)\."
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -1020,7 +1020,8 @@ class TestGraphWalkEdgeCases:
             result = _analyze_single_rung(rung)
 
         assert [str(item.message) for item in caught] == [
-            "Imported ladder topology bypasses contact 'DD2==DS353'; this condition was omitted from generated logic."
+            "In the imported ladder, a wire runs around contact 'DD2==DS353', so the "
+            "contact has no effect. The generated code leaves the contact out."
         ]
         labels = set(_leaf_labels(result.condition_tree))
         for instruction in result.instructions:
@@ -1095,7 +1096,7 @@ class TestGraphWalkEdgeCases:
         # This degenerate grid leaves its mid-grid contacts wired to no output,
         # so they are dropped and every output becomes unconditional. The drops
         # are the documented outcome, so assert the warning rather than ignore it.
-        with pytest.warns(UserWarning, match="drops contact"):
+        with pytest.warns(UserWarning, match="connects to no output"):
             result = _analyze_single_rung(rung)
 
         assert result.condition_tree is None
@@ -1143,7 +1144,9 @@ class TestShannonBridgeCoverage:
 
         assert len(analyzed) == 1
         assert [str(item.message) for item in caught] == [
-            "Rung contains bridge topology; resolved via Shannon expansion"
+            "The rung has a bridge, a contact that joins two parallel branches. The "
+            "generated code rewrites the rung as branches with the same logic. Some "
+            "contacts may appear more than once."
         ]
 
         result = analyzed[0]
@@ -1188,7 +1191,9 @@ class TestShannonBridgeCoverage:
             result = _analyze_single_rung(rung)
 
         assert [str(item.message) for item in caught] == [
-            "Rung contains bridge topology; resolved via Shannon expansion"
+            "The rung has a bridge, a contact that joins two parallel branches. The "
+            "generated code rewrites the rung as branches with the same logic. Some "
+            "contacts may appear more than once."
         ]
 
         tree = result.condition_tree
@@ -2767,7 +2772,7 @@ class TestRoundTrip:
         if refused:
             with pytest.raises(
                 ValueError,
-                match=rf"needs a Real source \(DF or a Real constant\), got copy source {re.escape(source)}\.",
+                match=rf"needs a Real source, such as a DF or a Real constant\. The source here is {re.escape(source)}\.",
             ):
                 ladder_to_pyrung(bundle)
         else:
@@ -5828,7 +5833,9 @@ class TestNop:
         from pyrung.click.codegen.models import _OperandCollection
 
         collection = _OperandCollection()
-        with pytest.raises(ValueError, match="Unrecognised AF token"):
+        with pytest.raises(
+            ValueError, match="is not an instruction or an operand that pyrung knows"
+        ):
             _render_af_token("BOGUS", collection, None)
 
     def test_blank_raw_rung_preserved_as_pass(self):
@@ -5883,7 +5890,7 @@ class TestNop:
             subroutine_rows=(),
         )
 
-        with pytest.raises(ValueError, match="complete output object"):
+        with pytest.raises(ValueError, match="no path joins the left rail to an output"):
             ladder_to_pyrung(bundle)
 
     def test_render_pin_rejects_lossy_flat_conditions(self):

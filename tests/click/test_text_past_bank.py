@@ -42,7 +42,7 @@ def _found(report):
     ]
 
 
-_AT = "at main.rung[0].instruction[0](CopyInstruction).instruction.target"
+_AT = "at main.rung[1].instruction[0](CopyInstruction).instruction.target"
 
 
 @pytest.mark.parametrize(

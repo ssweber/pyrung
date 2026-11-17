@@ -34,7 +34,7 @@ def _copy_through(pointer, bank=dd):
     return prog, TagMap({pointer: ds[1], out: ds[2]}, include_system=False)
 
 
-_AT = "at main.rung[0].instruction[0](CopyInstruction).instruction.source"
+_AT = "at main.rung[1].instruction[0](CopyInstruction).instruction.source"
 
 
 def test_choices_inside_the_bank_are_no_finding():
@@ -61,7 +61,7 @@ def test_a_copy_write_through_a_dd_pointer_says_what_a_click_does():
     mapping = TagMap({ptr: ds[1], src: ds[2]}, include_system=False)
     (finding,) = _found(prog, mapping)
     assert finding.message == (
-        "DD[Ptr] at main.rung[0].instruction[0](CopyInstruction).instruction.dest can "
+        "DD[Ptr] at main.rung[1].instruction[0](CopyInstruction).instruction.dest can "
         "reach DD1531. DD ends at DD1000. A CLICK Copy writes there and raises no flag. "
         "pyrung drops the write."
     )
@@ -158,7 +158,7 @@ def test_a_range_whose_end_passes_the_bank_warns_though_its_start_does_not():
     found = _found(prog, mapping)
     assert [f.message for f in found if "indirect range" in f.message] == [
         "The indirect range on DD at "
-        "main.rung[0].instruction[1](CopyInstruction).instruction.source "
+        "main.rung[1].instruction[1](CopyInstruction).instruction.source "
         "ends at DD1005. DD ends at DD1000. pyrung reads 0 there."
     ]
 
@@ -198,7 +198,7 @@ def test_a_pointer_read_in_a_rung_condition_warns():
     mapping = TagMap({ptr: ds[1], out: ds[2]}, include_system=False)
     (finding,) = _found(prog, mapping)
     assert finding.message == (
-        "DD[Ptr] at main.rung[0].condition can reach DD1500. DD ends at DD1000. "
+        "DD[Ptr] at main.rung[1].condition can reach DD1500. DD ends at DD1000. "
         "pyrung reads 0 there."
     )
 

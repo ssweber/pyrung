@@ -41,12 +41,28 @@ class LadderExportError(RuntimeError):
         self.issues: tuple[Issue, ...] = tuple(normalized)
 
         if self.issues:
-            preview = "; ".join(f"{issue['path']}: {issue['message']}" for issue in self.issues[:3])
+            lines = [f"pyrung could not export the ladder. It found {len(self.issues)} problem(s)."]
+            lines.extend(
+                f"  {_issue_place(issue)}: {issue['message']}" for issue in self.issues[:3]
+            )
             if len(self.issues) > 3:
-                preview += f" (+{len(self.issues) - 3} more)"
+                lines.append(
+                    f"  ... and {len(self.issues) - 3} more. The exception's issues "
+                    "attribute lists them all."
+                )
+            preview = "\n".join(lines)
         else:
-            preview = "Ladder export failed."
+            preview = "pyrung could not export the ladder."
         super().__init__(preview)
+
+
+def _issue_place(issue: Issue) -> str:
+    """Return ``file:line`` of the source that *issue* is about, or its path without one."""
+    source_file = issue["source_file"]
+    if source_file is None:
+        return str(issue["path"])
+    line = issue["source_line"]
+    return str(source_file) if line is None else f"{source_file}:{line}"
 
 
 # ---- Export summary ----

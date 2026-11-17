@@ -31,7 +31,9 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
+from pyrung.core.rung import dsl_call
 from pyrung.core.tag import ImmediateRef, Tag, TagType
+from pyrung.core.validation._common import rung_label
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
@@ -78,6 +80,14 @@ from .findings import (
     ValidationMode,
     _build_suggestion,
     _route_severity,
+    immediate_coil_not_y_text,
+    immediate_coil_operand_text,
+    immediate_coil_range_gap_text,
+    immediate_edge_text,
+    immediate_misplaced_text,
+    pointer_block_range_text,
+    pointer_expression_text,
+    pointer_offset_text,
 )
 from .resolve import (
     _bank_label,
@@ -128,7 +138,10 @@ def _evaluate_fact(
                 ClickFinding(
                     code=CLK_PTR_CONTEXT_ONLY_COPY,
                     severity=_route_severity(CLK_PTR_CONTEXT_ONLY_COPY, mode),
-                    message=f"Pointer (IndirectRef) used outside copy instruction at {location_str}.",
+                    message=(
+                        f"The pointer at {location_str} is outside copy(). CLICK accepts a "
+                        "pointer only in a Copy."
+                    ),
                     location=location_str,
                     suggestion=_build_suggestion(CLK_PTR_CONTEXT_ONLY_COPY, fact, tag_map),
                 )
@@ -150,8 +163,8 @@ def _evaluate_fact(
                         code=code,
                         severity=_route_severity(code, mode),
                         message=(
-                            f"Pointer '{pointer_name}' memory type could not be verified "
-                            f"as DS at {location_str}."
+                            f"pyrung cannot tell whether pointer '{pointer_name}' at "
+                            f"{location_str} is a DS address. CLICK needs a DS pointer."
                         ),
                         location=location_str,
                         suggestion=_build_suggestion(code, fact, tag_map),
@@ -164,8 +177,8 @@ def _evaluate_fact(
                         code=code,
                         severity=_route_severity(code, mode),
                         message=(
-                            f"Pointer '{pointer_name}' is mapped to {memory_type}, "
-                            f"not DS at {location_str}."
+                            f"Pointer '{pointer_name}' at {location_str} is mapped to "
+                            f"{memory_type}. CLICK needs a DS pointer."
                         ),
                         location=location_str,
                         suggestion=_build_suggestion(code, fact, tag_map),
@@ -178,10 +191,8 @@ def _evaluate_fact(
                     ClickFinding(
                         code=CLK_PTR_BLOCK_OFFSET,
                         severity=_route_severity(CLK_PTR_BLOCK_OFFSET, mode),
-                        message=(
-                            f"Pointer {block_name}[{pointer_name}] at {location_str} needs "
-                            f"the block's offset of {offset} added. CLICK takes only "
-                            "BANK[pointer] with no offset."
+                        message=pointer_offset_text(
+                            block_name, pointer_name, offset, f" at {location_str}"
                         ),
                         location=location_str,
                         suggestion=_build_suggestion(CLK_PTR_BLOCK_OFFSET, fact, tag_map),
@@ -193,7 +204,7 @@ def _evaluate_fact(
             ClickFinding(
                 code=CLK_PTR_EXPR_NOT_ALLOWED,
                 severity=_route_severity(CLK_PTR_EXPR_NOT_ALLOWED, mode),
-                message=f"Computed pointer expression (IndirectExprRef) not allowed at {location_str}.",
+                message=pointer_expression_text(f" at {location_str}"),
                 location=location_str,
                 suggestion=_build_suggestion(CLK_PTR_EXPR_NOT_ALLOWED, fact, tag_map),
             )
@@ -220,8 +231,8 @@ def _evaluate_fact(
                     code=CLK_TILDE_BOOL_CONTACT_ONLY,
                     severity=_route_severity(CLK_TILDE_BOOL_CONTACT_ONLY, mode),
                     message=(
-                        f"Expression uses `~` (bitwise invert) at {location_str}. "
-                        "Click portability reserves `~` for BOOL contact inversion."
+                        f"The expression at {location_str} uses ~ to invert bits. In CLICK, "
+                        "~ only marks a normally closed contact on a BOOL."
                     ),
                     location=location_str,
                     suggestion=_build_suggestion(CLK_TILDE_BOOL_CONTACT_ONLY, fact, tag_map),
@@ -236,7 +247,10 @@ def _evaluate_fact(
             ClickFinding(
                 code=CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
                 severity=_route_severity(CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED, mode),
-                message=f"Implicit numeric truthiness used in condition at {location_str}.",
+                message=(
+                    f"The condition at {location_str} tests a number tag on its own. CLICK "
+                    "needs a comparison, such as Count != 0."
+                ),
                 location=location_str,
                 suggestion=_build_suggestion(
                     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED, fact, tag_map
@@ -249,10 +263,7 @@ def _evaluate_fact(
             ClickFinding(
                 code=CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
                 severity=_route_severity(CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED, mode),
-                message=(
-                    f"IndirectBlockRange not allowed at {location_str}. "
-                    "Click hardware does not support computed block ranges."
-                ),
+                message=pointer_block_range_text(f" at {location_str}"),
                 location=location_str,
                 suggestion=_build_suggestion(CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED, fact, tag_map),
             )
@@ -293,7 +304,7 @@ def _evaluate_immediate_coil_target(
                 _unresolved_finding(
                     location,
                     mode,
-                    "immediate coil target mapping missing or ambiguous",
+                    "immediate coil target",
                 )
             ]
         slots = [resolved]
@@ -305,7 +316,7 @@ def _evaluate_immediate_coil_target(
                     _unresolved_finding(
                         location,
                         mode,
-                        "immediate coil range mapping missing or ambiguous",
+                        "immediate coil range",
                     )
                 ]
             slots.append(resolved)
@@ -314,10 +325,7 @@ def _evaluate_immediate_coil_target(
             ClickFinding(
                 code=CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
                 severity=_route_severity(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, mode),
-                message=(
-                    f"Immediate wrapper must wrap Tag or BlockRange at {location_text}, "
-                    f"got {type(wrapped).__name__}."
-                ),
+                message=immediate_coil_operand_text(type(wrapped).__name__, f" at {location_text}"),
                 location=location_text,
                 suggestion=_build_suggestion(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, None, tag_map),
             )
@@ -330,9 +338,9 @@ def _evaluate_immediate_coil_target(
             ClickFinding(
                 code=CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
                 severity=_route_severity(CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y, mode),
-                message=(
-                    f"Immediate coil target must resolve to Y bank at {location_text}, "
-                    f"found {', '.join(_bank_label(slot) for slot in _unique_slots(non_y_slots))}."
+                message=immediate_coil_not_y_text(
+                    f" at {location_text}",
+                    ", ".join(_bank_label(slot) for slot in _unique_slots(non_y_slots)),
                 ),
                 location=location_text,
                 suggestion=_build_suggestion(CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y, None, tag_map),
@@ -342,9 +350,7 @@ def _evaluate_immediate_coil_target(
     if isinstance(wrapped, BlockRange) and len(slots) > 1:
         addresses = [slot.address for slot in slots]
         if any(address is None for address in addresses):
-            findings.append(
-                _unresolved_finding(location, mode, "immediate range address unresolved")
-            )
+            findings.append(_unresolved_finding(location, mode, "immediate coil range"))
         else:
             numeric_addresses = [int(address) for address in addresses if address is not None]
             contiguous = all(
@@ -356,10 +362,7 @@ def _evaluate_immediate_coil_target(
                     ClickFinding(
                         code=CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
                         severity=_route_severity(CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS, mode),
-                        message=(
-                            "Immediate coil range must map to contiguous addresses "
-                            f"at {location_text}."
-                        ),
+                        message=immediate_coil_range_gap_text(f" at {location_text}"),
                         location=location_text,
                         suggestion=_build_suggestion(
                             CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS, None, tag_map
@@ -500,7 +503,7 @@ def _evaluate_immediate_usage(
                     ClickFinding(
                         code=CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
                         severity=_route_severity(CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED, mode),
-                        message=f"Immediate edge contact is not allowed at {location_text}.",
+                        message=immediate_edge_text(f" at {location_text}"),
                         location=location_text,
                         suggestion=_build_suggestion(
                             CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED, fact, tag_map
@@ -513,7 +516,7 @@ def _evaluate_immediate_usage(
                 ClickFinding(
                     code=CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
                     severity=_route_severity(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, mode),
-                    message=f"Immediate wrapper is not allowed at {location_text}.",
+                    message=immediate_misplaced_text(f" at {location_text}"),
                     location=location_text,
                     suggestion=_build_suggestion(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, fact, tag_map),
                 )
@@ -537,7 +540,7 @@ def _evaluate_immediate_usage(
             ClickFinding(
                 code=CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
                 severity=_route_severity(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, mode),
-                message=f"Immediate wrapper is not allowed at {location_text}.",
+                message=immediate_misplaced_text(f" at {location_text}"),
                 location=location_text,
                 suggestion=_build_suggestion(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, fact, tag_map),
             )
@@ -963,15 +966,14 @@ def _evaluate_status_bit_usage(
                 code=CLK_STATUS_BIT_NOT_PORTABLE,
                 severity=_route_severity(CLK_STATUS_BIT_NOT_PORTABLE, mode),
                 message=(
-                    f"Tag '{name}' is a simulation-only status bit at {location_str}. "
-                    "Click hardware manages timer/counter status bits internally."
+                    f"Tag '{name}' at {location_str} is a status bit that only pyrung's "
+                    "simulation has. A CLICK timer or counter has no such bit."
                 ),
                 location=location_str,
                 suggestion=(
-                    "Use the corresponding Done/Acc fields instead, or remove this "
-                    "reference from Click-targeted logic. Status bits (EN, TT, CU, CD) "
-                    "are available in the pyrung runner API (.when(), .monitor()) but "
-                    "cannot appear in Click ladder."
+                    "Use the Done and Acc fields instead, or remove this contact from the "
+                    "logic that you export to CLICK. Tests can still read EN, TT, CU and CD "
+                    "through .when() and .monitor()."
                 ),
             )
         )
@@ -986,11 +988,11 @@ def _evaluate_status_bit_usage(
             _walk_rung(body_rung, location_str)
 
     for rung_index, rung in enumerate(program.rungs):
-        _walk_rung(rung, f"main rung {rung_index}")
+        _walk_rung(rung, rung_label(None, rung_index))
 
     for sub_name in sorted(program.subroutines):
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+            _walk_rung(rung, rung_label(sub_name, rung_index))
 
     return findings
 
@@ -1058,10 +1060,10 @@ def _evaluate_text_order_compares(program: Any, mode: ValidationMode) -> list[Cl
             _walk_rung(body_rung, location_str)
 
     for rung_index, rung in enumerate(program.rungs):
-        _walk_rung(rung, f"main rung {rung_index}")
+        _walk_rung(rung, rung_label(None, rung_index))
     for sub_name in sorted(program.subroutines):
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+            _walk_rung(rung, rung_label(sub_name, rung_index))
     return findings
 
 
@@ -1177,10 +1179,10 @@ def _evaluate_text_windows(
             _walk_rung(body_rung, location_str)
 
     for rung_index, rung in enumerate(program.rungs):
-        _walk_rung(rung, f"main rung {rung_index}")
+        _walk_rung(rung, rung_label(None, rung_index))
     for sub_name in sorted(program.subroutines):
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+            _walk_rung(rung, rung_label(sub_name, rung_index))
     return findings
 
 
@@ -1262,10 +1264,10 @@ def _evaluate_compare_hex_mix(
             _walk_rung(body_rung, location_str)
 
     for rung_index, rung in enumerate(program.rungs):
-        _walk_rung(rung, f"main rung {rung_index}")
+        _walk_rung(rung, rung_label(None, rung_index))
     for sub_name in sorted(program.subroutines):
         for rung_index, rung in enumerate(program.subroutines[sub_name]):
-            _walk_rung(rung, f"subroutine '{sub_name}' rung {rung_index}")
+            _walk_rung(rung, rung_label(sub_name, rung_index))
     return findings
 
 
@@ -1284,13 +1286,13 @@ def _evaluate_instruction_portability(
                     code=CLK_MATH_MODE_MIXED,
                     severity=_route_severity(CLK_MATH_MODE_MIXED, mode),
                     message=(
-                        "math() mixes WORD (hex-family) and non-WORD (decimal-family) operands "
-                        f"at {location_text}."
+                        f"math() at {location_text} mixes WORD operands with other operands. "
+                        "CLICK runs a Math in hex or in decimal, not both."
                     ),
                     location=location_text,
                     suggestion=(
-                        "Split mixed math into separate decimal and WORD-only math() steps, "
-                        "or convert through an intermediate tag so each math() stays one family."
+                        "Split it into a math() of WORD tags and a math() of the other tags. "
+                        "Pass the result from one to the other through a tag."
                     ),
                 )
             )
@@ -1301,15 +1303,11 @@ def _evaluate_instruction_portability(
                 ClickFinding(
                     code=CLK_MATH_FLOOR_DIV,
                     severity=_route_severity(CLK_MATH_FLOOR_DIV, mode),
-                    message=(
-                        f"math() uses floor division (//) which Click does not support "
-                        f"at {location_text}."
-                    ),
+                    message=(f"math() at {location_text} uses //. CLICK has no floor division."),
                     location=location_text,
                     suggestion=(
-                        "Click has no floor-division operator. "
-                        "Use math(a / b, int_dest) instead; "
-                        "copying the result to an Int or Dint tag truncates toward zero automatically."
+                        "Use math(a / b, int_dest) instead. A copy into an Int or Dint tag "
+                        "truncates toward zero."
                     ),
                 )
             )
@@ -1326,16 +1324,14 @@ def _evaluate_instruction_portability(
                         code=CLK_MATH_FUNC_MODE_MISMATCH,
                         severity=_route_severity(CLK_MATH_FUNC_MODE_MISMATCH, mode),
                         message=(
-                            f"math() in {mode_info.mode} mode uses {names} "
-                            f"which {'is' if len(unique) == 1 else 'are'} "
-                            f"only available in {other_mode} mode at {location_text}."
+                            f"math() at {location_text} is a {mode_info.mode} Math, and "
+                            f"{names} {'is' if len(unique) == 1 else 'are'} only available in "
+                            f"a {other_mode} Math."
                         ),
                         location=location_text,
                         suggestion=(
-                            f"Move {names} into a separate math() with "
-                            f"{other_mode}-family tags, or remap operands to "
-                            f"{'WORD (DH)' if other_mode == 'hex' else 'INT/DINT/REAL (DS/DD/DF)'} "
-                            f"addresses."
+                            f"Move {names} into a separate math() whose tags are "
+                            f"{'WORD tags in DH' if other_mode == 'hex' else 'INT, DINT or REAL tags in DS, DD or DF'}."
                         ),
                     )
                 )
@@ -1348,9 +1344,8 @@ def _evaluate_instruction_portability(
                     code=CLK_MATH_NESTING_DEPTH,
                     severity=_route_severity(CLK_MATH_NESTING_DEPTH, mode),
                     message=(
-                        f"math() expression has {depth} levels of parenthetical nesting "
-                        f"at {location_text}; Click allows at most "
-                        f"{_CLICK_MAX_PAREN_DEPTH}."
+                        f"math() at {location_text} nests brackets {depth} deep. CLICK "
+                        f"allows {_CLICK_MAX_PAREN_DEPTH}."
                     ),
                     location=location_text,
                     suggestion=(
@@ -1367,13 +1362,13 @@ def _evaluate_instruction_portability(
                 code=CLK_FUNCTION_CALL_NOT_PORTABLE,
                 severity=_route_severity(CLK_FUNCTION_CALL_NOT_PORTABLE, mode),
                 message=(
-                    f"{instruction_type} is not Click-portable at {location_text}. "
-                    "Click execution cannot run arbitrary Python callables."
+                    f"{dsl_call(instruction)} at {location_text} cannot run on a CLICK, "
+                    "because a CLICK cannot run Python code."
                 ),
                 location=location_text,
                 suggestion=(
-                    "Replace run_function/run_enabled_function with Click-portable instructions "
-                    "(copy/math/timer/counter/send/receive)."
+                    "Replace it with CLICK instructions such as copy(), math(), timers, "
+                    "counters, send() or receive()."
                 ),
             )
         )
@@ -1392,10 +1387,6 @@ def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[Clic
     findings: list[ClickFinding] = []
     scopes: dict[str | None, list[Any]] = {None: list(program.rungs)}
     scopes.update(program.subroutines)
-
-    def _label(sub: str | None, rung_index: int) -> str:
-        scope = "main" if sub is None else f"subroutine '{sub}'"
-        return f"{scope} rung {rung_index + 1}"
 
     # The deepest loop nesting each scope reaches, counting the subroutines it calls.
     depth_memo: dict[str | None, int] = {}
@@ -1423,7 +1414,7 @@ def _evaluate_forloop_structure(program: Any, mode: ValidationMode) -> list[Clic
 
     for sub, rungs in scopes.items():
         for rung_index, rung in enumerate(rungs):
-            location = _label(sub, rung_index)
+            location = rung_label(sub, rung_index)
             for loop in _rung_instructions(rung):
                 if not isinstance(loop, ForLoopInstruction):
                     continue
@@ -1729,14 +1720,15 @@ def _evaluate_nested_calls(program: Any, mode: ValidationMode) -> list[ClickFind
             for instr in instructions:
                 if not isinstance(instr, CallInstruction):
                     continue
-                location = f"subroutine '{sub_name}' rung {rung_index + 1}"
+                location = rung_label(sub_name, rung_index)
                 findings.append(
                     ClickFinding(
                         code=CLK_NESTED_CALL,
                         severity=_route_severity(CLK_NESTED_CALL, mode),
                         message=(
-                            f"call('{instr.subroutine_name}') inside subroutine '{sub_name}' "
-                            f"at {location}; CLICK does not support nested subroutine calls."
+                            f"call('{instr.subroutine_name}') is inside subroutine "
+                            f"'{sub_name}' at {location}. CLICK does not support nested "
+                            "subroutine calls."
                         ),
                         location=location,
                         suggestion=(
@@ -1797,9 +1789,9 @@ def _evaluate_nop_no_coil(bundle: Any, mode: ValidationMode) -> list[ClickFindin
                     code=CLK_NOP_NO_COIL,
                     severity=_route_severity(CLK_NOP_NO_COIL, mode),
                     message=(
-                        f"The {location} has a NOP behind contacts that no output "
-                        "shares. CLICK's Syntax Check reports it as C0003, There is no Coil "
-                        "instruction in the rung."
+                        f"The NOP in {location} sits behind contacts that no output shares. "
+                        "CLICK's Syntax Check reports this as C0003, 'There is no Coil "
+                        "instruction in the rung.'"
                     ),
                     location=location,
                     suggestion="Remove the NOP, or give it an output.",

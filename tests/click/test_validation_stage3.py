@@ -1000,11 +1000,11 @@ def test_timer_done_and_acc_must_share_one_number():
 @pytest.mark.parametrize(
     ("instruction", "target", "expected"),
     [
-        (reset, txt[1], "reset(TXT1) at main.rung[0]"),
-        (reset, ds[1], "reset(DS1) at main.rung[0]"),
-        (reset, ds.select(1, 3), "reset(DS1..DS3) at main.rung[0]"),
-        (latch, dd[1], "latch(DD1) at main.rung[0]"),
-        (out, df[1], "out(DF1) at main.rung[0]"),
+        (reset, txt[1], "reset(TXT1) at main.rung[1]"),
+        (reset, ds[1], "reset(DS1) at main.rung[1]"),
+        (reset, ds.select(1, 3), "reset(DS1..DS3) at main.rung[1]"),
+        (latch, dd[1], "latch(DD1) at main.rung[1]"),
+        (out, df[1], "out(DF1) at main.rung[1]"),
     ],
 )
 def test_coil_on_non_bit_memory_is_refused(instruction, target, expected):

@@ -14,7 +14,8 @@ from pyrung.click._topology import (
     make_compound,
 )
 from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
-from pyrung.core.rung import Rung
+from pyrung.core.rung import Rung, dsl_call
+from pyrung.core.validation._common import rung_path
 
 from ._solve_order import MovedRead, ReadOrder
 from .instructions import _InstructionMixin
@@ -165,11 +166,7 @@ class _LadderExporter(
         rows: list[tuple[str, ...]] = []
         sources: list[LadderRungSource] = []
         for rung_index, rung in enumerate(rungs):
-            base_path = (
-                f"subroutine[{subroutine_name}].rung[{rung_index}]"
-                if scope == "subroutine"
-                else f"main.rung[{rung_index}]"
-            )
+            base_path = rung_path(subroutine_name if scope == "subroutine" else None, rung_index)
             rendered = self._render_source_rung(rung, path=base_path)
             try:
                 assert_no_column_a_vertical(rendered)
@@ -399,7 +396,7 @@ class _LadderExporter(
         source: Rung,
     ) -> NoReturn:
         contact = self._condition_signature(moved.contact)
-        writer = type(outputs[moved.writer][1]).__name__
+        writer = dsl_call(outputs[moved.writer][1])
         tag = moved.tag
         try:
             address = self._tag_map.resolve(tag)
@@ -408,9 +405,10 @@ class _LadderExporter(
         if address != tag:
             tag = f"{tag} ({address})"
         message = (
-            f"Contact {contact} cannot be drawn on the row that reads it here: {writer} on "
-            f"this rung writes {tag} between the two. To export it, move {writer} to a "
-            "rung of its own, or give the rows their own contacts."
+            f"The export would move contact {contact} past {writer}, which writes {tag} on "
+            f"this rung. The contact would then read a different value of {tag}. To export "
+            f"the rung, move {writer} to a rung of its own, or give the rows their own "
+            "contacts."
         )
         self._raise_issue(path=path, message=message, source=source)
 
@@ -437,9 +435,8 @@ class _LadderExporter(
                 self._raise_issue(
                     path=f"{path}.instruction",
                     message=(
-                        "Rungs that contain forloop() cannot include additional instructions "
-                        "or branch(...) blocks "
-                        "in Click ladder v1 export."
+                        "A rung with forloop() cannot hold another instruction or a branch(). "
+                        "Move the other instructions to a rung of their own."
                     ),
                     source=rung,
                 )
@@ -543,7 +540,10 @@ class _LadderExporter(
             return
         self._raise_issue(
             path=path,
-            message="Rendered rung exceeds Click's 32-row limit.",
+            message=(
+                f"This rung draws {len(rows)} rows, and CLICK allows 32. Split it into "
+                "smaller rungs."
+            ),
             source=source,
         )
 

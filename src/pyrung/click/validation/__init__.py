@@ -229,13 +229,13 @@ def _evaluate_step_limit(bundle: Any, mode: ValidationMode) -> list[ClickFinding
             code=CLK_STEP_LIMIT,
             severity=severity,
             message=(
-                f"Estimated {estimate.total} program steps {verb} CLICK's {CLICK_STEP_LIMIT} "
-                f"({', '.join(parts)})."
+                f"The program needs about {estimate.total} steps, and that {verb} CLICK's "
+                f"limit of {CLICK_STEP_LIMIT}. Steps by part: {', '.join(parts)}."
             ),
             location="program",
             suggestion=(
-                "Split the program into separate CLICK projects, or trim rungs; "
-                "the estimate is within about 1% of CLICK's count."
+                "Split the program into separate CLICK projects, or remove rungs. pyrung's "
+                "estimate is within about 1% of CLICK's count."
             ),
         )
     ]
@@ -297,7 +297,10 @@ def validate_click_program(
             ClickFinding(
                 code=CLK_PROFILE_UNAVAILABLE,
                 severity=_route_severity(CLK_PROFILE_UNAVAILABLE, mode),
-                message="Click hardware profile is unavailable; skipped Stage 3 checks (R6-R8).",
+                message=(
+                    "pyrung could not load the CLICK hardware profile, so it skipped the checks "
+                    "of which memory banks each instruction can use."
+                ),
                 location="program",
             )
         )

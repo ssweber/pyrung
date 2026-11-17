@@ -255,8 +255,9 @@ def tag_map_from_nickname_file(
         if existing is not None and existing != physical:
             display = format_address_display(row.memory_type, row.address)
             raise ValueError(
-                f"Physical definition {tag_meta.physical!r} at {display} conflicts with "
-                "an earlier definition."
+                f"physical={tag_meta.physical!r} at {display} conflicts with an earlier row "
+                f"that gives physical={tag_meta.physical!r} other details. Give both rows the "
+                "same details, or use another name."
             )
         physical_defs[tag_meta.physical] = physical
 
@@ -322,7 +323,8 @@ def tag_map_from_nickname_file(
         existing_display = format_address_display(existing[0], existing[1])
         display = format_address_display(memory_type, address)
         raise ValueError(
-            f"Duplicate logical name {name!r} at {display}; already used at {existing_display}."
+            f"Nickname {name!r} at {display} is already used at {existing_display}. Give each "
+            "address its own nickname."
         )
 
     def require_representable_block_nickname(*, memory_type: str, address: int, name: str) -> None:
@@ -331,13 +333,13 @@ def tag_map_from_nickname_file(
             return
         is_valid, error = validate_nickname(name)
         if not is_valid:
-            raise ValueError(f"Block row nickname at {display} is not representable: {error}.")
+            raise ValueError(f"The nickname {name!r} at {display} is not valid in CLICK. {error}.")
         existing = seen_names.get(name)
         if existing is not None and existing != (memory_type, address):
             existing_display = format_address_display(existing[0], existing[1])
             raise ValueError(
-                f"Block row nickname at {display} is not representable: duplicate logical "
-                f"name {name!r} already used at {existing_display}."
+                f"Nickname {name!r} at {display} is already used at {existing_display}. Give "
+                "each address its own nickname."
             )
         seen_names[name] = (memory_type, address)
 
@@ -477,7 +479,10 @@ def tag_map_from_nickname_file(
 
     def append_structure(structure: StructuredImport) -> None:
         if any(existing.name == structure.name for existing in structures):
-            raise ValueError(f"Duplicate structured import name {structure.name!r}.")
+            raise ValueError(
+                f"Two structures in the nickname file have the name {structure.name!r}. Rename "
+                "one of them."
+            )
         structures.append(structure)
 
     for block_range in ranges:
@@ -805,14 +810,14 @@ def tag_map_from_nickname_file(
 
         field_names = [field_name for _, field_name in grouped_specs]
         if len(set(field_names)) != len(field_names):
-            fallback_reason = "duplicate field names"
+            fallback_reason = "two fields have the same name"
 
         logical_counts = {len(spec.hardware_addresses) for spec, _ in grouped_specs}
         if fallback_reason is None and len(logical_counts) != 1:
-            fallback_reason = "field spans have different logical counts"
+            fallback_reason = "its fields cover different numbers of addresses"
 
         if fallback_reason is None and 0 in logical_counts:
-            fallback_reason = "one or more fields have an empty hardware span"
+            fallback_reason = "a field has no addresses"
 
         if fallback_reason is None:
             try:
@@ -852,10 +857,14 @@ def tag_map_from_nickname_file(
 
         assert fallback_reason is not None
         if mode == "strict":
-            raise ValueError(f"UDT grouping failed for base {base_name!r}: {fallback_reason}.")
+            raise ValueError(
+                f"Cannot import the :udt fields of {base_name!r} as one udt, because "
+                f"{fallback_reason}."
+            )
 
         structure_warnings.append(
-            f"UDT grouping for {base_name!r} failed ({fallback_reason}); imported as plain blocks."
+            f"pyrung imported the :udt fields of {base_name!r} as separate blocks, because "
+            f"{fallback_reason}."
         )
         for spec, field_name in grouped_specs:
             import_plain_block(spec, logical_name=f"{base_name}.{field_name}")

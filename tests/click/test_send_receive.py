@@ -296,7 +296,7 @@ def test_send_count_mismatch_raises():
     Error = Bool("Error")
     ExCode = Int("ExCode")
 
-    with pytest.raises(ValueError, match="count mismatch"):
+    with pytest.raises(ValueError, match="does not match the 1 tag"):
         with Program():
             with Rung(Enable):
                 click_send_receive.send(
@@ -321,7 +321,7 @@ def test_receive_count_mismatch_raises():
     Error = Bool("Error")
     ExCode = Int("ExCode")
 
-    with pytest.raises(ValueError, match="count mismatch"):
+    with pytest.raises(ValueError, match="does not match the 1 tag"):
         with Program():
             with Rung(Enable):
                 click_send_receive.receive(

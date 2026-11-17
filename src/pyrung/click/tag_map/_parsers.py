@@ -369,7 +369,8 @@ def _parse_structured_block_name(
 
     if name.endswith(":udt") or ":udt" in name:
         raise ValueError(
-            f"Invalid UDT block tag {name!r}. Expected Base.field:udt with identifier tokens."
+            f"Invalid udt marker {name!r}. Write Base.field:udt, where Base and field are "
+            "Python names."
         )
 
     block_match = _EXPLICIT_BLOCK_RE.fullmatch(name)
@@ -438,7 +439,7 @@ def _default_logical_block_start(hardware_addresses: tuple[int, ...]) -> int:
 def _parse_tag_meta_value(token: str) -> int | float | str:
     text = token.strip()
     if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
-        raise ValueError(f"Invalid TagMeta choice value {token!r}.")
+        raise ValueError(f"Invalid bracket metadata choice value {token!r}.")
     try:
         return int(text)
     except ValueError:
@@ -452,7 +453,7 @@ def _parse_tag_meta_value(token: str) -> int | float | str:
 def _parse_tag_meta_scalar(token: str, *, field_name: str) -> int | float | str:
     text = token.strip()
     if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
-        raise ValueError(f"Invalid TagMeta {field_name} value {token!r}.")
+        raise ValueError(f"Invalid bracket metadata {field_name} value {token!r}.")
     try:
         return int(text)
     except ValueError:
@@ -466,7 +467,7 @@ def _parse_tag_meta_scalar(token: str, *, field_name: str) -> int | float | str:
 def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
     text = raw.strip()
     if text == "":
-        raise ValueError("TagMeta choices must not be empty.")
+        raise ValueError("choices= in bracket metadata cannot be empty.")
     if text in _CHOICE_PRESETS:
         return dict(_CHOICE_PRESETS[text])
 
@@ -475,9 +476,9 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
         label_text, sep, value_text = pair.partition(":")
         label = label_text.strip()
         if sep != ":" or label == "":
-            raise ValueError(f"Invalid TagMeta choice pair {pair!r}.")
+            raise ValueError(f"Invalid bracket metadata choice pair {pair!r}.")
         if _CHOICE_LABEL_RE.fullmatch(label) is None:
-            raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+            raise ValueError(f"Invalid bracket metadata choice label {label!r}.")
         choices[_parse_tag_meta_value(value_text)] = label
 
     return choices
@@ -498,7 +499,9 @@ _OLD_FORM_TOKENS = ("profile=",)
 def _check_physical(values: dict[str, str | bool], system: str | None) -> None:
     kind_of_keys(values)
     if system is not None and not values:
-        raise ValueError("TagMeta system requires a physical response such as on_delay=.")
+        raise ValueError(
+            "system= in bracket metadata needs a physical key beside it, such as on_delay=."
+        )
 
 
 def _is_tag_meta(tokens: list[str]) -> bool:
@@ -546,7 +549,7 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
             raise OldCommentFormError(token)
         if token.startswith("choices="):
             if choices is not None:
-                raise ValueError("TagMeta choices may only be specified once.")
+                raise ValueError("Bracket metadata can give choices= only once.")
             choices = _parse_tag_meta_choices(token.split("=", maxsplit=1)[1])
             continue
         if token.startswith("link="):
@@ -554,16 +557,16 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
             # whole value against the link grammar.
             link = token.split("=", maxsplit=1)[1].strip()
             if _LINK_VALUE_RE.fullmatch(link) is None:
-                raise ValueError(f"Invalid TagMeta link value {link!r}.")
+                raise ValueError(f"Invalid bracket metadata link value {link!r}.")
             continue
         key, sep, value = token.partition("=")
         key = key.strip()
         if sep == "=" and key in _PHYSICAL_FLAG_TOKENS:
-            raise ValueError(f"TagMeta {key} is a bare flag. Write {key} without a value.")
+            raise ValueError(f"Bracket metadata {key} is a bare flag. Write {key} without a value.")
         if sep == "=" and key in _PHYSICAL_VALUE_TOKENS:
             text = value.strip()
             if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
-                raise ValueError(f"Invalid TagMeta {key} value {value!r}.")
+                raise ValueError(f"Invalid bracket metadata {key} value {value!r}.")
             PHYSICAL_KEYS[key].parse(text)
             response[key] = text
             continue
@@ -579,14 +582,14 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
                     uom = parsed_text
             elif key == "min":
                 if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
-                    raise ValueError(f"Invalid TagMeta min value {value!r}.")
+                    raise ValueError(f"Invalid bracket metadata min value {value!r}.")
                 min_val = parsed_value
             elif key == "max":
                 if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
-                    raise ValueError(f"Invalid TagMeta max value {value!r}.")
+                    raise ValueError(f"Invalid bracket metadata max value {value!r}.")
                 max_val = parsed_value
             continue
-        raise ValueError(f"Unsupported TagMeta token {token!r}.")
+        raise ValueError(f"Unsupported bracket metadata token {token!r}.")
 
     return TagMeta(
         readonly=flags.get("readonly", False),
@@ -648,7 +651,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
                 uom = parsed.uom
             if parsed.choices is not None:
                 if choices is not None:
-                    raise ValueError("TagMeta choices may only be specified once.")
+                    raise ValueError("Bracket metadata can give choices= only once.")
                 choices = parsed.choices
         cursor = match.end()
 
@@ -717,11 +720,11 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         tokens.append("public")
     if meta.link is not None:
         if _LINK_VALUE_RE.fullmatch(meta.link) is None:
-            raise ValueError(f"Invalid TagMeta link value {meta.link!r}.")
+            raise ValueError(f"Invalid bracket metadata link value {meta.link!r}.")
         tokens.append(f"link={meta.link}")
     if meta.physical is not None:
         if _CHOICE_VALUE_RE.fullmatch(meta.physical) is None:
-            raise ValueError(f"Invalid TagMeta physical value {meta.physical!r}.")
+            raise ValueError(f"Invalid bracket metadata physical value {meta.physical!r}.")
         tokens.append(f"physical={meta.physical}")
     _check_physical(response, meta.system)
     for name, value in response.items():
@@ -731,12 +734,12 @@ def format_tag_meta(meta: TagMeta | None) -> str:
             continue
         text = str(value)
         if _CHOICE_VALUE_RE.fullmatch(text) is None:
-            raise ValueError(f"Invalid TagMeta {name} value {text!r}.")
+            raise ValueError(f"Invalid bracket metadata {name} value {text!r}.")
         key.parse(text)
         tokens.append(f"{name}={text}")
     if meta.system is not None:
         if _CHOICE_VALUE_RE.fullmatch(meta.system) is None:
-            raise ValueError(f"Invalid TagMeta system value {meta.system!r}.")
+            raise ValueError(f"Invalid bracket metadata system value {meta.system!r}.")
         tokens.append(f"system={meta.system}")
     if meta.min is not None:
         tokens.append(f"min={meta.min}")
@@ -744,7 +747,7 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         tokens.append(f"max={meta.max}")
     if meta.uom is not None:
         if _CHOICE_VALUE_RE.fullmatch(meta.uom) is None:
-            raise ValueError(f"Invalid TagMeta uom value {meta.uom!r}.")
+            raise ValueError(f"Invalid bracket metadata uom value {meta.uom!r}.")
         tokens.append(f"uom={meta.uom}")
     if meta.choices is not None:
         if meta.choices == _BOOL_CHOICE_PRESET:
@@ -753,16 +756,16 @@ def format_tag_meta(meta: TagMeta | None) -> str:
             pairs: list[str] = []
             for value, label in meta.choices.items():
                 if _CHOICE_LABEL_RE.fullmatch(label) is None:
-                    raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+                    raise ValueError(f"Invalid bracket metadata choice label {label!r}.")
                 value_text = str(value)
                 if _CHOICE_VALUE_RE.fullmatch(value_text) is None:
-                    raise ValueError(f"Invalid TagMeta choice value {value!r}.")
+                    raise ValueError(f"Invalid bracket metadata choice value {value!r}.")
                 pairs.append(f"{label}:{value_text}")
             tokens.append(f"choices={'|'.join(pairs)}")
     flags = [name for name in response if PHYSICAL_KEYS[name].is_flag]
     if flags and meta.link is None and meta.physical is None:
         # A flag answers a linked command.  The reader takes a group of flags alone as text.
-        raise ValueError(f"TagMeta {flags[0]} needs link= or physical= beside it.")
+        raise ValueError(f"{flags[0]} in bracket metadata needs link= or physical= beside it.")
     return f"[{', '.join(tokens)}]"
 
 

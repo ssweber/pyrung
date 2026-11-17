@@ -152,6 +152,55 @@ def _bank_pointer_advice(
     )
 
 
+# The export refusals and the portability findings share these texts, so one fault reads
+# the same in both. Each takes *at*, the location phrase that portability adds.
+
+
+def immediate_edge_text(at: str = " here") -> str:
+    """Return the message for an immediate() rise() or fall() contact."""
+    return f"The contact{at} is an immediate rise() or fall(). CLICK has no immediate edge contact."
+
+
+def immediate_misplaced_text(at: str = " here") -> str:
+    """Return the message for immediate() on an operand that is no contact or coil."""
+    return f"immediate() is not allowed{at}. CLICK accepts immediate() only on a contact or a coil."
+
+
+def immediate_coil_operand_text(got: str, at: str = "") -> str:
+    """Return the message for immediate() around a coil operand that is no tag or range."""
+    return f"immediate() on a coil{at} needs a tag or a block range, got {got}."
+
+
+def immediate_coil_not_y_text(at: str = "", found: str | None = None) -> str:
+    """Return the message for an immediate coil that is not mapped to Y."""
+    if found is None:
+        return f"immediate() on a coil{at} needs a Y output."
+    return f"immediate() on a coil{at} needs a Y output, but it is mapped to {found}."
+
+
+def immediate_coil_range_gap_text(at: str = "") -> str:
+    """Return the message for an immediate coil range whose Y addresses have a gap."""
+    return f"immediate() on a coil range{at} needs consecutive Y addresses."
+
+
+def pointer_expression_text(at: str = " here") -> str:
+    """Return the message for a pointer that is an expression."""
+    return f"The pointer{at} is an expression. CLICK cannot compute a pointer."
+
+
+def pointer_offset_text(block: str, pointer: str, offset: int, at: str = "") -> str:
+    """Return the message for a pointer into a block that starts away from its bank's start."""
+    return (
+        f"Pointer {block}[{pointer}]{at} needs the block's offset of {offset} added. "
+        "A CLICK pointer takes no offset."
+    )
+
+
+def pointer_block_range_text(at: str = " here") -> str:
+    """Return the message for a block range whose ends use a pointer."""
+    return f"The block range{at} uses a pointer. CLICK accepts only a block range with fixed ends."
+
+
 def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> str:
     """Build a context-aware suggestion string for a finding code."""
     meta = {} if fact is None else fact.metadata
@@ -202,7 +251,7 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
                 "Pre-compute the index with math() into a DS pointer tag, "
                 "then use block[Ptr]."
             )
-        return "Replace computed pointer arithmetic with DS pointer tag updated separately."
+        return "Compute the index with math() into a DS pointer tag, then use block[Ptr]."
 
     if code == CLK_PTR_BLOCK_OFFSET:
         block_name = str(meta.get("block_name", ""))
@@ -245,10 +294,10 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         block_name = str(meta.get("block_name", ""))
         if block_name:
             return (
-                f"Block '{block_name}' uses computed range bounds. "
-                "Use a fixed BlockRange with literal start/end addresses instead."
+                f"Block '{block_name}' has a pointer at one end of its range. Use a range "
+                "with fixed ends, such as ds.select(1, 10)."
             )
-        return "Use a fixed BlockRange with literal start/end addresses for block copy."
+        return "Use a block range with fixed ends, such as ds.select(1, 10)."
 
     if code == CLK_FUNCTION_CALL_NOT_PORTABLE:
         return (
@@ -286,21 +335,21 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
 
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
         return (
-            "Use immediate(...) only in rung contacts and out()/latch()/reset()/toggle() "
-            "coil targets."
+            "Use immediate() only on a contact, or on the target of out(), latch(), reset() "
+            "or toggle()."
         )
 
     if code == CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED:
         return "Use rise(tag)/fall(tag) without immediate(...), or use a plain immediate contact."
 
     if code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y:
-        return "Map immediate coil targets to Y bank addresses only."
+        return "Map the coil to a Y address."
 
     if code == CLK_IMMEDIATE_CONTACT_MUST_BE_X:
         return "Map it to an X input, or use a plain contact."
 
     if code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS:
-        return "Map immediate-wrapped coil ranges to contiguous Y addresses (Ynnn..Ymmm)."
+        return "Map the range to consecutive Y addresses, such as Y001..Y004."
 
     if code == CLK_TIMER_PRESET_OVERFLOW:
         return "Use a larger time unit to keep the preset within INT range (max 32,767)."

@@ -35,8 +35,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from pyrung.core._messages import internal_error
 from pyrung.core.condition import AllCondition, AnyCondition, Condition, text_window_of
 from pyrung.core.rung import Rung
+
+# CLICK draws contacts in columns A to AE and the output in AF.
+_TOO_WIDE = (
+    "This rung is wider than CLICK allows. CLICK has 31 contact columns, A to AE. "
+    "Split the rung into smaller rungs."
+)
 
 # ---- Matrix shape/constants ----
 _CONDITION_COLS = 31
@@ -199,8 +206,8 @@ class _LayoutMixin:
                     self._raise_issue(
                         path=f"{branch_path}.instruction",
                         message=(
-                            "forloop() is not supported inside branch(...) in Click ladder v1 "
-                            "export."
+                            "A forloop() cannot go inside a branch() in CLICK. Move the "
+                            "forloop() to a rung of its own."
                         ),
                         source=item,
                     )
@@ -345,19 +352,19 @@ class _LayoutMixin:
             if points.setdefault((row, col), net) != net:
                 self._raise_issue(
                     path=where,
-                    message=f"Conflicting cell content at row {row}, column {col}.",
+                    message=internal_error(f"Conflicting cell content at row {row}, column {col}"),
                     source=src,
                 )
 
         def put(row: int, col: int, value: str, *, where: str, src: Any) -> None:
             if col >= _CONDITION_COLS:
-                self._raise_issue(path=where, message="Condition columns exceed AE.", source=src)
+                self._raise_issue(path=where, message=_TOO_WIDE, source=src)
             if across[row][col] is not None:
                 self._raise_issue(
                     path=where,
-                    message=(
+                    message=internal_error(
                         f"Conflicting cell content at column {col}: "
-                        f"{across[row][col]!r} vs {value!r}."
+                        f"{across[row][col]!r} vs {value!r}"
                     ),
                     source=src,
                 )
@@ -377,7 +384,9 @@ class _LayoutMixin:
             if af[sink.row]:
                 self._raise_issue(
                     path=sink.path,
-                    message=f"Conflicting AF content: {af[sink.row]!r} vs {sink.af!r}.",
+                    message=internal_error(
+                        f"Conflicting AF content: {af[sink.row]!r} vs {sink.af!r}"
+                    ),
                     source=sink.source,
                 )
             af[sink.row] = sink.af
@@ -390,9 +399,7 @@ class _LayoutMixin:
                 continue
             for row in range(net.top, net.bottom):
                 if net.col >= _CONDITION_COLS:
-                    self._raise_issue(
-                        path=net.path, message="Condition columns exceed AE.", source=net.source
-                    )
+                    self._raise_issue(path=net.path, message=_TOO_WIDE, source=net.source)
                 vertical[row][net.col] = True
                 claim(row, net.col, index, where=net.path, src=net.source)
                 claim(row + 1, net.col, index, where=net.path, src=net.source)

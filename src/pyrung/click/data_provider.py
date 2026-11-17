@@ -14,6 +14,7 @@ from pyclickplc.validation import assert_runtime_value
 
 from pyrung.click.tag_map import TagMap
 from pyrung.click.tag_map._nickname_io import _PLAIN_DATA_BANKS
+from pyrung.core._messages import read_only_system_point
 from pyrung.core.memory_block import Block
 from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
@@ -168,7 +169,7 @@ class ClickDataProvider:
         normalized, bank, index = self._normalize(address)
         if bank == "XD":
             assert_runtime_value(BANKS[bank].data_type, value, bank=bank, index=index)
-            raise ValueError("XD addresses are read-only and cannot be written.")
+            raise ValueError(f"{normalized} is read-only. You cannot write an XD address.")
         if bank == "YD":
             assert_runtime_value(BANKS[bank].data_type, value, bank=bank, index=index)
             self._write_mirrored_word(bank, index, cast(int, value))
@@ -220,9 +221,7 @@ class ClickDataProvider:
 
         assert_runtime_value(BANKS[bank].data_type, value, bank=bank, index=index)
         if mapped.source == "system" and mapped.read_only:
-            raise ValueError(
-                f"Tag '{mapped.logical_name}' is read-only system point and cannot be written"
-            )
+            raise ValueError(read_only_system_point(mapped.logical_name))
         if mapped.logical_name == system.sys.cmd_mode_stop.name:
             if bool(value):
                 if self._on_stop is not None:
