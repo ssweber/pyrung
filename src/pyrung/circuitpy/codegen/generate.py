@@ -115,7 +115,9 @@ def generate_circuitpy(
 
     if not hw._slots and not ctx.board_tag_names:
         raise ValueError(
-            "P1AM hardware config must include at least one configured slot or referenced board tags"
+            "The P1AM has no configured slot, and the program uses no board tags. Code "
+            "generation needs at least one configured slot or one board tag. Configure a "
+            "slot with hw.slot(1, ...), or use a board tag such as board.switch."
         )
 
     if hw._slots:
@@ -123,12 +125,17 @@ def generate_circuitpy(
         expected = list(range(1, slot_numbers[-1] + 1))
         if slot_numbers != expected:
             raise ValueError(
-                "Configured slots must be contiguous from 1..N for v1 roll-call generation"
+                f"Code generation needs the P1AM slots to be contiguous from 1. You "
+                f"configured slots {', '.join(map(str, slot_numbers))}. Configure every slot "
+                f"from 1 to {slot_numbers[-1]}."
             )
 
     report = validate_circuitpy_program(program, hw=hw, mode="strict")
     if report.errors:
-        lines = [f"{len(report.errors)} error(s)."]
+        lines = [
+            f"The program fails CircuitPython validation with {len(report.errors)} error(s). "
+            "Fix them before you generate code."
+        ]
         for err in report.errors:
             lines.append(f"{err.code} @ {err.location}: {err.message}")
         raise ValueError("\n".join(lines))

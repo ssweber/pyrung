@@ -88,7 +88,7 @@ def _compile_blockcopy_instruction(
         *src_setup,
         *dst_setup,
         f"if len({src_indices}) != len({dst_indices}):",
-        f'    raise ValueError(f"BlockCopy length mismatch: source has {{len({src_indices})}} elements, dest has {{len({dst_indices})}} elements")',
+        f'    raise ValueError(f"blockcopy() needs ranges of the same length. The source has {{len({src_indices})}} tags, and the destination has {{len({dst_indices})}}.")',
         "_blockcopy_values = []",
         f"for _src_idx in {src_indices}:",
         f"    _raw = {_range_item_read_expr(instr.source, src_symbol, '_src_idx', ctx)}",
@@ -125,7 +125,7 @@ def _compile_blockcopy_converter_instruction(
         *src_setup,
         *dst_setup,
         f"if len({src_indices}) != len({dst_indices}):",
-        f'    raise ValueError(f"BlockCopy length mismatch: source has {{len({src_indices})}} elements, dest has {{len({dst_indices})}} elements")',
+        f'    raise ValueError(f"blockcopy() needs ranges of the same length. The source has {{len({src_indices})}} tags, and the destination has {{len({dst_indices})}}.")',
     ]
 
     if mode in {"value", "ascii"}:

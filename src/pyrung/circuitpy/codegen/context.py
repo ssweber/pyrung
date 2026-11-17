@@ -29,6 +29,7 @@ from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
 from pyrung.core.function_source import _names_in, embedded_source, is_the_function
 from pyrung.core.instruction.data_transfer import CopyInstruction
+from pyrung.core.instruction.resolvers import _fn_name
 from pyrung.core.memory_block import (
     UNSET,
     Block,
@@ -40,6 +41,7 @@ from pyrung.core.memory_block import (
     OutputBlock,
 )
 from pyrung.core.program import Program
+from pyrung.core.rung import dsl_call
 from pyrung.core.system_points import system
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import walk_rung_operands
@@ -79,6 +81,14 @@ class StaticRangeLayout:
     tags: tuple[Tag, ...]
     addresses: tuple[int, ...]
     uses_backing_storage: bool
+
+
+def _no_source(fn: Any) -> str:
+    """Return the message for a run_function callable whose def pyrung cannot read."""
+    return (
+        f"pyrung cannot read the source of {_fn_name(fn)!r}. A code.py holds a copy of each "
+        "function that run_function calls. Pass a plain def from a .py file."
+    )
 
 
 def _is_plain_literal(value: Any) -> bool:
@@ -432,10 +442,11 @@ class CodegenContext:
                 bank = self.block_bindings[bank_id]
                 raise ValueError(
                     f"Block {binding.logical_name!r} is mapped onto bank "
-                    f"{bank.logical_name!r} and both are addressed indirectly. "
-                    f"The mapped registers are one memory, but indirect access "
-                    f"through each would compile to separate arrays. Address them "
-                    f"indirectly through one of the two, not both."
+                    f"{bank.logical_name!r}. The program addresses {binding.logical_name!r} "
+                    f"indirectly and also uses {bank.logical_name!r}. The generated code "
+                    f"would keep the indirect addresses in an array of their own, apart "
+                    f"from {bank.logical_name!r}. Then each mapped register would have two "
+                    f"copies. Use only one of the two names for these registers."
                 )
 
             self.block_alias[block_id] = (
@@ -651,8 +662,9 @@ class CodegenContext:
         assigned = getattr(obj, "_state_key", None)
         if assigned is None:
             raise RuntimeError(
-                f"{type(obj).__name__} has no site key: it was never bound into a program "
-                "(pyrung.core.site_memory.bind_sites)."
+                f"{dsl_call(obj)} is not part of a program, so it has no memory of its own. "
+                "Build it inside `with Program():`, or bind overlay rungs with "
+                "pyrung.core.site_memory.bind_sites()."
             )
         return assigned
 
@@ -719,32 +731,32 @@ class CodegenContext:
         try:
             rendered = embedded_source(fn)
         except (OSError, TypeError) as exc:
-            raise ValueError(f"Could not inspect source for callable {fn!r}") from exc
+            raise ValueError(_no_source(fn)) from exc
         if not rendered:
-            raise ValueError(f"Could not inspect source for callable {fn!r}")
+            raise ValueError(_no_source(fn))
         defined = _first_defined_name(rendered)
         if defined is None:
-            raise ValueError(f"Callable source is not inspectable for embedding: {fn!r}")
+            raise ValueError(_no_source(fn))
         if not is_the_function(rendered, fn):
             raise ValueError(
-                f"Callable source is not the function it stands for: {fn!r}. Embedding copies "
-                "the text of a plain def: the file may have changed since the import, or the "
-                "function uses a closure, a decorator or a wrapper."
+                f"The source text of {_fn_name(fn)!r} does not match the function. A code.py "
+                "copies the text of a plain def. Either the file changed after the import, or "
+                "the function uses a closure, a decorator or a wrapper."
             )
         if defined == "math" or hasattr(builtins, defined):
             # The def lands in the generated module and would replace the name that the
             # other generated code calls.
             raise ValueError(
-                f"Callable name would shadow a name the generated code uses: {fn!r}. "
-                "Rename the function."
+                f"The function {_fn_name(fn)!r} has the name of a builtin or of math, and the "
+                "generated code calls that name. Rename the function."
             )
         for name in sorted(_names_in(fn.__code__)):
             if name == "math" or getattr(fn, "__globals__", {}).get(name) is not math:
                 continue
             if name.startswith("_") or hasattr(builtins, name):
                 raise ValueError(
-                    f"Callable reads the math module as {name!r}, a name the generated code "
-                    f"uses: {fn!r}. Import it under another name."
+                    f"{_fn_name(fn)!r} imports the math module as {name!r}, and the generated "
+                    "code already uses that name. Import math under another name."
                 )
             self.math_aliases.add(name)
 

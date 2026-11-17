@@ -18,8 +18,10 @@ from pyrung.core.memory_block import (
     InputBlock,
     OutputBlock,
 )
+from pyrung.core.rung import dsl_call
 from pyrung.core.tag import InputTag, OutputTag, Tag
 from pyrung.core.time_mode import TimeUnit
+from pyrung.core.validation._common import rung_path
 from pyrung.core.validation.walker import (
     ProgramLocation,
     _condition_children,
@@ -76,10 +78,7 @@ _BLOCK_REGISTRY: dict[int, InputBlock | OutputBlock] = {}
 
 
 def _format_location(loc: ProgramLocation) -> str:
-    if loc.scope == "subroutine":
-        prefix = f"subroutine[{loc.subroutine}].rung[{loc.rung_index}]"
-    else:
-        prefix = f"main.rung[{loc.rung_index}]"
+    prefix = rung_path(loc.subroutine if loc.scope == "subroutine" else None, loc.rung_index)
 
     for branch_idx in loc.branch_path:
         prefix += f".branch[{branch_idx}]"
@@ -223,13 +222,14 @@ def _evaluate_function_call(
             code=code,
             severity=_route_severity(code, mode),
             message=(
-                f"{instruction_type} will be embedded via inspect.getsource() at {location_text}. "
-                "Verify the callable is CircuitPython-compatible."
+                f"The code generator copies the source of the function in "
+                f"{dsl_call(instruction)} at {location_text} into code.py. CircuitPython "
+                "must be able to run that function."
             ),
             location=location_text,
             suggestion=(
-                "Run the function on-device (or in a CircuitPython-compatible environment) and "
-                "avoid CPython-only modules/APIs."
+                "Run the function on the board, or in CircuitPython on your computer. "
+                "Do not use modules or functions that only CPython has."
             ),
         )
     ]
@@ -305,13 +305,14 @@ def _evaluate_timer_resolution(
             code=code,
             severity=_route_severity(code, mode),
             message=(
-                f"{instruction_type} uses Tms timing at {location_text}. "
-                "Effective timing resolution depends on scan time in CircuitPython."
+                f"{dsl_call(instruction)} at {location_text} counts in milliseconds. The "
+                "code updates the timer once per scan, so Done can turn on up to one "
+                "scan late."
             ),
             location=location_text,
             suggestion=(
-                "Millisecond timers are supported, but accuracy depends on maintaining "
-                "sub-millisecond scan times on your target."
+                "Acc keeps the exact time across scans. If one scan of delay matters, "
+                "keep the scan shorter than the delay you can accept."
             ),
         )
     ]
