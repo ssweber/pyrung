@@ -1,29 +1,29 @@
 """Block instructions: the ``block`` group (subroutine ``Conf_Block``).
 
 ``blockcopy``, ``fill``, ``pack_bits``/``unpack_to_bits`` and
-``pack_words``/``unpack_to_words``.  A slot's fields are not a range, so each
-case stages its sources in raw memory it owns (``memory.OWNED``): DS4001..DS4110
-(ten per case), C1201.., DD201.., DF201.. -- and reads the result back into its
-slot.  Its ``init`` puts the staged registers and bits back to zero.  A DD or
+``pack_words``/``unpack_to_words``. A slot's fields are not a range, so each
+case stages its sources in raw memory that it owns (``memory.OWNED``): DS4001..DS4110
+(ten per case), C1201.., DD201.., DF201.. Each case reads the result back into its
+slot. Its ``init`` puts the staged registers and bits back to zero. A DD or
 Real result is read back through a ``calc`` that subtracts a constant, so
 a result that does not fit an Int still lands in one.
 
-Static facts, no case: ``blockcopy`` takes only the ``to_value`` and
-``to_ascii`` converters (the others raise ``ValueError`` when the instruction
-is built), and a source and destination of different length raise when the
+Static facts, no case. ``blockcopy`` accepts only the ``to_value`` and
+``to_ascii`` converters. The other converters raise ``ValueError`` when the instruction
+is built. A source and destination of different length raise when the
 instruction runs, not at build time.
 
-The expectations are what a CLICK does.  The cases that tell a CLICK from a
+The expectations are what a CLICK does. These cases tell a CLICK from a
 different model:
 
 - ``blockcopy_range``: element ``i`` of the source goes to element ``i`` of
   the destination, and nothing past the destination is written.  A reversed
   copy would read 44 in ``Result2``.
 - ``blockcopy_overlap``: the whole source is read before the destination is
-  written, so DS{1,2,3} copied onto DS{2,3,4} gives {1,1,2,3}.  A copy that
-  writes as it reads gives {1,1,1,1}: ``Result3`` and ``Result4`` read 1.
+  written, so DS{1,2,3} copied onto DS{2,3,4} gives {1,1,2,3}. A copy that
+  writes as it reads gives {1,1,1,1}, and ``Result3`` and ``Result4`` read 1.
 - ``blockcopy_types``: a block copy converts element by element like
-  ``copy``: -2 DS -> DD stays -2, 70000 DD -> DS clamps to 32767.  A raw
+  ``copy``. -2 DS -> DD stays -2, and 70000 DD -> DS clamps to 32767. A raw
   word-for-word copy, or a wrapping copy, reads something else (70000 wraps
   to 4464).
 - ``fill_constant``: a fill writes the value to the whole range and not past it.
@@ -34,18 +34,18 @@ different model:
   that restored it.
 - ``pack_bits_int``: ``C1201`` is bit 0 (LSB first), the whole destination is
   written (junk above the packed bits is cleared), and bit 15 makes an Int
-  negative.  MSB-first packing reads 208 in ``Result1``; an OR-in leaves the
+  negative. MSB-first packing reads 208 in ``Result1``. An OR-in leaves the
   junk (32523).
 - ``pack_bits_real``: a REAL destination holds the raw IEEE-754 bits, not
-  the integer value: bits 21 and 30 are 2.5 (0x40200000, high word 0x4020).
+  the integer value. Bits 21 and 30 are 2.5 (0x40200000, high word 0x4020).
   A numeric conversion would give 1075838976.0.
 - ``unpack_bits``: bit 0 goes to the first bit of the range, and bit 15 of an
   Int is its sign bit.
-- ``pack_words``: the first source is the low word, the low word is not sign
-  extended (-1 and 1 pack to 131071; a sign-extending add gives 65535), and
-  the same bits into a REAL are 1.0.
-- ``unpack_words``: low word first; a low word with the top bit set lands in
-  an Int as a negative (wrapped, not clamped to 32767).
+- ``pack_words``: the first source is the low word. The low word is not sign
+  extended (-1 and 1 pack to 131071, where a sign-extending add gives 65535).
+  The same bits into a REAL are 1.0.
+- ``unpack_words``: low word first. A low word with the top bit set lands in
+  an Int as a negative number. It wraps and is not clamped to 32767.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ SCANS = scans_for()
 
 
 def _go(slot):
-    """The rung condition of a case that fires on its first scan."""
+    """Return the rung condition of a case that fires on its first scan."""
     return (slot.Cmd != 0, slot.Fired == 0)
 
 
