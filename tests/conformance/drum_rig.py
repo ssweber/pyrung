@@ -1,22 +1,22 @@
 """A time drum and a time & event drum side by side, for the drum probes.
 
-``drum_trace`` reads one event drum scan by scan.  The probes ask the same
-kind of question of ``time_drum`` and ``time_event_drum``, so a scenario here
-runs one of each on the same inputs (:class:`Pair`) and records them together.
+``drum_trace`` reads one event drum scan by scan.  The probes ask the same kind of
+question of ``time_drum`` and ``time_event_drum``.  So a scenario here runs one of each
+on the same inputs (:class:`Pair`) and records them together.
 
-A drum's state at the end of a scan is two digits, ``S`` then ``X``: the step,
-and ``X = 4 * flag + 2 * B + A``, so 22 is step 2 with B on, 24 is step 2
-complete (flag on, outputs off) and 10 is step 1 with both outputs off.  A
-snapshot packs the time drum's state above the time & event drum's: 2222 is
-both on step 2 with B on, 2224 the time drum on step 2 with B on and the
-other complete.  :func:`snap` copies one into a slot field on a named scan.
+A drum's state at the end of a scan is two digits, ``S`` then ``X``.  ``S`` is the step,
+and ``X = 4 * flag + 2 * B + A``.  So 22 is step 2 with B on, 24 is step 2 complete (flag
+on, outputs off) and 10 is step 1 with both outputs off.  A snapshot packs the time
+drum's state above the time & event drum's.  2222 means both are on step 2 with B on.
+2224 means the time drum is on step 2 with B on and the other drum is complete.
+:func:`snap` copies one snapshot into a slot field on a named scan.
 
-The step registers are DS (CLICK's editor takes no other for a drum), the
-accumulators TD, the completion flags and outputs C bits.  A time drum
-moves by a jog, or by the Acc a case stages past a preset, since over the
-wire a preset cannot be timed in scans; its presets are otherwise 30 s, so no
-scan's time pushes a trace over.  A time & event drum's steps are event-only
-(levels), so its events move it where the time drum's time or jog does.
+The step registers are DS, because CLICK's editor accepts no other type for a drum.  The
+accumulators are TD, and the completion flags and outputs are C bits.  A time drum moves
+by a jog, or by the Acc that a case stages past a preset, because a preset cannot be
+timed in scans over the wire.  Its presets are otherwise 30 s, so no scan's time pushes
+a trace over.  A time & event drum's steps are event-only (levels).  Its events move it,
+where the time drum moves by time or by the jog.
 """
 
 from __future__ import annotations
@@ -28,12 +28,12 @@ from typing import Any
 from pyrung.core import Or, Rung, copy, math, out, time_drum, time_event_drum
 from tests.conformance.memory import c
 
-#: A time drum step's preset (ms): longer than any trace.
+#: A time drum step's preset in ms.  It is longer than any trace.
 LONG = 30000
 
 
 class Pool:
-    """C bits handed out in order from a case's own run of the group's range."""
+    """Hands out C bits in order from a case's own run of the group's range."""
 
     def __init__(self, numbers: Sequence[int]) -> None:
         self._free: Iterator[int] = iter(numbers)
@@ -43,7 +43,7 @@ class Pool:
 
 
 def pool_of(*runs: range) -> Callable[[int, int], Pool]:
-    """``pool(index, size)``: the *index*-th run of *size* bits across the group's ranges."""
+    """Return ``pool(index, size)``, which returns the *index*-th run of *size* bits."""
     numbers = [n for run in runs for n in run]
 
     def pool(index: int, size: int) -> Pool:
@@ -57,11 +57,13 @@ def pool_of(*runs: range) -> Callable[[int, int], Pool]:
 
 @dataclass(frozen=True)
 class Resources:
-    """A group's raw memory, cut into a run per case: C bits, DS step registers,
-    TD accumulators and DD states (``memory.OWNED``)."""
+    """Holds a group's raw memory, cut into a run per case.
+
+    The memory is C bits, DS step registers, TD accumulators and DD states (``memory.OWNED``).
+    """
 
     bits: Callable[[int, int], Pool]
-    #: DS step registers, ``raw_counts[i]`` of them to case *i* in order.
+    #: DS step registers.  Case *i* gets ``raw_counts[i]`` of them, in order.
     raw: Sequence[int]
     raw_counts: Sequence[int]
     tds: Sequence[int]
@@ -73,7 +75,7 @@ class Resources:
 
 
 class Rig:
-    """The tags of case *index*: up to two scenarios of a pair of drums each."""
+    """Holds the tags of case *index*: up to two scenarios of a pair of drums each."""
 
     def __init__(self, slot: Any, res: Resources, index: int) -> None:
         from tests.conformance.memory import dd, ds, td
@@ -103,18 +105,21 @@ class Rig:
     def pair(
         self, which: int = 0, *, own_steps: tuple[Any, Any] | None = None, **options: Any
     ) -> Pair:
-        """Scenario *which* (0 or 1): scenario 0's time drum steps in Result1, unless
-        *own_steps* names the two step registers (a case that needs Result1 for itself)."""
+        """Return scenario *which* (0 or 1).
+
+        Scenario 0's time drum steps in Result1, unless *own_steps* names the two step
+        registers.  A case that needs Result1 for itself passes *own_steps*.
+        """
         return make_pair(self.slot, self.take, *self._tags(which, own_steps), **options)
 
     def alloc(self, which: int = 0, **options: Any) -> Pair:
-        """The tags of scenario *which* with no rung emitted (see :func:`emit_pair`)."""
+        """Return the tags of scenario *which*, emitting no rung (see :func:`emit_pair`)."""
         return alloc_pair(self.take, *self._tags(which, None), **options)
 
 
 @dataclass(frozen=True)
 class Side:
-    """One drum of a pair: its tags."""
+    """Holds the tags of one drum of a pair."""
 
     step: Any
     acc: Any
@@ -128,16 +133,16 @@ class Side:
 class Pair:
     time: Side
     event: Side
-    #: The time drum's jog and the events of the time & event drum's steps.
+    #: The time drum's jog, and the events of the time & event drum's steps.
     jog: Any
     events: tuple[Any, ...]
     jump: Any
-    #: The drum rung's condition besides ``Cmd != 0``; ``None`` for always.
+    #: The drum rung's condition besides ``Cmd != 0``.  ``None`` means always.
     pause: Any
 
 
 def pattern_for(steps: int) -> list[list[int]]:
-    """Step 1 A, step 2 B, step 3 both, then A again."""
+    """Return the output pattern: step 1 is A, step 2 is B, step 3 is both, then A again."""
     rows = [[1, 0], [0, 1], [1, 1], [1, 0], [0, 1]]
     return rows[:steps]
 
@@ -157,7 +162,7 @@ def alloc_pair(
     jump: bool = False,
     pausable: bool = False,
 ) -> Pair:
-    """The pair's tags and bits, and no rung yet."""
+    """Return the pair's tags and bits.  Emit no rung yet."""
     a_t, b_t, f_t, a_e, b_e, f_e = take(6)
     jog_bit = take(1)[0] if (jog or te_jog) else None
     jump_bit = take(1)[0] if jump else None
@@ -183,7 +188,7 @@ def emit_pair(
     te_jog: bool = False,
     jump_step: Any = None,
 ) -> None:
-    """The two drum rungs, ``~pause`` and ``Cmd != 0`` their condition."""
+    """Emit the two drum rungs, with ``~pause`` and ``Cmd != 0`` as their condition."""
     steps = len(pair.events)
     gate = [slot.Cmd != 0]
     if pair.pause is not None:
@@ -243,11 +248,10 @@ def make_pair(
 ) -> Pair:
     """Allocate a pair, call *above* with it, then emit its two drums.
 
-    *jump* with *jump_step* (a tag or int) gives both drums a jump; *jog* gives
-    the time drum a jog pin and *te_jog* the other (a bit both share).
-    *pausable* puts both rungs under ``~pause``.  *above* emits the rungs that
-    drive the drums, above them.  The caller adds :func:`track_both` and
-    :func:`snap` below.
+    *jump* with *jump_step* (a tag or int) gives both drums a jump.  *jog* gives the time
+    drum a jog pin, and *te_jog* gives the other drum one.  Both share a bit.  *pausable*
+    puts both rungs under ``~pause``.  *above* emits the rungs that drive the drums,
+    above them.  The caller adds :func:`track_both` and :func:`snap` below.
     """
     pair = alloc_pair(
         take,
@@ -278,7 +282,7 @@ def make_pair(
 
 
 def on_scans(slot: Any, bit: Any, *scans: int) -> None:
-    """*bit* is on, by an Out, on exactly the scans *scans* (a rung above the drums)."""
+    """Turn *bit* on with an Out on exactly the scans *scans* (a rung above the drums)."""
     with Rung(_any_scan(slot, scans)):
         out(bit)
 
@@ -290,16 +294,16 @@ def _any_scan(slot: Any, scans: Sequence[int]) -> Any:
 
 
 def put(slot: Any, scan: int, value: Any, into: Any) -> None:
-    """``into = value`` on scan *scan* only (a rung above the drums)."""
+    """Copy *value* into *into* on scan *scan* only (a rung above the drums)."""
     with Rung(slot.Scratch == scan):
         copy(value, into)
 
 
 def track(slot: Any, side: Side) -> None:
-    """Every scan, ``side.state`` = the drum's state (``SX``).  Below the drum.
+    """Set ``side.state`` to the drum's state (``SX``) every scan.  The rungs go below the drum.
 
-    Not gated on the case running or on the window: a compare contact costs 3 steps
-    and the state is only read by :func:`snap` on a scan of the window.
+    The rungs are not gated on the case running or on the window.  A compare contact costs
+    3 steps, and only :func:`snap` reads the state, on a scan of the window.
     """
     with Rung():
         math(side.step * 10, side.state)
@@ -312,7 +316,7 @@ def track(slot: Any, side: Side) -> None:
 
 
 def snap(slot: Any, pair: Pair, scan: int, into: Any) -> None:
-    """*into* = the time drum's state above the time & event drum's, as of scan *scan*."""
+    """Set *into* to the time drum's state above the time & event drum's, as of scan *scan*."""
     with Rung(slot.Scratch == scan):
         math(pair.time.state * 100 + pair.event.state, into)
 

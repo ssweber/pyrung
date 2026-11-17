@@ -154,7 +154,7 @@ class TestProjectBasic:
         assert f"{_SUBROUTINES_DIR}/__init__.py" not in files
 
     def test_release_scaffolding_and_experimental_how_guidance(self, tmp_path: Path):
-        """Generated projects require this release and scope ``how()`` failures narrowly."""
+        """A generated project requires this release and describes ``how()`` failures narrowly."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -280,7 +280,7 @@ class TestProjectBasic:
         )
 
     def test_persistent_workspace_guidance(self, tmp_path: Path):
-        """Persistent projects describe a workspace that survives CLICK."""
+        """The guidance of a persistent project describes a workspace that survives CLICK."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -315,7 +315,7 @@ class TestProjectBasic:
             assert "most recent `rung apply` source snapshot" not in normalized
 
     def test_user_guidance_files_point_at_pyrungs(self, tmp_path: Path):
-        """README.md and AGENTS.md are the user's: one pointer line, then notes."""
+        """README.md and AGENTS.md belong to the user.  Each holds one pointer line, then notes."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -344,7 +344,7 @@ class TestProjectBasic:
         assert "## Workspace model" not in files["AGENTS.md"]
 
     def test_existing_user_guidance_survives_regeneration(self, tmp_path: Path):
-        """Without overwrite, the user's files stay; pyrung's are rewritten."""
+        """Without overwrite, the user's files stay and pyrung's files are rewritten."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -1099,7 +1099,7 @@ class TestTimerCounterInstructions:
 
 class TestMathFormulaImports:
     def test_aggregates_and_functions_import_where_used(self, tmp_path: Path):
-        """Range aggregates import their bank and math functions import in the file using them.
+        """Range aggregates import their bank, and math functions import in the file that uses them.
 
         ABS is Python's builtin, so no file imports it.
         """

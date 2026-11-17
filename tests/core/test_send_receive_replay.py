@@ -396,7 +396,7 @@ def test_bytes_estimate_includes_io():
 
 
 def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
-    """CLICK lets any status bit be left off; each gets its own hidden tag and still runs."""
+    """CLICK lets you leave off any status bit.  Each one gets its own hidden tag and still runs."""
     futures = _fake_send_submit(monkeypatch)
     Enable = Bool("Enable")
     Source = Int("Source")
@@ -426,7 +426,7 @@ def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_two_programs_in_one_plc_each_replay_their_own_receive(monkeypatch: pytest.MonkeyPatch):
-    """Two programs' receives with every status bit left off keep apart in one PLC."""
+    """In one PLC, the receives of two programs with every status bit left off stay separate."""
     futures = _fake_recv_submit(monkeypatch)
 
     def build(dest: str) -> Program:

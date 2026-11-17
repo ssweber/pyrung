@@ -1,13 +1,13 @@
 """A quiet Math error's 0 in a larger formula: the ``term_zero`` group (part ``follow2_values``).
 
-On a CLICK a division by 0 and a SQRT of a negative each zero
-their own term, not the formula (5, 5, 5 for ``... + 5``, ``math_terms/error_terms``).  A CLICK
-zeroes the term of a MOD by 0, of ``0 ^ 0`` and of ABS of the least Int too.  0 to a negative power is no
-error there.  It is +Inf.  Each formula here runs once, on a scan whose first rung stages its
-operands, into a register preset to 99 (no store reads 99).
+On a CLICK, a division by 0 and a SQRT of a negative each zero their own term, not the
+formula.  The ``... + 5`` formulas read 5, 5, 5 (``math_terms/error_terms``).  A CLICK also
+zeroes the term of a MOD by 0, of ``0 ^ 0`` and of ABS of the least Int.  0 to a negative
+power is not an error there.  It is +Inf.  Each formula here runs once, on a scan whose first
+rung stages its operands.  It stores into a register preset to 99, and no store reads 99.
 
-``quiet_terms`` stores each ``... + 5`` into a DS.  Every operand is a DS, since pyrung never
-treats a DS as a constant and the editor is not asked to take a constant divisor of 0.
+``quiet_terms`` stores each ``... + 5`` into a DS.  Every operand is a DS, because pyrung never
+treats a DS as a constant.  That way the editor is never asked to accept a constant divisor of 0.
 
 - Result1 ``MOD(DS 7, DS 0) + 5`` reads 5, the MOD's term zeroed (0 would be the formula zeroed).
 - Result2 ``DS 0 ^ DS 0 + 5`` reads 5, the power's term zeroed (6 would be ``0 ^ 0`` taken as 1).
@@ -51,7 +51,7 @@ SC43 = system.fault.out_of_range
 
 
 def _coil_bits(slot: Any, coils: list[Any], into: Any) -> None:
-    """*into* += 1, 2, 4, ... for each coil on: below every op."""
+    """Add 1, 2, 4, ... to *into* for each coil that is on, in rungs below every op."""
     for k, coil in enumerate(coils):
         with Rung(*once(slot), coil):
             math(into + (1 << k), into)
@@ -111,7 +111,7 @@ def init_abs_int_min(slot: Any) -> None:
     copy(0, dd[131])
 
 
-#: What a quiet error into a DF may leave, in the class's order after +/-Inf and NaN.
+#: The readings that a quiet error into a DF may leave, after +/-Inf and NaN in the class order.
 REAL_READINGS = (0.0, 99.0)
 
 

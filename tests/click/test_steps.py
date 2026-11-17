@@ -1,7 +1,7 @@
 """estimate_steps: CLICK program-step costs measured on CLICK Programming Software.
 
-Each case is a probe rung of ``devtools/click_step_probe.py`` and the step
-count CLICK reported for it (2026-10-29).
+Each case is a probe rung of ``devtools/click_step_probe.py`` with the step count that
+CLICK reported for it (2026-10-29).
 """
 
 from __future__ import annotations

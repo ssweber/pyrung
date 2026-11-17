@@ -1,12 +1,12 @@
 """A block element indexed outside its block (``Tbl[P]``, ``Tbl[Q // Z]``).
 
-In a rung condition such an element reads as 0 (the type's zero), with no
-fault flag and the scan carrying on: the same rule as any other expression
-outside ``calc``.  ``copy()`` and ``math()`` read a source past its block as 0
-with no flag, and a source below it sets ``fault.address_error`` and writes
-nothing.  Every form must behave the same in the interpreted runtime, the
-compiled kernel (legacy and blockless) and the generated CircuitPython code.
-``tests/core/test_fault_flags.py`` has the instructions' rule on all of them.
+In a rung condition such an element reads as 0 (the type's zero).  It sets no fault
+flag, and the scan carries on.  Any other expression outside ``calc`` follows the same
+rule.  ``copy()`` and ``math()`` read a source past its block as 0 with no flag.  If the
+source is below the block, they set ``fault.address_error`` and write nothing.  Every
+form must behave the same in the interpreted runtime, the compiled kernel (legacy and
+blockless) and the generated CircuitPython code.  ``tests/core/test_fault_flags.py``
+tests the rule for the instructions on all of them.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ class _StubBase:
 
 
 def _first_scan(prog: Program, engine: str, tags: dict[str, Any], monkeypatch) -> dict[str, Any]:
-    """The named tags after one scan of *prog* on *engine*."""
+    """Return the named tags after one scan of *prog* on *engine*."""
     if engine in ("interpreted", "compiled"):
         runner = (PLC if engine == "interpreted" else CompiledPLC)(prog, dt=0.010)
         runner.step()
@@ -116,7 +116,7 @@ def _first_scan(prog: Program, engine: str, tags: dict[str, Any], monkeypatch) -
 
 
 def _build_compares(s_value: int) -> tuple[Program, dict[str, bool], dict[str, Any]]:
-    """One rung per (index, form, operator) driving its own coil."""
+    """Build one rung per (index, form, operator), each driving its own coil."""
     Tbl = Block("Tbl", TagType.INT, 1, 10)
     P = Int("P")  # 50: past the end
     N = Int("N")  # 0: below the start
@@ -181,7 +181,7 @@ def test_out_of_range_element_in_condition_reads_zero(
     actual = _first_scan(prog, engine, tags, monkeypatch)
 
     assert {name: bool(actual[name]) for name in expected} == expected
-    # No fault flag, and the scan runs on to the last rung.
+    # The scan sets no fault flag and runs on to the last rung.
     assert bool(actual["fault.address_error"]) is False
     assert bool(actual["Last"]) is True
 
@@ -295,8 +295,8 @@ def test_zero_based_block_reads_zero_below_its_start(engine: str, monkeypatch) -
 def test_bank_aliased_block_reads_zero_outside_range(
     engine: str, via: str, monkeypatch, request
 ) -> None:
-    # Tl is a named window onto DS101..DS105, one register per tag. The
-    # compiled code indexes one memory through one of the two, never both.
+    # Tl is a named window onto DS101..DS105, one register per tag.  The compiled
+    # code indexes one memory through one of the two, never both.
     ds = ClickBlocks().ds
     Tl = Block("Tl", TagType.INT, 1, 5)
     TagMap({Tl: ds.select(101, 105)}, include_system=False)
@@ -329,9 +329,9 @@ def test_bank_aliased_block_reads_zero_outside_range(
             out(coils["Tail"])
 
     if engine == "kernel_blockless" and via == "window":
-        # Pre-existing, on the base too: the blockless kernel refuses any
-        # indirect access through a bank-aliased window (an instruction's as
-        # well), as if the bank were indexed too.
+        # This already failed on the base.  The blockless kernel refuses any indirect
+        # access through a bank-aliased window, including an instruction's, as if
+        # the bank were indexed too.
         request.applymarker(
             pytest.mark.xfail(
                 raises=ValueError,
@@ -366,7 +366,7 @@ def _build_reads() -> tuple[Program, dict[str, Any]]:
         "D_calc_sum",
     )
     dests = {name: Int(name) for name in names}
-    # What the address-error flag read right after each instruction.
+    # Each flag records the address-error flag as read right after its instruction.
     flags = {name: Bool(f"Flag_{name}") for name in names}
     sources = {
         "D_copy_past": lambda dest: copy(Tbl[P], dest),
@@ -411,10 +411,11 @@ def test_copy_and_calc_source_outside_its_block(engine: str, monkeypatch) -> Non
     prog, tags = _build_reads()
     actual = _first_scan(prog, engine, tags, monkeypatch)
 
-    # Past the block: the type's zero, no flag.  Below it: nothing written and
-    # the flag.  In range: the element.  A division by zero in calc's own index
-    # is calc's division error, as any division in calc is: the division is 0
-    # with its flag, and the index it gives, 0, is below the block.
+    # Past the block, the source reads as the type's zero and sets no flag.  Below the
+    # block, nothing is written and the flag is set.  In range, the element is read.
+    # A division by zero in calc's own index is calc's division error, as any
+    # division in calc is.  The division gives 0 with its flag, and that index of 0
+    # is below the block.
     assert {name: actual[name] for name in tags if name.startswith("D_")} == {
         "D_copy_past": 0,
         "D_copy_past_expr": 0,
@@ -510,7 +511,7 @@ _POINTER_CONDS: dict[str, Callable[[Block, Int, Int], Any]] = {
 
 
 def _latches_on_some_input(logic: Program, pointer_max: int) -> bool:
-    """Step every KP and KS the tags allow, and say whether KA latched."""
+    """Step every KP and KS the tags allow, and return whether KA latched."""
     plc = PLC(logic, dt=0.010)
     for pointer in range(1, pointer_max + 1):
         for value in range(6):
@@ -521,8 +522,8 @@ def _latches_on_some_input(logic: Program, pointer_max: int) -> bool:
 
 @pytest.mark.parametrize("form", list(_POINTER_CONDS))
 def test_a_rung_true_only_out_of_range_turns_on(form: str) -> None:
-    # Every element in 1..10 is at least 10, so only an address past the end
-    # (reading 0) makes the rung true.
+    # Every element in 1..10 is at least 10.  Only an address past the end, which
+    # reads 0, makes the rung true.
     logic, _A = _pointer_program(_POINTER_CONDS[form], pointer_max=20)
     assert _latches_on_some_input(logic, 20) is True
 

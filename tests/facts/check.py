@@ -119,17 +119,17 @@ from pyrung.core.expression import randint_sites
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import TagType
 
-#: The scan time ``_build_prior_facts`` assumes, and every run uses.
+#: The scan time that ``_build_prior_facts`` assumes and that every run uses.
 DT = 0.010
 
-#: The RTC every run starts at.  A PLC starts its RTC at the wall clock, so a fact about a
-#: copy of ``rtc.hour`` would hold between midnight and 1 am only.  No field of this time
-#: is 0.
+#: The RTC every run starts at.  A PLC starts its RTC at the wall clock.  A fact about a
+#: copy of ``rtc.hour`` would then hold only between midnight and 1 am.  No field of this
+#: time is 0.
 RTC_START = datetime(2026, 6, 15, 13, 30, 20)
 
 
 def _plc(program: Any) -> PLC:
-    """A PLC of *program* with its RTC at :data:`RTC_START`."""
+    """Return a PLC of *program* with its RTC at :data:`RTC_START`."""
     plc = PLC(program, dt=DT)
     plc.set_rtc(RTC_START)
     return plc
@@ -145,15 +145,15 @@ _PROJECTION_REASONS = frozenset(
 )
 #: Probe scans per run.  Each probe forks the PLC a few times and runs one scan on each fork.
 PROBES_PER_RUN = 60
-#: At most this many value swaps per domain judgement.
+#: The most value swaps that one domain judgement tries.
 _MAX_SWAPS = 32
-#: At most this many when the rungs compare three or more tags in a chain.
+#: The most swaps when the rungs compare three or more tags in a chain.
 _MAX_CHAIN_SWAPS = 1024
 
 
 @dataclass(frozen=True)
 class Violation:
-    """One fact a scan contradicts."""
+    """Records one fact that a scan contradicts."""
 
     fact: str
     program: str
@@ -168,7 +168,7 @@ class Violation:
 
 @dataclass
 class Facts:
-    """Every fact the check judges, for one program."""
+    """Holds every fact that the check judges for one program."""
 
     program: Any
     prior: prove_passes._PriorFacts
@@ -188,7 +188,7 @@ class Facts:
 
 
 def compute_facts(program: Any, plc: PLC) -> Facts | Intractable:
-    """The facts of *program*, from the entry points the module docstring names."""
+    """Return the facts of *program*, from the entry points the module docstring names."""
     compiled = compile_kernel(program, blockless=True, proof_metadata=True)
     ctx = prove_passes._PassContext(program=program, dt=DT, compiled=compiled)
     prior = prove_passes._run_prior_pipeline(ctx)
@@ -229,7 +229,7 @@ def compute_facts(program: Any, plc: PLC) -> Facts | Intractable:
 
 @contextmanager
 def _prior_given(prior: prove_passes._PriorFacts) -> Any:
-    """Hand ``prepare_drive`` the facts already built, so it neither rebuilds nor differs."""
+    """Give ``prepare_drive`` the facts already built, so it does not rebuild them."""
     from pyrung.core.analysis import prove
 
     with pytest.MonkeyPatch.context() as patch:
@@ -238,7 +238,7 @@ def _prior_given(prior: prove_passes._PriorFacts) -> Any:
 
 
 def _condition_atoms(program: Any, pdg: ProgramGraph) -> list[Atom]:
-    """Every contact and comparison in the rungs' conditions, once each."""
+    """Return every contact and comparison in the rungs' conditions, once each."""
     found: dict[Any, Atom] = {}
     seen: set[int] = set()
 
@@ -304,7 +304,7 @@ def _value(tags: Mapping[str, Any], name: str, facts: Facts) -> Any:
 
 
 def _answer(atom: Atom, tags: Mapping[str, Any], facts: Facts) -> Any:
-    """What *atom* answers on *tags*.  A rise or fall answers nothing here."""
+    """Return what *atom* answers on *tags*.  A rise or fall answers nothing here."""
     left = _value(tags, atom.tag, facts)
     right = atom.operand
     if atom.operand_is_tag and isinstance(right, str):
@@ -334,7 +334,7 @@ def _answer(atom: Atom, tags: Mapping[str, Any], facts: Facts) -> Any:
 
 
 def _literals(facts: Facts, name: str) -> list[int | float]:
-    """The numbers the program compares *name* with."""
+    """Return the numbers that the program compares *name* with."""
     return [
         atom.operand
         for atom in facts.atoms_by_tag.get(name, ())
@@ -343,10 +343,10 @@ def _literals(facts: Facts, name: str) -> list[int | float]:
 
 
 def _nearest(value: Any, members: list[Any], reach: int = 2) -> list[Any]:
-    """The members to swap for *value*, the nearest first.
+    """Return the members to swap for *value*, the nearest first.
 
-    A small domain gives all its members.  A large one gives the *reach* nearest on each
-    side.  An infinity is nearest the members at its own end.
+    For a small domain, return all its members.  For a large one, return the *reach* nearest
+    members on each side.  An infinity is nearest the members at its own end.
     """
     if not all(_is_number(m) for m in members):
         return members[:8]
@@ -368,7 +368,7 @@ def _nearest(value: Any, members: list[Any], reach: int = 2) -> list[Any]:
 
 
 def driven_tags(facts: Facts, plc: PLC) -> list[str]:
-    """The tags a run writes (see the module docstring)."""
+    """Return the tags that a run writes (see the module docstring)."""
     feedback = {coupling.fb_name for coupling in facts.proofs.couplings}
     names = set(facts.prior.nondeterministic_dims) | set(facts.steerable)
     known = plc.tags
@@ -386,7 +386,7 @@ def driven_tags(facts: Facts, plc: PLC) -> list[str]:
 
 
 def candidate_values(name: str, facts: Facts, plc: PLC) -> list[Any]:
-    """The values a run gives *name* (see the module docstring)."""
+    """Return the values that a run writes to *name* (see the module docstring)."""
     tag = plc.tags[name]
     if tag.type is TagType.BOOL:
         return [False, True]
@@ -413,7 +413,7 @@ def candidate_values(name: str, facts: Facts, plc: PLC) -> list[Any]:
             values += [float(tag.min), float(tag.max)]
         else:
             values = [float(v) for v in values if _is_number(v)] + [0.0, 0.5, -1.5, 1e6]
-        # A Real holds the values between whole numbers too.
+        # A Real can hold values between whole numbers, so add the midpoints.
         points = sorted({v for v in values if math.isfinite(v)})
         values += [(a + b) / 2 for a, b in itertools.pairwise(points)]
     elif tag.type is TagType.CHAR:
@@ -426,7 +426,7 @@ def candidate_values(name: str, facts: Facts, plc: PLC) -> list[Any]:
 
 
 def hold_scans(program: Any) -> int:
-    """Scans a hold lasts, past the longest literal timer preset and at most 400."""
+    """Return how many scans a hold lasts: past the longest literal timer preset, at most 400."""
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
@@ -455,7 +455,7 @@ class Aim:
 
 
 def _holds(expr: Any, assign: Mapping[str, bool]) -> bool | None:
-    """Whether *expr* holds with the Bools in *assign*, or ``None`` if other tags decide.
+    """Return whether *expr* holds with the Bools in *assign*, or ``None`` if other tags decide.
 
     A rise or fall reads as its tag, so a Bool that flips every scan gives it edges.
     """
@@ -487,7 +487,7 @@ def _tag_names(expr: Any) -> set[str]:
 
 
 def _preset_scans(preset: Any, unit_ns: int | None, values: Mapping[str, list[Any]]) -> int:
-    """Scans to reach *preset*, a count for a counter or a time in *unit_ns* for a timer."""
+    """Return the scans to reach *preset*, a count for a counter or a time for a timer."""
     if _is_number(preset):
         reach = preset
     else:
@@ -500,7 +500,7 @@ def _preset_scans(preset: Any, unit_ns: int | None, values: Mapping[str, list[An
 
 
 def aims(program: Any, values: Mapping[str, list[Any]]) -> list[Aim]:
-    """An aim for each counter, timer and time drum whose inputs the run drives.
+    """Return an aim for each counter, timer and time drum whose inputs the run drives.
 
     A random walk seldom counts a counter up to its preset.  Each scan that a chattering
     input changes, the reset may change too.
@@ -552,7 +552,10 @@ def aims(program: Any, values: Mapping[str, list[Any]]) -> list[Aim]:
 def _aim_from(
     rows: list[dict[str, bool]], run: Any, stops: list[Any], edges: bool, scans: int
 ) -> Aim | None:
-    """The first row that runs the instruction with its stops off, and a row that resets it."""
+    """Return an aim from the first row that runs the instruction with its stops off.
+
+    The aim also holds a row that resets the instruction.
+    """
 
     def runs(row: Mapping[str, bool]) -> bool:
         return _holds(run, row) is not False and all(_holds(s, row) is False for s in stops)
@@ -577,7 +580,7 @@ def _aim_from(
 
 
 class RandomInputs:
-    """A seeded walk over each driven tag's candidate values, one mode at a time."""
+    """Walks over each driven tag's candidate values, one mode at a time, from a seed."""
 
     def __init__(
         self,
@@ -606,7 +609,7 @@ class RandomInputs:
                 self.rate = {"chatter": 0.5, "slow": 0.05, "hold": 0.0}[mode]
                 self.left = self.hold if mode == "hold" else self.random.randint(10, 80)
         if self.script:
-            # An aim sets only its own inputs, and the others hold still.
+            # An aim sets only its own inputs.  The other inputs hold still.
             want = self.script.pop(0)
         else:
             self.left -= 1
@@ -623,7 +626,7 @@ class RandomInputs:
         return changed
 
     def _aim_script(self) -> list[dict[str, Any]]:
-        """Each scan's inputs for the next aim, then three scans of its reset."""
+        """Return each scan's inputs for the next aim, then three scans of its reset."""
         aim = self.aims[self.turn % len(self.aims)]
         self.turn += 1
         script = []
@@ -644,7 +647,7 @@ class RandomInputs:
 
 @dataclass
 class Tally:
-    """How often each fact was judged, so a check that judged nothing shows it."""
+    """Counts how often each fact was judged, so a check that judged nothing shows it."""
 
     runs: int = 0
     scans: int = 0
@@ -667,8 +670,8 @@ class Judge:
         self.unmoved: list[str] = []
         self._marks: set[str] = set()
         prior = facts.prior
-        # An advice-only projection is a hint the walker tries on a fork, and it claims
-        # nothing about a scan.  A projected one has left the world key.
+        # An advice-only projection is a hint that the walker tries on a fork.  It claims
+        # nothing about a scan.  A projected tag has left the world key.
         self.projected = {
             name: dep
             for name, dep in prior.functional_dep_projections.items()
@@ -688,7 +691,7 @@ class Judge:
         self.became: set[tuple[str, Any]] = set()
         self.start: Mapping[str, Any] = {}
         self.done = _done_relations(facts)
-        #: Each Done and the value it turned to, in some scan.
+        #: Each Done, with a value it turned to in some scan.
         self.flips: set[tuple[str, bool]] = set()
 
     def fail(self, fact: str, scan: int, detail: str, key: str) -> None:
@@ -808,7 +811,7 @@ class Judge:
 
 @dataclass(frozen=True)
 class _DoneRule:
-    """When a world-key Done may turn on or off, by the Acc its spec pairs it with.
+    """Says when a world-key Done may turn on or off, by the Acc its spec pairs it with.
 
     *preset* is the fact's literal preset, or the name of the tag the instruction reads it
     from.  A time drum's Done is its completion flag, and *last* is its last step.
@@ -825,7 +828,7 @@ class _DoneRule:
     ) -> bool:
         acc = _value(tags, self.acc, facts)
         if isinstance(self.preset, str):
-            # The instruction reads its preset tag during the scan, so either end will do.
+            # The instruction reads its preset tag during the scan, so accept either end value.
             presets = [_value(tags, self.preset, facts), _value(before, self.preset, facts)]
         else:
             presets = [self.preset]
@@ -834,7 +837,7 @@ class _DoneRule:
             return True
         if self.kind == "time_drum":
             step = _value(tags, self.step or "", facts)
-            # The flag turns on at the last step's time, and only a reset turns it off.
+            # The flag turns on at the last step's time.  Only a reset turns it off.
             if now:
                 return step == self.last and any(acc >= p for p in presets)
             return step == 1
@@ -844,14 +847,14 @@ class _DoneRule:
         def reached(p: Any) -> bool:
             return acc <= p if self.kind == "count_down" else acc >= p
 
-        # A reset or a disabled timer clears the Acc with Done.
+        # A reset or a disabled timer clears the Acc and Done together.
         if now:
             return any(reached(p) for p in presets)
         return acc == 0 or not all(reached(p) for p in presets)
 
 
 def _done_relations(facts: Facts) -> dict[str, _DoneRule]:
-    """Each world-key Done, with what its instruction says about when it turns on or off."""
+    """Return each world-key Done with the rule for when its instruction turns it on or off."""
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
@@ -891,7 +894,7 @@ def _done_relations(facts: Facts) -> dict[str, _DoneRule]:
 
 
 def _differences(a: PLC, b: PLC, leave_out: Iterable[str]) -> list[str]:
-    """The tags and memory keys that differ between *a* and *b*, *leave_out* aside."""
+    """Return the tags and memory keys that differ between *a* and *b*, except *leave_out*."""
     skip = set(leave_out)
     out = []
     for part in ("tags", "memory"):
@@ -903,7 +906,7 @@ def _differences(a: PLC, b: PLC, leave_out: Iterable[str]) -> list[str]:
 
 
 def _seen_by_program(plc: PLC, facts: Facts, leave_out: set[str]) -> dict[str, Any]:
-    """What the program can see of *plc*'s state: Bools, comparison answers and memory.
+    """Return what the program can see of *plc*'s state: Bools, comparison answers and memory.
 
     A comparison of a tag in *leave_out* is left out too.
     """
@@ -933,7 +936,10 @@ def _names(operand: Any, names: set[str]) -> bool:
 def _start_answers(
     tags: Mapping[str, Any], facts: Facts, about: set[str] | None = None
 ) -> dict[str, Any]:
-    """What each comparison in a rung condition answers on *tags*, or each one *about* names."""
+    """Return what each comparison in a rung condition answers on *tags*.
+
+    With *about*, return only the comparisons that involve those names.
+    """
     return {
         repr(atom._key()): _answer(atom, tags, facts)
         for atom in facts.atoms
@@ -951,7 +957,10 @@ def _mismatch(a: Mapping[str, Any], b: Mapping[str, Any]) -> list[str]:
 
 
 def scan_local_tags(facts: Facts) -> list[str]:
-    """The written tags the world key leaves out with no stand-in (see the module docstring)."""
+    """Return the written tags that the world key leaves out with no stand-in.
+
+    See the module docstring.
+    """
     prior = facts.prior
     projections = {n for n, why in prior.elided_tags.items() if why in _PROJECTION_REASONS}
     absorbed = {spec.acc_name for spec in prior.state_key_done_specs}
@@ -968,7 +977,7 @@ def scan_local_tags(facts: Facts) -> list[str]:
 
 
 def threshold_tags(facts: Facts) -> list[str]:
-    """Tags the world key keeps only as which side of them an absorbed value is on."""
+    """Return the tags that the world key keeps only as the side an absorbed value is on."""
     found = {
         atom.threshold
         for spec in facts.prior.threshold_vector_specs
@@ -981,7 +990,7 @@ def threshold_tags(facts: Facts) -> list[str]:
 
 @dataclass
 class _Band:
-    """The numbers an absorbed value is compared with, and tags read at the time.
+    """Holds the numbers an absorbed value is compared with, and the tags read at the time.
 
     *unit* is how far the value moves in one scan.
     """
@@ -990,7 +999,10 @@ class _Band:
     unit: int
 
     def sides(self, value: Any, tags: Mapping[str, Any], facts: Facts) -> Any:
-        """-1, 0 or 1 for below, at or above each bound.  ``None`` if a value is not a number."""
+        """Return -1, 0 or 1 for below, at or above each bound.
+
+        Return ``None`` if a value is not a number.
+        """
         out = []
         for bound in self.bounds:
             at = _value(tags, bound, facts) if isinstance(bound, str) else bound
@@ -1001,7 +1013,7 @@ class _Band:
 
 
 def _bands(facts: Facts) -> dict[str, _Band]:
-    """The band of every absorbed value, by its name."""
+    """Return the band of every absorbed value, by its name."""
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.out_variants import (
         DebounceInstruction,
@@ -1023,7 +1035,7 @@ def _bands(facts: Facts) -> dict[str, _Band]:
             steps[instr.accumulator.name] = math.ceil(DT * 1e9 / instr.unit.ns)
         if isinstance(instr, (*timers, CountUpInstruction, CountDownInstruction)):
             presets[instr.accumulator.name] = [bound(instr.preset)]
-        # A coil with its own timers compares each accumulator with both its presets.
+        # A coil with its own timers compares each accumulator with both of its presets.
         if isinstance(instr, (DebounceInstruction, FlasherInstruction, TimedInstruction)):
             accs = [getattr(instr, f, None) for f in ("on_acc", "off_acc", "timer_acc")]
             ends = [getattr(instr, f, None) for f in ("on_preset", "off_preset")]
@@ -1060,21 +1072,21 @@ class _Fork:
     change: dict[str, Any]
     plc: PLC
     leave_out: set[str]
-    # For a domain judgement: the state before the scan, its patch, and each tag's swaps.
+    # For a domain judgement: the state before the scan, its patch and each tag's swaps.
     base: PLC | None = None
     patch: dict[str, Any] = field(default_factory=dict)
     near: dict[str, list[Any]] = field(default_factory=dict)
 
 
 class Prober:
-    """Runs a scan again on forks with changed starting values, and compares the results."""
+    """Runs a scan again on forks with changed starting values and compares the results."""
 
     def __init__(self, facts: Facts, driven: Iterable[str], seed: int) -> None:
         self.facts = facts
         self.random = random.Random(seed)
         skip = set(driven)
         self.scan_local = [n for n in scan_local_tags(facts) if n not in skip]
-        #: Scan-local tags, whose values the world key never sees.
+        #: Scan-local tags.  The world key never sees their values.
         self.unseen = set(scan_local_tags(facts))
         self.thresholds = [n for n in threshold_tags(facts) if n not in skip]
         self.bands = _bands(facts)
@@ -1091,7 +1103,7 @@ class Prober:
                 if atom.tag in self.domains and other in self.domains:
                     self.partners.setdefault(atom.tag, set()).add(other)
                     self.partners.setdefault(other, set()).add(atom.tag)
-        #: The tags each domain tag is compared with, directly or through others, itself too.
+        #: The tags that each domain tag is compared with, directly or through others, and itself.
         self.groups: dict[str, frozenset[str]] = {}
         for name in sorted(self.partners):
             if name in self.groups:
@@ -1106,15 +1118,15 @@ class Prober:
             for each in group:
                 self.groups[each] = frozenset(group)
         self.judged_cells: set[tuple[str, Any]] = set()
-        #: Which scan-local tag the next probe changes alone.
+        #: The scan-local tag that the next probe changes alone.
         self.turn = 0
-        #: Values found in their domains at a scan's start, by kind of domain.
+        #: How many values were in their domains at a scan's start, by kind of domain.
         self.tally_members: dict[str, int] = {}
 
     # -- building the forks before the scan ---------------------------------
 
     def forks(self, plc: PLC, patch: Mapping[str, Any], probe: bool) -> list[_Fork]:
-        """The forks to run beside *plc*'s next scan, which *patch* starts."""
+        """Return the forks to run beside *plc*'s next scan, which *patch* starts."""
         tags = {**plc.current_state.tags, **patch}
         out: list[_Fork] = []
         if probe:
@@ -1122,7 +1134,7 @@ class Prober:
             if self.scan_local:
                 change = {n: self._other(n, _value(tags, n, self.facts)) for n in self.scan_local}
                 out.append(self._fork(plc, patch, "scan-local", change))
-                # A change that only reaches other scan-local tags hides in the joint fork.
+                # A change that reaches only other scan-local tags hides in the joint fork.
                 one = self.scan_local[self.turn % len(self.scan_local)]
                 self.turn += 1
                 out.append(self._fork(plc, patch, "scan-local", {one: change[one]}))
@@ -1144,11 +1156,11 @@ class Prober:
         fork = plc.fork(inherit_log=False)
         fork.patch({**patch, **change})
         leave_out = set(change) | {f"_frac:{n}" for n in change}
-        # A fork drops the patches pending on its source, so _culprits patches the scan again.
+        # A fork drops the patches pending on its source.  So _culprits patches the scan again.
         return _Fork(why, change, fork, leave_out, patch=dict(patch))
 
     def _other(self, name: str, value: Any) -> Any:
-        """A value of *name*'s type other than *value*, often one the program compares it with."""
+        """Return a value of *name*'s type other than *value*, often one it is compared with."""
         tag = self.facts.pdg.tags.get(name)
         kind = tag.type if tag is not None else None
         if kind is TagType.BOOL or isinstance(value, bool):
@@ -1166,7 +1178,7 @@ class Prober:
         return int(min(hi, max(lo, pick)))
 
     def _band_moves(self, tags: Mapping[str, Any]) -> list[tuple[str, Any]]:
-        """For each absorbed value and threshold tag, a move that crosses no threshold."""
+        """Return, for each absorbed value and threshold tag, a move that crosses no threshold."""
         facts = self.facts
         moves = []
         for acc, band in self.bands.items():
@@ -1197,7 +1209,7 @@ class Prober:
         return moves
 
     def _step(self, value: Any, unit: int) -> Any:
-        """A move of *value* up or down, from one count to far past a scan's move."""
+        """Return *value* moved up or down, by one count or by far more than a scan moves it."""
         size = self.random.choice((1, 2, unit, 2 * unit, 5 * unit, 50 * unit, 200 * unit))
         step = size * self.random.choice((1, -1))
         if isinstance(value, int):
@@ -1205,7 +1217,7 @@ class Prober:
         return value + step
 
     def _domain_swaps(self, tags: Mapping[str, Any], probe: bool) -> dict[str, list[Any]] | None:
-        """The tags outside their domains at a scan's start, each with the values to swap in.
+        """Return the tags outside their domains at a scan's start, each with values to swap in.
 
         Each gap between domain values is judged once per run, and again at probe scans.
         """
@@ -1230,9 +1242,9 @@ class Prober:
     def _partner_swaps(
         self, near: Mapping[str, list[Any]], tags: Mapping[str, Any]
     ) -> dict[str, list[Any]]:
-        """Values for each tag compared with a swapped one, its own value first.
+        """Return values for each tag compared with a swapped one, its own value first.
 
-        A domain covers a comparison of two tags only through a pair of values, so the
+        A domain covers a comparison of two tags only through a pair of values.  So the
         partner of a swapped tag may need to move as well.  So may each tag compared with
         that partner.
         """
@@ -1248,7 +1260,7 @@ class Prober:
         return out
 
     def _reach(self, name: str) -> int:
-        """How many values on each side of its own a large domain offers *name*.
+        """Return how many values on each side of its own a large domain offers *name*.
 
         A chain of tags all past the same end of their domains needs a value for each.
         """
@@ -1295,9 +1307,9 @@ class Prober:
 
         A swap must answer every comparison as the run's state does at the scan's start,
         and show the same at its end.  A swap whose own comparisons answer otherwise at the
-        end crossed a value the domain need not split at, so it judges nothing.  One such
-        swap leaves the whole judgement out, though another swap may differ at the end.  A
-        tag is to blame when swapping all the others, with it left as it is, does pass.
+        end crossed a value that the domain need not split at, so it judges nothing.  One
+        such swap leaves the whole judgement out, though another swap may differ at the end.
+        A tag is to blame when swapping all the other tags, and leaving it as it is, passes.
         """
         assert fork.base is not None
         facts = self.facts
@@ -1355,7 +1367,7 @@ class Prober:
             judge.fail(kind, scan, detail, name)
 
     def _culprits(self, before: PLC, fork: _Fork, after: PLC) -> list[str]:
-        """The changed tags that alone change something outside the changed set."""
+        """Return the changed tags that alone change something outside the changed set."""
         if len(fork.change) == 1:
             return sorted(fork.change)
         found = []
@@ -1369,7 +1381,7 @@ class Prober:
 
 
 def _combos(near: Mapping[str, list[Any]], limit: int = _MAX_SWAPS) -> list[dict[str, Any]]:
-    """Joint swaps of every tag in *near*, the nearest values first, at most *limit*."""
+    """Return joint swaps of every tag in *near*, nearest values first, at most *limit*."""
     names = list(near)
     values = itertools.product(*(near[n] for n in names))
     return [dict(zip(names, each, strict=True)) for each in itertools.islice(values, limit)]
@@ -1393,18 +1405,18 @@ def _short(change: Mapping[str, Any]) -> str:
 
 
 class WriteRecorder:
-    """Records the tags each instruction writes while it runs.
+    """Records the tags that each instruction writes while it runs.
 
     Each tag goes to the innermost instruction running when it is written.  So a write in a
     forloop body counts for the body's instruction, and the loop's index for the loop.
     """
 
     #: The executor runs a For box's loop itself and never calls its ``execute()``.  So the
-    #: recorder wraps these executor functions as well, or it would miss the loop's writes.
+    #: recorder also wraps these executor functions.  Otherwise it would miss the loop's writes.
     _LOOP_RUNNERS = ("_execute_for_loop_natural", "_execute_for_loop_instruction")
 
     def __init__(self) -> None:
-        #: Each instruction that wrote, by ``id``, with the tags it wrote and the first scan.
+        #: Each instruction that wrote, by ``id``, with its tags and the first scan that wrote each.
         self.writes: dict[int, tuple[Any, dict[str, int]]] = {}
         self.scan = 0
         self._inner: list[set[str]] = []
@@ -1462,12 +1474,12 @@ class WriteRecorder:
 
 
 def declared_writes(instr: Any, tags: Mapping[str, Any]) -> Callable[[str], bool]:
-    """Whether the facts list a tag as one *instr* writes.
+    """Return a function that tells whether the facts list a tag as one *instr* writes.
 
-    The list holds the tags ``absorb._all_write_targets`` gives the facts, the names
-    ``write_sites`` resolves and the fault flags *instr* can set.  The facts expand a pointer
-    write into the tags its pointer's bounds reach.  A pointer write they can't expand (a
-    block past 1000 elements) covers every tag of its block.
+    The list holds the tags from ``absorb._all_write_targets``, the names that ``write_sites``
+    resolves and the fault flags *instr* can set.  The facts expand a pointer write into the
+    tags that its pointer's bounds reach.  They cannot expand a pointer write to a block
+    past 1000 elements, so that write covers every tag of its block.
     """
     from pyrung.core.analysis.prove.absorb import _all_write_targets
     from pyrung.core.analysis.prove.classify import _expand_indirect_tag_names
@@ -1493,7 +1505,7 @@ def declared_writes(instr: Any, tags: Mapping[str, Any]) -> Callable[[str], bool
 
 
 def writer_classes(program: Any) -> set[str]:
-    """The instruction classes of *program* that have writes in ``write_sites``."""
+    """Return the instruction classes of *program* that have writes in ``write_sites``."""
     from pyrung.core.validation._common import walk_instructions
 
     return {
@@ -1508,8 +1520,8 @@ def _judge_declared_writes(
 ) -> list[str]:
     """Fail each instruction that wrote a tag the facts do not list for it.
 
-    Returns each instruction class that has writes in ``write_sites`` and that no run saw
-    write.  A class the recorder can't see shows up there, not as a pass.
+    Return each instruction class that has writes in ``write_sites`` and that no run saw
+    write.  A class the recorder cannot see shows up there, not as a pass.
     """
     for instr, written in recorder.writes.values():
         covers = declared_writes(instr, tags)
@@ -1531,25 +1543,25 @@ def _judge_declared_writes(
 
 @dataclass
 class Report:
-    """The result of checking one program."""
+    """Holds the result of checking one program."""
 
     label: str
     violations: list[Violation]
     tally: Tally
     intractable: str | None = None
     unmoved: list[str] = field(default_factory=list)
-    #: Kinds of fact the program has that no scan judged, and Dones that never turned
-    #: on (``"<Done> on"``) or off.  A fact the runs never reach passes unchecked.
+    #: Kinds of fact that the program has and no scan judged, and Dones that never turned
+    #: on (``"<Done> on"``) or off.  A fact that the runs never reach passes unchecked.
     unjudged: list[str] = field(default_factory=list)
-    #: Instruction classes with writes in ``write_sites`` that no run saw write.
+    #: Instruction classes that have writes in ``write_sites`` and that no run saw write.
     silent_writers: list[str] = field(default_factory=list)
 
     def problems(self) -> list[str]:
         return [str(v) for v in self.violations]
 
 
-#: The tally keys that judge each kind of fact whose own name is no tally key.  A key that
-#: says "not judged" never counts, though it starts with the kind's name.
+#: The tally keys that judge each kind of fact whose own name is not a tally key.  A key
+#: that says "not judged" never counts, though it starts with the kind's name.
 _JUDGED_BY = {
     "input domain": ("input domain, swapped", "input domain, value in it"),
     "stateful domain": ("stateful domain, swapped", "stateful domain, value in it"),
@@ -1557,7 +1569,7 @@ _JUDGED_BY = {
 
 
 def _unjudged(judge: Judge, prober: Prober | None) -> list[str]:
-    """What :attr:`Report.unjudged` lists (see there)."""
+    """Return what :attr:`Report.unjudged` lists (see there)."""
     facts = judge.facts
     has = {
         "produced domain": bool(facts.produced),
@@ -1604,7 +1616,7 @@ def check_program(
     prepare: Callable[[PLC], None] | None = None,
     driver: Callable[[PLC, Step, RandomInputs], None] | None = None,
 ) -> Report:
-    """Compute the facts of ``build()``, run it, and judge every fact at every scan.
+    """Compute the facts of ``build()``, run it and judge every fact at every scan.
 
     *prepare* runs on each new PLC before anything else, to install a harness.  *driver*
     replaces the plain random walk.  It gets the PLC, a function that runs one scan with a
@@ -1620,7 +1632,7 @@ def check_program(
     judge = Judge(label, facts)
     driven = driven_tags(facts, plc)
     values = {name: candidate_values(name, facts, plc) for name in driven}
-    # A randint draw differs between a fork and its parent, so a probe would see noise.
+    # A randint draw differs between a fork and its parent, so a probe would only see noise.
     probing = not randint_sites(facts.pdg.tags)
     hold = hold_scans(program)
     aimed = aims(program, values)
@@ -1643,7 +1655,7 @@ def check_program(
                 count += 1
                 recorder.scan = count
                 before = run.current_state.tags
-                # The power-on state is no scan's result, so the domains start at scan 2's start.
+                # The power-on state is not a scan's result, so the domains start at scan 2's start.
                 forks = (
                     prober.forks(run, patch, count % every == 0) if probing and count > 1 else []
                 )
