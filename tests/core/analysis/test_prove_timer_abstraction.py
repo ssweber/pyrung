@@ -80,8 +80,8 @@ class TestTimerAccumulatorAgainstItsPreset:
 
 class TestAccumulatorThresholds:
     """An accumulator compared against thresholds.  A timer's tick may land on
-    any value a comparison splits at, so a threshold far past the budget's
-    scans is still crossed; a counter or a calc accumulator steps concretely,
+    any value that a comparison splits at, so a threshold far past the budget's
+    scans is still crossed.  A counter or a calc accumulator steps concretely,
     so its thresholds must lie within depth_budget."""
 
     def test_timer_threshold_event_nonzero_acc_assignment_stays_explicit(self):
@@ -170,7 +170,7 @@ def _stateful(logic: Program, unclassified: set[str] | None = None) -> dict[str,
 
 
 class TestAccumulatorStartValues:
-    """An Acc holds every value it starts from, and the values it counts or times on to."""
+    """An Acc's domain has every value it starts from and every value it counts or times on to."""
 
     def test_down_counter_staged_by_a_copy(self):
         tray = Counter.clone("StagedTray")

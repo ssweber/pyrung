@@ -260,8 +260,8 @@ def test_nested_branch_conditions_read_after_the_rows_above() -> None:
 
 
 def test_synthesis_bracket_rules_read_the_starting_state() -> None:
-    """A bracket's rules read the state it starts from: a guard on a write of
-    the bracket reads a bit the bracket solved before that write."""
+    """A bracket's rules read the state the bracket starts from.
+    A guard on a write in the bracket reads a bit that the bracket solved before that write."""
     from pyrung.core.synthesis import guarded_copy_rung
 
     gate = Bool("Gate")

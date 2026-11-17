@@ -1,12 +1,12 @@
 """Raw CLICK memory the conformance groups own, and Timer/Counter handles on it.
 
 A slot holds a case's command and results (DS, from the manifest).  Anything
-else a case touches -- C bits, timers, counters, staged DS/DD/DF/DH, TXT -- is a
-raw CLICK address, and nothing allocates those: a case picks addresses inside
+else a case touches is a raw CLICK address: C bits, timers, counters, staged
+DS/DD/DF/DH and TXT.  Nothing allocates these.  A case picks addresses inside
 its group's ranges in :data:`OWNED`.  A new group gets its ranges here before
-its first case.  ``test_build`` checks that every case stays inside its group's
-ranges, that the ranges are disjoint and inside CLICK's banks, and that no
-manifest block reaches :data:`STAGING_DS`.
+its first case.  ``test_build`` checks four things.  Every case stays inside its
+group's ranges.  The ranges are disjoint.  The ranges lie inside CLICK's banks.
+No manifest block reaches :data:`STAGING_DS`.
 
 Banks are keyed by CLICK's prefix.  ``T`` is the timer number (``T<n>`` and
 ``TD<n>``), ``CT`` the counter number (``CT<n>`` and ``CTD<n>``).
@@ -422,9 +422,9 @@ OWNED: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
 }
 
 
-#: Raw memory of the groups in parts with memory of their own (``suite.APART_PARTS``):
-#: they share nothing with :data:`OWNED`, which has no room left, and run in no project
-#: with its groups.
+#: Raw memory of the groups in parts that have memory of their own (``suite.APART_PARTS``).
+#: These parts share nothing with :data:`OWNED`, which has no room left.  They run in no
+#: project with their groups.
 OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
     "unit_pairs": {"T": range(1, 11)},
     "unit_minute": {"T": range(11, 21)},
@@ -538,7 +538,7 @@ OWNED_APART: Mapping[str, Mapping[str, range | tuple[range, ...]]] = {
 
 
 def ranges(owned: range | tuple[range, ...]) -> tuple[range, ...]:
-    """An :data:`OWNED` entry as a tuple of ranges."""
+    """Return an :data:`OWNED` entry as a tuple of ranges."""
     return owned if isinstance(owned, tuple) else (owned,)
 
 
@@ -589,7 +589,7 @@ def outside_owned(
     groups: Iterable[Group],
     table: Mapping[str, Mapping[str, range | tuple[range, ...]]] = OWNED,
 ) -> list[str]:
-    """One line per tag a case touches outside its group's ranges in *table*."""
+    """Return one line per tag a case touches outside its group's ranges in *table*."""
     problems: list[str] = []
     for g in groups:
         owned = table.get(g.name, {})

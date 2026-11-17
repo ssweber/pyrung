@@ -1,4 +1,4 @@
-"""Which ``run_function`` calls the gate refuses, and what stepping writes through one.
+"""Check which ``run_function`` calls the gate refuses and what stepping writes through one.
 
 A function whose answer may not follow from its inputs fails the gate.  The kernel asks
 the same gate.  Each row is measured against stepping, so the gate refuses only what a

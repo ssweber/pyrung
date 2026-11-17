@@ -1,4 +1,4 @@
-"""CMP_EQ_ON_COMPUTED_REAL: == / != against a REAL the ladder computes."""
+"""Check CMP_EQ_ON_COMPUTED_REAL for == and != against a REAL that the ladder computes."""
 
 from __future__ import annotations
 
