@@ -31,7 +31,7 @@ Sam ruled on 2026-11-13 that recording stays out of 0.16.0 and becomes the headl
 
 ## Work list, in order
 
-1. **One door.** Each structured mutation becomes a thin wrapper that builds its command line and dispatches it with a source. The request shapes stay, so ClickNick 0.16 and the VS Code extension keep working. Check these traps:
+1. **Console commands for every change.** Each structured mutation becomes a thin wrapper that builds its command line and dispatches it with a source. The request shapes stay, so ClickNick 0.16 and the VS Code extension keep working. Check these traps:
    - error messages ClickNick matches on;
    - unforce of a tag that isn't forced is not an error today;
    - `invalidate_mid_scan`.

@@ -248,13 +248,13 @@ All [nothing].
 - **A reload drops the scan-1 stop event.** `reload_console.py:771-772` calls `reloaded.stop()` before
   `_set_time_mode`, which starts a new scan log, so history never records that stop. Found by bob/record-save's review. [nothing]
 
-## 4. One door
+## 4. Console commands for every change
 
 Plan item 1.3. Every action that changes state is a console command, so a recording holds everything a user did.
 The old structured requests for those actions are deleted, not wrapped. Reads stay as requests. pyrung, ClickNick and
 the VS Code extension release together. [nothing, with a joint release]
 
-- **Through the door.**
+- **Requests that become console commands.**
   - From the VS Code extension: pyrungForce, pyrungUnforce and pyrungPatch. The panel sends a dict of tags, and
     `patch` takes one tag today.
   - From ClickNick (dap_service.py:611-758): SetMode, SetSpeed, Force, Patch, Unforce, ClearForces, the five Link
