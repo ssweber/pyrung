@@ -106,7 +106,7 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
     - CTU and CTD declare no `completion_controls` (counters.py:152 and :266), so pilot's `_completion_branch_error`
       (requirement_derivation.py:211) refuses them. The records would give "reset False", and for CTU the down input.
     - The TOF profile ignores the armed memory (timers.py:301). The kernel times a TOF only while it is armed or done
-      or has a nonzero Acc. So a TOF never armed, with Done False and Acc 0, may get a plan that never moves.
+      or has a nonzero Acc. So PILOT may wait on a TOF that was never armed, with Done False and Acc 0, and it never moves.
 
 #### One owner per question
 
@@ -340,8 +340,8 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 - **laddercodec as a dependency, in three steps.** They follow the plan's order (Sam, 2026-11-16). Before them, a
   dev-only diff on bob/lc-diff lists where pyrung's export and rules disagree with laddercodec's. [nothing]
-  1. Validation on laddercodec (plan item 2, step 2). It waits for laddercodec's release with `FieldError`, and it
-     comes straight after the `Rung` -> `rung` rename. laddercodec becomes a runtime dependency here.
+  1. Validation on laddercodec (plan item 2, step 2). It waits for laddercodec's release with `FieldError`. laddercodec
+     becomes a runtime dependency here.
      - Each case where pyrung becomes more permissive is logged in `pyrung-wt/buildbot/jobs/lc-diff/PERMISSIVE.md`.
        laddercodec's CLICK checks test each one against CLICK before the PR merges (Sam, 2026-11-17).
   2. Export through laddercodec (plan step 5).
