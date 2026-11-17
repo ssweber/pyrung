@@ -13,7 +13,16 @@ from pathlib import Path
 from typing import Any
 
 from pyrung.core.state import SystemState
-from pyrung.dap.expressions import And, Compare, Expr, ExpressionParseError, Not, Or
+from pyrung.dap.expressions import (
+    And,
+    Compare,
+    Expr,
+    ExpressionParseError,
+    Literal,
+    Not,
+    Or,
+    resolve_choice_label,
+)
 from pyrung.dap.expressions import compile as compile_condition
 from pyrung.dap.expressions import parse as parse_condition
 from pyrung.dap.internal_tags import visible_tags
@@ -217,10 +226,27 @@ def parse_known_condition(adapter: Any, state: SystemState, expression: str) -> 
 
 
 def condition_predicate(adapter: Any, parsed: Expr) -> Callable[[SystemState], bool]:
-    """Compile a parsed condition into a test of any state, reading aliases such as ``Pump.Run``."""
+    """Compile a parsed condition into a test of any state.
+
+    It reads aliases such as ``Pump.Run``, and a choice label such as ``HELD`` stands for its value.
+    """
     references = adapter._expression_references(parsed)
-    predicate = compile_condition(parsed)
+    tags = adapter._require_runner_locked().tags
+    predicate = compile_condition(_with_choice_values(parsed, tags))
     return lambda state: predicate(_state_with_reference_aliases(adapter, state, references))
+
+
+def _with_choice_values(expr: Expr, tags: Any) -> Expr:
+    if isinstance(expr, Compare) and expr.right is not None and isinstance(expr.right.value, str):
+        value = resolve_choice_label(tags, expr.tag.name, expr.right.value)
+        if value is None:
+            return expr
+        return Compare(tag=expr.tag, op=expr.op, right=Literal(value=value))
+    if isinstance(expr, And):
+        return And(children=[_with_choice_values(child, tags) for child in expr.children])
+    if isinstance(expr, Or):
+        return Or(children=[_with_choice_values(child, tags) for child in expr.children])
+    return expr
 
 
 def effective_evaluate_state_locked(adapter: Any) -> SystemState:

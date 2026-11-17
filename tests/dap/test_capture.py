@@ -625,6 +625,33 @@ class TestAssertVerb:
         resp, _ = _repl(adapter, out, "assert State == IDLE", seq=13)
         assert resp["message"] == "assert failed: State = 2, expected 'IDLE'"
 
+    def test_run_until_reads_a_choice_label(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        resp, _ = _repl(adapter, out, "run until State == HELD within 5", seq=11)
+        assert resp["success"] is True
+        assert resp["body"]["result"].endswith(", State == HELD is true")
+        assert adapter._runner.current_state.tags["State"] == 2
+
+    def test_watch_reads_a_choice_label(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path, _values_script())
+        _repl(adapter, out, "patch Button true", seq=10)
+        _repl(adapter, out, "step", seq=11)
+
+        def watch(expression: str, seq: int) -> str:
+            messages = _send_request(
+                adapter,
+                out,
+                seq=seq,
+                command="evaluate",
+                arguments={"expression": expression, "context": "watch"},
+            )
+            return _single_response(messages)["body"]["result"]
+
+        assert watch("State == HELD", 12) == "True"
+        assert watch("State == IDLE", 13) == "False"
+        assert watch("(State != IDLE) & Light", 14) == "True"
+
     def test_assert_names_an_unknown_tag(self, tmp_path: Path):
         adapter, out = _setup(tmp_path, _values_script())
         resp, _ = _repl(adapter, out, "assert Lamp == true")

@@ -98,6 +98,7 @@ pause                      # stop a running continue
 ```text
 run until Done within 500          # stop on the first scan that ends with Done on
 run until Count >= 10 within 2 s   # a Watch expression, given at most 2 s
+run until State == HELD within 50  # a choice label stands for its value
 ```
 
 `run until` runs whole scans until its condition holds, and runs none if it already holds. It takes the same conditions as a Watch or a breakpoint condition. Past its limit, it fails with an error that names the condition and how far it ran, so a replay stops there.

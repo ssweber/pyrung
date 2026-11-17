@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from pyrung.dap.console import ConsoleResult, register
-from pyrung.dap.expressions import Compare, Literal, _resolve_choice_label
+from pyrung.dap.expressions import Compare
 from pyrung.dap.grammar import Slot
 from pyrung.dap.handlers.stack_variables_evaluate import condition_predicate, parse_known_condition
 
@@ -186,21 +186,15 @@ def _cmd_assert(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError(_ASSERT_USAGE)
 
     name = parsed.tag.name
-    typed = parsed.right.value
-    expected = typed
-    if isinstance(typed, str):
-        label_value = _resolve_choice_label(runner.tags, name, typed)
-        if label_value is not None:
-            expected = label_value
+    expected = parsed.right.value
     actual = adapter._state_value_for_reference(state, name)
 
     if isinstance(actual, float) and isinstance(expected, int | float):
         matched = math.isclose(actual, expected, rel_tol=REAL_TOLERANCE, abs_tol=REAL_TOLERANCE)
     else:
-        check = Compare(tag=parsed.tag, op="==", right=Literal(value=expected))
-        matched = condition_predicate(adapter, check)(state)
+        matched = condition_predicate(adapter, parsed)(state)
     if not matched:
-        raise adapter.DAPAdapterError(f"assert failed: {name} = {actual!r}, expected {typed!r}")
+        raise adapter.DAPAdapterError(f"assert failed: {name} = {actual!r}, expected {expected!r}")
     return ConsoleResult(f"assert ok: {name} = {actual!r}")
 
 
