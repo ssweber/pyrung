@@ -155,6 +155,7 @@ def _coils() -> Iterator[tuple[str, Body]]:
         yield f"{name}(Bool[1..4])", lambda fn=fn: fn(_blocks()["bits"].select(1, 4))
         yield f"{name}(Bool block element)", lambda fn=fn: fn(_blocks()["bits"][3])
     yield "out(Bool, oneshot)", lambda: out(Bool("Coil"), oneshot=True)
+    yield "out(Bool[1..4], oneshot)", lambda: out(_blocks()["bits"].select(1, 4), oneshot=True)
     yield "reset(Int)", lambda: reset(Int("Value"))
     yield "reset(Char)", lambda: reset(Char("Letter"))
     yield "reset(Int[1..4])", lambda: reset(_blocks()["ints"].select(1, 4))
