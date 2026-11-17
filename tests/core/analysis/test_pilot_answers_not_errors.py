@@ -26,6 +26,7 @@ from pyrung import (
     latch,
     math,
     on_delay,
+    out,
     system,
 )
 from pyrung.core.analysis.graph import PlanStatus
@@ -81,6 +82,99 @@ class TestArithmeticInARung:
         assert plan.status is PlanStatus.REACHED, plan.reason
         assert plan.fork is not None
         assert plan.fork.state.tags[hit.name]
+
+    @pytest.mark.parametrize("form", ["ge", "eq"])
+    def test_a_tag_compared_with_arithmetic(self, form: str) -> None:
+        """``Acc == Limit + 10`` once raised a TypeError from inside how()."""
+        watch = Timer.clone("Watch")
+        limit = Int("Limit", default=20)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("Enable", external=True)):
+                on_delay(watch, 1000)
+            with Rung(watch.Acc >= limit + 1 if form == "ge" else watch.Acc == limit + 10):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="how() has no lever that sets Lvl to the value Tb[P] reads, so it stops",
+    )
+    def test_a_tag_compared_with_a_pointer_element(self) -> None:
+        """``Lvl == Tb[P]`` once raised a TypeError from inside how()."""
+        level = Int("Lvl", external=True, min=0, max=20)
+        table = Block("Tb", TagType.INT, 1, 3)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("Ld", external=True)):
+                copy(7, table[2])
+            with Rung(level == table[Int("P", external=True, min=1, max=3)], level > 5):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
+
+    @pytest.mark.parametrize(("entry", "status"), [(9, "REACHED"), (5, "STOPPED")])
+    def test_an_avoid_compared_with_a_pointer_element(self, entry: int, status: str) -> None:
+        """Start copies 5 into Lvl, so only a Tb1 of 5 puts the route in ``Lvl == Tb[P]``.
+
+        That avoid once tripped on every state, so how() stopped for either Tb1.
+        """
+        level, pointer = Int("Lvl"), Int("P", default=1)
+        table = Block("Tb", TagType.INT, 1, 3)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("Dummy")):
+                copy(table[pointer], Int("Sink"))
+            with Rung(Bool("Start", external=True)):
+                copy(5, level)
+            with Rung(level == 5):
+                latch(hit)
+        plc = PLC(program, dt=0.01)
+        plc.patch({"Tb1": entry, "P": 1})
+        plc.step()
+        plan = plc.how(hit, avoid=level == table[pointer], **BOUND)
+        assert plan.status is PlanStatus[status], plan.reason
+
+    def test_a_tag_not_equal_to_arithmetic(self) -> None:
+        """``A != B + 2`` beside ``A == B + 2`` once raised a TypeError from inside how()."""
+        left, right = (
+            Int("EA", external=True, min=0, max=10),
+            Int("EB", external=True, min=0, max=10),
+        )
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(left == right + 2):
+                out(Bool("Two"))
+            with Rung(left != right + 2, Bool("Go", external=True)):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
+
+    def test_a_writer_whose_guard_reads_a_tag_through_arithmetic_is_not_dead(self) -> None:
+        """No Lvl gives ``Lvl == Sp + 2`` while Sp is 30.  SetSp copies 1 into Sp, and Lvl 3 then does.
+
+        Reading Sp at its value now once judged the latch's guard dead, and how() stopped.
+        """
+        level = Int("Lvl", external=True, min=0, max=5)
+        setpoint = Int("Sp", default=30)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("SetSp", external=True)):
+                copy(1, setpoint)
+            with Rung(level == setpoint + 2):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status is PlanStatus.REACHED, plan.reason
+
+    def test_a_goal_holding_arithmetic_twice_keeps_one(self) -> None:
+        """Merging goals once hashed each value, and an expression has no hash."""
+        from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
+
+        arithmetic = TargetSpec("A", Int("B") + 2)
+        merged = TargetSpec.conjunction((arithmetic, TargetSpec("C", 3), arithmetic))
+        assert [member.tag for member in merged.members] == ["A", "C"]
 
     def test_packml_with_an_avoid_on_a_state_it_starts_in(self) -> None:
         plc = PLC(packml, dt=0.01)
@@ -139,6 +233,25 @@ class TestTargetForms:
         limit = Int("Limit", default=5)
         with pytest.raises(ValueError, match="compared with arithmetic"):
             PLC(program, dt=0.01).how(watch.Acc >= limit + 1, **BOUND)
+
+    def test_an_equal_target_with_arithmetic_is_a_clear_error(self) -> None:
+        program, watch, _other, _hit = self._program()
+        limit = Int("Limit", default=5)
+        with pytest.raises(ValueError, match="compared with arithmetic"):
+            PLC(program, dt=0.01).how(watch.Acc == limit + 1, **BOUND)
+
+    @pytest.mark.parametrize("offset", [0, 1])
+    def test_an_equal_target_with_a_pointer_element_is_a_clear_error(self, offset: int) -> None:
+        """``Held == Tb[P + 1]`` once raised a TypeError from inside how()."""
+        held = Int("Held")
+        table = Block("Tb", TagType.INT, 1, 3)
+        entry = Int("P", external=True, min=1, max=2)
+        with Program(strict=False) as program:
+            with Rung(Bool("Grab", external=True)):
+                copy(Int("Lvl", external=True, min=0, max=20), held)
+        element = table[entry + 1] if offset else table[entry]
+        with pytest.raises(ValueError, match="compared with a pointer element"):
+            PLC(program, dt=0.01).how(held == element, **BOUND)
 
     def test_and_is_several_targets(self) -> None:
         program, watch, _other, hit = self._program()

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Expr, Or
+from pyrung.core.expression import Expression
+from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 
 def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
@@ -79,7 +81,47 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         except TypeError:
             return None
         eval_atom = Atom(atom.tag, atom.form, operand)
+    elif isinstance(atom.operand, Expression):
+        # Comparing with the expression itself would give a condition, not a bool.
+        operand = _expression_value(atom.operand, state)
+        if operand is None:
+            return None
+        eval_atom = Atom(atom.tag, atom.form, operand)
+    elif isinstance(atom.operand, (IndirectRef, IndirectExprRef, IndirectBlockRange)):
+        # The mapping cannot say which element a pointer reads.
+        return None
     return _eval_atom(eval_atom, state[atom.tag])
+
+
+class _StateView:
+    """Lets an expression read its tags from a mapping, as it reads them in a scan."""
+
+    __slots__ = ("_state",)
+
+    def __init__(self, state: Mapping[str, Any]) -> None:
+        self._state = state
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        return self._state.get(name, default)
+
+    def get_memory(self, key: str, default: Any = None) -> Any:
+        return default
+
+
+def _expression_value(expr: Expression, state: Mapping[str, Any]) -> int | float | None:
+    """What *expr* gives on *state*, or None when *state* lacks a tag it reads."""
+    from pyrung.core.analysis.sp_values import _expr_tag_names
+
+    names = _expr_tag_names(expr)
+    if names is None or not names <= state.keys():
+        return None
+    try:
+        value = expr.evaluate(cast(Any, _StateView(state)))
+    except (TypeError, ValueError, ArithmeticError):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
 
 
 def _eval_arith_atom_from_state(atom: ArithAtom, state: Mapping[str, Any]) -> bool | None:
@@ -142,21 +184,46 @@ def _eval_expr_from_state(expr: Expr | ArithAtom, state: Mapping[str, Any]) -> b
     return None
 
 
-def _referenced_tags(expr: Expr) -> frozenset[str]:
-    """Collect all tag names still referenced in an expression."""
-    tags: set[str] = set()
-    _walk_tags(expr, tags)
-    return frozenset(tags)
+def _atom_reads(atom: Atom) -> frozenset[str] | None:
+    """The tags :func:`_eval_atom_from_state` reads to decide *atom*.
+
+    A reader that pins or enumerates an atom's tags needs all of them.  A tag it misses
+    is read at its value now, as if it could not change.  So an arithmetic operand gives
+    the tags it reads.  None means the atom reads a tag it cannot name, such as a pointer
+    element.  No domain lists that tag, so no reader may decide the atom.
+    """
+    if atom.unsupported is not None or atom.indirect_ref is not None:
+        return None
+    operand = atom.operand
+    if atom.operand_is_tag:
+        return frozenset((atom.tag, operand))
+    if isinstance(operand, Expression):
+        from pyrung.core.analysis.sp_values import _expr_tag_names
+
+        names = _expr_tag_names(operand)
+        return None if names is None else frozenset((atom.tag, *names))
+    if operand is None or isinstance(operand, (bool, int, float, str)):
+        return frozenset((atom.tag,))
+    return None
 
 
-def _walk_tags(expr: Expr, out: set[str]) -> None:
+def _referenced_tags(expr: Expr | ArithAtom) -> frozenset[str] | None:
+    """The tags :func:`_eval_expr_from_state` reads, or None when one atom reads a tag it cannot name."""
     if isinstance(expr, Atom):
-        out.add(expr.tag)
-        if expr.operand_is_tag:
-            out.add(expr.operand)
-    elif isinstance(expr, (And, Or)):
-        for t in expr.terms:
-            _walk_tags(t, out)
+        return _atom_reads(expr)
+    if isinstance(expr, Const):
+        return frozenset()
+    if isinstance(expr, ArithAtom):
+        return frozenset((expr.left, expr.right))
+    if isinstance(expr, (And, Or)):
+        tags: set[str] = set()
+        for term in expr.terms:
+            reads = _referenced_tags(term)
+            if reads is None:
+                return None
+            tags |= reads
+        return frozenset(tags)
+    return None
 
 
 def _edge_source_tags(program: Any) -> frozenset[str]:

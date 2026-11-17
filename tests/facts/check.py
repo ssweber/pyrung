@@ -23,8 +23,9 @@ power-on defaults that no scan produced, so the checks start at the end of scan 
   see at its end.  That is every Bool, every memory key and every comparison of a tag not
   swapped.  A swap whose own comparisons answer otherwise at the end judges nothing.  A
   counter one count short of a literal crosses it in a scan, but the domain need not hold
-  that neighbour.  A tag compared with a swapped one may move too, since the domains cover
-  such a comparison only through a pair of values.
+  that neighbour.  A tag compared with a swapped one may move too, and so may each tag
+  compared with that one.  The domains cover such comparisons only through values chosen
+  together.  A chain of three or more tags gets more values and more swaps to choose from.
 - **Produced value domains** (``produced_value_domains``).  These list every value exactly,
   so each value a tag holds is one of them.
 - **Scan-local tags.**  The world key (``stateful_names``) lists the tags whose values
@@ -146,6 +147,8 @@ _PROJECTION_REASONS = frozenset(
 PROBES_PER_RUN = 60
 #: At most this many value swaps per domain judgement.
 _MAX_SWAPS = 32
+#: At most this many when the rungs compare three or more tags in a chain.
+_MAX_CHAIN_SWAPS = 1024
 
 
 @dataclass(frozen=True)
@@ -339,11 +342,11 @@ def _literals(facts: Facts, name: str) -> list[int | float]:
     ]
 
 
-def _nearest(value: Any, members: list[Any]) -> list[Any]:
+def _nearest(value: Any, members: list[Any], reach: int = 2) -> list[Any]:
     """The members to swap for *value*, the nearest first.
 
-    A small domain gives all its members.  A large one gives the two nearest on each side.
-    An infinity is nearest the members at its own end.
+    A small domain gives all its members.  A large one gives the *reach* nearest on each
+    side.  An infinity is nearest the members at its own end.
     """
     if not all(_is_number(m) for m in members):
         return members[:8]
@@ -354,8 +357,8 @@ def _nearest(value: Any, members: list[Any]) -> list[Any]:
     ordered = sorted(members, key=lambda m: abs(m - value))
     if len(members) <= 8:
         return ordered
-    below = [m for m in ordered if m < value][:2]
-    above = [m for m in ordered if m > value][:2]
+    below = [m for m in ordered if m < value][:reach]
+    above = [m for m in ordered if m > value][:reach]
     return sorted(below + above, key=lambda m: abs(m - value))
 
 
@@ -1088,6 +1091,20 @@ class Prober:
                 if atom.tag in self.domains and other in self.domains:
                     self.partners.setdefault(atom.tag, set()).add(other)
                     self.partners.setdefault(other, set()).add(atom.tag)
+        #: The tags each domain tag is compared with, directly or through others, itself too.
+        self.groups: dict[str, frozenset[str]] = {}
+        for name in sorted(self.partners):
+            if name in self.groups:
+                continue
+            group: set[str] = set()
+            todo = [name]
+            while todo:
+                each = todo.pop()
+                if each not in group:
+                    group.add(each)
+                    todo.extend(self.partners.get(each, ()))
+            for each in group:
+                self.groups[each] = frozenset(group)
         self.judged_cells: set[tuple[str, Any]] = set()
         #: Which scan-local tag the next probe changes alone.
         self.turn = 0
@@ -1200,7 +1217,7 @@ class Prober:
                 key = f"{kind}, value in it"
                 self.tally_members[key] = self.tally_members.get(key, 0) + 1
                 continue
-            near = _nearest(value, members)
+            near = _nearest(value, members, self._reach(name))
             outside[name] = near
             cell = (name, tuple(_hashable(v) for v in near))
             if cell not in self.judged_cells:
@@ -1216,17 +1233,26 @@ class Prober:
         """Values for each tag compared with a swapped one, its own value first.
 
         A domain covers a comparison of two tags only through a pair of values, so the
-        partner of a swapped tag may need to move as well.
+        partner of a swapped tag may need to move as well.  So may each tag compared with
+        that partner.
         """
         out: dict[str, list[Any]] = {}
         for name in near:
-            for partner in sorted(self.partners.get(name, ())):
+            for partner in sorted(self.groups.get(name, ())):
                 if partner in near or partner in out:
                     continue
                 value = _value(tags, partner, self.facts)
-                others = _nearest(value, self.domains[partner][1])
-                out[partner] = [value, *[v for v in others if not _same(v, value)][:2]]
+                reach = self._reach(partner)
+                others = _nearest(value, self.domains[partner][1], reach)
+                out[partner] = [value, *[v for v in others if not _same(v, value)][:reach]]
         return out
+
+    def _reach(self, name: str) -> int:
+        """How many values on each side of its own a large domain offers *name*.
+
+        A chain of tags all past the same end of their domains needs a value for each.
+        """
+        return max(2, len(self.groups.get(name, ())))
 
     # -- judging the forks after the scan -----------------------------------
 
@@ -1285,7 +1311,10 @@ class Prober:
 
         def passes(near: Mapping[str, list[Any]]) -> bool:
             nonlocal closest, crossed
-            for combo in _combos(near):
+            limit = _MAX_SWAPS
+            if any(self._reach(name) > 2 for name in near):
+                limit = _MAX_CHAIN_SWAPS
+            for combo in _combos(near, limit):
                 mismatch = _mismatch(_start_answers({**entry, **combo}, facts), want_start)
                 if not mismatch:
                     alt = _forked(fork.base, {**fork.patch, **combo})
@@ -1339,11 +1368,11 @@ class Prober:
         return found
 
 
-def _combos(near: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
-    """Joint swaps of every tag in *near*, the nearest values first, at most ``_MAX_SWAPS``."""
+def _combos(near: Mapping[str, list[Any]], limit: int = _MAX_SWAPS) -> list[dict[str, Any]]:
+    """Joint swaps of every tag in *near*, the nearest values first, at most *limit*."""
     names = list(near)
     values = itertools.product(*(near[n] for n in names))
-    return [dict(zip(names, each, strict=True)) for each in itertools.islice(values, _MAX_SWAPS)]
+    return [dict(zip(names, each, strict=True)) for each in itertools.islice(values, limit)]
 
 
 def _forked(base: PLC, patch: Mapping[str, Any]) -> PLC:

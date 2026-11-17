@@ -120,6 +120,14 @@ if TYPE_CHECKING:
     from pyrung.core.intrascan_counterfactual import CounterfactualPatch
 
 
+def _same_target(left: TargetSpec, right: TargetSpec) -> bool:
+    try:
+        return bool(left == right)
+    except TypeError:
+        # A pointer element answers ``==`` with a condition that has no truth value.
+        return False
+
+
 @dataclass(frozen=True)
 class TargetSpec:
     """The target Compass is orienting toward."""
@@ -136,7 +144,12 @@ class TargetSpec:
 
         if not targets:
             raise ValueError("pilot: a goal requires at least one target")
-        targets = tuple(dict.fromkeys(targets))
+        # Compare rather than hash, since a target value may be an expression with no hash.
+        unique: list[TargetSpec] = []
+        for target in targets:
+            if not any(target is kept or _same_target(target, kept) for kept in unique):
+                unique.append(target)
+        targets = tuple(unique)
         if len(targets) == 1:
             return targets[0]
         return cls(

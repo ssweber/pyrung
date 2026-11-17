@@ -33,6 +33,10 @@ Groups (the brief for this tool, written after two branches regressed how() unse
                compared with a value the runtime gives it
     preset     a negative preset, written as a literal and as a tag: a counter held in
                reset, the same counter staged below its preset, an on-delay
+    accs       a count a copy stages past its preset, counts compared with each other
+               (directly and with a constant added), a tag its copies leave at 0 or 10
+               compared with an input, an input compared with an unbounded input, and an
+               input compared with a set point plus 2
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
 and never reuse it, because two runs are compared by name.
@@ -1767,3 +1771,88 @@ for _kind, _literal in (("literal", True), ("tag", False)):
         _negative_preset_counter(_literal, stage=True),
     )
     _add("preset", f"preset/on delay -5 s {_kind}", _negative_preset_on_delay(_literal))
+
+
+# --------------------------------------------------------------------------- accs
+
+
+def _accs_staged():
+    """Load copies 6 into the count, and one more pulse takes it to 7, past its preset of 3."""
+    load, pulse = Bool("Load", external=True), Bool("Pulse", external=True)
+    count, hit = Counter.clone("Cnt"), Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung(load):
+            copy(6, count.Acc)
+        with Rung(pulse):
+            count_up(count, 3).reset(Bool("Clear", external=True))
+        with Rung(count.Acc == 7):
+            latch(hit)
+    return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
+
+
+def _accs_pair(offset):
+    """Hit latches once count A is ahead of count B, which has counted twice."""
+
+    def build():
+        a, b = Counter.clone("CntA"), Counter.clone("CntB")
+        hit = Bool("Hit")
+        with Program(strict=False) as prog:
+            with Rung(Bool("PulseA", external=True)):
+                count_up(a, 3).reset(Bool("ClearA", external=True))
+            with Rung(Bool("PulseB", external=True)):
+                count_up(b, 3).reset(Bool("ClearB", external=True))
+            ahead = a.Acc > b.Acc if offset is None else a.Acc == b.Acc + offset
+            with Rung(ahead, b.Acc >= 2):
+                latch(hit)
+        return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
+
+    return build
+
+
+def _accs_written_above_an_input():
+    """Level's copies leave it at 0 or 10, and Hit needs it above the input Limit."""
+    level, limit, hit = Int("Level"), Int("Limit", external=True, min=0, max=9), Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung(Bool("Fill", external=True)):
+            copy(10, level)
+        with Rung(Bool("Drain", external=True)):
+            copy(0, level)
+        with Rung(level > limit, limit >= 5):
+            latch(hit)
+    return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
+
+
+def _accs_level_and_hmi():
+    """Level is compared with 10 and with an HMI value that has no bounds, so it has no domain."""
+    level, hit = Int("Level", external=True), Bool("Hit")
+    with Program(strict=False) as prog:
+        with Rung(level == Int("HmiLevel", external=True)):
+            out(Bool("AtHmi"))
+        with Rung(level > 10):
+            latch(hit)
+    return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
+
+
+_add("accs", "accs/a count a copy stages past its preset", _accs_staged)
+_add("accs", "accs/a count ahead of another", _accs_pair(None))
+_add("accs", "accs/a count two ahead of another", _accs_pair(2))
+_add("accs", "accs/a copied level above an input", _accs_written_above_an_input)
+_add("accs", "accs/an input compared with 10 and with an unbounded input", _accs_level_and_hmi)
+
+
+def _accs_level_above_a_set_point():
+    """No Level gives ``Level == Sp + 2`` while Sp is 30.  SetSp copies 1 into Sp, and Level 3 then does."""
+    level, setpoint, hit = (
+        Int("Level", external=True, min=0, max=5),
+        Int("Sp", default=30),
+        Bool("Hit"),
+    )
+    with Program(strict=False) as prog:
+        with Rung(Bool("SetSp", external=True)):
+            copy(1, setpoint)
+        with Rung(level == setpoint + 2):
+            latch(hit)
+    return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
+
+
+_add("accs", "accs/an input equal to a set point plus 2", _accs_level_above_a_set_point)

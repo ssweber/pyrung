@@ -847,15 +847,6 @@ def _avoid_expr_has_edge(expr: Any) -> bool:
     return any(_avoid_expr_has_edge(child) for child in getattr(expr, "terms", ()) or ())
 
 
-def _avoid_expr_is_opaque(expr: Any) -> bool:
-    """Does this avoid lower to a stand-in for a pointer or an expression, naming no real tag?"""
-    if getattr(expr, "unsupported", None) is not None:
-        return True
-    if str(getattr(expr, "tag", "")).startswith("indirect("):
-        return True
-    return any(_avoid_expr_is_opaque(child) for child in getattr(expr, "terms", ()) or ())
-
-
 def _avoid_condition_predicate(condition: Any) -> Callable[[dict[str, Any]], bool]:
     """Evaluate *condition* itself on a state, each tag not yet in it at its default."""
 
@@ -904,7 +895,8 @@ def _compile_avoid_member(
 
     A plain callable has no expression and names no tags, so both are ``None``.
     A condition lowers to an expression, and the predicate reads an undecided
-    expression as violated.
+    expression as violated.  Its tag names are ``None`` when it reads a tag it cannot
+    name, such as a pointer element.
     """
     from pyrung.core.condition import Condition, _as_condition, _normalize_and_condition
     from pyrung.core.tag import Tag
@@ -931,7 +923,8 @@ def _compile_avoid_member(
     def _predicate(state: dict[str, Any]) -> bool:
         return _eval_expr_from_state(expr, state) is not False
 
-    return _predicate, sorted(_referenced_tags(expr)), expr
+    reads = _referenced_tags(expr)
+    return _predicate, None if reads is None else sorted(reads), expr
 
 
 def _compile_avoid(spec: Any) -> Any:
@@ -960,15 +953,16 @@ def _compile_avoid(spec: Any) -> Any:
             )
         name = _render_avoid_expr(expr) if expr is not None else ", ".join(tags or ()) or "avoid"
         condition = _avoid_condition(cond, expr)
-        if expr is not None and _avoid_expr_is_opaque(expr):
-            # The lowered form has no reading of these, and undecided counts as violated.
+        opaque = expr is not None and tags is None
+        if opaque:
+            # The lowered form cannot read a tag it cannot name.  It would trip on every state.
             name = _avoid_opaque_name(condition)
             pred = _avoid_condition_predicate(condition)
         members.append(
             _AvoidMember(
                 name=name,
                 pred=pred,
-                tags=frozenset(tags or ()),
+                tags=None if opaque else frozenset(tags or ()),
                 condition=condition,
             )
         )

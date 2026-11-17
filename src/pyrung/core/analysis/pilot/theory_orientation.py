@@ -1441,7 +1441,10 @@ def _theory_intrascan_frontier_bearing(
                             direct_values = (True,)
                         elif atom.form in {"xio", "fall"}:
                             direct_values = (False,)
-                        elif atom.form == "eq":
+                        elif atom.form == "eq" and isinstance(
+                            atom.operand, (bool, int, float, str)
+                        ):
+                            # An expression or a pointer element names no value to set.
                             direct_values = (atom.operand,)
                         elif tag is not None and atom.form in {
                             "ne",

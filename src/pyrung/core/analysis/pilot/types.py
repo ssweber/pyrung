@@ -92,7 +92,8 @@ class _AvoidMember:
 
     name: str
     pred: Callable[[dict[str, Any]], bool]
-    tags: frozenset[str] = frozenset()
+    # It is None for a condition that reads a tag it cannot name, so no weighed state trips it.
+    tags: frozenset[str] | None = frozenset()
     # The normalized runtime Condition equivalent to ``pred``.  CoastSession
     # uses it only to say what it reads; ``pred`` remains authoritative.
     # Opaque callables have none and therefore retain the narrower

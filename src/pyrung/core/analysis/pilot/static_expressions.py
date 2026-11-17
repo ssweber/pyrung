@@ -53,19 +53,6 @@ def _resolved_atom_operand(atom: Atom, snapshot: dict[str, Any]) -> Any:
         return None
 
 
-def simplified_expr_tags(expr: Any) -> set[str]:
-    """Tag names referenced by a simplified expression."""
-
-    if isinstance(expr, Atom):
-        tags = {expr.tag}
-        if expr.operand_is_tag:
-            tags.add(expr.operand)
-        return tags
-    if isinstance(expr, (And, Or)):
-        return set().union(*(simplified_expr_tags(term) for term in expr.terms))
-    return set()
-
-
 def _domain_granularity(domain: tuple[Any, ...]) -> Any:
     """Smallest positive spacing in a finite numeric domain."""
 

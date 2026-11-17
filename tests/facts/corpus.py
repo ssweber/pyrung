@@ -1004,6 +1004,10 @@ def hmi_request_taken_when_nonzero() -> Any:
 #: Idioms that need a harness on each PLC: name -> the function that installs it.
 PREPARE: dict[str, Callable[[PLC], None]] = {}
 
+#: Idioms whose runs start with fixed inputs: name -> one patch for each of the first scans.
+#: The random walk runs after them.
+OPENING: dict[str, tuple[dict[str, Any], ...]] = {}
+
 
 def _harness(plc: PLC) -> None:
     Harness(plc).install()
@@ -1623,3 +1627,235 @@ def text_copy_skipped_on_a_bad_digit() -> Any:
         with Rung(Bool("KeyHigh")):
             out(Bool("KeyLamp"))
     return prog
+
+
+# ---------------------------------------------------------------------------
+# Tags compared with a tag, a pointer element or an expression
+# ---------------------------------------------------------------------------
+
+
+@idiom
+def count_compared_with_an_hmi_target() -> Any:
+    """A count staged past its preset, compared with an HMI target that has no bounds."""
+    picks = Counter.clone("Picks")
+    with Program() as prog:
+        with Rung(Bool("LoadPicks", external=True)):
+            copy(5, picks.Acc)
+        with Rung(Bool("Pick", external=True)):
+            count_down(picks, 0).reset(Bool("PicksClear", external=True))
+        with Rung(picks.Acc == Dint("PickTarget", external=True)):
+            out(Bool("AtPickTarget"))
+    return prog
+
+
+@idiom
+def soak_time_compared_with_a_recipe_step() -> Any:
+    """A timer's Acc compared with the recipe time a pointer picks."""
+    step = Int("SoakStep", external=True, min=1, max=3)
+    times = Block("SoakTime", TagType.INT, 1, 3)
+    soak = Timer.clone("Soak")
+    with Program() as prog:
+        with Rung(Bool("SoakRun", external=True)):
+            on_delay(soak, 300)
+        with Rung(Bool("SoakSet", external=True)):
+            copy(Int("HmiSoak", external=True, min=0, max=400), times[step])
+        with Rung(soak.Acc == times[step]):
+            out(Bool("SoakStepDone"))
+        with Rung():
+            copy(soak.Acc, Int("SoakShown"))
+    return prog
+
+
+@idiom
+def counts_compared_through_their_difference() -> Any:
+    """Two counts a rung compares through their difference, both past their presets."""
+    inbound, outbound = Counter.clone("Inbound"), Counter.clone("Outbound")
+    with Program() as prog:
+        with Rung(Bool("InPulse", external=True)):
+            count_up(inbound, 3).reset(Bool("InboundClear", external=True))
+        with Rung(Bool("OutPulse", external=True)):
+            count_up(outbound, 3).reset(Bool("OutboundClear", external=True))
+        with Rung(inbound.Acc - outbound.Acc == 2):
+            out(Bool("TwoInside"))
+        with Rung():
+            copy(inbound.Acc, Dint("InboundShown"))
+    return prog
+
+
+@idiom
+def count_compared_with_another_plus_an_offset() -> Any:
+    """A count a rung compares with another count plus a constant."""
+    fed, cut = Counter.clone("Fed"), Counter.clone("Cut")
+    with Program() as prog:
+        with Rung(Bool("FeedPulse", external=True)):
+            count_up(fed, 3).reset(Bool("FedClear", external=True))
+        with Rung(Bool("CutPulse", external=True)):
+            count_up(cut, 3).reset(Bool("CutClear", external=True))
+        with Rung(fed.Acc == cut.Acc + 2):
+            out(Bool("TwoAhead"))
+        with Rung():
+            copy(fed.Acc, Dint("FedShown"))
+    return prog
+
+
+@idiom
+def three_counts_kept_in_order() -> Any:
+    """Three counts a rung compares in a chain, all past their presets."""
+    first, second, third = (Counter.clone(f"Stage{i}") for i in range(3))
+    clear = Bool("StagesClear")
+    with Program() as prog:
+        with Rung(Bool("StagePulse0", external=True)):
+            count_up(first, 2).reset(clear)
+        with Rung(Bool("StagePulse1", external=True)):
+            count_up(second, 2).reset(clear)
+        with Rung(Bool("StagePulse2", external=True)):
+            count_up(third, 2).reset(clear)
+        with Rung(first.Acc < second.Acc, second.Acc < third.Acc):
+            out(Bool("StagesInOrder"))
+        with Rung():
+            copy(third.Acc, Dint("Stage2Shown"))
+    return prog
+
+
+@idiom
+def count_with_a_preset_tag_compared_with_a_literal() -> Any:
+    """A count whose preset an HMI sets, and a rung that compares the count with 3."""
+    batch = Counter.clone("Tray")
+    with Program() as prog:
+        with Rung(Bool("TrayPulse", external=True)):
+            count_up(batch, Dint("TraySize", external=True, min=2, max=5)).reset(
+                Bool("TrayClear", external=True)
+            )
+        with Rung(batch.Acc == 3):
+            out(Bool("TrayAtThree"))
+        with Rung(batch.Done):
+            out(Bool("TrayFull"))
+    return prog
+
+
+@idiom
+def level_compared_with_an_hmi_level() -> Any:
+    """An input compared with a literal and with an HMI value that has no bounds."""
+    level = Int("TankLevel", external=True)
+    with Program() as prog:
+        with Rung(level > 10):
+            out(Bool("TankAboveTen"))
+        with Rung(level == Int("HmiLevel", external=True)):
+            out(Bool("TankAtHmi"))
+    return prog
+
+
+@idiom
+def level_compared_with_a_table_entry() -> Any:
+    """An input compared with a literal and with the table entry a pointer picks."""
+    level = Int("BinLevel", external=True)
+    entry = Int("BinEntry", external=True, min=1, max=3)
+    table = Block("BinTable", TagType.INT, 1, 3)
+    with Program() as prog:
+        with Rung(level > 10):
+            out(Bool("BinAboveTen"))
+        with Rung(Bool("BinTableSet", external=True)):
+            copy(Int("HmiBin", external=True, min=11, max=13), table[entry])
+        with Rung(table[entry] == level):
+            out(Bool("BinAtEntry"))
+    return prog
+
+
+@idiom
+def held_reading_compared_with_a_table_entry() -> Any:
+    """A copied reading compared with the table entry a pointer picks."""
+    raw = Int("ScaleRaw", external=True, min=0, max=100)
+    entry = Int("ScaleEntry", external=True, min=1, max=2)
+    table = Block("ScaleTable", TagType.INT, 1, 2)
+    held = Int("ScaleHeld")
+    with Program() as prog:
+        with Rung(raw > 10):
+            out(Bool("ScaleLoaded"))
+        with Rung(Bool("ScaleGrab", external=True)):
+            copy(raw, held)
+        with Rung(Bool("ScaleTableSet", external=True)):
+            copy(Int("HmiScale", external=True, min=0, max=100), table[1])
+        with Rung(held == table[entry]):
+            out(Bool("ScaleAtEntry"))
+    return prog
+
+
+@idiom
+def recipe_mode_compared_with_a_table_entry() -> Any:
+    """A tag with ``choices=`` that a copy can set past them, compared with a table entry."""
+    mode = Int("RecipeMode", choices={0: "Off", 1: "Fill", 2: "Mix"})
+    entry = Int("RecipeEntry", external=True, min=1, max=2)
+    table = Block("RecipeTable", TagType.INT, 1, 2)
+    hmi = Int("HmiRecipe", external=True, min=0, max=100)
+    with Program() as prog:
+        with Rung(hmi > 50):
+            out(Bool("RecipeHigh"))
+        with Rung(Bool("RecipeLoad", external=True)):
+            copy(hmi, mode)
+        with Rung(Bool("RecipeTableSet", external=True)):
+            copy(Int("HmiRecipeEntry", external=True, min=0, max=100), table[1])
+        with Rung(mode == table[entry]):
+            out(Bool("RecipeAtEntry"))
+    return prog
+
+
+@idiom
+def real_reading_compared_with_a_table_entry() -> Any:
+    """A Real input compared with the Real table entry a pointer picks."""
+    entry = Int("TempEntry", external=True, min=1, max=2)
+    table = Block("TempTable", TagType.REAL, 1, 2)
+    with Program() as prog:
+        with Rung(Bool("TempTableSet", external=True)):
+            copy(Real("HmiTemp", external=True, min=0, max=10), table[1])
+        with Rung(Real("TempIn", external=True, min=0, max=10) == table[entry]):
+            out(Bool("TempAtEntry"))
+    return prog
+
+
+@idiom
+def real_readings_kept_in_order() -> Any:
+    """Two Real inputs inside one band, and a rung that compares them."""
+    first = Real("BandA", external=True, min=0, max=1)
+    second = Real("BandB", external=True, min=0, max=1)
+    with Program() as prog:
+        with Rung(first > 0.5, first < 0.9, second > 0.5, second < 0.9, first < second):
+            out(Bool("BandInOrder"))
+    return prog
+
+
+@idiom
+def count_compared_with_a_real_reading() -> Any:
+    """An Int count and a Real reading inside one band, and rungs that compare them."""
+    count = Int("BinCount", external=True)
+    reading = Real("BinReading", external=True)
+    with Program() as prog:
+        with Rung(count > 2, count < 9, reading > 4.6, reading < 5.4, count == reading):
+            out(Bool("BinCountMatches"))
+        with Rung(count < reading):
+            out(Bool("BinCountBelow"))
+    return prog
+
+
+# The count and the reading are equal inside the band.
+OPENING["count_compared_with_a_real_reading"] = ({"BinCount": 5, "BinReading": 5.0},) * 3
+
+
+@idiom
+def shown_count_compared_with_an_hmi_count() -> Any:
+    """A count copied to a display tag, which a rung compares with an HMI count."""
+    boxes = Counter.clone("Boxes")
+    shown = Dint("BoxesShown")
+    with Program() as prog:
+        with Rung(Bool("BoxPulse", external=True)):
+            count_up(boxes, 3).reset(Bool("BoxesClear", external=True))
+        with Rung():
+            copy(boxes.Acc, shown)
+        with Rung(shown == Dint("HmiBoxes", external=True)):
+            out(Bool("BoxesAtHmi"))
+    return prog
+
+
+# The count runs past its preset to the HMI count, 5.
+OPENING["shown_count_compared_with_an_hmi_count"] = tuple(
+    {"BoxPulse": scan % 2 == 0, "BoxesClear": False, "HmiBoxes": 5} for scan in range(12)
+)

@@ -30,11 +30,10 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
     project_pilot_overlay,
 )
-from pyrung.core.analysis.pilot.static_expressions import simplified_expr_tags
 from pyrung.core.analysis.pilot.types import _ExecutedAttempt
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 from pyrung.core.analysis.pilot.writer_selection import _can_produce
-from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+from pyrung.core.analysis.prove.expr import _eval_expr_from_state, _referenced_tags
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 
@@ -353,11 +352,16 @@ def _route_blocker_crossings(
         if _eval_expr_from_state(predicate, prospective_landing) is not True:
             continue
         crossings: list[_RouteBlockerCrossing] = []
-        predicate_tags = simplified_expr_tags(predicate) - {ctx.target.tag}
-        replay_scan_ids = write_replay_scan_ids(
-            pulse.fork,
-            exact_scan_ids,
-            predicate_tags,
+        predicate_tags = _referenced_tags(predicate)
+        # A predicate reading a tag it cannot name may cross on any scan, so each is replayed.
+        replay_scan_ids = (
+            tuple(sorted(set(exact_scan_ids)))
+            if predicate_tags is None
+            else write_replay_scan_ids(
+                pulse.fork,
+                exact_scan_ids,
+                predicate_tags - {ctx.target.tag},
+            )
         )
         for scan_id in replay_scan_ids:
             projection = attempt.projection_at(scan_id)

@@ -47,7 +47,10 @@ tests/facts checks the facts against real runs, over the idiom corpus and the co
   - Two kinds of `Real` keep an input domain with no NaN or Inf in it, so how() never sets one there. No run refutes it, because the runs never write one. A `Real` the program writes gets no domain when it may hold NaN or Inf (`prove/non_finite.py`).
     - an input `Real` the outside writes and no rung writes
     - a `receive()` payload
-  - A tag the rungs compare with a tag that has no domain keeps a domain that may have no value equal to the other's. No run refutes it yet. Tags compared with each other that both have domains share their values (`_close_tag_comparisons` in classify.py). The other tag may have been absorbed, or have no claim, as `Loop_Result3` beside `TD211` in `loop/skipped_body_holds_timer_and_counter`. A sound fix gives the first tag no claim, unless its domain lists every value it can hold.
+  - A value that reaches a compared tag through a copy or a `math()` keeps split points the comparison does not split. A count copied to a display tag that a rung compares with an HMI count keeps its domain, which ends at the preset. `test_facts_idioms.py`, `[shown_count_compared_with_an_hmi_count-stateful domain-Boxes_Acc]`. An HMI `Real` copied into the table entry a Real input is compared with keeps whole numbers only, `[real_reading_compared_with_a_table_entry-input domain-HmiTemp]`. A drop of the compared tag would have to reach back along the copy to the tags it reads.
+  - A tag copied into a tag compared with an HMI tag keeps a short domain. With `copy(Raw, F)` on every scan and `F == C`, Raw keeps the split points of its own comparisons, and a run refutes it at 37. Widening reaches only the writers of a tag that keeps a domain, and F has none. This goes to the bindings transport.
+  - The facts see no comparison inside a counter's or timer's `.reset()`, or inside a `search()`. So `.reset(Lvl == 30)` gives `Lvl` no split point at 30, and `search()` gives none at its value. The reviewer's probes refute both.
+  - Two `Char` tags a rung compares with each other share no values, since `_close_tag_comparisons` in classify.py shares only numbers. So `A == B` may have no pair of domain values that answers True. No run refutes it yet.
   - A functional dependency is claimed before the rung first writes the tag. `test_facts_idioms.py`, `[funcdep_follows_its_source-functional dep-PosOffset]`.
   - A functional dependency ignores a rung that writes the tag before its source moves. `test_facts_idioms.py`, `[funcdep_written_before_its_source_moves-functional dep-Lag]`.
   - A `to_text()` copy of an expression into a tag in no block declares only that tag. The runtime counts on by name (`Msg1`, `Msg2`, ...), and an expression's text has no bound, so the analyses miss the rest.
@@ -215,6 +218,13 @@ planner, which is fixed in the planner. The last resort is not widened into a se
 
 The list to sort:
 - The last resort can't see inputs through plant links.
+- Wider input domains cost the last resort and the skiff. Tags a rung compares with each other share their values, so some domains grew (tumbler `Ref_Cmd_Stop` from 6 values to 19).
+  - The last resort tries the first 8 values of an input's domain in sorted order (last_resort.py:72). It no longer tries 7, 8 and 9 for `Ref_Cmd_Stop`.
+  - The skiff probes a word only when its domain has at most 8 values (skiff.py:564).
+  - A tag compared with a pointer element, with arithmetic or with an input that has no bounds now gets no domain. Neither of them tries a value for it.
+- A stateful tag compared with another tag now holds that tag's values too, so `_satisfying_value` (sp_values.py:392) can pick a value its writers never store. A lever aimed at that value may find no writer for it. No case shows it yet.
+- A comparison with a pointer element stops, as in `Rung(Lvl == Tb[P], Lvl > 5)`. how() has no lever that sets Lvl to the value `Tb[P]` reads. `test_pilot_answers_not_errors.py`, `test_a_tag_compared_with_a_pointer_element` is a strict xfail.
+- A comparison with arithmetic stops, as in `A.Acc == B.Acc + 2` and `A.Acc - B.Acc == 2`. So does `A.Acc > B.Acc` on two counters. The trace has no lever for them.
 - The planner's guesses read `writers_of` alone, so they miss a write through a pointer that lists no targets. These are tide_tables.py:518 and :645, static_expressions.py:302, trace_constraints.py:235, options.py:150 and :155, and guidance.py:75. A run checks each plan, so none of them makes a false claim. [nothing]
 - Chains past the trace depth of 15 reach only through the last resort.
 - An En misread. It reads the scan end where it should read at the rung.

@@ -433,7 +433,12 @@ def _atom_matches_acc_preset_boundary(
 ) -> bool:
     """True if *atom* is one side of the Acc/Preset done threshold."""
     if atom.tag == acc_name:
-        return atom.operand in preset_match_values and atom.form in {"ge", "lt"}
+        # An expression operand (``Acc == Other + 50``) has no hash, and is no preset.
+        return (
+            isinstance(atom.operand, (int, float, str))
+            and atom.operand in preset_match_values
+            and atom.form in {"ge", "lt"}
+        )
     if atom.operand_is_tag and atom.operand == acc_name:
         return atom.tag in preset_match_values and atom.form in {"le", "gt"}
     return False

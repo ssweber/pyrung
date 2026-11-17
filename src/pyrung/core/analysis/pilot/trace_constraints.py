@@ -27,9 +27,14 @@ from pyrung.core.analysis.sp_values import (
     _written_value_for_tag,
 )
 from pyrung.core.crossing import Affine, AffineCmp, Cmp, Constraint, Eq, Literal
+from pyrung.core.expression import Expression
+from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
+
+
+_INDIRECT = (IndirectRef, IndirectExprRef, IndirectBlockRange)
 
 
 def _atom_target(
@@ -52,6 +57,9 @@ def _atom_target(
             except TypeError:
                 return None
             return (atom.tag, operand)
+        if isinstance(atom.operand, (Expression, *_INDIRECT)):
+            # ``A == B + 2`` and ``A == Tb[P]`` name no value for A until a scan reads them.
+            return None
         return (atom.tag, atom.operand)
     if form == "rise":
         return (atom.tag, True)

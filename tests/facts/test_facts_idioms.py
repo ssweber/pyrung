@@ -11,15 +11,29 @@ ones the runs cannot reach, and why.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import cache
+from typing import Any
 
 import pytest
 
-from tests.facts.check import Report, check_program
-from tests.facts.corpus import CORPUS, PREPARE
+from pyrung.core import PLC
+from tests.facts.check import RandomInputs, Report, Step, check_program
+from tests.facts.corpus import CORPUS, OPENING, PREPARE
+
+# recipe_mode_compared_with_a_table_entry stores values past RecipeMode's choices on purpose.
+pytestmark = pytest.mark.filterwarnings("ignore:BoundsViolation. RecipeMode=:UserWarning")
 
 #: Seeds of the random runs, one run each.
 SEEDS = (1, 2)
+
+#: Scans of each random walk, as ``check_program`` runs by default.
+SCANS = 600
+
+Driver = Callable[[PLC, Step, RandomInputs], None]
+
+#: The tally of a domain swap that crossed a comparison.
+_CROSSED = "domain swap crossed a comparison, not judged"
 
 #: Facts the runs refute, by idiom: ``(fact, tag)`` -> the first scan that refutes it.
 KNOWN: dict[str, dict[tuple[str, str], str]] = {
@@ -47,10 +61,22 @@ KNOWN: dict[str, dict[tuple[str, str], str]] = {
             " points at 10 only.  No value of it is above 50."
         ),
     },
+    "real_reading_compared_with_a_table_entry": {
+        ("input domain", "HmiTemp"): (
+            "scan 2.  HmiTemp = 1.5 is copied into the table entry TempIn is compared with."
+            "  HmiTemp's domain lists whole numbers only, since no rung compares it."
+        ),
+    },
+    "shown_count_compared_with_an_hmi_count": {
+        ("stateful domain", "Boxes_Acc"): (
+            "scan 10.  BoxesShown copies the count, and a rung compares it with HmiBoxes."
+            "  The count's domain ends at its preset, 3, so 5 is no value of it."
+        ),
+    },
     "text_copy_skipped_on_a_bad_digit": {
         ("scan-local", "KeyLevel"): (
             "scan 10.  The copy writes nothing when KeyChar is not a digit, so KeyLevel keeps"
-            " the value of the scan before.  The prover takes the copy for a write on every"
+            " the value of the scan before.  The facts take the copy for a write on every"
             " scan."
         ),
     },
@@ -86,7 +112,24 @@ SILENT: dict[str, dict[str, str]] = {
 
 @cache
 def _report(name: str) -> Report:
-    return check_program(name, CORPUS[name], seeds=SEEDS, prepare=PREPARE.get(name))
+    opening = OPENING.get(name)
+    return check_program(
+        name,
+        CORPUS[name],
+        seeds=SEEDS,
+        prepare=PREPARE.get(name),
+        driver=None if opening is None else _opening_then_walk(opening),
+    )
+
+
+def _opening_then_walk(opening: tuple[dict[str, Any], ...]) -> Driver:
+    def drive(_plc: PLC, one_scan: Step, walk: RandomInputs) -> None:
+        for patch in opening:
+            one_scan(patch)
+        for _ in range(SCANS):
+            one_scan(walk.next())
+
+    return drive
 
 
 def _found(report: Report) -> set[tuple[str, str]]:
@@ -101,6 +144,11 @@ def test_facts_hold(name: str) -> None:
     known = KNOWN.get(name, {})
     new = [str(v) for v in report.violations if (v.fact, v.key) not in known]
     assert not new, "\n".join(new)
+    # A swap that crosses a comparison judges nothing.  A domain that grew too coarse would
+    # excuse more and more swaps that way.
+    judged = report.tally.judged
+    swapped = sum(count for kind, count in judged.items() if kind.endswith(", swapped"))
+    assert judged.get(_CROSSED, 0) * 10 <= swapped
     # The runs move every stepping tag, so they reach the values its writes produce.
     assert not report.unmoved
     assert sorted(report.unjudged) == sorted(UNJUDGED.get(name, {}))

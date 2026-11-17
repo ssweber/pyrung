@@ -35,6 +35,7 @@ from pyrung.core.condition import (
 from pyrung.core.crossing import Cmp, Constraint, complement_scalar_constraint
 from pyrung.core.executor import RungRun
 from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 
 
@@ -134,7 +135,11 @@ def _guard_leaf_constraint(condition: Condition) -> Constraint | None:
     bound_tag = _tag_name(bound)
     if bound_tag is not None:
         return Cmp(tag, operator, bound_tag, bound_is_tag=True)
-    if isinstance(bound, Tag | ImmediateRef) or hasattr(bound, "evaluate"):
+    # A pointer element names no value until a scan reads it, and answers ``==`` with a
+    # condition, so a constraint holding one could not be compared.
+    if isinstance(bound, Tag | ImmediateRef | IndirectRef | IndirectExprRef | IndirectBlockRange):
+        return None
+    if hasattr(bound, "evaluate"):
         return None
     return Cmp(tag, operator, bound)
 

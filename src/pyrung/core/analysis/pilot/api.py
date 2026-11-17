@@ -85,6 +85,8 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
         CompareEq,
         NormallyClosedCondition,
     )
+    from pyrung.core.expression import Expression
+    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
     from pyrung.core.tag import Tag
 
     if isinstance(cond, Tag):
@@ -110,6 +112,16 @@ def _parse_one(cond: Any) -> tuple[str, Any, Any]:
                 f"pilot: how() target {tag_name} == {value.name!r} compares against a "
                 f"Tag, not a concrete value. Pass the value it stands for{hint} or a "
                 f"literal so the target is a frozen scalar."
+            )
+        if isinstance(value, Expression):
+            raise ValueError(
+                f"pilot: how() target {tag_name} is compared with arithmetic; compare it with "
+                "a literal."
+            )
+        if isinstance(value, IndirectRef | IndirectExprRef | IndirectBlockRange):
+            raise ValueError(
+                f"pilot: how() target {tag_name} is compared with a pointer element; compare it "
+                "with a literal."
             )
         return tag_name, value, None
 
