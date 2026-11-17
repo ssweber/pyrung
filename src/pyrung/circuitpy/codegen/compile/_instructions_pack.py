@@ -20,6 +20,7 @@ from pyrung.core.instruction import (
     UnpackToWordsInstruction,
 )
 
+from ._emit import emit_truth
 from ._primitives import (
     _compile_assignment_lines,
     _compile_guarded_instruction,
@@ -64,7 +65,7 @@ def _compile_pack_bits_instruction(
         [
             "_packed = 0",
             f"for _bit_index, _src_idx in enumerate({src_indices}):",
-            f"    if bool({src_symbol}[_src_idx]):",
+            f"    if {emit_truth(f'{src_symbol}[_src_idx]')}:",
             "        _packed |= (1 << _bit_index)",
             f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
             *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
