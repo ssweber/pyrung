@@ -1,4 +1,4 @@
-"""Rung end lines come from the file as it is now, not as it was first read."""
+"""Check that rung end lines come from the file as it is now, not as it was first read."""
 
 from __future__ import annotations
 

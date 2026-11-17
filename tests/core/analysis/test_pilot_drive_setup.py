@@ -183,7 +183,7 @@ def test_prepare_target_context_preserves_work_and_compass_defaults_and_override
         (setup, override_work, "Target", False, "other-predicate"),
         {"max_scans": 37, "avoid_pred": other_avoid, "compass": override_compass},
     )
-    # The start ask reads the work the search will start from, not the setup's.
+    # The start ask reads the work that the search will start from, not the setup's work.
     assert asked == [("avoid", {"SetupWork": 1}), ("other-avoid", {"OverrideWork": 2})]
     assert route_calls[0][0][0] is setup.work
     assert route_calls[1][0][0] is override_work
@@ -214,7 +214,7 @@ def _slot_program() -> tuple[Program, Block]:
 
 @pytest.fixture
 def computed(monkeypatch: Any) -> list[Any]:
-    """Each program build_prover_context runs the prover's passes for."""
+    """Record each program that build_prover_context runs the prover's passes for."""
     calls: list[Any] = []
     real = drive_setup._compute_prover_context
 
@@ -233,7 +233,7 @@ def test_second_call_on_the_same_program_reuses_the_answer(computed: list[Any]) 
     assert computed == [logic]
     assert first.key_config is not None
     assert second == first
-    # Each caller gets its own dicts, so a change to one never reaches the next.
+    # Each caller gets its own dicts, so a change by one caller never reaches the next.
     assert first.nd_domains is not None
     first.nd_domains.clear()
     third = drive_setup.build_prover_context(logic)

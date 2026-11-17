@@ -177,7 +177,7 @@ def exclusive_inputs_across_scans(pool: TagPool) -> list[RungSpec] | None:
 def count_down_constant_preset(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #8: count_down(C, -5).reset(R) + Rung(C.Acc <= -3).
 
-    The compare crosses on the third count, before Done (``Acc <= -5``)."""
+    The compare crosses on the third count, before Done (``Acc <= -5``) is reached."""
     if not pool.counters or not pool.writable_bool():
         return None
     counter = pool.counters[0]
@@ -362,7 +362,7 @@ def range_sum_into_compare(pool: TagPool) -> list[RungSpec] | None:
 def range_aggregate_into_compare(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #29b: math(block.select(start, end).max(), Out) + Rung(Out > 0).
 
-    The non-additive siblings of range_sum_into_compare.  Every member stays
+    These are the non-additive siblings of range_sum_into_compare. Every member stays
     a read of the calc, with no element-wise sum decomposition.
     """
     if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
@@ -978,7 +978,7 @@ TIER1_PATTERNS = [
 ]
 
 # Patterns that deliberately place two program features adjacent to each other.
-# Bugs tend to live in those corners.  program_specs()
+# Bugs tend to live in those corners. program_specs()
 # weights selection toward these (see _ADJACENCY_PATTERN_WEIGHT in strategies.py).
 ADJACENCY_PATTERNS = [
     copy_chain_into_compare,

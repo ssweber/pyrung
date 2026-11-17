@@ -1,9 +1,9 @@
-"""A Real that holds NaN and stays NaN has not changed, whichever NaN object a state holds.
+"""Test that a Real that holds NaN and stays NaN has not changed, whatever NaN object it holds.
 
-``copy()`` keeps the NaN it copies, ``math()`` computes a new NaN object each scan, and each
-patch is a new one too.  Every reader of history must count none of them as a change.
-``cause()`` and ``effect()`` follow a NaN that one rung writes and a later rung reads as they
-follow a number.
+``copy()`` keeps the NaN it copies. ``math()`` computes a new NaN object each scan, and each
+patch is a new NaN object too. Every reader of history must count none of them as a change.
+``cause()`` and ``effect()`` must follow a NaN that one rung writes and a later rung reads,
+the same way they follow a number.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ def test_diff_monitors_and_the_dap_window_see_no_change() -> None:
         plc.monitor(tag, lambda _now, _before, tag=tag: calls.append((tag, plc.state.scan_id)))
     for _ in range(20):
         plc.step()
-    # A second patch is a new NaN over the old one.
+    # A second patch writes a new NaN over the old one.
     plc.patch({"Source": float("nan")})
     plc.step()
     assert calls == [(tag, 1) for tag in TAGS]
