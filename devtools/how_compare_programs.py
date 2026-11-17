@@ -35,7 +35,8 @@ Groups (the brief for this tool, written after two branches regressed how() unse
                reset, the same counter staged below its preset, an on-delay
     accs       a count a copy stages past its preset, counts compared with each other
                (directly and with a constant added), a tag its copies leave at 0 or 10
-               compared with an input, and an input compared with an unbounded input
+               compared with an input, an input compared with an unbounded input, and an
+               input compared with a set point plus 2
 
 Cases marked fast=False only run with --full.  The case name is its key: name a new case once
 and never reuse it, because two runs are compared by name.
@@ -1837,3 +1838,21 @@ _add("accs", "accs/a count ahead of another", _accs_pair(None))
 _add("accs", "accs/a count two ahead of another", _accs_pair(2))
 _add("accs", "accs/a copied level above an input", _accs_written_above_an_input)
 _add("accs", "accs/an input compared with 10 and with an unbounded input", _accs_level_and_hmi)
+
+
+def _accs_level_above_a_set_point():
+    """No Level gives ``Level == Sp + 2`` while Sp is 30.  SetSp copies 1 into Sp, and Level 3 then does."""
+    level, setpoint, hit = (
+        Int("Level", external=True, min=0, max=5),
+        Int("Sp", default=30),
+        Bool("Hit"),
+    )
+    with Program(strict=False) as prog:
+        with Rung(Bool("SetSp", external=True)):
+            copy(1, setpoint)
+        with Rung(level == setpoint + 2):
+            latch(hit)
+    return dict(plc=PLC(prog, dt=0.01), targets=(hit,), goal=_tag_goal(hit))
+
+
+_add("accs", "accs/an input equal to a set point plus 2", _accs_level_above_a_set_point)
