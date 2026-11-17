@@ -1,10 +1,10 @@
-"""A slot read only through a range reads its declared default, on every path.
+"""Test that a slot that is read only through a range reads its declared default, on every path.
 
-A slot's default is its power-on value.  Memory is keyed by name, and a slot nothing
-names directly never reaches the runner's state: the fallback the read passes decides
-what it reads.  ``SumExpr.evaluate`` passed 0, so interpreted scans summed a blank where
-the kernel and generated code read the default, and a run that went on in the scan loop
-gained more per scan than one stepped.
+A slot's default is its power-on value. Memory is keyed by name. A slot that nothing names
+directly never reaches the runner's state, so the fallback that the read passes decides what
+it reads. ``SumExpr.evaluate`` passed 0. Interpreted scans therefore summed a blank, while the
+kernel and the generated code read the default. A run that continued in the scan loop gained
+more per scan than a run that was stepped.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
 from tests.core.test_indirect_expr_compare import _StubBase
 
-# Past the prefix a long run takes interpreted, so the rest of it runs in the loop.
+# After the prefix, a long run goes interpreted, so the rest of it runs in the loop.
 LOOP_SCANS = 2000
 STEPPED_SCANS = 6
 
@@ -106,7 +106,10 @@ def _real_sum() -> Program:
 
 
 def _sum_into_its_own_range() -> Program:
-    """The program that showed it: DS2 is read through the range and nowhere else."""
+    """Build the program that showed the bug.
+
+    DS2 is read through the range and nowhere else.
+    """
     block = Block("DS", TagType.INT, 1, 2, default_factory=lambda _addr: 9)
     with Program(strict=False) as program:
         with Rung():
@@ -114,7 +117,7 @@ def _sum_into_its_own_range() -> Program:
     return program
 
 
-# The value is what a scan must store, worked out from the defaults by hand.
+# Each value is what a scan must store. It was worked out by hand from the defaults.
 ROWS = [
     pytest.param(_sum_into_its_own_range, "DS1", 19, id="sum-into-its-own-range"),
     pytest.param(_calc_on("sum", _factory_slots), "Seen", 19, id="sum-factory"),
@@ -169,7 +172,7 @@ def test_generated_code_reads_the_same_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     namespace = _generated_scan(build(), monkeypatch)
-    # DS1 lives in the block's array; the other two are scalars of their own.
+    # DS1 lives in the block's array. The other two are scalars of their own.
     stored = namespace["_b_DS"][0] if watched == "DS1" else namespace[f"_t_{watched}"]
     assert stored == first_scan
 
@@ -196,7 +199,10 @@ def test_a_long_run_lands_where_stepping_does(
 
 
 def test_the_program_that_showed_it_gains_ten_per_scan() -> None:
-    """One from the sum's own slot on top of DS2's 9, however the run got there."""
+    """Check that each scan adds 10, however the run got there.
+
+    That is 1 from the sum's own slot on top of DS2's 9.
+    """
     for jit in (True, False):
         plc = PLC(_sum_into_its_own_range(), dt=0.010)
         plc.run_until(NEVER, max_cycles=LOOP_SCANS, jit=jit)
@@ -205,7 +211,7 @@ def test_the_program_that_showed_it_gains_ten_per_scan() -> None:
 
 @pytest.mark.parametrize("runner", [PLC, CompiledPLC])
 def test_a_written_slot_reads_what_was_written(runner: Any) -> None:
-    """The default is the power-on value: it stops counting once the slot holds something."""
+    """Check that the default is the power-on value and stops counting once the slot is written."""
     plc = runner(_calc_on("sum", _factory_slots)(), dt=0.010)
     plc.step()
     assert plc.current_state.tags["Seen"] == 19

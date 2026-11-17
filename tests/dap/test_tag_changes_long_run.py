@@ -1,4 +1,7 @@
-"""The history panel after a long compiled run: the same entries as stepping, or a window."""
+"""Test the history panel after a long compiled run.
+
+It must show the same entries as stepping, or a window.
+"""
 
 from __future__ import annotations
 
@@ -196,7 +199,8 @@ def test_a_transition_keeps_its_own_scan_and_a_pulse_is_not_lost(compiled: Sessi
         for scan, entry in by_scan.items()
         if entry["changes"].get("T2_Done", [0, 0])[1] == "True"
     )
-    # One scan up, one scan down, every time round: the timer holds its Acc for neither.
+    # Each time round, T2_Done is up for one scan and down for one scan. The timer holds its Acc
+    # for neither.
     assert len(rises) >= 39
     assert all(by_scan[scan + 1]["changes"]["T2_Done"] == ["True", "False"] for scan in rises)
 

@@ -1,4 +1,4 @@
-"""Out coil variants: the ``out`` group (subroutine ``Conf_Out``).
+"""Test the Out coil variants in the ``out`` group (subroutine ``Conf_Out``).
 
 Each coil is a C bit and each phase a raw Timer pair, ``T<n>`` with ``TD<n>``,
 which is what CLICK's Out dialog names (its TD) and claims (the whole timer
@@ -17,7 +17,7 @@ The six cases are O1 to O6, in the order the group lists them.  An Out coil
 never sets its Timer's done bit T<n>, so a contact on that T<n> is always off
 (O6).
 
-Each case but O1 runs in steps that ``Scratch`` holds.  A step ends on a timer's
+Each case but O1 runs in steps that are numbered in ``Scratch``.  A step ends on a timer's
 own TD, so no reading depends on how long a scan takes.  A step's rungs come
 below the coil in reverse order, so each new step starts on the next scan.  A
 timer of the case's own times a wait that the coil's TDs cannot time.
@@ -74,7 +74,7 @@ DEADLINE_MS = 1000
 
 
 def prove_toggle_flips_once_per_edge(slot):
-    # O1: the rung goes true and stays true; the bit flips once.
+    # O1: the rung goes true and stays true, and the bit flips once.
     with Rung(slot.Cmd != 0):
         toggle(c[1801])
     with Rung(slot.Cmd != 0, c[1801]):
@@ -90,7 +90,7 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 
 def prove_debounce_td_keeps_counting(slot):
-    # O2: the on side fires at 100 ms.  The case ends on the scan its TD reaches 300.
+    # O2: the on side fires at 100 ms.  The case ends on the scan that its TD reaches 300.
     with Rung(slot.Cmd != 0):
         debounce(c[1811], on=(ClickTimer(301), 100), off=(ClickTimer(311), 1000))
     with Rung(slot.Cmd != 0, c[1811]):
@@ -186,7 +186,8 @@ def prove_timed_needs_fresh_edge(slot):
 
 
 def prove_out_coil_sets_timer_done(slot):
-    # O6: does the coil write its T<n>?  The case ends on the scan the on TD reaches 300.
+    # O6: checks whether the coil writes its T<n>.  The case ends on the scan that the on TD
+    # reaches 300.
     with Rung(slot.Cmd != 0):
         debounce(c[1851], on=(ClickTimer(310), 200), off=(ClickTimer(312), 1000))
     with Rung(slot.Cmd != 0, t[310]):
@@ -294,7 +295,7 @@ def test_out():
     assert_all_passed(run(group))
 
 
-#: Each case redesigned to step on its timers, with the time it takes in-process.
+#: The cases that step on their own timers, with the time each takes in-process.
 STEPPED = {
     "debounce_td_keeps_counting": 0.5,
     "debounce_bounce_restarts_on_side": 1.0,
@@ -307,7 +308,10 @@ STEPPED = {
 @pytest.mark.parametrize("dt", [0.001, 0.010, 0.025, 0.040, 0.050])
 @pytest.mark.parametrize("case_id", STEPPED)
 def test_out_at_any_scan(monkeypatch, dt, case_id):
-    """The CLICK scans in about 1 ms, the soft PLC in 10..40 ms."""
+    """Check the case at several scan times.
+
+    A CLICK scans in about 1 ms, and the soft PLC in 10 to 40 ms.
+    """
     monkeypatch.setattr(runner_module, "DT", dt)
     stepped = next(c for c in group.cases if c.id == case_id)
     scans = int(STEPPED[case_id] / dt)
