@@ -58,8 +58,8 @@ class _InstructionInfo:
     af_token: str
     branch_tree: SPNode | None  # branch-local conditions (SP tree)
     pins: list[_PinInfo]
-    # The wire of the raw CSV rung it sits on (0 for the first), a wire being
-    # rows joined by verticals; None where unknown.
+    # The wire of the raw CSV rung that this entry sits on, counting from 0 for the first.
+    # A wire is rows joined by verticals.  It is None where unknown.
     wire: int | None = field(default=None, compare=False)
 
 
@@ -70,7 +70,7 @@ class _SourceOutput:
     af_token: str
     tree: SPNode | None  # full condition from the power rail to this output
     pins: tuple[_PinInfo, ...]
-    wire: int = 0  # the wire of the raw CSV rung it sits on (0 for the first)
+    wire: int = 0  # the wire of the raw CSV rung it sits on, from 0 for the first
 
 
 @dataclass
@@ -82,8 +82,8 @@ class _AnalyzedRung:
     instructions: list[_InstructionInfo]
     role: RungRole = RungRole.NORMAL
     is_continued: bool = False
-    # Per-output source wiring of the raw CSV rung this rung starts; None on
-    # pieces split off a raw rung (they share the first piece's entry).
+    # The source wiring of each output of the raw CSV rung that this rung starts.  It is None
+    # on pieces split off a raw rung, which share the first piece's entry.
     source_outputs: tuple[_SourceOutput, ...] | None = None
 
 

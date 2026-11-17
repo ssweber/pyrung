@@ -227,8 +227,8 @@ def monotone_profile(
     returned profile exposes none of those implementation details as fields;
     callers ask ``plan`` for the operation appropriate to the current target.
 
-    An ascending owner completes at ``acc >= preset`` and a descending one at
-    ``acc <= preset``, with the preset's own sign, as the instruction computes Done.
+    An ascending owner completes at ``acc >= preset``.  A descending owner completes at
+    ``acc <= preset``.  Both use the preset's own sign, as the instruction computes Done.
     """
 
     sign = 1 if direction >= 0 else -1

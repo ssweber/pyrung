@@ -24,7 +24,7 @@ from pyrung.core.tag import TagType
 
 @dataclass(frozen=True, slots=True)
 class _KernelSnapshot:
-    """A kernel's tags, memory and edge bits (blocks reload from the tags)."""
+    """Hold a kernel's tags, memory and edge bits.  Blocks reload from the tags."""
 
     tags: dict[str, Any]
     memory: dict[str, Any]

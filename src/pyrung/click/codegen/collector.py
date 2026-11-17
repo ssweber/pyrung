@@ -692,7 +692,7 @@ def _enrich_with_ownership(
         _hw_address_name(entry.hardware): entry.logical for entry in structured_map.tags()
     }
 
-    # A Timer/Counter clone conforms to the retentive policy and comments its
+    # Make each Timer/Counter clone follow the retentive policy and the comments that its
     # addresses carry.
     _conform_clone_to_addresses(collection, structured_map, tag_by_hardware)
     clone_operands = {
@@ -766,7 +766,7 @@ def _enrich_with_ownership(
     for (memory_type, index), comment in structured_map._source_unmapped_comments.items():
         operand = format_address_display(memory_type, index)
         if operand in clone_operands:
-            continue  # carried by the clone's comments=
+            continue  # the clone's comments= already carries this comment
         parsed = _parse_operand_prefix(operand)
         if parsed is None:
             continue
@@ -840,8 +840,10 @@ def _conform_clone_to_addresses(
     structured_map: TagMap,
     tag_by_hardware: dict[str, Any],
 ) -> None:
-    """Record each clone field whose address retentive differs from the built-in's,
-    and each field whose address has a comment."""
+    """Record each clone field whose address retentive setting differs from the built-in's.
+
+    Also record each clone field whose address has a comment.
+    """
     from pyclickplc.addresses import parse_address
     from pyclickplc.banks import DEFAULT_RETENTIVE
 
@@ -904,8 +906,8 @@ def _register_timer_counter_clone(
     )
     var_name = _make_safe_identifier(raw_name, used_names=used_var_names)
 
-    # A field the project left un-nicknamed is named after its own address, which
-    # exports back as no nickname: codegen never invents one (T1_Done, OvenTimer_Acc).
+    # Name a field that the project left without a nickname after its own address.  That
+    # exports back as no nickname, because codegen never invents one (T1_Done, OvenTimer_Acc).
     field_nicknames = {"Done": done_nick or done_operand, "Acc": acc_nick or acc_operand}
 
     collection.timer_counter_clones.append(
@@ -1058,8 +1060,8 @@ def _register_operands_from_text(
         prefix2 = range_match.group(3)
         num2 = int(range_match.group(4))
         if prefix1 == prefix2:
-            # A descending range (shift(C1018..C1011)) is the ascending window
-            # reversed; register the ascending one (see _render_range_expr).
+            # A descending range such as shift(C1018..C1011) is the ascending window
+            # reversed.  Register the ascending one (see _render_range_expr).
             num1, num2 = min(num1, num2), max(num1, num2)
             range_str = _ascending_range_str(range_match.group(0))
             if range_str not in collection.ranges:
@@ -1297,7 +1299,7 @@ def _ref_af_token(
             remaining = [f"{k}={v}" for k, v in tc_kwargs]
             args_str = ",".join(remaining)
 
-    # Out coil variants: each phase's Done/Acc renders as its Timer clone.
+    # Out coil variants: each phase's Done and Acc render as its Timer clone.
     if func_name in _OUT_VARIANT_TIMER_INSTRUCTIONS:
         from pyrung.click.codegen.utils import _out_variant_timer_pairs, _parse_af_args
 
@@ -1357,8 +1359,8 @@ def _ref_operands_in_text(
             if parsed is not None:
                 refs.used_click_blocks.add(parsed[2])
 
-    # Range aggregates: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum(); same
-    # semantic-or-block rendering as _render_range_expr in utils.
+    # Range aggregates: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum().  They render as a
+    # semantic range or a block, the same as _render_range_expr in utils.
     for agg_match in _RANGE_AGG_RE.finditer(text):
         prefix = agg_match.group(2)
         start_num = int(agg_match.group(3))
@@ -1371,7 +1373,7 @@ def _ref_operands_in_text(
         if parsed is not None:
             refs.used_click_blocks.add(parsed[2])
 
-    # Expression functions (SQRT → sqrt, ...) are imported by the file that uses them.
+    # The file that uses an expression function (SQRT → sqrt, ...) imports it.
     for func_match in _CLICK_FUNC_RE.finditer(text):
         py_name = _CLICK_FUNC_TO_PYTHON[func_match.group(1)]
         if py_name in _EXPR_FUNC_IMPORT_NAMES:
