@@ -274,8 +274,6 @@ class CountDownInstruction(Instruction):
             rate_per_scan=lambda _dt: 0.5,
             advance=ConditionDemand(self.down_condition),
             advance_is_pulse=True,
-            # Done is ``acc <= preset``, not ``acc <= -preset``.
-            mirror_preset=False,
             restore=(
                 ConditionDemand(self.reset_condition) if self.reset_condition is not None else None
             ),

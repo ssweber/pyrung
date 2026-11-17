@@ -182,6 +182,37 @@ def test_count_down_tag_preset_boundary_reads_the_tag() -> None:
     )
 
 
+def test_a_negative_literal_preset_keeps_its_sign() -> None:
+    """Done is ``Acc >= -5`` at run time, so the boundary must not read it as 5."""
+    from pyrung.core.runner import PLC
+
+    run = Bool("run", external=True)
+    reset = Bool("reset", external=True)
+    timer = Timer.clone("Neg")
+    owners = (
+        (lambda: count_up(Counter[1], preset=-5).reset(reset), Counter[1]),
+        (lambda: on_delay(timer, -5, "ms"), timer),
+        (lambda: off_delay(timer, -5, "ms"), timer),
+    )
+    for build, owner in owners:
+        with Program() as program:
+            with Rung(run):
+                build()
+        profile = _only_profile(program)
+        assert profile is not None
+        assert profile.completion_boundary is not None
+        assert profile.completion_boundary({}) == Cmp(owner.Acc.name, ">=", -5)
+
+    # A run agrees: the counter is done at Acc 0, before any count.
+    with Program() as program:
+        with Rung(run):
+            count_up(Counter[1], preset=-5).reset(reset)
+    plc = PLC(program, dt=0.010)
+    plc.step()
+    assert plc.state.tags[Counter[1].Acc.name] == 0
+    assert plc.state.tags[Counter[1].Done.name] is True
+
+
 def test_plain_output_has_no_advance_profile() -> None:
     source = Bool("source", external=True)
     result = Bool("result")
