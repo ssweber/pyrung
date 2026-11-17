@@ -722,8 +722,8 @@ def test_the_form_of_a_check_does_not_change_the_answer() -> None:
 def test_a_check_is_not_asked_about_a_real_input_put_back_at_rest() -> None:
     """RecipeShown copies Recipe every scan, so no real state has the two with different values.
 
-    If a plan put Recipe back at 0 under a real RecipeShown of 5, that state would never
-    happen.  The check would raise on it.
+    If a plan put Recipe back at 0 under a real RecipeShown of 5, that would be a state that
+    no real run reaches.  The check would raise on it.
     """
     sensor = Bool("HoldSensor", external=True)
     recipe = Int("Recipe", external=True)
@@ -1077,7 +1077,7 @@ def _dwell_target():
 
 
 def _entry_preset():
-    """The first scan latches X.  A timer with no preset removes it on the next scan."""
+    """The first scan latches X.  A timer with no preset resets X on the next scan."""
     x = Bool("HX")
     target = Bool("HT")
     wait = Timer.clone("HW")

@@ -229,7 +229,10 @@ def compute_facts(program: Any, plc: PLC) -> Facts | Intractable:
 
 @contextmanager
 def _prior_given(prior: prove_passes._PriorFacts) -> Any:
-    """Give ``prepare_drive`` the facts already built, so it does not rebuild them."""
+    """Give ``prepare_drive`` the facts already built.
+
+    So it does not rebuild them, and it does not build different facts from the check's.
+    """
     from pyrung.core.analysis import prove
 
     with pytest.MonkeyPatch.context() as patch:
@@ -828,7 +831,8 @@ class _DoneRule:
     ) -> bool:
         acc = _value(tags, self.acc, facts)
         if isinstance(self.preset, str):
-            # The instruction reads its preset tag during the scan, so accept either end value.
+            # The instruction reads its preset tag during the scan, so accept the tag's value
+            # from either the start or the end of the scan.
             presets = [_value(tags, self.preset, facts), _value(before, self.preset, facts)]
         else:
             presets = [self.preset]
@@ -1209,7 +1213,7 @@ class Prober:
         return moves
 
     def _step(self, value: Any, unit: int) -> Any:
-        """Return *value* moved up or down, by one count or by far more than a scan moves it."""
+        """Return *value* moved up or down, by anything from one count to far past a scan's move."""
         size = self.random.choice((1, 2, unit, 2 * unit, 5 * unit, 50 * unit, 200 * unit))
         step = size * self.random.choice((1, -1))
         if isinstance(value, int):

@@ -1,8 +1,8 @@
 """Test long runs over harness analog feedback, and over slots that a run first touches late.
 
-A ``ramp_on`` or ``approach_to`` plant moves its value every scan. The run must stop at the scan
-where a rung would read that value as crossed, and the value must be the one that stepping
-leaves. If no rung can see the value, or the value has settled, the run stays in the loop.
+A ``ramp_on`` or ``approach_to`` plant moves its value every scan. So the loop must stop at the
+scan where a rung would read that value as crossed. The value there must be the one that
+stepping leaves. If no rung can see the value, or the value has settled, the run stays in the loop.
 
 A slot that is absent from the state when a run starts joins it on the first scan that touches it.
 """
@@ -389,7 +389,7 @@ class TestFeedbackStaysInTheLoop:
 
 
 class TestCoastOverAMovingPlant:
-    """A plant that is still moving, under a cycle, lands the coast where stepping lands."""
+    """With a plant that is still moving under a cycle, the coast lands where stepping lands."""
 
     @pytest.mark.parametrize(("profile", "threshold"), PROFILES)
     def test_coast_lands_on_the_crossing(self, profile: Any, threshold: float) -> None:
@@ -1450,7 +1450,8 @@ class TestSlotFirstTouchedInsideTheRun:
     def _run(
         body: Callable[[Any, Timer, Bool], None], watched: int, first: dict[str, Any] | None = None
     ) -> None:
-        # Use a fresh block, and start in the loop. An earlier PLC on the block would seed the slot.
+        # Use a fresh block, and run the coast on it before any other PLC uses it. An earlier
+        # PLC on the block would seed the slot.
         bank = Block(f"FreshBank{next(_FRESH)}", TagType.INT, 1, 400)
         Delay = Timer.clone("Delay")
 

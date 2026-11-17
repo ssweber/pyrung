@@ -93,7 +93,8 @@ def _tag_read_in_a_subroutine() -> tuple[Program, RandIntExpr, list[str]]:
     return logic, roll, [name, f"{name}.ucut", "Die", "Shown"]
 
 
-#: Programs whose draws differed between stepping and the kernel (review of the uncut draw).
+#: Programs whose draws once differed between stepping and the kernel. The review of the
+#: uncut draw found them.
 _KERNEL_SITE_PROGRAMS = {
     "int_and_hex_word": _int_and_word,
     "calc_and_tag_copy": lambda: _tag_read_by_a_rung(with_calc=True, as_condition=False),
@@ -489,7 +490,10 @@ class TestBoundsAsCLICKReadsThem:
         ],
     )
     def test_only_the_draws_a_math_runs_are_drawn(self, factory, dests, drawn):
-        """A Math draws once for each RAND it runs, as on a CLICK. Each draw ignores the others."""
+        """A Math draws once for each RAND it runs, as on a CLICK.
+
+        Each draw comes from its own site and has the value it would have if it ran alone.
+        """
         roll = randint(70000, 90000)
         with Program(strict=False) as logic:
             with Rung():

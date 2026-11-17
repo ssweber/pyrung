@@ -588,7 +588,11 @@ class TestSystemPointsStayOutOfBlocks:
             Int("rtc.second").map_to(Block("Cb", TagType.INT, 1, 8)[3])
 
     def test_a_block_range_cannot_carry_one(self) -> None:
-        """``Block.map_to`` receives a slot's name, so it refuses a system name at that point."""
+        """Refuse a system name when a block slot is named.
+
+        ``Block.map_to`` takes each slot's name from the slot, so naming the slot is where a
+        system name is refused.
+        """
         logical = Block("Sn", TagType.INT, 1, 4)
         with pytest.raises(ValueError, match="can't live in a block"):
             logical.slot(3, name="rtc.second")

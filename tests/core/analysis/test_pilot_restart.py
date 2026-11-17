@@ -72,7 +72,7 @@ def test_a_plan_that_needs_the_restart_says_so_as_its_first_step() -> None:
     assert "how() found no way from where the session is" in text
     assert "\n2. " in text
     assert plan.total_scans == 1
-    # The session did not move.  A real run follows this plan.
+    # The session did not move.  A replay of the plan reaches the target.
     assert plc.current_state is before
     assert plan.replay().state.tags[target.name] is True
 

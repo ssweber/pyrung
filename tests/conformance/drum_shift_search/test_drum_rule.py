@@ -18,9 +18,9 @@ move on their events. The expectations are what pyrung reads, which is the drum 
 drums follow. A drum writes its outputs when its step moves or its rung comes back, not on
 every scan. A write to its step register is not a move.
 
-The time & event drum is moved on scan 2 and the time drum on scan 1. A one-scan event on
-scan 1 does not move the drum on a CLICK, which ``drum_settle`` asks on its own. Every
-scenario here starts from step 2.
+The time & event drum is moved on scan 2 and the time drum on scan 1. On a CLICK, a one-scan
+event on scan 1 does not move the time & event drum. The ``drum_settle`` group has its own
+case for this. Every scenario here starts from step 2.
 
 - ``writes_on_move_only`` (probe): both drums on step 2 with B on from scan 2.
   Scenario A: B reset above the drums on scan 3 stays off, 2020 on scans 3 and

@@ -457,8 +457,8 @@ def test_bare_box_then_a_bare_row_in_a_forloop_body_round_trips():
 def test_import_gives_each_wire_of_a_box_rung_a_rung_of_its_own():
     """CLICK -> pyrung -> CLICK: import gives each wire of a box rung a rung of its own.
 
-    When the wires share their first contact, they come back as the rung of the box plus
-    one continued() rung for each other wire.
+    When the wires share their first contact, the first wire comes back as a rung, and each
+    other wire comes back as a continued() rung.
     """
     header = ("marker", *[f"col{i}" for i in range(31)], "AF")
 

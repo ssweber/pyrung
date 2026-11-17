@@ -1,12 +1,12 @@
-"""Check how CLICK spells hex and REAL constants on export, and how it reads them back.
+"""Check that the export spells hex and REAL constants as CLICK does, and the import reads them.
 
 When you type a rung, CLICK reads digits in a hex context as hex and appends ``h``. A hex
 context is hex-mode Math, or a DH/XD/YD value or compare. A pasted rung gets no such fix-up.
 pyrung literals stay decimal, so pyrung ``255`` exports as ``FFh``. The export is unpadded
 because CLICK's Math normalizes ``000Ah`` to ``Ah``, and Copy and Compare keep either spelling.
 
-REAL constants are float32 in CLICK and keep at most 7 significant digits. CLICK writes them
-in its own way (``3.402823E+38``).
+REAL constants are float32 in CLICK and keep at most 7 significant digits. The export writes
+them the way CLICK does (``3.402823E+38``).
 
 A blank text constant is ``$00``, CLICK's ASCII-code constant for NUL (a TXT blank). A quoted
 ``""`` writes no TXT at all, and CLICK ends a quoted constant at NUL.
@@ -287,7 +287,10 @@ def test_real_exponent_round_trips():
 
 
 def test_blank_text_constants_export_as_ascii_code():
-    """Check that ``""`` writes nothing on CLICK and a raw NUL in quotes ends the constant."""
+    """Check that the export writes a blank text constant as ``$00``.
+
+    On CLICK, ``""`` writes nothing, and a raw NUL in quotes ends the constant.
+    """
     with Program() as logic:
         with Rung():
             fill("\x00", txt.select(1, 2))
@@ -355,7 +358,10 @@ def test_blank_text_constants_import_as_nul():
 
 @pytest.mark.parametrize("blank", ["$00", '""'])
 def test_csv_blank_spellings_import_as_blank(blank: str):
-    """Read ``$00`` as the blank. It is the export's spelling, and older CSVs use ``""``."""
+    """Read both ``$00`` and ``""`` as the blank.
+
+    ``$00`` is the export's spelling, and older CSVs use ``""``.
+    """
     bundle = _bundle(
         ("", 'copy("Q",TXT1)'),
         ("", f"copy({blank},TXT1)"),

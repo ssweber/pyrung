@@ -97,7 +97,7 @@ a body rung's contacts read across iterations
 (``loop/body_rung_contact_per_iteration``).
 
 Open: a ``call()`` inside a rung, between rows.  CLICK has no nested calls and
-every case already runs inside ``Conf_SolveOrder``.  The case waits for a subroutine
+every case already runs inside ``Conf_SolveOrder``.  This open item waits for a subroutine
 home called from main.
 """
 
@@ -329,8 +329,9 @@ def init_continued_reads_later_wire(slot):
 
 
 def prove_box_leg_reads_row_below(slot):
-    # P = C661.  A continued wire below the counter latches it on scan 4, because what sits
-    # below a box in one rung is a continued wire.  The counter counts on scan 2.
+    # P = C661.  A continued wire below the counter latches it on scan 4.  The wire is a
+    # continued wire because whatever sits below a box in one rung is one.  The counter
+    # counts on scan 2.
     counter = ClickCounter(162)
     count_scans(slot)
     with Rung(slot.Cmd != 0, slot.Scratch == 2):

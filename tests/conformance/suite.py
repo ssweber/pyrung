@@ -466,8 +466,9 @@ def build_for(endpoint: Endpoint | None, names: list[str] | None = None) -> Conf
 
     That build is the part, or the whole suite, whose layout hash is in the ``DS1`` of the
     endpoint. A local target (``None``) runs the whole suite. If *names* asks only for groups
-    on memory of their own, a local target runs them in their own part when one part holds
-    them all.
+    on memory of their own, a local target runs those groups instead. It runs them in their
+    own part if one part holds them all. Otherwise it runs every group on memory of its own,
+    as one program.
 
     Raises:
         BuildMismatchError: ``DS1`` holds no layout hash of a build of the suite, or *names*

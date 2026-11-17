@@ -283,9 +283,9 @@ def _build(*, field_order: bool) -> Program:
 
         # The field program copies its live sequence register unconditionally to
         # a later reporting register. This is a one-way observation handoff, not a
-        # second navigated channel. Keeping it here makes Compass preserve that
-        # distinction while it still sees the same receipt topology as the field
-        # program.
+        # second navigated channel. Keeping it here lets the tests check that Compass
+        # preserves that distinction while it still sees the same receipt topology as
+        # the field program.
         with rung():
             copy(SequenceStep, ReportedSequenceStep)
     return logic

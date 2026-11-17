@@ -1,4 +1,4 @@
-"""Check that SC40 and SC46 stay on across a scan boundary: the ``flag_carry`` group.
+"""Check whether SC40 and SC46 stay on across a scan boundary: the ``flag_carry`` group.
 
 Part ``follow2_carry`` holds the group alone, so that nothing but its own rungs and main's two
 runs sit between its op and its reads.

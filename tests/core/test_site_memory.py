@@ -598,9 +598,9 @@ def _every_memory_kind(*, preset: int = 10, jump_step: int = 1) -> Program:
 
 
 class TestReloadInputMemory:
-    """An edit to what an instruction reads (a preset, a source, a jump step) keeps the
-    memory of the instruction's inputs as it last saw them. A leg's memory is kept only
-    while that leg is unchanged."""
+    """When you edit what an instruction reads (a preset, a source, a jump step), the reload
+    carries the memory of the instruction's inputs as it last saw them. It carries a leg's
+    memory only while that leg is unchanged."""
 
     def test_every_slot_is_classified(self):
         from pyrung.core.instruction.counters import COUNT_DOWN_MEMORY, COUNT_UP_MEMORY

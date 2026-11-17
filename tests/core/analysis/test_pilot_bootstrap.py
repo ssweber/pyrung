@@ -315,9 +315,9 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
 
 
 def test_a_search_of_a_scanned_session_stays_at_or_after_its_tip() -> None:
-    """Check that no plan can run the scan behind the tip again.
+    """Check that the search starts at the tip and never goes behind it.
 
-    That scan is the machine's past.
+    The scan behind the tip is the machine's past. No plan can run it again.
     """
     plc = PLC(first_scan.logic, dt=0.010)
     plc.step()
