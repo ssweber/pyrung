@@ -225,7 +225,7 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        # The two rules merge into one row that reads the input before it writes it, so the
+        # The two rules merge into one row. That row reads the input before it writes it, so the
         # input flips every scan.
         assert (
             "   with rung(Sts_StateCurrent == 6, ~RotateSensor):\n     out(RotateSensor)\n" in text
@@ -319,13 +319,13 @@ class TestPlanDisplay:
 
         assert "2. Remove temporary logic from step 1:" in text
         assert "with rung(State == 6):\n     out(Go)" in text
-        # A lone False rule holds Go off for as long as it is in: its condition never mattered.
+        # A lone False rule holds Go off for as long as it is in. Its condition never mattered.
         assert "3. Install temporary logic:\n   with rung():\n     reset(Go)" in text
         assert "Temporary logic in effect: step 3." in text
 
     def test_a_removal_and_new_logic_on_one_scan_read_the_same_from_a_recording(self):
         # The recording fills in the rows that ran, so the removal's rows after it are the new
-        # logic's.  They are not logic the removal kept.
+        # logic's. They are not logic that the removal kept.
         State = Int("State")
         old = PilotRung("Go", True, State == 6)
         replacement = PilotRung("Go", False, State == 6)
@@ -377,11 +377,11 @@ class TestPlanDisplay:
             "     out(Go)\n"
         ) in text
         assert "   From here on it runs as:\n   with rung(State == 6):\n     out(Go)" in text
-        # The rule left in is printed by the removal, so the wait names that step.
+        # The removal prints the rule that is left in, so the wait names that step.
         assert "Temporary logic in effect: step 3." in text
 
     def test_a_removal_the_recording_shows_logic_left_after_reads_as_partial(self):
-        # The rule left in went in before the plan's first step, so only the recording knows it.
+        # The rule left in went in before the plan's first step, so only the recording shows it.
         State = Int("State")
         off = PilotRung("Go", False, State == 7)
         plan = Plan(
@@ -469,7 +469,7 @@ class TestPlanDisplay:
             ),
         )
 
-        # What a coast waits on is the plan; a shortcut past it is not an instruction.
+        # A coast waits on the plan. A shortcut past the plan is not an instruction.
         assert "Jump ahead" not in str(plan)
 
     def test_pulse_step_renders_as_set_and_keeps_its_observed_transition(self):

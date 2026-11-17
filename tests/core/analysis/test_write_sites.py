@@ -1,4 +1,4 @@
-"""Shared instruction write-destination discovery."""
+"""Test the shared discovery of the destinations that an instruction writes."""
 
 from __future__ import annotations
 
@@ -250,7 +250,7 @@ _EXTREMES: list[tuple[Any, Any, list[Any]]] = [
 def test_to_text_writes_only_declared_characters_and_reaches_the_last(
     make: Any, convert: Any, values: list[Any]
 ) -> None:
-    """Each value writes inside the declared characters, and the longest fills them all."""
+    """Check that each value writes inside the declared characters and the longest fills them all."""
     msg = Block("BoundMsg", TagType.CHAR, 1, 100)
     source = make("BoundSource")
     with Program(strict=False) as logic:
@@ -305,7 +305,10 @@ def test_to_text_of_a_literal_writes_its_own_text_every_time() -> None:
 
 
 def test_the_characters_past_the_first_are_writes_the_copy_may_not_make() -> None:
-    """A short value leaves the later characters, so no read of them is write-before-read."""
+    """A short value may leave the later characters unwritten.
+
+    So no read of them is write-before-read.
+    """
     msg = Block("PartialMsg", TagType.CHAR, 1, 20)
     with Program(strict=False) as logic:
         with Rung():
@@ -341,7 +344,7 @@ def test_to_text_through_a_bounded_pointer_follows_the_pointer() -> None:
         with Rung():
             copy(Int("TextPointerSource"), txt[pointer], convert=to_text())
     (instr,) = logic.rungs[0]._instructions
-    # The same targets on every call, so an analysis that keys a pointer by id finds it again.
+    # Every call returns the same targets, so an analysis that keys a pointer by id finds it again.
     targets = instruction_write_targets(instr)
     assert all(a is b for a, b in zip(targets, instruction_write_targets(instr), strict=True))
     assert len(instruction_partial_write_targets(instr)) == 5
@@ -377,13 +380,13 @@ def test_a_destination_mapped_after_the_first_call_gets_its_new_bank() -> None:
     literal_dest.map_to(txt[10])
     assert names(text) == ["LaterMsg", *(f"TXT{a}" for a in range(2, 7))]
     assert names(literal) == ["LaterLiteral", "TXT11", "TXT12"]
-    # A tag mapped onto an address the text reaches takes that address's place.
+    # A tag mapped onto an address that the text reaches takes the place of that address.
     Char("LaterThird").map_to(txt[3])
     assert names(text) == ["LaterMsg", "TXT2", "LaterThird", "TXT4", "TXT5", "TXT6"]
 
 
 def test_the_analysis_does_not_keep_a_mapped_bank_alive() -> None:
-    """The mapping holds the bank weakly, so once the bank goes the text has no block."""
+    """The mapping holds the bank weakly. Once the bank is gone, the text has no block."""
     import gc
     import weakref
 

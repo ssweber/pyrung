@@ -1,7 +1,7 @@
-"""A patch or force leaves a value the tag's own type can serve.
+"""A patch or force leaves the tag with a value that its own type can serve.
 
-A Modbus read packs a tag's value by the tag's type, and ``struct`` raises on a float
-into an INT, so a value of another type is a register nobody can read.
+A Modbus read packs a tag's value by the tag's type. ``struct`` raises on a float in an INT,
+so a value of another type would be a register that nobody can read.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def _engines() -> list[Any]:
 
 
 HELD = [
-    # A zero of another type used to publish over the default it equals.
+    # A zero of another type used to be published over the default value that it equals.
     ("I", 0.0, 0),
     ("I", False, 0),
     ("I", -0.0, 0),
@@ -77,7 +77,7 @@ HELD = [
     ("R", -0.0, -0.0),
     ("C", "", "\x00"),
     ("C", "A", "A"),
-    # What a copy() of the same value stores.
+    # These match what a copy() of the same value stores.
     ("I", 3.14, 3),
     ("I", 70000, 32767),
     ("I", -70000.0, -32768),
@@ -87,7 +87,7 @@ HELD = [
     ("I", pymath.inf, 32767),
     ("I", -pymath.inf, -32768),
     ("I", pymath.nan, 0),
-    # Not bool(inf): a non-finite stores as 0 into anything but a clamp's bound.
+    # Not bool(inf). A non-finite value is stored as 0 in anything except a clamp's bound.
     ("Enable", pymath.inf, False),
     ("Enable", -pymath.inf, False),
     ("Enable", pymath.nan, False),
@@ -193,7 +193,7 @@ def test_a_copy_of_a_non_finite_into_a_bool_is_false_in_generated_code(
 
 
 def test_a_name_nothing_reads_has_no_type_to_hold() -> None:
-    """Nothing in the program says what it is, so it stays as written, and is reported."""
+    """Keep the value as written and report it, because nothing in the program types the name."""
     plc = PLC(_program(), dt=0.01)
     plc.patch({"NoSuchTag": 0.5})
     plc.step()
@@ -285,7 +285,7 @@ def test_a_fork_knows_the_slots_its_parent_does() -> None:
 
 
 def test_a_slot_outside_what_rungs_reach_stays_as_given_on_both_engines() -> None:
-    """Nothing in the program reaches it: the same "no type to hold" as any other name."""
+    """A slot that nothing in the program reaches has "no type to hold", like any other name."""
     for engine in (PLC, CompiledPLC):
         plc = engine(_names_a_slot_only_a_range_uses(), dt=0.01)
         plc.patch({"DS5": 0.5})
@@ -422,7 +422,10 @@ def test_a_tag_a_harness_registers_is_known_by_name_after_an_override_named_it()
 
 
 def test_a_replay_gives_a_slot_named_by_string_what_the_scan_gave_it() -> None:
-    """What a log recorded is what the scan was given, whatever the runner would type now."""
+    """Replay a slot named by string with the value that the scan was given.
+
+    The log recorded that value, whatever type the runner would give it now.
+    """
     program, _ = _slots_only_a_range_uses()
     plc = PLC(program, dt=0.01)
     plc.patch_as_recorded({"Run": True, "DS2": 3.9})
@@ -465,7 +468,7 @@ def test_a_replay_takes_text_in_a_slot_as_the_scan_did() -> None:
 
 
 def test_a_replay_past_a_name_the_runner_learned_later_holds_what_was_given() -> None:
-    """A name no one knew when patched, known by the time of the seek."""
+    """Replay past a name that the runner did not know when it was patched but knows at the seek."""
     plc = PLC(_program(), dt=0.01)
     plc.patch({"Spare": "text"})
     plc.run(4)
