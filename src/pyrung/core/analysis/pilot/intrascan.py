@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot.advance import AdvanceIndex
 from pyrung.core.analysis.pilot.effects import (

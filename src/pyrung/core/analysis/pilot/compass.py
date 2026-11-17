@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.navigation_contracts import (
     EvidenceScope,
     NavigationConstraints,

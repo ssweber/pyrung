@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.causal._rung_writes import RungRead, RungWrite
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_values import _SnapshotView, _values_match

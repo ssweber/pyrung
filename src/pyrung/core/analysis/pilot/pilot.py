@@ -22,7 +22,7 @@ import pyrung.core.analysis.pilot.requirement_repair as _requirement_repair
 import pyrung.core.analysis.pilot.target_route as _target_route
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
 import pyrung.core.analysis.pilot.theory_recording as _theory_recording
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.graph import (
     NO_NEXT_STEP,
     PlanStep,

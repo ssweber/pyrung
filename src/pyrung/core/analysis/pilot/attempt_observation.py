@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.effect_observation import write_replay_scan_ids
 from pyrung.core.analysis.pilot.execution import (

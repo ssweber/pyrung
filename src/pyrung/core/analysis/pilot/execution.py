@@ -14,7 +14,7 @@ from itertools import count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.runner import PLC, Epoch, EpochQuery
 

@@ -14,7 +14,7 @@ from dataclasses import replace
 from typing import Any
 
 import pyrung.core.analysis.pilot.theory_recording as _theory_recording
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.bootstrap import (
     _BootstrapExecution,
     bind_observed_route_designations,

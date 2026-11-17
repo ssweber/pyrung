@@ -9,7 +9,7 @@ import pyrung.core.analysis.pilot.attempt_verification as _attempt_verification
 import pyrung.core.analysis.pilot.entry_execution as _entry_execution
 import pyrung.core.analysis.pilot.theory_recording as _theory_recording
 import pyrung.core.analysis.pilot.trial_commit as _trial_commit
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CompassObservation,

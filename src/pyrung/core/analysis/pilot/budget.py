@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 
 # The ledger counts work in units.  A scan that the search steps costs one unit.  So do the
 # first two scans and the last scan of each wait.  The other scans of a wait cost a hundredth

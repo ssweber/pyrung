@@ -11,7 +11,7 @@ import itertools
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.compass import CompassObservation
 from pyrung.core.analysis.pilot.physical import upstream_through_plant
 from pyrung.core.analysis.pilot.skiff import _declared_domain, _skiff_expectation, run_pinned_scan

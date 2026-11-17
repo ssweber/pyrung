@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol
 
-from pyrung.core.analysis._internal_error import internal_error
+from pyrung.core._messages import internal_error
 from pyrung.core.analysis.pilot.candidate_policy import _holds_defeat_needed
 from pyrung.core.analysis.pilot.causal import chase_chain_tags
 from pyrung.core.analysis.pilot.constrained_reachability import (
