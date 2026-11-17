@@ -22,10 +22,10 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --runner-backend=both $(PYTEST_PARALLEL)
+	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --runner-backend=both $(PYTEST_PARALLEL)
 
 test-fold:
-	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --ignore=tests/fuzz --fold-check -q $(PYTEST_PARALLEL)
+	uv run pytest -m "not integration and not hypothesis and not fuzz and not tumbler and not conformance" --fold-check -q $(PYTEST_PARALLEL)
 
 # The test files this branch adds, under --fold-check: the mergeq `fold-new` stage, so a new file
 # cannot first meet the lockstep in the full `test-fold` run.
