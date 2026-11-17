@@ -66,7 +66,8 @@ def store_real(value: Any) -> float:
 
     A CLICK REAL is a float32, so a result past its range is +/-Inf (not a
     saturated +/-``REAL_MAX``).  Inf and NaN are kept.  pyrung keeps a finite
-    value at 64-bit precision, so a compare involves no float32 round trip.
+    value at 64-bit precision.  The function only compares the value with the
+    range and never rounds it through float32.
     """
     try:
         real = float(value)

@@ -183,7 +183,11 @@ def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> d
 
 
 def _format_int_text(value: int, width: int, suppress_zero: bool, *, signed: bool = True) -> str:
-    """Return a number's text.  With *signed* False, for a Word, it is hex (0xAB is "AB")."""
+    """Return a number's text.
+
+    With *signed* False, for a Word, the text is hex.  0xAB is "AB" with *suppress_zero*.
+    Without it, zeros pad the text to *width*, as in "00AB".
+    """
     if suppress_zero:
         return str(value) if signed else f"{value:X}"
     if not signed:

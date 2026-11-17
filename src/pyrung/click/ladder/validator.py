@@ -66,8 +66,8 @@ class _ValidationMixin:
         # still render faithfully, so it warns instead of refusing.  These warn too:
         # - A text past its block, which a CLICK writes on into the bank.
         # - A text past its bank, unless it is a constant into TXT, which the render refuses.
-        # - A pointer that can run past its bank.  CLICK's Copy accepts a register source,
-        #   which saves no end address, and CLICK takes the write.
+        #   CLICK's Copy accepts a register source, which saves no end address.
+        # - A pointer that can run past its bank, because CLICK takes the write.
         # - A rung whose contacts feed only a NOP, because CLICK keeps it.
         warn_only = (
             CLK_STEP_LIMIT,

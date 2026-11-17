@@ -36,7 +36,8 @@ def _bool_literal(expr: str) -> bool | None:
 def _optional_value_type_name(value: Any) -> str | None:
     """Return the type of the tag or pointer *value* reads, as :func:`copy_source_kind` takes it.
 
-    An ``immediate()`` operand has its tag's type.  Anything else returns ``None``.
+    An ``immediate()`` operand has its tag's type.  For anything else the function returns
+    ``None``.
     """
     kind = copy_source_kind(value)
     return kind.name if isinstance(kind, TagType) else None

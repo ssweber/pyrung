@@ -120,7 +120,10 @@ def same_wiring(a: Coupling, b: Coupling) -> bool:
 
 
 def _response(physical: Physical) -> tuple[Any, ...]:
-    """Return the kind and its values, with times in ms.  So ``1s`` matches ``1000ms``."""
+    """Return the kind and its values, with each time in ms.
+
+    So ``1s`` matches ``1000ms``.  A missing time becomes 0, so it matches a time of 0.
+    """
     values: list[Any] = [physical.kind]
     for key in physical.kind_spec.keys:
         value = getattr(physical, key.name)

@@ -453,10 +453,11 @@ def queue_stop_for_error(adapter: Any, error: Any) -> None:
 
 
 def scan_mark(adapter: Any) -> tuple[Any, int | None]:
-    """Return a mark of the last finished scan, so a caller can later tell whether a scan ran.
+    """Return a mark of the last finished scan.
 
-    The mark includes the runner, because a ``reload`` replaces the runner and may restart
-    the count.
+    A caller later passes the mark to ``scans_ran_since`` to tell whether any scan has run
+    since the mark was taken.  The mark includes the runner, because a ``reload`` replaces
+    the runner and may restart the count.
     """
     runner = adapter._runner
     return runner, None if runner is None else runner.current_state.scan_id

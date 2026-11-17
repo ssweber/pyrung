@@ -288,8 +288,8 @@ def _expr_route_key(expr: Any) -> str:
 _SAME_TAG_VALUE_BUDGET = 1
 
 # How deep a trace goes along a wire. A wire is a tag that the trace has not yet met on
-# its path, and that at most one rung writes, reading at most one tag. Past ``max_depth``
-# only wires continue. See ``_trace_back``.
+# its path. At most one rung writes it, and that rung reads at most one tag. Past
+# ``max_depth`` only wires continue. See ``_trace_back``.
 _CHAIN_DEPTH = 60
 
 
@@ -885,9 +885,9 @@ def _counter_phase_blockers(
     snapshot = _route_judgment._route_overlay(phase, env.snapshot)
     phase_env = _at(snapshot)
     for demand in holds:
-        # The overlay sets only what the phase traces. A reset that a coil carries still
-        # reads off there, when the phase energizes the coil (``Rung(Start, M):
-        # out(Rc)``). When everything that breaks the hold is already met, the hold
+        # The overlay sets only what the phase traces. If the phase energizes a coil that
+        # carries the reset (``Rung(Start, M): out(Rc)``), the reset still reads off on the
+        # overlay. When everything that breaks the hold is already met, the hold
         # breaks as the phase lands.
         breaking = _trace(phase_env, ConditionDemand(demand.condition, not demand.value))
         if any(not node.satisfied for node in breaking) and all(

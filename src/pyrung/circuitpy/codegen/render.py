@@ -1278,8 +1278,8 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "    if _desired_run != _mode_run:",
                 "        if _desired_run:",
                 "            _reset_for_run_transition()",
-                # The first RUN scan times the loop pass it runs in, because core's
-                # first scan after start() advances by a full dt.
+                # The first RUN scan times the loop pass it runs in.  Core's first
+                # scan after start() also advances by a full dt.
                 '            _mem["_dt"] = dt',
                 '            _mem["_dt_ns"] = _dt_ns',
                 '            print("Mode: RUN")',

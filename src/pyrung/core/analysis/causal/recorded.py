@@ -1757,9 +1757,9 @@ def _executed_writers_from_pdg(
 
 
 def _same_value(written: Any, to_value: Any) -> bool:
-    """Return True if the value that a rung's write states equals *to_value*.
+    """Return True if *written*, the value that a rung's write states, equals *to_value*.
 
-    The function reads the value from the program. A NaN matches a NaN. A deferred value
+    A NaN matches a NaN. A deferred value
     (an ``IndirectRef`` from static extraction) raises on ``==``. It cannot match a stored
     value, so it is a non-match.
     """

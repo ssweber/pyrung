@@ -1944,8 +1944,9 @@ class PLC:
 
     @property
     def tags(self) -> MappingProxyType[str, Tag]:
-        """Return a read-only mapping of tag name to Tag object, for what the program reaches.
+        """Return a read-only mapping of tag name to Tag object.
 
+        The mapping holds the tags that the runner knows and the slots that its rungs reach.
         Reading a slot that a range reaches creates a tag for it.
         """
         return MappingProxyType(
@@ -2137,7 +2138,10 @@ class PLC:
         return firings
 
     def _recorded_rung_firings(self, target: int) -> PMap:
-        """Return what the timelines say of *target*. A value they gave up on is unknown."""
+        """Return what the timelines say of *target*.
+
+        A value that the timelines gave up on is ``_UNKNOWN_VALUE``.
+        """
         self._settle_compiled_ranges(target, target)
         owner = self._causal_lineage.owner_at(target)
         return owner.rung_firing_timelines.at(target) if owner is not None else pmap()
@@ -2611,7 +2615,10 @@ class PLC:
         return anchor if anchor is not None else self._initial_scan_id
 
     def _search_limits(self) -> Callable[[], None] | None:
-        """Return the function that a how() search polls for its limits while it waits."""
+        """Return the function that a how() search polls for its limits while it waits.
+
+        Return None when this PLC has no ``_coast_memo``.
+        """
         return None if self._coast_memo is None else self._coast_memo.check_limits
 
     def _stepped_again(self, first: int, last: int, check_limits: Callable[[], None] | None) -> PLC:
@@ -2724,14 +2731,15 @@ class PLC:
     def _recorded_pointer_write(
         self, pdg: Any, scan_id: int
     ) -> Callable[[int, str, Any], bool | None] | None:
-        """Return whether the scan history shows a pointer write storing a tag's value.
+        """Return a function that tells whether a pointer write stored a tag's value.
 
-        why() asks about a node, a tag and the tag's value at *scan_id*, as it does for a
-        listed writer.  The method returns True when the node stored the value at the tag's
-        last change, or stored it again on its latest run since then.  It returns False when
-        the node did neither.  It returns None when the history cannot say. That happens when
-        the value was there before the history starts, or when too many scans would have to
-        be stepped again.
+        Return None when there is no program or the program has no unlisted writes.
+        why() calls the function with a node, a tag and the tag's value at *scan_id*, as it
+        asks a listed writer.  The function reads the scan history.  It returns True when the
+        node stored the value at the tag's last change, or stored it again on its latest run
+        since then.  It returns False when the node did neither.  It returns None when the
+        history cannot say. That happens when the value was there before the history starts,
+        or when too many scans would have to be stepped again.
         """
         program = self._program
         if program is None or not pdg.unlisted_writes:
@@ -3870,7 +3878,11 @@ class PLC:
         return kernel
 
     def _compiled_fork_at(self, target_scan_id: int, kernel: CompiledKernel) -> PLC:
-        """Return a fork at *target_scan_id*, with the kernel running each later scan."""
+        """Return a fork at *target_scan_id*.
+
+        The fork starts from the nearest checkpoint at or before *target_scan_id*. The kernel
+        runs each scan after that checkpoint.
+        """
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
         return self._build_replay_fork(anchor, kernel, target_scan_id)[0]
 
@@ -4996,7 +5008,10 @@ class PLC:
         registration.enabled = False
 
     def _note_unrecorded_scans(self, first: int, last: int) -> None:
-        """Note that scans *first*..*last* ran without records. A question settles them."""
+        """Note that scans *first*..*last* ran without records.
+
+        A question that reaches them settles them.
+        """
         windows = self._unrecorded_scans
         if windows and windows[-1][1] == first - 1:
             windows[-1] = (windows[-1][0], last)

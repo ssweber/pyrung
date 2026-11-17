@@ -126,8 +126,8 @@ def _read_trace_disposition(
     # A writer was found and all its conditions are satisfied, meaning it has no children or
     # only satisfied ones.  The output instruction just has not fired yet.  This readiness
     # means the same at every trace depth.  A timer result can make a nested Step writer ready
-    # one scan before the outer target writer observes Step.  A coil above the timer, whose
-    # Done it reads, sees that Done on the next scan.  So let the loop coast.
+    # one scan before the outer target writer observes Step.  A coil above the timer that
+    # reads the timer's Done sees that Done on the next scan.  So let the loop coast.
     if any(
         node.writer_rung is not None
         and all(child.satisfied for child in node.children)
