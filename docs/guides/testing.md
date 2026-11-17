@@ -380,6 +380,29 @@ def test_stop_after_start(plc):
         assert Motor.value is False
 ```
 
+## Recordings as tests
+
+```python
+# tests/conftest.py
+pytest_plugins = ["pyrung.pytest_plugin"]
+```
+
+```text
+tests/
+  conftest.py
+  start_machine.rec
+```
+
+With the plugin on, each `.rec` file that pytest collects is a test. The test loads the program that the recording's `# program:` line names. It replays the recording with no debugger attached, and fails at the first command that fails:
+
+```text
+FAILED tests/start_machine.rec::start_machine - start_machine.rec:9: assert failed: Running = False, expected True
+```
+
+Make a recording in the [Console](console.md#session-capture) with `record` and `record save`, or write one by hand. Use `assert` on the values you care about, and `run until ... within` to wait for each step of the sequence.
+
+The test starts from a fresh load of the program, before its first scan. Start recording right after launch, before you change anything. A recording started later replays from a different state than the one it recorded.
+
 ## Running tests
 
 ```bash
