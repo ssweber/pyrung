@@ -346,7 +346,8 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
        laddercodec's CLICK checks test each one against CLICK before the PR merges (Sam, 2026-11-17).
   2. Export through laddercodec (plan step 5).
   3. Import reads laddercodec's objects (plan step 6).
-  Where pyrung and laddercodec disagree, the one that refuses wins by default (Sam, 2026-11-15, plan item 2). The pyrung sections of
+  Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
+  2026-11-17). This replaces "the refusal wins". The pyrung sections of
   laddercodec's `csv-format.md` move here.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
