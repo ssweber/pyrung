@@ -281,7 +281,12 @@ CASES = [
     Case("TimedInstruction", "target", TagType.BOOL, _timed("target")),
     Case("TimedInstruction", "timer_acc", TagType.INT, _timed("timer_acc")),
     *(
-        Case(cls, field, TagType.INT if field == "accumulator" else TagType.BOOL, _timer_case(dsl, field))
+        Case(
+            cls,
+            field,
+            TagType.INT if field == "accumulator" else TagType.BOOL,
+            _timer_case(dsl, field),
+        )
         for cls, dsl in (("OnDelayInstruction", on_delay), ("OffDelayInstruction", off_delay))
         for field in _TIMER_FIELDS
     ),
@@ -296,7 +301,12 @@ CASES = [
         for field in _COUNTER_FIELDS
     ),
     *(
-        Case(cls, field, TagType.INT if field in {"current_step", "accumulator"} else TagType.BOOL, _drum(kind, field))
+        Case(
+            cls,
+            field,
+            TagType.INT if field in {"current_step", "accumulator"} else TagType.BOOL,
+            _drum(kind, field),
+        )
         for cls, kind, fields in (
             ("EventDrumInstruction", "event", ("outputs", "current_step", "completion_flag")),
             (
@@ -321,7 +331,9 @@ CASES = [
         _rung(lambda w: blockcopy(Block("BC_Src", TagType.INT, 1, 2).select(1, 2), w.select(1, 2))),
         block=True,
     ),
-    Case("FillInstruction", "dest", TagType.INT, _rung(lambda w: fill(7, w.select(1, 2))), block=True),
+    Case(
+        "FillInstruction", "dest", TagType.INT, _rung(lambda w: fill(7, w.select(1, 2))), block=True
+    ),
     Case("CalcInstruction", "dest", TagType.INT, _rung(lambda w: math(Int("Calc_A") + 1, w))),
     Case(
         "PackBitsInstruction",
