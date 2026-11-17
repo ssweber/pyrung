@@ -13,6 +13,7 @@ from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusRtuTarget,
     ModbusSendInstruction,
+    ModbusTcpTarget,
     RegisterType,
 )
 from pyrung.core.memory_block import (
@@ -58,6 +59,19 @@ def _modbus_client_spec_for_instruction(
     targets = {target.name: target for target in ctx.modbus_client.targets}
     if instr.target_name not in targets:
         raise ValueError(f"Unknown Modbus client target: {instr.target_name!r}")
+    # The generated code takes its connection from ModbusClientConfig, so a CLICK-only form
+    # on the instruction's own target would be dropped without a word.
+    raw = instr.raw_target
+    if isinstance(instr.device_id, Tag):
+        raise TypeError(
+            f"target {instr.target_name!r}: the P1AM takes device_id as an int, "
+            f"not a tag ({instr.device_id.name!r})"
+        )
+    if isinstance(raw, ModbusTcpTarget) and raw.com_port != "ethernet":
+        raise ValueError(
+            f"target {instr.target_name!r}: the P1AM talks Modbus TCP over Ethernet only, "
+            f"got com_port={raw.com_port!r}"
+        )
 
     if instr.bank is None:
         # Raw ModbusAddress path (TCP only).

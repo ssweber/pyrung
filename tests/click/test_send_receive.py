@@ -422,3 +422,43 @@ def test_run_click_send_request_sparse_writes_are_split_by_gap(monkeypatch: pyte
 
     assert result.ok is True
     assert writes == [("X001", list(range(16))), ("X021", 16)]
+
+
+@pytest.mark.parametrize("instruction", ["send", "receive"])
+def test_device_id_from_a_ds_tag_is_read_as_each_request_starts(
+    monkeypatch: pytest.MonkeyPatch, instruction: str
+):
+    """A DS device ID is read when a request starts, not when the program is built."""
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
+
+    submissions: list[tuple[dict[str, object], Future[click_send_receive._RequestResult]]] = []
+
+    def fake_submit(**kwargs: object) -> Future[click_send_receive._RequestResult]:
+        fut: Future[click_send_receive._RequestResult] = Future()
+        submissions.append((kwargs, fut))
+        return fut
+
+    monkeypatch.setattr(click_send_receive, f"_submit_click_{instruction}_request", fake_submit)
+
+    Enable = Bool("Enable")
+    Slave = Int("Slave")
+    Value = Int("Value")
+    target = ModbusTcpTarget("peer", "127.0.0.1", device_id=Slave)
+
+    operand = {"source": Value} if instruction == "send" else {"dest": Value}
+    build = getattr(click_send_receive, instruction)
+    with Program() as logic:
+        with Rung(Enable):
+            build(target=target, remote_start="DS1", **operand)
+
+    runner = PLC(logic=logic)
+    runner.patch({"Enable": True, "Slave": 7})
+    runner.step()
+    submissions[0][1].set_result(
+        click_send_receive._RequestResult(ok=True, exception_code=0, values=(5,))
+    )
+    runner.patch({"Slave": 9})
+    runner.step()  # drains the first request
+    runner.step()  # starts the next
+
+    assert [kwargs["device_id"] for kwargs, _ in submissions] == [7, 9]

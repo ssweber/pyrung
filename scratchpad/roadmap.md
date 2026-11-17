@@ -186,6 +186,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
   - `flag_boxes/ton_ctu_by_pointer` (part follow_flags) can't tell whether a TON or a CTU clears an SC44 raised
     through pointer -1. It needs another way to raise and hold SC44.
   - Re-run parts drum1, drum2, follow_timing, follow_extra and text_flasher to confirm their rewritten readings.
+  - Re-paste and re-run the `to_text()` cases in parts copy, math, system and follow_extra. Their export now
+    writes only the flag the source has, which changed their hashes.
   - Re-paste part control from the current build, which clears the false "Changed" results.
   - Unread: whether a TD write keeps any part of a ms left over, and a ladder write to the next phase's TD on the scan
     a phase ends.
@@ -195,11 +197,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
 - **`math()` of a Real into a Word.** pyrung runs it, but a CLICK refuses it. The CLICK check reports
   `CLK_MATH_MODE_MIXED`. Decide whether pyrung runs it or refuses it. [nothing]
 - **CLICK v4 send/receive forms** (laddercodec's asks, ruled for after 0.16.0). [CLICK]
-  - `com_port="wlan"` on ModbusTcpTarget (a missing com_port means Ethernet), and `"cpu3"` for RTU.
-  - `device_id` as an int or a DS address. CLICK refuses DD, DH and C there. What an out-of-range ID does at request
-    time needs a probe [PLC].
-  - `to_text` writes only the flag that applies to its source. Export refuses `exponential=True` on an integer
-    source.
+  - What a CLICK does when the DS register of a `device_id` holds an ID out of range, at request time, needs a probe
+    [PLC]. pyrung passes the value on as it is.
 
 ## 3. The recording core
 
@@ -356,6 +355,9 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   Where pyrung and laddercodec disagree, the case is logged and the fix goes into laddercodec (Sam,
   2026-11-17). This replaces "the refusal wins". The pyrung sections of
   laddercodec's `csv-format.md` move here.
+  - Disagreements for laddercodec to fix (logged 2026-11-17): `to_text(exponential=1)` from a Real constant
+    (CLICK accepts it, case22) and from a DF pointer such as `DF[DS1]` (CLICK accepts it, clicknick
+    copy-pointer-text). laddercodec's `Copy._is_df` matches only a literal `DF<n>`.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
   finding. It waits on laddercodec's release. [nothing]

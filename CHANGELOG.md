@@ -20,8 +20,21 @@
 - The console's `assert Tag == value` checks one tag. A replay stops at the first failed check.
 - The console's `run until <condition> within <N | duration>` runs scans until the condition holds. It fails if the limit comes first.
 
+#### Send and receive
+
+- `send()` and `receive()` reach CLICK v4's ports and Slave ID forms:
+  - `ModbusTcpTarget(com_port="wlan")` talks over the WLAN port.
+  - `ModbusRtuTarget(com_port="cpu3")` talks over CPU port 3.
+  - `device_id` takes a DS tag, which the instruction reads as each request starts.
+
 ### Behaviour changes
 
+- `ModbusRtuTarget` refuses a `device_id` above 247, the last Modbus RTU device address (it took up to 255).
+  Use 0..247.
+- `receive()` from an RTU device refuses `device_id=0`, the broadcast address no device answers (it took 0).
+  Use 1..247.
+- CLICK export refuses `to_text(exponential=True)` from an integer source (it exported it). Importing a ladder CSV refuses it too.
+  Drop `exponential=True`. An integer source takes `suppress_zero` only.
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
   Look a point up by its new name, or by its tag such as `system.fault.plc_error`. A nickname file row with the old name loads and is ignored.
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
@@ -40,6 +53,7 @@
 - The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
 - A `replay` that stops on a failed line now reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
+- CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).

@@ -50,6 +50,17 @@ class ModbusClientConfig:
                 )
             if target.name in seen:
                 raise ValueError(f"Duplicate Modbus target name: {target.name!r}")
+            # A DS device ID and the WLAN port are CLICK forms the P1AM has no use for.
+            if not isinstance(target.device_id, int):
+                raise TypeError(
+                    f"target {target.name!r}: the P1AM takes device_id as an int, "
+                    f"not a tag ({target.device_id.name!r})"
+                )
+            if target.com_port != "ethernet":
+                raise ValueError(
+                    f"target {target.name!r}: the P1AM talks Modbus TCP over Ethernet only, "
+                    f"got com_port={target.com_port!r}"
+                )
             seen.add(target.name)
 
 

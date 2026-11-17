@@ -327,6 +327,50 @@ def _constant_into_bit(
     ]
 
 
+def _exponential_from_an_integer(
+    instruction: Any,
+    source: Any,
+    source_resolution: Any,
+    source_location: ProgramLocation,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    """CLICK offers Exponential Numbering only for a Real source.
+
+    A DF, a DF pointer and a Real constant are Real sources.  This check runs before the
+    early return for a constant, so an integer constant is refused too.
+    """
+    converter = getattr(instruction, "authored_convert", getattr(instruction, "convert", None))
+    if not (
+        isinstance(converter, CopyConverter) and converter.mode == "text" and converter.exponential
+    ):
+        return []
+    if copy_source_kind(source) == LITERAL:
+        value = source.value if isinstance(source, ImmediateRef) else source
+        if isinstance(value, float):
+            return []
+        got = [f"the constant {value!r}"]
+    else:
+        got = [
+            memory_type
+            for memory_type in dict.fromkeys(slot.memory_type for slot in source_resolution.slots)
+            if memory_type != "DF"
+        ]
+    location_text = _format_location(source_location)
+    return [
+        ClickFinding(
+            code=CLK_COPY_CONVERTER_INCOMPATIBLE,
+            severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
+            message=(
+                "to_text(exponential=True) needs a Real source (DF or a Real constant), "
+                f"got {item} at {location_text}."
+            ),
+            location=location_text,
+            suggestion="Drop exponential=True. An integer source takes suppress_zero.",
+        )
+        for item in got
+    ]
+
+
 def _evaluate_copy_compatibility(
     instruction: Any,
     base_location: ProgramLocation,
@@ -367,6 +411,9 @@ def _evaluate_copy_compatibility(
         findings.extend(
             _constant_into_bit(operation, source, dest_memory_types, dest_location, mode)
         )
+    findings.extend(
+        _exponential_from_an_integer(instruction, source, source_resolution, source_location, mode)
+    )
 
     if not source_resolution.slots or not dest_resolution.slots:
         return findings
@@ -1084,16 +1131,17 @@ def _evaluate_out_variant_unit(
     ]
 
 
-# The banks a Send or Receive may write, from CLICK's help pages for them (the MODBUS
+# The banks each Send or Receive operand takes, from CLICK's help pages for them (the MODBUS
 # TCP and RTU pages agree).  Not probed on hardware: no conformance case runs them.
 # SD is a Receive destination there whole, so this does not apply copy()'s writable
 # SD subset.
 _MODBUS_FLAG_BANKS = frozenset({"C"})
 _MODBUS_EXCEPTION_BANKS = frozenset({"DS", "DD"})
+_MODBUS_DEVICE_ID_BANKS = frozenset({"DS"})
 _MODBUS_RECEIVE_DEST_BANKS = frozenset(
     {"Y", "C", "CTD", "DS", "DD", "DH", "DF", "SD", "TD", "YD", "TXT"}
 )
-_MODBUS_WRITE_BANKS: dict[tuple[str, str], frozenset[str]] = {
+_MODBUS_BANKS: dict[tuple[str, str], frozenset[str]] = {
     ("ModbusReceiveInstruction", "dest"): _MODBUS_RECEIVE_DEST_BANKS,
     ("ModbusReceiveInstruction", "receiving"): _MODBUS_FLAG_BANKS,
     ("ModbusReceiveInstruction", "success"): _MODBUS_FLAG_BANKS,
@@ -1103,6 +1151,9 @@ _MODBUS_WRITE_BANKS: dict[tuple[str, str], frozenset[str]] = {
     ("ModbusSendInstruction", "success"): _MODBUS_FLAG_BANKS,
     ("ModbusSendInstruction", "error"): _MODBUS_FLAG_BANKS,
     ("ModbusSendInstruction", "exception_response"): _MODBUS_EXCEPTION_BANKS,
+    # CLICK's Slave ID box takes a number or a DS address.
+    ("ModbusReceiveInstruction", "device_id"): _MODBUS_DEVICE_ID_BANKS,
+    ("ModbusSendInstruction", "device_id"): _MODBUS_DEVICE_ID_BANKS,
 }
 
 
@@ -1115,13 +1166,16 @@ def _evaluate_modbus_banks(
     findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
 
-    for (candidate_type, field_name), banks in _MODBUS_WRITE_BANKS.items():
+    for (candidate_type, field_name), banks in _MODBUS_BANKS.items():
         if instruction_type != candidate_type:
             continue
 
         value = getattr(instruction, field_name)
         # A status bit left off is a hidden tag that never reaches the CLICK project.
         if isinstance(value, Tag) and is_modbus_status_tag(value.name):
+            continue
+        # A numeric device ID has no bank.
+        if isinstance(value, int):
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")

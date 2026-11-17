@@ -2075,3 +2075,39 @@ def test_raw_receive_signed_int_negative(monkeypatch):
 
     assert ns["_t_Dest"] == -456
     assert ns["_t_Success"] is True
+
+
+def test_client_config_refuses_click_only_target_forms():
+    """A DS device ID and the WLAN port are CLICK forms the P1AM's client cannot use."""
+    with pytest.raises(TypeError, match="takes device_id as an int"):
+        ModbusClientConfig(targets=(ModbusTcpTarget("peer", "192.168.1.50", device_id=Int("Id")),))
+    with pytest.raises(ValueError, match="Ethernet only"):
+        ModbusClientConfig(targets=(ModbusTcpTarget("peer", "192.168.1.50", com_port="wlan"),))
+
+
+@pytest.mark.parametrize(
+    ("target", "error", "match"),
+    [
+        (
+            ModbusTcpTarget("peer", "192.168.1.50", device_id=Int("PeerId")),
+            TypeError,
+            "takes device_id as an int",
+        ),
+        (ModbusTcpTarget("peer", "192.168.1.50", com_port="wlan"), ValueError, "Ethernet only"),
+    ],
+)
+def test_codegen_refuses_click_only_forms_on_the_instruction_target(target, error, match):
+    """The generated code connects with ModbusClientConfig's target, so it can't honour these."""
+    with Program(strict=False) as prog:
+        with Rung(Bool("Enable")):
+            send(
+                target=target,
+                remote_start=ModbusAddress(0x100),
+                source=Int("Source"),
+                sending=Bool("Sending"),
+                success=Bool("Success"),
+                error=Bool("Error"),
+                exception_response=Int("ExCode"),
+            )
+    with pytest.raises(error, match=match):
+        _raw_client_source(prog)

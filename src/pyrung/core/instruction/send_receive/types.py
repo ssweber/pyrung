@@ -6,6 +6,8 @@ import enum
 from dataclasses import dataclass, field
 from typing import Literal
 
+from pyrung.core.tag import Tag, TagType
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -112,15 +114,62 @@ class ModbusAddress:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ModbusTcpTarget:
-    """Connection details for a remote Modbus TCP device."""
+def _check_device_id(device_id: object, high: int) -> None:
+    """CLICK's Slave ID box takes a number or a DS register. It refuses DD, DH and C."""
+    if isinstance(device_id, Tag):
+        if device_id.type is not TagType.INT:
+            raise TypeError(
+                f"device_id must be an int 0..{high} or a DS tag (an Int), "
+                f"got {device_id.type.name.title()} tag {device_id.name!r}"
+            )
+        return
+    if isinstance(device_id, bool) or not isinstance(device_id, int):
+        raise TypeError(
+            f"device_id must be an int 0..{high} or a DS tag (an Int), "
+            f"got {type(device_id).__name__}"
+        )
+    if device_id < 0 or device_id > high:
+        raise ValueError(f"device_id must be an int 0..{high} or a DS tag, got {device_id}")
+
+
+class _TargetEquality:
+    """Compare and hash a target by its fields, with a tag ``device_id`` taken by type and name.
+
+    A tag's own ``==`` builds a rung condition, so the dataclass ``==`` would raise on it.
+    """
+
+    def _key(self) -> tuple[object, ...]:
+        return tuple(
+            (value.type, value.name) if isinstance(value, Tag) else value
+            for value in vars(self).values()
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self) -> int:
+        return hash((type(self), self._key()))
+
+
+VALID_TCP_COM_PORTS = frozenset({"ethernet", "wlan"})
+
+
+@dataclass(frozen=True, eq=False)
+class ModbusTcpTarget(_TargetEquality):
+    """Connection details for a remote Modbus TCP device.
+
+    ``device_id`` is a number or a DS tag that holds it.  ``com_port`` is
+    ``"ethernet"`` (the default) or ``"wlan"``.
+    """
 
     name: str
     ip: str
     port: int = 502
-    device_id: int = 1
+    device_id: int | Tag = 1
     timeout_ms: int = 1000
+    com_port: str = "ethernet"
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str):
@@ -135,26 +184,32 @@ class ModbusTcpTarget:
             raise TypeError(f"port must be int, got {type(self.port).__name__}")
         if self.port < 1 or self.port > 65535:
             raise ValueError("port must be in 1..65535")
-        if not isinstance(self.device_id, int):
-            raise TypeError(f"device_id must be int, got {type(self.device_id).__name__}")
-        if self.device_id < 0 or self.device_id > 255:
-            raise ValueError("device_id must be in 0..255")
+        _check_device_id(self.device_id, 255)
         if not isinstance(self.timeout_ms, int):
             raise TypeError(f"timeout_ms must be int, got {type(self.timeout_ms).__name__}")
         if self.timeout_ms <= 0:
             raise ValueError("timeout_ms must be > 0")
+        if not isinstance(self.com_port, str):
+            raise TypeError(f"com_port must be str, got {type(self.com_port).__name__}")
+        if self.com_port not in VALID_TCP_COM_PORTS:
+            raise ValueError(
+                f"com_port must be one of {sorted(VALID_TCP_COM_PORTS)}, got {self.com_port!r}"
+            )
 
 
-VALID_COM_PORTS = frozenset({"cpu2", "slot0_1", "slot0_2", "slot1_1", "slot1_2"})
+VALID_COM_PORTS = frozenset({"cpu2", "cpu3", "slot0_1", "slot0_2", "slot1_1", "slot1_2"})
 
 
-@dataclass(frozen=True)
-class ModbusRtuTarget:
-    """Connection details for a remote Modbus RTU (serial) device."""
+@dataclass(frozen=True, eq=False)
+class ModbusRtuTarget(_TargetEquality):
+    """Connection details for a remote Modbus RTU (serial) device.
+
+    ``device_id`` is a number 0..247 or a DS tag that holds it.
+    """
 
     name: str
     serial_port: str = ""
-    device_id: int = 1
+    device_id: int | Tag = 1
     baudrate: int = 9600
     bytesize: int = 8
     parity: str = "N"
@@ -169,10 +224,8 @@ class ModbusRtuTarget:
             raise ValueError("name must not be empty")
         if not isinstance(self.serial_port, str):
             raise TypeError(f"serial_port must be str, got {type(self.serial_port).__name__}")
-        if not isinstance(self.device_id, int):
-            raise TypeError(f"device_id must be int, got {type(self.device_id).__name__}")
-        if self.device_id < 0 or self.device_id > 255:
-            raise ValueError("device_id must be in 0..255")
+        # Modbus RTU unit addresses stop at 247, so 248..255 reach no device.
+        _check_device_id(self.device_id, 247)
         if not isinstance(self.baudrate, int):
             raise TypeError(f"baudrate must be int, got {type(self.baudrate).__name__}")
         if self.baudrate <= 0:
