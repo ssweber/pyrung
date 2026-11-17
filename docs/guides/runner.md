@@ -113,14 +113,14 @@ runner.run_for(3600)            # an hour of a plain timer at 10 ms takes about 
 runner.run_for(10, jit=False)   # every scan interpreted, recording as it goes
 ```
 
-`run_for()` and `run_until()` are a tracing JIT for scans.  Past the first 1,000 scans of
-a run, every scan executes in the compiled kernel. Scans that repeat the one before
-run in a guarded loop.  No scan is skipped. The run lands on the same state and scan count
-as stepping.
+`run_for()` and `run_until()` compile your program with a tracing JIT. After the first
+1,000 scans of a run, every scan executes in the compiled kernel. Scans that repeat the one
+before them run in a guarded loop. No scan is skipped. The run ends on the same state and
+scan count as stepping.
 
-A callable predicate, a monitor, a breakpoint or a `when()` watches every scan. Any of
-them keeps the run interpreted, as for a program with no kernel.  A stop written as a tag
-or a condition stays in the kernel. Prefer `run_until(Tmr.Done)` over
+A callable predicate, a monitor, a breakpoint or a `when()` watches every scan. If you use
+any of them, the run stays interpreted, as it does for a program with no kernel. A stop
+written as a tag or a condition stays in the kernel. Prefer `run_until(Tmr.Done)` over
 `run_until(lambda s: s.tags["Tmr_Done"])` for a long wait.
 
 ## Injecting inputs
@@ -271,12 +271,16 @@ reconstructed on demand from the scan log and checkpoints.
 A long `run_until()` or `run_for()` runs compiled and records no rung firings.
 Without `history`, a stepped run also stops recording once its records hold about 140 MB.
 History still serves each of those scans by replaying them on demand.
-The first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` to reach them steps
-them again to get their records. The answer is therefore the one stepping gives.  A question
-that would step more than 250,000 scans raises `UnrecordedScansError` and names
-the range. Scans a question has stepped keep their records, so ask first about a scan nearer the
-start of that range for `cause`, or nearer its end for `effect`, then ask again,
-from Python or the debugger. From Python, `cause()` also takes `since=`.
+The first `cause()`, `effect()`, `cold_rungs()` or `hot_rungs()` call that reaches those
+scans steps them again to get their records. The answer is therefore the one that stepping
+gives.
+
+A question that would step more than 250,000 scans raises `UnrecordedScansError` and names
+the range. Scans that a question has stepped keep their records. To get an answer, ask
+first about a scan nearer the start of that range for `cause`, or nearer its end for
+`effect`. Then ask again, from Python or the debugger. From Python, `cause()` also takes
+`since=`.
+
 A run with `jit=False` and `history` records every scan in the window.
 
 `previous_transition()` returns the latest matching recorded transition, or

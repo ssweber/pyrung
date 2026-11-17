@@ -152,7 +152,14 @@ The check ignores instruction operands, because they always see every write abov
 | `COIL_STUCK_HIGH` | Warning | A tag is latched but never reset. An `out` inside a skippable subroutine counts as a latch; see [Outputs in skippable subroutines](#outputs-in-skippable-subroutines). |
 | `COIL_STUCK_LOW` | Warning | A tag is reset but never latched anywhere in the program. |
 
-For conflicting outputs, the lint proves mutual exclusivity for different-constant equality comparisons, complementary Boolean contacts, and complementary ranges such as `<`/`>=` or `<=`/`>`. Different subroutines are safe when their caller conditions are provably exclusive. When exclusivity cannot be established statically, the lint keeps the finding.
+For conflicting outputs, the lint treats two paths as mutually exclusive in these cases:
+
+- equality comparisons against different constants
+- complementary Boolean contacts
+- complementary ranges such as `<`/`>=` or `<=`/`>`
+- different subroutines whose caller conditions are provably exclusive
+
+When the lint cannot prove exclusivity statically, it keeps the finding.
 
 ### Comparisons
 
