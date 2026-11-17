@@ -440,7 +440,9 @@ class TestWriteBeforeRead:
         held_by_hold = (
             (lambda: on_delay(timer, 50, "ms"), timer.Acc, 20),
             (
-                lambda: search(table.select(1, 10) == 0, result=result, found=found, continuous=True),
+                lambda: search(
+                    table.select(1, 10) == 0, result=result, found=found, continuous=True
+                ),
                 result,
                 3,
             ),
