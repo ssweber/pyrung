@@ -270,20 +270,34 @@ def instruction_fault_writes(instr: Any) -> tuple[str, ...]:
     return tuple(getattr(instr, "_fault_writes", ()))
 
 
-def static_write_target_names(target: Any) -> frozenset[str]:
-    """Concrete names represented by one safe, statically resolved target.
+def static_write_target_tags(target: Any) -> tuple[Tag, ...]:
+    """The tags one statically resolved target names, in address order.
 
-    Dynamic destinations deliberately return no names.  They need a runtime
+    Dynamic destinations deliberately return no tags.  They need a runtime
     address or a PDG-specific conservative region, neither of which is an exact
     instruction occurrence for a named-tag writer lookup.
     """
     if isinstance(target, ImmediateRef):
         target = target.value
     if isinstance(target, Tag):
-        return frozenset({target.name})
+        return (target,)
     if not isinstance(target, BlockRange):
-        return frozenset()
-    return frozenset(tag.name for tag in target.tags())
+        return ()
+    return tuple(target.tags())
+
+
+def static_write_target_names(target: Any) -> frozenset[str]:
+    """Concrete names represented by one safe, statically resolved target."""
+    return frozenset(tag.name for tag in static_write_target_tags(target))
+
+
+def instruction_written_tags(instr: Any) -> tuple[Tag, ...]:
+    """Each tag *instr* may write at a static address, once, in declaration order."""
+    tags: dict[str, Tag] = {}
+    for target in instruction_write_targets(instr):
+        for tag in static_write_target_tags(target):
+            tags.setdefault(tag.name, tag)
+    return tuple(tags.values())
 
 
 def instruction_writes_tag(instr: Any, tag_name: str) -> bool:
@@ -298,5 +312,7 @@ __all__ = [
     "instruction_partial_write_targets",
     "instruction_write_targets",
     "instruction_writes_tag",
+    "instruction_written_tags",
     "static_write_target_names",
+    "static_write_target_tags",
 ]
