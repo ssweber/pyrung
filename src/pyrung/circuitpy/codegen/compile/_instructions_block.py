@@ -390,15 +390,6 @@ def _compile_shift_instruction(
     return [" " * indent + line for line in lines]
 
 
-def _compile_step_selector_lines(
-    *,
-    step_var: str,
-    target_var: str,
-    value_exprs: list[str],
-) -> list[str]:
-    return emit_choose(step_var, target_var, value_exprs)
-
-
 def _compile_drum_instruction(
     instr: EventDrumInstruction | TimeDrumInstruction | TimeEventDrumInstruction,
     enabled_expr: str,
@@ -541,10 +532,10 @@ def _compile_drum_instruction(
     if isinstance(instr, EventDrumInstruction):
         lines.extend(
             [
-                *_compile_step_selector_lines(
-                    step_var="_step",
-                    target_var="_event_curr",
-                    value_exprs=_event_drum_event_exprs(instr, ctx),
+                *emit_choose(
+                    "_step",
+                    "_event_curr",
+                    _event_drum_event_exprs(instr, ctx),
                 ),
                 emit_prev_store(f"_drum_event_prev:{key_base}", "_event_curr"),
                 emit_mem_set(f"_drum_last_step:{key_base}", "_step"),
@@ -568,10 +559,10 @@ def _drum_end_lines(
         key_base = ctx.state_key_for(instr)
         last_step = f"int({emit_mem_get(f'_drum_last_step:{key_base}', '0')})"
         return [
-            *_compile_step_selector_lines(
-                step_var="_step",
-                target_var="_event_curr",
-                value_exprs=_event_drum_event_exprs(instr, ctx),
+            *emit_choose(
+                "_step",
+                "_event_curr",
+                _event_drum_event_exprs(instr, ctx),
             ),
             # A step reached by a write to the register or a correction has spent its edge.
             f"_end_met = _event_curr and {emit_cmp('_step_raw', '==', last_step)}"
@@ -585,11 +576,7 @@ def _drum_end_lines(
     tick = _drum_tick_lines(instr, ctx)
     if isinstance(instr, TimeDrumInstruction):
         lines = [
-            *_compile_step_selector_lines(
-                step_var="_step",
-                target_var="_limit",
-                value_exprs=[expr for expr in preset_exprs if expr is not None],
-            ),
+            *emit_choose("_step", "_limit", [expr for expr in preset_exprs if expr is not None]),
             *tick,
         ]
         if ctx.proof_metadata:
@@ -602,31 +589,27 @@ def _drum_end_lines(
     timed_steps = sum(expr is not None for expr in preset_exprs)
     if timed_steps == len(preset_exprs):
         lines.extend(
-            _compile_step_selector_lines(
-                step_var="_step",
-                target_var="_limit",
-                value_exprs=[expr for expr in preset_exprs if expr is not None],
-            )
+            emit_choose("_step", "_limit", [expr for expr in preset_exprs if expr is not None])
         )
         lines.extend(tick)
     elif timed_steps:
         lines.extend(
             [
                 "_limit = None",
-                *_compile_step_selector_lines(
-                    step_var="_step",
-                    target_var="_limit",
-                    value_exprs=[expr if expr is not None else "None" for expr in preset_exprs],
+                *emit_choose(
+                    "_step",
+                    "_limit",
+                    [expr if expr is not None else "None" for expr in preset_exprs],
                 ),
                 "if _limit is not None:",
                 *_indent_body(tick, 4),
             ]
         )
     lines.extend(
-        _compile_step_selector_lines(
-            step_var="_step",
-            target_var="_end_met",
-            value_exprs=_time_event_end_exprs(instr, ctx),
+        emit_choose(
+            "_step",
+            "_end_met",
+            _time_event_end_exprs(instr, ctx),
         )
     )
     return lines
