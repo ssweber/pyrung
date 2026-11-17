@@ -195,7 +195,8 @@ class _OwnTwin:
 def own_twin(plc: Any) -> Iterator[Callable[[Any], None]]:
     """Run a block with no twin made here.
 
-    The block's function keeps state that a twin in this process would share. The twin would go on from the run's count. The test therefore clears that state, steps its
+    The block's function keeps state that a twin in this process would share.
+    The twin would go on from the run's count. The test therefore clears that state, steps its
     own runner and passes it to the compare function that this yields. The block's last compare
     must be of where its run got to, even if the block raises, and it must be of another
     runner. State, scan and runner are compared as a twin's would be. Only *plc* is let off, and
