@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Expr, Or
+from pyrung.core.expression import Expression
+from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 
 def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
@@ -79,6 +81,10 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         except TypeError:
             return None
         eval_atom = Atom(atom.tag, atom.form, operand)
+    elif isinstance(atom.operand, (Expression, IndirectRef, IndirectExprRef, IndirectBlockRange)):
+        # An expression or a pointer element answers a comparison with a condition, not a
+        # bool, and the mapping cannot say what it reads.
+        return None
     return _eval_atom(eval_atom, state[atom.tag])
 
 

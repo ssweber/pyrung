@@ -26,6 +26,7 @@ from pyrung import (
     latch,
     math,
     on_delay,
+    out,
     system,
 )
 from pyrung.core.analysis.graph import PlanStatus
@@ -96,6 +97,42 @@ class TestArithmeticInARung:
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
 
+    def test_a_tag_compared_with_a_pointer_element(self) -> None:
+        """``Lvl == Tb[P]`` once raised a TypeError from inside how()."""
+        level = Int("Lvl", external=True, min=0, max=20)
+        table = Block("Tb", TagType.INT, 1, 3)
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(Bool("Ld", external=True)):
+                copy(7, table[2])
+            with Rung(level == table[Int("P", external=True, min=1, max=3)], level > 5):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, **BOUND)
+        assert plan.status in {PlanStatus.REACHED, PlanStatus.STOPPED}, plan.reason
+
+    def test_a_tag_not_equal_to_arithmetic(self) -> None:
+        """``A != B + 2`` beside ``A == B + 2`` once raised a TypeError from inside how()."""
+        left, right = (
+            Int("EA", external=True, min=0, max=10),
+            Int("EB", external=True, min=0, max=10),
+        )
+        hit = Bool("Hit")
+        with Program(strict=False) as program:
+            with Rung(left == right + 2):
+                out(Bool("Two"))
+            with Rung(left != right + 2, Bool("Go", external=True)):
+                latch(hit)
+        plan = PLC(program, dt=0.01).how(hit, wall_clock_s=3.0, max_scans=300)
+        assert plan.status in {PlanStatus.REACHED, PlanStatus.STOPPED}, plan.reason
+
+    def test_a_goal_holding_arithmetic_twice_keeps_one(self) -> None:
+        """Merging goals once hashed each value, and an expression has no hash."""
+        from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
+
+        arithmetic = TargetSpec("A", Int("B") + 2)
+        merged = TargetSpec.conjunction((arithmetic, TargetSpec("C", 3), arithmetic))
+        assert [member.tag for member in merged.members] == ["A", "C"]
+
     def test_packml_with_an_avoid_on_a_state_it_starts_in(self) -> None:
         plc = PLC(packml, dt=0.01)
         plan = plc.how(
@@ -153,6 +190,12 @@ class TestTargetForms:
         limit = Int("Limit", default=5)
         with pytest.raises(ValueError, match="compared with arithmetic"):
             PLC(program, dt=0.01).how(watch.Acc >= limit + 1, **BOUND)
+
+    def test_an_equal_target_with_arithmetic_is_a_clear_error(self) -> None:
+        program, watch, _other, _hit = self._program()
+        limit = Int("Limit", default=5)
+        with pytest.raises(ValueError, match="compared with arithmetic"):
+            PLC(program, dt=0.01).how(watch.Acc == limit + 1, **BOUND)
 
     def test_and_is_several_targets(self) -> None:
         program, watch, _other, hit = self._program()

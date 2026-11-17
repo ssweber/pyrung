@@ -512,7 +512,8 @@ class TraceNode:
     def _relational_key(self) -> tuple[str, Any]:
         """Dedup key for a relational frontier: tag + (form, operand)."""
         p = self.predicate
-        return (self.tag, (getattr(p, "form", None), getattr(p, "operand", self.value)))
+        operand = getattr(p, "operand", self.value)
+        return (self.tag, (getattr(p, "form", None), _visit_key(self.tag, operand)[1]))
 
 
 def _trace_node_constraint(node: TraceNode) -> Constraint | None:
@@ -525,6 +526,9 @@ def _trace_node_constraint(node: TraceNode) -> Constraint | None:
         if predicate.form in ("xio", "fall"):
             return Eq(predicate.tag, frozenset((False,)))
         if predicate.form == "eq" and not predicate.operand_is_tag:
+            if not isinstance(predicate.operand, (bool, int, float, str)):
+                # An expression or a pointer element names no value until a scan reads it.
+                return None
             return Eq(predicate.tag, frozenset((predicate.operand,)))
         op = _FORM_TO_OP.get(predicate.form)
         if op is not None:
@@ -545,7 +549,11 @@ def _trace_node_constraint(node: TraceNode) -> Constraint | None:
                 bound_is_tag=predicate.operand_is_tag,
             )
     if node.value is not None and not isinstance(node.value, Atom):
-        return Eq(node.tag, frozenset((node.value,)))
+        try:
+            return Eq(node.tag, frozenset((node.value,)))
+        except TypeError:
+            # An expression has no hash, and names no value until a scan reads it.
+            return None
     return None
 
 
