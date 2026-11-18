@@ -78,7 +78,6 @@ from pyrung.core.program import (
     ForLoop,
     Or,
     Program,
-    Rung,
     SubroutineFunc,
     blockcopy,
     branch,
@@ -231,7 +230,6 @@ __all__ = [
     "SlotView",
     # Program structure
     "Program",
-    "Rung",
     "rung",
     "SubroutineFunc",
     "ForLoop",

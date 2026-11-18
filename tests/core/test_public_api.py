@@ -24,6 +24,46 @@ def test_removed_feedback_classes_are_gone(module, name):
         exec(f"from {module} import {name}", {})
 
 
+def test_rung_class_is_not_exported():
+    import pyrung
+    import pyrung.core
+
+    assert "Rung" not in pyrung.__all__
+    assert "Rung" not in pyrung.core.__all__
+    assert not hasattr(pyrung, "Rung")
+    assert not hasattr(pyrung.core, "Rung")
+    assert "Rung" not in dir(pyrung)
+
+
+def test_reading_pyrung_rung_names_the_fix():
+    import pyrung
+
+    with pytest.raises(AttributeError) as excinfo:
+        pyrung.Rung  # noqa: B018
+    assert str(excinfo.value) == "pyrung no longer exports Rung. Write `with rung(...):` instead"
+
+
+def test_importing_rung_from_pyrung_raises_import_error():
+    # Python drops the AttributeError text and raises its own ImportError text.
+    with pytest.raises(ImportError, match="cannot import name 'Rung' from 'pyrung'"):
+        exec("from pyrung import Rung", {})
+
+
+def test_star_import_does_not_define_rung():
+    namespace: dict[str, object] = {}
+    exec("from pyrung import *", namespace)
+    assert "rung" in namespace
+    assert "Rung" not in namespace
+
+
+def test_other_missing_names_raise_the_plain_attribute_error():
+    import pyrung
+
+    with pytest.raises(AttributeError) as excinfo:
+        pyrung.Nope  # noqa: B018
+    assert str(excinfo.value) == "module 'pyrung' has no attribute 'Nope'"
+
+
 @pytest.mark.parametrize(
     "module", ["pyrung", "pyrung.click", "pyrung.circuitpy", "pyrung.validation", "pyrung.live"]
 )

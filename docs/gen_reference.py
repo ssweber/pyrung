@@ -144,7 +144,6 @@ PAGES: tuple[ReferencePage, ...] = (
         summary="Program/rung builders and control-flow composition primitives.",
         symbols=(
             "pyrung.Program",
-            "pyrung.Rung",
             "pyrung.rung",
             "pyrung.program",
             "pyrung.PyrungNameError",
