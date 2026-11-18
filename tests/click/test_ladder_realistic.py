@@ -4,7 +4,7 @@ Adapted from ``circuitpy_codegen_review.py`` — same instruction surface but
 Click-compatible (no inline expressions in copy, no Python functions, no
 CircuitPython system commands).
 
-Exercises:  OR conditions, edge contacts, timers, counters, calc expressions,
+Exercises:  OR conditions, edge contacts, timers, counters, Math expressions,
 copy (literal + indirect), blockcopy, fill, search (numeric + text), shift,
 event/time drums, pack/unpack family, forloop, subroutine, branches,
 send/receive, and an indirect compare condition.
@@ -155,7 +155,7 @@ def _build_program_and_mapping():
         with Rung(Running):
             count_down(Counter2, preset=-5).reset(ShiftReset)
 
-        # R7: copy + calc + indirect copy + blockcopy + fill
+        # R7: copy + Math + indirect copy + blockcopy + fill
         with Rung(Running, Timer[1].Done):
             copy(120, Source)
             math((Source * 2) + (Idx * 2) - 3, CalcOut)

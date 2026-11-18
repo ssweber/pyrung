@@ -98,7 +98,7 @@ def _is_number(value: Any) -> TypeGuard[int | float]:
 def _affine_of(src: Any) -> tuple[Any, int | float, int | float] | None:
     """``(source_tag, scale, offset)`` when *src* is an affine map over one tag.
 
-    The copy-source analogue of ``calc``'s affine forward: recognises ``+tag`` /
+    The copy-source analogue of ``math()``'s affine forward: recognises ``+tag`` /
     ``-tag`` and ``tag ± k`` / ``k ± tag`` / ``tag * k`` / ``k * tag`` with a
     numeric literal *k* and a single source tag.  A non-affine, multi-tag, or
     non-numeric expression (or a plain tag / literal) yields ``None``.
@@ -304,7 +304,7 @@ class CopyCrossing(BaseCrossing):
     ) -> ReverseResult | None:
         """Invert an affine expression-source copy ``copy(scale*S + off, D)``.
 
-        The copy-source twin of calc's affine reverse, but through copy's
+        The copy-source twin of Math's affine reverse, but through copy's
         destination store semantics. A discrete INT/DINT interior has the exact
         integer preimage ``S == (value - off) / scale``. At a clamp rail, all
         expression values beyond the rail collapse there, so the inverse is a

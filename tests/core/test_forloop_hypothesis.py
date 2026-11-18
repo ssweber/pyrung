@@ -3,7 +3,7 @@
 The test builds a random loop nest (up to three deep) into a pyrung program.  It also runs
 the same tree through a model, a plain-Python interpreter.  The tree mixes bare body
 instructions (implicit always-true rungs) with conditioned body rungs holding
-``break_loop()`` / ``continue_loop()``, ``out()`` coils and ``calc`` increments, read
+``break_loop()`` / ``continue_loop()``, ``out()`` coils and ``math()`` increments, read
 back from tags the body wrote on earlier iterations.  pyrung's interpreter and the
 compiled kernel must both match the model on every scan, and match each other.
 

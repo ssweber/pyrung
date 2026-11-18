@@ -1,6 +1,6 @@
-"""Calc crossing (Phase 2) — affine inversion, equality and inequality.
+"""Math crossing (Phase 2) — affine inversion, equality and inequality.
 
-:class:`CalcCrossing` inverts an affine calc writer in two shapes:
+:class:`CalcCrossing` inverts an affine Math writer in two shapes:
 
 **Equality** (``dest == value``) reuses ``calc_reverse_edge`` (the codebase's
 single affine inverter, also used by ``build_reverse_edge_map``): same-width
@@ -122,7 +122,7 @@ def _two_tag_addsub(expr: Any) -> tuple[str, str, str] | None:
 
 
 class CalcCrossing(BaseCrossing):
-    """Reverse for affine calc writers (equality targets)."""
+    """Reverse for affine Math writers (equality targets)."""
 
     def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
         claim = self._raw_forward(instr)
@@ -273,7 +273,7 @@ class CalcCrossing(BaseCrossing):
         return REVERSE_FALLTHROUGH
 
     def _reverse_cmp(self, instr: Any, target: Cmp, ctx: CrossingContext) -> ReverseResult:
-        """Reverse an inequality ``dest op bound`` onto the calc's source(s)."""
+        """Reverse an inequality ``dest op bound`` onto the Math's source(s)."""
         op = target.op
         bound = target.bound
         if target.bound_is_tag or op not in _FLIP_OP or not _is_number(bound):

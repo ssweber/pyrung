@@ -175,7 +175,7 @@ class TestPointerDomainInference:
         assert "Idx" in result.tags
 
     def test_internal_pointer_auto_bounded(self):
-        """Internal pointer written by calc gets domain from block bounds."""
+        """Internal pointer written by a Math gets domain from block bounds."""
         blk = Block("DS", TagType.INT, 1, 10)
         idx = Int("Idx")
         dest = Int("Out")

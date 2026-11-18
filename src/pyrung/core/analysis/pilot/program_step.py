@@ -297,7 +297,7 @@ def read_frontier_motion(
 ) -> tuple[str, Any, Any] | None:
     """Return a frontier value that the unchanged program closes on by itself.
 
-    No instruction needs to own the motion.  A calc that is fed its own result moves a tag as
+    No instruction needs to own the motion.  A Math that is fed its own result moves a tag as
     a timer does.  Only a numeric frontier counts.  Its distance to its wanted value must
     never grow over the projected scans, and it must end smaller.  A wrap or a step away
     does not count.  Some values move only every other scan, so the projection runs more

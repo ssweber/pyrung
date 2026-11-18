@@ -81,7 +81,7 @@ class TestTimerAccumulatorAgainstItsPreset:
 class TestAccumulatorThresholds:
     """An accumulator compared against thresholds.  A timer's tick may land on
     any value that a comparison splits at, so a threshold far past the budget's
-    scans is still crossed.  A counter or a calc accumulator steps concretely,
+    scans is still crossed.  A counter or a Math accumulator steps concretely,
     so its thresholds must lie within depth_budget."""
 
     def test_timer_threshold_event_nonzero_acc_assignment_stays_explicit(self):

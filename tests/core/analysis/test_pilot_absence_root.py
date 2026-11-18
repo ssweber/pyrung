@@ -2,7 +2,7 @@
 
 A fault whose true cause **never moved** is invisible to the shallow chase:
 ``Sail`` (external, resting False) drives an intermediate error register,
-which feeds an alarm delay, a latch, and a laundering calc before the state
+which feeds an alarm delay, a latch, and a laundering Math before the state
 machine aborts Execute(6) -> Aborting(8) — the recorded chain of the abort
 dead-ends at things that *did* move.  The deep cause walk names ``Sail``
 as a never-moved external root, and investigation must turn that into the

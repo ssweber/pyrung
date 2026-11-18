@@ -5,7 +5,7 @@ tags are initialized from their declared default at power-on and must never
 be written again — not by the ladder, not by any external source.
 
 This validator covers ALL instruction types that produce writes, including
-one-shot instructions (copy, calc, etc.) that are not covered by the
+one-shot instructions (copy, Math, etc.) that are not covered by the
 conflicting-output or stuck-bit validators.
 """
 

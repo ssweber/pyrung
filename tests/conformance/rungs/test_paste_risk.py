@@ -33,11 +33,11 @@ and DF411..DF420.
   ``faults/rand_unequal_bounds`` asks DF bounds that differ.
 - ``loop_body_split`` (probe): an instruction above a box in a For
   body.  A box with pins ends its rung (C000A: all its pins start from the box's
-  own wire), so the calc and the counter are two body rungs with the same
+  own wire), so the Math and the counter are two body rungs with the same
   contacts (the Scratch contact is written by an earlier body rung, so the
-  second copy re-reads nothing the calc wrote).  The count input is on in
-  iterations 1, 2 and 4 of 4 (``loop/counter_inside_loop``, F8), the calc runs
-  on those three: Result1 = 2 (counter edges) and Result2 = 3 (the calc).  A
+  second copy re-reads nothing the Math wrote).  The count input is on in
+  iterations 1, 2 and 4 of 4 (``loop/counter_inside_loop``, F8), the Math runs
+  on those three: Result1 = 2 (counter edges) and Result2 = 3 (the Math).  A
   CLICK that refuses the loop never fires the case.
 """
 
@@ -138,7 +138,7 @@ def _fire(slot):
 
 def prove_loop_body_split(slot):
     # The count input (the counter's body rung's Scratch != 3) is on in
-    # iterations 1, 2 and 4 of 4. The calc above the counter is a body rung of
+    # iterations 1, 2 and 4 of 4. The Math above the counter is a body rung of
     # its own with the same contacts, because a box with pins ends its rung.
     counter = ClickCounter(196)
     with Rung():

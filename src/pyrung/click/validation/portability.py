@@ -667,7 +667,7 @@ _CLICK_OP_NAME: dict[str, str] = {
 
 
 def _collect_mode_violations(expr: Any, calc_mode: CalcMode) -> list[str]:
-    """Return Click-native names of operators/functions that violate the calc mode."""
+    """Return Click-native names of operators/functions that violate the Math mode."""
     violations: list[str] = []
     _walk_mode_violations(expr, calc_mode, violations, set())
     return violations

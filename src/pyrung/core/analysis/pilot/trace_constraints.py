@@ -90,7 +90,7 @@ def _rewrite_internal_compare(
     *,
     _depth: int = 0,
 ) -> list[Atom]:
-    """Reverse one internal comparison through transparent copy/calc writers."""
+    """Reverse one internal comparison through transparent copy/Math writers."""
 
     if _depth > 6 or atom.tag in steerable:
         return [atom]

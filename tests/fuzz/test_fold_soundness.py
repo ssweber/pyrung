@@ -423,7 +423,7 @@ def reader(shape, *, src=0, k=5, d=100, form="ge", count=True):
 @given(spec=_composite_spec())
 @settings.get_profile(PROFILE)
 # Review probes, always exercised: read-above (a6), slow-timer == (a7),
-# pulse reset (a3), expression / stored copy (gap_dataread), affine self-calc (a1).
+# pulse reset (a3), expression / stored copy (gap_dataread), affine self-feeding Math (a1).
 @example(spec=spec_of(["timer_ms"], [reader("cmp_above")]))
 @example(spec=spec_of(["timer_s"], [reader("eq", k=7, d=1)], dt=0.1))
 @example(spec=spec_of(["counter_pulse_reset"], [reader("cmp_below", k=1, d=7)]))

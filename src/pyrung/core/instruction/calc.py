@@ -108,7 +108,7 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 
 
 def check_float_literals(value: Any, seen: set[int] | None = None) -> None:
-    """Refuse a float constant in a calc expression outside CLICK's REAL range."""
+    """Refuse a float constant in a Math expression outside CLICK's REAL range."""
     if seen is None:
         seen = set()
     if id(value) in seen:
@@ -224,7 +224,7 @@ def _rebuild(value: Any, form: _CalcForm) -> Any:
 
 
 def cut_int_constants(value: Any) -> Any:
-    """Return *value* (a calc expression) with each integer constant cut to 32 bits, signed.
+    """Return *value* (a Math expression) with each integer constant cut to 32 bits, signed.
 
     This is what a decimal Math runs (:func:`calc_form`), including the bounds of a
     ``randint()``.  Only a constant past a Dint's range changes.
@@ -247,7 +247,7 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
       ``CalcUnaryExpr``, whose integer steps past 2 ** 53 are doubles.
     - ``%`` truncates.  A ``%`` by 0 and ``0 ^ 0`` are 0 with no flag, and 0 to
       a negative power is +Inf (:data:`~pyrung.core.expression.CALC_OPS`).
-      Outside ``calc`` they stay Python's.
+      Outside a Math they stay Python's.
     - ``abs()`` of an Int or Dint tag cannot return the bottom of its range.
       ``abs(DS1)`` with DS1 = -32768 is 0 and sets SC43.  ``abs(DD1)`` with
       DD1 = -2147483648 does the same.  The rule depends on the operand's type, so it
@@ -267,7 +267,7 @@ def calc_form(expression: Any, mode: CalcMode) -> Any:
 
 
 def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
-    """Infer calc arithmetic mode and whether the expression mixes mode families."""
+    """Infer Math arithmetic mode and whether the expression mixes mode families."""
     tag_types: set[TagType] = set()
     _collect_calc_tag_types(expression, tag_types, set())
     tag_types.add(dest.type)
@@ -287,7 +287,7 @@ def infer_calc_mode(expression: Any, dest: Tag) -> CalcModeInference:
 
 
 class CalcInstruction(OneShotMixin, Instruction):
-    """Evaluate an arithmetic expression and store the result (CALC).
+    """Evaluate an arithmetic expression and store the result (Math).
 
     Evaluates `expression` (which may reference any `Tag` or arithmetic
     combination thereof) and stores the result into `dest`, truncating

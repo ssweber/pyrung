@@ -182,7 +182,7 @@ ready writer, or satisfied trace awaiting its writer. A self-advancing frontier
 is either an advance profile on the leaf or, where the trace stops at a
 program-written numeric value, an unchanged four-scan projection
 (`read_frontier_motion`) in which that value only closes on the traced one: a
-calc fed its own result reads like a timer. Absence of a diagnosis
+Math fed its own result reads like a timer. Absence of a diagnosis
 does not authorize motion. Orientation lowers positive evidence to the named
 `ProgramContinuation` act; its `seek` and `settle` modes reuse the bounded coast
 mechanics and ordinary verification gates without representing the decision as

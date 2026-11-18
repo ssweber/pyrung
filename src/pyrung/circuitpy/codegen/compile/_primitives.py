@@ -143,9 +143,9 @@ def _compile_expression_impl(
 
     An operation that can fail gives 0 and the rest runs, as in the core.  Such an
     operation goes through ``_permissive_op``, ``_permissive_math`` or a helper of its
-    own.  Pass *strict* for a calc.  Then each failing operation also appends its flag's
-    code to the calc's ``_calc_flags`` (:data:`CALC_FLAGS`, core ``CALC_FAULTS``).  The
-    calc sets those flags after the formula, and nothing in the formula raises.
+    own.  Pass *strict* for a Math.  Then each failing operation also appends its flag's
+    code to the Math's ``_calc_flags`` (:data:`CALC_FLAGS`, core ``CALC_FAULTS``).  The
+    Math sets those flags after the formula, and nothing in the formula raises.
     """
     if isinstance(expr, TagExpr):
         return _snapshot_tag_symbol(
@@ -177,14 +177,14 @@ def _compile_expression_impl(
         if (not strict or not isinstance(expr, CalcBinaryExpr)) and (
             _binary_may_raise(expr) or _may_be_huge(expr.left) or _may_be_huge(expr.right)
         ):
-            # This applies outside a calc.  In a calc it applies only to a randint()
+            # This applies outside a Math.  In a Math it applies only to a randint()
             # bound, because calc_form keeps its ops.
             symbol = {"%": "mod", "**": "pow0"}[expr.symbol] if calc_op else expr.symbol
             return _permissive_op(symbol, left, right, ctx, flags)
         if expr.symbol in _BITWISE_SYMBOLS:
             if _binary_may_raise(expr) or (strict and _may_be_double(left, right)):
-                # In a calc, an Inf or NaN operand or a negative shift count gives 0
-                # with SC43.  A calc's integer step past 2 ** 53 is a double (_dbl).
+                # In a Math, an Inf or NaN operand or a negative shift count gives 0
+                # with SC43.  A Math's integer step past 2 ** 53 is a double (_dbl).
                 # Such a double may be Inf or NaN too, as in lsh(1, 2000).  An operand
                 # without _dbl is an integer of at most 2 ** 53, so int() is safe.
                 compiled = _permissive_op(expr.symbol, left, right, ctx, flags)
@@ -195,7 +195,7 @@ def _compile_expression_impl(
                 right_int = _shift_count_expr(expr.right, right_int, ctx)
             return _calc_step(expr, f"({left_int} {expr.symbol} {right_int})", ctx, strict)
         if calc_op and expr.symbol == "**" and not _positive_int_literal(expr.right):
-            # A calc's ** follows core _op_pow_calc.  0 ^ 0 is 0 with no flag.  0 to
+            # A Math's ** follows core _op_pow_calc.  0 ^ 0 is 0 with no flag.  0 to
             # a negative power is +Inf.  A complex result is 0 with SC46.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
@@ -209,7 +209,7 @@ def _compile_expression_impl(
         ):
             # _pow returns +/-Inf for a float overflow, as the core's _op_pow does.
             # It raises _MathDomainError for a complex result.  An integer power is
-            # exact and never overflows.  A calc's stepped double (_dbl) is a float,
+            # exact and never overflows.  A Math's stepped double (_dbl) is a float,
             # so lsh(1, 1000) ** 2 is Inf and not an OverflowError.
             ctx.mark_helper("_math_func")
             ctx.mark_helper("_pow")
@@ -219,13 +219,13 @@ def _compile_expression_impl(
             and expr.symbol == "%"
             and not (_non_negative(expr.left) and _positive_literal(expr.right))
         ):
-            # A calc's MOD truncates, so the result has the sign of the dividend.
+            # A Math's MOD truncates, so the result has the sign of the dividend.
             # A MOD by 0 is 0 with no flag.  Both follow the core's _op_mod.  Python's
             # % floors instead.
             ctx.mark_helper("_mod")
             return f"_mod({left}, {right})"
         if expr.symbol in ("/", "//") and not _non_zero_literal(expr.right):
-            # A calc's division by 0 is 0 with SC40.  If the divisor is a tag, the
+            # A Math's division by 0 is 0 with SC40.  If the divisor is a tag, the
             # zero test is inline.  The exception is a dividend that appends flags of
             # its own, because a skipped dividend would lose them.  Otherwise a helper
             # reads the divisor once.
@@ -253,7 +253,7 @@ def _compile_expression_impl(
         if expr.symbol == "abs":
             floor = _abs_floor(expr)
             if floor is not None:
-                # In a calc, abs() of an Int or Dint tag (see calc_form) turns the
+                # In a Math, abs() of an Int or Dint tag (see calc_form) turns the
                 # bottom of the range into 0, with SC43.
                 ctx.mark_helper("_abs_int")
                 ctx.mark_helper("_term_fail")
@@ -270,7 +270,7 @@ def _compile_expression_impl(
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
         # _math_func passes a non-finite operand through, as MathFuncExpr.evaluate
-        # does.  _permissive_math also gives 0 for a domain error (SC46 in a calc)
+        # does.  _permissive_math also gives 0 for a domain error (SC46 in a Math)
         # and for an integer too large for a float (SC43).
         operand = _compile_expression_impl(
             expr.operand,
@@ -343,8 +343,8 @@ def _compile_expression_impl(
 
     if isinstance(expr, RandIntExpr):
         # This follows RandIntExpr.evaluate.  A bare Real tag as a bound reads 0.
-        # Equal bounds, or a bound that holds Inf or NaN, make the site 0.  In a calc
-        # the site appends its flag to the calc's _calc_flags (CALC_FLAGS), as any
+        # Equal bounds, or a bound that holds Inf or NaN, make the site 0.  In a Math
+        # the site appends its flag to the Math's _calc_flags (CALC_FLAGS), as any
         # failing operation does.  Only the site is zeroed.
         if expr.real_bounds:
             return "0"
@@ -440,7 +440,7 @@ def _compile_range_aggregate(expr: RangeAggregateExpr, terms: list[str]) -> str:
 
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
 
-#: The op each symbol runs outside ``calc``; ``calc_form`` swaps it for its CALC_OPS one.
+#: The op each symbol runs outside a Math; ``calc_form`` swaps it for its CALC_OPS one.
 _PYTHON_OPS = {"%": operator.mod, "**": _op_pow}
 
 
@@ -464,14 +464,14 @@ def _positive_int_literal(expr: Any) -> bool:
     return isinstance(expr, LiteralExpr) and isinstance(expr.value, int) and expr.value > 0
 
 
-#: The list a calc's failing operations append their flags' codes to (``_term_fail``).
+#: The list a Math's failing operations append their flags' codes to (``_term_fail``).
 CALC_FLAGS = "_calc_flags"
 
 _CALC_FLAGS_RE = re.compile(rf"\b{CALC_FLAGS}\b")
 
 
 def _appends_flags(compiled: str) -> bool:
-    """Return whether the compiled calc code *compiled* can append to :data:`CALC_FLAGS`."""
+    """Return whether the compiled Math code *compiled* can append to :data:`CALC_FLAGS`."""
     return _CALC_FLAGS_RE.search(compiled) is not None
 
 
@@ -479,9 +479,9 @@ _DOUBLE_RE = re.compile(r"\b_dbl\(")
 
 
 def _may_be_double(*compiled: str) -> bool:
-    """Return whether a compiled calc operand can hold a double from an integer step.
+    """Return whether a compiled Math operand can hold a double from an integer step.
 
-    A calc's integer step past 2 ** 53 is a double (:func:`_calc_step`, ``_dbl``).
+    A Math's integer step past 2 ** 53 is a double (:func:`_calc_step`, ``_dbl``).
     Such a double may be +/-Inf or NaN, as in ``lsh(1, 2000)`` or Inf - Inf, where
     :func:`_may_be_float` sees an integer.  ``int()`` of one raises.  So a bitwise,
     shift or address use of such an operand needs its guard.  A float's ``**`` raises
@@ -523,7 +523,7 @@ _TYPE_BOUNDS = {
 def _int_bound(expr: Any) -> float:
     """Return a bound on the magnitude of *expr* when it is an integer (inf if unknown).
 
-    In a calc, a step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl``,
+    In a Math, a step whose bound is past ``DOUBLE_EXACT_LIMIT`` goes through ``_dbl``,
     as in the core's ``_calc_step``.  A float result needs no bound, so its bound is 0.
     """
     if isinstance(expr, bool):
@@ -582,10 +582,10 @@ def _small_count_literal(expr: Any) -> bool:
 
 
 def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> str:
-    """Wrap *compiled*, a step of a calc, in ``_dbl`` if its value can pass 2 ** 53.
+    """Wrap *compiled*, a step of a Math, in ``_dbl`` if its value can pass 2 ** 53.
 
     The core ``_calc_step`` makes the same decision.  A step is a ``CalcBinaryExpr`` or
-    ``CalcUnaryExpr`` (what ``calc_form`` builds), or a shift in a calc.
+    ``CalcUnaryExpr`` (what ``calc_form`` builds), or a shift in a Math.
     """
     if isinstance(expr, (BinaryExpr, UnaryExpr)):
         stepped = isinstance(expr, (CalcBinaryExpr, CalcUnaryExpr))
@@ -598,10 +598,10 @@ def _calc_step(expr: Any, compiled: str, ctx: CodegenContext, strict: bool) -> s
 
 
 def _binary_may_raise(expr: BinaryExpr) -> bool:
-    """Return whether *expr* can raise on a math error (and so, outside calc, give 0).
+    """Return whether *expr* can raise on a math error (and so, outside a Math, give 0).
 
     A division by a non-zero constant, a power with a non-negative integer
-    constant exponent (positive in a calc), a bitwise operation on integers and a shift by a
+    constant exponent (positive in a Math), a bitwise operation on integers and a shift by a
     non-negative constant cannot; ``+``, ``-`` and ``*`` never do (a float
     overflow is Inf).  Each of them can raise when an operand is an integer too
     large for a float (:func:`_may_be_huge`), which the caller checks.
@@ -610,7 +610,7 @@ def _binary_may_raise(expr: BinaryExpr) -> bool:
     if symbol in ("/", "//", "%"):
         return not _non_zero_literal(expr.right)
     if symbol == "**":
-        # A negative exponent of 0 divides by zero (in a calc, 0 ** 0 is an
+        # A negative exponent of 0 divides by zero (in a Math, 0 ** 0 is an
         # error too); a fractional one of a negative base is complex.
         if expr.op is CALC_OPS[_op_pow]:
             return not _positive_int_literal(expr.right)
@@ -668,7 +668,7 @@ def _permissive_op(
     """Return ``_permissive_op(op, left, right)``, which gives the operation or 0 on a math error.
 
     The core's expressions give 0 where an operation raises (``_permissive`` in
-    pyrung.core.expression).  In a calc (*flags*, :data:`CALC_FLAGS`) the
+    pyrung.core.expression).  In a Math (*flags*, :data:`CALC_FLAGS`) the
     error's flag is also appended.
     """
     ctx.mark_helper("_bit_int")
@@ -693,7 +693,7 @@ def _bit_int_expr(expr: Any, compiled: str, ctx: CodegenContext) -> str:
     ``OverflowError`` for NaN as ``int()`` does for Inf (the core's
     ``bit_operand``), not the ``ValueError`` of ``int(nan)``.  An operation whose
     operand may be Inf or NaN is guarded by ``_permissive_op`` or ``_rand_*``,
-    which make it 0, with the out-of-range flag in a calc.
+    which make it 0, with the out-of-range flag in a Math.
     """
     if _may_be_float(expr):
         ctx.mark_helper("_bit_int")
@@ -1506,7 +1506,7 @@ def _compile_value(
 ) -> str:
     """Return *value* as a Python expression.
 
-    Pass *strict* for a calc (see _compile_expression_impl).  Pass *condition* for a rung
+    Pass *strict* for a Math (see _compile_expression_impl).  Pass *condition* for a rung
     condition's operand.  Then an indexed element outside its block reads as 0, with no
     fault flag.
     """
@@ -1543,7 +1543,7 @@ def _compile_value(
         if condition:
             return _compile_condition_element_read(value.block, binding, expr, ctx, block_snapshots)
         if strict and _may_be_double(expr):
-            # A calc's integer step past 2 ** 53 is a double (_dbl), so the address
+            # A Math's integer step past 2 ** 53 is a double (_dbl), so the address
             # can be +/-Inf or NaN, which _addr_int makes -1: below every block,
             # the address error and nothing written (core IndirectExprRef.resolve_ctx).
             ctx.mark_helper("_addr_int")

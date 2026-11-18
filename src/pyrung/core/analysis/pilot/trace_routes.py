@@ -252,7 +252,7 @@ def writer_route_eligible(
 
     Two gates, mirroring the OR-arm collapse:
 
-    1. **Retentive** (``tag not in ote_writes``) — a latch/SET or copy/calc into a
+    1. **Retentive** (``tag not in ote_writes``) — a latch/SET or copy/Math into a
        held register, so establishing via this writer is not clobbered by a
        later last-wins ``out``.  A non-retentive multi-out is a ``duplicate_out``
        conflict, never a safe default.
