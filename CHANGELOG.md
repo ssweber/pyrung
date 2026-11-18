@@ -13,7 +13,7 @@
 
 ## v0.17.0 (2026-11-18)
 
-You can now record a debug session and replay it as a pytest test. Ladder export takes more of what CLICK's editor takes, and `send()` and `receive()` reach CLICK v4's ports. Read Behaviour changes before you upgrade. A program that uses `Rung` needs an edit, and the property checks and lock files are gone. Imports from `pyrung.core` still work. Move them to `pyrung`, because `pyrung.core` is internal and can change in any release.
+You can now record a debug session and replay it as a pytest test. Ladder export accepts more of the forms that CLICK's editor accepts, and `send()` and `receive()` reach CLICK v4's ports. Read Behaviour changes before you upgrade. A program that uses `Rung` needs an edit. Other imports from `pyrung.core` still work. Move them to `pyrung`, because `pyrung.core` is internal and can change in any release. The property checks and lock files are gone.
 
 ### What's new
 
@@ -32,9 +32,9 @@ You can now record a debug session and replay it as a pytest test. Ladder export
   - `ModbusRtuTarget(com_port="cpu3")` talks over CPU port 3.
   - `device_id` takes a DS tag, which the instruction reads as each request starts.
 
-#### Ladder export accepts what CLICK's editor accepts
+#### Ladder export accepts more of what CLICK's editor accepts
 
-- A rung whose contacts feed only a NOP, as a CLICK keeps it. `mapping.validate(logic)` warns about it with `CLK_NOP_NO_COIL`, CLICK's Syntax Check error C0003.
+- A rung with contacts and no instruction, written as a NOP.
 - `out()` on the SC bits CLICK's Out coil takes, such as SC162 and SC303.
 - `math()` into an SD that CLICK lets a program write, such as SD29, SD61 and SD147.
 - A hex `math()` into YD.
@@ -46,19 +46,21 @@ You can now record a debug session and replay it as a pytest test. Ladder export
 - `randint()` with DH bounds in a hex `math()`.
 - A `copy()` of a constant with a fraction into DH or YD, such as `copy(1.5, DH1)`.
 
-CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes back as `nop()` in a `branch()`.
+#### Ladder import
+
+- CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes back as `nop()` in a `branch()`.
 
 #### Public imports
 
 - `pyrung.validation` exports `ValidationReport`, which `Program.check()` returns. It also exports the rule list and the functions that read and write `[tool.pyrung.check]`.
-- `ValidationReport.grouped()` returns the findings by rule code. It shows the stuck bits that one block reset leaves as one entry.
+- `ValidationReport.grouped()` returns the findings by rule code. It lists the stuck bits from one block `reset()` as one entry.
 - `pyrung.live` exports `send_command()`, `list_sessions()` and `command_grammar()`, so Python code can drive a running debug session.
 - `pyrung` exports the math functions (`sqrt`, `log`, `lsh`, `randint` and the rest), `PI`, `SystemState`, `DataView`, `AvoidCheckError`, `UnrecordedScansError` and the names of the physical kinds.
 - `pyrung.click` exports the comment-format names (`TagMeta`, `parse_tag_meta`, `upgrade_comment` and the rest), `ClickValidationReport` and `ClickFinding`.
 
 ### Behaviour changes
 
-- `pyrung` no longer exports `Rung`. After `from pyrung import *`, a `with Rung(...):` raises `NameError: name 'Rung' is not defined`. A `from pyrung import Rung` raises `ImportError`.
+- `pyrung` and `pyrung.core` no longer export `Rung`. After `from pyrung import *`, a `with Rung(...):` raises `NameError: name 'Rung' is not defined`. `from pyrung import Rung` and `from pyrung.core import Rung` raise `ImportError`.
   Write `with rung(...):` instead. `rung` accepts the same conditions.
 - `pyrung.core` and `pyrung.dap` are internal. Docs, examples and generated code import from `pyrung` (they imported the math functions, `system` and `SystemState` from `pyrung.core`, and `send_command` from `pyrung.dap.live`).
   Import from `pyrung`, `pyrung.click`, `pyrung.circuitpy`, `pyrung.validation` or `pyrung.live`. The internal paths can change in any release.
@@ -68,7 +70,7 @@ CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes 
   Test each property in pytest with `force()` and `run_for()`, and use `how()` to find a path to a state. Delete `pyrung lock --check` from CI and your `pyrung.lock` files.
 - Tags, blocks, `.slot()`, `Field()`, `@udt`, `@named_array` and `TagMeta` no longer take `lock=`. A nickname file that still holds `[lock]` loads. pyrung drops the flag when it writes the file.
   Delete `lock=True` from your tag declarations, or regenerate a `tags.py` that pyrung generated.
-- The console no longer has the `log`, `note`, `candidates`, `accept`, `deny`, `suppress` and `spec` commands. `expr_requires()` and `reset_dominance()`, which the tests that `spec` wrote call, are gone too.
+- The console no longer has the `log`, `note`, `candidates`, `accept`, `deny`, `suppress` and `spec` commands. The tests that `spec` wrote call `expr_requires()` and `reset_dominance()`. Both are gone too.
   Read past scans in the VS Code History panel or with `cause` and `effect`. Write tests in pytest, and check a property that `spec` checked with `force()` and `run_for()`.
 - `record stop` prints every command recorded (it printed a shortened transcript).
   Cut the lines you don't want from the transcript before you replay it.
@@ -112,15 +114,19 @@ CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes 
   `allow=` does not lift it. Start the copy low enough to fit the constant.
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
   Look a point up by its new name, or by its tag such as `system.fault.plc_error`. A nickname file row with the old name loads and is ignored.
-- `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type). It also raises `ValueError` for two nicknames that differ only in letter case, because CLICK reads them as one name. A row that repeats an SC or SD nickname raises it too.
-  Fix the row, or leave its Data Type blank. Rename one of the two nicknames.
+- `mapping.validate(logic)` reports `CLK_NOP_NO_COIL` for a rung whose contacts feed only a NOP (it passed the rung). CLICK's Syntax Check reports error C0003 for such a rung.
+  Give the rung an output, or remove its contacts.
+- `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
+  Fix the row, or leave its Data Type blank.
+- `TagMap.from_nickname_file()` keeps a space at the start of a TXT initial value. A TXT holds one character, so `  a ` loads as `" "` (it loaded `"a"`). A CLICK trims a bare value and keeps a quoted one.
+  Remove the spaces before a bare value.
 
 ### Fixes
 
 #### Debugger and console
 
 - The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`). A replay that stops on a failed line reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
-- When a scan raises partway through the console's `step` or `run`, the debugger stops at the last scan that ran.
+- When a scan raises partway through the console's `step` or `run`, the debugger stops at the last scan that ran (the editor kept showing the scan before the command).
 - The debugger shows a TXT character outside printable ASCII as CLICK's Data View does, such as `$C8` (it showed the character).
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
 - The VS Code debugger shows live tag values inside a `with rung(...)` block (it showed them only inside `with Rung(...)`).
@@ -133,7 +139,6 @@ CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes 
   - A float register that CLICK shows as `Err-Format` loads as NaN. 0.16.0 raised `ValueError`.
   - A text register that holds a comma loads as `","`. 0.16.0 read the comma as an empty address and moved the rest of the row one address on.
   - If a row with a comma also has an empty address, pyrung cannot tell what some text registers hold. It skips them, loads the rest of the file and names the skipped addresses. `load_snapshot()` warns with `SkippedAddressesWarning`. The warning's `addresses` attribute lists them. A DAP client gets them in `skippedAddresses` in the launch response.
-- `TagMap.from_nickname_file()` strips the spaces at either end of a nickname, as CLICK does.
 - A nickname file's Retentive column accepts `True` and `1` as well as `Yes`.
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
 - CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
@@ -148,7 +153,7 @@ CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes 
 
 #### program.check()
 
-- `program.check()` sees writes by every instruction, writes through a pointer and writes in a `forloop()` body. Its choices, stuck-bit, link and comparison checks missed some of them. Its `readonly=True` and `final=True` checks saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`.
+- `program.check()` sees writes by every instruction, writes through a pointer and writes in a `forloop()` body. In 0.16.0 its choices, stuck-bit, link and comparison checks missed some of them. Its `readonly=True` and `final=True` checks saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`.
 - `program.check()` no longer calls a comparison always false in these cases:
   - The `math()` that writes the tag wraps past the end of its type.
   - A copy clamps the value it stores.
@@ -162,7 +167,8 @@ CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes 
 
 - `how()` gives a correct plan for more programs:
   - It no longer assumes that a `Real` holds a number, or that an up counter with a down input stays between 0 and its preset. It no longer assumes that a timer's or counter's Acc starts at 0 when a copy or a `math()` writes it.
-  - It reads a drum step's preset, an off-delay's preset and a continuous `search()`'s result as values that carry over from the last scan when a rung below the instruction sets them.
+  - It reads a drum step's preset and an off-delay's preset as values that carry over from the last scan when a rung below the instruction sets them.
+  - It reads a continuous `search()`'s result as a value that carries over from the last scan, because the search resumes after it.
   - It no longer misses the states where two compared tags are equal, such as the Accs of two timers. It no longer misses the values of a tag that a rung compares with a pointer element, with arithmetic or with an input that has no bounds.
   - It no longer raises `TypeError` on a rung such as `Fed.Acc == Cut.Acc + 2` or `Lvl == Tb[P]`. A target such as `how(Lvl == Sp + 2)` raises a `ValueError` that asks for a literal. `how(avoid=Lvl == Tb[P])` no longer treats every state as avoided.
 - `why()` follows a timer's Acc or a continuous `search()`'s result back to a later rung that writes it (it stopped at the tag).
