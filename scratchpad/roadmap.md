@@ -421,6 +421,24 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **A rung over CLICK's 32 rows can export.** pyrung's Click export counts one row for each CSV row. In CLICK many
+  boxes are taller than one row. On 2026-11-18 the export of `plc_stores` wrote a rung of 17 CSV rows, a Fill and
+  16 Copies. laddercodec counted 34 rows, and its `encode()` refused the rung. The bob/hw-split branch split that
+  rung in the case.
+  - `_LadderExporter._assert_rung_height` in `src/pyrung/click/ladder/_exporter.py` refuses a rung of more than 32
+    CSV rows. 17 Copies into DS pass that check and make a rung of 34 rows.
+  - laddercodec gives each box a height in its instruction's `cell_params()["visual_rows"]`:
+    - 2 rows for every Copy-family box (copy, block copy, fill, pack and unpack), whatever the destination. Search
+      and a timed coil are also 2 rows.
+    - 3 rows for Send, Receive, Email, Home, Position and Velocity, and for a debounce or flasher coil.
+    - One row for each pin, plus 1, for a Timer, Counter, Shift or Drum. A Timer with no reset pin is 2 rows, and
+      pyrung writes it as 1 CSV row.
+  - The height check should take each box's height from that list, or ask laddercodec for it.
+  - `estimate_steps` in `src/pyrung/click/ladder/steps.py` estimates program steps and counts no rows.
+  - Moving the export to laddercodec does not close this. At laddercodec 2eaf985, `encode()` refuses a rung of more
+    than 32 rows, and `lay_out()` refuses a circuit that needs more. `csv_rows()`, `write_csv()` and
+    `write_bundle()` check no row count.
+
 - **Two subroutine names that differ only in case.** pyrung accepts "Pump" and "pump" in one program. The export
   writes `subroutines/Pump.csv` and then `subroutines/pump.csv`, and on Windows the second file overwrites the first.
   laddercodec's `write_bundle()` refuses the pair. pyrung should report the pair as a validation finding before the
