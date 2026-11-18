@@ -17,6 +17,9 @@ from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.handlers import history_seek
 from pyrung.dap.protocol import read_message
 
+# The panel's clocks for a test that does not time the clock out.
+LOADED_MACHINE_CLOCK_S = 300.0
+
 WATCHED = ["Lamp", "Stage", "T2_Done", "Held", "Mirror", "Patched"]
 
 _SCRIPT = """
@@ -137,8 +140,8 @@ class Session:
 @pytest.fixture(autouse=True)
 def _allowance_outlasts_a_loaded_machine(monkeypatch: pytest.MonkeyPatch) -> None:
     """The panel's clock is the user's wait; a test that wants it short sets it to 0 itself."""
-    monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", 300.0)
-    monkeypatch.setattr(history_seek, "_READ_CLOCK_S", 300.0)
+    monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", LOADED_MACHINE_CLOCK_S)
+    monkeypatch.setattr(history_seek, "_READ_CLOCK_S", LOADED_MACHINE_CLOCK_S)
 
 
 @pytest.fixture(scope="module")
@@ -262,7 +265,8 @@ def test_loading_a_window_reaches_the_stepped_entries(
 ) -> None:
     monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", 0.0)
     *entries, window = compiled.changes()
-    monkeypatch.undo()
+    # undo() would also drop the fixture's long clocks, and the real 3 s clock can run out here.
+    monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", LOADED_MACHINE_CLOCK_S)
 
     entries += compiled.changes(beforeScan=window["scanId"] + 1)
 
@@ -274,7 +278,7 @@ def test_a_refresh_does_not_pay_again_after_it_ran_out(
 ) -> None:
     monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", 0.0)
     first = compiled.changes()
-    monkeypatch.undo()
+    monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", LOADED_MACHINE_CLOCK_S)
     left = list(compiled.runner._unrecorded_scans)
 
     assert compiled.changes() == first
@@ -389,7 +393,7 @@ def test_the_entry_above_a_window_stays_the_stepped_entry_on_every_refresh(
     expected = {entry["scanId"]: entry for entry in _seam_changes(seam_stepped)}
     monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", 0.0)
     first = _seam_changes(seam_compiled)
-    monkeypatch.undo()
+    monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", LOADED_MACHINE_CLOCK_S)
 
     *read, window = first
     assert window["window"] is True

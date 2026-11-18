@@ -49,6 +49,10 @@ _THREAD_TIMEOUT_S = 5.0
 _MODE_RUN_BIT = 11
 #: SD9, CLICK's scan counter.
 _SCAN_COUNTER = 9
+#: SD9 counts 0..32767 and then starts again.
+_SCAN_COUNTER_WRAP = 32768
+#: Scans to wait after the harness zeroes the slots, before it trusts ``Ready``.
+_SCANS_AFTER_ZEROING = 2
 #: Seconds between SD9 reads while waiting for it to wrap.
 _WRAP_POLL_S = 0.2
 #: Seconds of SD9 reads that size the wait for it to wrap.
@@ -604,10 +608,16 @@ async def _drive(
             start, width = g.span
             await _write_ds(client, start, [0] * width)
         slots = [(g, i) for g in live for i, _ in g.cases]
+        # A write reaches the ladder at the start of a later scan, so a read just after it can
+        # still return the Ready of an earlier scan.  Two scans past this read of SD9, the
+        # scan that took the zeros has run every case's reset rung.
+        zeroed_at = int(await client.sd[_SCAN_COUNTER])
         deadline = time.monotonic() + timeout
         while True:
+            now = int(await client.sd[_SCAN_COUNTER])
             regs = _by_register(live, await _read_spans(client, live))
-            unready = {(g.name, i) for g, i in slots if not _reset_done(g, i, regs)}
+            scanned = (now - zeroed_at) % _SCAN_COUNTER_WRAP >= _SCANS_AFTER_ZEROING
+            unready = {(g.name, i) for g, i in slots if not (scanned and _reset_done(g, i, regs))}
             if not unready or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(POLL_S)
