@@ -42,12 +42,17 @@ class CompareDefaultVisitor(ast.NodeVisitor):
 
 
 def _calls_rung_class(expr: ast.expr) -> bool:
-    if not isinstance(expr, ast.Call):
-        return False
-    func = expr.func
-    return (isinstance(func, ast.Name) and func.id == "Rung") or (
-        isinstance(func, ast.Attribute) and func.attr == "Rung"
-    )
+    # Walk down the call chain so that `Rung(A).continued()` counts as a call to Rung.
+    while isinstance(expr, ast.Call):
+        func = expr.func
+        if isinstance(func, ast.Name):
+            return func.id == "Rung"
+        if not isinstance(func, ast.Attribute):
+            return False
+        if func.attr == "Rung":
+            return True
+        expr = func.value
+    return False
 
 
 def find_with_rung_class(paths: list[Path]) -> list[tuple[Path, int]]:
@@ -58,8 +63,12 @@ def find_with_rung_class(paths: list[Path]) -> list[tuple[Path, int]]:
     """
     found = []
     for path in paths:
+        source = path.read_text(encoding="utf-8")
+        # Parsing every test file costs seconds, and most of them never write `Rung(`.
+        if "Rung(" not in source:
+            continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            tree = ast.parse(source, filename=str(path))
         except SyntaxError:
             continue
         for node in ast.walk(tree):
