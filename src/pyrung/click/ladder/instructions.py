@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.click.validation.hardware import constant_text_past_txt
 from pyrung.core.condition import Condition
-from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.copy_converters import CopyConverter, to_value
 from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
@@ -17,7 +17,7 @@ from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.tag import Tag, TagType
 
 from ._loop_items import is_own_rung, loop_item_rung
-from .translator import _quote
+from .translator import _operand_type, _quote
 
 _WHOLE_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
 
@@ -25,16 +25,32 @@ _WHOLE_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
 def _exported_converter(instruction: Any) -> CopyConverter | None:
     """Return the converter that the export writes with a Copy.
 
-    CLICK saves a Copy of a number register into TXT with its conversion. The dialog
-    starts on Copy Value with Suppress zero. So a plain Copy of an Int, Dint or Word
-    into text exports the ``to_text()`` that it runs. Any other plain Copy exports as
-    written.
+    CLICK saves every Copy between TXT and a number register or constant with a
+    conversion. So a plain Copy across text exports the converter that pyrung runs for
+    it. A TXT into a DF is the one exception, and it exports as written. CLICK is
+    believed to save a plain Copy there, and that belief is not yet checked on a CLICK.
     """
     authored = getattr(instruction, "authored_convert", instruction.convert)
     if authored is not None:
         return authored
-    if copy_source_kind(instruction.source) in _WHOLE_NUMBER_TYPES:
+    converter = instruction.convert
+    if converter is not None and converter.mode == "value":
+        if copy_source_kind(instruction.dest) is TagType.REAL:
+            return None
+    return converter
+
+
+def _exported_block_converter(instruction: Any) -> CopyConverter | None:
+    """Return the converter that the export writes with a Block Copy.
+
+    CLICK saves a Block Copy of TXT into DS, DD or DH with a conversion. A plain
+    ``blockcopy()`` there stores each digit, so it exports as ``to_value``.
+    """
+    if instruction.convert is not None:
         return instruction.convert
+    source = _operand_type(instruction.source)
+    if source is TagType.CHAR and _operand_type(instruction.dest) in _WHOLE_NUMBER_TYPES:
+        return to_value
     return None
 
 
@@ -378,9 +394,10 @@ class _InstructionMixin:
             block_source = self._render_operand(
                 instruction.source, path=f"{path}.source", source=instruction
             )
-            if instruction.convert is not None:
+            block_converter = _exported_block_converter(instruction)
+            if block_converter is not None:
                 convert_kw["convert"] = self._render_converter(
-                    instruction.convert, instruction, block_source, path=f"{path}.convert"
+                    block_converter, instruction, block_source, path=f"{path}.convert"
                 )
             return self._fn(
                 "blockcopy",

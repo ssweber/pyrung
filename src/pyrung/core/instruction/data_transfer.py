@@ -42,21 +42,28 @@ if TYPE_CHECKING:
 def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
     """Return the conversion that a Copy with no ``convert=`` makes across text, as CLICK does.
 
-    A number register into a TXT writes its text, as ``to_text()`` does.  CLICK's dialog
-    has no Copy there without a conversion, and it starts on Copy Value with Suppress zero.
-    A TXT into a number reads its digit, as ``to_value`` does.  Return ``None`` for any
-    other Copy.
+    A number register or a number constant into a TXT writes its text, as ``to_text()``
+    does.  CLICK's dialog has no Copy there without a conversion, and it starts on Copy
+    Value with Suppress zero.  CLICK stores the digits of a constant too.  A TXT into a
+    number reads its digit, as ``to_value`` does.  Return ``None`` for any other Copy.
     """
     from pyrung.core.copy_converters import to_text, to_value
     from pyrung.core.tag import TagType
 
     source_type = copy_source_kind(source)
     dest_type = copy_source_kind(dest)
-    if source_type in _NUMBER_TYPES and dest_type is TagType.CHAR:
+    if dest_type is TagType.CHAR and (
+        source_type in _NUMBER_TYPES or _is_number_constant(source)
+    ):
         return to_text()
     if source_type is TagType.CHAR and dest_type in _NUMBER_TYPES:
         return to_value
     return None
+
+
+def _is_number_constant(value: Any) -> bool:
+    """Return True for an int or float constant.  A bool is not a number to a Copy."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _source_past_end_keeps(source: Any, ctx: ScanContext) -> bool:
@@ -85,10 +92,10 @@ class CopyInstruction(OneShotMixin, Instruction):
     a string literal.  Destination may be a `Tag` or `IndirectRef`.
 
     Pass ``convert=`` to enable text/numeric conversion (see
-    :mod:`pyrung.core.copy_converters`).  With none, a number register into a CHAR writes
-    its text (``to_text()``) and a CHAR into a number reads its digit (``to_value``), as
-    CLICK's plain Copy does; ``convert`` holds that converter and ``authored_convert``
-    what was written.
+    :mod:`pyrung.core.copy_converters`).  With none, a number register or a number
+    constant into a CHAR writes its text (``to_text()``).  A CHAR into a number reads its
+    digit (``to_value``).  CLICK's plain Copy does the same.  ``convert`` holds the
+    converter that runs, and ``authored_convert`` holds the one that was written.
 
     **Clamping semantics:** Out-of-range values are clamped to the
     destination type's min/max (e.g. copying 40 000 into an INT tag produces
