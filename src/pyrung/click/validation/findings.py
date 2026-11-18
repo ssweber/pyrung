@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Literal
 
 from pyclickplc.banks import BANKS
 
+from pyrung.core.validation.display import FindingDisplay, Frame, _FindingTextMixin
+
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
     from pyrung.core.validation.walker import OperandFact
@@ -83,13 +85,45 @@ CLK_COMPARE_HEX_MIX = "CLK_COMPARE_HEX_MIX"
 CLK_NOP_NO_COIL = "CLK_NOP_NO_COIL"
 
 
-@dataclass(frozen=True)
-class ClickFinding:
+@dataclass(frozen=True, init=False)
+class ClickFinding(_FindingTextMixin):
+    """A CLICK portability finding. ``str()`` renders its ``display``.
+
+    If a site passes no ``display``, the finding builds one. It has one frame at
+    ``location``, ``message`` as the problem and ``suggestion`` as the hint.
+    """
+
     code: str
     severity: FindingSeverity
     message: str
     location: str
-    suggestion: str | None = None
+    suggestion: str | None
+    display: FindingDisplay
+
+    def __init__(
+        self,
+        code: str,
+        severity: FindingSeverity,
+        message: str,
+        location: str,
+        suggestion: str | None = None,
+        display: FindingDisplay | None = None,
+    ) -> None:
+        if display is None:
+            display = FindingDisplay(
+                code=code,
+                severity=severity,
+                frames=(Frame(location=location),),
+                problem=message,
+                hint=suggestion or "",
+            )
+        # A frozen dataclass refuses plain attribute assignment.
+        object.__setattr__(self, "code", code)
+        object.__setattr__(self, "severity", severity)
+        object.__setattr__(self, "message", message)
+        object.__setattr__(self, "location", location)
+        object.__setattr__(self, "suggestion", suggestion)
+        object.__setattr__(self, "display", display)
 
 
 @dataclass(frozen=True)

@@ -23,3 +23,6 @@ SEVERITY_ORDER: dict[Severity, int] = {
     "info": 1,
     "advisory": 0,
 }
+
+#: The levels a FindingDisplay can show. A CLICK finding ranks as error, warning or hint.
+DisplaySeverity = Severity | Literal["hint"]

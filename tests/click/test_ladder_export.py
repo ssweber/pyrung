@@ -1103,10 +1103,14 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
         {
             "path": "main.rung[1].instruction[0](CalcInstruction).instruction.expression",
             "message": (
-                "CLK_MATH_MODE_MIXED: math() at "
+                "[CLK_MATH_MODE_MIXED] error\n"
+                "  math() at "
                 "main.rung[1].instruction[0](CalcInstruction).instruction.expression mixes "
                 "WORD operands with other operands. CLICK runs a Math in hex or in decimal, "
-                "not both."
+                "not both.\n"
+                " --> main.rung[1].instruction[0](CalcInstruction).instruction.expression\n"
+                "  = hint: Split it into a math() of WORD tags and a math() of the other "
+                "tags. Pass the result from one to the other through a tag."
             ),
             "source_file": None,
             "source_line": None,
@@ -1301,13 +1305,25 @@ def test_precheck_and_issue_payload():
         {
             "path": "main.rung[1].instruction[0](CopyInstruction).instruction.source",
             "message": (
-                "CLK_EXPR_ONLY_IN_MATH: Expression used outside a math() instruction at "
-                "main.rung[1].instruction[0](CopyInstruction).instruction.source."
+                "[CLK_EXPR_ONLY_IN_MATH] error\n"
+                "  Expression used outside a math() instruction at "
+                "main.rung[1].instruction[0](CopyInstruction).instruction.source.\n"
+                " --> main.rung[1].instruction[0](CopyInstruction).instruction.source\n"
+                "  = hint: Expression 'A * 2' cannot be used directly here. Move it into "
+                "math(A * 2, temp) and use temp in this context."
             ),
             "source_file": None,
             "source_line": None,
         }
     ]
+    # The exception text indents the later lines of the finding under its issue.
+    lines = str(exc_info.value).splitlines()
+    assert lines[1] == (
+        "  main.rung[1].instruction[0](CopyInstruction).instruction.source: "
+        "[CLK_EXPR_ONLY_IN_MATH] error"
+    )
+    assert len(lines) == 5
+    assert all(line.startswith("     ") for line in lines[2:])
 
 
 def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
@@ -1336,9 +1352,12 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
         {
             "path": "main.rung[1].instruction[0](OutInstruction).instruction.target",
             "message": (
-                "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS: immediate() on a coil range at "
+                "[CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS] error\n"
+                "  immediate() on a coil range at "
                 "main.rung[1].instruction[0](OutInstruction).instruction.target needs "
-                "consecutive Y addresses."
+                "consecutive Y addresses.\n"
+                " --> main.rung[1].instruction[0](OutInstruction).instruction.target\n"
+                "  = hint: Map the range to consecutive Y addresses, such as Y001..Y004."
             ),
             "source_file": None,
             "source_line": None,
@@ -1360,8 +1379,11 @@ def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
         pyrung_to_ladder(logic, mapping)
 
     assert [issue["message"] for issue in exc_info.value.issues] == [
-        "CLK_IMMEDIATE_CONTACT_MUST_BE_X: Immediate contact on Sensor (C1) at "
-        "main.rung[1].condition; an immediate contact must read an input mapped to X."
+        "[CLK_IMMEDIATE_CONTACT_MUST_BE_X] error\n"
+        "  Immediate contact on Sensor (C1) at "
+        "main.rung[1].condition; an immediate contact must read an input mapped to X.\n"
+        " --> main.rung[1].condition\n"
+        "  = hint: Map it to an X input, or use a plain contact."
     ]
 
 
@@ -1389,9 +1411,13 @@ def test_immediate_in_copy_fails_with_context_diagnostic():
     assert exc_info.value.issues[0] == {
         "path": "main.rung[1].instruction[0](CopyInstruction).instruction.source",
         "message": (
-            "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED: immediate() is not allowed at "
+            "[CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED] error\n"
+            "  immediate() is not allowed at "
             "main.rung[1].instruction[0](CopyInstruction).instruction.source. CLICK accepts "
-            "immediate() only on a contact or a coil."
+            "immediate() only on a contact or a coil.\n"
+            " --> main.rung[1].instruction[0](CopyInstruction).instruction.source\n"
+            "  = hint: Use immediate() only on a contact, or on the target of out(), "
+            "latch(), reset() or toggle()."
         ),
         "source_file": None,
         "source_line": None,
@@ -2362,7 +2388,7 @@ def test_to_text_exponential_from_an_integer_is_refused(source):
     )
     with pytest.raises(
         LadderExportError,
-        match=r"CLK_COPY_CONVERTER_INCOMPATIBLE.*needs a Real source, such as a DF or a Real",
+        match=r"(?s)CLK_COPY_CONVERTER_INCOMPATIBLE.*needs a Real source, such as a DF or a Real",
     ):
         pyrung_to_ladder(logic, mapping)
     with pytest.raises(

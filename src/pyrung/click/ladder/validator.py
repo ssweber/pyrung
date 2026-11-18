@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from pyrung.click._topology import Leaf, Parallel, Series, SPNode, make_compound, trees_equal
@@ -77,9 +77,10 @@ class _ValidationMixin:
             CLK_PTR_PAST_BANK,
             CLK_NOP_NO_COIL,
         )
-        # The step limit warns whatever *allow* holds.
+        # The step limit warns whatever *allow* holds.  The strict report ranks every
+        # finding as an error, so a finding that only warns shows as a warning.
         pending = [
-            f"{finding.code}: {finding.message} {finding.suggestion or ''}".rstrip()
+            str(replace(finding.display, severity="warning"))
             for finding in findings
             if finding.code in warn_only
             and (finding.code == CLK_STEP_LIMIT or finding.code not in allow)
@@ -92,7 +93,7 @@ class _ValidationMixin:
                 issues.append(
                     {
                         "path": finding.location,
-                        "message": f"{finding.code}: {finding.message}",
+                        "message": str(finding),
                         "source_file": None,
                         "source_line": None,
                     }
