@@ -69,8 +69,8 @@
   Fix or remove the rule name.
 - `expr_requires()` and `reset_dominance()` are gone.
   Delete the tests that use them, or check the property with `force()` and `run_for()`.
-- pyrung requires pyclickplc 0.9.0 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
-  If your own code calls pyclickplc, read pyclickplc's 0.9.0 changelog.
+- pyrung requires pyclickplc 0.9.1 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
+  If your own code calls pyclickplc, read pyclickplc's 0.9.0 and 0.9.1 changelogs.
 - The soft PLC's Modbus server stores a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (it answered exception 2). A rung that reads the T or CT bit sees the write.
   If a client of yours relied on that refusal, check the address before it writes.
 - The generated P1AM server stores a coil write to X, or to a coil between X or Y slots (it answered exception 2). It stores a write to a T or CT bit that a rung uses or the TagMap maps.
