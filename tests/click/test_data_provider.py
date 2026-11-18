@@ -10,7 +10,19 @@ from pyclickplc.server import MemoryDataProvider, _answer, _ClickDeviceContext
 from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
-from pyrung.core import PLC, Block, Program, Rung, SystemState, Tag, TagType, out
+from pyrung.core import (
+    PLC,
+    Block,
+    Program,
+    Rung,
+    SystemState,
+    Tag,
+    TagType,
+    copy,
+    math,
+    out,
+    unpack_to_words,
+)
 
 
 def _write_slot_word(provider: ClickDataProvider, bank: str, start: int, word: int) -> None:
@@ -356,6 +368,43 @@ def test_a_real_holding_any_nan_serves_its_own_bits(bits):
     runner.step()
 
     assert _registers(send(struct.pack(">BHH", 3, DF1, 2))) == _words(nan)
+
+
+def test_a_nan_that_a_math_computes_reads_all_ones():
+    # A CLICK reads 0xFFFF:0xFFFF from a DF that Inf - Inf filled (modbus_raw/staged_nan).
+    inf = Tag("Inf", TagType.REAL)
+    level = Tag("Level", TagType.REAL)
+    with Program() as logic:
+        with Rung():
+            math(inf - inf, level)
+            copy(inf - inf, df[3])
+    runner = PLC(logic=logic)
+    send = _server(ClickDataProvider(runner, TagMap({level: df[1], inf: df[2]}), blocks=(df,)))
+    request = struct.pack(">BHHB2H", 16, DF1 + 2, 2, 4, 0x0000, 0x7F80)
+    assert send(request) == request[:5]
+    runner.step()
+
+    assert (
+        _registers(send(struct.pack(">BHH", 3, DF1, 6)))
+        == [0xFFFF, 0xFFFF, 0, 0x7F80] + [0xFFFF] * 2
+    )
+
+
+def test_an_unpack_copy_of_a_nan_that_a_client_wrote_keeps_its_bits():
+    # A CLICK unpacks the NaN 0x0000:0x7FC0 to those words (modbus_raw/df_quiet_nan).
+    level = Tag("Level", TagType.REAL)
+    with Program() as logic:
+        with Rung():
+            unpack_to_words(level, dh.select(1, 2))
+            copy(level, df[2])
+    runner = PLC(logic=logic)
+    send = _server(ClickDataProvider(runner, TagMap({level: df[1]}), blocks=(dh, df)))
+    request = struct.pack(">BHHB2H", 16, DF1, 2, 4, 0x0000, 0x7FC0)
+    assert send(request) == request[:5]
+    runner.step()
+
+    assert _registers(send(struct.pack(">BHH", 3, 24576, 2))) == [0x0000, 0x7FC0]
+    assert _registers(send(struct.pack(">BHH", 3, DF1, 4))) == [0x0000, 0x7FC0] * 2
 
 
 def test_a_df_word_written_alone_keeps_the_other_word():

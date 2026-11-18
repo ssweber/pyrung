@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.copy_converters import CopyConverter
+from pyrung.core.expression import Expression
 from pyrung.core.memory_block import PastBankError
-from pyrung.core.storage import check_real_literal
+from pyrung.core.storage import check_real_literal, computed_real
 from pyrung.core.tag import Tag
 
 from .base import Instruction, OneShotMixin
@@ -191,6 +192,8 @@ class CopyInstruction(OneShotMixin, Instruction):
 
         if resolved_target is None:
             return
+        if isinstance(self.source, Expression):
+            value = computed_real(value)
 
         # String literal fan-out: "00026" → sequential CHAR tags, as many as the block holds
         from pyrung.core.tag import TagType
@@ -473,6 +476,8 @@ class FillInstruction(OneShotMixin, Instruction):
         except IndexError:
             _set_fault_address_error(ctx)
             return
+        if isinstance(self.value, Expression):
+            value = computed_real(value)
 
         source = copy_source_kind(self.value)
         updates = {}

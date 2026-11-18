@@ -22,7 +22,7 @@ from pyrung.core.expression import (
     _op_and,
 )
 from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
-from pyrung.core.storage import check_real_value
+from pyrung.core.storage import check_real_value, computed_real
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .base import Instruction, OneShotMixin
@@ -410,7 +410,7 @@ class CalcInstruction(OneShotMixin, Instruction):
 
         # Truncate to destination type
         try:
-            value = _truncate_to_tag_type(value, self.dest, self.mode)
+            value = computed_real(_truncate_to_tag_type(value, self.dest, self.mode))
         except OverflowError:
             _set_fault_out_of_range(ctx)
             value = _truncate_to_tag_type(0, self.dest, self.mode)

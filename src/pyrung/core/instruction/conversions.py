@@ -117,12 +117,10 @@ def _int_to_float_bits(n: int) -> float:
 def _float_to_int_bits(f: float) -> int:
     """Reinterpret an IEEE 754 float bit pattern as 32-bit unsigned integer.
 
-    A NaN becomes 0xFFFFFFFF, whichever NaN it is.  That is what a CLICK's DF holds for one.
+    A NaN keeps its bits.  A CLICK's Unpack Copy gives the bits that a client wrote, and
+    a NaN that a Math computes holds 0xFFFFFFFF (``storage.CLICK_NAN``).
     """
-    f = float(f)
-    if f != f:
-        return 0xFFFFFFFF
-    return struct.unpack("<I", struct.pack("<f", f))[0]
+    return struct.unpack("<I", struct.pack("<f", float(f)))[0]
 
 
 def _ascii_char_from_code(code: int) -> str:

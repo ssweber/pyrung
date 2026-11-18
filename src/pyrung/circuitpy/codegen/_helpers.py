@@ -44,10 +44,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
     ],
     "_float_to_int_bits": [
         "def _float_to_int_bits(f):",
-        "    f = float(f)",
-        "    if f != f:",
-        "        return 0xFFFFFFFF",
-        '    return struct.unpack("<I", struct.pack("<f", f))[0]',
+        '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
         "",
     ],
     "_ascii_char_from_code": [
@@ -261,6 +258,16 @@ _HELPER_DEFS: dict[str, list[str]] = {
         '        return float("inf")',
         f"    if value < {-REAL_MAX!r}:",
         '        return float("-inf")',
+        "    return value",
+        "",
+    ],
+    # A CLICK's Math stores one NaN, whatever made it.  It reads 0xFFFF:0xFFFF over Modbus.
+    "_computed_real": [
+        "_CLICK_NAN = struct.unpack('<f', struct.pack('<I', 0xFFFFFFFF))[0]",
+        "",
+        "def _computed_real(value):",
+        "    if value != value:",
+        "        return _CLICK_NAN",
         "    return value",
         "",
     ],

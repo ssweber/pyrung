@@ -80,6 +80,7 @@ import pyrung.core.scan_trace as scan_trace
 from pyrung.core.analysis.pilot.budget import SearchOutOfMemory, SearchOutOfTime
 from pyrung.core.coast_run import CoastMemo, work_charged
 from pyrung.core.rung_firings import SearchQuestionRefused
+from pyrung.core.state import nan_bits as _nan_bits
 
 MAX_SCANS = int(os.environ.get("FOLD_CHECK_MAX_SCANS", "200000"))
 # Firing sizes for the loop: short ones to compare often, long ones to reach far.
@@ -334,10 +335,11 @@ def _exact(value: Any) -> Any:
     """A value spelled so ``==`` means the same type and, for a float, the same bits.
 
     ``True == 1`` and ``0.0 == -0.0`` hold in Python and are different values in a
-    tag; NaN equals nothing, and its spelling here equals itself.
+    tag; NaN equals nothing, and its spelling here equals itself.  ``float.hex()`` spells
+    every NaN ``nan``, so a NaN is spelled by its bits.  A Modbus client reads them.
     """
     if isinstance(value, float):
-        return ("float", value.hex())
+        return ("float", value.hex() if value == value else "nan " + _nan_bits(value).hex())
     return (type(value).__name__, value)
 
 

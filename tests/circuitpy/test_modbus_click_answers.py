@@ -13,7 +13,21 @@ import struct
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Dint, Int, Program, Real, Rung, TagType, copy, fill, out
+from pyrung import (
+    Block,
+    Bool,
+    Dint,
+    Int,
+    Program,
+    Real,
+    Rung,
+    TagType,
+    copy,
+    fill,
+    math,
+    out,
+    unpack_to_words,
+)
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.click import ClickBlocks, TagMap
 from tests.circuitpy.test_codegen import _run_single_scan_source
@@ -224,6 +238,40 @@ def test_a_df_word_written_alone_keeps_the_other_word(monkeypatch):
         assert send(request)[7:] == request
         assert _read_regs(send, 3, first, 2) == after
     assert ns["_t_Level"] == 2.5
+
+
+def test_a_nan_that_a_math_computes_reads_all_ones(monkeypatch):
+    # A CLICK reads 0xFFFF:0xFFFF from a DF that Inf - Inf filled (modbus_raw/staged_nan).
+    big = Real("Big", default=3.0e38)
+    inf = Real("Inf")
+    level = Real("Level")
+    with Program(strict=False) as prog:
+        with Rung():
+            math(big * 10, inf)
+            math(inf - inf, level)
+            copy(inf - inf, df[2])
+    _ns, send = _server(monkeypatch, TagMap({level: df[1]}), prog)
+    assert _read_regs(send, 3, _addr("DF", 1), 4) == [0xFFFF] * 4
+
+
+def test_an_unpack_copy_of_a_nan_that_a_client_wrote_keeps_its_bits(monkeypatch):
+    # A CLICK unpacks the NaN 0x0000:0x7FC0 to those words (modbus_raw/df_quiet_nan).
+    level = Real("Level")
+    with Program(strict=False) as prog:
+        with Rung():
+            unpack_to_words(level, Block("W", TagType.WORD, 1, 2).select(1, 2))
+            copy(level, df[2])
+    result = _ctx_and_source(prog, TagMap({level: df[1]}))
+    request = _mbap(1, _fc16(_addr("DF", 1), [0x0000, 0x7FC0]))
+    # The request arrives after the first scan.  The second scan unpacks and copies it.
+    serve = f"if __scan_once == 1: _t_answer = _rt._mb_handle({request!r}, {len(request)})"
+    code = result.code.replace("while True:\n", f"while True:\n    {serve}\n", 1)
+    ns = _run_single_scan_source(
+        code, monkeypatch, _IdleBase(), runtime_source=result.runtime, scans=2
+    )
+    assert ns["_b_W"][:2] == [0x0000, 0x7FC0]
+    read = _mbap(2, struct.pack(">BHH", 3, _addr("DF", 1), 4))
+    assert list(struct.unpack(">4H", ns["_mb_handle"](read, len(read))[9:])) == [0, 0x7FC0] * 2
 
 
 def test_a_read_in_the_y_gap_answers_0(monkeypatch):

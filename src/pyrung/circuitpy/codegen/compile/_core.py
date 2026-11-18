@@ -610,7 +610,11 @@ def _compile_calc_instruction(
             '        _calc_value = float("inf")',
             f"    elif _calc_value < {-REAL_MAX!r}:",
             '        _calc_value = float("-inf")',
+            # A CLICK's Math stores one NaN, whatever made it.
+            "elif _calc_value != _calc_value:",
+            "    _calc_value = _computed_real(_calc_value)",
         ]
+        ctx.mark_helper("_computed_real")
         range_cond = None
     else:
         # An Inf or NaN result, from an Inf or NaN operand, stores 0. Into an integer

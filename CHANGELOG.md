@@ -53,7 +53,7 @@
   If your own code calls pyclickplc, read pyclickplc's 0.9.0 changelog.
 - The soft PLC's Modbus server and the generated P1AM server store a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (they answered exception 2). A rung that reads the T or CT bit sees the write.
   If a client of yours relied on that refusal, check the address before it writes.
-- A NaN in a `Real` goes over Modbus as its own bits, so `math.nan` is 0x0000:0x7FC0. A CLICK keeps the bits that a client writes. This covers both servers and `send()` (they sent 0xFFFF:0xFFFF for any NaN).
+- A NaN that a client writes to a `Real` keeps its own bits, as a CLICK keeps them. Modbus reads, `send()` and `unpack_to_words()` give those bits (they gave 0xFFFF:0xFFFF for any NaN). A NaN that a `math()` computes still reads 0xFFFF:0xFFFF.
   Test for NaN with `math.isnan()` on the decoded float, not by comparing the words with 0xFFFF:0xFFFF.
 - The console's `replay` reads a relative path from the program's folder (it read it from the debugger's working folder).
   Give an absolute path to replay a file from somewhere else.

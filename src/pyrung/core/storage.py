@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import struct
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +23,20 @@ IDENTITY_STORE = StoreTransform()
 #: keeps a REAL at 64-bit precision but never outside this range.  A result
 #: past it is +/-Inf, as a CLICK's float32 Math stores it.
 REAL_MAX = 3.4028235e38
+
+#: The NaN that a CLICK's Math stores.  It reads 0xFFFF:0xFFFF over Modbus.
+CLICK_NAN: float = struct.unpack("<f", struct.pack("<I", 0xFFFFFFFF))[0]
+
+
+def computed_real(value: Any) -> Any:
+    """Return *value*, with a NaN replaced by :data:`CLICK_NAN`.
+
+    pyrung calls this on what a Math or an arithmetic expression computes.  A CLICK's
+    Math stores one NaN whatever made it.  A NaN that a client writes, or that a Copy
+    moves, keeps its own bits, so a plain store does not call this.
+    """
+    return CLICK_NAN if value != value else value
+
 
 #: The blank CHAR.  A CLICK TXT is one byte, so blank and NUL ($00) are the
 #: same value.  An unwritten TXT, ``fill("")`` and ``reset()`` all leave NUL.
@@ -145,12 +160,14 @@ def check_real_literal(value: Any, dest: Any, what: str) -> None:
 
 __all__ = [
     "BLANK_CHAR",
+    "CLICK_NAN",
     "IDENTITY_STORE",
     "REAL_MAX",
     "StoreTransform",
     "WORD_STORE_FLOOR",
     "check_real_literal",
     "check_real_value",
+    "computed_real",
     "real_in_range",
     "store_char",
     "store_real",

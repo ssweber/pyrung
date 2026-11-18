@@ -1,13 +1,15 @@
 """Test that a Real that holds NaN and stays NaN has not changed, whatever NaN object it holds.
 
-``copy()`` keeps the NaN it copies. ``math()`` computes a new NaN object each scan, and each
-patch is a new NaN object too. Every reader of history must count none of them as a change.
+``copy()`` keeps the NaN it copies. ``math()`` computes a new NaN object each scan, with
+CLICK's bits, and each patch is a new NaN object too. Every reader of history must count
+none of them as a change. A NaN with other bits is a change.
 ``cause()`` and ``effect()`` must follow a NaN that one rung writes and a later rung reads,
 the same way they follow a number.
 """
 
 from __future__ import annotations
 
+import struct
 from typing import Any
 
 import pytest
@@ -16,7 +18,8 @@ from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, math
 from pyrung.core import scan_trace
 from pyrung.core.analysis.causal.projected import _values_equal
 from pyrung.core.coast_run import coast_until
-from pyrung.core.state import value_changed
+from pyrung.core.state import nan_bits, value_changed
+from pyrung.core.storage import CLICK_NAN
 from pyrung.dap.handlers.history_seek import _window_entry
 
 NAN = float("nan")
@@ -43,7 +46,8 @@ def _plc() -> PLC:
     [
         (NAN, NAN, False),
         (NAN, float("nan"), False),
-        (NAN, -NAN, False),
+        # A NaN with other bits is a change, because a Modbus client reads the bits.
+        (NAN, -NAN, True),
         (0.0, -0.0, False),
         (0, False, False),
         (None, None, False),
@@ -153,3 +157,85 @@ def test_cause_names_the_write_that_stored_the_nan(tag: str) -> None:
     assert expected is not None and chain is not None
     assert expected.effect.occurrence_ordinal is not None
     assert chain.effect.occurrence_ordinal == expected.effect.occurrence_ordinal
+
+
+QUIET = struct.unpack("<d", struct.pack("<Q", 0x7FF8000000000000))[0]
+NEGATIVE = struct.unpack("<d", struct.pack("<Q", 0xFFF8000000000000))[0]
+Left = Real("Left", external=True)
+Right = Real("Right", external=True)
+
+
+def _swap_plc() -> PLC:
+    # Each scan swaps Left and Right, so two NaNs with other bits trade places.
+    with Program(strict=False) as program:
+        with Rung():
+            copy(Left, Mid)
+            copy(Right, Left)
+            copy(Mid, Right)
+            math(Steps + 1, Steps)
+    plc = PLC(program, dt=0.01)
+    plc.patch({"Left": QUIET, "Right": NEGATIVE})
+    plc.step()
+    return plc
+
+
+@pytest.mark.parametrize("scans", [7, 400])
+def test_the_loop_leaves_the_nan_bits_that_stepping_leaves(scans: int) -> None:
+    looped, stepped = _swap_plc(), _swap_plc()
+    looped.run_until(Steps >= scans + 1)
+    for _ in range(scans):
+        stepped.step()
+    assert looped.state.scan_id == stepped.state.scan_id
+    for tag in ("Left", "Right", "Mid"):
+        assert nan_bits(looped.state.tags[tag]) == nan_bits(stepped.state.tags[tag]), tag
+    # The patch scan swapped once, so an odd number of scans after it swaps back.
+    assert nan_bits(stepped.state.tags["Left"]) == nan_bits(QUIET if scans % 2 else NEGATIVE)
+
+
+def test_a_math_stores_click_s_nan() -> None:
+    plc = _plc()
+    plc.step()
+    assert nan_bits(plc.state.tags["Scaled"]) == nan_bits(CLICK_NAN)
+    assert nan_bits(plc.state.tags["Copied"]) == nan_bits(NAN)
+
+
+Written = Real("Written", external=True)
+Held = Real("Held")
+
+
+def _copy_plc() -> PLC:
+    with Program(strict=False) as program:
+        with Rung():
+            copy(Written, Held)
+            math(Steps + 1, Steps)
+    plc = PLC(program, dt=0.01)
+    plc.patch({"Written": QUIET})
+    plc.step()
+    return plc
+
+
+def test_a_client_s_nan_with_other_bits_ends_the_loop_s_trace() -> None:
+    # copy(Written, Held) with Held already NaN.  A client then writes a NaN with other bits.
+    looped, stepped = _copy_plc(), _copy_plc()
+    coast_until(looped, lambda _state: False, budget=100, predicate_reads=frozenset())
+    for plc in (looped, stepped):
+        plc.patch({"Written": NEGATIVE})
+    traces = scan_trace.TOTALS["traces"]
+    coast_until(looped, lambda _state: False, budget=50, predicate_reads=frozenset())
+    for _ in range(150):
+        stepped.step()
+    # The trace was made while Written held the other NaN, so the loop traces again.
+    assert scan_trace.TOTALS["traces"] > traces
+    assert looped.state.scan_id == stepped.state.scan_id
+    for tag in ("Written", "Held"):
+        assert nan_bits(looped.state.tags[tag]) == nan_bits(NEGATIVE), tag
+        assert nan_bits(stepped.state.tags[tag]) == nan_bits(NEGATIVE), tag
+
+
+def test_the_loop_and_the_fold_check_tell_two_nans_apart() -> None:
+    from tests.fold_check import _exact
+
+    assert scan_trace.same(QUIET, float("nan"))
+    assert not scan_trace.same(QUIET, NEGATIVE)
+    assert _exact(QUIET) == _exact(float("nan"))
+    assert _exact(QUIET) != _exact(NEGATIVE)
