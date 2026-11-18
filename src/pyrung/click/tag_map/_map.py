@@ -428,7 +428,8 @@ class TagMap:
             try:
                 data = read_plc_data("data.csv", skip_default=True)
             except PlcDataReadError as exc:
-                # values holds every address except the TXT addresses it could not read.
+                # values holds every address except the TXT addresses
+                # that `read_plc_data` could not read.
                 data = exc.values
             runner.patch(mapping.tags_from_plc_data(data))
 

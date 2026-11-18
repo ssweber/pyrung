@@ -15,9 +15,7 @@ state = mapping.load_snapshot("data.csv")
 plc = PLC(logic, initial_state=state)
 ```
 
-CLICK writes a TXT comma without quotes, so some TXT rows can be read more than one way. `load_snapshot()` skips the TXT addresses it cannot read, loads the rest of the file and warns with `SkippedAddressesWarning`. The warning's `addresses` attribute lists the skipped addresses.
-
-In a project generated from CLICK, pass `blocks=blocks` (exported beside `mapping`) so plain nicknamed addresses are seeded as well. See [Loading PLC state](../dialects/click.md#loading-plc-state) for the full CLICK workflow. For other targets, build the state directly:
+In a project generated from CLICK, pass `blocks=blocks` (exported beside `mapping`) so plain nicknamed addresses are seeded as well. See [Loading PLC state](../dialects/click.md#loading-plc-state) for the full CLICK workflow and for the TXT addresses that `load_snapshot()` may skip. For other targets, build the state directly:
 
 ```python
 from pyrung import SystemState
