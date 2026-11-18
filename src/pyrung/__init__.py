@@ -5,6 +5,8 @@ Import user-facing DSL symbols from this module:
     from pyrung import Bool, Program, rung, PLC
 """
 
+from typing import TYPE_CHECKING
+
 from pyrung.core import (
     PHYSICAL_KEYS,
     PHYSICAL_KINDS,
@@ -44,7 +46,6 @@ from pyrung.core import (
     Real,
     RealBlock,
     RegisterType,
-    Rung,
     SlotView,
     SystemState,
     TagType,
@@ -169,7 +170,6 @@ __all__ = [
     "RangeSlotView",
     "SlotView",
     "Program",
-    "Rung",
     "rung",
     "program",
     "branch",
@@ -242,3 +242,13 @@ __all__ = [
     "rro",
     "randint",
 ]
+
+# A user upgrading from a release that exported Rung sees the fix in the error. Type
+# checkers must not see __getattr__, because they would then accept any name from pyrung.
+if not TYPE_CHECKING:
+
+    def __getattr__(name: str):
+        # No full stop, because Python's traceback appends ". Did you mean: ...?".
+        if name == "Rung":
+            raise AttributeError("pyrung no longer exports Rung. Write `with rung(...):` instead")
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

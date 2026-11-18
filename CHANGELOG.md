@@ -57,6 +57,8 @@
 
 ### Behaviour changes
 
+- `pyrung` no longer exports `Rung`. After `from pyrung import *`, a `with Rung(...):` raises `NameError: name 'Rung' is not defined`. A `from pyrung import Rung` raises `ImportError`.
+  Write `with rung(...):` instead. `rung` accepts the same conditions.
 - `pyrung.core` and `pyrung.dap` are internal. Docs, examples and generated code import from `pyrung` (they imported the math functions, `system` and `SystemState` from `pyrung.core`, and `send_command` from `pyrung.dap.live`).
   Import from `pyrung`, `pyrung.click`, `pyrung.circuitpy`, `pyrung.validation` or `pyrung.live`. The internal paths can change in any release.
 - `Program.validate()`, `Program.register_dialect()` and `Program.registered_dialects()` are gone, and so is `validate()` in `pyrung.core.validation`.
@@ -109,7 +111,7 @@
   Test each property in pytest with `force()` and `run_for()`, and use `how()` to find a path to a state. Delete `pyrung lock --check` from CI and your `pyrung.lock` files.
 - Tags, blocks, `.slot()`, `Field()`, `@udt`, `@named_array` and `TagMeta` no longer take `lock=`. A nickname file that still holds `[lock]` loads. pyrung drops the flag when it writes the file.
   Delete `lock=True` from your tag declarations, or regenerate a `tags.py` that pyrung generated.
-- Error messages, warnings and CLICK findings say what went wrong and what to do. They name the call you wrote, such as `count_up()` (they named pyrung's classes, such as `CountUpInstruction`). They spell the rung call `rung(...)`, as the docs do (some spelled it `Rung(...)`).
+- Error messages, warnings and CLICK findings say what went wrong and what to do. They name the call you wrote, such as `count_up()` (they named pyrung's classes, such as `CountUpInstruction`). They spell the rung call `rung(...)` (some spelled it `Rung(...)`).
   Update any test that matches the old text.
 - A ladder export issue's `path` and a CLICK finding's `location` count rungs from 1, so the first rung is `main.rung[1]` (it was `main.rung[0]`).
   Add 1 to a rung index that you compare with a path.
@@ -166,7 +168,7 @@
 - A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
 - `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
 - `how()` numbers rungs from 1 in its route and producer text, the way `cause()` does, and writes a subroutine rung as `MySub:3`. It counted from 0, and a subroutine rung showed a number that was not its place in the subroutine.
-- The VS Code debugger shows live tag values on the lines of a `with rung(...)` block, the spelling the docs use (it showed them only in `with Rung(...)` blocks).
+- The VS Code debugger now shows live tag values inside a `with rung(...)` block (it showed them only inside `with Rung(...)`).
 
 ## v0.16.0 (2026-11-14)
 
