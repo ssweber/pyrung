@@ -62,9 +62,9 @@ _COMMENT_IN_RUNG_HINT = (
     "comment() attaches to the *next* rung; move it before the `with rung(...):`"
 )
 
-# A `with` that calls any of these names opens a rung. pyrung exports only `rung`, but
-# pyrung.core.program still defines `Rung` and `RungContext`. A `with Rung(...):` must get
-# the same source lines and checks as `with rung(...):`.
+# A `with` that calls any of these names opens a rung. pyrung exports only `rung`.
+# pyrung.core.program also exports the same class as `Rung` and `RungContext`.
+# A `with Rung(...):` must get the same source lines and checks as `with rung(...):`.
 _RUNG_NAMES = ("rung", "Rung", "RungContext")
 
 

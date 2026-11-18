@@ -57,7 +57,7 @@
 
 ### Behaviour changes
 
-- `pyrung` no longer exports `Rung`. After `from pyrung import *`, a `with Rung(...):` stops with `NameError: name 'Rung' is not defined`. A `from pyrung import Rung` raises `ImportError`.
+- `pyrung` no longer exports `Rung`. After `from pyrung import *`, a `with Rung(...):` raises `NameError: name 'Rung' is not defined`. A `from pyrung import Rung` raises `ImportError`.
   Write `with rung(...):` instead. `rung` accepts the same conditions.
 - `pyrung.core` and `pyrung.dap` are internal. Docs, examples and generated code import from `pyrung` (they imported the math functions, `system` and `SystemState` from `pyrung.core`, and `send_command` from `pyrung.dap.live`).
   Import from `pyrung`, `pyrung.click`, `pyrung.circuitpy`, `pyrung.validation` or `pyrung.live`. The internal paths can change in any release.
