@@ -95,6 +95,25 @@ class ValidationReport:
     def __iter__(self) -> Iterator[Finding]:
         return iter(self.findings)
 
+    def grouped(self) -> dict[str, list[FindingDisplay]]:
+        """Return the findings' displays keyed by rule code, in the order they were found.
+
+        A block reset or fill can leave many coils stuck. Their stuck-bit findings
+        share one display, so a 140-coil block clear reads as one entry.
+        """
+        from pyrung.core.validation.stuck_bits import StuckBitFinding, StuckBitReport
+
+        grouped: dict[str, list[FindingDisplay]] = {}
+        stuck: list[StuckBitFinding] = []
+        for finding in self.findings:
+            if isinstance(finding, StuckBitFinding):
+                stuck.append(finding)
+            else:
+                grouped.setdefault(finding.code, []).append(finding.display)
+        for group in StuckBitReport(findings=tuple(stuck)).grouped():
+            grouped.setdefault(group.code, []).append(group.display)
+        return grouped
+
 
 def check(
     program: Program,
