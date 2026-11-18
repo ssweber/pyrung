@@ -1118,6 +1118,17 @@ class TestInstructionCoverage:
         results = _on_every_backend(prog, monkeypatch, (dest,), scans=1)
         assert results == {name: (3,) for name in results}
 
+    @pytest.mark.parametrize("value", [14, 0x1E, 255, 0xFFFF])
+    def test_a_constant_copied_into_dh_stores_the_same_on_every_backend(self, monkeypatch, value):
+        """A constant whose hex spelling starts with E (14, 30) stores its number."""
+        dh = ClickBlocks().dh
+        with Program(strict=False) as prog:
+            with rung():
+                copy(value, dh[1])
+
+        results = _on_every_backend(prog, monkeypatch, (dh[1],), scans=1)
+        assert results == {name: (value,) for name in results}
+
     def test_unknown_instruction_type_raises(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")

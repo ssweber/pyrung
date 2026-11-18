@@ -68,7 +68,7 @@ class _InstructionMixin:
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
         def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
         def _hex_constants(
-            self, mode: Literal["word", "copy", "exact"] | None
+            self, mode: Literal["word", "copy", "math", "exact"] | None
         ) -> AbstractContextManager[None]: ...
         @staticmethod
         def _is_hex_bank_operand(rendered: str) -> bool: ...
@@ -404,7 +404,7 @@ class _InstructionMixin:
             expression = instruction.source_expression
             mode = infer_calc_mode(expression, instruction.dest).mode
             # Hex-mode Math reads every constant as hex (shift counts too).
-            with self._hex_constants("word" if str(mode) == "hex" else None):
+            with self._hex_constants("math" if str(mode) == "hex" else None):
                 formula = self._render_operand(
                     expression,
                     path=f"{path}.expression",
