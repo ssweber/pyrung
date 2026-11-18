@@ -109,7 +109,7 @@
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
 - CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
-- A conformance run against the soft PLC or a CLICK waits for each case's reset scan before it starts the case (it could start a case first, and the case then read stale values).
+- A conformance run now starts each case only after the case's reset has run (it could start the case before its reset, and the case read stale values).
 - `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
 - `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.

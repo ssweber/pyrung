@@ -612,6 +612,17 @@ class _Session:
             return False
         return True
 
+    async def wait_scans(self, what: str) -> tuple[bool, int] | None:
+        """Wait for SD9 to move on two scans after a write, as ``wait_scans_after_write`` does.
+
+        Return ``None`` and record the error in ``broken`` if SD9 cannot be read.
+        """
+        try:
+            return await wait_scans_after_write(self.w.click, time.monotonic() + 10.0)
+        except Exception as exc:
+            self.broken.append(f"{what}: reading SD9 raised {_error(exc)}")
+            return None
+
     async def until(
         self, check: Callable[[], Awaitable[bool]], timeout: float = ACK_TIMEOUT_S
     ) -> bool:
@@ -709,13 +720,15 @@ async def _stage(s: _Session) -> bool:
     if not await s.write_ds(s.slot["Cmd"], [0] * 9, "the reset"):
         return False
 
-    moved = await wait_scans_after_write(s.w.click, time.monotonic() + 10.0)
+    waited = await s.wait_scans("the reset")
+    if waited is None:
+        return False
 
     async def reset_done() -> bool:
         return (await s.reg("Ready"), await s.reg("Cmd"), await s.reg("Fired")) == (1, 0, 0)
 
-    if moved < 2 or not await s.until(reset_done, timeout=10.0):
-        s.broken.append(f"the reset did not raise Ready within 10 s, SD9 moved {moved} scans")
+    if not waited[0] or not await s.until(reset_done, timeout=10.0):
+        s.broken.append(f"the reset did not raise Ready within 10 s, SD9 moved {waited[1]} scans")
         return False
     if not await s.write_ds(s.slot["Cmd"], 1, "the staging"):
         return False
@@ -1178,14 +1191,14 @@ async def _probe_all(s: _Session) -> None:
     finally:
         # The reset clears all of the part's memory.
         if await s.write_ds(s.slot["Cmd"], 0, "the closing reset"):
-            moved = await wait_scans_after_write(s.w.click, time.monotonic() + 10.0)
+            waited = await s.wait_scans("the closing reset")
 
             async def ready() -> bool:
                 return await s.reg("Ready") == 1
 
-            if moved < 2 or not await s.until(ready, timeout=10.0):
+            if waited is not None and (not waited[0] or not await s.until(ready, timeout=10.0)):
                 s.broken.append(
-                    f"the closing reset did not raise Ready within 10 s, SD9 moved {moved} scans"
+                    f"the closing reset did not raise Ready within 10 s, SD9 moved {waited[1]} scans"
                 )
     if os.environ.get(STOP_ENV) == "1":
         await _stop_probes(s)

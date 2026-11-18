@@ -51,8 +51,8 @@ _MODE_RUN_BIT = 11
 _SCAN_COUNTER = 9
 #: SD9 counts 0..32767 and then starts again.
 _SCAN_COUNTER_WRAP = 32768
-#: Scans to wait after the harness zeroes the slots, before it trusts ``Ready``.
-_SCANS_AFTER_ZEROING = 2
+#: Scans to wait after the harness writes a reset, before it trusts ``Ready``.
+_SCANS_AFTER_WRITE = 2
 #: Seconds between SD9 reads while waiting for it to wrap.
 _WRAP_POLL_S = 0.2
 #: Seconds of SD9 reads that size the wait for it to wrap.
@@ -537,18 +537,19 @@ async def _await_program_hash(client: Any, endpoint: Endpoint, timeout: float) -
     return found
 
 
-async def wait_scans_after_write(client: Any, deadline: float) -> int:
+async def wait_scans_after_write(client: Any, deadline: float) -> tuple[bool, int]:
     """Wait until SD9 has moved on two scans since this call began, or until *deadline*.
 
     A write reaches the ladder at the start of a later scan, so a read just after a write can
-    still return a scan from before it. Call this right after the write. Return how many scans
-    SD9 moved, which is less than two only when *deadline* passed first.
+    still return a scan from before it. Call this right after the write. Return whether SD9
+    moved on two scans, and how many scans it moved. It moved fewer only when *deadline* passed
+    first.
     """
     start = int(await client.sd[_SCAN_COUNTER])
     while True:
         moved = (int(await client.sd[_SCAN_COUNTER]) - start) % _SCAN_COUNTER_WRAP
-        if moved >= _SCANS_AFTER_ZEROING or time.monotonic() >= deadline:
-            return moved
+        if moved >= _SCANS_AFTER_WRITE or time.monotonic() >= deadline:
+            return moved >= _SCANS_AFTER_WRITE, moved
         await asyncio.sleep(POLL_S)
 
 
@@ -624,14 +625,10 @@ async def _drive(
             await _write_ds(client, start, [0] * width)
         slots = [(g, i) for g in live for i, _ in g.cases]
         deadline = time.monotonic() + timeout
-        moved = await wait_scans_after_write(client, deadline)
+        waited, moved = await wait_scans_after_write(client, deadline)
         while True:
             regs = _by_register(live, await _read_spans(client, live))
-            unready = {
-                (g.name, i)
-                for g, i in slots
-                if not (moved >= _SCANS_AFTER_ZEROING and _reset_done(g, i, regs))
-            }
+            unready = {(g.name, i) for g, i in slots if not (waited and _reset_done(g, i, regs))}
             if not unready or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(POLL_S)
