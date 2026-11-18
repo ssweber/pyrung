@@ -357,9 +357,12 @@ def test_a_fraction_copied_into_a_word_exports_as_written(bank, value):
     _exports_as(lambda: fill(value, bank.select(1, 1)), token)
 
 
-def test_a_fraction_filled_into_a_range_of_words_is_refused():
-    with pytest.raises(LadderExportError, match="is not an integer"):
-        pyrung_to_ladder(_program(lambda: fill(1.5, dh.select(1, 2))), TagMap())
+@pytest.mark.parametrize("value", [1.5, -1.5, 70000.5])
+def test_a_fraction_filled_into_a_range_of_words_is_refused_even_when_allowed(value):
+    write = lambda: fill(value, dh.select(1, 2))  # noqa: E731
+    assert CLK_COPY_WIDE_CONSTANT in _codes(write)
+    with pytest.raises(LadderExportError, match=f"Constant {value} is not an integer"):
+        pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_COPY_WIDE_CONSTANT,))
 
 
 # --- CLICK's Copy answers ---------------------------------------------------------------
