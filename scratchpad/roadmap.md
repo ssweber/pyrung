@@ -26,9 +26,12 @@ Every later step pays the gate, so it comes first. All [nothing]. The range boun
 and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9). Per-test times from that run are in
 `pyrung-wt/buildbot/logs/gate-trim/`.
 
-- **Narrow `fold`** to the test files whose long runs use the loop (`run_for`/`run_until`). Today it reruns all of
-  `test`'s selection, less the 16 slowest cases of `test_pilot_long_wait.py`. It took 964 s on 2026-11-15 (1,873 s
-  with those cases).
+- **Narrowing `make test-fold` is shelved.** Branch bob/fold-narrow (ef7059b, local only) runs only the 121 test
+  files whose runs go through the jit (`run_for`/`run_until`), from a generated list. Narrowed, `make test-fold` took
+  676 s on a quiet machine. The full run took 960 s. Both compared the same 2282 tests. The branch adds about 440
+  lines, and `make test` fails when a new test file goes through the jit but is missing from the list. Sam shelved it
+  on 2026-11-17. `make test-fold` runs only after a jit change, so the saving does not pay for the lines and the new
+  `make test` failure.
 - **Fuzz runs in no gate.** The `pytestmark` in tests/fuzz/conftest.py has no effect, and the fuzz tests put `@given`
   on an inner function. What is left checks `PLC` against `CompiledPLC` and the fold check. Decide whether a gate
   runs it. [Sam]
@@ -406,6 +409,11 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **Two how() labels print a rung number that does not count from 1.** `pilot/trace_routes.py:558`
+  (`_writer_label`) prints an index into `pdg.rung_nodes` as "rung N". `pilot/options.py:914` (`program_note`) prints
+  `producer.rung_index` with no +1. The rung labels from `query._rung_label` count from 1, as `restart.py` shows.
+  Whoever next works on the how() trace text resolves the node to its rung and prints it with `_rung_label`. The
+  label then reads `Sub:N` for a subroutine rung, not `{scope} rung N`.
 - **Two drum cases flake on the local soft PLC.** `drum/pins_read_before_step_fix` and its tee twin sometimes
   read Result4 = 3, depending on scan speed. `drum_idle` reads Result2 = 1022 when the soft PLC scans fast. Each
   fails the same way when run as a part and when run as a pick (bob/main-runner found them). A case must not depend on how fast
