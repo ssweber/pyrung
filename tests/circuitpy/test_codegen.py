@@ -1990,6 +1990,28 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (int_text, word_text), scans=1)
         assert results == {name: (True, True) for name in results}
 
+    def test_a_copy_of_a_number_constant_into_a_txt_writes_its_digits_on_every_backend(
+        self, monkeypatch
+    ):
+        """CLICK stores the digits of a constant copied into a TXT (clicknick RESULTS6, row 5).
+
+        An int is written as ``to_text()`` writes it, and a real with seven decimals.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 20)
+        int_text = Bool("IntText")
+        real_text = Bool("RealText")
+        with Program(strict=False) as prog:
+            with rung():
+                copy(-5, chars[1])
+                copy(2.5, chars[5])
+            with rung(chars[1] == "-", chars[2] == "5", chars[3] == ""):
+                out(int_text)
+            with rung(*(chars[5 + i] == ch for i, ch in enumerate("2.5000000"))):
+                out(real_text)
+
+        results = _on_every_backend(prog, monkeypatch, (int_text, real_text), scans=1)
+        assert results == {name: (True, True) for name in results}
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
         """A code needs an integer, so the TXT stays as it was and SC43 is set.
