@@ -106,7 +106,7 @@ def _counter_program():
     """Build a per-scan integer count: ``Count`` increments by 1 every scan.
 
     A ``count_up`` counts rising edges, so a held rung counts once.  The per-scan
-    source is therefore an unconditional self-calc, read against a limit as a
+    source is therefore an unconditional self-feeding Math, read against a limit as a
     counter's preset was.  ``Enable`` only mirrors the old counter's rung.
     """
     Enable = Bool("Enable", external=True)

@@ -105,7 +105,7 @@ def test_clamp_idempotent(value, tag_type):
 
 
 # =============================================================================
-# U2: Truncation is modular (calc-style wrap)
+# U2: Truncation is modular (Math-style wrap)
 # =============================================================================
 
 

@@ -86,7 +86,7 @@ src/pyrung/
 │   ├── scan_trace.py    # Guarded scan loop traced from the kernel source (soundness argument in its docstring)
 │   ├── cycle_jump.py    # Predicts how many cycles the guarded loop repeats, so a run can skip them (argument in its docstring)
 │   ├── condition.py     # Condition combinators (And, Or, rise, fall, comparisons)
-│   ├── expression.py    # Expression tree for conditions/calc
+│   ├── expression.py    # Expression tree for conditions and math()
 │   ├── history.py       # Time travel, scan log access
 │   ├── scan_log.py      # Sparse ScanLog with compiled replay
 │   ├── memory_block.py  # Block, InputBlock, OutputBlock
@@ -95,7 +95,7 @@ src/pyrung/
 │   ├── physical.py      # Physical annotations (physical, link, uom)
 │   ├── bounds.py        # Runtime min/max/choices checking
 │   ├── debugger.py      # Breakpoints, monitors, debug hooks
-│   ├── instruction/     # All instructions (coils, timers, counters, copy, calc, drums, control, packing, send/receive)
+│   ├── instruction/     # All instructions (coils, timers, counters, copy, math, drums, control, packing, send/receive)
 │   ├── program/         # Program builder, decorators, validation, context managers
 │   ├── validation/      # Static validators (duplicate_out, readonly, stuck_bits, etc.)
 │   └── analysis/

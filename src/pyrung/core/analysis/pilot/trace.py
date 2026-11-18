@@ -2430,7 +2430,7 @@ def _trace_back(
         # would wrongly read the gate as satisfied.  Keys on the semantic shape
         # (fire-time pins derivable from the writer's data flow or its guard),
         # not the identity-copy silhouette: identity/converting copies, affine
-        # calc transitions, and guard-pinned decodes all reach the tide tables,
+        # Math transitions, and guard-pinned decodes all reach the tide tables,
         # which are asked which mode makes the gate hold under those pins.
         attempt_node.children.extend(
             _table_enablement_prereqs(
@@ -2559,7 +2559,7 @@ def _preserve_children(
     """Preserve prerequisites: keep a retentive ``tag=value`` from being clobbered.
 
     The writer walk *establishes* the value (finds the writer that produces it).
-    For a **retentive** target — a latch/SET coil or a copy/calc into a held
+    For a **retentive** target — a latch/SET coil or a copy/Math into a held
     register — the value also has to *persist*: any competing writer that
     provably drives the tag to a different value overwrites it on a later scan
     unless its guard is suppressed.  An engineer reading ``latch(Running)``
@@ -2782,10 +2782,10 @@ def _transition_fire_pins(
     pins, so evaluating it needs the *fire-time* source values, not the
     snapshot's.  Soundly derivable in three writer shapes, none guessed:
 
-    - a registered writer reverse — copy, aligned block-copy, or affine calc —
+    - a registered writer reverse — copy, aligned block-copy, or affine Math —
       returns singleton ``Eq`` constraints for the producer values forced on its
       firing scan;
-    - a **non-affine calc** — ``math(A * B, tag)``, ``math(A & mask, tag)``,
+    - a **non-affine Math** — ``math(A * B, tag)``, ``math(A & mask, tag)``,
       ``math((A << 2) | B, tag)`` — that the crossing can't invert symbolically,
       solved by enumerate-and-evaluate over the sources' *complete* finite
       domains (:func:`~pyrung.core.analysis.pilot.tide_tables.solve_calc_preimage`),
@@ -2799,7 +2799,7 @@ def _transition_fire_pins(
     pins = _producer_pins(reverse_result, eq_target(tag, value))
     if pins:
         return pins
-    # Non-affine calc decode: no symbolic inverse, so solve the expression over
+    # Non-affine Math decode: no symbolic inverse, so solve the expression over
     # the sources' complete finite domains and pin only the forced values.
     from pyrung.core.analysis.pilot.tide_tables import solve_calc_preimage
 

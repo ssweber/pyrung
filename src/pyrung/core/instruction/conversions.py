@@ -90,7 +90,7 @@ def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | 
 
 
 def calc_store_transform(tag_type: Any, mode: str = "decimal") -> StoreTransform | None:
-    """Destination conversion used by calc and packing result stores."""
+    """Destination conversion used by Math and packing result stores."""
     from pyrung.core.tag import TagType
 
     if mode == "hex" and tag_type in {TagType.INT, TagType.DINT, TagType.WORD}:

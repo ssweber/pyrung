@@ -135,7 +135,7 @@ def _time_event_drum():
 
 
 # (instruction, target_tag, target_value, expected_level, ctx_tags) per registered
-# class.  ctx_tags supplies the type table a crossing needs (calc wrap-correction
+# class.  ctx_tags supplies the type table a crossing needs (Math wrap-correction
 # reads source/dest types); most crossings read types off the instruction itself.
 def _search():
     blk = Block("DS", TagType.INT, 1, 5)

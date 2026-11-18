@@ -234,7 +234,7 @@ def test_a_send_of_any_nan_sends_all_ones(monkeypatch, bits):
 
 
 def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
-    """A calc marks a math-import flag, not a runtime name; code.py must still import."""
+    """A Math marks a math-import flag, not a runtime name; code.py must still import."""
     src = Int("Src", default=6)
     dest = Int("Dest")
     mapping = TagMap({src: ds[1], dest: ds[2]})

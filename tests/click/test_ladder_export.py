@@ -957,7 +957,7 @@ def test_calc_exports_wide_constants_as_written_once_allowed():
 
 
 def test_calc_token_uses_click_native_operators():
-    """Calc expressions use Click-native operator syntax in CSV tokens."""
+    """Math expressions use Click-native operator syntax in CSV tokens."""
     from pyrung.core.expression import lsh, rsh, sqrt
 
     Enable = Bool("Enable")

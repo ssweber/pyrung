@@ -1398,9 +1398,9 @@ def _clobber_copy_program() -> Program:
 
 
 def _liveword_clobber_program() -> Program:
-    """A clobbering copy gated by a genuinely-live (calc-computed) word.
+    """A clobbering copy gated by a genuinely-live (Math-computed) word.
 
-    ``Sel`` selects a raw mask (4 or 0), ``Mask`` is ``RawMask & 4`` — a *calc*
+    ``Sel`` selects a raw mask (4 or 0), ``Mask`` is ``RawMask & 4`` — a *Math*
     output, so its finite domain is unreadable and the guard-force enumeration
     **punts**.  The clobber ``copy(0, State)`` fires while ``Mask != 0``.  Only the
     skiff can find the suppressing lever: a bounded isolated probe holding the
@@ -1467,7 +1467,7 @@ class TestGeneralizedAntagonistExcursion:
         assert result.replay_fork.state.tags["State"] == 5
 
     def test_live_word_guard_uses_skiff_probe(self):
-        # The clobber's guard reads a calc-computed word: guard-force enumeration
+        # The clobber's guard reads a Math-computed word: guard-force enumeration
         # punts, and the skiff's isolated probe nominates the condition-read Bool
         # Sel=False, which replay verification confirms.
         prog = _liveword_clobber_program()

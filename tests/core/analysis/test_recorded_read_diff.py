@@ -24,7 +24,7 @@ from pyrung.core.tag import TagType
 
 
 def _sum_program() -> Program:
-    """``Total = DS1 + DS2 + DS3`` (opaque calc-sum), ``Flag`` when nonzero."""
+    """``Total = DS1 + DS2 + DS3`` (opaque Math-sum), ``Flag`` when nonzero."""
     blk = Block("DS", TagType.INT, 1, 5)
     total = Int("Total")
     flag = Bool("Flag")
@@ -171,7 +171,7 @@ def test_empty_footprint_is_empty_diff() -> None:
 
 
 # --------------------------------------------------------------------------
-# end-to-end: cause() crosses the opaque calc-sum (today it dead-ends)
+# end-to-end: cause() crosses the opaque Math-sum (today it dead-ends)
 # --------------------------------------------------------------------------
 
 
@@ -180,12 +180,12 @@ def test_cause_crosses_calc_sum_to_changed_operand() -> None:
     runner = PLC(prog, dt=0.010)
     runner.step()
     runner.patch({"DS2": 5})
-    runner.step()  # Total 0 -> 5 through the opaque calc
+    runner.step()  # Total 0 -> 5 through the opaque Math
 
     chain = runner.cause("Total")
 
     assert chain is not None
-    assert "DS2" in chain.tags()  # crossed the calc to its changed operand
+    assert "DS2" in chain.tags()  # crossed the Math to its changed operand
     calc_step = next(s for s in chain.steps if s.transition.tag_name == "Total")
     assert "DS2" in [t.tag_name for t in calc_step.triggers]
 
@@ -209,7 +209,7 @@ def test_cause_attributes_nonzero_to_truthy_operands() -> None:
 
 
 def _gated_sum_program() -> Program:
-    """Like ``_sum_program`` but the calc is gated by a held ``Enable``."""
+    """Like ``_sum_program`` but the Math is gated by a held ``Enable``."""
     blk = Block("DS", TagType.INT, 1, 5)
     enable = Bool("Enable", external=True)
     total = Int("Total")
@@ -244,7 +244,7 @@ def test_cause_crosses_gated_calc_sum() -> None:
 
 
 def test_cause_crosses_subroutine_aggregate_writer() -> None:
-    """A calc-sum inside a called subroutine is crossed; the step names the
+    """A Math-sum inside a called subroutine is crossed; the step names the
     subroutine writer (node-aware) and the caller gate is an enabler."""
     blk = Block("DS", TagType.INT, 1, 5)
     enable = Bool("Enable", external=True)
@@ -314,7 +314,7 @@ def test_cause_uses_exact_nested_caller_reads_instead_of_static_leaves() -> None
 
 
 def test_cause_crosses_branch_writer() -> None:
-    """A calc-sum inside a branch (``branch_path`` non-empty) is crossed."""
+    """A Math-sum inside a branch (``branch_path`` non-empty) is crossed."""
     blk = Block("DS", TagType.INT, 1, 5)
     enable = Bool("Enable", external=True)
     total = Int("Total")

@@ -33,13 +33,13 @@ Numeric = int | float
 # =============================================================================
 
 
-#: While ``calc`` evaluates its formula, this holds the list that the failing operations
+#: While ``math()`` evaluates its formula, this holds the list that the failing operations
 #: append their fault flags (tag names) to. It is ``None`` everywhere else.
 #:
 #: A math error affects only the operation that failed, as in CLICK's Math. The
 #: operation returns 0 and the formula carries on. Hardware, 2026-11-06: ``7 / 0 + 5``
 #: and ``(7 / 0 + 1) * 5`` are 5, into a DF too, and so is ``SQRT(-4.0) + 5``.
-#: In a ``calc`` the failing operation also adds its flag to this list:
+#: In a Math the failing operation also adds its flag to this list:
 #:
 #: - A division by zero adds SC40 (``fault.division_error``).
 #: - A domain error adds SC46 (``fault.math_operation_error``).
@@ -47,8 +47,8 @@ Numeric = int | float
 #:   adds SC43 (``fault.out_of_range``).
 #: - A :class:`QuietMathError` adds no flag.
 #:
-#: ``calc`` sets the flags once the formula is done. A REAL can hold +/-Inf itself
-#: (a Math overflow), so ``calc`` cannot tell a division by zero from an Inf operand
+#: ``math()`` sets the flags once the formula is done. A REAL can hold +/-Inf itself
+#: (a Math overflow), so ``math()`` cannot tell a division by zero from an Inf operand
 #: afterwards.
 #:
 #: Everywhere else (a rung condition, a copy source, a forloop count, a pointer
@@ -65,7 +65,7 @@ MATH_OPERATION_FAULT = "fault.math_operation_error"
 def _permissive(error: Exception) -> int:
     """Return 0 as the value of an operation that raised *error*.
 
-    The 0 replaces only that operation's term. Inside ``calc`` (:data:`CALC_FAULTS`)
+    The 0 replaces only that operation's term. Inside a Math (:data:`CALC_FAULTS`)
     this function also records the error's flag.
     """
     faults = CALC_FAULTS.get()
@@ -83,11 +83,11 @@ class QuietMathError(ArithmeticError):
     """A math error CLICK's Math answers with 0 and no fault flag.
 
     A MOD by 0 and ``0 ** 0`` are such errors (a CLICK read 0 and no flag). Only the
-    ops that :func:`~pyrung.core.instruction.calc.calc_form` puts in a ``calc`` raise
+    ops that :func:`~pyrung.core.instruction.calc.calc_form` puts in a Math raise
     it (:func:`_op_mod`, :func:`_op_pow_calc`). The operation is 0 and the formula
     carries on, as for every math error (:data:`CALC_FAULTS`). So ``MOD(DS7, 0) + 5``
     and ``0 ^ 0 + 5`` are 5 (hardware, 2026-11-10). Into a DF the 0 is 0.0
-    (``7.5 MOD 0.0`` read 0.0). Outside ``calc``, ``%`` floors and ``0 ** 0`` is 1,
+    (``7.5 MOD 0.0`` read 0.0). Outside a Math, ``%`` floors and ``0 ** 0`` is 1,
     as in Python.
     """
 
@@ -122,7 +122,7 @@ def _op_mod(a: Numeric, b: Numeric) -> Numeric:
 
     ``-7 MOD 2`` is -1 and ``7 MOD -2`` is 1, for Int and Real alike. That matches C's
     ``fmod``. Python's ``%`` floors instead. A MOD by 0 raises :class:`QuietMathError`.
-    ``calc`` runs ``%`` as this function. Anywhere else ``%`` is Python's.
+    ``math()`` runs ``%`` as this function. Anywhere else ``%`` is Python's.
     """
     if b == 0:
         raise QuietMathError("MOD by zero")
@@ -141,19 +141,19 @@ def _op_pow(a: Numeric, b: Numeric) -> Numeric:
         result = a**b
     except OverflowError:
         if not (isinstance(a, float) or isinstance(b, float)):
-            raise  # an int too large for a float: in a calc the result is 0, with SC43
+            raise  # an int too large for a float: in a Math the result is 0, with SC43
         odd = b % 2 == 1 if isinstance(b, int) else b.is_integer() and int(b) % 2 == 1
         negative = a < 0 and odd
         return -math.inf if negative else math.inf
     if isinstance(result, complex):
         # A negative base to a fractional power (``(-8.0) ** 0.5``) has no real value.
-        # That is a math error, as ``sqrt(-1)`` is (calc sets SC46).
+        # That is a math error, as ``sqrt(-1)`` is (a Math sets SC46).
         raise MathDomainError(f"({a!r}) ** {b!r}: math domain error")
     return result
 
 
 def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
-    """Return ``a ** b`` as a ``calc`` computes it.
+    """Return ``a ** b`` as a Math computes it.
 
     ``0 ^ 0`` raises :class:`QuietMathError`, and 0 to a negative power is +Inf.
     CLICK's Math stores +Inf for ``0.0 ^ -1.0`` into a DF. It stores 0 for
@@ -167,7 +167,7 @@ def _op_pow_calc(a: Numeric, b: Numeric) -> Numeric:
     return _op_pow(a, b)
 
 
-#: Maps each op of a formula to the op that ``calc`` runs in its place (``calc_form``).
+#: Maps each op of a formula to the op that ``math()`` runs in its place (``calc_form``).
 CALC_OPS: dict[Any, Any] = {operator.mod: _op_mod, _op_pow: _op_pow_calc}
 
 
@@ -175,7 +175,7 @@ def bit_operand(value: Numeric) -> int:
     """Return ``int(value)`` for an operand of a bitwise or shift operation.
 
     ``int()`` raises ``OverflowError`` for an Inf. For a NaN it raises ``ValueError``,
-    so this function raises ``OverflowError`` for a NaN too. In a ``calc`` the operation
+    so this function raises ``OverflowError`` for a NaN too. In a Math the operation
     is then 0 and sets the out-of-range flag for either. The compiled kernel and the
     generated CircuitPython use the ``_bit_int`` helper, which does the same.
     """
@@ -200,7 +200,7 @@ def shift_count(value: Numeric) -> int:
     """Return ``bit_operand(value)`` for a shift count, which must not be negative.
 
     A negative count raises ``OverflowError``, where Python raises ``ValueError``. So in
-    a ``calc`` the shift is 0 and sets the out-of-range flag. That is pyrung's choice.
+    a Math the shift is 0 and sets the out-of-range flag. That is pyrung's choice.
     The compiled kernel and the generated CircuitPython use ``_shift_count``.
     """
     count = bit_operand(value)
@@ -221,7 +221,7 @@ def _op_invert(a: Numeric) -> int:
     return ~bit_operand(a)
 
 
-#: The bottom of each signed range, which ABS cannot take. ``calc`` swaps ``abs()`` of
+#: The bottom of each signed range, which ABS cannot take. ``math()`` swaps ``abs()`` of
 #: an Int or Dint tag for the op of its own type. The error affects only the ABS, as
 #: for every math error. ``ABS(DS1) + 1`` with DS1 = -32768 is 1 with SC43, and
 #: ``ABS(DS1)`` into a DD is 0 with SC43 (hardware, 2026-11-10).
@@ -231,7 +231,7 @@ ABS_FLOORS: dict[str, int] = {"INT": -32768, "DINT": -2147483648}
 def _abs_of_int(a: Numeric) -> Numeric:
     """Return the ABS of an Int.
 
-    ``ABS(-32768)`` has no Int result, so it raises ``OverflowError``. In a calc the ABS
+    ``ABS(-32768)`` has no Int result, so it raises ``OverflowError``. In a Math the ABS
     is 0, with SC43.
     """
     if a == -32768:
@@ -242,7 +242,7 @@ def _abs_of_int(a: Numeric) -> Numeric:
 def _abs_of_dint(a: Numeric) -> Numeric:
     """Return the ABS of a Dint.
 
-    ``ABS(-2147483648)`` has no Dint result, so it raises ``OverflowError``. In a calc
+    ``ABS(-2147483648)`` has no Dint result, so it raises ``OverflowError``. In a Math
     the ABS is 0, with SC43.
     """
     if a == -2147483648:
@@ -250,7 +250,7 @@ def _abs_of_dint(a: Numeric) -> Numeric:
     return abs(a)
 
 
-#: Maps a tag type name to the ``abs()`` that ``calc`` runs for a tag of that type.
+#: Maps a tag type name to the ``abs()`` that ``math()`` runs for a tag of that type.
 ABS_OF_TYPE: dict[str, Any] = {"INT": _abs_of_int, "DINT": _abs_of_dint}
 
 
@@ -514,10 +514,10 @@ class BinaryExpr(Expression):
 
 
 def _calc_step(result: Numeric) -> Numeric:
-    """Return *result* as a ``calc`` step holds it, with an integer past 2 ** 53 as a double.
+    """Return *result* as a Math step holds it, with an integer past 2 ** 53 as a double.
 
     A CLICK Math computes in doubles (hardware, 2026-11-05: ``a * a - (a * a - 1)``
-    with ``a`` = 2147483647 is 0). Outside ``calc`` an integer step stays exact.
+    with ``a`` = 2147483647 is 0). Outside a Math an integer step stays exact.
     """
     if (
         type(result) is int
@@ -532,7 +532,7 @@ _NEG_DOUBLE_EXACT_LIMIT = -DOUBLE_EXACT_LIMIT
 
 
 class CalcBinaryExpr(BinaryExpr):
-    """A :class:`BinaryExpr` of a ``calc`` formula, whose steps are doubles.
+    """A :class:`BinaryExpr` of a Math formula, whose steps are doubles.
 
     See :func:`_calc_step`. ``calc_form`` builds these. An expression anywhere else does
     not pay for the check, and its integer steps stay exact.
@@ -579,7 +579,7 @@ class UnaryExpr(Expression):
 
 
 class CalcUnaryExpr(UnaryExpr):
-    """A :class:`UnaryExpr` of a ``calc`` formula, whose steps are doubles.
+    """A :class:`UnaryExpr` of a Math formula, whose steps are doubles.
 
     It behaves as :class:`CalcBinaryExpr` does.
     """
@@ -627,7 +627,7 @@ class MathDomainError(ValueError):
     """Raised when a math function gets an operand outside its domain.
 
     Examples are ``sqrt`` of a negative, ``log``/``log10`` of 0 or a negative, and
-    ``asin``/``acos`` outside -1..1. ``calc`` turns it into CLICK's math-operation
+    ``asin``/``acos`` outside -1..1. ``math()`` turns it into CLICK's math-operation
     error (SC46). The function is 0 and the formula carries on (``SQRT(-4.0) + 5``
     is 5). The flag stays on until the next Math clears it, and the PLC stays in RUN.
     """
@@ -892,9 +892,9 @@ class RandIntExpr(Expression):
 
     - A bare ``Real`` tag as a bound reads 0 with no flag.
     - Equal bounds, whether constants or tags holding one value, are a math error. The
-      site reads 0, with SC46 in a ``calc``.
+      site reads 0, with SC46 in a Math.
     - Any other bound is read as an integer. If it evaluates to Inf or NaN, the site
-      reads 0, with SC43 in a ``calc``.
+      reads 0, with SC43 in a Math.
 
     A math error of the site zeroes only the site: ``randint(7, 7) + 5`` is 5
     (hardware, 2026-11-05).
@@ -1025,7 +1025,7 @@ class RandIntExpr(Expression):
             lo = self.lo.evaluate(ctx)
             hi = self.hi.evaluate(ctx)
             if not (_finite(lo) and _finite(hi)):
-                # A bound holding Inf or NaN has no integer range, so a calc sets SC43.
+                # A bound holding Inf or NaN has no integer range, so a Math sets SC43.
                 # That is pyrung's choice. CLICK's editor accepts no such bound.
                 return self._site_error(OUT_OF_RANGE_FAULT)
             if int(lo) == int(hi):
@@ -1036,8 +1036,8 @@ class RandIntExpr(Expression):
     def _site_error(flag: str) -> int:
         """Return 0 for a math error of the site.
 
-        In a ``calc`` this records *flag* (:data:`CALC_FAULTS`), as for any math error.
-        Only the site is zeroed, and the rest of the formula runs. Outside ``calc`` it
+        In a Math this records *flag* (:data:`CALC_FAULTS`), as for any math error.
+        Only the site is zeroed, and the rest of the formula runs. Outside a Math it
         sets no flag, as for any math error there.
         """
         faults = CALC_FAULTS.get()
@@ -1058,7 +1058,7 @@ def randint(lo: Expression | int | Tag, hi: Expression | int | Tag) -> RandIntEx
 
     A bare ``Real`` tag as a bound reads 0 with no flag. Equal bounds, whether constants
     or tag values, are a math error. The ``randint`` reads 0, the rest of the formula
-    runs, and a ``calc`` sets SC46.
+    runs, and a Math sets SC46.
 
     A decimal Math draws over the whole bounds and stores the draw as it stores any
     result. Into an ``Int``, a draw outside -32768..32767 wraps and sets SC43. A hex Math
@@ -1163,7 +1163,7 @@ def aggregate_values(kind: str, values: list[Any] | tuple[Any, ...]) -> Numeric:
     operations inline (``_primitives.py``), in the same member order:
 
     - ``max`` / ``min``: Python ``max`` / ``min``.
-    - ``mean``: left-to-right ``+`` then ``/ n``. The quotient is exact, and calc's
+    - ``mean``: left-to-right ``+`` then ``/ n``. The quotient is exact, and Math's
       destination conversion decides truncation.
     - ``median``: the middle of the sorted values. For an even count it is the mean of
       the two middle values, truncated toward zero when the range is integer, as on a

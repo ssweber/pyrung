@@ -526,7 +526,7 @@ class TestBackPropagation:
 
     @staticmethod
     def _build():
-        """Program with a calc chain: Scaled = Raw + 10.
+        """Program with a Math chain: Scaled = Raw + 10.
 
         Rung 0: (unconditional) math(Raw + 10, Scaled)
         Rung 1: Enable → out(Output)

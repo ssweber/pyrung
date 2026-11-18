@@ -1,4 +1,4 @@
-"""Definite arithmetic-fault validation for calc instructions."""
+"""Definite arithmetic-fault validation for Math instructions."""
 
 from __future__ import annotations
 
@@ -176,7 +176,7 @@ def validate_math_conditions(
     *,
     _context: ValidationContext | None = None,
 ) -> MathConditionReport:
-    """Report only calc divisors proved zero on every executable call path."""
+    """Report only Math divisors proved zero on every executable call path."""
     from pyrung.core.analysis.return_guards import effective_reach_chains
     from pyrung.core.validation.context import ValidationContext
 

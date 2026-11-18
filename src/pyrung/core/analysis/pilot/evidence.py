@@ -151,7 +151,7 @@ def expand_routes(
       request tags whose own writers are enumerated in Phase 2.
     - **UNKNOWN** indirect-copy writers are expanded when their pointer can be
       canonicalized to a request tag through ExploreContext functional deps or
-      a local single-calc definition.
+      a local single-Math definition.
 
     Phase 2 enumerates writers of each discovered request tag and builds
     pipeline routes, resolving destination values via the dest_map or

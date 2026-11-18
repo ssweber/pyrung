@@ -76,7 +76,7 @@ def _counter_program(preset: int = 100) -> tuple[Program, Counter]:
 
 
 def _churn_timer_program(preset_ms: int = 500) -> tuple[Program, Timer]:
-    """Timer program with an unread free-running self-calc (churn)."""
+    """Timer program with an unread free-running self-feeding Math (churn)."""
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     Done = Bool("Done")
@@ -321,7 +321,7 @@ class TestNoSourceProgram:
 
 
 class TestChurnExclusion:
-    """Programs with unread self-calcs still fold (tier 1 churn)."""
+    """Programs with unread self-feeding Math instructions still fold (tier 1 churn)."""
 
     def test_unread_churn_folds_timer(self) -> None:
         prog, tmr = _churn_timer_program(200)
@@ -1378,7 +1378,7 @@ def _rtc_gated_counter_program() -> Program:
 
     Its value is a fold coordinate, so a window whose scans read a different
     second than the probe did would patch the wrong per-scan delta.  (A
-    ``calc``: a counter counts edges, so it would add one a minute.)
+    Math: a counter counts edges, so it would add one a minute.)
     """
     N = Dint("N")
     Tmr = Timer.clone("Tmr")
@@ -2391,8 +2391,8 @@ class TestTimerCarryExact:
 
 
 class TestSelfFeedingChurnExact:
-    """A calc that feeds its own destination is not simply left out of the plateau guard. The
-    fold patches an exact affine self-calc forward in closed form, wrapping and faulting exactly
+    """A Math that feeds its own destination is not simply left out of the plateau guard. The
+    fold patches an exact affine self-feeding Math forward in closed form, wrapping and faulting exactly
     as stepping does. Any other shape stays guarded."""
 
     @staticmethod
@@ -2477,9 +2477,9 @@ class TestSelfFeedingChurnExact:
         store_first: bool = False,
         dest: Any = None,
     ) -> Callable[[], Program]:
-        """A self-calc viewed by one store, a reader of it, and a slow timer.
+        """A self-feeding Math viewed by one store, a reader of it, and a slow timer.
 
-        The reader sits right after the store: the self-calc settles the flags.
+        The reader sits right after the store: the self-feeding Math settles the flags.
         """
 
         def build() -> Program:
@@ -3214,7 +3214,7 @@ class TestFlagsFollowInsideAWindow:
             self._until_end,
             patch={"Wide": 32_000},
         )
-        # A store above the self-calc is settled by it, whatever follows.
+        # A store above the self-feeding Math is settled by it, whatever follows.
         assert plc.state.tags[self.SC43.name] is (not cleared and not store_first)
 
     @pytest.mark.parametrize("cleared", [False, True], ids=["left_up", "cleared_later"])
@@ -3331,7 +3331,7 @@ class TestFlagsFollowInsideAWindow:
             return prog
 
         plc = _assert_fold_is_exact(build, self._until_end, patch={"Wide": -700})
-        # A divide above the self-calc is settled by it before the reader.
+        # A divide above the self-feeding Math is settled by it before the reader.
         assert plc.state.tags["Seen"] == (0 if store_first else 1)
 
     @pytest.mark.parametrize("step, start", [(7, -350), (-7, 350)], ids=["into", "out_of"])
@@ -3387,7 +3387,7 @@ def copy_rung(dest: Any) -> None:
 
 
 class TestUnseenStopsStayExact:
-    """A bound that exists only to keep a fold exact (a self-calc's wrap) shortens windows but
+    """A bound that exists only to keep a fold exact (a self-feeding Math's wrap) shortens windows but
     never opens one. A ``when()`` callback is judged on every scan. The fold cannot see either
     stop."""
 
@@ -3594,7 +3594,7 @@ def _plain_tags_of(state: Any) -> dict[str, Any]:
 def _scan_stamp_program(source: Callable[[], None], reader: Any, above: bool) -> Program:
     """*reader* gates ``L``; a rise of ``L`` stamps the scan counter ``SC``.
 
-    ``SC`` adds one every scan (a ``calc``: a counter counts edges, so on an
+    ``SC`` adds one every scan (a Math: a counter counts edges, so on an
     always-true rung it would stop at 1 and stamp nothing).
     """
     SC = Dint("SC")

@@ -131,7 +131,7 @@ def test_cmd_valid_is_a_second_independent_caller(bench):
 
 
 def test_punts_on_multi_writer_target(bench):
-    """A tag written by many rungs (not one calc) is not a table predicate."""
+    """A tag written by many rungs (not one Math) is not a table predicate."""
     program, pdg, snap = bench
     assert solve_table_predicate("StateCurrent", 0, "==", snap, pdg, program) is None
 
@@ -356,7 +356,7 @@ def test_no_mode_surfaced_when_current_mode_already_enables(bench_trace):
 # register recomputed each scan from constant-table lookups plus the
 # transition's own fire-time pins — not the identity-copy silhouette.  These
 # programs are the PackML bench shape with the transition writer swapped for an
-# affine calc (states stored at an offset) and for a literal decode (the pin
+# affine Math (states stored at an offset) and for a literal decode (the pin
 # lives in the guard, not in data flow).  Both must surface the mode
 # prerequisite the same way
 # test_trace_surfaces_mode_for_state_disabled_in_current_mode does.
@@ -376,7 +376,7 @@ def _mask_gate_program(transition: str):
       at a +100 offset; the fire-time pin is the inverted affine map);
     - ``"affine_copy"`` — ``copy(StateRequested + 100, StateCurrent)`` (an
       expression-source *copy*, semantically identical to ``"affine"`` but routed
-      through the copy crossing's affine inversion rather than calc's);
+      through the copy crossing's affine inversion rather than a Math's);
     - ``"decode"`` — ``copy(10, StateCurrent)`` gated ``StateRequested == 10``
       (the pin is the guard's own equality conjunct);
     - ``"nonaffine"`` — ``math(StateRequested * StateRequested, StateCurrent)``
@@ -534,8 +534,8 @@ def test_affine_copy_transition_surfaces_mode():
 
     Semantically identical to ``test_affine_calc_transition_surfaces_mode`` — the
     same +100 offset, the same recomputed table gate — but the transition writer
-    is a copy, not a calc.  The copy crossing now inverts the affine expression
-    the same way calc does (fire-time pin ``StateRequested == 10``, from
+    is a copy, not a Math.  The copy crossing now inverts the affine expression
+    the same way a Math does (fire-time pin ``StateRequested == 10``, from
     ``110 - 100``), so the writer's reverse receipt carries the pin and the
     oracle trigger surfaces the mode prerequisite with zero pilot changes.
     """
@@ -713,7 +713,7 @@ def test_preimage_unsatisfiable_returns_empty_not_none():
 
 
 def test_preimage_punts_on_multi_writer_target():
-    """A ``Dest`` written by more than one rung is not a sole-calc decode ⇒ None."""
+    """A ``Dest`` written by more than one rung is not a sole-Math decode ⇒ None."""
     from pyrung import Bool, Int, Program, copy, math, rung
 
     A = Int("A")
@@ -735,12 +735,12 @@ def test_preimage_punts_on_multi_writer_target():
 
 
 def _pointer_chase_program(depth):
-    """``copy(ds[p0], Dest)`` behind a chain of *depth* calc-defined pointers.
+    """``copy(ds[p0], Dest)`` behind a chain of *depth* Math-defined pointers.
 
     ``p{i} = math(p{i+1} + 1)`` for ``i < depth-1`` and ``p{depth-1} =
     math(seed + 1)`` with ``seed`` never written, so the chase hops
     ``p0 → p1 → … → p{depth-1}`` — reaching the deepest pointer takes ``depth-1``
-    single-calc-source hops.  The chase supports three hops.
+    single-Math-source hops.  The chase supports three hops.
     """
     from pyrung import Int, Program, copy, math, rung
     from pyrung.core.memory_block import Block
@@ -791,7 +791,7 @@ def test_indirect_src_resolves_within_three_hops():
 def test_indirect_src_punts_on_four_hop_chain():
     """A chain needing a fourth hop exceeds the budget → clean punt (no table).
 
-    The chase follows only three calc hops; a fourth would leave the address
+    The chase follows only three Math hops; a fourth would leave the address
     resolved to a still-computed pointer, so the oracle must return ``None``
     rather than model a table over a partially-resolved ``eval_addr``.
     """

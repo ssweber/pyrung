@@ -1643,7 +1643,7 @@ class TestRecoversWithAssume:
 
 
 # ---------------------------------------------------------------------------
-# Simulation primitive (_simulate_scan) and copy/calc awareness
+# Simulation primitive (_simulate_scan) and copy/Math awareness
 # ---------------------------------------------------------------------------
 
 
@@ -1684,7 +1684,7 @@ class TestSimulateScan:
         assert dict(sim.rung_writes.get(0, {})).get("Dest") == 42
 
     def test_calc_captured(self) -> None:
-        """Simulation captures calc instruction writes."""
+        """Simulation captures Math instruction writes."""
         from pyrung.core.analysis.causal.projected import _simulate_scan
         from pyrung.core.state import SystemState
 
@@ -1822,7 +1822,7 @@ class TestRungProducesValue:
 
 
 class TestProjectedCauseCopyCalc:
-    """projected_cause finds copy/calc rungs as candidates."""
+    """projected_cause finds copy/Math rungs as candidates."""
 
     def test_copy_rung_candidate(self) -> None:
         """cause(to=) finds a copy rung that would produce the value."""
@@ -1872,7 +1872,7 @@ class TestProjectedCauseCopyCalc:
         assert chain.steps[0].to_dict()["crossing_exact"] is exact
 
     def test_calc_rung_candidate(self) -> None:
-        """cause(to=) finds a calc rung that would produce the value."""
+        """cause(to=) finds a Math rung that would produce the value."""
         Gate = Bool("Gate")
         A = Int("A")
         Result = Int("Result")
@@ -1914,7 +1914,7 @@ class TestProjectedCauseCopyCalc:
 
 
 class TestProjectedEffectCopyCalc:
-    """projected_effect detects copy/calc downstream effects."""
+    """projected_effect detects copy/Math downstream effects."""
 
     def test_copy_downstream(self) -> None:
         """effect() detects a copy instruction as downstream effect."""
@@ -1954,7 +1954,7 @@ class TestProjectedEffectCopyCalc:
         assert step.transition.to_value == 42
 
     def test_calc_downstream(self) -> None:
-        """effect() detects a calc instruction as downstream effect."""
+        """effect() detects a Math instruction as downstream effect."""
         Enable = Bool("Enable")
         A = Int("A")
         Result = Int("Result")
@@ -1973,7 +1973,7 @@ class TestProjectedEffectCopyCalc:
         assert "Result" in effect_tags
 
     def test_calc_correct_value(self) -> None:
-        """Transition.to_value carries the actual computed value from calc."""
+        """Transition.to_value carries the actual computed value from a Math."""
         Enable = Bool("Enable")
         A = Int("A")
         Result = Int("Result")

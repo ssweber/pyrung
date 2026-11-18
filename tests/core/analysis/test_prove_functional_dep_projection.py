@@ -76,7 +76,7 @@ def test_zero_offset_copy_projected() -> None:
 
 
 def test_mixed_writers_kept() -> None:
-    """Tag written by calc in one rung and literal in another stays stateful."""
+    """Tag written by a Math in one rung and literal in another stays stateful."""
     x = Int("X", min=0, max=3)
     y = Int("Y", min=0, max=8)
     cond = Bool("Cond")
@@ -157,7 +157,7 @@ def test_co_writing_violation_kept() -> None:
 
 
 def test_sequential_unconditional_same_sub_projected() -> None:
-    """Calc chain in same subroutine, sequential, unconditional -> projected.
+    """Math chain in same subroutine, sequential, unconditional -> projected.
 
     Mirrors the historian pattern: X is computed from a nondeterministic
     source via a non-linear expression, then Y = X + offset follows

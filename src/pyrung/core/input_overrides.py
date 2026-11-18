@@ -96,9 +96,9 @@ def _randint_sites_run(rungs: Iterable[Any]) -> tuple[tuple[RandIntExpr, ...], d
 
     The sites are found by name, from the tags that the kernel's own walk reaches
     (``walk_rung_operands``): a draw's tag inside a formula, or ``expr.tag`` read straight
-    off a rung.  That walk takes a calc's formula as it runs, not its ``source_expression``.
-    A hex calc runs a cut draw in place of the uncut one (``RandIntExpr.with_cut_bounds``).
-    So the uncut site that the calc names runs only where some other rung runs it, as a
+    off a rung.  That walk takes a Math's formula as it runs, not its ``source_expression``.
+    A hex Math runs a cut draw in place of the uncut one (``RandIntExpr.with_cut_bounds``).
+    So the uncut site that the Math names runs only where some other rung runs it, as a
     decimal Math that keeps the constants does.
     """
     from pyrung.core.expression import is_randint_tag, randint_numbers, randint_sites
@@ -346,7 +346,7 @@ class TagsRungsReach:
         """Return the ``randint`` sites that the rungs run, in site order: the draws a scan makes.
 
         A CLICK draws once per RAND that a Math runs.  A site that only the written formula
-        of a calc names (the uncut one of a cut draw) therefore draws nothing.  Its tag
+        of a Math names (the uncut one of a cut draw) therefore draws nothing.  Its tag
         holds what was last put there, as the compiled run's does.  Each draw depends only
         on its site's number and the scan.  A site left out of the draws still has a number
         (an uncut site takes its cut's), so no other site's values move.

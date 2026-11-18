@@ -5,7 +5,7 @@
 case stages its sources in raw memory that it owns (``memory.OWNED``): DS4001..DS4110
 (ten per case), C1201.., DD201.., DF201.. Each case reads the result back into its
 slot. Its ``init`` puts the staged registers and bits back to zero. A DD or
-Real result is read back through a ``calc`` that subtracts a constant, so
+Real result is read back through a Math that subtracts a constant, so
 a result that does not fit an Int still lands in one.
 
 Static facts, no case. ``blockcopy`` accepts only the ``to_value`` and

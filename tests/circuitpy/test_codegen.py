@@ -623,10 +623,10 @@ class TestConditionAndExpressionCompiler:
         assert "<<" in compile_expression(a << 1, ctx)
         assert ">>" in compile_expression(a >> 1, ctx)
         assert "~int" in compile_expression(~a, ctx)
-        # A domain error gives 0, so sqrt goes through _permissive_math. In a calc,
+        # A domain error gives 0, so sqrt goes through _permissive_math. In a Math,
         # _permissive_math appends SC46 to _calc_flags. A function with no domain error uses
-        # _math_func. Outside calc, a division by a variable goes through _permissive_op.
-        # Inside calc (calc_form), the division tests the divisor inline.
+        # _math_func. Outside a Math, a division by a variable goes through _permissive_op.
+        # Inside a Math (calc_form), the division tests the divisor inline.
         from pyrung.core.instruction.calc import calc_form
 
         assert "_math_func(math.sin, " in compile_expression(sin(a), ctx, strict=True)
@@ -1660,9 +1660,9 @@ class TestBoardPeripheralsAndRunStop:
 
     @staticmethod
     def _non_finite_real(operand: str) -> tuple[Real, list]:
-        """Return a Real that scan 0 sets to +Inf, -Inf or NaN, and the calcs that set it.
+        """Return a Real that scan 0 sets to +Inf, -Inf or NaN, and the Math instructions that set it.
 
-        SC43 is set on scan 0 only. A REAL literal cannot be Inf or NaN, so calcs build it.
+        SC43 is set on scan 0 only. A REAL literal cannot be Inf or NaN, so Math instructions build it.
         """
         big = Real("Big", default=3.0e38)
         inf = Real("InfR")
@@ -2178,7 +2178,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_domain_error_in_a_randint_bound_on_every_backend(
         self, monkeypatch, make, tag_type, held, dest
     ):
-        """Inside calc the bound is read too. The result is 0 with SC46, and the scan runs on."""
+        """Inside a Math the bound is read too. The result is 0 with SC46, and the scan runs on."""
         from pyrung.core import randint
 
         n = tag_type("N", default=held)
@@ -2196,7 +2196,7 @@ class TestBoardPeripheralsAndRunStop:
         assert results == {name: (0, True, True) for name in results}
 
     def test_a_domain_error_in_a_randint_bound_outside_calc_on_every_backend(self, monkeypatch):
-        """Outside calc the same bound reads 0 and sets no flag."""
+        """Outside a Math the same bound reads 0 and sets no flag."""
         from pyrung.core import randint
 
         n = Int("N", default=-1)
@@ -2228,8 +2228,8 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_non_finite_computed_randint_bound_on_every_backend(self, monkeypatch, operand):
         """pyrung's choice: the site is 0.
 
-        In a calc it also sets SC43, and the rest of the formula runs, as for any randint()
-        math error. Outside a calc it sets no flag.
+        In a Math it also sets SC43, and the rest of the formula runs, as for any randint()
+        math error. Outside a Math it sets no flag.
         """
         from pyrung.core import randint
 
@@ -2395,7 +2395,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_math_error_outside_calc_is_zero_with_no_flag_on_every_backend(
         self, monkeypatch, label, make
     ):
-        """pyrung's choice: outside calc an expression is permissive.
+        """pyrung's choice: outside a Math an expression is permissive.
 
         The operation that hits a math error gives 0. Nothing raises and no flag is set. This
         holds in a rung condition, a copy source and a forloop count alike.
@@ -2508,7 +2508,7 @@ class TestBoardPeripheralsAndRunStop:
     ):
         """An exact integer power is fine until it meets a float.
 
-        Outside calc, the operation that meets a float gives 0 and sets no flag.
+        Outside a Math, the operation that meets a float gives 0 and sets no flag.
         """
         e = Int("E", default=1100)
         bd = Dint("BD", default=2_000_000_000)
@@ -2524,7 +2524,7 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (hit, copied, *self._FAULTS), scans=1)
         assert results == {name: (True, 0.0, False, False, False) for name in results}, label
 
-    #: What each _HUGE calc stores into a Real. A calc step is a double, so the integer
+    #: What each _HUGE Math stores into a Real. A Math step is a double, so the integer
     #: past the double range is Inf (SC43 into a Real). sin(Inf) is NaN with no flag.
     #: atan(Inf) is pi / 2.
     _HUGE_IN_CALC = {
@@ -2705,8 +2705,8 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_complex_power_is_a_math_error_on_every_backend(self, monkeypatch, label, make):
         """pyrung's choice: a negative base to a fractional power is a math error.
 
-        It has no real value, and neither does sqrt(-1). The result is 0 with no flag outside
-        calc, and 0 with math_operation_error (SC46) in calc.
+        It has no real value, and neither does sqrt(-1). The result is 0 with no flag outside a
+        Math, and 0 with math_operation_error (SC46) in a Math.
         """
         n = Real("N", default=-8.0)
         h = Real("H", default=0.5)

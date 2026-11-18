@@ -5,7 +5,7 @@ the operator pointing the way the value moves (``Timer.Acc >= Setpoint``, not
 ``Setpoint <= Timer.Acc``).  "Dynamic" (belongs on the left) is any
 program-written tag, self-advancing register, or inline computed expression;
 "static" is a literal, an ``S.`` constant, or a never-written setpoint/external
-tag.  The verdict is driven by the writer-membership index; calc-derived
+tag.  The verdict is driven by the writer-membership index; Math-derived
 provenance only sharpens the message.
 
 Two advisory wording tiers, plus the escalation into CMP_TRUE_AT_RESET when the
@@ -171,7 +171,7 @@ def _correct_forms_program() -> Program:
             math(b + 1, calc_b)
         with Rung():
             on_delay(tmr, 5, "sec")
-        # dynamic (calc) on left, literal right — correct
+        # dynamic (Math) on left, literal right — correct
         with Rung(calc_out > 3):
             copy(1, out)
         # dynamic (accumulator) on left, static right — correct (bench form)
@@ -184,11 +184,11 @@ def _correct_forms_program() -> Program:
 
 
 def _external_sensor_program() -> Program:
-    """An external sensor on the left, a calc-derived band on the right.  The analyzer
+    """An external sensor on the left, a Math-derived band on the right.  The analyzer
     cannot prove the sensor is the mover (no accumulator), so this is a 'maybe'."""
     dryer_temp = Int("DryerTemp", external=True)  # sensor input
     setpoint = Int("Setpoint", external=True)
-    band = Int("LowBandTemp")  # calc-derived threshold — written
+    band = Int("LowBandTemp")  # Math-derived threshold — written
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
         with Rung(out):

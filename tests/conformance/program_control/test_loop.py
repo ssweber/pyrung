@@ -17,7 +17,7 @@ Which case tells which model apart, and what the other model reads:
 
 - ``false_for_rung_skips_body`` (F2): a skipped body leaves C1701 latched
   (Result1 = 1).  A body run once with power off turns C1701 off (2).  A body
-  calc does not run either way (Result2 = 0).
+  Math does not run either way (Result2 = 0).
 - ``zero_count`` (F3): no iteration reads Result1 = 0, Result2 = 0.  65536
   iterations wrap Result1 to 0 and read Result2 = 1.  "At least once" reads
   Result1 = 1, Result2 = 1.

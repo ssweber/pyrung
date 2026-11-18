@@ -131,7 +131,7 @@ def test_same_width_source_at_rail_is_exact_singleton() -> None:
     assert _only(r) == (Eq("Src", frozenset({32767})),)
 
 
-# --- affine expression source (the copy-side twin of calc's affine inverse) ---
+# --- affine expression source (the copy-side twin of Math's affine inverse) ---
 
 
 def test_affine_expr_source_interior_inverts_exactly() -> None:

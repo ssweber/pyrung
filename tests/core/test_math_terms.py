@@ -98,7 +98,7 @@ FORMULAS: dict[str, tuple[Callable[[], Any], type, Any, set[int]]] = {
     "abs_dint_bottom": (lambda: abs(DINT_BOTTOM) + 1, Dint, 1, {43}),
     "negative_shift": (lambda: lsh(SEVEN_INT, NEGATIVE) + 1, Int, 1, {43}),
     "inf_into_and": (lambda: ((BIG**9) & 1) + 2, Int, 2, {43}),
-    # An integer step in a calc becomes a double past 2 ** 53 and Inf past 2 ** 1024
+    # An integer step in a Math becomes a double past 2 ** 53 and Inf past 2 ** 1024
     # (lsh(1, 2000)). A bit operation on Inf is 0 with SC43, as it is on a Real.
     "stepped_inf_into_and": (lambda: (lsh(ONE, FAR) & 1) + 2, Int, 2, {43}),
     "stepped_inf_into_and_real": (lambda: (lsh(ONE, FAR) & 1) + 2, Real, 2.0, {43}),
@@ -218,7 +218,7 @@ def test_a_failing_operation_is_zero_and_the_formula_carries_on(
 
 TABLE = Block("Table", TagType.INT, 1, 10)
 
-#: Pointers whose address is a calc's double past the integer range. The address is
+#: Pointers whose address is a Math's double past the integer range. The address is
 #: Inf (``lsh(1, 2000)``) or NaN (Inf - Inf), each alone and after a division by 0.
 #: The last is ``~`` of Inf, which is 0 with SC43, below the block.
 POINTERS: dict[str, tuple[Callable[[], Any], set[int]]] = {

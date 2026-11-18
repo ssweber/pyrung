@@ -270,7 +270,7 @@ def _channel_from_values(
 
 
 def single_calc_source(idx_tag: str, pdg: Any, program: Any) -> tuple[Any, str] | None:
-    """Return ``(expression, source_tag)`` for one calc-written index."""
+    """Return ``(expression, source_tag)`` for one Math-written index."""
 
     from pyrung.core.instruction.calc import CalcInstruction
 

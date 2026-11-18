@@ -130,7 +130,7 @@ def _literal_write_values(root: str, writer_instrs: dict[str, list[Any]]) -> set
         elif type(instr).__name__ == "FillInstruction":
             src = getattr(instr, "value", None)
         else:
-            return None  # calc / non-literal writer → not a pure literal domain
+            return None  # Math / non-literal writer → not a pure literal domain
         if _is_int(src):
             values.add(src)
         else:

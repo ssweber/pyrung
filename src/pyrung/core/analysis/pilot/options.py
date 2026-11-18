@@ -157,7 +157,7 @@ def _read_trace_disposition(
         return _candidate_read.CandidateDiagnosis(_STUCK_TRACE_EMPTY)
 
     # The trace stopped at a program-written value that it cannot read further.  The program
-    # may be moving that value itself, for example a calc fed its own result, or any motion
+    # may be moving that value itself, for example a Math fed its own result, or any motion
     # that no advance profile describes.  If an unchanged projection closes on the wanted
     # value, that is the positive reading.  Without one, the trace stays a stop.
     if state is not None:

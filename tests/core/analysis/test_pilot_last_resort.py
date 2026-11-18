@@ -88,9 +88,9 @@ def test_a_long_chain_of_coils_is_traced_to_its_input() -> None:
 
 
 def test_a_count_the_program_runs_every_other_scan_is_waited_for_without_the_last_resort() -> None:
-    """The trace unrolls Count's own calc to its depth and stops: a projection reads the motion.
+    """The trace unrolls Count's own Math to its depth and stops: a projection reads the motion.
 
-    This was a last-resort rescue: no advance profile owns a calc fed its own result.
+    This was a last-resort rescue: no advance profile owns a Math fed its own result.
     """
     osc, count, hit = Bool("Osc"), Int("Count"), Bool("Hit")
     with Program(strict=False) as logic:

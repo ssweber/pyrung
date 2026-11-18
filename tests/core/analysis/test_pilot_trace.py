@@ -452,7 +452,7 @@ def test_copy_data_flow():
     assert "Requested" in names
 
 
-# -- Test 3: Calc expression -------------------------------------------------
+# -- Test 3: Math expression -------------------------------------------------
 
 
 def test_calc_affine():
@@ -1356,7 +1356,7 @@ def test_reference_constants_via_func_dep_chain():
     """Reference constants are detected through the pointer chain.
 
     Models the PackML pattern where named constants feed into a tag
-    that drives a lookup-table pointer through a calc-defined scratch:
+    that drives a lookup-table pointer through a Math-defined scratch:
 
       copy(STATE_STARTING_REF, StateRequested)   -- REF is the constant
       math(StateRequested + 10, Idx)              -- func dep: Idx depends on StateRequested
@@ -1364,7 +1364,7 @@ def test_reference_constants_via_func_dep_chain():
 
     STATE_STARTING_REF is never written. It is the source of a copy into
     StateRequested, and StateRequested represents the indirect-copy pointer
-    through the calc hop. So all three conditions hold.
+    through the Math hop. So all three conditions hold.
 
     CMD_REF works the same way: it feeds CtrlCmd, which drives a separate
     lookup table pointer.
@@ -1399,13 +1399,13 @@ def test_reference_constants_via_func_dep_chain():
         with rung(x_Reset):
             copy(CMD_RESET_REF, CtrlCmd)
 
-        # State jump table: calc pointer, indirect read
+        # State jump table: Math pointer, indirect read
         with rung():
             math(StateRequested + 10, JumpIdx)
         with rung():
             copy(ds[JumpIdx], JumpTarget)
 
-        # Command validation table: calc pointer, indirect read
+        # Command validation table: Math pointer, indirect read
         with rung():
             math(CtrlCmd + 20, CmdIdx)
         with rung():

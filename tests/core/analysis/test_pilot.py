@@ -379,7 +379,7 @@ def test_crossing_dnf_verifies_atomic_branch_then_uses_sibling(monkeypatch):
 
 
 def test_actual_calc_singleton_proposal_uses_scalar_verified_pulse():
-    """A native two-source calc proposal remains a scalar observed artifact."""
+    """A native two-source Math proposal remains a scalar observed artifact."""
     A = Int("SingletonA", external=True)
     B = Int("SingletonB", external=True)
     Result = Int("SingletonResult")
@@ -1881,7 +1881,7 @@ def test_single_calc_source_rejects_two_mutable_tags():
 
 
 def test_invert_indirect_multi_tag_pointer():
-    """The tide-table inverter follows a constant-base pointer calc."""
+    """The tide-table inverter follows a constant-base pointer Math."""
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
     from pyrung.core.analysis.pilot.tide_tables import invert_indirect_copy
@@ -2006,7 +2006,7 @@ def test_expand_routes_punts_on_aggregate_writer():
 def test_learned_action_probe_with_trace_context():
     """Learned-action probes include trace-known inputs for opaque pipelines.
 
-    The mode pipeline uses a two-tag pointer calc (CmdReg + Base), so the
+    The mode pipeline uses a two-tag pointer Math (CmdReg + Base), so the
     backward trace cannot invert the IndirectRef — CmdProd is only
     discoverable through convergent action detection. The command rungs
     require both CmdProd AND rise(Enable). Enable is in the trace's
