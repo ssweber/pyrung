@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -19,6 +20,7 @@ from pyrung.core import Block, BlockRange, Tag
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry, note_metadata_edit
 
+from ._errors import SkippedAddressesWarning, skipped_addresses_text
 from ._nickname_io import (
     _PLAIN_DATA_BANKS,
     tag_map_from_nickname_file,
@@ -416,13 +418,19 @@ class TagMap:
         logical tag names in this mapping.  Unmapped addresses are
         silently skipped unless *blocks* covers them.
 
+        To load a whole file as a starting state, call :meth:`load_snapshot`.
+        To patch a running PLC, read the file and translate it here:
+
         .. code-block:: python
 
-            from pyclickplc import read_plc_data
+            from pyclickplc import PlcDataReadError, read_plc_data
 
-            data = read_plc_data("data.csv", skip_default=True)
-            tags = mapping.tags_from_plc_data(data)
-            runner = PLC(logic, initial_state=SystemState().with_tags(tags))
+            try:
+                data = read_plc_data("data.csv", skip_default=True)
+            except PlcDataReadError as exc:
+                # values holds every address except the TXT addresses it could not read.
+                data = exc.values
+            runner.patch(mapping.tags_from_plc_data(data))
 
         Args:
             data: ``{hardware_address: value}`` dict — keys are normalised
@@ -496,20 +504,48 @@ class TagMap:
         Returns:
             A :class:`SystemState` seeded with the mapped tag values.
 
+        Warns:
+            SkippedAddressesWarning: If some TXT addresses can be read more than
+                one way. CLICK writes a TXT comma without quotes, so a TXT row that
+                holds a comma and an empty address can be read more than one way.
+                ``load_snapshot`` leaves those addresses out of the state and loads
+                the rest of the file. The warning's ``addresses`` attribute lists the
+                skipped addresses. To refuse such a file, turn the warning into an
+                error with :mod:`warnings`.
+
         Raises:
             ValueError: If the file is not a readable PLC data dump. The message
                 keeps the reader's detail, such as the row that is malformed.
         """
-        from pyclickplc import read_plc_data
+        state, skipped = self._load_snapshot(path, skip_default=skip_default, blocks=blocks)
+        if skipped:
+            warnings.warn(
+                SkippedAddressesWarning(skipped_addresses_text(skipped, Path(path).name), skipped),
+                stacklevel=2,
+            )
+        return state
+
+    def _load_snapshot(
+        self,
+        path: str | Path,
+        *,
+        skip_default: bool = True,
+        blocks: Iterable[Any] | None = None,
+    ) -> tuple[SystemState, tuple[str, ...]]:
+        """Return the state that :meth:`load_snapshot` loads and the TXT addresses it skipped."""
+        from pyclickplc import PlcDataReadError, read_plc_data
 
         from pyrung.core.state import SystemState
 
+        skipped: tuple[str, ...] = ()
         try:
             data = read_plc_data(path, skip_default=skip_default)
+        except PlcDataReadError as exc:
+            data, skipped = exc.values, exc.addresses
         except ValueError as exc:
             raise ValueError(f"Cannot load snapshot: {exc}") from exc
         tags = self.tags_from_plc_data(data, blocks=blocks)
-        return SystemState().with_tags(tags)
+        return SystemState().with_tags(tags), skipped
 
     @property
     def entries(self) -> tuple[_TagEntry | _BlockEntry, ...]:

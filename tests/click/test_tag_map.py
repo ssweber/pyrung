@@ -2521,6 +2521,84 @@ def test_load_snapshot_reads_a_dump_as_click_writes_it(tmp_path):
     assert _math.isnan(state.tags["Level"])
 
 
+# CLICK writes a TXT comma without quotes. These rows hold a comma and an empty address,
+# so pyclickplc cannot tell what TXT13..TXT20 hold.
+_UNCLEAR_TXT_DUMP = (
+    "<DS=START>\n"
+    "Address,1,2,3,4,5,6,7,8,9,10,\n"
+    "DS1,42,0,0,0,0,0,0,0,0,0,\n"
+    "</DS=END>\n"
+    "<TXT=START>\n"
+    "Address,1,2,3,4,5,6,7,8,9,10,\n"
+    "TXT1,A,B,C,,,,,,,,\n"
+    "TXT11,H,i,,,,,,,,,,\n"
+    "</TXT=END>\n"
+)
+
+
+def test_load_snapshot_loads_the_rest_of_a_dump_with_unclear_txt(tmp_path):
+    from pyrung.click import SkippedAddressesWarning
+
+    mapping = TagMap(
+        {
+            Tag("Level", TagType.INT): ds[1],
+            Tag("First", TagType.CHAR): txt[1],
+            Tag("Empty", TagType.CHAR, default="y"): txt[4],
+            Tag("Second", TagType.CHAR): txt[12],
+            Tag("Unclear", TagType.CHAR, default="z"): txt[13],
+        }
+    )
+    dump = tmp_path / "data.csv"
+    dump.write_text(_UNCLEAR_TXT_DUMP, encoding="utf-8")
+
+    # skip_default=False keeps an empty TXT, so a skipped address differs from an empty one.
+    with pytest.warns(SkippedAddressesWarning) as record:
+        state = mapping.load_snapshot(dump, skip_default=False)
+
+    assert state.tags["Level"] == 42
+    assert state.tags["First"] == "A"
+    assert state.tags["Empty"] == ""
+    assert state.tags["Second"] == "i"
+    assert "Unclear" not in state.tags
+    [warning] = record
+    assert warning.filename == __file__
+    assert isinstance(warning.message, SkippedAddressesWarning)
+    assert warning.message.addresses == tuple(f"TXT{n}" for n in range(13, 21))
+    assert str(warning.message) == (
+        "pyrung skipped TXT13..TXT20 in data.csv and left them at their power-on values. "
+        "CLICK writes a TXT comma without quotes, so their values in the file are unclear. "
+        "The rest of the file loaded. Check these addresses in CLICK."
+    )
+
+
+@pytest.mark.parametrize(
+    ("addresses", "text"),
+    [
+        (("TXT5",), "TXT5"),
+        (("TXT5", "TXT6"), "TXT5..TXT6"),
+        (("TXT3", "TXT5", "TXT6", "TXT7", "TXT20"), "TXT3, TXT5..TXT7, TXT20"),
+    ],
+)
+def test_address_runs_joins_consecutive_addresses(addresses, text):
+    from pyrung.click.tag_map._errors import address_runs
+
+    assert address_runs(addresses) == text
+
+
+def test_skipped_addresses_warning_pickles_and_copies():
+    import copy
+    import pickle
+
+    from pyrung.click import SkippedAddressesWarning
+
+    warning = SkippedAddressesWarning("message", ("TXT13", "TXT14"))
+
+    for clone in (pickle.loads(pickle.dumps(warning)), copy.copy(warning), copy.deepcopy(warning)):
+        assert type(clone) is SkippedAddressesWarning
+        assert str(clone) == "message"
+        assert clone.addresses == ("TXT13", "TXT14")
+
+
 # ===================================================================
 # Input-mapped tags stamped external
 # ===================================================================

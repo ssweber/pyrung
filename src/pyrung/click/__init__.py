@@ -246,6 +246,7 @@ from pyrung.click.raw import RawInstruction, raw
 from pyrung.click.tag_map import (
     MIGRATIONS,
     OldCommentFormError,
+    SkippedAddressesWarning,
     SystemNicknameRepair,
     SystemNicknameRepairRequired,
     TagMap,
@@ -288,6 +289,7 @@ __all__ = [
     "format_tag_meta",
     "parse_tag_meta",
     "OldCommentFormError",
+    "SkippedAddressesWarning",
     "MIGRATIONS",
     "comment_needs_upgrade",
     "old_form_tokens",

@@ -71,8 +71,8 @@
   Fix or remove the rule name.
 - `expr_requires()` and `reset_dominance()` are gone.
   Delete the tests that use them, or check the property with `force()` and `run_for()`.
-- pyrung requires pyclickplc 0.9.0 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
-  If your own code calls pyclickplc, read pyclickplc's 0.9.0 changelog.
+- pyrung requires pyclickplc 0.9.1 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
+  If your own code calls pyclickplc, read pyclickplc's 0.9.0 and 0.9.1 changelogs.
 - The soft PLC's Modbus server stores a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (it answered exception 2). A rung that reads the T or CT bit sees the write.
   If a client of yours relied on that refusal, check the address before it writes.
 - The generated P1AM server stores a coil write to X, or to a coil between X or Y slots (it answered exception 2). It stores a write to a T or CT bit that a rung uses or the TagMap maps.
@@ -131,7 +131,11 @@
 - CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - A conformance run now starts each case only after the case's reset has run (it could start the case before its reset, and the case read stale values).
-- `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
+- `TagMap.load_snapshot()` and the debugger read a CLICK data dump as CLICK writes it:
+  - A text register holding a space loads as `" "` (it loaded `"$20"`).
+  - A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
+  - A text register holding a comma loads as `","`. 0.16.0 read the comma as an empty address and moved the rest of the row one address on.
+  - If a row with a comma also has an empty address, pyrung cannot tell what some text registers hold. It skips them, loads the rest of the file and names the skipped addresses. `load_snapshot()` warns with `SkippedAddressesWarning`. The warning's `addresses` attribute lists them. A DAP client gets them in `skippedAddresses` in the launch response.
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
 - `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
 - `program.check()` no longer calls a comparison always false when the `math()` that writes the tag wraps past the end of its type.
