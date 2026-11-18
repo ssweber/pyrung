@@ -17,13 +17,17 @@ from . import _state
 from ._program import Program
 from ._state import _current_forloop_body, _pop_rung_context, _push_rung_context
 
+# pyrung exports the rung context manager under each of these names. The source
+# lookups match a `with` item that calls any of them.
+_RUNG_NAMES = ("rung", "Rung", "RungContext")
+
 
 def _set_scope_end_line(
     rung: RungLogic,
     *,
     source_file: str | None,
     source_line: int | None,
-    context_name: str,
+    context_name: str | tuple[str, ...],
 ) -> None:
     """Populate end-line metadata for a scope-backed rung."""
     rung.end_line = _capture_with_end_line(
@@ -59,7 +63,7 @@ class Rung:
         condition_arg_lines = _capture_with_call_arg_lines(
             source_file,
             source_line,
-            context_name="Rung",
+            context_name=_RUNG_NAMES,
         )
 
         # Consume any pending comment() call.
@@ -163,7 +167,7 @@ class Rung:
             self._rung,
             source_file=self._rung.source_file,
             source_line=self._rung.source_line,
-            context_name="Rung",
+            context_name=_RUNG_NAMES,
         )
         if self._loop is not None:
             self._loop._add_body_rung(self._rung)

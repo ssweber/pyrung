@@ -50,11 +50,20 @@ def _capture_source(depth: int = 2) -> tuple[str | None, int | None]:
         del frame
 
 
+def _context_names(context_name: str | tuple[str, ...] | None) -> tuple[str | None, ...]:
+    """Return the names that *context_name* stands for.
+
+    A tuple lets one context manager match under each name it is exported as,
+    such as `rung` and `Rung`.
+    """
+    return context_name if isinstance(context_name, tuple) else (context_name,)
+
+
 def _capture_with_end_line(
     source_file: str | None,
     start_line: int | None,
     *,
-    context_name: str | None = None,
+    context_name: str | tuple[str, ...] | None = None,
 ) -> int | None:
     """Best-effort lookup of a with-statement end line from source."""
     if source_file is None or start_line is None:
@@ -70,9 +79,10 @@ def _capture_with_end_line(
     if not candidates:
         return None
 
+    names = _context_names(context_name)
     best = min(
         candidates,
-        key=lambda candidate: 0 if context_name in candidate.context_names else 1,
+        key=lambda candidate: 0 if any(name in candidate.context_names for name in names) else 1,
     )
     return best.end_line
 
@@ -81,7 +91,7 @@ def _capture_with_call_arg_lines(
     source_file: str | None,
     start_line: int | None,
     *,
-    context_name: str | None = None,
+    context_name: str | tuple[str, ...] | None = None,
 ) -> list[int]:
     """Best-effort lookup of `with` context-manager call argument line numbers."""
     if source_file is None or start_line is None:
@@ -97,11 +107,10 @@ def _capture_with_call_arg_lines(
     if not candidates:
         return []
 
+    names = _context_names(context_name)
     best = min(
         candidates,
-        key=lambda candidate: (
-            0 if context_name is None or candidate.context_name == context_name else 1
-        ),
+        key=lambda candidate: 0 if context_name is None or candidate.context_name in names else 1,
     )
     return list(best.arg_lines)
 
