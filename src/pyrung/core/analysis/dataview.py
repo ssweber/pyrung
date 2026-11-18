@@ -298,12 +298,24 @@ class DataView:
     # ------------------------------------------------------------------
 
     def upstream(self, tag: str) -> DataView:
-        """Upstream dependency cone of *tag*, intersected with current view."""
-        return self._narrow(self._tags & self._graph.upstream_slice(tag, follow_calls=False))
+        """Upstream dependency cone of *tag*, intersected with current view.
+
+        For a tag written in a subroutine, the cone includes the condition tags of
+        the rungs that call it, up the call chain. It stops at those tags, because
+        the call condition is the subroutine's enable.
+        """
+        cone = self._graph.upstream_slice(tag, follow_calls="call_site")
+        return self._narrow(self._tags & cone)
 
     def downstream(self, tag: str) -> DataView:
-        """Downstream dependency cone of *tag*, intersected with current view."""
-        return self._narrow(self._tags & self._graph.downstream_slice(tag))
+        """Downstream dependency cone of *tag*, intersected with current view.
+
+        This is the reverse of :meth:`upstream`. If *tag* is read in the condition of
+        a rung that calls a subroutine, the cone includes the tags that the
+        subroutine writes. A tag reached later does not open a subroutine.
+        """
+        cone = self._graph.downstream_slice(tag, follow_calls="call_site")
+        return self._narrow(self._tags & cone)
 
     # ------------------------------------------------------------------
     # Iteration / inspection

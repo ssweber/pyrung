@@ -66,6 +66,10 @@ These return narrowed DataViews, so you can chain further:
 dv.inputs().upstream("MotorOut")  # which inputs feed into MotorOut?
 ```
 
+For a tag written in a subroutine, `upstream()` includes the conditions of the rungs that call the subroutine, at every call site and up a chain of nested calls. The call condition is the subroutine's enable, so the slice stops there. It does not add what feeds the call condition, unless a rung inside the slice reads that tag too.
+
+`downstream()` is the exact reverse. A tag in a call rung's condition reaches every tag that the subroutine writes. A tag that the slice reaches later does not open a subroutine. `X` is in `dv.upstream(Y)` exactly when `Y` is in `dv.downstream(X)`.
+
 ### Iteration
 
 DataView is iterable and supports `len`, `in`, and `bool`:
