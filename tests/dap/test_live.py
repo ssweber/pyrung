@@ -85,16 +85,6 @@ def _setup_with_session(tmp_path: Path, session_name: str) -> tuple[DAPAdapter, 
     return adapter, out_stream
 
 
-@pytest.fixture(autouse=True)
-def _own_session_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Keep each test's port files out of the directory that other test workers share."""
-    import pyrung.dap.live as live_mod
-
-    directory = tmp_path / "sessions"
-    monkeypatch.setattr(live_mod, "_SESSION_DIR", directory)
-    return directory
-
-
 @pytest.fixture()
 def live_session(tmp_path: Path):
     """Yield (adapter, out_stream, session_name) with a running LiveServer."""

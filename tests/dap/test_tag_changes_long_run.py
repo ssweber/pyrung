@@ -17,7 +17,7 @@ from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.handlers import history_seek
 from pyrung.dap.protocol import read_message
 
-# The panel's clocks for a test that does not time the clock out.
+# Long enough that no test runs out of clock on a loaded machine.
 LOADED_MACHINE_CLOCK_S = 300.0
 
 WATCHED = ["Lamp", "Stage", "T2_Done", "Held", "Mirror", "Patched"]
@@ -144,9 +144,24 @@ def _allowance_outlasts_a_loaded_machine(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(history_seek, "_READ_CLOCK_S", LOADED_MACHINE_CLOCK_S)
 
 
+def _module_session(
+    tmp_path_factory: pytest.TempPathFactory, name: str, *, script: str = _SCRIPT
+) -> Session:
+    """Launch a stepped session for a module-scoped fixture.
+
+    The autouse session_dir fixture runs per test, after the module-scoped ones, so this
+    points the port file at a folder of its own.
+    """
+    import pyrung.dap.live as live_mod
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(live_mod, "_SESSION_DIR", tmp_path_factory.mktemp("sessions"))
+        return Session(tmp_path_factory.mktemp(name), jit=False, script=script)
+
+
 @pytest.fixture(scope="module")
 def stepped(tmp_path_factory: pytest.TempPathFactory) -> Session:
-    return Session(tmp_path_factory.mktemp("stepped"), jit=False)
+    return _module_session(tmp_path_factory, "stepped")
 
 
 @pytest.fixture
@@ -265,7 +280,7 @@ def test_loading_a_window_reaches_the_stepped_entries(
 ) -> None:
     monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", 0.0)
     *entries, window = compiled.changes()
-    # undo() would also drop the fixture's long clocks, and the real 3 s clock can run out here.
+    # Back to the fixture's long clock. The real 3 s clock can run out on a loaded machine.
     monkeypatch.setattr(history_seek, "_SETTLE_CLOCK_S", LOADED_MACHINE_CLOCK_S)
 
     entries += compiled.changes(beforeScan=window["scanId"] + 1)
@@ -331,7 +346,7 @@ def test_a_fork_reads_its_parents_timestamps() -> None:
 
 @pytest.fixture(scope="module")
 def seam_stepped(tmp_path_factory: pytest.TempPathFactory) -> Session:
-    return Session(tmp_path_factory.mktemp("seam_stepped"), jit=False, script=_SEAM_SCRIPT)
+    return _module_session(tmp_path_factory, "seam_stepped", script=_SEAM_SCRIPT)
 
 
 @pytest.fixture
