@@ -13,13 +13,10 @@ from pyrung.core._source import (
 from pyrung.core.condition import ConditionTerm
 from pyrung.core.rung import Rung as RungLogic
 
+from ..validation import _RUNG_NAMES
 from . import _state
 from ._program import Program
 from ._state import _current_forloop_body, _pop_rung_context, _push_rung_context
-
-# pyrung exports the rung context manager under each of these names. The source
-# lookups match a `with` item that calls any of them.
-_RUNG_NAMES = ("rung", "Rung", "RungContext")
 
 
 def _set_scope_end_line(

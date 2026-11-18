@@ -62,6 +62,11 @@ _COMMENT_IN_RUNG_HINT = (
     "comment() attaches to the *next* rung; move it before the `with rung(...):`"
 )
 
+# A `with` that calls any of these names opens a rung. pyrung exports only `rung`, but
+# pyrung.core.program still defines `Rung` and `RungContext`. A `with Rung(...):` must get
+# the same source lines and checks as `with rung(...):`.
+_RUNG_NAMES = ("rung", "Rung", "RungContext")
+
 
 def _with_call_names(node: ast.With) -> set[str]:
     names: set[str] = set()
@@ -76,7 +81,7 @@ def _with_call_names(node: ast.With) -> set[str]:
 
 def _is_rung_context(node: ast.With) -> bool:
     """Return True if the with-statement opens a rung scope (``with rung(...):``)."""
-    return not _with_call_names(node).isdisjoint(("rung", "Rung", "RungContext"))
+    return not _with_call_names(node).isdisjoint(_RUNG_NAMES)
 
 
 def _is_forloop_context(node: ast.With) -> bool:
