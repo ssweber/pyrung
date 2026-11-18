@@ -474,9 +474,9 @@ All [nothing] unless marked.
   causal) resolves labels but raises KeyError on a `Pump.State` alias.
 - **Export a fraction constant into DH or YD.** CLICK accepts `copy(1.5, DH1)` (copy_single answers). What it stores
   there is unread. [PLC]
-- **A plain number constant into TXT.** v0.17.0 made a `copy()` of an Int, Dint or Word tag into a Char write its
-  digits, and export writes it as a `to_text()` copy. A number constant still does none of that (checked on main
-  2026-11-18). `copy(-5, txt[1000])` with no `convert` skips the TXT1000 check, exports as `copy(-5,TXT1000)`, and
+- **A plain number constant into TXT.** A `copy()` of a number constant into TXT still does not write digits or
+  export a converter, as a `copy()` of an Int, Dint or Word tag does since v0.17.0 (checked on main 2026-11-18).
+  `copy(-5, txt[1000])` with no `convert` skips the TXT1000 check, exports as `copy(-5,TXT1000)`, and
   the runtime stores the raw number in the Char, where CLICK stores the digits (RESULTS6 row 5). laddercodec will
   refuse a bare number->TXT Copy with no converter, so the export must always write the converter. A plain number
   constant into TXT should:

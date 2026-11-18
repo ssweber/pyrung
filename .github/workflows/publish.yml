@@ -35,7 +35,7 @@ jobs:
         run: |
           git fetch origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::Commit $GITHUB_SHA is not on main. Merge it to main, then publish from a tag or run on main."
+            echo "::error::Commit $GITHUB_SHA is not on main. Merge it to main, then publish again from a tag on main or run this workflow on main."
             exit 1
           fi
 
@@ -47,10 +47,10 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           uv venv /tmp/wheelcheck
-          uv pip install --python /tmp/wheelcheck dist/*.whl
+          uv pip install --python /tmp/wheelcheck dist/*.whl packaging
           version=$(/tmp/wheelcheck/bin/python -c "import importlib.metadata, pyrung; print(importlib.metadata.version('pyrung'))")
           echo "Built wheel reports version $version"
-          if [ -n "$TAG" ] && [ "$version" != "${TAG#v}" ]; then
+          if [ -n "$TAG" ] && ! /tmp/wheelcheck/bin/python -c "import sys; from packaging.version import Version; sys.exit(Version(sys.argv[1]) != Version(sys.argv[2].removeprefix('v')))" "$version" "$TAG"; then
             echo "::error::The wheel is version $version but the release tag is $TAG. Fix the tag or the version source and publish again."
             exit 1
           fi
