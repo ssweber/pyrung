@@ -129,9 +129,11 @@
 - CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - A conformance run now starts each case only after the case's reset has run (it could start the case before its reset, and the case read stale values).
-- `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
-- `TagMap.load_snapshot()` now loads a CLICK data dump with an ambiguous TXT row. It skips the TXT addresses it cannot read and warns with `SkippedAddressesWarning` (it raised `ValueError`). The warning's `addresses` attribute lists the skipped addresses.
-- The debugger now starts from a CLICK data dump with an ambiguous TXT row. It loads the rest of the file and names the TXT addresses it skipped (it refused the file). A DAP client gets the same addresses in `skippedAddresses` in the launch response.
+- `TagMap.load_snapshot()` and the debugger read a CLICK data dump as CLICK writes it:
+  - A text register holding a space loads as `" "` (it loaded `"$20"`).
+  - A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
+  - A text register holding a comma loads as `","`. 0.16.0 read the comma as an empty address and moved the rest of the row one address on.
+  - If a row with a comma also has an empty address, pyrung cannot tell what some text registers hold. It skips them, loads the rest of the file and names the skipped addresses. `load_snapshot()` warns with `SkippedAddressesWarning`. The warning's `addresses` attribute lists them. A DAP client gets them in `skippedAddresses` in the launch response.
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
 - `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
 - `program.check()` no longer calls a comparison always false when the `math()` that writes the tag wraps past the end of its type.
