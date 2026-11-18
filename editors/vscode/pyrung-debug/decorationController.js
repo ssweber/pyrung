@@ -364,7 +364,7 @@ class PyrungDecorationController {
       const text = editor.document.lineAt(lineIdx).text;
       const indent = text.search(/\S/);
       if (indent === -1) continue;
-      if (/^\s*with\s+Rung\s*\(/.test(text)) {
+      if (/^\s*with\s+[Rr]ung\s*\(/.test(text)) {
         rungIndent = indent;
         lines.add(lineIdx);
       } else if (rungIndent >= 0 && indent > rungIndent) {
