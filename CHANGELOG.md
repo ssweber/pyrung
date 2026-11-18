@@ -74,7 +74,7 @@ CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes 
   Cut the lines you don't want from the transcript before you replay it.
 - The console's `replay` reads a relative path from the program's folder (it read it from the debugger's working folder).
   Give an absolute path to replay a file from somewhere else.
-- `program.dataview().upstream()` of a tag written in a subroutine includes the conditions of the rungs that call the subroutine, and stops there. `downstream()` of a tag in a call rung's condition includes the tags that the subroutine, or a subroutine it calls, writes. Both used to stop at the call, and so did the VS Code graph panel.
+- `program.dataview().upstream()` of a tag written in a subroutine includes the conditions of the rungs that call the subroutine, and stops there. `downstream()` of a tag in a call rung's condition includes the tags that the subroutine, or a subroutine it calls, writes. Both used to stop at the call.
   Update any test that expects the old slice.
 - `load_check_config()` raises `ValueError` if `[tool.pyrung.check]` names a rule that pyrung does not know. The message names the file and the rule (it loaded the name, and `pyrung check` raised later).
   Fix or remove the rule name.

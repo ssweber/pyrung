@@ -41,9 +41,11 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
 
 ## 1. The deletions release
 
-Plan items 3 (public surface) and 6 (search removal). All [nothing]. The record machinery (plan item 1.1) is gone.
+Plan items 3 (public surface) and 6 (search removal) ship in 0.17.0. All [nothing]. The record machinery (plan item
+1.1) is gone. The public surface and the `Rung` -> `rung` rename landed in #94, #95 and #96, and `Rung` is no longer
+a public name. The static facts below are what is left of this step.
 ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `candidates`, `accept`, `deny`,
-`suppress` and `spec` left it.
+`suppress` and `spec` left it. ClickNick's test of its named imports is ClickNick's work.
 
 ### 1b. The static facts
 
@@ -180,22 +182,6 @@ gives one question one owner. All [nothing].
 10. **What each stage of a search does.** `_search_events` (pilot.py:580-1775) does all of them in 1,196 lines,
     nested 8 deep. Split it into its stages. No order set.
 
-### 1c. The public surface
-
-Plan item 3. `pyrung`, `pyrung.click` and `pyrung.circuitpy` are public. The few names users need move to the top
-level, and validation gets one public module. ClickNick's test of its named imports is ClickNick's work.
-Sam decided on 2026-11-17 that 1c and then 1d are pyrung's next work, now that the recording branches are in main.
-The deletions release follows them, on Sam's tag.
-
-### 1d. Then the `Rung` -> `rung` rename in tests
-
-- 9,536 lines in 399 test files, plus 70 lines in 19 src files. `rung` is already exported (_rung.py:204), and the
-  docs use only `rung`.
-- It gets its own squash commit straight after 1c, before new branches start, because it conflicts with every open
-  branch.
-- Add `.git-blame-ignore-revs` with that commit, and a check in `devtools/semantic_lint.py` that refuses a new
-  `with Rung(` in tests.
-
 ## 2. CLICK-match fixes
 
 The 2026-11-10 readings shipped in 0.16.0. The conformance page lists two known differences: 64-bit Reals (step 5)
@@ -213,7 +199,10 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
     after XD8 and YD8 in `readings.toml`. clicknick read the same requests by hand (`jobs/plc-answers/NOTES.md`), and
     bob/plc-modbus made both Modbus servers match them.
   - `flag_boxes/ton_ctu_by_pointer` (part follow_flags) can't tell whether a TON or a CTU clears an SC44 raised
-    through pointer -1. It needs another way to raise and hold SC44.
+    through pointer -1. It needs another way to raise and hold SC44. clicknick has nothing on file, and its runner
+    cannot read a runtime flag (clicknick, 2026-11-18). So a pyrung session writes a new conformance case first
+    [nothing]. The case's ladder keeps SC44 raised on every scan, for example with a pointer copy that faults on
+    each scan, and puts a TON or a CTU box alone after it. The case then runs on a CLICK in this round.
   - Re-run parts drum1, drum2, follow_timing, follow_extra and text_flasher to confirm their rewritten readings.
   - Re-paste and re-run the `to_text()` cases in parts copy, math, system and follow_extra. Their export now
     writes only the flag the source has, which changed their hashes.
@@ -228,6 +217,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
 - **`math()` of a Real into a Word.** pyrung runs it, but a CLICK refuses it. The CLICK check reports
   `CLK_MATH_MODE_MIXED`. Decide whether pyrung runs it or refuses it. [nothing]
 - **CLICK v4 send/receive forms** (laddercodec's asks, ruled for after 0.16.0). [CLICK]
+  - The form questions go into laddercodec's Send and Receive grids, not into a list here. clicknick's runner
+    drives Receive with `try`, and Send is being added (clicknick, 2026-11-18). clicknick runs the forms on Sam's go.
   - What a CLICK does when the DS register of a `device_id` holds an ID out of range, at request time, needs a probe
     [PLC]. pyrung passes the value on as it is.
 
@@ -390,8 +381,8 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
      - The joint release waits for two things. This branch must pass pyrung's existing validation tests against
        laddercodec's `main`. Sam must also review, from a user's view, the kebab-case `.code` that laddercodec gives
        each refusal. Nothing else is waited for.
-     - Open the branch after 1c and 1d. 1c moves modules and 1d renames `Rung`, and both conflict with every open
-       branch. The plan says 1c lands before this branch opens.
+     - The plan said the public surface lands before this branch opens. It and the `Rung` rename landed in #94, #95
+       and #96, so the branch can open.
      - The branch needs a git source for laddercodec in `pyproject.toml`. Check that `make install`, mergeq and CI
        accept it.
      - Each case where pyrung becomes more permissive is logged in `pyrung-wt/buildbot/jobs/lc-diff/PERMISSIVE.md`.
@@ -412,8 +403,13 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
   finding. laddercodec has the marker on its `main`, unreleased. pyrung runs it after the joint release (plan, "In
   laddercodec"). [nothing]
 
-- **A TXT initial value with edge spaces.** pyclickplc 0.8.0 loads `  a ` as written, where pyrung's last
-  release loaded `a`. Whether CLICK keeps the edge spaces is unconfirmed. [CLICK]
+- **A TXT initial value with edge spaces.** clicknick imported nickname files into CLICK and read the result
+  (`clicknick-wt/buildbot/jobs/csv-import/RESULTS.md:102-106`). CLICK keeps a quoted value as written, so `" a "`
+  stays ` a `. CLICK trims the whitespace (space, tab, VT and FF) at both ends of a bare value, so ` a` becomes `a`,
+  and a bare space is stored as no value. [nothing]
+  - The pyrung work is for `TagMap.from_nickname_file()` to keep a quoted value and trim a bare one, as CLICK does.
+  - pyclickplc 0.9.1's `read_csv` keeps a Text initial value as written, and its result does not say whether the
+    cell was quoted. So the reader must get the quoting from pyclickplc, or read the raw cell itself.
 
 ## Small fixes
 
@@ -433,10 +429,9 @@ All [nothing] unless marked.
       pyrung writes it as 1 CSV row.
   - The height check should take each box's height from that list, or ask laddercodec for it.
   - `estimate_steps` in `src/pyrung/click/ladder/steps.py` estimates program steps and counts no rows.
-  - Moving the export to laddercodec does not close this. At laddercodec 2eaf985, `encode()` refuses a rung of more
-    than 32 rows, and `lay_out()` refuses a circuit that needs more. `csv_rows()`, `write_csv()` and
-    `write_bundle()` check no row count. laddy is adding the check to every one of these (laddercodec branch
-    `fix/rung-height`, 2026-11-18). Until it merges, pyrung's own check is the only guard.
+  - laddercodec's main refuses a rung of more than 32 rows in `read_csv`, `write_csv`, `read_bundle`, `csv_rows`
+    and `write_bundle`, and its `check()` reports `layout-too-tall` (laddercodec 12a42d9, #120). pyrung's export
+    does not go through laddercodec yet. Until it does, `_assert_rung_height` is pyrung's only guard.
 - **The graph panel's slice ignores the call-site rule.** Sam's coordinating session ruled on 2026-11-18, under Sam's
   rule that the views should not surprise a user, that the panel should match the console.
   - The panel computes its slice in JS (`computeSliceLocal`, graphPanel.js) over the graph of the active file. So it
@@ -453,6 +448,19 @@ All [nothing] unless marked.
   export. CLICK refuses the pair too. ClickNick's runner checked on its CLICK 4.00 on 2026-11-18, in two runs.
   After "Pump" existed, adding "pump" brought up the same box as adding "Pump" again: "GUI-036 The Program Name
   already exists. Please choose another name."
+- **CLICK import of a Break, Continue or For/Next that CLICK refuses.** CLICK refuses a Break or Continue with no
+  contact (C000B, C000C) or outside a For loop (C010F, C0110). It also refuses For/Next nested more than three deep
+  (C010D). laddercodec's `check()` will report each of these per program, for Main and for each subroutine.
+  - pyrung's DSL refuses all three when the program is built. `break_loop()` and `continue_loop()` raise
+    `RuntimeError` outside a `forloop()` and in a body rung with no contact (`_loop_exit_context` in
+    core/program/instructions.py). A fourth nested `forloop()` raises `RuntimeError` (`ForLoop.__enter__` in
+    core/program/context/_control_flow.py).
+  - CLICK import has no check for them, even with `validate=True`. On 2026-11-18 a release-prep session edited an
+    exported CSV and ran `ladder_to_pyrung()` on it. A Break with no contact, and a Break outside the loop, both
+    imported. The generated code raised when it ran, and both times the message said "break_loop() works only
+    inside a forloop", with no CLICK code.
+  - A pyrung session makes CLICK import report each case with CLICK's code before it writes the code. Once
+    validation runs on laddercodec, import can read the findings of laddercodec's `check()`.
 
 - **`CompiledPLC` leaves out a block slot that no rung uses.** When the program text writes `DS[1]` and no rung
   reads or writes it, `PLC`'s state holds `DS1: 0` and `CompiledPLC`'s state has no `DS1`. The two engines must
