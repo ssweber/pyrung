@@ -200,7 +200,7 @@ def test_sys_dt_reports_scan_period_as_real_seconds():
 
 def test_sys_dt_reflects_fold_dt_override_during_macro_skip():
     # A time fold jumps N scans by setting a single inflated dt for the next
-    # scan; ``sys.dt`` must report that inflated dt so a plant calc rung reading
+    # scan; ``sys.dt`` must report that inflated dt so a plant Math rung reading
     # it (``Fb += rate*dt``) advances by the full N-scan amount for free.
     runner = PLC(logic=[], dt=0.01)
     runner.step()

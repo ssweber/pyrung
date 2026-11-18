@@ -1,4 +1,4 @@
-"""Compiled parity tests for calc instruction."""
+"""Compiled parity tests for Math instruction."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class TestCalcInstruction:
         assert runner.current_state.tags["Result"] == 300
 
     def test_wrapping_semantics(self, runner_factory):
-        """calc wraps on overflow (modular), unlike copy which clamps."""
+        """A Math wraps on overflow (modular), unlike copy which clamps."""
         Enable = Bool("Enable")
         A = Int("A")
         Result = Int("Result")
@@ -181,7 +181,7 @@ class TestCutIntConstants:
         assert cut_int_constants(expr) is expr
         instr = CalcInstruction(expr, Int("Dest"))
         assert instr.source_expression is expr
-        # The calc runs the same formula, its steps doubles; the written one is untouched.
+        # The Math runs the same formula, its steps doubles; the written one is untouched.
         assert repr(instr.expression) == repr(expr)
         assert isinstance(instr.expression, CalcBinaryExpr)
         assert isinstance(instr.expression.left, CalcBinaryExpr)
@@ -227,7 +227,7 @@ class TestCutIntConstants:
 
 
 class TestCalcRangeAggregates:
-    """max/min/median/mean through calc's destination conversion, both backends."""
+    """max/min/median/mean through Math's destination conversion, both backends."""
 
     def _run(self, runner_factory, expression_for, dest, values):
         from pyrung.core import Block, TagType
@@ -271,7 +271,7 @@ class TestCalcRangeAggregates:
         assert result == pytest.approx(expected)
 
     def test_negative_mean_truncates_toward_zero(self, runner_factory):
-        # -7, -2 -> -4.5 -> -4 (calc's integer store truncates toward zero)
+        # -7, -2 -> -4.5 -> -4 (Math's integer store truncates toward zero)
         result = self._run(runner_factory, lambda ds: ds.select(1, 2).mean(), Int("Out"), [-7, -2])
         assert result == -4
 

@@ -88,7 +88,7 @@ class TestKernelDomainDiscovery:
         assert "SelfFeedCounter" not in comparison.comparison_tags
 
     def test_mixed_self_feed_and_overwrite_writers_are_excluded(self):
-        """A self-feeding calc next to an overwrite copy still reads the tag — excluded."""
+        """A self-feeding Math next to an overwrite copy still reads the tag — excluded."""
         from pyrung.core.analysis.pdg import build_program_graph
         from pyrung.core.analysis.prove.absorb import (
             _find_comparison_absorptions,

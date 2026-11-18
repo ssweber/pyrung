@@ -115,7 +115,7 @@ class TestBitEqual:
         assert folded.state.tags == ref.state.tags
 
     def test_a_self_calc_soak_lands_as_stepped(self) -> None:
-        # The soak is a per-scan self-calc, because a counter counts edges, not scans.
+        # The soak is a per-scan self-feeding Math, because a counter counts edges, not scans.
         Soak = Dint("LayeredReceipt")
         SoakDone = Bool("LayeredReceiptDone")
         with Program() as program:
@@ -418,7 +418,7 @@ class TestEdgeCounter:
 def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
     """Build an active-hold soak whose period a read system clock forces wide.
 
-    The soak is a self-calc (``+1``/scan), so it can reach long dwells without the
+    The soak is a self-feeding Math (``+1``/scan), so it can reach long dwells without the
     32 767 timer-accumulator clamp.  ``Blink`` follows ``clock_1s``, whose full period
     is 1 s, or 100 scans at the default dt.
     """

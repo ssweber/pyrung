@@ -4,7 +4,7 @@ The input keeps its literal partition as well. It does not get every value in it
 
 The expression partition gives an input one value for each class that its literal comparisons
 split. Suppose the input is compared with another changing value. That value may be a timer or
-counter accumulator, a calc-stepped Int, another input or an expression. The input's classes
+counter accumulator, a Math-stepped Int, another input or an expression. The input's classes
 are then split at points that no literal names. For example, ``T.Acc == In`` needs ``In`` to
 equal whatever the accumulator holds.
 """

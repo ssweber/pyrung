@@ -14,7 +14,7 @@ Threshold absorption principle
 The concrete value of a threshold is irrelevant to which side of it a
 progress accumulator is on.  The gate for absorption is **exclusivity** (the
 threshold tag is only used in threshold comparisons and as a timer/counter
-preset, never in copy/calc data-flow), not **stability**.
+preset, never in copy/math data-flow), not **stability**.
 
 *Redundant Acc absorption* (``_find_redundant_acc_absorptions``): an
 accumulator compared only at its own preset boundary is the Done bit.
@@ -392,7 +392,7 @@ def _reset_feedback_is_threshold_mediated(
     Two conditions must hold:
 
     1. No path from *seed_tags* to *target_tags* reaches the target through
-       ``data_reads`` (copy/calc of the exact accumulator value).
+       ``data_reads`` (copy/math of the exact accumulator value).
     2. Every writer of every intermediate tag on the dependency path must
        itself transitively depend on a target.  An intermediate tag with an
        independent writer (one that doesn't reach any target) carries state
@@ -995,7 +995,7 @@ def _is_matching_owner_preset_read(instr: Any, threshold_name: str, acc_name: st
 
 
 def _direct_write_target(instr: Any) -> Any:
-    """Return a direct Tag write target for copy/calc-like instructions."""
+    """Return a direct Tag write target for copy/math-like instructions."""
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
     from pyrung.core.tag import Tag

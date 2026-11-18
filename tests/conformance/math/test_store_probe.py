@@ -34,7 +34,7 @@ An expectation is what pyrung reads where no CLICK reading backs it.
 - ``rand_tag_bounds`` (probe): two Dint tags holding 7 and 7 as bounds draw 7
   with no flag (Result1 = 7; 0 if equal tags are an error), randint ( df , df )
   + 5 with DF 3.0 reads 5 (Result2: a Real bound reads 0 and the 5 still
-  lands, without a flag), and equal constants zero the whole calc, 0 (Result3)
+  lands, without a flag), and equal constants zero the whole Math, 0 (Result3)
   with SC46 (Result4 = 4).  RAND ( 7 , 7 ) + 5 reading 5 puts the 0 on the
   RAND alone.  On a CLICK equal tags are a math error, 0 with SC46, and
   RAND ( 7 , 7 ) + 5 is 5 with SC46 (Result4 = 5).

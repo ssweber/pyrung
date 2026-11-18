@@ -1,8 +1,8 @@
 """Heuristic steerable values for free numeric words in ``how()`` — the fill gate.
 
 The fill shape: a step register advances through an ``on_delay`` gated on
-``PV < Lower`` where both compare operands are internal calc registers.  ``PV``'s
-writer is a two-tag calc (``Raw - Level``) so the equality chase can't invert it;
+``PV < Lower`` where both compare operands are internal Math registers.  ``PV``'s
+writer is a two-tag Math (``Raw - Level``) so the equality chase can't invert it;
 ``Lower = math(SetPoint - Band)`` where ``Band`` is a steerable Real with **no
 declared domain** — the "free word".  Statically every resolution punts, so
 pre-fix the drive stops without finding the relational boundary for ``Band``.

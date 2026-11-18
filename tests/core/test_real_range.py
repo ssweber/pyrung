@@ -1,7 +1,7 @@
 """A finite REAL never leaves CLICK's range, +/-3.4028235E+38.
 
 pyrung keeps 64-bit precision, a documented deviation from CLICK's float32. A store past
-the range gives +/-Inf, as a CLICK's float32 Math does. In ``calc`` it also sets the
+the range gives +/-Inf, as a CLICK's float32 Math does. In a Math it also sets the
 out-of-range flag (SC43). pyrung refuses a finite user-supplied value past the range. A
 patch or force may be +/-Inf or NaN. The ``runner_factory`` cases run on the interpreter
 and the compiled kernel.

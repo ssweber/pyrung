@@ -664,7 +664,7 @@ def _walk_frame(
 
     A writer that is already on the current path (*lineage*) for the same tag is a
     recurrence, not a new cause. For example, ``math(T + 3, T)`` reads its own previous
-    result, and two calcs that feed each other hand the value back and forth.
+    result, and two Math instructions that feed each other hand the value back and forth.
     The step above already names the value read. Walking on would repeat the
     same explanation once per scan, so the walk stops there.
     """
@@ -1007,7 +1007,7 @@ def _walk_frame(
 
         if sp_tree is None:
             # Unconditional rung — no conditions to attribute.  Phase 1: cross
-            # the writer's data reads (calc/sum/copy operands) so the walk
+            # the writer's data reads (Math/sum/copy operands) so the walk
             # continues from the changed/non-zero operands instead of stopping
             # at the opaque written tag.
             crossed = _cross_opaque_data_reads(
@@ -1173,12 +1173,12 @@ def _walk_frame(
         if not proximate or deep is not None:
             # Conditioned writer with no proximate cause — explained only by
             # held gate conditions (or nothing).  Phase 1: cross the writer's
-            # data reads so a gated calc/sum/copy continues from its changed/
+            # data reads so a gated Math/sum/copy continues from its changed/
             # non-zero operands, folding them into the step alongside the held
             # gate enablers instead of dead-ending at the written tag.
             #
             # Deep walk: the value channel is orthogonal to the guard, so
-            # cross it even when the guard has a proximate trigger — a calc
+            # cross it even when the guard has a proximate trigger — a Math
             # whose gate transitioned the same scan must not hide its
             # operands (the guard trigger explains the *firing*, the data
             # reads explain the *value*).

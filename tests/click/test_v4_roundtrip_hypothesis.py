@@ -160,7 +160,7 @@ def test_v4_programs_behave_the_same_after_export_and_import(spec):
             right.step()
             a, b = dict(left.current_state.tags), dict(right.current_state.tags)
             for name, lo, hi in rands:
-                # A destination is 0 until its rung first runs (calc then holds
+                # A destination is 0 until its rung first runs (a Math then holds
                 # the last draw), so 0 out of bounds means "not run yet".  Once
                 # nonzero it must stay in bounds, and both sides must agree on
                 # whether the rung has run.

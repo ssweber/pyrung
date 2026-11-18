@@ -2,7 +2,7 @@
 
 Tags partition into three roles:
 
-- **Stateful** — latch/reset, timer/counter, copy, calc; values that carry
+- **Stateful** — latch/reset, timer/counter, copy, Math; values that carry
   from scan to scan, which PILOT's world key tracks.
 - **Nondeterministic** — external inputs, which PILOT may set.
 - **Combinational** — OTE-only writes with no cross-scan readers; ignored.
@@ -396,7 +396,7 @@ def _comparison_influencing_tags(
     misclassify the input as constant storage.
 
     Back-propagates from direct comparison participants through *invertible*
-    reverse edges (copy, fill, single-source calc expressions that
+    reverse edges (copy, fill, single-source Math expressions that
     ``_calc_reverse_edge`` can invert).  Multi-source expressions like
     ``DS.select(1, 2).sum()`` are NOT invertible, so genuinely constant block
     slots that only feed such expressions stay pinned to their default.
@@ -757,7 +757,7 @@ def _compute_stepping_tags(
     """Tags with write-site structure that actively cycles through values.
 
     A tag is *stepping* if it has an arithmetic self-write (``math(tag ± N, tag)``),
-    a self-referential calc (``math(f(tag), tag)``), or >=2 distinct literal write
+    a self-referential Math (``math(f(tag), tag)``), or >=2 distinct literal write
     values.  Copy-coupled tags inherit stepping from their source — including a
     ``copy(block[index], tag)`` indirect copy over a *constant* table, which
     couples the destination to the table index (see
@@ -876,7 +876,7 @@ def _domain_for_source_tag(
     # Unwritten internal tags are at their default for fixpoint resolution
     # purposes.  This is broader than the structural seeding (which excludes
     # tags with comparison atoms), but that's fine: this only affects how
-    # copy/fill/calc source values propagate through the fixpoint, not what
+    # copy/fill/math source values propagate through the fixpoint, not what
     # enters known_domains directly.
     if tag_name not in graph.writers_of and not graph.written_from_outside(tag_name):
         return (tag.default,)
@@ -1118,8 +1118,8 @@ def _interval_bounds(
 
     if node.symbol == "%":
         # A modulo is not monotone, so the corners do not bound it.  The result is
-        # smaller than the divisor in size.  A calc's MOD truncates, so the result has
-        # the dividend's sign (0 for a MOD by 0).  Python's % outside calc floors, so
+        # smaller than the divisor in size.  A Math's MOD truncates, so the result has
+        # the dividend's sign (0 for a MOD by 0).  Python's % outside a Math floors, so
         # the result has the divisor's sign.
         size = max(abs(b_lo), abs(b_hi))
         if node.op is operator.mod:
@@ -1130,7 +1130,7 @@ def _interval_bounds(
         corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
     except (ArithmeticError, ValueError):
         return None
-    # A corner can be +Inf or NaN, for example from a calc's 0 ** -1.  An integer stores 0
+    # A corner can be +Inf or NaN, for example from a Math's 0 ** -1.  An integer stores 0
     # for it, and the corners do not bound 0.
     if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in corners):
         return None
@@ -1149,7 +1149,7 @@ def _domain_from_calc_expression(
     mode: str = "decimal",
     non_finite: frozenset[str] = frozenset(),
 ) -> tuple[Any, ...] | None:
-    """Infer a target domain from a supported calc expression shape."""
+    """Infer a target domain from a supported Math expression shape."""
     from pyrung.core.expression import BinaryExpr
 
     direct = _domain_from_copy_like_value(
@@ -1173,7 +1173,7 @@ def _domain_from_calc_expression(
     ):
         modulus = _literal_value_from_value(expression.right)
         if isinstance(modulus, int) and not isinstance(modulus, bool) and 0 < modulus <= 1000:
-            # A calc's MOD truncates, so a dividend that may be negative reaches
+            # A Math's MOD truncates, so a dividend that may be negative reaches
             # -(modulus - 1).  The destination stores that value like any other (a Word
             # holds -1 as 65535).  Python's % floors into 0..modulus - 1.
             dividend = _interval_bounds(
@@ -1211,7 +1211,7 @@ def _domain_from_calc_expression(
     return None
 
 
-#: Operations that keep whole numbers whole (a calc's step past 2 ** 53 is a
+#: Operations that keep whole numbers whole (a Math's step past 2 ** 53 is a
 #: double, but still a whole one).
 _WHOLE_BINARY_SYMBOLS = frozenset({"+", "-", "*", "//", "%", "&", "|", "^", "<<", ">>"})
 _WHOLE_UNARY_SYMBOLS = frozenset({"-", "+", "~", "abs"})
@@ -2070,7 +2070,7 @@ def _backward_propagate_comparison_boundaries(
     from pyrung.core.validation._common import _resolve_tag_names, walk_instructions
 
     # Source -> (target, inverse of the expression, what the target's store is): copy's
-    # store unless a calc wrote it, when the mode names calc's.
+    # store unless a Math wrote it, when the mode names Math's.
     reverse_edges: dict[str, list[tuple[str, _InvertFn, str | None]]] = {}
     covered_pairs: set[tuple[str, str]] = set()
 
@@ -2267,7 +2267,7 @@ def _backward_propagate_comparison_boundaries(
     reverse_soundness_blockers: set[str] = set()
     for instr in walk_instructions(program):
         if carried_back and isinstance(instr, CalcInstruction):
-            # Whatever shape it is in, a calc no edge covers has no way back from its target.
+            # Whatever shape it is in, a Math no edge covers has no way back from its target.
             dest_names = _resolve_tag_names(instr.dest) or _expand_indirect_tag_names(instr.dest)
             for source_name in sorted(carried_back & _extract_tag_names(instr.expression, {})):
                 for target_name in dest_names:

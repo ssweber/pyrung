@@ -1,7 +1,7 @@
 """Numerical handling: the ``numeric`` group (subroutine ``Conf_Numeric``).
 
 Wrap and clamp at each integer width, what Math does with a Real, division by
-zero, calc mode (decimal or hex), and how wide Math's intermediates are.  The
+zero, Math mode (decimal or hex), and how wide Math's intermediates are.  The
 cases stage operands in raw registers the group owns (``memory.OWNED``):
 DD101..DD200, DF101..DF200 and DH201..DH300, ten per case.  Each case's
 ``init`` fills them back to zero.

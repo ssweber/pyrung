@@ -375,7 +375,7 @@ def walk_rung_operands(
     body rung conditions.  An operand is a ``Tag``, a pointer (``IndirectRef``,
     ``IndirectExprRef``), or a range (``BlockRange``, ``IndirectBlockRange``).  The walk
     visits a pointer's or an indirect range's own operands after it, and leaves a static
-    range to *visit*.  A calc's ``source_expression`` is no declared field.  What it
+    range to *visit*.  A Math's ``source_expression`` is no declared field.  What it
     names runs only where something else runs it.
 
     *on_instruction*, when given, is called on each instruction the walk enters, a

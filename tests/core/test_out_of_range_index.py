@@ -1,7 +1,7 @@
 """A block element indexed outside its block (``Tbl[P]``, ``Tbl[Q // Z]``).
 
 In a rung condition such an element reads as 0 (the type's zero).  It sets no fault
-flag, and the scan carries on.  Any other expression outside ``calc`` follows the same
+flag, and the scan carries on.  Any other expression outside a Math follows the same
 rule.  ``copy()`` and ``math()`` read a source past its block as 0 with no flag.  If the
 source is below the block, they set ``fault.address_error`` and write nothing.  Every
 form must behave the same in the interpreted runtime, the compiled kernel (legacy and
@@ -413,8 +413,8 @@ def test_copy_and_calc_source_outside_its_block(engine: str, monkeypatch) -> Non
 
     # Past the block, the source reads as the type's zero and sets no flag.  Below the
     # block, nothing is written and the flag is set.  In range, the element is read.
-    # A division by zero in calc's own index is calc's division error, as any
-    # division in calc is.  The division gives 0 with its flag, and that index of 0
+    # A division by zero in a Math's own index is a Math's division error, as any
+    # division in a Math is.  The division gives 0 with its flag, and that index of 0
     # is below the block.
     assert {name: actual[name] for name in tags if name.startswith("D_")} == {
         "D_copy_past": 0,

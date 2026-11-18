@@ -929,8 +929,8 @@ class Real(_TagTypeBase):
     pyrung keeps a REAL at Python's 64-bit precision, but a CLICK REAL is a
     32-bit IEEE 754 float. ``16777216.0 + 1`` reads 16777217 in pyrung and
     16777216 on a CLICK. The range is CLICK's float32 range, so a finite value
-    never leaves +/-3.4028235E+38. A ``calc`` or ``copy`` result past that range
-    is +/-Inf, as a CLICK stores it (``calc`` also sets
+    never leaves +/-3.4028235E+38. A Math or ``copy`` result past that range
+    is +/-Inf, as a CLICK stores it (``math()`` also sets
     ``system.fault.out_of_range``). A default or literal must be finite and in
     range. A patch or force may be +/-Inf or NaN, but never a finite value past
     the range.

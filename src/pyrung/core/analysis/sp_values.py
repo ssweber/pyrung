@@ -608,7 +608,7 @@ def _derive_one_hop(
     pdg: ProgramGraph,
     program: Any,
 ) -> dict[str, Any]:
-    """Partial-eval one hop: recompute calc tags that depend on the overlay.
+    """Partial-eval one hop: recompute Math tags that depend on the overlay.
 
     A writer guard may read a tag (``valstepisodd``) *derived* from a tag we
     are projecting (``CurStep``).  Recompute those derived values from the

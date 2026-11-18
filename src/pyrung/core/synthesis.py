@@ -221,7 +221,7 @@ def analog_approach_rung(
 ) -> list[Rung]:
     """Lower a first-order analog coupling (``approach_to``/``approach_rate``).
 
-    One guarded ``calc`` plant rung — ``fb += rate*(toward - fb)*dt`` while
+    One guarded ``math()`` plant rung — ``fb += rate*(toward - fb)*dt`` while
     energized, holding on enable fall::
 
         Rung(enable): math(fb + rate*(toward - fb)*dt, fb)

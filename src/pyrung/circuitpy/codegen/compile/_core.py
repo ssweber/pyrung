@@ -291,7 +291,7 @@ def compile_expression(
 ) -> str:
     """Return a Python expression string with explicit parentheses.
 
-    Pass *strict* for a calc expression, which raises on a math error.  Everywhere
+    Pass *strict* for a Math expression, which raises on a math error.  Everywhere
     else, an operation that can raise returns 0 instead.
     """
     return _compile_expression_impl(expr, ctx, strict=strict)

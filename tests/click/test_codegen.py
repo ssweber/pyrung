@@ -1833,7 +1833,7 @@ class TestRoundTrip:
         )
 
     def test_calc(self):
-        """Calc instruction."""
+        """Math instruction."""
         _assert_codegen_body(
             """
             with Program() as p:
@@ -1847,7 +1847,7 @@ class TestRoundTrip:
         )
 
     def test_calc_decimal_operators(self):
-        """Calc with power, modulo, and math functions (decimal-mode) round-trips."""
+        """Math with power, modulo, and math functions (decimal-mode) round-trips."""
         _assert_codegen_body(
             """
             from pyrung.core.expression import sqrt
@@ -1871,7 +1871,7 @@ class TestRoundTrip:
         )
 
     def test_calc_hex_shift_operators(self):
-        """Calc with LSH/RSH (hex-mode) round-trips."""
+        """Math with LSH/RSH (hex-mode) round-trips."""
         _assert_codegen_body(
             """
             from pyrung.core.expression import lsh
@@ -1890,7 +1890,7 @@ class TestRoundTrip:
         )
 
     def test_calc_bitwise_codegen(self):
-        """Calc with AND/OR/XOR round-trips through Click-native operators."""
+        """Math with AND/OR/XOR round-trips through Click-native operators."""
         _assert_codegen_body(
             """
             with rung(X1):
@@ -1947,7 +1947,7 @@ class TestRoundTrip:
         exec_with_source(code, ns)
 
     def test_click_hex_literal_in_calc(self, tmp_path: Path):
-        """Click hex literal in a calc expression becomes ``0x`` in Python."""
+        """Click hex literal in a Math expression becomes ``0x`` in Python."""
         csv_path = tmp_path / "test.csv"
         header = [
             "marker",
@@ -2024,7 +2024,7 @@ class TestRoundTrip:
         exec_with_source(code, ns)
 
     def test_calc_sum_codegen(self):
-        """Calc with SUM(range) round-trips through colon-range syntax."""
+        """Math with SUM(range) round-trips through colon-range syntax."""
         _assert_codegen_body(
             """
             with Program() as p:

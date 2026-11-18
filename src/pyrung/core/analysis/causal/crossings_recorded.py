@@ -1,7 +1,7 @@
 """Recorded read-diff — the mechanical, semantics-free reverse (Crossings Phase 1).
 
 Given a writer that recorded ``cause()`` cannot cross — a non-Boolean writer
-(``calc``/``sum``/``copy``/``pack``) whose data reads never appear as SP-tree
+(``math()``/``sum``/``copy``/``pack``) whose data reads never appear as SP-tree
 contacts, so the backward walk dead-ends at the written tag — observe *which of
 its static read footprint changed* between scan N-1 and N, and which reads are
 non-zero at N.  No sign reasoning and no inversion: the operand values are

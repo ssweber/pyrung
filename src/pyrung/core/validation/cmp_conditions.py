@@ -56,7 +56,7 @@ expression-tree ``ExprCompare``:
 or inline computed expression; "static" is a literal, an ``S.`` constant, or any
 never-written tag (an external sensor and an HMI setpoint both land here — the rule
 does not classify measurement vs threshold, it grades the finding by confidence).
-Calc-derived provenance is recovered via shared affine analysis and sharpens the
+Math-derived provenance is recovered via shared affine analysis and sharpens the
 message without changing the verdict.
 """
 
@@ -458,10 +458,10 @@ def _written_names(graph: ProgramGraph) -> set[str]:
 
 
 def _calc_derived_names(program: Program) -> set[str]:
-    """Tag names that are the product of a calculation (calc expr or affine transform).
+    """Tag names that are the product of a calculation (Math expr or affine transform).
 
     Reuses shared affine analysis so an identity ``copy`` is
-    excluded while a ``dest = src ± k`` / calc expression is admitted.
+    excluded while a ``dest = src ± k`` / Math expression is admitted.
     """
     from pyrung.core.instruction.calc import CalcInstruction
 

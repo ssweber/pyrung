@@ -110,7 +110,7 @@ def _solve_calc_assignments(
     allow_free_sources: bool,
     require_complete_domains: bool,
 ) -> _CalcSolutions | None:
-    """Model, enumerate, and evaluate one finite ``calc`` preimage."""
+    """Model, enumerate, and evaluate one finite ``math()`` preimage."""
 
     fixed = dict(fixed or {})
     domains = domains or {}
@@ -253,7 +253,7 @@ def solve_calc_preimage(
 
     The value-side sibling of :func:`solve_table_predicate`: where that solver
     inverts a boolean *predicate* over constant-table operands, this one inverts
-    a whole ``calc`` *expression* — ``A * B``, ``A & mask``, ``(A << 2) | B`` —
+    a whole ``math()`` *expression* — ``A * B``, ``A & mask``, ``(A << 2) | B`` —
     whose registered reverse cannot invert symbolically. Nothing here is
     guessed: it is exact enumerate-and-evaluate
     over *complete finite* domains, punting on anything softer.
@@ -356,13 +356,13 @@ def guard_verdict(
     - :data:`GUARD_SAT` — a concrete satisfying assignment exists (or the
       fully-pinned guard is definitely ``True``).
     - :data:`GUARD_PUNT` — undecidable (a ``None`` term — ``rise``/``fall``, a
-      stale calc-result), or a free tag has no known finite domain, or an atom
+      stale Math-result), or a free tag has no known finite domain, or an atom
       reads a tag it cannot name (a pointer element), or the enumeration
       guardrails are exceeded.  Never a rejection, but distinct from
       ``SAT`` so the caller can flag a frontier gated by a genuinely-unreadable
       guard (the skiff's escalation signal).
 
-    ``fixed`` pins what the writer *forces* — its copy/calc source and any
+    ``fixed`` pins what the writer *forces* — its copy/math source and any
     context. Every free tag must pass :func:`_is_complete_domain` before
     enumeration: a Bool supplies ``(False, True)`` and ``domains`` carries
     prover-owned complete domains. Missing completeness returns
@@ -502,7 +502,7 @@ def table_from_indirect_src(
 ) -> _TableOperand | None:
     """Model an ``IndirectRef``/``IndirectExprRef`` copy source as a
     :class:`_TableOperand`: the index register plus an ``address(index)``
-    evaluator, hopping through calc-defined scratch pointers (``math(X+200, idx)``).
+    evaluator, hopping through Math-defined scratch pointers (``math(X+200, idx)``).
 
     Shared by :func:`_model_table_operand` (the tide tables' predicate solver) and
     ``trace._invert_indirect`` (the single-table value-jump inverter): the two are
@@ -578,7 +578,7 @@ def table_from_indirect_src(
 
 
 def _constant_calc_env(expr: Any, source_tag: str, pdg: ProgramGraph) -> dict[str, Any]:
-    """Declared defaults for immutable constants beside one mutable calc source."""
+    """Declared defaults for immutable constants beside one mutable Math source."""
 
     from pyrung.core.analysis.sp_values import _expr_tag_names
 

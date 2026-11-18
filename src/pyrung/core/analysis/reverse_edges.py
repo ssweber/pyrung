@@ -50,7 +50,7 @@ def literal_value_from_value(value: Any) -> Any | None:
 def calc_reverse_edge(
     expression: Any,
 ) -> tuple[str, InvertFn] | None:
-    """Extract ``(source_tag_name, invert_fn)`` from a calc expression.
+    """Extract ``(source_tag_name, invert_fn)`` from a Math expression.
 
     Returns the inverse transform for single-source-tag expressions of the
     form ``source ± literal``, ``literal ± source``, ``source * literal``,
@@ -121,7 +121,7 @@ def build_reverse_edge_map(
 ) -> dict[str, list[tuple[str, InvertFn]]]:
     """Build a map from source tags to ``(target_tag, invert_fn)`` pairs.
 
-    Walks all Copy, Fill, BlockCopy, and Calc instructions.  For each,
+    Walks all Copy, Fill, BlockCopy, and Math instructions.  For each,
     extracts the source→target relationship and the inverse transform that
     maps a target value back to its source value.
 

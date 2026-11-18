@@ -52,7 +52,7 @@ def _leaf_pairs(node: TraceNode) -> set[tuple[str, object]]:
 
 # --- Test 1: a guard that contradicts the writer's own fire pin ---------------
 #
-# ``math(Cmd + 5, State)`` producing ``State == 7`` forces ``Cmd == 2`` (the calc
+# ``math(Cmd + 5, State)`` producing ``State == 7`` forces ``Cmd == 2`` (the Math
 # fire pin), while the same rung is gated ``Cmd == 1``.  The two can never hold at
 # once, so the writer is provably dead. The selected writer's reverse receipt
 # carries that fire pin to the oracle, which skips the impossible writer.
@@ -71,7 +71,7 @@ def _calc_contradiction_program():
 
 
 def test_calc_fire_pin_contradiction_verdict_is_dead():
-    """The oracle reports the calc-gated writer's guard provably unsatisfiable."""
+    """The oracle reports the Math-gated writer's guard provably unsatisfiable."""
     logic = _calc_contradiction_program()
     pdg = build_program_graph(logic)
     steer = _steer(logic)
@@ -87,12 +87,12 @@ def test_calc_fire_pin_contradiction_verdict_is_dead():
 
 
 def test_calc_fire_pin_contradiction_writer_skipped():
-    """Trace skips the dead calc writer and picks the viable copy writer."""
+    """Trace skips the dead Math writer and picks the viable copy writer."""
     logic = _calc_contradiction_program()
     pdg = build_program_graph(logic)
     tree = trace_back("State", 7, {"Cmd": 0, "Go": False, "State": 0}, pdg, logic, _steer(logic))
 
-    assert tree.writer_rung == 1  # the viable copy writer, not the dead calc one
+    assert tree.writer_rung == 1  # the viable copy writer, not the dead Math one
     assert _leaf_pairs(tree) == {("Go", True), ("Cmd", 7)}
 
 

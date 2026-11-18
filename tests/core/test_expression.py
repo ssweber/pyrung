@@ -716,7 +716,7 @@ class TestExpressionEdgeCases:
 
     @pytest.mark.parametrize("symbol", ["/", "//", "%"])
     def test_division_by_zero_outside_calc_is_zero(self, symbol):
-        """Outside calc, an expression returns 0 for a division by zero."""
+        """Outside a Math, an expression returns 0 for a division by zero."""
         DS = Block("DS", TagType.INT, 1, 9)
         expr = {"/": DS[1] / DS[2], "//": DS[1] // DS[2], "%": DS[1] % DS[2]}[symbol]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
@@ -726,7 +726,7 @@ class TestExpressionEdgeCases:
 
     @pytest.mark.parametrize("symbol", ["/", "//", "%"])
     def test_division_by_zero_inside_calc_is_its_term_with_sc40(self, symbol):
-        """Inside calc (CALC_FAULTS), a division by zero is 0 too, and it notes SC40.
+        """Inside a Math (CALC_FAULTS), a division by zero is 0 too, and it notes SC40.
 
         The rest of the formula runs. A raw ``%`` by 0 counts as such a division. A raw ``%``
         is one that calc_form leaves, as in a pointer or a randint() bound.
@@ -744,7 +744,7 @@ class TestExpressionEdgeCases:
         assert faults == ["fault.division_error"]
 
     def test_calc_form_swaps_in_clicks_mod_and_power(self):
-        """Make calc run CLICK's MOD and ``**``, while the expression keeps Python's.
+        """Make a Math run CLICK's MOD and ``**``, while the expression keeps Python's.
 
         CLICK's MOD truncates, and MOD by 0 gives 0 with no flag. 0 ** 0 also gives 0 with no
         flag.

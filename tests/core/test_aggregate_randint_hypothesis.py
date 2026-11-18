@@ -3,7 +3,7 @@
 The aggregate tests compare aggregates (``sum``/``max``/``min``/``median``/``mean`` over a
 block range) with exact ``Fraction`` arithmetic. The checks cover three things:
 
-- How each destination type stores the result. The docs say "calc wraps" and
+- How each destination type stores the result. The docs say "math() wraps" and
   "an Int truncates toward zero".
 - The CLICK rule for an even-count integer median, which was recorded on hardware in
   ``tests/conformance/math/test_math.py``.
@@ -67,7 +67,7 @@ def _wrap(value: int, bits: int, signed: bool) -> int:
 
 
 def aggregate(kind: str, values: list, *, integer: bool) -> Fraction:
-    """Return the exact value of an aggregate. Calc stores it per destination."""
+    """Return the exact value of an aggregate. A Math stores it per destination."""
     exact = [Fraction(v) for v in values]
     if kind == "sum":
         return sum(exact, Fraction(0))
@@ -100,7 +100,7 @@ DEST_TYPES = {"int": Int, "dint": Dint, "word": Word, "real": Real}
 
 
 def _dest_names(src: str) -> list[tuple[str, str, tuple[int, int], str]]:
-    """Return (source, kind, range, dest type) for every calc in the aggregate program."""
+    """Return (source, kind, range, dest type) for every Math in the aggregate program."""
     out = []
     for kind in KINDS:
         if src == "bool" and kind != "sum":

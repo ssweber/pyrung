@@ -84,7 +84,7 @@ def _apply_store(value: Any, storage: StoreTransform) -> Any:
     """Apply a forward claim's concrete destination-store transform.
 
     Returns :data:`UNKNOWN` when the descriptor or conversion is not
-    representable.  The numeric behavior mirrors the interpreter's copy/calc
+    representable.  The numeric behavior mirrors the interpreter's copy/math
     stores, including non-finite-to-zero handling and integer coercion before
     clamp/wrap.
     """

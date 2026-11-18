@@ -363,7 +363,7 @@ def range_aggregate_into_compare(pool: TagPool) -> list[RungSpec] | None:
     """Pattern #29b: math(block.select(start, end).max(), Out) + Rung(Out > 0).
 
     These are the non-additive siblings of range_sum_into_compare. Every member stays
-    a read of the calc, with no element-wise sum decomposition.
+    a read of the Math, with no element-wise sum decomposition.
     """
     if pool.int_block is None or not pool.writable_numeric() or not pool.writable_bool():
         return None
@@ -443,7 +443,7 @@ def indirect_oob_source(pool: TagPool) -> list[RungSpec] | None:
 
 
 def identity_calc(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #32: math(X + 0, Y) + Rung(Y == K) — identity calc keeps X observed."""
+    """Pattern #32: math(X + 0, Y) + Rung(Y == K) — identity Math keeps X observed."""
     writable_nums = pool.writable_numeric()
     all_nums = pool.all_numeric()
     if not writable_nums or not all_nums:
@@ -588,7 +588,7 @@ def ote_inside_conditional_subroutine(
 
 
 def conditional_write_through_intermediate(pool: TagPool) -> list[RungSpec] | None:
-    """Pattern #33: rise(In) latches B, B gates conditional copy into R, R feeds calc into W.
+    """Pattern #33: rise(In) latches B, B gates conditional copy into R, R feeds Math into W.
 
     Creates the observer-elision topology: R is WBR (abstract-elidable), but a
     property like ``R < K`` observes R.  If the concrete elider doesn't thread
@@ -713,7 +713,7 @@ def self_resetting_timer(pool: TagPool) -> list[RungSpec] | None:
 def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
     """Adjacency: copy(lit, A) -> copy(A, B) -> math(B + k, C) + Rung(C >= k).
 
-    A mixed copy+calc chain (>=2 hops) whose tail is read by a comparison.
+    A mixed copy+Math chain (>=2 hops) whose tail is read by a comparison.
     """
     writable_nums = pool.writable_numeric()
     if len(writable_nums) < 3:
@@ -745,7 +745,7 @@ def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
 def chain_tail_preset(pool: TagPool) -> list[RungSpec] | None:
     """Adjacency: copy(lit, A) -> math(A + k, B), then on_delay(T, preset=B).
 
-    The tail of a copy/calc chain is consumed as a timer preset.
+    The tail of a copy/math chain is consumed as a timer preset.
     """
     writable_nums = pool.writable_numeric()
     presets = pool.writable_preset_tags()

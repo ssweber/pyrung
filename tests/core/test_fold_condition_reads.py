@@ -209,7 +209,7 @@ class TestFirstBumpParity:
 
 def _churn_plus_timer_program(preset_ms: int = 100_000) -> Program:
     """A self-incrementing churn tag X (only reader is its own writer rung, the
-    rung writes nothing else, affine self-referential calc) PLUS an unrelated
+    rung writes nothing else, affine self-referential Math) PLUS an unrelated
     timer so the fold has a plateau to fold.
 
     Unprotected, X moves by a constant the scan loop checks: one unconditional

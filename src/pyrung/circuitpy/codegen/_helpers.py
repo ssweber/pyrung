@@ -309,10 +309,10 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return value",
         "",
     ],
-    # A failing operation in a calc's formula is 0, and the rest of the formula still
+    # A failing operation in a Math's formula is 0, and the rest of the formula still
     # runs (core CALC_FAULTS).  The operation appends its flag's code (40 SC40,
-    # 43 SC43, 46 SC46) to the calc's *flags*.  The calc sets those flags after the
-    # formula.  Outside a calc, *flags* is None.
+    # 43 SC43, 46 SC46) to the Math's *flags*.  The Math sets those flags after the
+    # formula.  Outside a Math, *flags* is None.
     "_term_fail": [
         "def _term_fail(flags, code):",
         "    if flags is not None:",
@@ -320,7 +320,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return 0",
         "",
     ],
-    # A calc's pointer address that went through _dbl is -1 when it is +/-Inf or NaN.
+    # A Math's pointer address that went through _dbl is -1 when it is +/-Inf or NaN.
     # Such a value is no address, and -1 is below every block (a block starts at 0 or
     # above).
     "_addr_int": [
@@ -331,7 +331,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "        return -1",
         "",
     ],
-    # A calc's division by a divisor that is not a bare tag gives 0 for a divisor of 0,
+    # A Math's division by a divisor that is not a bare tag gives 0 for a divisor of 0,
     # and sets SC40 (core _op_div).
     "_calc_div": [
         "def _calc_div(a, b, flags):",
@@ -374,7 +374,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return random.randint(min(lo, hi), max(lo, hi))",
         "",
     ],
-    # A calc's MOD (core _op_mod) truncates.  A MOD by 0 is 0 and sets no flag
+    # A Math's MOD (core _op_mod) truncates.  A MOD by 0 is 0 and sets no flag
     # (core QuietMathError).
     "_mod": [
         "def _mod(a, b):",
@@ -384,7 +384,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return -r if a < 0 else r",
         "",
     ],
-    # A calc step past 2 ** 53 becomes the double that a CLICK's Math holds (to_double).
+    # A Math step past 2 ** 53 becomes the double that a CLICK's Math holds (to_double).
     "_dbl": [
         "def _dbl(value):",
         f"    if type(value) is int and not -{1 << 53} <= value <= {1 << 53}:",
@@ -396,7 +396,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # ABS of an Int or Dint tag at the bottom of its range has no value there.  The ABS
-    # is 0, and it sets SC43 in a calc (ABS_OF_TYPE).
+    # is 0, and it sets SC43 in a Math (ABS_OF_TYPE).
     "_abs_int": [
         "def _abs_int(value, floor, flags=None):",
         "    if value == floor:",
@@ -405,8 +405,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # A math function that can fail, as _math_func, gives 0 for a domain error and sets
-    # SC46 in a calc.  It also gives 0 for an integer too large for a float, and sets SC43
-    # in a calc.
+    # SC46 in a Math.  It also gives 0 for an integer too large for a float, and sets SC43
+    # in a Math.
     "_permissive_math": [
         "def _permissive_math(func, value, flags=None):",
         "    try:",
@@ -440,8 +440,8 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "    return result",
         "",
     ],
-    # ** in a calc (core _op_pow_calc): 0 ^ 0 is 0 with no flag.  0 to a negative power
-    # is +Inf.  A complex result is 0, and it sets SC46 in a calc.
+    # ** in a Math (core _op_pow_calc): 0 ^ 0 is 0 with no flag.  0 to a negative power
+    # is +Inf.  A complex result is 0, and it sets SC46 in a Math.
     "_pow_calc": [
         "def _pow_calc(base, exp, flags=None):",
         "    if base == 0 and exp <= 0:",
@@ -452,7 +452,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "        return _term_fail(flags, 46)",
         "",
     ],
-    # An operation that can fail gives 0.  In a calc (*flags*) it also sets its error's
+    # An operation that can fail gives 0.  In a Math (*flags*) it also sets its error's
     # flag (core _permissive).
     "_permissive_op": [
         "def _permissive_op(op, a, b, flags=None):",

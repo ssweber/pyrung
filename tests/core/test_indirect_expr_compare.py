@@ -80,7 +80,7 @@ def _tbl(i: int) -> int:
 
 
 def _build(s_value: int) -> tuple[Program, dict[str, bool], dict[str, Int]]:
-    """Build one rung per (form, operator) that drives its own coil, plus copy/calc reads."""
+    """Build one rung per (form, operator) that drives its own coil, plus copy/math reads."""
     S = Int("S")
     Q = Int("Q")
     R = Int("R")

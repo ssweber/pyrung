@@ -339,7 +339,7 @@ def test_a_kernel_calls_a_function_named_like_what_it_calls(tmp_path, monkeypatc
 
 
 def _stores_two_ways(fn):
-    """Build a program whose generated code clamps a copy, wraps a calc and calls *fn*."""
+    """Build a program whose generated code clamps a copy, wraps a Math and calls *fn*."""
     with Program(strict=False) as program:
         with Rung():
             math(A + 1, A)
