@@ -2543,6 +2543,7 @@ def test_load_snapshot_loads_the_rest_of_a_dump_with_unclear_txt(tmp_path):
         {
             Tag("Level", TagType.INT): ds[1],
             Tag("First", TagType.CHAR): txt[1],
+            Tag("Empty", TagType.CHAR, default="y"): txt[4],
             Tag("Second", TagType.CHAR): txt[12],
             Tag("Unclear", TagType.CHAR, default="z"): txt[13],
         }
@@ -2550,11 +2551,13 @@ def test_load_snapshot_loads_the_rest_of_a_dump_with_unclear_txt(tmp_path):
     dump = tmp_path / "data.csv"
     dump.write_text(_UNCLEAR_TXT_DUMP, encoding="utf-8")
 
+    # skip_default=False keeps an empty TXT, so a skipped address differs from an empty one.
     with pytest.warns(SkippedAddressesWarning) as record:
-        state = mapping.load_snapshot(dump)
+        state = mapping.load_snapshot(dump, skip_default=False)
 
     assert state.tags["Level"] == 42
     assert state.tags["First"] == "A"
+    assert state.tags["Empty"] == ""
     assert state.tags["Second"] == "i"
     assert "Unclear" not in state.tags
     [warning] = record

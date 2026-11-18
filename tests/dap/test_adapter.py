@@ -988,17 +988,18 @@ def test_launch_with_snapshot_loads_the_rest_of_a_dump_with_unclear_txt(
         "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks\n"
         "Level = Tag('Level', TagType.INT)\n"
         "First = Tag('First', TagType.CHAR)\n"
-        "mapping = TagMap({Level: ds[1], First: txt[1]})\n",
+        "Unclear = Tag('Unclear', TagType.CHAR, default='z')\n"
+        "mapping = TagMap({Level: ds[1], First: txt[1], Unclear: txt[13]})\n",
     )
     _write_script(
         tmp_path,
         "run.py",
         "from pyrung.core import PLC, Program, rung, copy\n"
-        "from tags import Level, First, txt\n"
+        "from tags import Level, First, Unclear, txt\n"
         "with Program(strict=False) as prog:\n"
         "    with rung():\n"
         "        copy(txt[12], txt[30])\n"
-        "        copy(txt[13], txt[31])\n"
+        "        copy(Unclear, txt[31])\n"
         "runner = PLC(prog)\n",
     )
     # CLICK writes a TXT comma without quotes. These rows hold a comma and an empty
@@ -1039,8 +1040,8 @@ def test_launch_with_snapshot_loads_the_rest_of_a_dump_with_unclear_txt(
     assert state.tags["Level"] == 42
     assert state.tags["First"] == "A"
     assert state.tags["TXT12"] == "i"
-    # TXT13 keeps its power-on value.
-    assert state.tags["TXT13"] == "\x00"
+    # The tag on TXT13 keeps its power-on value.
+    assert state.tags["Unclear"] == "z"
 
     adapter._drain_internal_events()
     outputs = [event["body"] for event in _events(_drain_messages(out_stream), "output")]
