@@ -112,7 +112,7 @@ CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes 
   `allow=` does not lift it. Start the copy low enough to fit the constant.
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
   Look a point up by its new name, or by its tag such as `system.fault.plc_error`. A nickname file row with the old name loads and is ignored.
-- `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type). It also raises `ValueError` for two nicknames that differ only in letter case, because CLICK reads them as one name, and for a row that repeats an SC or SD nickname.
+- `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type). It also raises `ValueError` for two nicknames that differ only in letter case, because CLICK reads them as one name. A row that repeats an SC or SD nickname raises it too.
   Fix the row, or leave its Data Type blank. Rename one of the two nicknames.
 
 ### Fixes
