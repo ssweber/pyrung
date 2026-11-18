@@ -145,6 +145,7 @@
 - Generated CircuitPython code runs a `pack_text()` into a `Word` (it stopped with an error).
 - A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
 - `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
+- `how()` numbers rungs from 1 in its route and producer text, the way `cause()` does, and writes a subroutine rung as `MySub:3`. It counted from 0, and a subroutine rung showed a number that was not its place in the subroutine.
 
 ## v0.16.0 (2026-11-14)
 

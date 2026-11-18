@@ -417,21 +417,6 @@ All [nothing] unless marked.
   laddercodec's `write_bundle()` refuses the pair. pyrung should report the pair as a validation finding before the
   export. Whether CLICK treats subroutine names without case is unread. [CLICK]
 
-- **Two how() labels print a rung number that does not count from 1.** `pilot/trace_routes.py:558`
-  (`_writer_label`) prints an index into `pdg.rung_nodes` as "rung N". `pilot/options.py:914` (`program_note`) prints
-  `producer.rung_index` with no +1. The rung labels from `query._rung_label` count from 1, as `restart.py` shows.
-  Whoever next works on the how() trace text resolves the node to its rung and prints it with `_rung_label`. The
-  label then reads `Sub:N` for a subroutine rung, not `{scope} rung N`.
-- **Two drum cases flake on the local soft PLC.** `drum/pins_read_before_step_fix` and its tee twin sometimes
-  read Result4 = 3, depending on scan speed. `drum_idle` reads Result2 = 1022 when the soft PLC scans fast. Each
-  fails the same way when run as a part and when run as a pick (bob/main-runner found them). A case must not depend on how fast
-  the host scans, so each needs to step on its own Acc or Done.
-- **Two dap tests read the wall clock and fail under load.**
-  `tests/dap/test_tag_changes_long_run.py::test_loading_a_window_reaches_the_stepped_entries` failed on a loaded
-  machine twice on 2026-11-17, and passes alone. Its handler stops at a `history_seek` deadline.
-  `tests/dap/test_live.py::TestListSessions` fails when two workers write the same port file
-  (`%TEMP%/pyrung/pyrung-logic.port` in the failing run). Neither may depend on
-  machine speed or on another worker.
 - **`CompiledPLC` leaves out a block slot that no rung uses.** When the program text writes `DS[1]` and no rung
   reads or writes it, `PLC`'s state holds `DS1: 0` and `CompiledPLC`'s state has no `DS1`. The two engines must
   hold the same tags, so `CompiledPLC` should carry the slot. The fuzz suite found it

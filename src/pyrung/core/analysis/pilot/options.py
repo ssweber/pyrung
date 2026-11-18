@@ -67,6 +67,7 @@ from pyrung.core.analysis.pilot.wait_options import (
     _expectation_from_route_writer,
     _prescribe_wait,
 )
+from pyrung.core.analysis.query import _rung_label
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.instruction.advance import constraint_holds
 
@@ -911,7 +912,7 @@ def _assemble_candidate_read(
             bearing_boundary=(program_heading.boundary if program_heading is not None else None),
             route_context=route_context,
             program_note=(
-                f"exact program producer rung {program_step.producer.rung_index} "
+                f"exact program producer rung {_producer_label(ctx.pdg, program_step.producer)} "
                 f"currently needs {pair[0]}={pair[1]!r}"
                 if pair in program_pairs and program_step is not None
                 else ""
@@ -1099,6 +1100,11 @@ def _assemble_candidate_read(
         diagnosis=diagnosis,
         widening_expectations=tuple(widening_expectations),
     )
+
+
+def _producer_label(pdg: Any, producer: Any) -> str:
+    node = pdg.rung_nodes[producer.rung_index]
+    return _rung_label(node.subroutine, node.rung_index)
 
 
 def _build_candidates(
