@@ -386,8 +386,13 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 - **laddercodec as a dependency, in three steps.** They follow the plan's order (Sam, 2026-11-16). Before them, a
   dev-only diff on bob/lc-diff lists where pyrung's export and rules disagree with laddercodec's. [nothing]
-  1. Validation on laddercodec (plan item 2, step 2). It waits for laddercodec's release with `FieldError`. laddercodec
-     becomes a runtime dependency here.
+  1. Validation on laddercodec (plan item 2, step 2). laddercodec becomes a runtime dependency here. No laddercodec
+     release comes first. The work lives on one branch that builds against laddercodec's `main`, and that branch stays
+     open until the joint release (plan, "The joint release", Sam 2026-11-17). The joint release closes when this
+     branch passes its agreement tests and Sam has reviewed laddercodec's code names.
+     - Open the branch after 1d, because the rename conflicts with every open branch.
+     - The branch needs a git source for laddercodec in `pyproject.toml`. Check that `make install`, mergeq and CI
+       accept it.
      - Each case where pyrung becomes more permissive is logged in `pyrung-wt/buildbot/jobs/lc-diff/PERMISSIVE.md`.
        laddercodec's CLICK checks test each one against CLICK before the PR merges (Sam, 2026-11-17).
   2. Export through laddercodec (plan step 5). laddercodec's main has `csv_rows()`, a public `CSV_HEADER`, and
@@ -403,7 +408,7 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
     copy-pointer-text). laddercodec's `Copy._is_df` matches only a literal `DF<n>`.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
-  finding. It waits on laddercodec's release. [nothing]
+  finding. It needs the marker on laddercodec's `main`, not a release, and it goes on the validation branch. [nothing]
 
 - **A TXT initial value with edge spaces.** pyclickplc 0.8.0 loads `  a ` as written, where pyrung's last
   release loaded `a`. Whether CLICK keeps the edge spaces is unconfirmed. [CLICK]
