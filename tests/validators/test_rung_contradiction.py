@@ -19,7 +19,7 @@ Two independent defects, one rung — a double De Morgan's slip:
 
 The bench itself is repaired (task #6); this file preserves the buggy pattern as
 the should-fail fixture and pins what the new rules must report.  The
-``validate()``-facing assertions are ``xfail(strict=True)`` until the rules land
+``check()``-facing assertions are ``xfail(strict=True)`` until the rules land
 — when they do, the XPASS forces the marker off.
 """
 
@@ -35,7 +35,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
 )
 from pyrung.core.validation._common import _conjunction_satisfiable
-from pyrung.core.validation.report import validate
+from pyrung.core.validation.report import check
 from pyrung.core.validation.sat import (
     conjunction_satisfiable,
     disjunction_tautological,
@@ -94,12 +94,12 @@ class TestFixtureReproducesBug:
 
 class TestRungContradiction:
     def test_contradiction_reported(self):
-        report = validate(_buggy_guard_program(), select={"RUNG"})
+        report = check(_buggy_guard_program(), select={"RUNG"})
         codes = {f.code for f in report}
         assert "RUNG_CONTRADICTION" in codes
 
     def test_finding_names_blocking_pair(self):
-        report = validate(_buggy_guard_program(), select={"RUNG"})
+        report = check(_buggy_guard_program(), select={"RUNG"})
         contradiction = next(f for f in report if f.code == "RUNG_CONTRADICTION")
         # The diagnostic must surface the contradictory pair by name/value.
         assert "UnitModeCmd" in contradiction.message
@@ -109,12 +109,12 @@ class TestRungContradiction:
 
 class TestRungTautology:
     def test_tautology_reported_on_or_term(self):
-        report = validate(_buggy_guard_program(), select={"RUNG"})
+        report = check(_buggy_guard_program(), select={"RUNG"})
         codes = {f.code for f in report}
         assert "RUNG_TAUTOLOGY" in codes
 
     def test_tautology_reports_residual(self):
-        report = validate(_buggy_guard_program(), select={"RUNG"})
+        report = check(_buggy_guard_program(), select={"RUNG"})
         tautology = next(f for f in report if f.code == "RUNG_TAUTOLOGY")
         # Half the value is showing the real gate: the residual after the
         # always-true Or term is stripped out.
@@ -124,7 +124,7 @@ class TestRungTautology:
 class TestSatReduction:
     """Proof-of-concept for the sat.py primitives (spec/plan §4).  The De Morgan
     reduction detects the tautological Or-subterm on the real fixture *before* the
-    RUNG_TAUTOLOGY rule is wired into validate() — the validate()-facing xfails
+    RUNG_TAUTOLOGY rule is wired into check() — the check()-facing xfails
     above stay red until that wiring lands (task #7/#9)."""
 
     def test_buggy_or_term_is_tautological(self):

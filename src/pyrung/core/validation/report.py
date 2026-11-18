@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
     from pyrung.core.validation.display import FindingDisplay
 
-__all__ = ["ALL_RULES", "Finding", "ValidationReport", "check", "validate"]
+__all__ = ["ALL_RULES", "Finding", "ValidationReport", "check"]
 
 
 class Finding(Protocol):
@@ -130,25 +130,13 @@ def check(
     return ValidationReport(findings=tuple(findings), checked_rules=active)
 
 
-def validate(
-    program: Program,
-    *,
-    select: set[str] | None = None,
-    ignore: set[str] | None = None,
-    extend_select: set[str] | None = None,
-    dt: float = 0.010,
-) -> ValidationReport:
-    """Compatibility alias for :func:`check`."""
-    return check(program, select=select, ignore=ignore, extend_select=extend_select, dt=dt)
-
-
 def _validator_dispatch(
     program: Program, dt: float
 ) -> dict[str, Callable[[], tuple[Finding, ...]]]:
     """Map each validator key to a thunk returning that pass's findings.
 
-    Imports are local so importing this module never eagerly loads the validator
-    modules — matching the historical import profile of :func:`validate`.
+    The imports are local so that importing this module does not load the validator
+    modules.
     """
     from pyrung.core.validation.call_graph import validate_call_graph
     from pyrung.core.validation.choices_violation import validate_choices

@@ -1,14 +1,12 @@
 """Central rule registry: the single source of truth for validator metadata.
 
-Each rule has a :class:`RuleSpec` carrying its category, default severity, the
-validator that emits it, and (post-rename) any deprecated code aliases.  The
-registry replaces the hand-maintained if-ladder in :func:`report.validate`:
-``validate`` resolves the requested codes/categories against :data:`RULES`,
-runs only the validators that can emit an active code, and filters.
+Each rule has a :class:`RuleSpec` carrying its category, default severity and the
+validator that emits it. :func:`report.check` resolves the requested codes and
+categories against :data:`RULES`, runs only the validators that can emit an
+active code, and filters their findings.
 
-This module is deliberately import-light — it pulls in nothing but the
-``severity`` vocabulary — so importing it never eagerly loads the validator
-modules (that stays lazy inside :func:`report.validate`).
+This module imports nothing but the ``severity`` vocabulary, so that importing it
+does not load the validator modules. :func:`report.check` loads them when it runs.
 """
 
 from __future__ import annotations

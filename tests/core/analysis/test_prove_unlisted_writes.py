@@ -33,7 +33,7 @@ from pyrung.core.analysis.prove import passes
 from pyrung.core.analysis.prove.classify import collect_produced_value_domains
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.tag import TagType
-from pyrung.core.validation import CMP_OPERAND_NO_WRITER, validate
+from pyrung.core.validation import CMP_OPERAND_NO_WRITER, check
 from pyrung.core.validation.stuck_bits import validate_stuck_bits
 
 WRITE = Bool("Write", external=True)
@@ -129,7 +129,7 @@ def test_check_does_not_call_a_reached_element_unwritten() -> None:
             copy(SOURCE, big[AT])
         with Rung(limit >= big[5]):
             out(Bool("Reached"))
-    findings = validate(prog, select={CMP_OPERAND_NO_WRITER})
+    findings = check(prog, select={CMP_OPERAND_NO_WRITER})
     assert not [f for f in findings if f.code == CMP_OPERAND_NO_WRITER]
 
 

@@ -24,12 +24,12 @@ from pyrung.core.system_points import system
 from pyrung.core.validation import (
     CMP_OPERAND_NO_WRITER,
     CMP_PRESET_STAYS_ZERO,
-    validate,
+    check,
 )
 
 
 def _codes(program: Program, *codes: str):
-    return [finding for finding in validate(program, select=set(codes)) if finding.code in codes]
+    return [finding for finding in check(program, select=set(codes)) if finding.code in codes]
 
 
 def _comparison_program(limit: Tag) -> Program:

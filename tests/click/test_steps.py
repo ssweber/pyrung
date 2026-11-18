@@ -16,9 +16,8 @@ from pyrung.click import (
     TagMap,
     estimate_steps,
     pyrung_to_ladder,
-    validate_click_program,
 )
-from pyrung.click.validation import CLK_STEP_LIMIT
+from pyrung.click.validation import CLK_STEP_LIMIT, validate_click_program
 from pyrung.core import (
     Or,
     Program,

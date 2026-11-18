@@ -74,10 +74,7 @@ from .instructions import (
     unpack_to_bits,
     unpack_to_words,
 )
-from .validation import (
-    DialectValidator,
-    ForbiddenControlFlowError,
-)
+from .validation import ForbiddenControlFlowError
 
 __all__ = [
     # Contexts & Structure
@@ -144,6 +141,5 @@ __all__ = [
     "time_event_drum",
     "timed",
     # Validation & Types
-    "DialectValidator",
     "ForbiddenControlFlowError",
 ]

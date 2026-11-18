@@ -208,8 +208,8 @@ class TestPointerDefaultValidator:
             with Rung():
                 copy(ds[ptr], dest)
 
-        selected = prog.validate(select={PTR_DEFAULT_BEFORE_BLOCK_START})
-        ignored = prog.validate(ignore={PTR_DEFAULT_BEFORE_BLOCK_START})
+        selected = prog.check(select={PTR_DEFAULT_BEFORE_BLOCK_START})
+        ignored = prog.check(ignore={PTR_DEFAULT_BEFORE_BLOCK_START})
 
         assert len(selected.findings) == 1
         assert all(f.code == PTR_DEFAULT_BEFORE_BLOCK_START for f in selected.findings)

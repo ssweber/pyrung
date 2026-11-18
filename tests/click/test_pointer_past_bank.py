@@ -10,8 +10,8 @@ import warnings
 
 import pytest
 
-from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder, validate_click_program
-from pyrung.click.validation import CLK_PTR_PAST_BANK
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
+from pyrung.click.validation import CLK_PTR_PAST_BANK, validate_click_program
 from pyrung.core import Block, Int, Program, TagType, rung
 from pyrung.core.program import copy
 

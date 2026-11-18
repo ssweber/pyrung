@@ -17,9 +17,9 @@ import warnings
 
 import pytest
 
-from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder, validate_click_program
+from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
-from pyrung.click.validation import CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK
+from pyrung.click.validation import CLK_TEXT_PAST_BANK, CLK_TEXT_PAST_BLOCK, validate_click_program
 from pyrung.core import Block, Program, Real, TagType, rung, to_text, to_value
 from pyrung.core.program import copy
 
