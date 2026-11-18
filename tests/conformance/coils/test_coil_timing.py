@@ -54,7 +54,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, debounce, math, off_delay, on_delay, out
+from pyrung.core import Or, copy, debounce, math, off_delay, on_delay, out, rung
 from tests.conformance.memory import ClickTimer, c, t, td
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -64,50 +64,50 @@ OFF_WINDOW = 40
 def prove_off_td_held(slot: Any) -> None:
     deb = c[242]
     off_td = td[116]
-    rung = (slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3))
+    rung_conds = (slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3))
 
     def step(n: int) -> tuple[Any, Any]:
         return (slot.Cmd != 0, slot.Scratch == n)
 
-    with Rung(*rung):
+    with rung(*rung_conds):
         debounce(deb, on=(ClickTimer(115), 0), off=(ClickTimer(116), 500))
     # The clock times the rung's time on, from 0 at each rise.
-    with Rung(*rung):
+    with rung(*rung_conds):
         on_delay(ClickTimer(117), 5000)
     clock = td[117]
-    with Rung(*step(3), clock >= 50, off_td >= 100):
+    with rung(*step(3), clock >= 50, off_td >= 100):
         copy(1, slot.Result2)
-    with Rung(*step(3), clock >= 50, off_td == 0):
+    with rung(*step(3), clock >= 50, off_td == 0):
         copy(2, slot.Result2)
-    with Rung(*step(3), clock >= 50):
+    with rung(*step(3), clock >= 50):
         copy(4, slot.Scratch)
         copy(1, slot.Fired)
-    with Rung(*step(2), off_td >= 100, deb):
+    with rung(*step(2), off_td >= 100, deb):
         copy(1, slot.Result1)
-    with Rung(*step(2), off_td >= 100):
+    with rung(*step(2), off_td >= 100):
         copy(3, slot.Scratch)
-    with Rung(*step(1), off_td < 100):
+    with rung(*step(1), off_td < 100):
         copy(1, slot.Result3)
-    with Rung(*step(1)):
+    with rung(*step(1)):
         copy(2, slot.Scratch)
-    with Rung(*step(0), clock >= 50):
+    with rung(*step(0), clock >= 50):
         copy(1, slot.Scratch)
 
 
 def prove_deb_off_against_tof(slot: Any) -> None:
-    rung, deb = c[245], c[246]
+    rung_bit, deb = c[245], c[246]
     tof = ClickTimer(124)
     count_scans(slot, OFF_WINDOW)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3)):
-        out(rung)
-    with Rung(rung):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3)):
+        out(rung_bit)
+    with rung(rung_bit):
         debounce(deb, on=(ClickTimer(122), 0), off=(ClickTimer(123), 5))
-    with Rung(rung):
+    with rung(rung_bit):
         off_delay(tof, 5)
     for bit, field in ((deb, slot.Result1), (tof.Done, slot.Result2)):
-        with Rung(slot.Cmd != 0, slot.Scratch >= 4, slot.Scratch <= OFF_WINDOW, ~bit, field == 0):
+        with rung(slot.Cmd != 0, slot.Scratch >= 4, slot.Scratch <= OFF_WINDOW, ~bit, field == 0):
             copy(slot.Scratch, field)
-    with Rung(slot.Cmd != 0, slot.Scratch == OFF_WINDOW + 1, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == OFF_WINDOW + 1, slot.Fired == 0):
         math(slot.Result1 - slot.Result2, slot.ErrorCode)
     done(slot, OFF_WINDOW)
 

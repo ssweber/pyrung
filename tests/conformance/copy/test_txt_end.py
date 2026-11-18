@@ -34,7 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, system, to_ascii, to_text
+from pyrung.core import copy, fill, math, rung, system, to_ascii, to_text
 from tests.conformance.memory import dd, df, ds, txt
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -54,12 +54,12 @@ ds.slot(3944, choices={0: "no address"})
 
 
 def _flag(slot: Any, scan: int, flag: Any, bit: int) -> None:
-    with Rung(slot.Scratch == scan, flag):
+    with rung(slot.Scratch == scan, flag):
         math(slot.Result4 + bit, slot.Result4)
 
 
 def _pair(slot: Any, first: int, into: Any) -> None:
-    with Rung(slot.Scratch > WINDOW):
+    with rung(slot.Scratch > WINDOW):
         copy(txt[first], CODE, convert=to_ascii)
         math(CODE * 128, into)
         copy(txt[first + 1], CODE, convert=to_ascii)
@@ -68,26 +68,26 @@ def _pair(slot: Any, first: int, into: Any) -> None:
 
 def _txt_end(slot: Any, store: Any) -> None:
     count_scans(slot, WINDOW)
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         copy("ZZZZZZZ", txt[START - 1])
         copy(1.5, REAL)
         copy(START, POINTER)
         copy(40000, BIG)
         copy(0, ZERO)
-    with Rung(slot.Scratch == PROBE_SCAN):
+    with rung(slot.Scratch == PROBE_SCAN):
         copy(REAL, store, convert=to_text())
     _flag(slot, PROBE_SCAN, SC43, 1)
     _flag(slot, PROBE_SCAN, SC44, 2)
-    with Rung(slot.Scratch == CONTROL_SCAN):
+    with rung(slot.Scratch == CONTROL_SCAN):
         copy(BIG, CLAMPED)
     _flag(slot, CONTROL_SCAN, SC43, 4)
-    with Rung(slot.Scratch == CONTROL_SCAN):
+    with rung(slot.Scratch == CONTROL_SCAN):
         copy(dd[ZERO], SINK)
     _flag(slot, CONTROL_SCAN, SC44, 8)
     _pair(slot, START, slot.Result1)
     _pair(slot, START + 2, slot.Result2)
     _pair(slot, START + 4, slot.Result3)
-    with Rung(slot.Scratch > WINDOW):
+    with rung(slot.Scratch > WINDOW):
         copy(txt[START - 1], slot.ErrorCode, convert=to_ascii)
     done(slot, WINDOW)
 

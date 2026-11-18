@@ -14,14 +14,14 @@ from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
 
 _NAMED_OUTSIDE_THE_RUNGS = """
-from pyrung.core import PLC, Block, Program, Rung, TagType, fill
+from pyrung.core import PLC, Block, Program, rung, TagType, fill
 
 recipe = Block("Rq", TagType.INT, 1, 5)
 recipe.slot(2, choices={0: "zero", 7: "seven"})
 alias = recipe[2]
 
 with Program(strict=False) as prog:
-    with Rung():
+    with rung():
         fill(7, recipe.select(1, 3))
 
 runner = PLC(prog, dt=0.01)

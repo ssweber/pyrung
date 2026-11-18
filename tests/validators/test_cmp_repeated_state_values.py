@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, branch, copy, subroutine
+from pyrung.core import Bool, Int, Program, branch, copy, rung, subroutine
 from pyrung.core.validation import CMP_REPEATED_STATE_VALUE, check
 from pyrung.core.validation.cmp_conditions import (
     _REPEATED_STATE_MIN_INTERVENING_RUNGS,
@@ -15,7 +15,7 @@ def _findings(program: Program):
 
 
 def _comparison_rung(state, value: int, result) -> None:
-    with Rung(state == value):
+    with rung(state == value):
         copy(1, result)
 
 
@@ -88,7 +88,7 @@ def test_far_apart_value_is_dispersed() -> None:
     with Program(strict=False) as program:
         _comparison_rung(state, 4, result)
         for _ in range(_REPEATED_STATE_MIN_INTERVENING_RUNGS):
-            with Rung():
+            with rung():
                 copy(0, filler)
         _comparison_rung(state, 4, result)
 
@@ -117,7 +117,7 @@ def test_parallel_branches_count_as_one_top_level_rung() -> None:
     state = Int("BranchState")
     result = Bool("BranchResult", external=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             with branch(state == 6):
                 copy(1, result)
             with branch(state == 6):
@@ -132,7 +132,7 @@ def test_named_reference_comparisons_do_not_count_as_raw_literals() -> None:
     result = Bool("ReferencedResult", external=True)
     with Program(strict=False) as program:
         for _ in range(_REPEATED_STATE_SINGLE_VALUE_MIN_RUNGS):
-            with Rung(state == starting):
+            with rung(state == starting):
                 copy(1, result)
 
     assert not _findings(program)
@@ -143,7 +143,7 @@ def test_one_time_bool_decode_bank_stays_quiet() -> None:
     decoded = [Bool("IsIdle"), Bool("IsShow"), Bool("IsInput")]
     with Program(strict=False) as program:
         for value, status in zip((1, 2, 3), decoded, strict=True):
-            with Rung(state == state.choice({1: "IDLE", 2: "SHOW", 3: "INPUT"}[value])):
+            with rung(state == state.choice({1: "IDLE", 2: "SHOW", 3: "INPUT"}[value])):
                 copy(1, status)
 
     assert not _findings(program)

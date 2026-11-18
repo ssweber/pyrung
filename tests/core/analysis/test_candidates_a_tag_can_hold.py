@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Bool, Char, Int, Or, Program, Real, Rung, Word, copy, fill, latch, math, out
+from pyrung import Bool, Char, Int, Or, Program, Real, Word, copy, fill, latch, math, out, rung
 from pyrung.core import PLC, Block, TagType
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot.skiff import _declared_domain
@@ -31,7 +31,7 @@ R = Real("R", external=True)
 
 def _program(condition) -> Program:
     with Program() as program:
-        with Rung(condition):
+        with rung(condition):
             out(Y)
     return program
 
@@ -132,9 +132,9 @@ def test_how_takes_the_other_branch_of_an_or() -> None:
 def test_a_literal_no_tag_holds_blocks_its_rung_not_the_run() -> None:
     M = Bool("M")
     with Program() as program:
-        with Rung(C == "AB"):
+        with rung(C == "AB"):
             latch(M)
-        with Rung(M, Go):
+        with rung(M, Go):
             out(Y)
 
     assert _how(program).reachable is False
@@ -161,9 +161,9 @@ def test_how_sets_a_source_what_it_can_hold_to_reach_a_wrapped_value(writes, nee
     """An INT source would clamp 65535.  The way to a WORD's 65535 is -1."""
     words = Block("WW", TagType.WORD, 1, 2)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             writes(words)
-        with Rung(words[1] == 65535):
+        with rung(words[1] == 65535):
             out(Y)
 
     plan = _how(program)
@@ -191,9 +191,9 @@ def test_a_value_carried_back_through_a_copy_is_what_the_source_holds() -> None:
     """The back-propagated 3.5 lands on an INT source as 3, and a replay holds that too."""
     D = Real("D")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(In, D)
-        with Rung(D > 3.5):
+        with rung(D > 3.5):
             out(Y)
 
     assert all(type(v) is int for v in _domain(program, "In"))

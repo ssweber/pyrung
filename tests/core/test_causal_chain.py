@@ -13,7 +13,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     branch,
     call,
@@ -50,13 +49,13 @@ def _build_worked_example():
     Cmd_Run = Bool("Cmd_Run")
 
     with Program() as logic:
-        with Rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
+        with rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
             latch(Sts_FaultTripped)
 
-        with Rung(And(Sts_FaultTripped, Cmd_Reset)):
+        with rung(And(Sts_FaultTripped, Cmd_Reset)):
             reset(Sts_FaultTripped)
 
-        with Rung(Sts_FaultTripped):
+        with rung(Sts_FaultTripped):
             out(Alarm_Horn)
             reset(Cmd_Run)
 
@@ -232,7 +231,7 @@ class TestEdgeCases:
         """cause() on a tag that never changed returns None."""
         X = Bool("X")
         with Program() as logic:
-            with Rung():
+            with rung():
                 out(X)
 
         runner = PLC(logic)
@@ -249,7 +248,7 @@ class TestEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 latch(X)
 
         runner = PLC(logic)
@@ -266,7 +265,7 @@ class TestEdgeCases:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         runner = PLC(logic)
@@ -284,9 +283,9 @@ class TestEdgeCases:
         C = Bool("C")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(B)
-            with Rung(B):
+            with rung(B):
                 latch(C)
 
         runner = PLC(logic)
@@ -318,7 +317,7 @@ class TestEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -342,7 +341,7 @@ class TestEdgeCases:
         """cause(tag, scan=N) returns None if the tag did not change at scan N."""
         X = Bool("X")
         with Program() as logic:
-            with Rung():
+            with rung():
                 out(X)
 
         runner = PLC(logic)
@@ -363,9 +362,9 @@ class TestEdgeCases:
         C = Bool("C")
 
         with Program() as logic:
-            with Rung(B):  # Rung 0: reads B (comes before writer)
+            with rung(B):  # Rung 0: reads B (comes before writer)
                 latch(C)
-            with Rung(A):  # Rung 1: writes B
+            with rung(A):  # Rung 1: writes B
                 latch(B)
 
         runner = PLC(logic)
@@ -386,7 +385,7 @@ class TestEdgeCases:
         Enable = Bool("Enable", external=True)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=50)
 
         runner = PLC(logic, dt=0.010)
@@ -429,9 +428,9 @@ class TestEdgeCases:
         with Program() as prog:
             # Reader before writer: the parent establishes Starting, then the
             # child's first scan is the first opportunity for Alarm to fire.
-            with Rung(Starting, ~DoorClosed):
+            with rung(Starting, ~DoorClosed):
                 latch(Alarm)
-            with Rung(State == 3):
+            with rung(State == 3):
                 out(Starting)
 
         parent = PLC(prog)
@@ -466,9 +465,9 @@ class TestEdgeCases:
                 out(Starting)
 
         with Program() as prog:
-            with Rung(Starting, ~DoorClosed):
+            with rung(Starting, ~DoorClosed):
                 latch(Alarm)
-            with Rung():
+            with rung():
                 call(map_state)
 
         parent = PLC(prog)
@@ -506,9 +505,9 @@ class TestEdgeCases:
                 out(Starting)
 
         with Program() as prog:
-            with Rung(Starting, ~DoorClosed):
+            with rung(Starting, ~DoorClosed):
                 latch(Alarm)
-            with Rung():
+            with rung():
                 call(map_block_state)
 
         parent = PLC(prog)
@@ -546,11 +545,11 @@ class TestEdgeCases:
                 out(Starting)
 
         with Program() as prog:
-            with Rung(Starting, ~DoorClosed):
+            with rung(Starting, ~DoorClosed):
                 latch(Alarm)
-            with Rung():
+            with rung():
                 call(called_map)
-            with Rung(CallUncalled):
+            with rung(CallUncalled):
                 call(uncalled_map)
 
         parent = PLC(prog)
@@ -583,11 +582,11 @@ class TestEdgeCases:
                 out(Starting)
 
         with Program() as prog:
-            with Rung(Starting, ~DoorClosed):
+            with rung(Starting, ~DoorClosed):
                 latch(Alarm)
-            with Rung(Advance):
+            with rung(Advance):
                 copy(6, State)
-            with Rung():
+            with rung():
                 call(map_state)
 
         parent = PLC(prog)
@@ -626,9 +625,9 @@ class TestEdgeCases:
                 latch(Starting)
 
         with Program() as prog:
-            with Rung(Starting, ~DoorClosed):
+            with rung(Starting, ~DoorClosed):
                 latch(Alarm)
-            with Rung(CallMap):
+            with rung(CallMap):
                 call(sparse_map)
 
         plc = PLC(prog)
@@ -672,7 +671,7 @@ class TestEdgeCases:
         Trigger = Bool("Trigger", external=True)
         Result = Bool("Result")
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(Result)
 
         parent = PLC(prog)
@@ -702,15 +701,15 @@ class TestEdgeCases:
         Requested = Int("StateRequested")
 
         with Program() as prog:
-            with Rung(State == 6):
+            with rung(State == 6):
                 out(Execute)
-            with Rung(Enter):
+            with rung(Enter):
                 copy(6, State)
-            with Rung(Execute, Or(~Door, ~LintDoor)):
+            with rung(Execute, Or(~Door, ~LintDoor)):
                 copy(4, Cmd)
-            with Rung(Cmd == 4):
+            with rung(Cmd == 4):
                 copy(10, Requested)
-            with Rung(Requested != 0):
+            with rung(Requested != 0):
                 copy(Requested, State)
                 copy(0, Requested)
                 copy(0, Cmd)
@@ -741,7 +740,7 @@ class TestEdgeCases:
         Output = Bool("ReplayHeldOutput")
 
         with Program() as prog:
-            with Rung(HeldInput):
+            with rung(HeldInput):
                 out(Output)
 
         plc = PLC(prog)
@@ -765,7 +764,7 @@ class TestEdgeCases:
         Observed = Bool("AttributedPlantObserved")
 
         with Program() as prog:
-            with Rung(PlantValue):
+            with rung(PlantValue):
                 out(Observed)
 
         plc = PLC(prog)
@@ -789,7 +788,7 @@ class TestEdgeCases:
         Observed = Bool("AttributedHeldObserved")
 
         with Program() as prog:
-            with Rung(Guard, Held):
+            with rung(Guard, Held):
                 out(Observed)
 
         plc = PLC(prog)
@@ -819,7 +818,7 @@ class TestEdgeCases:
         Observed = Bool("ReleasedObserved")
 
         with Program() as prog:
-            with Rung(Value):
+            with rung(Value):
                 out(Observed)
 
         plc = PLC(prog)
@@ -848,7 +847,7 @@ class TestEdgeCases:
         Observed = Bool("OrderedHeldObserved")
 
         with Program() as prog:
-            with Rung(Value):
+            with rung(Value):
                 out(Observed)
 
         plc = PLC(prog)
@@ -998,7 +997,7 @@ class TestConfidence:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(And(A, B)):
+            with rung(And(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -1068,9 +1067,9 @@ class TestSubroutineWriters:
                 latch(Output)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 call(my_sub)
-            with Rung(Output):
+            with rung(Output):
                 out(Lamp)
 
         plc = PLC(prog)
@@ -1109,7 +1108,7 @@ class TestSubroutineWriters:
                 copy(1, Terminal)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 call(my_sub)
 
         plc = PLC(prog)
@@ -1150,9 +1149,9 @@ class TestSubroutineWriters:
                 latch(Output)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 call(my_sub)
-            with Rung(Output):
+            with rung(Output):
                 out(Reader)
 
         plc = PLC(prog)
@@ -1185,11 +1184,11 @@ class TestSubroutineWriters:
                 latch(Output)
 
         with Program() as prog:
-            with Rung(ModeA):
+            with rung(ModeA):
                 call(shared_sub)
-            with Rung(ModeB):
+            with rung(ModeB):
                 call(shared_sub)
-            with Rung(Output):
+            with rung(Output):
                 out(Reader)
 
         # Call via first call site (ModeA)
@@ -1231,10 +1230,10 @@ class TestSubroutineWriters:
                 copy(1, Output)
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 latch(Gate)
                 call(shared_sub)
-            with Rung():
+            with rung():
                 reset(Gate)
                 call(shared_sub)
 
@@ -1287,9 +1286,9 @@ class TestSubroutineWriters:
                 reset(Cmd)
 
         with Program() as prog:
-            with Rung(CallGate):
+            with rung(CallGate):
                 call(cmd_sub)
-            with Rung(Target):
+            with rung(Target):
                 out(Echo)
 
         plc = PLC(prog)
@@ -1337,10 +1336,10 @@ class TestIndirectCopyWriter:
         Target = blk._get_tag(500)
 
         with Program() as prog:
-            with Rung(Trigger):
+            with rung(Trigger):
                 copy(42, Source)
                 copy(500, Pointer)
-            with Rung():
+            with rung():
                 copy(Source, blk[Pointer])
 
         plc = PLC(prog)
@@ -1375,13 +1374,13 @@ class TestIndirectCopyWriter:
 
         @subroutine("use_and_reset")
         def use_and_reset():
-            with Rung(Param):
+            with rung(Param):
                 latch(Result)
-            with Rung():
+            with rung():
                 reset(Param)
 
         with Program() as prog:
-            with Rung(rise(Trigger)):
+            with rung(rise(Trigger)):
                 copy(Trigger, Param)
                 call(use_and_reset)
 
@@ -1416,7 +1415,7 @@ class TestLongRecordedChains:
         En = Bool("En")
         T = Int("T")
         with Program() as prog:
-            with Rung(En):
+            with rung(En):
                 math(T + 3, T)
 
         plc = PLC(prog)
@@ -1440,9 +1439,9 @@ class TestLongRecordedChains:
         A = Int("A")
         B = Int("B")
         with Program() as prog:
-            with Rung(En):
+            with rung(En):
                 math(B + 1, A)
-            with Rung(En):
+            with rung(En):
                 math(A + 1, B)
 
         plc = PLC(prog)
@@ -1461,9 +1460,9 @@ class TestLongRecordedChains:
         Setpoint = Int("Setpoint")
         T = Int("T")
         with Program() as prog:
-            with Rung(rise(Reset)):
+            with rung(rise(Reset)):
                 copy(Setpoint, T)
-            with Rung(~Reset):
+            with rung(~Reset):
                 math(T + 3, T)
 
         plc = PLC(prog)
@@ -1495,7 +1494,7 @@ class TestBranchInheritedRows:
         B = Bool("B")
         Y = Bool("Y")
         with Program(strict=False) as prog:
-            with Rung(A):
+            with rung(A):
                 reset(A)
                 with branch(B):
                     out(Y)
@@ -1531,7 +1530,7 @@ class TestBranchInheritedRows:
         N = Bool("N")
         Y = Bool("Y")
         with Program(strict=False) as prog:
-            with Rung(A):
+            with rung(A):
                 with branch(M):
                     reset(M)
                     with branch(N):
@@ -1559,7 +1558,7 @@ class TestBranchInheritedRows:
         N = Bool("N")
         Y = Bool("Y")
         with Program(strict=False) as prog:
-            with Rung(A):
+            with rung(A):
                 with branch(M):
                     reset(M)
                     with branch(N):
@@ -1590,7 +1589,7 @@ class TestBranchInheritedRows:
         Go = Bool("Go")
         shared = Or(A, Z)
         with Program(strict=False) as prog:
-            with Rung(Go, shared):
+            with rung(Go, shared):
                 reset(A)
                 latch(Z)
                 with branch(shared):

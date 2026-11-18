@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from pyrsistent import PMap, pmap
 
-from pyrung import Bool, Program, Rung, Timer, on_delay, out
+from pyrung import Bool, Program, Timer, on_delay, out, rung
 from pyrung.core import SystemState
 from pyrung.core.coast_run import coast_until
 from pyrung.core.read_trace import _FIELD_READ, _READ_ALL, _traced_call
@@ -35,9 +35,9 @@ SAVED = SystemState(scan_id=1, timestamp=0.5, tags=pmap({"Run": True}), memory=p
 
 def _program() -> Program:
     with Program() as logic:
-        with Rung(Run):
+        with rung(Run):
             on_delay(T, 30, "s")
-        with Rung(T.Done):
+        with rung(T.Done):
             out(Lamp)
     return logic
 

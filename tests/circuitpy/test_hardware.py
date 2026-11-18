@@ -9,9 +9,9 @@ from pyrung.core import (
     InputBlock,
     OutputBlock,
     Program,
-    Rung,
     TagType,
     out,
+    rung,
 )
 from pyrung.core.tag import LiveInputTag, LiveOutputTag
 
@@ -347,7 +347,7 @@ class TestIntegration:
         Light = outputs[1]
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         runner = PLC(logic)
@@ -374,7 +374,7 @@ class TestIntegration:
         Relay = out_block[1]
 
         with Program() as logic:
-            with Rung(Switch):
+            with rung(Switch):
                 out(Relay)
 
         runner = PLC(logic)

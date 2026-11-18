@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, Program, Rung, copy
+from pyrung.core import Bool, Int, Program, copy, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.tide_tables import (
     GUARD_DEAD,
@@ -35,13 +35,13 @@ _MODE = {"Mode": (1, 2, 3)}
 @pytest.fixture
 def ctx():
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(0, Int("x"))
         # Referencing the Bool tag as a rung condition registers it in the PDG's
         # ``tags`` map with ``TagType.BOOL`` — needed for the Bool-domain tests
         # below, which resolve a free operand's domain off the tag's declared
         # type rather than an explicit ``domains=`` entry.
-        with Rung(Bool("Flag")):
+        with rung(Bool("Flag")):
             copy(0, Int("y"))
     return prog, build_program_graph(prog)
 
@@ -123,9 +123,9 @@ def incomplete_domain_ctx():
     right = Bool("Right")
     mode = Int("SoftMode")
     with Program(strict=False) as prog:
-        with Rung(left):
+        with rung(left):
             copy(1, mode)
-        with Rung(right):
+        with rung(right):
             copy(2, mode)
     snapshot = {"Left": False, "Right": False, "SoftMode": 0}
     return prog, build_program_graph(prog), snapshot

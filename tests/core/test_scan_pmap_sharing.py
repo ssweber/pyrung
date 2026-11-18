@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pyrsistent import pmap
 
-from pyrung.core import PLC, Bool, Program, Rung, out
+from pyrung.core import PLC, Bool, Program, out, rung
 from pyrung.core.context import ScanContext
 from pyrung.core.state import SystemState
 
@@ -19,7 +19,7 @@ from pyrung.core.state import SystemState
 def _idle_runner() -> PLC:
     light = Bool("Light")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             out(light)
     return PLC(logic, dt=0.01)
 

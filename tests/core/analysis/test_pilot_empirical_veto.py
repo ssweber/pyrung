@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung import Bool, Int, Program, Rung, copy, out
+from pyrung import Bool, Int, Program, copy, out, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.causal import (
     _shared_cause,
@@ -38,7 +38,7 @@ def _mover_program() -> Program:
     trigger = Bool("Trigger", external=True)
     status = Int("Status")
     with Program(strict=False) as logic:
-        with Rung(trigger):
+        with rung(trigger):
             copy(1, status)
     return logic
 
@@ -103,7 +103,7 @@ def test_veto_excludes_exact_recorded_pilot_write() -> None:
     status = Int("PilotWrittenStatus")
     seen = Bool("PilotWrittenSeen")
     with Program(strict=False) as logic:
-        with Rung(status == 1):
+        with rung(status == 1):
             out(seen)
     plc = PLC(logic)
     from pyrung.core.synthesis import Synthesis, copy_hold_rung
@@ -130,7 +130,7 @@ def test_veto_accepts_later_plant_restoration_after_hold_expiry() -> None:
     status = Int("EmpiricalReleasedStatus")
     seen = Bool("EmpiricalReleasedSeen")
     with Program(strict=False) as logic:
-        with Rung(status == 1):
+        with rung(status == 1):
             out(seen)
     plc = PLC(logic)
     from pyrung.core.synthesis import Synthesis, copy_hold_rung
@@ -167,9 +167,9 @@ def _chain_program() -> Program:
     mid = Bool("Mid")
     out_ = Bool("Out")
     with Program(strict=False) as logic:
-        with Rung(lever):
+        with rung(lever):
             out(mid)
-        with Rung(mid):
+        with rung(mid):
             out(out_)
     return logic
 
@@ -341,7 +341,7 @@ def _free_word_ctx() -> tuple[SimpleNamespace, str]:
     pv = Int("PV")
     step = Int("Step")
     with Program(strict=False) as logic:
-        with Rung(pv < 5):
+        with rung(pv < 5):
             copy(1, step)
     graph = build_program_graph(logic)
     plc = PLC(logic)

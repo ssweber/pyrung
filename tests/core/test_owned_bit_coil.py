@@ -9,7 +9,6 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     copy,
     count_down,
@@ -20,6 +19,7 @@ from pyrung.core import (
     on_delay,
     out,
     reset,
+    rung,
     toggle,
 )
 from pyrung.core.validation.owned_bit_coil import OwnedBitCoilError
@@ -40,9 +40,9 @@ C = Block("OC", TagType.BOOL, 1, 16)
 
 def _build(owner, coil):
     with Program(strict=False):
-        with Rung(En):
+        with rung(En):
             owner()
-        with Rung(En):
+        with rung(En):
             coil()
 
 
@@ -73,9 +73,9 @@ def test_coil_before_owner_refused():
     done = Bool("PlainDone")
     with pytest.raises(OwnedBitCoilError):
         with Program(strict=False):
-            with Rung(En):
+            with rung(En):
                 out(done)
-            with Rung(En):
+            with rung(En):
                 on_delay(_u(done), 100)
 
 
@@ -83,9 +83,9 @@ def test_coil_in_branch_and_subroutine_refused():
     done = Bool("PlainDone")
     with pytest.raises(OwnedBitCoilError):
         with Program(strict=False):
-            with Rung(En):
+            with rung(En):
                 on_delay(_u(done), 100)
-                with Rung(Rst):
+                with rung(Rst):
                     latch(done)
 
 
@@ -101,10 +101,10 @@ def test_block_range_not_covering_owned_bit_legal():
 def test_legal_forms():
     done = Bool("PlainDone")
     with Program(strict=False):
-        with Rung(En):
+        with rung(En):
             on_delay(_u(done), 100).reset(Rst)
-        with Rung(done):
+        with rung(done):
             out(Flag)
-        with Rung(Rst):
+        with rung(Rst):
             copy(0, Acc)
             math(Acc + 1, Acc)

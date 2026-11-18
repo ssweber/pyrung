@@ -23,7 +23,6 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     branch,
     build_program_graph,
     call,
@@ -32,6 +31,7 @@ from pyrung.core import (
     latch,
     out,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.prove import Intractable
@@ -69,15 +69,15 @@ def _y3(tags: Any) -> bool:
 def _return_in_branch():
     """The guard is a branch of an otherwise unconditional rung."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung():
+            with rung():
                 with branch(G):
                     return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
@@ -85,17 +85,17 @@ def _return_in_branch():
 def _return_in_branch_reader_apart():
     """As above, with no main rung sharing the writer's rung index."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Btn):
+        with rung(Btn):
             out(Z)
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung():
+            with rung():
                 with branch(G):
                     return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
@@ -103,14 +103,14 @@ def _return_in_branch_reader_apart():
 def _writer_in_branch():
     """A top-level guard skips a writer that sits in a branch."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung(G):
+            with rung(G):
                 return_early()
-            with Rung():
+            with rung():
                 with branch(Btn):
                     out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
@@ -119,32 +119,32 @@ def _writer_in_branch():
 def _top_level_guard_reader_apart():
     """A top-level guard and writer, no rung-index coincidence to hide behind."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Btn):
+        with rung(Btn):
             out(Z)
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung(G):
+            with rung(G):
                 return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
 
 def _return_in_nested_branch():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung():
+            with rung():
                 with branch(Btn):
                     with branch(G):
                         return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, G), _y3_with_g
 
@@ -152,15 +152,15 @@ def _return_in_nested_branch():
 def _return_in_branch_of_conditioned_rung():
     """The return's path reads the rung's contact and the branch's."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung(C):
+            with rung(C):
                 with branch(G):
                     return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL, "C": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
@@ -168,12 +168,12 @@ def _return_in_branch_of_conditioned_rung():
 def _return_before_writer_same_rung():
     """A branch return ahead of the rung's own out(): when it fires the coil holds."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung(Btn):
+            with rung(Btn):
                 with branch(G):
                     return_early()
                 out(Y2)
@@ -183,14 +183,14 @@ def _return_before_writer_same_rung():
 def _return_before_branch_writer_same_rung():
     """A comparison guard in one branch skips the writer in the next."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
-        with Rung(DQ == 3):
+        with rung(DQ == 3):
             out(Z)
         with subroutine("work"):
-            with Rung():
+            with rung():
                 with branch(DQ > 5):
                     return_early()
                 with branch(Btn):
@@ -200,16 +200,16 @@ def _return_before_branch_writer_same_rung():
 
 def _return_in_forloop_body():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("work"):
-            with Rung():
+            with rung():
                 with branch(G):
                     with forloop(1):
                         return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
@@ -217,18 +217,18 @@ def _return_in_forloop_body():
 def _return_in_nested_subroutine_branch():
     """A return in the inner subroutine's branch skips the inner writer."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("outer")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("outer"):
-            with Rung():
+            with rung():
                 call("inner")
         with subroutine("inner"):
-            with Rung():
+            with rung():
                 with branch(G):
                     return_early()
-            with Rung():
+            with rung():
                 with branch(Btn):
                     out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
@@ -237,18 +237,18 @@ def _return_in_nested_subroutine_branch():
 def _guarded_call():
     """A return in the caller skips the call, so the callee's writer holds."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("outer")
-        with Rung(Y2):
+        with rung(Y2):
             out(Y3)
         with subroutine("outer"):
-            with Rung():
+            with rung():
                 with branch(G):
                     return_early()
-            with Rung():
+            with rung():
                 call("inner")
         with subroutine("inner"):
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
@@ -260,16 +260,16 @@ def _guard_shares_writer_contact():
     writer's own: ``latch(X)`` is conditional, so X is no scan-local scratch.
     """
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(Btn):
+        with rung(Btn):
             latch(X)
         with subroutine("work"):
-            with Rung(G):
+            with rung(G):
                 return_early()
-            with Rung(G):
+            with rung(G):
                 latch(X)
-            with Rung(X):
+            with rung(X):
                 out(Y3)
     return logic, {"Btn": _BOOL, "G": _BOOL}, Y3, _y3
 
@@ -277,14 +277,14 @@ def _guard_shares_writer_contact():
 def _guarded_write_read_after_call():
     """A guarded write in an always-run subroutine, read in main after the call."""
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(X):
+        with rung(X):
             out(Y3)
         with subroutine("work"):
-            with Rung(G):
+            with rung(G):
                 return_early()
-            with Rung():
+            with rung():
                 copy(Btn, X)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y3, ~Btn), _y3_without_btn
 
@@ -299,35 +299,35 @@ def _y2_without_btn(tags: Any) -> bool:
 
 def _unread_coil_behind_branch_return():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
         with subroutine("work"):
-            with Rung():
+            with rung():
                 with branch(G):
                     return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y2, ~Btn), _y2_without_btn
 
 
 def _unread_coil_behind_return():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
         with subroutine("work"):
-            with Rung(G):
+            with rung(G):
                 return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y2, ~Btn), _y2_without_btn
 
 
 def _unread_branch_coil_after_branch_return():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
         with subroutine("work"):
-            with Rung():
+            with rung():
                 with branch(G):
                     return_early()
                 with branch(Btn):
@@ -338,10 +338,10 @@ def _unread_branch_coil_after_branch_return():
 def _unread_coil_in_conditional_call():
     """No return at all: the subroutine is not called on every scan."""
     with Program(strict=False) as logic:
-        with Rung(G):
+        with rung(G):
             call("work")
         with subroutine("work"):
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
     return logic, {"Btn": _BOOL, "G": _BOOL}, And(Y2, ~Btn), _y2_without_btn
 
@@ -349,7 +349,7 @@ def _unread_coil_in_conditional_call():
 def _unread_coil_in_forloop_body():
     """A false For rung skips its body, so the coil holds."""
     with Program(strict=False) as logic:
-        with Rung(Btn):
+        with rung(Btn):
             with forloop(1):
                 out(Y2)
     return logic, {"Btn": _BOOL}, And(Y2, ~Btn), _y2_without_btn
@@ -421,15 +421,15 @@ def test_out_before_a_return_in_its_rung_is_not_guarded() -> None:
     # out(X) runs before the return in its own rung, so it follows C as a
     # level and X stays combinational.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             call("work")
-        with Rung(X):
+        with rung(X):
             out(Y3)
         with subroutine("work"):
-            with Rung(C):
+            with rung(C):
                 out(X)
                 return_early()
-            with Rung(Btn):
+            with rung(Btn):
                 out(Y2)
 
     graph = build_program_graph(logic)

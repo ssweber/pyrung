@@ -16,7 +16,6 @@ from pyrung.core import (
     Int,
     OutputBlock,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -25,6 +24,7 @@ from pyrung.core import (
     out,
     run_enabled_function,
     run_function,
+    rung,
     subroutine,
 )
 
@@ -61,7 +61,7 @@ class TestCleanProgram:
         light = outputs[1]
 
         def logic():
-            with Rung(button):
+            with rung(button):
                 out(light)
 
         prog = _build_program(logic)
@@ -80,7 +80,7 @@ class TestFunctionCallVerify:
             return {"result": value}
 
         def logic():
-            with Rung():
+            with rung():
                 run_function(fn, ins={"value": source}, outs={"result": dest})
 
         prog = _build_program(logic)
@@ -103,7 +103,7 @@ class TestEnabledFunctionCallVerify:
             return {"result": value}
 
         def logic():
-            with Rung(enable):
+            with rung(enable):
                 run_enabled_function(fn, ins={"value": source}, outs={"result": dest})
 
         prog = _build_program(logic)
@@ -125,7 +125,7 @@ class TestIOBlockUntracked:
         remote_button = remote_inputs[1]
 
         def logic():
-            with Rung(remote_button):
+            with rung(remote_button):
                 out(light)
 
         prog = _build_program(logic)
@@ -143,7 +143,7 @@ class TestIOBlockTracked:
         light = outputs[1]
 
         def logic():
-            with Rung(button):
+            with rung(button):
                 out(light)
 
         prog = _build_program(logic)
@@ -156,7 +156,7 @@ class TestIOBlockTracked:
         hw.slot(1, "P1-08SIM")
 
         def logic():
-            with Rung(board.switch):
+            with rung(board.switch):
                 out(board.led)
 
         prog = _build_program(logic)
@@ -170,7 +170,7 @@ class TestTimerMillisecond:
         reset_tag = Bool("Reset")
 
         def logic():
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 on_delay(Timer[1], preset=10, unit="Tms").reset(reset_tag)
 
         prog = _build_program(logic)
@@ -185,7 +185,7 @@ class TestTimerSeconds:
         reset_tag = Bool("Reset")
 
         def logic():
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 on_delay(Timer2, preset=10, unit="Ts").reset(reset_tag)
 
         prog = _build_program(logic)
@@ -199,7 +199,7 @@ class TestOffDelayTimer:
         hw = P1AM()
 
         def logic():
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 off_delay(Timer3, preset=10, unit="Tms")
 
         prog = _build_program(logic)
@@ -217,10 +217,10 @@ class TestNoHardware:
             return {}
 
         def logic():
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 out(remote_light)
                 run_function(fn)
-            with Rung(Bool("Enable")).continued():
+            with rung(Bool("Enable")).continued():
                 on_delay(Timer4, preset=10, unit="Tms").reset(Bool("Reset"))
 
         prog = _build_program(logic)
@@ -240,7 +240,7 @@ class TestHardwareValidate:
             return {}
 
         def logic():
-            with Rung():
+            with rung():
                 run_function(fn)
 
         prog = _build_program(logic)
@@ -259,7 +259,7 @@ class TestReportSummary:
             return {}
 
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 run_function(fn)
 
         warn_report = validate_circuitpy_program(prog, mode="warn")
@@ -275,7 +275,7 @@ class TestLocationFormatting:
             return {}
 
         def logic():
-            with Rung():
+            with rung():
                 out(Bool("Filler"))
                 run_function(fn)
 
@@ -291,7 +291,7 @@ class TestLocationFormatting:
             return {}
 
         def logic():
-            with Rung():
+            with rung():
                 run_function(fn)
 
         prog = _build_program(logic)
@@ -309,7 +309,7 @@ class TestSuggestionContent:
             return {}
 
         def logic():
-            with Rung():
+            with rung():
                 run_function(fn)
 
         report = validate_circuitpy_program(_build_program(logic), mode="warn")
@@ -324,7 +324,7 @@ class TestSuggestionContent:
         external = InputBlock("External", TagType.BOOL, 1, 8)[1]
 
         def logic():
-            with Rung(external):
+            with rung(external):
                 out(light)
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
@@ -336,7 +336,7 @@ class TestSuggestionContent:
         hw = P1AM()
 
         def logic():
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 on_delay(Timer5, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
@@ -352,7 +352,7 @@ class TestSubroutines:
 
         with Program(strict=False) as prog:
             with subroutine("worker"):
-                with Rung():
+                with rung():
                     run_function(fn)
 
         report = validate_circuitpy_program(prog, mode="warn")
@@ -366,7 +366,7 @@ class TestBranches:
             return {}
 
         with Program(strict=False) as prog:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 with branch(Bool("BranchEnable")):
                     run_function(fn)
 
@@ -386,10 +386,10 @@ class TestStrictMode:
             return {}
 
         def logic():
-            with Rung(external_input):
+            with rung(external_input):
                 out(light)
                 run_function(fn)
-            with Rung(external_input).continued():
+            with rung(external_input).continued():
                 on_delay(Timer6, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="strict")
@@ -412,10 +412,10 @@ class TestWarnMode:
             return {}
 
         def logic():
-            with Rung(external_input):
+            with rung(external_input):
                 out(light)
                 run_function(fn)
-            with Rung(external_input).continued():
+            with rung(external_input).continued():
                 on_delay(Timer7, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
@@ -433,7 +433,7 @@ class TestComboModuleIO:
         relay = combo_out[1]
 
         def logic():
-            with Rung(sensor):
+            with rung(sensor):
                 out(relay)
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")

@@ -11,7 +11,7 @@ from __future__ import annotations
 import math as pymath
 from typing import Any
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, fall, latch, math, out, rise
+from pyrung import PLC, Bool, Int, Program, Real, fall, latch, math, out, rise, rung
 from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
 from pyrung.core import compiled_run, scan_trace
 
@@ -25,15 +25,15 @@ Rose, Fell = Bool("LwRose"), Bool("LwFell")
 
 def _program() -> Program:
     with Program() as program:
-        with Rung(Run):
+        with rung(Run):
             out(Coiled)
-        with Rung(Run):
+        with rung(Run):
             out(Bounded)
-        with Rung():
+        with rung():
             math(Source * -1.0, Gained)
-        with Rung(rise(Coiled)):
+        with rung(rise(Coiled)):
             latch(Rose)
-        with Rung(fall(Coiled)):
+        with rung(fall(Coiled)):
             latch(Fell)
     return program
 

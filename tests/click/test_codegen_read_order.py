@@ -27,7 +27,7 @@ from pyrung.click._topology import Series, make_compound
 from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.parser import _parse_rows
 from pyrung.click.codegen.shaping import emitted_logic_mismatch
-from pyrung.core import PLC, Or, Program, Rung
+from pyrung.core import PLC, Or, Program, rung
 from pyrung.core.program import branch, out, reset
 from tests.click.helpers import exec_with_source, join_continued, rung_drawing
 
@@ -41,21 +41,21 @@ def _row(marker: str, cells: list[str], af: str) -> list[str]:
 
 
 def _rail_rows_write_c5() -> None:
-    with Rung(c[5]):
+    with rung(c[5]):
         reset(c[5])
-    with Rung(c[5]).continued():
+    with rung(c[5]).continued():
         out(y[1])
 
 
 def _trunk_then_written_contact() -> None:
-    with Rung(x[1], c[5]):
+    with rung(x[1], c[5]):
         reset(c[5])
-    with Rung(x[1], c[5], x[2]).continued():
+    with rung(x[1], c[5], x[2]).continued():
         out(y[1])
 
 
 def _teed_cells_write_c5() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         with branch(c[5]):
             reset(c[5])
         with branch(c[5], x[2]):
@@ -63,7 +63,7 @@ def _teed_cells_write_c5() -> None:
 
 
 def _teed_cells_no_write() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         with branch(c[5]):
             reset(c[6])
         with branch(c[5], x[2]):
@@ -71,24 +71,24 @@ def _teed_cells_no_write() -> None:
 
 
 def _rail_rows_no_write() -> None:
-    with Rung(c[5]):
+    with rung(c[5]):
         reset(c[6])
-    with Rung(c[5]).continued():
+    with rung(c[5]).continued():
         out(y[1])
 
 
 def _coil_writes_trunk_contact() -> None:
-    with Rung(x[1], c[5]):
+    with rung(x[1], c[5]):
         out(c[1])
-    with Rung(c[1], x[2]).continued():
+    with rung(c[1], x[2]).continued():
         out(y[1])
 
 
 def _teed_cell_then_rail_row() -> None:
-    with Rung(c[5]):
+    with rung(c[5]):
         reset(c[5])
         out(y[1])
-    with Rung(c[5]).continued():
+    with rung(c[5]).continued():
         out(y[2])
 
 
@@ -201,13 +201,13 @@ def test_round_trip_keeps_outputs_teed_off_one_cell_together():
 
 
 def _coils_on_one_contact() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
         out(y[2])
 
 
 def _unconditional_trunk_branches() -> None:
-    with Rung():
+    with rung():
         with branch(x[1]):
             out(y[1])
         with branch(x[2]):
@@ -215,7 +215,7 @@ def _unconditional_trunk_branches() -> None:
 
 
 def _nested_branches_under_an_or() -> None:
-    with Rung(Or(x[1], x[2]), x[3]):
+    with rung(Or(x[1], x[2]), x[3]):
         out(y[1])
         with branch(x[4]):
             out(y[2])
@@ -225,11 +225,11 @@ def _nested_branches_under_an_or() -> None:
 
 
 def _three_wires() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
-    with Rung(x[1], x[2]).continued():
+    with rung(x[1], x[2]).continued():
         out(y[2])
-    with Rung().continued():
+    with rung().continued():
         out(y[3])
 
 
@@ -311,7 +311,7 @@ def test_logic_check_refuses_an_output_moved_to_another_wire():
 
 def test_export_keeps_a_written_contact_out_of_the_shared_prefix():
     with Program() as logic:
-        with Rung(x[1]):
+        with rung(x[1]):
             with branch(c[5]):
                 reset(c[5])
             with branch(c[5], x[2]):

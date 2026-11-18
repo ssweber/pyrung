@@ -12,7 +12,6 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     Timer,
     branch,
     break_loop,
@@ -26,6 +25,7 @@ from pyrung.core import (
     out,
     reset,
     return_early,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
@@ -53,12 +53,12 @@ Ctr = Counter.clone("Ctr")
 
 def _body_rung_program() -> Program:
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3):
                 math(A + 1, A)
-                with Rung(Stop):
+                with rung(Stop):
                     break_loop()
-                with Rung(Gate):
+                with rung(Gate):
                     out(Y)
     return logic
 
@@ -99,7 +99,7 @@ def test_loop_exit_makes_every_loop_instruction_unprovable_for_stuck_bits():
 def test_bare_loop_out_is_not_a_level_follower():
     # A false For rung skips its body (CLICK), so the coil holds its value.
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
                 out(Y)
 
@@ -111,7 +111,7 @@ def test_bare_loop_out_is_not_a_level_follower():
 def test_loop_count_tag_gates_the_body():
     # A count of 0 runs no iteration, so the count joins the node's guard.
     with Program() as logic:
-        with Rung():
+        with rung():
             with forloop(A):
                 out(Y)
 
@@ -123,10 +123,10 @@ def test_loop_count_tag_gates_the_body():
 def test_a_loop_coil_holds_while_the_loop_rung_is_false():
     lamp = Bool("Lamp")
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
                 out(Y)
-        with Rung(~Enable, Y):
+        with rung(~Enable, Y):
             out(lamp)
 
     plc = PLC(logic, dt=0.01)
@@ -143,10 +143,10 @@ def test_a_zero_count_skips_the_write():
     kept = Bool("Kept")
     stale = Bool("Stale")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(count):
                 copy(value, kept)
-        with Rung(kept, ~value):
+        with rung(kept, ~value):
             out(stale)
 
     plc = PLC(logic, dt=0.01)
@@ -159,7 +159,7 @@ def test_a_zero_count_skips_the_write():
 
 def test_stuck_bits_reports_a_loop_coil_whose_loop_rung_can_be_false():
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
                 out(Y)
 
@@ -169,7 +169,7 @@ def test_stuck_bits_reports_a_loop_coil_whose_loop_rung_can_be_false():
 
 def test_stuck_bits_accepts_a_loop_coil_on_an_unconditional_loop():
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(2):
                 out(Y)
 
@@ -181,10 +181,10 @@ def test_stuck_bits_reports_a_loop_coil_on_an_unconditional_oneshot_loop(body_ru
     # A oneshot loop runs its body only on the rung's rising edge.  On a
     # contactless rung, that is the first scan.  Y is evaluated then, and holds after.
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(2, oneshot=True):
                 if body_rung:
-                    with Rung(Gate):
+                    with rung(Gate):
                         out(Y)
                 else:
                     out(Y)
@@ -196,13 +196,13 @@ def test_stuck_bits_reports_a_loop_coil_on_an_unconditional_oneshot_loop(body_ru
 def test_return_inside_body_rung_guards_later_rungs():
     with Program() as logic:
         with subroutine("work"):
-            with Rung(Enable):
+            with rung(Enable):
                 with forloop(2):
-                    with Rung(Gate):
+                    with rung(Gate):
                         return_early()
-            with Rung():
+            with rung():
                 out(Y)
-        with Rung():
+        with rung():
             call("work")
 
     graph = build_program_graph(logic)
@@ -217,7 +217,7 @@ def test_return_inside_body_rung_guards_later_rungs():
 
 def _bare_loop_counter(preset: int) -> Program:
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3):
                 count_up(Ctr, preset).reset(Rst)
     return logic
@@ -238,15 +238,15 @@ def test_how_keeps_its_prover_context_with_body_rungs():
     from pyrung.core.analysis.pilot.drive_setup import build_prover_context
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3):
-                with Rung(Stop):
+                with rung(Stop):
                     break_loop()
-                with Rung(Gate):
+                with rung(Gate):
                     latch(Y)
-        with Rung(Rst):
+        with rung(Rst):
             reset(Y)
-        with Rung(Y):
+        with rung(Y):
             out(Bool("Lamp"))
     prover = build_prover_context(logic)
     assert prover.nd_domains
@@ -261,10 +261,10 @@ def test_how_counts_a_counter_inside_a_loop(conditioned: bool):
     # A bare body counter counts once ever (see above); a body rung's counter
     # counts each rise of its rung's condition while the loop runs.
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3):
                 if conditioned:
-                    with Rung(Gate):
+                    with rung(Gate):
                         count_up(Ctr, 30).reset(Rst)
                 else:
                     count_up(Ctr, 1).reset(Rst)
@@ -279,11 +279,11 @@ def test_timer_in_body_rung_folds_like_stepping():
 
     def build() -> Program:
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 with forloop(2):
-                    with Rung(Gate):
+                    with rung(Gate):
                         on_delay(timer, 500)
-            with Rung(timer.Done):
+            with rung(timer.Done):
                 out(done)
         return logic
 
@@ -300,10 +300,10 @@ def test_timer_in_body_rung_folds_like_stepping():
 
 def _loop_in_branch_program() -> Program:
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with branch(Gate):
                 with forloop(2):
-                    with Rung(Stop):
+                    with rung(Stop):
                         out(Y)
     return logic
 

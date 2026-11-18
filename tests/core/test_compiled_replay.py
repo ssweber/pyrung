@@ -14,7 +14,6 @@ from pyrung.core import (
     CompiledPLC,
     Int,
     Program,
-    Rung,
     SystemState,
     TagType,
     Timer,
@@ -29,6 +28,7 @@ from pyrung.core import (
     out,
     rise,
     run_function,
+    rung,
     search,
     shift,
     subroutine,
@@ -75,7 +75,7 @@ def test_compile_kernel_export_and_replay_kernel_bootstrap() -> None:
     light = Bool("Light")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             latch(light)
 
     compiled = compile_kernel(program)
@@ -95,9 +95,9 @@ def test_compiled_plc_seeds_explicit_block_pointer_tag() -> None:
     ds = Block("DS", TagType.INT, 1, 3)
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             math(index + 1, index)
-        with Rung(enable):
+        with rung(enable):
             copy(0, ds[ds[1]])
 
     runner = CompiledPLC(program)
@@ -116,7 +116,7 @@ def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() ->
     )
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             blockcopy(ds.select(1, 3), ds.select(10, 12))
 
     compiled = compile_kernel(program)
@@ -137,7 +137,7 @@ def test_a_dormant_range_keeps_through_a_reset_only_if_retentive(
     values = Block("ResetRange", TagType.INT, 1, 2, retentive=retentive)
 
     with Program(strict=False) as program:
-        with Rung(enabled):
+        with rung(enabled):
             fill(7, values.select(1, 2))
 
     plc = PLC(program, dt=0.010)
@@ -181,7 +181,7 @@ def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
     values = Block("AnchorRange", TagType.INT, 1, 2)
 
     with Program(strict=False) as program:
-        with Rung(enabled):
+        with rung(enabled):
             fill(7, values.select(1, 2))
 
     initial = SystemState().with_tags(
@@ -210,7 +210,7 @@ def test_compiled_plc_forced_block_tag_survives_battery_reboot() -> None:
     values = Block("ForcedRange", TagType.INT, 1, 2, retentive=True)
 
     with Program(strict=False) as program:
-        with Rung(enabled):
+        with rung(enabled):
             fill(7, values.select(1, 2))
 
     plc = PLC(program, dt=0.010)
@@ -240,7 +240,7 @@ def test_unused_block_override_does_not_materialize_current_state(
     values = Block("UnusedOverride", TagType.INT, 1, 2)
 
     with Program(strict=False) as program:
-        with Rung(enabled):
+        with rung(enabled):
             fill(7, values.select(1, 2))
 
     plc = PLC(program, dt=0.010)
@@ -274,7 +274,7 @@ def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
     values = Block("PatchedRange", TagType.INT, 1, 2, retentive=True)
 
     with Program(strict=False) as program:
-        with Rung(enabled):
+        with rung(enabled):
             fill(7, values.select(1, 2))
 
     plc = PLC(program, dt=0.010)
@@ -309,9 +309,9 @@ def test_applied_block_patch_materializes_on_every_compiled_pre_scan_path(
     values = Block("PreScanRange", TagType.INT, 1, 2)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(1, marker)
-        with Rung(enabled):
+        with rung(enabled):
             fill(7, values.select(1, 2))
 
     plc = PLC(program, dt=0.010)
@@ -345,7 +345,7 @@ def test_compiled_plc_preserves_named_array_range_identity_and_shape(
     enabled = Bool("ReplayRowCopyEnabled")
 
     with Program(strict=False) as program:
-        with Rung(enabled):
+        with rung(enabled):
             blockcopy(ReplayRow.instance(1).reverse(), ReplayRow.instance(2))
 
     plc = PLC(program, dt=0.010)
@@ -401,7 +401,7 @@ def test_compiled_plc_specialized_fill_is_visible_to_same_scan_copy(
     observed = Int("FillRowObserved")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             fill(9, FillRow.instance(1))
             copy(FillRow[1].second, observed)
 
@@ -432,7 +432,7 @@ def test_compiled_plc_sparse_reversed_specialized_search_keeps_address_parity(
     found = Bool("SearchRowFound")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             search(
                 SearchRow.instance_select(1, 2).reverse() == 42,
                 result=result,
@@ -480,7 +480,7 @@ def test_compile_kernel_caches_specialized_static_range_layout(monkeypatch) -> N
     monkeypatch.setattr(range_type, "tags", counted_tags)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             fill(1, selected)
 
     compile_kernel(program, blockless=True)
@@ -499,12 +499,12 @@ def test_blockless_kernel_matches_legacy_for_block_operations() -> None:
     found = Bool("Found")
 
     with Program(strict=False) as program:
-        with Rung(fill_cmd):
+        with rung(fill_cmd):
             fill(3, ds.select(2, 4))
-        with Rung(copy_cmd):
+        with rung(copy_cmd):
             copy(ds[idx], out_tag)
             copy(7, dd[idx])
-        with Rung():
+        with rung():
             blockcopy(ds.select(1, 3), dd.select(4, 6))
             search(dd.select(1, 6) >= 3, result=found_addr, found=found)
 
@@ -531,9 +531,9 @@ def test_recompile_keeps_mapped_condition_tag_scalar(blockless: bool) -> None:
     state.map_to(ds[1])
 
     with Program(strict=False) as program:
-        with Rung(state == 7):
+        with rung(state == 7):
             out(observed)
-        with Rung():
+        with rung():
             copy(ds[index], copied)
 
     first = compile_kernel(program, blockless=blockless)
@@ -562,11 +562,11 @@ def test_blockless_kernel_matches_legacy_for_shift_edge_and_oneshot() -> None:
     fired = Bool("Fired")
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             shift(bits.select(1, 4)).clock(clock).reset(reset_cmd)
-        with Rung(rise(bits[4])):
+        with rung(rise(bits[4])):
             out(pulse)
-        with Rung(bits[1]):
+        with rung(bits[1]):
             out(fired, oneshot=True)
 
     legacy = compile_kernel(program)
@@ -598,13 +598,13 @@ def test_blockless_kernel_subroutine_matches_legacy_for_block_edge_and_oneshot()
 
     with Program(strict=False) as program:
         with subroutine("worker"):
-            with Rung(rise(bits[4])):
+            with rung(rise(bits[4])):
                 out(pulse)
-            with Rung(bits[1]):
+            with rung(bits[1]):
                 out(fired, oneshot=True)
-        with Rung():
+        with rung():
             shift(bits.select(1, 4)).clock(clock).reset(reset_cmd)
-        with Rung():
+        with rung():
             call("worker")
 
     legacy = compile_kernel(program)
@@ -634,9 +634,9 @@ def test_kernel_subroutine_copy_converter_scalar_char_fanout_uses_live_tags() ->
 
     with Program(strict=False) as program:
         with subroutine("worker"):
-            with Rung():
+            with rung():
                 copy(source, start, convert=to_text(termination_code=0))
-        with Rung(enable):
+        with rung(enable):
             call("worker")
 
     legacy = compile_kernel(program)
@@ -670,7 +670,7 @@ def test_blockless_specialized_char_range_supports_sequential_copy_converter() -
     source = Int("NamedCharsSource", default=12)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             fill("", NamedChars.instance(1))
             copy(source, NamedChars[1].char1, convert=to_text())
 
@@ -709,11 +709,11 @@ def test_compiled_plc_matches_plc_for_patch_force_and_edge_memory() -> None:
     output = Bool("Output")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             latch(reset_tag)
-        with Rung(enable).continued():
+        with rung(enable).continued():
             on_delay(Timer[1], preset=50).reset(reset_tag)
-        with Rung(rise(enable)):
+        with rung(rise(enable)):
             out(output)
 
     plc = PLC(program, dt=0.010)
@@ -744,7 +744,7 @@ def test_compiled_plc_matches_plc_for_indirect_copy_converter_address_fault() ->
     enable = Bool("Enable")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             copy(ds[pointer], ch[1], convert=to_binary, oneshot=True)
 
     plc = PLC(program, dt=0.010)
@@ -790,9 +790,9 @@ def test_intra_rung_write_visible_to_timer_reset_in_compiled_kernel() -> None:
     ResetBtn = Bool("ResetBtn")
 
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             latch(ResetBtn)
-        with Rung(Enable).continued():
+        with rung(Enable).continued():
             on_delay(Timer[1], preset=100).reset(ResetBtn)
 
     plc = PLC(program, dt=0.010)
@@ -820,9 +820,9 @@ def test_compiled_plc_matches_plc_for_continued_chain() -> None:
     Output = Bool("Output")
 
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             out(Latched)
-        with Rung(Latched).continued():
+        with rung(Latched).continued():
             out(Output)
 
     plc = PLC(program, dt=0.010)
@@ -852,7 +852,7 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
     light = Bool("Light")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             latch(light)
 
     source = PLC(program, dt=0.01)
@@ -890,11 +890,11 @@ def test_both_replay_paths_keep_history_from_the_target(
     seen = Int("FloorSeen")
 
     with Program(strict=False) as program:
-        with Rung(~toggle):
+        with rung(~toggle):
             out(toggle)
-        with Rung(toggle):
+        with rung(toggle):
             math(count + 1, count)
-        with Rung(count == 1450):
+        with rung(count == 1450):
             copy(7, seen)
 
     source = PLC(
@@ -939,7 +939,7 @@ def _replay_both_ways(source: PLC, target: int) -> list[PLC]:
 def test_a_replay_of_a_checkpoint_keeps_a_stop_made_after_it() -> None:
     toggle = Bool("StopToggle")
     with Program(strict=False) as program:
-        with Rung(~toggle):
+        with rung(~toggle):
             out(toggle)
     source = PLC(program, dt=0.01, checkpoint_interval=100)
     for _ in range(200):
@@ -954,9 +954,9 @@ def test_a_replay_of_a_checkpoint_keeps_a_stop_made_after_it() -> None:
 def _battery_program() -> Program:
     toggle, seen = Bool("BatteryToggle"), Bool("BatterySeen")
     with Program(strict=False) as program:
-        with Rung(~toggle):
+        with rung(~toggle):
             out(toggle)
-        with Rung(system.sys.battery_present):
+        with rung(system.sys.battery_present):
             out(seen)
     return program
 
@@ -1036,11 +1036,11 @@ def test_a_replay_of_a_stopped_tip_restarts_on_its_next_scan_as_live_does(
 ) -> None:
     tick, count, kill = Bool("RestartTick"), Int("RestartCount"), Bool("RestartKill")
     with Program(strict=False) as program:
-        with Rung(~tick):
+        with rung(~tick):
             out(tick)
-        with Rung(tick):
+        with rung(tick):
             math(count + 1, count)
-        with Rung(kill):
+        with rung(kill):
             out(system.sys.cmd_mode_stop)
     source = PLC(program, dt=0.01, checkpoint_interval=100)
     for _ in range(230):
@@ -1074,7 +1074,7 @@ def test_interpreted_replay_preserves_active_pilot_holds() -> None:
     alarm = Bool("ReplayHoldAlarm")
 
     with Program(strict=False) as program:
-        with Rung(hold_scope, ~held_input):
+        with rung(hold_scope, ~held_input):
             latch(alarm)
 
     source = PLC(program, dt=0.01, cache=0, checkpoint_interval=10_000)
@@ -1106,7 +1106,7 @@ def test_history_at_and_replay_range_use_compiled_path_when_supported(monkeypatc
     light = Bool("Light")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             latch(light)
 
     source = PLC(program, dt=0.01)
@@ -1138,7 +1138,7 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
     enable = Bool("Enable")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             run_function(time.time)
 
     source = PLC(program, dt=0.01)
@@ -1162,9 +1162,9 @@ def test_a_math_write_to_a_read_only_system_tag_raises_in_a_run_as_in_stepping(
     go = Bool("RoSysGo")
     timer = Timer.clone("RoSysT")
     with Program(strict=False) as program:
-        with Rung(go):
+        with rung(go):
             on_delay(timer, 100)
-        with Rung(timer.Done):
+        with rung(timer.Done):
             math(Int("RoSysA") + 7, system.sys.scan_time_max_ms)
 
     plc = PLC(program, dt=0.01)
@@ -1182,7 +1182,7 @@ def test_a_replay_of_a_world_the_kernel_cannot_run_lands_interpreted() -> None:
     enable = Bool("UnsupportedSeekEnable")
 
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             run_function(time.time)
 
     source = PLC(program, dt=0.01)
@@ -1205,7 +1205,7 @@ def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) ->
     light = Bool("Light")
 
     with Program() as program:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     kernel = compile_kernel(program)

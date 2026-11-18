@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, out, pack_text, reset, system
+from pyrung.core import copy, fill, math, out, pack_text, reset, rung, system
 from tests.conformance.memory import c, dd, txt
 from tests.conformance.probe_kit import finish, once
 
@@ -39,22 +39,22 @@ TEXTS = (
 
 def prove_point_into_dd(slot: Any) -> None:
     for text, first, into, coil in TEXTS:
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             copy(99, into)
             for offset, char in enumerate(text):
                 copy(char, txt[first + offset])
             pack_text(txt.select(first, first + len(text) - 1), into)
-        with Rung(*once(slot), SC43):
+        with rung(*once(slot), SC43):
             out(coil)
     for (_text, _first, into, _coil), field in zip(
         TEXTS, (slot.Result1, slot.Result2, slot.Result3), strict=True
     ):
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             copy(into, field)
     for (_text, _first, _into, coil), bit in zip(TEXTS[:2], (1, 2), strict=True):
-        with Rung(*once(slot), coil):
+        with rung(*once(slot), coil):
             math(slot.ErrorCode + bit, slot.ErrorCode)
-    with Rung(*once(slot), TEXTS[2][3]):
+    with rung(*once(slot), TEXTS[2][3]):
         copy(1, slot.Result4)
     finish(slot)
 

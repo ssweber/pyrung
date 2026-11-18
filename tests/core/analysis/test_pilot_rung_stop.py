@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Rung, Timer, latch, math, on_delay, out
+from pyrung import PLC, Bool, Int, Program, Timer, latch, math, on_delay, out, rung
 from pyrung.core import AvoidCheckError
 from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_events
@@ -36,13 +36,13 @@ Start, Arm, Done, Tick, Count, Kill = (
 )
 def test_a_stop_before_the_target_is_the_answer(stop_at: int, lamp_at: int) -> None:
     with Program() as logic:
-        with Rung():
+        with rung():
             on_delay(StopTimer, preset=stop_at)
-        with Rung(StopTimer.Done):
+        with rung(StopTimer.Done):
             out(system.sys.cmd_mode_stop)
-        with Rung():
+        with rung():
             on_delay(LampTimer, preset=lamp_at)
-        with Rung(LampTimer.Done):
+        with rung(LampTimer.Done):
             out(Lamp)
     plc = PLC(logic, dt=0.001)
 
@@ -67,13 +67,13 @@ def test_a_stop_before_the_target_is_the_answer(stop_at: int, lamp_at: int) -> N
 def test_the_returned_fork_is_not_a_search() -> None:
     # The stop comes after the target. The search never reaches it, but the caller does.
     with Program() as logic:
-        with Rung():
+        with rung():
             on_delay(LampTimer, preset=50)
-        with Rung(LampTimer.Done):
+        with rung(LampTimer.Done):
             out(Lamp)
-        with Rung(Lamp):
+        with rung(Lamp):
             on_delay(StopTimer, preset=5)
-        with Rung(StopTimer.Done):
+        with rung(StopTimer.Done):
             out(system.sys.cmd_mode_stop)
     plc = PLC(logic, dt=0.001)
     plan = plc.how(Lamp, max_scans=4000)
@@ -125,13 +125,13 @@ def _wait_for_nothing(plc: PLC) -> None:
 
 def _counting_program() -> Program:
     with Program(strict=False) as logic:
-        with Rung(~Tick):
+        with rung(~Tick):
             out(Tick)
-        with Rung(Tick):
+        with rung(Tick):
             math(Count + 1, Count)
-        with Rung(Start, Arm, Count > 40):
+        with rung(Start, Arm, Count > 40):
             latch(Done)
-        with Rung(Kill):
+        with rung(Kill):
             out(system.sys.cmd_mode_stop)
     return logic
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung import Bool, Int, Or, Program, Rung, branch, copy
+from pyrung import Bool, Int, Or, Program, branch, copy, rung
 from pyrung.core import Block, TagType
 
 
@@ -15,7 +15,7 @@ def test_invalid_literal_write_before_read_is_not_sanitization(index):
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(index, pointer)
             copy(block[pointer], Int("Result"))
     assert _codes(program) == {"PTR_MAY_ESCAPE_BLOCK"}
@@ -25,7 +25,7 @@ def test_range_guard_accepts_open_external_pointer_with_zero_default():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True)
     with Program() as program:
-        with Rung(pointer >= 1, pointer <= 100):
+        with rung(pointer >= 1, pointer <= 100):
             copy(block[pointer], Int("Result"))
     assert not _codes(program)
 
@@ -34,7 +34,7 @@ def test_open_pointer_without_guard_is_advisory_when_default_is_valid():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True, default=1)
     with Program() as program:
-        with Rung():
+        with rung():
             copy(block[pointer], Int("Result"))
     assert _codes(program) == {"PTR_UNGUARDED_ACCESS"}
     assert not program.check()  # The uncertain rule is opt-in.
@@ -44,7 +44,7 @@ def test_known_assignment_needs_no_guard():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(5, pointer)
             copy(block[pointer], Int("Result"))
     assert not _codes(program)
@@ -54,7 +54,7 @@ def test_overwrite_invalidates_earlier_guard():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True)
     with Program() as program:
-        with Rung(pointer >= 1, pointer <= 100):
+        with rung(pointer >= 1, pointer <= 100):
             copy(101, pointer)
             copy(block[pointer], Int("Result"))
     assert _codes(program) == {"PTR_MAY_ESCAPE_BLOCK"}
@@ -68,7 +68,7 @@ def test_guard_must_precede_condition_dereference(guard_first):
     if not guard_first:
         conditions.reverse()
     with Program() as program:
-        with Rung(*conditions):
+        with rung(*conditions):
             copy(1, Int("Result"))
     assert bool(_codes(program)) is not guard_first
 
@@ -77,7 +77,7 @@ def test_or_does_not_turn_partial_bounds_into_a_guard():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True)
     with Program() as program:
-        with Rung(Or(pointer >= 1, pointer <= 100)):
+        with rung(Or(pointer >= 1, pointer <= 100)):
             copy(block[pointer], Int("Result"))
     assert _codes(program)
 
@@ -86,7 +86,7 @@ def test_branch_write_before_access_invalidates_guard():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True)
     with Program() as program:
-        with Rung(pointer >= 1, pointer <= 100):
+        with rung(pointer >= 1, pointer <= 100):
             with branch(Bool("Change")):
                 copy(101, pointer)
             copy(block[pointer], Int("Result"))
@@ -99,7 +99,7 @@ def test_branch_guard_reads_the_parent_write_live():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True, default=5)
     with Program() as program:
-        with Rung():
+        with rung():
             copy(101, pointer)
             with branch(pointer == 5):
                 copy(block[pointer], Int("Result"))
@@ -110,7 +110,7 @@ def test_branch_guard_after_parent_write_sees_the_written_value():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True, default=5)
     with Program() as program:
-        with Rung():
+        with rung():
             copy(101, pointer)
             with branch(pointer == 101):
                 copy(block[pointer], Int("Result"))
@@ -121,9 +121,9 @@ def test_continued_guard_reads_the_prior_rung_write_live():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index", external=True, default=5)
     with Program() as program:
-        with Rung():
+        with rung():
             copy(101, pointer)
-        with Rung().continued():
+        with rung().continued():
             with branch(pointer == 5):
                 copy(block[pointer], Int("Result"))
     assert not _codes(program)
@@ -133,7 +133,7 @@ def test_branch_condition_read_follows_the_instruction_assignment():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(5, pointer)
             with branch(block[pointer] == 7):
                 copy(1, Int("Result"))
@@ -146,7 +146,7 @@ def test_inherited_contact_is_read_on_its_own_row():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index")
     with Program() as program:
-        with Rung(block[pointer] == 7):
+        with rung(block[pointer] == 7):
             copy(5, pointer)
             with branch(Bool("Extra")):
                 copy(1, Int("Result"))
@@ -157,8 +157,8 @@ def test_continued_condition_read_follows_the_prior_rung():
     block = Block("Data", TagType.INT, 1, 100)
     pointer = Int("Index")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(5, pointer)
-        with Rung(block[pointer] == 7).continued():
+        with rung(block[pointer] == 7).continued():
             copy(1, Int("Result"))
     assert not _codes(program)

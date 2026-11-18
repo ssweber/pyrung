@@ -23,13 +23,13 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     Timer,
     copy,
     latch,
     off_delay,
     on_delay,
     out,
+    rung,
     udt,
 )
 
@@ -58,7 +58,7 @@ def test_timer_clone_nickname_overrides_flow_through_runtime_and_analysis(runner
     )
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(timer, preset=10)
 
     advance = build_advance_index(logic)
@@ -98,7 +98,7 @@ class TestOnDelayTON:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -120,7 +120,7 @@ class TestOnDelayTON:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=50)  # 50ms preset
 
         runner = runner_factory(logic, dt=0.010)
@@ -150,7 +150,7 @@ class TestOnDelayTON:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -174,7 +174,7 @@ class TestOnDelayTON:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -200,7 +200,7 @@ class TestOnDelayTON:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=1000)
 
         runner = runner_factory(logic, dt=0.001)
@@ -228,7 +228,7 @@ class TestOnDelayRTON:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -247,7 +247,7 @@ class TestOnDelayRTON:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -276,7 +276,7 @@ class TestOnDelayRTON:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -305,7 +305,7 @@ class TestOnDelayRTON:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=50).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -337,9 +337,9 @@ class TestOnDelayRTON:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 latch(ResetBtn)
-            with Rung(Enable).continued():
+            with rung(Enable).continued():
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -357,7 +357,7 @@ class TestOnDelayRTON:
         kept = Timer.clone("Timer", retentive={"Acc": True})
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(kept, preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -391,7 +391,7 @@ class TestOnDelayRTON:
             Acc: Int = Field(retentive=False, default=10)  # noqa: F821
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(NRTimer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -423,7 +423,7 @@ class TestOffDelayTOF:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=50)
 
         runner = runner_factory(logic, dt=0.010)
@@ -443,7 +443,7 @@ class TestOffDelayTOF:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=50)
 
         runner = runner_factory(logic, dt=0.010)
@@ -469,7 +469,7 @@ class TestOffDelayTOF:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=50)
 
         runner = runner_factory(logic, dt=0.010)
@@ -493,7 +493,7 @@ class TestOffDelayTOF:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=50)
 
         runner = runner_factory(logic, dt=0.010)
@@ -521,7 +521,7 @@ class TestOffDelayTOF:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=50)
 
         runner = runner_factory(logic, dt=0.010)
@@ -558,7 +558,7 @@ class TestOffDelayPresetReachedUnderOneUnit:
     def _tof(preset=0, unit="Tms"):
         Enable = Bool("Enable")
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=preset, unit=unit)
         return logic
 
@@ -667,10 +667,10 @@ class TestTimerIntegration:
         CapturedAcc = Int("CapturedAcc")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=1000)
 
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Timer[1].Acc, CapturedAcc)
 
         runner = runner_factory(logic, dt=0.002)
@@ -700,7 +700,7 @@ class TestTimerIntegration:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 # Using default Tms - accumulator in milliseconds
                 on_delay(Timer[1], preset=100)
 
@@ -730,15 +730,15 @@ class TestTimerIntegration:
 
         with Program() as logic:
             # Start delay: Motor must be on for 50ms before output
-            with Rung(Motor):
+            with rung(Motor):
                 on_delay(Timer[1], preset=50)
 
             # Stop delay: Output stays on 50ms after motor stops
-            with Rung(Motor):
+            with rung(Motor):
                 off_delay(Timer2, preset=50)
 
             # Output logic: TON done AND TOF done
-            with Rung(Timer[1].Done, Timer2.Done):
+            with rung(Timer[1].Done, Timer2.Done):
                 out(MotorOutput)
 
         runner = runner_factory(logic, dt=0.010)
@@ -773,11 +773,11 @@ class TestTimerIntegration:
         PumpOutput = Bool("PumpOutput")
 
         with Program() as logic:
-            with Rung(MotorRunning):
+            with rung(MotorRunning):
                 # 5000ms = 5 seconds (scaled down from 5 minutes for test)
                 on_delay(Timer[1], preset=5000)
 
-            with Rung(Timer[1].Done):
+            with rung(Timer[1].Done):
                 out(PumpOutput)
 
         runner = runner_factory(logic, dt=1.0)
@@ -814,7 +814,7 @@ class TestDynamicpresets:
         preset = Int("preset")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=preset)
 
         runner = runner_factory(logic, dt=0.010)
@@ -860,7 +860,7 @@ class TestDynamicpresets:
         preset = Int("preset")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=preset)
 
         runner = runner_factory(logic, dt=0.010)
@@ -898,7 +898,7 @@ class TestDynamicpresets:
         preset = Int("preset")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=preset).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -941,7 +941,7 @@ class TestTimerAccumulatorOverflow:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -972,7 +972,7 @@ class TestTimerAccumulatorOverflow:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100)
 
         runner = runner_factory(logic, dt=10.0)  # 10000ms per scan — reach max int quickly
@@ -1007,7 +1007,7 @@ class TestTimerAccumulatorOverflow:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=50).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1029,7 +1029,7 @@ class TestTimerAccumulatorOverflow:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=10.0)
@@ -1062,7 +1062,7 @@ class TestTimerAccumulatorOverflow:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=50)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1086,7 +1086,7 @@ class TestTimerAccumulatorOverflow:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=50)
 
         runner = runner_factory(logic, dt=10.0)
@@ -1126,7 +1126,7 @@ class TestTimerConditionTypeGuards:
         ResetValue = Int("ResetValue")
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     on_delay(Timer[1], preset=100).reset(ResetValue)
 
@@ -1143,7 +1143,7 @@ class TestTimerStructuralContract:
             Acc: Int  # noqa: F821
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(MyTimer[1], preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1160,7 +1160,7 @@ class TestTimerStructuralContract:
             Acc: Dint  # noqa: F821
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(BigTimer[1], preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1177,7 +1177,7 @@ class TestTimerStructuralContract:
             Acc: Int  # noqa: F821
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(TypeError, match="'Done' to be a Bool"):
                     on_delay(BadDone[1], preset=100)
 
@@ -1190,7 +1190,7 @@ class TestTimerStructuralContract:
             Acc: Real  # noqa: F821
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(TypeError, match="'Acc' to be an Int or Dint"):
                     on_delay(BadAcc[1], preset=100)
 
@@ -1203,7 +1203,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], 100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1216,7 +1216,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], 5, "s")
 
         runner = runner_factory(logic, dt=1.0)
@@ -1233,7 +1233,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], 10, "ms")
 
         runner = runner_factory(logic, dt=0.010)
@@ -1246,7 +1246,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=2, unit="min")
 
         runner = runner_factory(logic, dt=60.0)
@@ -1262,7 +1262,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=1, unit="h")
 
         runner = runner_factory(logic, dt=3600.0)
@@ -1275,7 +1275,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], 100, "Tms")
 
         runner = runner_factory(logic, dt=0.010)
@@ -1288,7 +1288,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1302,7 +1302,7 @@ class TestPositionalAndUnitAliases:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], 100, "ms").reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.050)
@@ -1316,7 +1316,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(ValueError, match="unknown time unit"):
                     on_delay(Timer[1], 100, "furlongs")
 
@@ -1325,7 +1325,7 @@ class TestPositionalAndUnitAliases:
         Enable = Bool("Enable")
 
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 with pytest.raises(ValueError, match="ambiguous"):
                     on_delay(Timer[1], 100, "T")
 
@@ -1338,7 +1338,7 @@ class TestTimerStatusBits:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=30)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1378,7 +1378,7 @@ class TestTimerStatusBits:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Timer[1], preset=50).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1408,7 +1408,7 @@ class TestTimerStatusBits:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 off_delay(Timer[1], preset=30)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1448,7 +1448,7 @@ class TestTimerStatusBits:
         Enable = Bool("Enable")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(MyTimer, preset=100)
 
         runner = runner_factory(logic, dt=0.010)
@@ -1499,9 +1499,9 @@ class TestRetentiveDefaults:
         enable = Bool("RtonEnable")
         plain, kept = Timer.clone("PlainRton"), Timer.clone("KeptRton", retentive={"Acc": True})
         with Program() as logic:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(plain, 1000).reset(Bool("RtonReset"))
-            with Rung(enable):
+            with rung(enable):
                 on_delay(kept, 1000).reset(Bool("RtonReset2"))
 
         runner = runner_factory(logic, dt=0.010)

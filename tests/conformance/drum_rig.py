@@ -25,7 +25,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pyrung.core import Or, Rung, copy, math, out, time_drum, time_event_drum
+from pyrung.core import Or, copy, math, out, rung, time_drum, time_event_drum
 from tests.conformance.memory import c
 
 #: A time drum step's preset in ms.  It is longer than any trace.
@@ -195,7 +195,7 @@ def emit_pair(
         gate.append(~pair.pause)
     pattern = pattern_for(steps)
     reset = slot.Cmd == 0
-    with Rung(*gate):
+    with rung(*gate):
         t = time_drum(
             outputs=[pair.time.a, pair.time.b],
             presets=list(presets) if presets is not None else [LONG] * steps,
@@ -209,7 +209,7 @@ def emit_pair(
             t = t.jump(pair.jump, step=jump_step)
         if pair.jog is not None and jog:
             t.jog(pair.jog)
-    with Rung(*gate):
+    with rung(*gate):
         e = time_event_drum(
             outputs=[pair.event.a, pair.event.b],
             presets=list(te_presets) if te_presets is not None else [None] * steps,
@@ -283,7 +283,7 @@ def make_pair(
 
 def on_scans(slot: Any, bit: Any, *scans: int) -> None:
     """Turn *bit* on with an Out on exactly the scans *scans* (a rung above the drums)."""
-    with Rung(_any_scan(slot, scans)):
+    with rung(_any_scan(slot, scans)):
         out(bit)
 
 
@@ -295,7 +295,7 @@ def _any_scan(slot: Any, scans: Sequence[int]) -> Any:
 
 def put(slot: Any, scan: int, value: Any, into: Any) -> None:
     """Copy *value* into *into* on scan *scan* only (a rung above the drums)."""
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         copy(value, into)
 
 
@@ -305,19 +305,19 @@ def track(slot: Any, side: Side) -> None:
     The rungs are not gated on the case running or on the window.  A compare contact costs
     3 steps, and only :func:`snap` reads the state, on a scan of the window.
     """
-    with Rung():
+    with rung():
         math(side.step * 10, side.state)
-    with Rung(side.flag):
+    with rung(side.flag):
         math(side.state + 4, side.state)
-    with Rung(side.b):
+    with rung(side.b):
         math(side.state + 2, side.state)
-    with Rung(side.a):
+    with rung(side.a):
         math(side.state + 1, side.state)
 
 
 def snap(slot: Any, pair: Pair, scan: int, into: Any) -> None:
     """Set *into* to the time drum's state above the time & event drum's, as of scan *scan*."""
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         math(pair.time.state * 100 + pair.event.state, into)
 
 

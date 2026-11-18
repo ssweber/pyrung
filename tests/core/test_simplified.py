@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 
 from pyrung import call, subroutine
-from pyrung.core import PLC, Bool, Int, Program, Rung, branch, latch, out, reset
+from pyrung.core import PLC, Bool, Int, Program, branch, latch, out, reset, rung
 from pyrung.core import And as AllOf
 from pyrung.core import Or as AnyOf
 from pyrung.core.analysis.simplified import (
@@ -30,7 +30,7 @@ def test_single_rung_single_input() -> None:
     A = Bool("A")
     B = Bool("B")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(B)
 
     forms = simplified_forms(prog)
@@ -43,9 +43,9 @@ def test_two_rung_chain_resolves_pivot() -> None:
     P = Bool("P")
     T = Bool("T")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(P)
-        with Rung(P):
+        with rung(P):
             out(T)
 
     forms = simplified_forms(prog)
@@ -60,13 +60,13 @@ def test_deep_chain() -> None:
     P3 = Bool("P3")
     T = Bool("T")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(P1)
-        with Rung(P1):
+        with rung(P1):
             out(P2)
-        with Rung(P2):
+        with rung(P2):
             out(P3)
-        with Rung(P3):
+        with rung(P3):
             out(T)
 
     forms = simplified_forms(prog)
@@ -80,7 +80,7 @@ def test_and_chain() -> None:
     B = Bool("B")
     T = Bool("T")
     with Program() as prog:
-        with Rung(A, B):
+        with rung(A, B):
             out(T)
 
     forms = simplified_forms(prog)
@@ -92,7 +92,7 @@ def test_or_topology_via_an_or_contact() -> None:
     B = Bool("B")
     T = Bool("T")
     with Program() as prog:
-        with Rung(AnyOf(A, B)):
+        with rung(AnyOf(A, B)):
             out(T)
 
     forms = simplified_forms(prog)
@@ -106,7 +106,7 @@ def test_last_out_in_a_rung_wins() -> None:
     B = Bool("B")
     T = Bool("T")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             with branch(A):
                 out(T)
             with branch(B):
@@ -131,7 +131,7 @@ def test_branches_preserve_factored_form() -> None:
     Y = Bool("Y")
     T = Bool("T")
     with Program(strict=False) as prog:
-        with Rung(P):
+        with rung(P):
             with branch(X):
                 out(T)
             with branch(Y):
@@ -152,12 +152,12 @@ def test_pivot_resolution_preserves_branch_topology() -> None:
     Y = Bool("Y")
     T = Bool("T")
     with Program(strict=False) as prog:
-        with Rung(A, B):
+        with rung(A, B):
             with branch(X):
                 out(P)
             with branch(Y):
                 out(P)
-        with Rung(P):
+        with rung(P):
             out(T)
 
     forms = simplified_forms(prog)
@@ -173,9 +173,9 @@ def test_pivot_written_below_a_branch_is_not_seen_by_it() -> None:
     P = Bool("P")
     T = Bool("T")
     with Program(strict=False) as prog:
-        with Rung(A):
+        with rung(A):
             out(P)
-        with Rung(B):
+        with rung(B):
             with branch(P):
                 out(T)
             out(P)
@@ -194,9 +194,9 @@ def test_trunk_contact_keeps_its_first_solved_value() -> None:
     Q = Bool("Q")
     T = Bool("T")
     with Program(strict=False) as prog:
-        with Rung(A):
+        with rung(A):
             out(Q)
-        with Rung(Q):
+        with rung(Q):
             with branch(C):
                 out(Q)
             with branch(D):
@@ -221,7 +221,7 @@ def test_branches_of_different_parents_do_not_factor() -> None:
     R = Bool("R")
     U = Bool("U")
     with Program() as prog:
-        with Rung(G):
+        with rung(G):
             with branch(X):
                 with branch(Q):
                     latch(U)
@@ -241,9 +241,9 @@ def test_and_or_combined() -> None:
     P = Bool("P")
     T = Bool("T")
     with Program() as prog:
-        with Rung(AnyOf(B, C)):
+        with rung(AnyOf(B, C)):
             out(P)
-        with Rung(A, P):
+        with rung(A, P):
             out(T)
 
     forms = simplified_forms(prog)
@@ -254,7 +254,7 @@ def test_and_or_combined() -> None:
 def test_unconditional_rung() -> None:
     T = Bool("T")
     with Program() as prog:
-        with Rung():
+        with rung():
             out(T)
 
     forms = simplified_forms(prog)
@@ -265,7 +265,7 @@ def test_negation_normally_closed() -> None:
     A = Bool("A")
     T = Bool("T")
     with Program() as prog:
-        with Rung(~A):
+        with rung(~A):
             out(T)
 
     forms = simplified_forms(prog)
@@ -278,9 +278,9 @@ def test_negation_resolves_through_pivot() -> None:
     P = Bool("P")
     T = Bool("T")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(P)
-        with Rung(~P):
+        with rung(~P):
             out(T)
 
     forms = simplified_forms(prog)
@@ -291,7 +291,7 @@ def test_comparison_condition() -> None:
     Count = Int("Count")
     T = Bool("T")
     with Program() as prog:
-        with Rung(Count > 0):
+        with rung(Count > 0):
             out(T)
 
     forms = simplified_forms(prog)
@@ -309,7 +309,7 @@ def test_rising_edge() -> None:
     A = Bool("A")
     T = Bool("T")
     with Program() as prog:
-        with Rung(rise(A)):
+        with rung(rise(A)):
             out(T)
 
     forms = simplified_forms(prog)
@@ -327,11 +327,11 @@ def test_seal_in_does_not_infinite_loop() -> None:
     Running = Bool("Running")
     T = Bool("T")
     with Program() as prog:
-        with Rung(AnyOf(Start, SealIn)):
+        with rung(AnyOf(Start, SealIn)):
             out(Running)
-        with Rung(Running):
+        with rung(Running):
             out(SealIn)
-        with Rung(Running):
+        with rung(Running):
             out(T)
 
     forms = simplified_forms(prog)
@@ -408,11 +408,11 @@ def test_latch_reset_pivot_not_resolved() -> None:
     Running = Bool("Running")
     T = Bool("T")
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             latch(Running)
-        with Rung(Stop):
+        with rung(Stop):
             reset(Running)
-        with Rung(Running):
+        with rung(Running):
             out(T)
 
     forms = simplified_forms(prog)
@@ -426,9 +426,9 @@ def test_last_writer_wins() -> None:
     B = Bool("B")
     T = Bool("T")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(T)
-        with Rung(B):
+        with rung(B):
             out(T)
 
     forms = simplified_forms(prog)
@@ -445,9 +445,9 @@ def test_reset_writer_excluded_from_true_form() -> None:
     A = Bool("A")
     Y = Bool("Y")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(Y)
-        with Rung():  # unconditional reset, last rung
+        with rung():  # unconditional reset, last rung
             reset(Y)
 
     forms = simplified_forms(prog)
@@ -460,11 +460,11 @@ def test_multiple_out_writers_with_trailing_reset() -> None:
     B = Bool("B")
     Y = Bool("Y")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(Y)
-        with Rung(B):
+        with rung(B):
             out(Y)
-        with Rung():
+        with rung():
             reset(Y)
 
     forms = simplified_forms(prog)
@@ -476,7 +476,7 @@ def test_reset_only_terminal_is_false() -> None:
     Stop = Bool("Stop")
     Y = Bool("Y")
     with Program() as prog:
-        with Rung(Stop):
+        with rung(Stop):
             reset(Y)
 
     forms = simplified_forms(prog)
@@ -496,11 +496,11 @@ def test_subroutine_writer_carries_call_guard() -> None:
 
     @subroutine("sg_set_out")
     def sg_set_out() -> None:
-        with Rung(Src):
+        with rung(Src):
             out(Y)
 
     with Program() as prog:
-        with Rung(Mode == 1):
+        with rung(Mode == 1):
             call(sg_set_out)
 
     forms = simplified_forms(prog)
@@ -514,11 +514,11 @@ def test_unconditional_call_adds_no_guard() -> None:
 
     @subroutine("sg_uncond")
     def sg_uncond() -> None:
-        with Rung(Src):
+        with rung(Src):
             out(Y)
 
     with Program() as prog:
-        with Rung():
+        with rung():
             call(sg_uncond)
 
     forms = simplified_forms(prog)
@@ -535,25 +535,25 @@ def test_mutually_exclusive_subroutine_writers_or_not_dropped() -> None:
 
     @subroutine("sg_prod")
     def sg_prod() -> None:
-        with Rung(Src):
+        with rung(Src):
             out(Y)
 
     @subroutine("sg_manual")
     def sg_manual() -> None:
-        with Rung(Src):
+        with rung(Src):
             out(Y)
 
     @subroutine("sg_disable")
     def sg_disable() -> None:
-        with Rung():
+        with rung():
             reset(Y)
 
     with Program() as prog:
-        with Rung(Mode == 1):
+        with rung(Mode == 1):
             call(sg_prod)
-        with Rung(Mode == 3):
+        with rung(Mode == 3):
             call(sg_manual)
-        with Rung(Mode == 0):
+        with rung(Mode == 0):
             call(sg_disable)
 
     forms = simplified_forms(prog)
@@ -573,7 +573,7 @@ def test_terminal_form_str() -> None:
     A = Bool("A")
     T = Bool("T")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(T)
 
     forms = simplified_forms(prog)
@@ -584,7 +584,7 @@ def test_program_simplified_method() -> None:
     A = Bool("A")
     T = Bool("T")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(T)
 
     forms = prog.simplified()
@@ -606,17 +606,17 @@ def test_realistic_motor_circuit() -> None:
     MotorOut = Bool("MotorOut")
 
     with Program() as prog:
-        with Rung(~EStop):
+        with rung(~EStop):
             out(SafetyOK)
-        with Rung(RunPermit, SafetyOK):
+        with rung(RunPermit, SafetyOK):
             out(Permitted)
-        with Rung(Permitted, AnyOf(StartBtn, SealIn)):
+        with rung(Permitted, AnyOf(StartBtn, SealIn)):
             out(Running)
-        with Rung(Running):
+        with rung(Running):
             out(SealIn)
         # Both paths go into one coil through an Or contact.  Two out(MotorOut) would be
         # two coils, and the last one would decide.
-        with Rung(AnyOf(AllOf(Running, ~Fault), MaintOverride)):
+        with rung(AnyOf(AllOf(Running, ~Fault), MaintOverride)):
             out(MotorOut)
 
     forms = simplified_forms(prog)
@@ -639,7 +639,7 @@ class TestTerminalFormPermissives:
         Start = Bool("Start")
         Motor = Bool("Motor")
         with Program(strict=False) as logic:
-            with Rung(SafetyOK, Start):
+            with rung(SafetyOK, Start):
                 out(Motor)
 
         assert SafetyOK in logic.simplified()["Motor"].permissives
@@ -651,7 +651,7 @@ class TestTerminalFormPermissives:
         Jog = Bool("Jog")
         Motor = Bool("Motor")
         with Program(strict=False) as logic:
-            with Rung(SafetyOK, AnyOf(Start, Jog)):
+            with rung(SafetyOK, AnyOf(Start, Jog)):
                 out(Motor)
 
         permissives = logic.simplified()["Motor"].permissives
@@ -666,7 +666,7 @@ class TestTerminalFormPermissives:
         MaintenanceOverride = Bool("MaintenanceOverride")
         Motor = Bool("Motor")
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 with branch(SafetyOK, Start):
                     out(Motor)
                 with branch(MaintenanceOverride):
@@ -681,9 +681,9 @@ class TestTerminalFormPermissives:
         Start = Bool("Start")
         Motor = Bool("Motor")
         with Program(strict=False) as logic:
-            with Rung(SafetyOK, GuardClosed):
+            with rung(SafetyOK, GuardClosed):
                 out(Ready)
-            with Rung(Ready, Start):
+            with rung(Ready, Start):
                 out(Motor)
 
         permissives = logic.simplified()["Motor"].permissives
@@ -695,7 +695,7 @@ class TestTerminalFormPermissives:
         Fault = Bool("Fault")
         Motor = Bool("Motor")
         with Program(strict=False) as logic:
-            with Rung(SafetyOK, ~Fault):
+            with rung(SafetyOK, ~Fault):
                 out(Motor)
 
         permissives = logic.simplified()["Motor"].permissives

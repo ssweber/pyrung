@@ -2,7 +2,7 @@
 
 This tests the DSL syntax:
         with Program() as logic:
-            with Rung(condition):
+            with rung(condition):
                 out(target)
 """
 
@@ -17,30 +17,30 @@ class TestProgramContextManager:
 
     def test_program_captures_rungs(self):
         """Program context manager captures rungs defined within it."""
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         assert len(prog.rungs) == 1
 
     def test_program_multiple_rungs(self):
         """Program captures multiple rungs in order."""
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Button = Bool("Button")
         Light = Bool("Light")
         Motor = Bool("Motor")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
-            with Rung():  # Unconditional
+            with rung():  # Unconditional
                 out(Motor)
 
         assert len(prog.rungs) == 2
@@ -51,13 +51,13 @@ class TestRungDSL:
 
     def test_rung_with_out(self):
         """out() adds OUT instruction."""
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         # Verify the rung works
@@ -67,13 +67,13 @@ class TestRungDSL:
 
     def test_rung_with_out_block_range(self):
         """out() accepts .select() and drives all tags in the range."""
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Button = Bool("Button")
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 out(C.select(1, 3))
 
         state = SystemState().with_tags({"Button": True, "C1": False, "C2": False, "C3": False})
@@ -92,13 +92,13 @@ class TestRungDSL:
     def test_rung_with_immediate_contact(self):
         """Rung accepts immediate contact wrappers for BOOL tags."""
         from pyrung.core import InputBlock, OutputBlock
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         X = InputBlock("X", TagType.BOOL, 1, 8)
         Y = OutputBlock("Y", TagType.BOOL, 1, 8)
 
         with Program() as prog:
-            with Rung(X[1].immediate):
+            with rung(X[1].immediate):
                 out(Y[1])
 
         state = SystemState().with_tags({"X1": True, "Y1": False})
@@ -108,13 +108,13 @@ class TestRungDSL:
     def test_out_accepts_immediate_tag_wrapper(self):
         """out(immediate(tag)) executes with core pass-through semantics."""
         from pyrung.core import InputBlock, OutputBlock, immediate
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         X = InputBlock("X", TagType.BOOL, 1, 8)
         Y = OutputBlock("Y", TagType.BOOL, 1, 8)
 
         with Program() as prog:
-            with Rung(X[1]):
+            with rung(X[1]):
                 out(immediate(Y[1]))
 
         state = SystemState().with_tags({"X1": True, "Y1": False})
@@ -124,13 +124,13 @@ class TestRungDSL:
     def test_out_accepts_immediate_block_range_wrapper(self):
         """out(immediate(.select())) executes as a normal OUT range in core runtime."""
         from pyrung.core import InputBlock, OutputBlock, immediate
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         X = InputBlock("X", TagType.BOOL, 1, 8)
         Y = OutputBlock("Y", TagType.BOOL, 1, 8)
 
         with Program() as prog:
-            with Rung(X[1]):
+            with rung(X[1]):
                 out(immediate(Y.select(1, 2)))
 
         state = SystemState().with_tags({"X1": True, "Y1": False, "Y2": False})
@@ -140,13 +140,13 @@ class TestRungDSL:
 
     def test_rung_with_latch(self):
         """latch() adds LATCH instruction."""
-        from pyrung.core.program import Program, Rung, latch
+        from pyrung.core.program import Program, latch, rung
 
         Button = Bool("Button")
         Motor = Bool("Motor")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 latch(Motor)
 
         state = SystemState().with_tags({"Button": True, "Motor": False})
@@ -155,13 +155,13 @@ class TestRungDSL:
 
     def test_rung_with_latch_block_range(self):
         """latch() accepts .select() and latches all tags in the range."""
-        from pyrung.core.program import Program, Rung, latch
+        from pyrung.core.program import Program, latch, rung
 
         Button = Bool("Button")
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 latch(C.select(10, 12))
 
         state = SystemState().with_tags({"Button": True, "C10": False, "C11": False, "C12": False})
@@ -179,13 +179,13 @@ class TestRungDSL:
 
     def test_rung_with_reset(self):
         """reset() adds RESET instruction."""
-        from pyrung.core.program import Program, Rung, reset
+        from pyrung.core.program import Program, reset, rung
 
         StopButton = Bool("StopButton")
         Motor = Bool("Motor")
 
         with Program() as prog:
-            with Rung(StopButton):
+            with rung(StopButton):
                 reset(Motor)
 
         state = SystemState().with_tags({"StopButton": True, "Motor": True})
@@ -194,13 +194,13 @@ class TestRungDSL:
 
     def test_rung_with_reset_block_range(self):
         """reset() accepts .select() and resets all tags in the range."""
-        from pyrung.core.program import Program, Rung, reset
+        from pyrung.core.program import Program, reset, rung
 
         StopButton = Bool("StopButton")
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as prog:
-            with Rung(StopButton):
+            with rung(StopButton):
                 reset(C.select(20, 22))
 
         state = SystemState().with_tags({"StopButton": True, "C20": True, "C21": True, "C22": True})
@@ -211,13 +211,13 @@ class TestRungDSL:
 
     def test_rung_with_copy(self):
         """copy() adds COPY instruction."""
-        from pyrung.core.program import Program, Rung, copy
+        from pyrung.core.program import Program, copy, rung
 
         Button = Bool("Button")
         Step = Int("Step")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 copy(5, Step)
 
         state = SystemState().with_tags({"Button": True, "Step": 0})
@@ -226,14 +226,14 @@ class TestRungDSL:
 
     def test_rung_with_pack_bits(self):
         """pack_bits() adds PACK_BITS instruction."""
-        from pyrung.core.program import Program, Rung, pack_bits
+        from pyrung.core.program import Program, pack_bits, rung
 
         Button = Bool("Button")
         C = Block("C", TagType.BOOL, 1, 100)
         Dest = Int("Dest")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 pack_bits(C.select(1, 4), Dest)
 
         state = SystemState().with_tags(
@@ -244,14 +244,14 @@ class TestRungDSL:
 
     def test_rung_with_pack_words(self):
         """pack_words() adds PACK_WORDS instruction with low-word-first ordering."""
-        from pyrung.core.program import Program, Rung, pack_words
+        from pyrung.core.program import Program, pack_words, rung
 
         Button = Bool("Button")
         DS = Block("DS", TagType.INT, 1, 100)
         Dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 pack_words(DS.select(1, 2), Dest)
 
         state = SystemState().with_tags({"Button": True, "DS1": 0x1234, "DS2": 0x5678})
@@ -260,14 +260,14 @@ class TestRungDSL:
 
     def test_rung_with_pack_text(self):
         """pack_text() parses a CHAR range into a numeric destination."""
-        from pyrung.core.program import Program, Rung, pack_text
+        from pyrung.core.program import Program, pack_text, rung
 
         Button = Bool("Button")
         CH = Block("CH", TagType.CHAR, 1, 100)
         Dest = Int("Dest")
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 pack_text(CH.select(1, 3), Dest)
 
         state = SystemState().with_tags({"Button": True, "CH1": "1", "CH2": "2", "CH3": "3"})
@@ -276,14 +276,14 @@ class TestRungDSL:
 
     def test_rung_with_unpack_to_bits(self):
         """unpack_to_bits() adds UNPACK_TO_BITS instruction."""
-        from pyrung.core.program import Program, Rung, unpack_to_bits
+        from pyrung.core.program import Program, rung, unpack_to_bits
 
         Button = Bool("Button")
         Source = Dint("Source")
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 unpack_to_bits(Source, C.select(1, 4))
 
         state = SystemState().with_tags({"Button": True, "Source": 0b1010})
@@ -295,14 +295,14 @@ class TestRungDSL:
 
     def test_rung_with_unpack_to_words(self):
         """unpack_to_words() adds UNPACK_TO_WORDS instruction."""
-        from pyrung.core.program import Program, Rung, unpack_to_words
+        from pyrung.core.program import Program, rung, unpack_to_words
 
         Button = Bool("Button")
         Source = Real("Source")
         DH = Block("DH", TagType.WORD, 1, 100)
 
         with Program() as prog:
-            with Rung(Button):
+            with rung(Button):
                 unpack_to_words(Source, DH.select(1, 2))
 
         state = SystemState().with_tags({"Button": True, "Source": 1.0})
@@ -312,13 +312,13 @@ class TestRungDSL:
 
     def test_rung_with_tilde_normally_closed_condition(self):
         """~Bool creates normally closed condition."""
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung(~Button):  # Light on when Button is OFF
+            with rung(~Button):  # Light on when Button is OFF
                 out(Light)
 
         # Button OFF -> Light ON
@@ -333,14 +333,14 @@ class TestRungDSL:
 
     def test_rung_rejects_inverted_int_expression_as_condition(self):
         """~Int creates an expression and is invalid as a direct rung condition."""
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Step = Int("Step")
         Light = Bool("Light")
 
         with pytest.raises(TypeError, match="Expected Condition or Tag"):
             with Program():
-                with Rung(~Step):
+                with rung(~Step):
                     out(Light)
 
 
@@ -348,7 +348,7 @@ class TestSearchDSL:
     """Test SEARCH integration via Program/Rung DSL."""
 
     def test_rung_with_search_instruction(self):
-        from pyrung.core.program import Program, Rung, search
+        from pyrung.core.program import Program, rung, search
 
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 100)
@@ -356,7 +356,7 @@ class TestSearchDSL:
         Found = Bool("Found")
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 search(DS.select(1, 3) == 20, result=Result, found=Found)
 
         state = SystemState().with_tags(
@@ -367,7 +367,7 @@ class TestSearchDSL:
         assert new_state.tags["Found"] is True
 
     def test_search_then_copy_by_pointer_pattern(self):
-        from pyrung.core.program import Program, Rung, copy, search
+        from pyrung.core.program import Program, copy, rung, search
 
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 100)
@@ -376,9 +376,9 @@ class TestSearchDSL:
         Found = Bool("Found")
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 search(DS.select(1, 5) == 30, result=Pointer, found=Found)
-            with Rung(Found):
+            with rung(Found):
                 copy(DS[Pointer], DD[1])
 
         state = SystemState().with_tags(
@@ -401,7 +401,7 @@ class TestSearchDSL:
         assert new_state.tags["DD1"] == 30
 
     def test_search_continuous_progression_across_runner_steps(self):
-        from pyrung.core.program import Program, Rung, search
+        from pyrung.core.program import Program, rung, search
 
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 100)
@@ -409,7 +409,7 @@ class TestSearchDSL:
         Found = Bool("Found")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 search(DS.select(1, 4) == 7, result=Result, found=Found, continuous=True)
 
         runner = PLC(logic)
@@ -430,7 +430,7 @@ class TestSearchDSL:
         assert runner.current_state.tags["Found"] is False
 
     def test_search_reverse_range_order(self):
-        from pyrung.core.program import Program, Rung, search
+        from pyrung.core.program import Program, rung, search
 
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 100)
@@ -438,7 +438,7 @@ class TestSearchDSL:
         Found = Bool("Found")
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 search(DS.select(1, 4).reverse() == 5, result=Result, found=Found)
 
         state = SystemState().with_tags(
@@ -450,7 +450,7 @@ class TestSearchDSL:
         assert new_state.tags["Found"] is True
 
     def test_search_text_end_to_end(self):
-        from pyrung.core.program import Program, Rung, search
+        from pyrung.core.program import Program, rung, search
 
         Enable = Bool("Enable")
         CH = Block("CH", TagType.CHAR, 1, 100)
@@ -458,7 +458,7 @@ class TestSearchDSL:
         Found = Bool("Found")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 search(CH.select(1, 6) == "ADC", result=Result, found=Found)
 
         runner = PLC(logic)
@@ -484,14 +484,14 @@ class TestProgramDecorator:
 
     def test_program_decorator(self):
         """@program decorator captures rungs from function."""
-        from pyrung.core.program import Program, Rung, out, program
+        from pyrung.core.program import Program, out, program, rung
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         @program
         def my_logic():
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         # my_logic is now a Program
@@ -503,7 +503,7 @@ class TestStrictDslControlFlowGuard:
     """Tests for strict AST control-flow guard in Program/@program/@subroutine."""
 
     def test_context_manager_rejects_if(self):
-        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+        from pyrung.core.program import ForbiddenControlFlowError, Program, out, rung
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -511,11 +511,11 @@ class TestStrictDslControlFlowGuard:
         with pytest.raises(ForbiddenControlFlowError, match="if/elif/else"):
             with Program():
                 if True:
-                    with Rung(Enable):
+                    with rung(Enable):
                         out(Light)
 
     def test_context_manager_rejects_and_or(self):
-        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+        from pyrung.core.program import ForbiddenControlFlowError, Program, out, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -523,22 +523,22 @@ class TestStrictDslControlFlowGuard:
 
         with pytest.raises(ForbiddenControlFlowError, match="And\\(\\).*Or\\(\\)"):
             with Program():
-                with Rung(A and B):
+                with rung(A and B):
                     out(Light)
 
     def test_context_manager_rejects_not(self):
-        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+        from pyrung.core.program import ForbiddenControlFlowError, Program, out, rung
 
         A = Bool("A")
         Light = Bool("Light")
 
         with pytest.raises(ForbiddenControlFlowError, match="Use `~Tag`"):
             with Program():
-                with Rung(not A):
+                with rung(not A):
                     out(Light)
 
     def test_context_manager_rejects_for_loop(self):
-        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+        from pyrung.core.program import ForbiddenControlFlowError, Program, out, rung
 
         A = Bool("A")
         Light = Bool("Light")
@@ -546,7 +546,7 @@ class TestStrictDslControlFlowGuard:
         with pytest.raises(ForbiddenControlFlowError, match="for/while"):
             with Program():
                 for _ in range(1):
-                    with Rung(A):
+                    with rung(A):
                         out(Light)
 
     def test_context_manager_rejects_try_except(self):
@@ -587,7 +587,7 @@ class TestStrictDslControlFlowGuard:
                 helper()
 
     def test_program_decorator_rejects_assignment(self):
-        from pyrung.core.program import ForbiddenControlFlowError, Rung, out, program
+        from pyrung.core.program import ForbiddenControlFlowError, out, program, rung
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -598,11 +598,11 @@ class TestStrictDslControlFlowGuard:
             def my_logic():
                 value = 1
                 if value:
-                    with Rung(Enable):
+                    with rung(Enable):
                         out(Light)
 
     def test_allowed_with_expr_call_and_pass_are_accepted(self):
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -615,14 +615,14 @@ class TestStrictDslControlFlowGuard:
         with Program() as logic:
             pass
             marker()
-            with Rung(Enable):
+            with rung(Enable):
                 out(Light)
 
         assert calls == ["seen"]
         assert len(logic.rungs) == 1
 
     def test_context_manager_allows_rung_comment_assignment(self):
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -631,7 +631,7 @@ class TestStrictDslControlFlowGuard:
 
         with Program() as logic:
             comment("Turn on light.")
-            with Rung(Enable):
+            with rung(Enable):
                 out(Light)
 
         assert logic.rungs[0].comment == "Turn on light."
@@ -649,7 +649,7 @@ class TestStrictDslControlFlowGuard:
                 dummy.comment = "mutated"
 
     def test_subroutine_decorator_rejects_comment_in_rung_body(self):
-        from pyrung.core.program import ForbiddenControlFlowError, Rung, comment, out, subroutine
+        from pyrung.core.program import ForbiddenControlFlowError, comment, out, rung, subroutine
 
         Light = Bool("Light")
 
@@ -657,12 +657,12 @@ class TestStrictDslControlFlowGuard:
 
             @subroutine("bad_sub")
             def bad_sub():
-                with Rung():
+                with rung():
                     comment("misplaced")
                     out(Light)
 
     def test_subroutine_decorator_allows_comment_before_rung(self):
-        from pyrung.core.program import Program, Rung, call, comment, out, subroutine
+        from pyrung.core.program import Program, call, comment, out, rung, subroutine
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -670,17 +670,17 @@ class TestStrictDslControlFlowGuard:
         @subroutine("good_sub")
         def good_sub():
             comment("Sub edit")
-            with Rung():
+            with rung():
                 out(Light)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 call(good_sub)
 
         assert logic.subroutines["good_sub"][0].comment == "Sub edit"
 
     def test_program_strict_false_opt_out(self):
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -688,13 +688,13 @@ class TestStrictDslControlFlowGuard:
         with Program(strict=False) as logic:
             value = 1
             if value:
-                with Rung(Enable):
+                with rung(Enable):
                     out(Light)
 
         assert len(logic.rungs) == 1
 
     def test_program_decorator_strict_false_opt_out(self):
-        from pyrung.core.program import Program, Rung, out, program
+        from pyrung.core.program import Program, out, program, rung
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -703,14 +703,14 @@ class TestStrictDslControlFlowGuard:
         def my_logic():
             value = 1
             if value:
-                with Rung(Enable):
+                with rung(Enable):
                     out(Light)
 
         assert isinstance(my_logic, Program)
         assert len(my_logic.rungs) == 1
 
     def test_subroutine_decorator_rejects_assignment(self):
-        from pyrung.core.program import ForbiddenControlFlowError, Rung, out, subroutine
+        from pyrung.core.program import ForbiddenControlFlowError, out, rung, subroutine
 
         Light = Bool("Light")
 
@@ -720,11 +720,11 @@ class TestStrictDslControlFlowGuard:
             def bad_sub():
                 value = 1
                 if value:
-                    with Rung():
+                    with rung():
                         out(Light)
 
     def test_subroutine_decorator_strict_false_opt_out(self):
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -733,11 +733,11 @@ class TestStrictDslControlFlowGuard:
         def init_sequence():
             value = 1
             if value:
-                with Rung():
+                with rung():
                     out(Light)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 call(init_sequence)
 
         runner = PLC(logic)
@@ -763,7 +763,7 @@ class TestStrictDslControlFlowGuard:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             with program_module.Program() as logic:
-                with program_module.Rung(Enable):
+                with program_module.rung(Enable):
                     program_module.out(Light)
 
         assert len(logic.rungs) == 1
@@ -774,18 +774,18 @@ class TestStrictDslControlFlowGuard:
         from pyrung.core.program import Program
 
         source = (
-            "from pyrung import Bool, Program, Rung, out, subroutine\n"
+            "from pyrung import Bool, Program, rung, out, subroutine\n"
             "Enable = Bool('Enable')\n"
             "Light = Bool('Light')\n"
             "@subroutine('init')\n"
             "def init():\n"
-            "    with Rung(Light):\n"
+            "    with rung(Light):\n"
             "        out(Enable)\n"
             "with Program() as logic:\n"
-            "    with Rung(Enable):\n"
+            "    with rung(Enable):\n"
             "        out(Light)\n"
             "    with subroutine('nested'):\n"
-            "        with Rung(Light):\n"
+            "        with rung(Light):\n"
             "            out(Enable)\n"
         )
         namespace: dict[str, object] = {}
@@ -813,7 +813,7 @@ class TestStrictDslControlFlowGuard:
 
         with pytest.warns(RuntimeWarning, match="pyrung skipped the strict check of"):
             with program_module.Program() as logic:
-                with program_module.Rung(Enable):
+                with program_module.rung(Enable):
                     program_module.out(Light)
 
         assert len(logic.rungs) == 1
@@ -861,18 +861,18 @@ class TestCastingReferenceExamples:
 
     def test_example1_bypass_sign_priority_via_dh(self):
         """DS=-1 -> DD keeps sign, but DS->DH->DD preserves 0x0000FFFF."""
-        from pyrung.core.program import Program, Rung, copy
+        from pyrung.core.program import Program, copy, rung
 
         DS = Block("DS", TagType.INT, 1, 100)
         DH = Block("DH", TagType.WORD, 1, 100)
         DD = Block("DD", TagType.DINT, 1, 100)
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(-1, DS[1])
-            with Rung():
+            with rung():
                 copy(DS[1], DD[1])
-            with Rung():
+            with rung():
                 copy(DS[1], DH[1])
                 copy(DH[1], DD[2])
 
@@ -885,20 +885,20 @@ class TestCastingReferenceExamples:
 
     def test_example2_unpack_preserves_32_bit_pattern(self):
         """DD -> DS clamps, while DD -> unpack DH -> pack DD preserves pattern."""
-        from pyrung.core.program import Program, Rung, copy, pack_words, unpack_to_words
+        from pyrung.core.program import Program, copy, pack_words, rung, unpack_to_words
 
         DS = Block("DS", TagType.INT, 1, 100)
         DH = Block("DH", TagType.WORD, 1, 100)
         DD = Block("DD", TagType.DINT, 1, 100)
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(305_419_896, DD[1])  # 0x12345678
-            with Rung():
+            with rung():
                 copy(DD[1], DS[1])  # Range-limited for INT destination
-            with Rung():
+            with rung():
                 unpack_to_words(DD[1], DH.select(1, 2))
-            with Rung():
+            with rung():
                 pack_words(DH.select(1, 2), DD[2])
 
         new_state = evaluate_program(prog, SystemState())
@@ -915,13 +915,13 @@ class TestCopyAndMathReferenceExamples:
 
     def test_copy_block_example_with_oneshot_behavior(self):
         """copy_block.md: one-shot block copy on OFF->ON transition behavior."""
-        from pyrung.core.program import Program, Rung, blockcopy
+        from pyrung.core.program import Program, blockcopy, rung
 
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 1000)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 blockcopy(DS.select(1, 3), DS.select(501, 503), oneshot=True)
 
         runner = PLC(logic)
@@ -963,13 +963,13 @@ class TestCopyAndMathReferenceExamples:
 
     def test_fill_example_with_oneshot_behavior(self):
         """copy_fill.md: one-shot fill loads constant across destination range."""
-        from pyrung.core.program import Program, Rung, fill
+        from pyrung.core.program import Program, fill, rung
 
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 1000)
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 fill(1000, DS.select(501, 503), oneshot=True)
 
         runner = PLC(logic)
@@ -1000,14 +1000,14 @@ class TestCopyAndMathReferenceExamples:
 
     def test_pack_copy_example_c2_to_c7_into_dh(self):
         """copy_pack.md: pack range of C bits into a DH word destination."""
-        from pyrung.core.program import Program, Rung, pack_bits
+        from pyrung.core.program import Program, pack_bits, rung
 
         Enable = Bool("Enable")
         C = Block("C", TagType.BOOL, 1, 100)
         DH = Block("DH", TagType.WORD, 1, 100)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 pack_bits(C.select(2, 7), DH[10])
 
         # C2 is bit0, C3 bit1 ... C7 bit5
@@ -1027,14 +1027,14 @@ class TestCopyAndMathReferenceExamples:
 
     def test_unpack_copy_example_dh_to_c_range(self):
         """copy_unpack.md: unpack DH source into destination C bit range."""
-        from pyrung.core.program import Program, Rung, unpack_to_bits
+        from pyrung.core.program import Program, rung, unpack_to_bits
 
         Enable = Bool("Enable")
         C = Block("C", TagType.BOOL, 1, 100)
         DH = Block("DH", TagType.WORD, 1, 100)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 unpack_to_bits(DH[2], C.select(15, 19))
 
         # bit pattern for lower 5 bits: 1,0,1,1,0
@@ -1050,13 +1050,13 @@ class TestCopyAndMathReferenceExamples:
     def test_math_hex_shift_rotate_example(self):
         """math_hex.md: RSH/RRO example with DH1=0x45B1."""
         from pyrung.core import rro, rsh
-        from pyrung.core.program import Program, Rung, math
+        from pyrung.core.program import Program, math, rung
 
         Enable = Bool("Enable")
         DH = Block("DH", TagType.WORD, 1, 200)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 math(rsh(DH[1], 1), DH[2])
                 math(rro(DH[1], 1), DH[3])
 
@@ -1067,14 +1067,14 @@ class TestCopyAndMathReferenceExamples:
         assert new_state.tags["DH3"] == 0xA2D8
 
     def test_calc_dsl_rejects_mode_keyword(self):
-        from pyrung.core.program import Program, Rung, math
+        from pyrung.core.program import Program, math, rung
 
         Enable = Bool("Enable")
         Result = Int("Result")
 
         with Program():
             with pytest.raises(TypeError):
-                with Rung(Enable):
+                with rung(Enable):
                     math(1 + 2, Result, mode="decimal")  # ty: ignore[unknown-argument]
 
 
@@ -1084,13 +1084,13 @@ class TestClickPrebuiltProgramIntegration:
     def test_click_input_to_output_rung_uses_canonical_names(self):
         """x/y prebuilt blocks execute in Program with Click canonical tag names."""
         from pyrung.click import ClickBlocks
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         blocks = ClickBlocks()
         x, y = blocks.x, blocks.y
 
         with Program() as prog:
-            with Rung(x[1]):
+            with rung(x[1]):
                 out(y[1])
 
         state = SystemState().with_tags({"X001": True, "Y001": False})
@@ -1100,13 +1100,13 @@ class TestClickPrebuiltProgramIntegration:
     def test_click_sparse_window_pack_bits_skips_invalid_addresses(self):
         """x.select(1, 21) packs 17 valid bits (1-16 and 21), not raw 21 addresses."""
         from pyrung.click import ClickBlocks
-        from pyrung.core.program import Program, Rung, pack_bits
+        from pyrung.core.program import Program, pack_bits, rung
 
         blocks = ClickBlocks()
         dd, x = blocks.dd, blocks.x
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 pack_bits(x.select(1, 21), dd[1])
 
         # Only X021 is ON. If sparse gaps are skipped, this is packed as bit 16.
@@ -1120,13 +1120,13 @@ class TestPLCIntegration:
 
     def test_runner_executes_program(self, runner_factory):
         """PLC evaluates program logic each scan."""
-        from pyrung.core.program import Program, Rung, out
+        from pyrung.core.program import Program, out, rung
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         runner = runner_factory(logic)
@@ -1150,7 +1150,7 @@ class TestPLCIntegration:
 
     def test_runner_with_latch_reset_circuit(self, runner_factory):
         """Classic start/stop latch circuit."""
-        from pyrung.core.program import Program, Rung, latch, reset
+        from pyrung.core.program import Program, latch, reset, rung
 
         StartButton = Bool("StartButton")
         StopButton = Bool("StopButton")
@@ -1158,11 +1158,11 @@ class TestPLCIntegration:
 
         with Program() as logic:
             # Start rung: latch motor when start pressed
-            with Rung(StartButton):
+            with rung(StartButton):
                 latch(MotorRunning)
 
             # Stop rung: reset motor when stop pressed
-            with Rung(StopButton):
+            with rung(StopButton):
                 reset(MotorRunning)
 
         runner = runner_factory(logic)
@@ -1188,7 +1188,7 @@ class TestPLCIntegration:
 
     def test_runner_with_step_sequencer(self, runner_factory):
         """Simple step sequencer using copy."""
-        from pyrung.core.program import Program, Rung, copy, out
+        from pyrung.core.program import Program, copy, out, rung
 
         Step = Int("Step")
         NextButton = Bool("NextButton")
@@ -1197,15 +1197,15 @@ class TestPLCIntegration:
 
         with Program() as logic:
             # Light1 on when Step == 0
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 out(Light1)
 
             # Light2 on when Step == 1
-            with Rung(Step == 1):
+            with rung(Step == 1):
                 out(Light2)
 
             # Advance step when button pressed (simplified - no edge detection)
-            with Rung(NextButton, Step == 0):
+            with rung(NextButton, Step == 0):
                 copy(1, Step, oneshot=True)
 
         runner = runner_factory(logic)
@@ -1240,7 +1240,7 @@ class TestBranch:
 
     def test_branch_executes_when_parent_and_branch_conditions_true(self, runner_factory):
         """Branch executes when parent rung AND branch conditions are true."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
@@ -1248,7 +1248,7 @@ class TestBranch:
         Light2 = Bool("Light2")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 out(Light1)
                 with branch(AutoMode):
                     out(Light2)
@@ -1262,7 +1262,7 @@ class TestBranch:
 
     def test_branch_not_executed_when_parent_false(self, runner_factory):
         """Branch does not execute when parent rung condition is false."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
@@ -1270,7 +1270,7 @@ class TestBranch:
         Light2 = Bool("Light2")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 out(Light1)
                 with branch(AutoMode):
                     out(Light2)
@@ -1285,7 +1285,7 @@ class TestBranch:
 
     def test_branch_not_executed_when_branch_condition_false(self, runner_factory):
         """Branch does not execute when branch condition is false."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
@@ -1293,7 +1293,7 @@ class TestBranch:
         Light2 = Bool("Light2")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 out(Light1)
                 with branch(AutoMode):
                     out(Light2)
@@ -1308,14 +1308,14 @@ class TestBranch:
 
     def test_branch_with_copy_oneshot(self, runner_factory):
         """Branch can contain copy with oneshot."""
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, branch, copy, out, rung
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 out(Light)
                 with branch(AutoMode):
                     copy(1, Step, oneshot=True)
@@ -1333,7 +1333,7 @@ class TestBranch:
 
     def test_branch_reads_its_contacts_when_the_solve_reaches_it(self, runner_factory):
         """Check that a branch reads its contacts after the rows above it have written."""
-        from pyrung.core.program import Program, Rung, branch, latch, out
+        from pyrung.core.program import Program, branch, latch, out, rung
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
@@ -1341,7 +1341,7 @@ class TestBranch:
         Light2 = Bool("Light2")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 out(Light1)
                 # This write comes before the branch in source order, so the branch
                 # reads the new value. A CLICK solves its rows live in the same way.
@@ -1362,7 +1362,7 @@ class TestBranch:
 
         The trunk is solved once.
         """
-        from pyrung.core.program import Program, Rung, branch, copy, out
+        from pyrung.core.program import Program, branch, copy, out, rung
 
         Step = Int("Step")
         Go = Bool("Go")
@@ -1370,7 +1370,7 @@ class TestBranch:
         Lamp = Bool("Lamp")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 copy(1, Step)
                 out(Light)
                 with branch(Go):
@@ -1392,14 +1392,14 @@ class TestBranch:
 
         Light = Bool("Light")
 
-        with pytest.raises(RuntimeError, match="must be called inside a Rung"):
+        with pytest.raises(RuntimeError, match="must be called inside a rung"):
             with Program():
                 with branch():  # No parent rung!
                     out(Light)
 
     def test_multiple_branches_in_rung(self, runner_factory):
         """Multiple branches can exist in a single rung."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         Step = Int("Step")
         Mode1 = Bool("Mode1")
@@ -1409,7 +1409,7 @@ class TestBranch:
         Light3 = Bool("Light3")
 
         with Program() as logic:
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 out(Light1)
                 with branch(Mode1):
                     out(Light2)
@@ -1437,7 +1437,7 @@ class TestBranch:
         """Branch's _get_combined_condition() should include parent AND branch conditions."""
         from pyrsistent import pmap
 
-        from pyrung.core.program import Program, Rung, branch
+        from pyrung.core.program import Program, branch, rung
         from pyrung.core.state import SystemState
 
         Step = Int("Step")
@@ -1454,7 +1454,7 @@ class TestBranch:
             captured_condition = ctx._rung._get_combined_condition()
 
         with Program():
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 with branch(Mode):
                     capture_condition()
 
@@ -1479,7 +1479,7 @@ class TestBranch:
 
     def test_branch_effects_apply_before_later_call_in_same_rung(self, runner_factory):
         """Branch side effects apply before later same-rung instructions in source order."""
-        from pyrung.core.program import Program, Rung, branch, call, copy, out, subroutine
+        from pyrung.core.program import Program, branch, call, copy, out, rung, subroutine
 
         Step = Int("Step")
         AutoMode = Bool("AutoMode")
@@ -1488,10 +1488,10 @@ class TestBranch:
 
         with Program() as logic:
             with subroutine("sub"):
-                with Rung(Step == 1):
+                with rung(Step == 1):
                     out(SubLight)
 
-            with Rung(Step == 0):
+            with rung(Step == 0):
                 with branch(AutoMode):
                     out(BranchDone)
                     copy(1, Step, oneshot=True)
@@ -1511,7 +1511,7 @@ class TestNestedBranches:
 
     def test_2_deep_nesting_all_conditions_true(self, runner_factory):
         """Nested branch executes when rung, parent branch, and nested branch are all true."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1521,7 +1521,7 @@ class TestNestedBranches:
         Z = Bool("Z")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
                 with branch(B):
                     out(Y)
@@ -1538,7 +1538,7 @@ class TestNestedBranches:
 
     def test_2_deep_nesting_inner_false(self, runner_factory):
         """Inner nested branch does not execute when its condition is false."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1548,7 +1548,7 @@ class TestNestedBranches:
         Z = Bool("Z")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
                 with branch(B):
                     out(Y)
@@ -1565,7 +1565,7 @@ class TestNestedBranches:
 
     def test_2_deep_nesting_middle_false_disables_inner(self, runner_factory):
         """When middle branch is false, nested branch also does not execute."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1575,7 +1575,7 @@ class TestNestedBranches:
         Z = Bool("Z")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
                 with branch(B):
                     out(Y)
@@ -1592,7 +1592,7 @@ class TestNestedBranches:
 
     def test_3_deep_nesting(self, runner_factory):
         """Three levels of branch nesting works correctly."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1604,7 +1604,7 @@ class TestNestedBranches:
         W = Bool("W")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
                 with branch(B):
                     out(Y)
@@ -1635,7 +1635,7 @@ class TestNestedBranches:
         """Instructions execute in source order regardless of nesting depth.
 
         Structure:
-            with Rung(A):
+            with rung(A):
                 copy(1, Order)          # 1st
                 with branch(B):
                     copy(2, Order)      # 2nd
@@ -1647,7 +1647,7 @@ class TestNestedBranches:
         Each copy overwrites Order, so the final value proves execution order.
         Intermediate values are captured via a sequence tag.
         """
-        from pyrung.core.program import Program, Rung, branch, copy
+        from pyrung.core.program import Program, branch, copy, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1657,7 +1657,7 @@ class TestNestedBranches:
         Trace = Dint("Trace")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 copy(1, Order)
                 with branch(B):
                     # Shift trace left and OR in current Order to prove we saw 1
@@ -1687,14 +1687,14 @@ class TestNestedBranches:
 
         It therefore sees the writes of the rows above it.
         """
-        from pyrung.core.program import Program, Rung, branch, latch, out
+        from pyrung.core.program import Program, branch, latch, out, rung
 
         A = Bool("A")
         Flag = Bool("Flag")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 # This latch writes Flag before the solve reaches the nested branch in
                 # source order, so the nested branch reads Flag as True.
                 latch(Flag)
@@ -1714,7 +1714,7 @@ class TestNestedBranches:
 
         These are the writes of its parent's rows, and the writes of the trunk's rows above it.
         """
-        from pyrung.core.program import Program, Rung, branch, latch, out
+        from pyrung.core.program import Program, branch, latch, out, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1722,7 +1722,7 @@ class TestNestedBranches:
         Deep = Bool("Deep")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(Flag)  # writes Flag early in source order
                 with branch(B):
                     latch(Deep)  # writes Deep inside the parent branch
@@ -1744,7 +1744,7 @@ class TestNestedBranches:
 
     def test_sibling_branches_at_nested_level(self, runner_factory):
         """Multiple sibling branches inside a parent branch work independently."""
-        from pyrung.core.program import Program, Rung, branch, out
+        from pyrung.core.program import Program, branch, out, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1755,7 +1755,7 @@ class TestNestedBranches:
         Z = Bool("Z")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 with branch(B):
                     out(X)
                     with branch(C1):
@@ -1775,7 +1775,7 @@ class TestNestedBranches:
         """A nested branch's combined condition ANDs rung + parent branch + own condition."""
         from pyrsistent import pmap
 
-        from pyrung.core.program import Program, Rung, branch
+        from pyrung.core.program import Program, branch, rung
         from pyrung.core.state import SystemState
 
         A = Bool("A")
@@ -1792,7 +1792,7 @@ class TestNestedBranches:
             captured = ctx._rung._get_combined_condition()
 
         with Program():
-            with Rung(A):
+            with rung(A):
                 with branch(B):
                     with branch(C):
                         capture()
@@ -1811,7 +1811,7 @@ class TestNestedBranches:
     def test_nested_branch_instructions_interleave_with_parent(self, runner_factory):
         """Instructions in a nested branch between two parent instructions
         execute in that source order."""
-        from pyrung.core.program import Program, Rung, branch, copy
+        from pyrung.core.program import Program, branch, copy, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1819,7 +1819,7 @@ class TestNestedBranches:
         V = Int("V")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 copy(10, V)  # parent: V = 10
                 with branch(B):
                     with branch(C):
@@ -1836,7 +1836,7 @@ class TestNestedBranches:
     def test_nested_branch_disabled_skips_instructions_but_continues_parent(self, runner_factory):
         """When a nested branch is disabled, its instructions are skipped
         but parent instructions after it still execute."""
-        from pyrung.core.program import Program, Rung, branch, copy
+        from pyrung.core.program import Program, branch, copy, rung
 
         A = Bool("A")
         B = Bool("B")
@@ -1844,7 +1844,7 @@ class TestNestedBranches:
         V = Int("V")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 copy(10, V)
                 with branch(B):
                     with branch(C):
@@ -1871,30 +1871,30 @@ class TestSubroutineAndCall:
                     pass
 
     def test_call_rejects_subroutine_name_with_double_quote(self, runner_factory):
-        from pyrung.core.program import Program, Rung, call
+        from pyrung.core.program import Program, call, rung
 
         Button = Bool("Button")
 
         with pytest.raises(ValueError, match="must not contain"):
             with Program():
-                with Rung(Button):
+                with rung(Button):
                     call('bad"name')
 
     def test_subroutine_defined_and_called(self, runner_factory):
         """Subroutine is defined and executed when called."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         Light = Bool("Light")
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():  # Unconditional
+                with rung():  # Unconditional
                     out(SubLight)
 
         runner = runner_factory(logic)
@@ -1906,19 +1906,19 @@ class TestSubroutineAndCall:
 
     def test_subroutine_not_called_when_rung_false(self, runner_factory):
         """Subroutine is not executed when calling rung is false."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         Light = Bool("Light")
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(SubLight)
 
         runner = runner_factory(logic)
@@ -1930,7 +1930,7 @@ class TestSubroutineAndCall:
 
     def test_subroutine_with_conditional_rung(self, runner_factory):
         """Subroutine rungs have their own conditions."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         Step = Int("Step")
@@ -1938,12 +1938,12 @@ class TestSubroutineAndCall:
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung(Step == 1):  # Only executes when Step==1
+                with rung(Step == 1):  # Only executes when Step==1
                     out(SubLight)
 
         runner = runner_factory(logic)
@@ -1962,41 +1962,41 @@ class TestSubroutineAndCall:
 
     def test_call_undefined_subroutine_raises_during_program_build(self, runner_factory):
         """Calling undefined subroutine raises error when Program exits."""
-        from pyrung.core.program import Program, Rung, call, out
+        from pyrung.core.program import Program, call, out, rung
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with pytest.raises(KeyError, match="nonexistent"):
             with Program():
-                with Rung(Button):
+                with rung(Button):
                     out(Light)
                     call("nonexistent")
 
     def test_call_undefined_subroutine_error_includes_call_site(self, runner_factory):
         """Missing subroutine errors include call() source location when available."""
-        from pyrung.core.program import Program, Rung, call
+        from pyrung.core.program import Program, call, rung
 
         Button = Bool("Button")
 
         with pytest.raises(KeyError, match=r"test_program\.py:\d+"):
             with Program():
-                with Rung(Button):
+                with rung(Button):
                     call("nonexistent")
 
     def test_subroutine_not_executed_directly(self, runner_factory):
         """Subroutine rungs are not executed in main scan unless called."""
-        from pyrung.core.program import Program, Rung, out, subroutine
+        from pyrung.core.program import Program, out, rung, subroutine
 
         Light = Bool("Light")
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung():  # Unconditional
+            with rung():  # Unconditional
                 out(Light)
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(SubLight)
 
         runner = runner_factory(logic)
@@ -2010,7 +2010,7 @@ class TestSubroutineAndCall:
 
     def test_return_early_exits_subroutine_early(self, runner_factory):
         """return_early() exits subroutine immediately and skips remaining rungs."""
-        from pyrung.core.program import Program, Rung, call, out, return_early, subroutine
+        from pyrung.core.program import Program, call, out, return_early, rung, subroutine
 
         Run = Bool("Run")
         First = Bool("First")
@@ -2018,16 +2018,16 @@ class TestSubroutineAndCall:
         Third = Bool("Third")
 
         with Program() as logic:
-            with Rung(Run):
+            with rung(Run):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(First)
                     return_early()
                     out(Second)
 
-                with Rung():
+                with rung():
                     out(Third)
 
         runner = runner_factory(logic)
@@ -2040,7 +2040,7 @@ class TestSubroutineAndCall:
 
     def test_return_early_only_exits_current_subroutine(self, runner_factory):
         """return_early() in a nested call should not abort the caller subroutine."""
-        from pyrung.core.program import Program, Rung, call, out, return_early, subroutine
+        from pyrung.core.program import Program, call, out, return_early, rung, subroutine
 
         Run = Bool("Run")
         CallerDone = Bool("CallerDone")
@@ -2048,16 +2048,16 @@ class TestSubroutineAndCall:
         CalleeAfter = Bool("CalleeAfter")
 
         with Program() as logic:
-            with Rung(Run):
+            with rung(Run):
                 call("caller")
 
             with subroutine("caller"):
-                with Rung():
+                with rung():
                     call("callee")
                     out(CallerDone)
 
             with subroutine("callee"):
-                with Rung():
+                with rung():
                     out(CalleeBefore)
                     return_early()
                     out(CalleeAfter)
@@ -2081,30 +2081,30 @@ class TestSubroutineAndCall:
         """return_early() is only valid while defining a subroutine."""
         import pytest
 
-        from pyrung.core.program import Program, Rung, return_early
+        from pyrung.core.program import Program, return_early, rung
 
         Run = Bool("Run")
 
         with pytest.raises(RuntimeError, match="inside a subroutine"):
             with Program():
-                with Rung(Run):
+                with rung(Run):
                     return_early()
 
     def test_missing_subroutine_call_inside_subroutine_raises_during_program_build(
         self, runner_factory
     ):
         """Undefined nested call() targets are caught before execution."""
-        from pyrung.core.program import Program, Rung, call, subroutine
+        from pyrung.core.program import Program, call, rung, subroutine
 
         Run = Bool("Run")
 
         with pytest.raises(KeyError, match="callee"):
             with Program():
-                with Rung(Run):
+                with rung(Run):
                     call("caller")
 
                 with subroutine("caller"):
-                    with Rung():
+                    with rung():
                         call("callee")
 
 
@@ -2112,7 +2112,7 @@ class TestSubroutineDecorator:
     """Test @subroutine('name') decorator syntax."""
 
     def test_decorator_subroutine_name_rejects_double_quote(self, runner_factory):
-        from pyrung.core.program import Rung, out, subroutine
+        from pyrung.core.program import out, rung, subroutine
 
         Light = Bool("Light")
 
@@ -2120,12 +2120,12 @@ class TestSubroutineDecorator:
 
             @subroutine('bad"name')
             def bad_sub():
-                with Rung():
+                with rung():
                     out(Light)
 
     def test_decorator_subroutine_defined_and_called(self, runner_factory):
         """Decorated subroutine is auto-registered and executed when called."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         Light = Bool("Light")
@@ -2133,11 +2133,11 @@ class TestSubroutineDecorator:
 
         @subroutine("init")
         def init_sequence():
-            with Rung():
+            with rung():
                 out(SubLight)
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call(init_sequence)
 
@@ -2150,18 +2150,18 @@ class TestSubroutineDecorator:
 
     def test_decorator_subroutine_not_executed_directly(self, runner_factory):
         """Decorated subroutine rungs are not in the main scan."""
-        from pyrung.core.program import Program, Rung, out, subroutine
+        from pyrung.core.program import Program, out, rung, subroutine
 
         Light = Bool("Light")
         SubLight = Bool("SubLight")
 
         @subroutine("my_sub")
         def my_sub():
-            with Rung():
+            with rung():
                 out(SubLight)
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 out(Light)
 
         # Subroutine was never call()'d, so not registered
@@ -2174,7 +2174,7 @@ class TestSubroutineDecorator:
 
     def test_decorator_subroutine_not_called_when_rung_false(self, runner_factory):
         """Decorated subroutine is not executed when calling rung is false."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         Light = Bool("Light")
@@ -2182,11 +2182,11 @@ class TestSubroutineDecorator:
 
         @subroutine("my_sub")
         def my_sub():
-            with Rung():
+            with rung():
                 out(SubLight)
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call(my_sub)
 
@@ -2199,7 +2199,7 @@ class TestSubroutineDecorator:
 
     def test_decorator_subroutine_with_conditional_rung(self, runner_factory):
         """Decorated subroutine rungs have their own conditions."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         Step = Int("Step")
@@ -2208,11 +2208,11 @@ class TestSubroutineDecorator:
 
         @subroutine("my_sub")
         def my_sub():
-            with Rung(Step == 1):
+            with rung(Step == 1):
                 out(SubLight)
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
                 call(my_sub)
 
@@ -2232,35 +2232,35 @@ class TestSubroutineDecorator:
         """call() with decorated subroutine outside Program raises error."""
         import pytest
 
-        from pyrung.core.program import Rung, call, out, subroutine
+        from pyrung.core.program import call, out, rung, subroutine
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         @subroutine("my_sub")
         def my_sub():
-            with Rung():
+            with rung():
                 out(Light)
 
         with pytest.raises(RuntimeError, match="must be used inside a Program"):
-            with Rung(Button):
+            with rung(Button):
                 call(my_sub)
 
     def test_decorator_with_program_decorator(self, runner_factory):
         """@subroutine works with @program decorator."""
-        from pyrung.core.program import Program, Rung, call, out, program, subroutine
+        from pyrung.core.program import Program, call, out, program, rung, subroutine
 
         Button = Bool("Button")
         SubLight = Bool("SubLight")
 
         @subroutine("init")
         def init_sequence():
-            with Rung():
+            with rung():
                 out(SubLight)
 
         @program
         def my_logic():
-            with Rung(Button):
+            with rung(Button):
                 call(init_sequence)
 
         assert isinstance(my_logic, Program)
@@ -2276,24 +2276,24 @@ class TestSubroutineDecorator:
         self, runner_factory
     ):
         """Decorated subroutine is inert until call(func), so call('name') fails early."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         SubLight = Bool("SubLight")
 
         @subroutine("my_sub")
         def my_sub():
-            with Rung():
+            with rung():
                 out(SubLight)
 
         with pytest.raises(KeyError, match="my_sub"):
             with Program():
-                with Rung(Button):
+                with rung(Button):
                     call("my_sub")
 
     def test_decorator_and_context_manager_coexist(self, runner_factory):
         """Decorator and context-manager subroutines can coexist."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         Light1 = Bool("Light1")
@@ -2301,16 +2301,16 @@ class TestSubroutineDecorator:
 
         @subroutine("dec_sub")
         def dec_sub():
-            with Rung():
+            with rung():
                 out(Light1)
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 call(dec_sub)
                 call("ctx_sub")
 
             with subroutine("ctx_sub"):
-                with Rung():
+                with rung():
                     out(Light2)
 
         runner = runner_factory(logic)
@@ -2322,17 +2322,17 @@ class TestSubroutineDecorator:
 
     def test_call_accepts_string_subroutine_name(self, runner_factory):
         """Existing string-based call() API is unchanged."""
-        from pyrung.core.program import Program, Rung, call, out, subroutine
+        from pyrung.core.program import Program, call, out, rung, subroutine
 
         Button = Bool("Button")
         SubLight = Bool("SubLight")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     out(SubLight)
 
         runner = runner_factory(logic)

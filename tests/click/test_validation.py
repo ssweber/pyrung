@@ -57,7 +57,6 @@ from pyrung.core import (
 from pyrung.core.expression import lro, lsh, rro, rsh
 from pyrung.core.program import (
     Program,
-    Rung,
     copy,
     math,
     on_delay,
@@ -66,6 +65,7 @@ from pyrung.core.program import (
     rise,
     run_enabled_function,
     run_function,
+    rung,
 )
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ class TestAllowedCopyWithDSPointer:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest)
 
         prog = _build_program(logic)
@@ -135,7 +135,7 @@ class TestAllowedCopyWithDSPointer:
         blocks.ds.slot(121, name="Pointer")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(blocks.dd[blocks.ds[121]], blocks.dd[1])
 
         prog = _build_program(logic)
@@ -157,7 +157,7 @@ class TestNonDSPointer:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest)
 
         prog = _build_program(logic)
@@ -175,7 +175,7 @@ class TestNonDSPointer:
         blocks.dd.slot(50, name="Pointer")
 
         def logic():
-            with Rung():
+            with rung():
                 copy(blocks.dd[blocks.dd[50]], blocks.dd[1])
 
         prog = _build_program(logic)
@@ -190,7 +190,7 @@ class TestNonDSPointer:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest)
 
         prog = _build_program(logic)
@@ -214,7 +214,7 @@ class TestPointerInCondition:
         Pointer = Tag("Pointer", TagType.INT)
 
         def logic():
-            with Rung(dd[Pointer] > 5):
+            with rung(dd[Pointer] > 5):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -238,7 +238,7 @@ class TestPointerExpressionIndex:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[idx + 1], Dest)
 
         prog = _build_program(logic)
@@ -262,7 +262,7 @@ class TestExpressionInCondition:
         B = Tag("B", TagType.INT)
 
         def logic():
-            with Rung((A + B) > 10):
+            with rung((A + B) > 10):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -277,7 +277,7 @@ class TestIntTruthinessInCondition:
         Step = Tag("Step", TagType.INT)
 
         def logic():
-            with Rung(Step):
+            with rung(Step):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -291,7 +291,7 @@ class TestIntTruthinessInCondition:
         Step = Tag("Step", TagType.INT)
 
         def logic():
-            with Rung(Step):
+            with rung(Step):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -305,7 +305,7 @@ class TestIntTruthinessInCondition:
         Count = Tag("Count", TagType.DINT)
 
         def logic():
-            with Rung(Count):
+            with rung(Count):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -319,7 +319,7 @@ class TestIntTruthinessInCondition:
         Step = Tag("Step", TagType.INT)
 
         def logic():
-            with Rung(Step != 0):
+            with rung(Step != 0):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -338,7 +338,7 @@ class TestIntTruthinessInCondition:
         def logic():
             from pyrung.core import Or
 
-            with Rung(Or(Step, Start)):
+            with rung(Or(Step, Start)):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -359,7 +359,7 @@ class TestExpressionInCopy:
         Dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(A * 2, Dest)
 
         prog = _build_program(logic)
@@ -380,7 +380,7 @@ class TestExpressionInMath:
         Dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(A * 2, Dest)
 
         prog = _build_program(logic)
@@ -402,7 +402,7 @@ class TestCalcModeMixedValidation:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a + h, dest)
 
         prog = _build_program(logic)
@@ -420,7 +420,7 @@ class TestCalcModeMixedValidation:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a + h, dest)
 
         prog = _build_program(logic)
@@ -438,7 +438,7 @@ class TestCalcModeMixedValidation:
         dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a + b, dest)
 
         prog = _build_program(logic)
@@ -458,7 +458,7 @@ class TestCalcModeMixedValidation:
         dest = Tag("Dest", TagType.WORD)
 
         def logic():
-            with Rung():
+            with rung():
                 math(h1 | h2, dest)
 
         prog = _build_program(logic)
@@ -480,7 +480,7 @@ class TestFloorDivisionPortability:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a // b, dest)
 
         prog = _build_program(logic)
@@ -498,7 +498,7 @@ class TestFloorDivisionPortability:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a // b, dest)
 
         prog = _build_program(logic)
@@ -516,7 +516,7 @@ class TestFloorDivisionPortability:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a / b, dest)
 
         prog = _build_program(logic)
@@ -538,7 +538,7 @@ class TestCalcFuncModeMismatch:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a << 3, dest)
 
         prog = _build_program(logic)
@@ -558,7 +558,7 @@ class TestCalcFuncModeMismatch:
         dest = Tag("Dest", TagType.WORD)
 
         def logic():
-            with Rung():
+            with rung():
                 math(sqrt(h), dest)
 
         prog = _build_program(logic)
@@ -577,7 +577,7 @@ class TestCalcFuncModeMismatch:
         dest = Tag("Dest", TagType.WORD)
 
         def logic():
-            with Rung():
+            with rung():
                 math(h1 & h2, dest)
 
         prog = _build_program(logic)
@@ -598,7 +598,7 @@ class TestCalcFuncModeMismatch:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a**2, dest)
 
         prog = _build_program(logic)
@@ -619,7 +619,7 @@ class TestCalcFuncModeMismatch:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a << 3, dest)
 
         prog = _build_program(logic)
@@ -654,7 +654,7 @@ class TestCalcNestingDepth:
         expr_8 = self._deeply_nested_expr(a, 8)
 
         def logic():
-            with Rung():
+            with rung():
                 math(expr_8, dest)
 
         prog = _build_program(logic)
@@ -676,7 +676,7 @@ class TestCalcNestingDepth:
         expr = self._deeply_nested_expr(a, 9)
 
         def logic():
-            with Rung():
+            with rung():
                 math(expr, dest)
 
         prog = _build_program(logic)
@@ -695,7 +695,7 @@ class TestCalcNestingDepth:
         expr = self._deeply_nested_expr(a, 9)
 
         def logic():
-            with Rung():
+            with rung():
                 math(expr, dest)
 
         prog = _build_program(logic)
@@ -719,7 +719,7 @@ class TestCalcNestingDepth:
         expr = sqrt(inner)
 
         def logic():
-            with Rung():
+            with rung():
                 math(expr, dest)
 
         prog = _build_program(logic)
@@ -738,7 +738,7 @@ class TestCalcNestingDepth:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(a + b, dest)
 
         prog = _build_program(logic)
@@ -765,7 +765,7 @@ class TestAbsMode:
         dest = Tag("Dest", TagType.WORD)
 
         def logic():
-            with Rung():
+            with rung():
                 math(abs(h), dest)
 
         prog = _build_program(logic)
@@ -781,7 +781,7 @@ class TestAbsMode:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(abs(a), dest)
 
         prog = _build_program(logic)
@@ -798,7 +798,7 @@ class TestRangeAggregateModes:
         dest = Tag("Dest", TagType.WORD)
 
         def logic():
-            with Rung():
+            with rung():
                 math(H.select(1, 4).max() + H.select(1, 4).median(), dest)
 
         prog = _build_program(logic)
@@ -817,7 +817,7 @@ class TestRangeAggregateModes:
             expr = (expr + 1) * 2
 
         def logic():
-            with Rung():
+            with rung():
                 math(expr, dest)
 
         prog = _build_program(logic)
@@ -833,7 +833,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(V.select(1, 4).mean(), dest)
 
         prog = _build_program(logic)
@@ -848,7 +848,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(V.select(1, 3).max(), dest)
 
         prog = _build_program(logic)
@@ -865,7 +865,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(V.select(1, 4).reverse().sum(), dest)
 
         prog = _build_program(logic)
@@ -880,7 +880,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(V.select(1, 2).min(), dest)
 
         prog = _build_program(logic)
@@ -896,7 +896,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(dd.select(1, 257).median(), dest)
 
         prog = _build_program(logic)
@@ -909,7 +909,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(ds.select(1, 512).median(), dest)
                 math(ds.select(1, 600).mean(), dest)
 
@@ -924,7 +924,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(c.select(1, 8).sum(), dest)
 
         prog = _build_program(logic)
@@ -938,7 +938,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(c.select(1, 8).max(), dest)
 
         prog = _build_program(logic)
@@ -952,7 +952,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", dest_type)
 
         def logic():
-            with Rung():
+            with rung():
                 math(block.select(1, 4).sum(), dest)
 
         prog = _build_program(logic)
@@ -979,7 +979,7 @@ class TestRangeAggregateRules:
         dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(dh.select(1, 4).sum(), dest)
 
         prog = _build_program(logic)
@@ -996,7 +996,7 @@ class TestTildeExpressionPortability:
         Dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(~A, Dest)
 
         prog = _build_program(logic)
@@ -1010,7 +1010,7 @@ class TestTildeExpressionPortability:
         Dest = Tag("Dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(~A, Dest)
 
         prog = _build_program(logic)
@@ -1023,7 +1023,7 @@ class TestTildeExpressionPortability:
         Start = Bool("Start")
 
         def logic():
-            with Rung(~Start):
+            with rung(~Start):
                 pass
 
         prog = _build_program(logic)
@@ -1047,7 +1047,7 @@ class TestUnresolvedPointerBank:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest)
 
         prog = _build_program(logic)
@@ -1065,7 +1065,7 @@ class TestUnresolvedPointerBank:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest)
 
         prog = _build_program(logic)
@@ -1089,7 +1089,7 @@ class TestIndirectBlockRange:
         End = Tag("End", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 from pyrung.core.program import blockcopy
 
                 blockcopy(dd.select(Start, End), dd.select(100, 110))
@@ -1112,7 +1112,7 @@ class TestExprCompareInCondition:
         B = Tag("B", TagType.INT)
 
         def logic():
-            with Rung((A + B) > 100):
+            with rung((A + B) > 100):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -1135,7 +1135,7 @@ class TestLocationFormatting:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 out(Bool("Filler"))
                 copy(dd[Pointer], Dest)
 
@@ -1160,7 +1160,7 @@ class TestLocationFormatting:
         B = Tag("B", TagType.INT)
 
         def logic():
-            with Rung((A + B) > 10):
+            with rung((A + B) > 10):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -1185,7 +1185,7 @@ class TestTagMapValidate:
         B = Tag("B", TagType.INT)
 
         def logic():
-            with Rung((A + B) > 10):
+            with rung((A + B) > 10):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -1200,7 +1200,7 @@ class TestTagMapValidate:
         A = Tag("A", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(A * 2, Tag("Dest", TagType.INT))
 
         prog = _build_program(logic)
@@ -1225,7 +1225,7 @@ class TestReportSummary:
         B = Tag("B", TagType.INT)
 
         def logic():
-            with Rung((A + B) > 10):
+            with rung((A + B) > 10):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -1248,7 +1248,7 @@ class TestFunctionCallPortability:
             return {"dest": src}
 
         def logic():
-            with Rung():
+            with rung():
                 run_function(fn, ins={"src": Src}, outs={"dest": Dest})
 
         prog = _build_program(logic)
@@ -1266,7 +1266,7 @@ class TestFunctionCallPortability:
             return {"dest": src}
 
         def logic():
-            with Rung():
+            with rung():
                 run_enabled_function(fn, ins={"src": Src}, outs={"dest": Dest})
 
         prog = _build_program(logic)
@@ -1288,7 +1288,7 @@ class TestSuggestionContent:
         Pointer = Tag("Pointer", TagType.INT)
 
         def logic():
-            with Rung(dd[Pointer] > 5):
+            with rung(dd[Pointer] > 5):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -1310,7 +1310,7 @@ class TestSuggestionContent:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest)
 
         prog = _build_program(logic)
@@ -1332,7 +1332,7 @@ class TestSuggestionContent:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest)
 
         prog = _build_program(logic)
@@ -1353,7 +1353,7 @@ class TestSuggestionContent:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[idx + 1], Dest)
 
         prog = _build_program(logic)
@@ -1376,7 +1376,7 @@ class TestSuggestionContent:
         B = Tag("B", TagType.INT)
 
         def logic():
-            with Rung((A + B) > 10):
+            with rung((A + B) > 10):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -1394,7 +1394,7 @@ class TestSuggestionContent:
         End = Tag("End", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 from pyrung.core.program import blockcopy
 
                 blockcopy(dd.select(Start, End), dd.select(100, 110))
@@ -1416,7 +1416,7 @@ class TestWrappedCopySources:
         Dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(dd[Pointer], Dest, convert=to_value)
 
         prog = _build_program(logic)
@@ -1433,7 +1433,7 @@ class TestImmediateValidation:
         Coil = Bool("Coil")
 
         def logic():
-            with Rung(Start):
+            with rung(Start):
                 out(immediate(Coil))
 
         prog = _build_program(logic)
@@ -1449,7 +1449,7 @@ class TestImmediateValidation:
         Coils = Block("Coils", TagType.BOOL, 1, 4)
 
         def logic():
-            with Rung(Start):
+            with rung(Start):
                 out(immediate(Coils.select(1, 4)))
 
         prog = _build_program(logic)
@@ -1468,7 +1468,7 @@ class TestImmediateValidation:
         Coils = Block("Coils", TagType.BOOL, 1, 4)
 
         def logic():
-            with Rung(Start):
+            with rung(Start):
                 out(immediate(Coils.select(1, 4)))
 
         prog = _build_program(logic)
@@ -1492,7 +1492,7 @@ class TestImmediateValidation:
         Dest = Bool("Dest")
 
         def logic():
-            with Rung(Start):
+            with rung(Start):
                 copy(immediate(Source), Dest)
 
         prog = _build_program(logic)
@@ -1509,7 +1509,7 @@ class TestImmediateValidation:
         Coil = Bool("Coil")
 
         def logic():
-            with Rung(rise(immediate(Start))):
+            with rung(rise(immediate(Start))):
                 out(Coil)
 
         prog = _build_program(logic)
@@ -1523,7 +1523,7 @@ class TestImmediateValidation:
         Coil = Bool("Coil")
 
         def logic():
-            with Rung(Start):
+            with rung(Start):
                 reset(immediate(Coil))
 
         prog = _build_program(logic)
@@ -1540,7 +1540,7 @@ class TestImmediateValidation:
         Coil = Bool("Coil")
 
         def logic():
-            with Rung(immediate(Sensor) if contact == "no" else ~immediate(Sensor)):
+            with rung(immediate(Sensor) if contact == "no" else ~immediate(Sensor)):
                 out(Coil)
 
         prog = _build_program(logic)
@@ -1560,7 +1560,7 @@ class TestImmediateValidation:
         Lamp = Bool("Lamp")
 
         def logic():
-            with Rung(Start):
+            with rung(Start):
                 out(Coil)
                 with branch(Or(Other, immediate(Sensor))):
                     out(Lamp)
@@ -1587,11 +1587,11 @@ class TestImmediateValidation:
         Coil = Bool("Coil")
 
         def logic():
-            with Rung(Start):
+            with rung(Start):
                 with forloop(2):
-                    with Rung():
+                    with rung():
                         with forloop(2):
-                            with Rung(immediate(Sensor)):
+                            with rung(immediate(Sensor)):
                                 out(Coil)
 
         prog = _build_program(logic)
@@ -1608,7 +1608,7 @@ class TestImmediateValidation:
         Coil = Bool("Coil")
 
         def logic():
-            with Rung(immediate(Sensor), ~immediate(Sensor)):
+            with rung(immediate(Sensor), ~immediate(Sensor)):
                 out(Coil)
 
         prog = _build_program(logic)
@@ -1622,7 +1622,7 @@ class TestImmediateValidation:
         Sensors = Block("Sensors", TagType.BOOL, 1, 2)
 
         def logic():
-            with Rung(immediate(Sensors.select(1, 2))):
+            with rung(immediate(Sensors.select(1, 2))):
                 out(Bool("Coil"))
 
         with pytest.raises(TypeError, match="Immediate contact requires a Tag"):
@@ -1637,7 +1637,7 @@ class TestImmediateValidation:
 class TestTimerPresetOverflow:
     def test_preset_within_range_no_finding(self):
         def logic():
-            with Rung():
+            with rung():
                 on_delay(Timer[1], preset=32767, unit="Tms")
 
         prog = _build_program(logic)
@@ -1650,7 +1650,7 @@ class TestTimerPresetOverflow:
 
     def test_preset_exceeds_int_range(self):
         def logic():
-            with Rung():
+            with rung():
                 on_delay(Timer[1], preset=60000, unit="Tms")
 
         prog = _build_program(logic)
@@ -1666,7 +1666,7 @@ class TestTimerPresetOverflow:
         Preset = Int("Preset")
 
         def logic():
-            with Rung():
+            with rung():
                 on_delay(Timer[1], preset=Preset, unit="Tms")
 
         prog = _build_program(logic)
@@ -1684,7 +1684,7 @@ class TestForLoopCountAndRandBounds:
     @staticmethod
     def _for_count(count, mappings, mode="warn"):
         def logic():
-            with Rung():
+            with rung():
                 with forloop(count):
                     out(y[1])
 
@@ -1733,7 +1733,7 @@ class TestForLoopCountAndRandBounds:
         dest = Tag("Dest", TagType.DINT)
 
         def logic():
-            with Rung():
+            with rung():
                 math(randint(lo, hi), dest)
 
         return validate_click_program(
@@ -1817,7 +1817,7 @@ class TestCalcPlainArguments:
         out_tag = dest if target == "dd" else hdest
 
         def logic():
-            with Rung():
+            with rung():
                 math(expr, out_tag)
 
         report = validate_click_program(
@@ -1884,7 +1884,7 @@ class TestCalcWideConstant:
         block = {TagType.DINT: dd, TagType.INT: ds, TagType.REAL: df, TagType.WORD: dh}[dest_type]
 
         def logic():
-            with Rung():
+            with rung():
                 math(build(n, w), dest)
 
         report = validate_click_program(
@@ -1991,7 +1991,7 @@ def test_export_refuses_a_real_rand_bound_unless_allowed():
     dest = Tag("Dest", TagType.DINT)
 
     def logic():
-        with Rung():
+        with rung():
             math(randint(lo, 9), dest)
 
     prog = _build_program(logic)
@@ -2014,7 +2014,7 @@ class TestPointerBlockOffset:
         dest = Tag("dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         tag_map = TagMap(
@@ -2045,7 +2045,7 @@ class TestPointerBlockOffset:
         dest = Tag("dest", TagType.INT)
 
         def logic():
-            with Rung():
+            with rung():
                 copy(ds[idx], dest)
 
         tag_map = TagMap([idx.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
@@ -2061,7 +2061,7 @@ class TestPointerBlockOffset:
         idx = Tag("idx", TagType.INT)
         dest = Tag("dest", TagType.INT)
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
         tag_map = TagMap(
             [idx.map_to(ds[1]), dest.map_to(ds[2]), blk.map_to(ds.select(100, 109))],
@@ -2103,7 +2103,7 @@ class TestPointerBlockOffsetCases:
         )
 
         def logic():
-            with Rung():
+            with rung():
                 copy(blk[idx], other)
 
         assert "math(idx - 4, Ptr); copy(ds[Ptr], dest)" in self._suggestion(
@@ -2114,7 +2114,7 @@ class TestPointerBlockOffsetCases:
         blk, idx, other, tag_map = self._mapped()
 
         def logic():
-            with Rung():
+            with rung():
                 copy(other, blk[idx])
 
         assert "copy(src, ds[Ptr])" in self._suggestion(_build_program(logic), tag_map)
@@ -2125,7 +2125,7 @@ class TestPointerBlockOffsetCases:
 
         blk, idx, other, tag_map = self._mapped()
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(other, blk[idx])
         with pytest.raises(LadderExportError, match="CLK_PTR_BLOCK_OFFSET") as exc:
             pyrung_to_ladder(logic, tag_map, allow=[CLK_PTR_BLOCK_OFFSET])
@@ -2149,7 +2149,7 @@ class TestPointerBlockOffsetCases:
             include_system=False,
         )
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 math(idx + 99, ptr)
                 copy(ds[ptr], other)
         report = validate_click_program(logic, tag_map, mode="strict")

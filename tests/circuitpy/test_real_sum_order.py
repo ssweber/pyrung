@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung.circuitpy import P1AM, generate_circuitpy
-from pyrung.core import PLC, Block, CompiledPLC, Program, Real, Rung, TagType, math
+from pyrung.core import PLC, Block, CompiledPLC, Program, Real, TagType, math, rung
 from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.core.test_indirect_expr_compare import _StubBase
 
@@ -17,7 +17,7 @@ def _program() -> Program:
     for i, value in enumerate(VALUES, start=1):
         block.slot(i, default=value)
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             math(block.select(1, 4).sum(), Real("RsOut"))
     return logic
 

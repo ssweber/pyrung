@@ -6,7 +6,7 @@ They are pure functions: evaluate(state) -> new_state.
 
 import pytest
 
-from pyrung.core import Bool, Int, Program, Rung, SystemState
+from pyrung.core import Bool, Int, Program, SystemState, rung
 from tests.conftest import evaluate_rung
 
 
@@ -503,7 +503,7 @@ class TestRungBranchIntTruthiness:
     """Branch conditions support INT truthiness via shared normalization."""
 
     def test_branch_with_int_condition(self):
-        from pyrung.core import Program, Rung, branch, out
+        from pyrung.core import Program, branch, out, rung
         from tests.conftest import evaluate_program
 
         Enable = Bool("Enable")
@@ -511,7 +511,7 @@ class TestRungBranchIntTruthiness:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 with branch(Step):
                     out(Light)
 
@@ -589,7 +589,7 @@ class TestRungComment:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment is None
@@ -602,7 +602,7 @@ class TestRungComment:
 
         with Program() as logic:
             comment("Initialize the light system.")
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment == "Initialize the light system."
@@ -615,7 +615,7 @@ class TestRungComment:
 
         with Program() as logic:
             comment("  padded text  ")
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment == "padded text"
@@ -631,7 +631,7 @@ class TestRungComment:
                     Line one.
                     Line two.
                 """)
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment == "Line one.\nLine two."
@@ -651,7 +651,7 @@ class TestRungComment:
 
         with Program() as logic:
             comment("x" * 1400)
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment is not None

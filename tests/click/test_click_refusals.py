@@ -28,11 +28,11 @@ from pyrung.core import Bool, Counter, Int, Or, Timer, Word, forloop, randint
 from pyrung.core.program import (
     Branch,
     Program,
-    Rung,
     copy,
     count_up,
     fill,
     math,
+    rung,
     search,
     time_drum,
     time_event_drum,
@@ -77,7 +77,7 @@ def _export_refuses(
 @pytest.mark.parametrize("bit", [c[1], y[1]], ids=["C", "Y"])
 def test_a_constant_copied_into_a_bit_is_refused(value, bit):
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             copy(value, bit)
 
     # copy(False, bit) also warns when the program is built: use reset().
@@ -94,7 +94,7 @@ def test_a_constant_copied_into_a_bit_is_refused(value, bit):
 @pytest.mark.parametrize("value", [2, True, 0, False])
 def test_a_constant_filled_into_bits_is_refused(value):
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             fill(value, c.select(1, 4))
 
     (finding,) = _found(body, CLK_COPY_CONSTANT_INTO_BIT)
@@ -104,7 +104,7 @@ def test_a_constant_filled_into_bits_is_refused(value):
 
 def test_a_constant_into_a_register_and_a_bit_into_a_bit_pass():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             copy(2, ds[1])
             copy(2.7, ds[2])
             copy(c[1], c[2])
@@ -130,7 +130,7 @@ def test_a_constant_into_a_register_and_a_bit_into_a_bit_pass():
 )
 def test_a_bit_in_a_math_formula_is_refused(build, bank):
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             math(build(bank), ds[100])
 
     (finding,) = _found(body, CLK_MATH_BIT_OPERAND)
@@ -150,7 +150,7 @@ def test_a_bit_in_a_math_formula_is_refused(build, bank):
 
 def test_each_bit_is_named_once():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             math(c[1] + c[2] * c[1], ds[100])
 
     (finding,) = _found(body, CLK_MATH_BIT_OPERAND)
@@ -178,7 +178,7 @@ def test_each_bit_is_named_once():
 )
 def test_a_formula_without_a_bit_operand_passes(build, dest):
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             math(build(), dest)
 
     assert _found(body, CLK_MATH_BIT_OPERAND) == []
@@ -186,7 +186,7 @@ def test_a_formula_without_a_bit_operand_passes(build, dest):
 
 def test_a_one_bit_sum_exports_as_a_range_of_one_bit():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             math(c.select(1, 1).sum() + 5, dd[100])
 
     rows = pyrung_to_ladder(_program(body), TagMap()).main_rows
@@ -195,7 +195,7 @@ def test_a_one_bit_sum_exports_as_a_range_of_one_bit():
 
 def test_a_bit_rand_bound_is_the_rand_finding_only():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             math(randint(c[1], 9), ds[100])
 
     assert _found(body, CLK_MATH_BIT_OPERAND) == []
@@ -211,7 +211,7 @@ def test_a_bit_rand_bound_is_the_rand_finding_only():
 )
 def test_a_math_result_outside_the_dialogs_banks_is_refused(dest):
     def body():
-        with Rung(x[2]):
+        with rung(x[2]):
             math(ds[1] + 1, dest)
 
     (finding,) = _found(body, CLK_MATH_DEST_BANK)
@@ -226,7 +226,7 @@ def test_a_math_result_outside_the_dialogs_banks_is_refused(dest):
 
 def test_a_math_result_in_each_bank_the_dialog_takes_passes():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             math(ds[1] + 1, ds[2])
             math(ds[1] + 1, dd[2])
             math(ds[1] + 1, df[2])
@@ -242,7 +242,7 @@ def test_a_decimal_math_into_dh_is_refused_as_a_mixed_math():
     # Math decimal only through a non-Word operand, which CLK_MATH_MODE_MIXED flags, so the
     # destination check has nothing of its own to add.
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             math(ds[1] + 1, dh[3])
 
     assert _found(body, CLK_MATH_DEST_BANK) == []
@@ -257,7 +257,7 @@ def test_a_decimal_math_into_dh_is_refused_as_a_mixed_math():
 @pytest.mark.parametrize("result", [dd[1], td[1]], ids=["DD", "TD"])
 def test_a_search_result_must_be_a_ds(result):
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             search(ds.select(1, 10) == 5, result=result, found=c[1])
 
     (finding,) = _found(body, CLK_SEARCH_RESULT_NOT_DS)
@@ -267,7 +267,7 @@ def test_a_search_result_must_be_a_ds(result):
 
 def test_a_search_range_outside_the_dialogs_banks_is_refused():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             search(sd.select(1, 10) == 5, result=ds[100], found=c[1])
 
     (finding,) = _found(body, CLK_SEARCH_RANGE_BANK)
@@ -278,7 +278,7 @@ def test_a_search_range_outside_the_dialogs_banks_is_refused():
 
 def test_a_search_over_each_bank_the_dialog_takes_passes():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             search(ds.select(1, 10) == 5, result=ds[100], found=c[1])
             search(dd.select(1, 10) > 5, result=ds[101], found=c[2])
             search(dh.select(1, 10) == 5, result=ds[102], found=c[3])
@@ -323,7 +323,7 @@ def _timer_map(*extra) -> TagMap:
 )  # fmt: skip
 def test_a_constant_out_coil_preset_below_the_dialogs_floor_is_refused(build, count):
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             build()
 
     found = _found(body, CLK_TIMER_PRESET_TOO_LOW, _timer_map())
@@ -335,7 +335,7 @@ def test_out_coil_presets_the_dialog_takes_pass():
     preset = Int("OnTime")
 
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             flasher(y[1], on=(Timers[1], 1), off=(Timers[2], 1))
             timed(y[2], Timers[3], 1)
             debounce(y[3], on=(Timers[4], 0), off=(Timers[1], 0))
@@ -351,7 +351,7 @@ def test_a_negative_constant_drum_step_is_refused_and_zero_passes():
     tag_map = TagMap([step.map_to(ds[1]), done.map_to(c[1])], include_system=False)
 
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             time_drum(
                 outputs=[y[1]],
                 presets=[0, -1, 100],
@@ -360,7 +360,7 @@ def test_a_negative_constant_drum_step_is_refused_and_zero_passes():
                 accumulator=td[1],
                 completion_flag=done,
             ).reset(x[2])
-        with Rung(x[1]):
+        with rung(x[1]):
             time_event_drum(
                 outputs=[y[2]],
                 presets=[-2, None],
@@ -398,7 +398,7 @@ def test_a_hex_operand_against_a_decimal_one_is_refused(build):
     tag_map = TagMap([word.map_to(dh[1]), number.map_to(ds[1])], include_system=False)
 
     def body():
-        with Rung(build(word, number)):
+        with rung(build(word, number)):
             copy(1, ds[9])
 
     found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
@@ -416,7 +416,7 @@ def test_a_hex_operand_through_a_pointer_against_a_decimal_one_is_flagged(build)
     tag_map = TagMap([number.map_to(ds[2])], include_system=False)
 
     def body():
-        with Rung(build(number)):
+        with rung(build(number)):
             copy(1, ds[9])
 
     assert len(_found(body, CLK_COMPARE_HEX_MIX, tag_map)) == 1
@@ -429,7 +429,7 @@ def test_compares_the_dialog_takes_are_not_flagged():
     )
 
     def body():
-        with Rung(word == other, word > 255, number < 70000, ds[2] == number, dh[ds[1]] == dh[3]):
+        with rung(word == other, word > 255, number < 70000, ds[2] == number, dh[ds[1]] == dh[3]):
             copy(1, ds[9])
 
     assert _found(body, CLK_COMPARE_HEX_MIX, tag_map) == []
@@ -440,7 +440,7 @@ def test_a_hex_compare_inside_an_or_and_a_branch_is_refused():
     tag_map = TagMap([word.map_to(dh[1]), number.map_to(ds[1])], include_system=False)
 
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             copy(1, ds[9])
             with Branch(Or(x[2], word == number)):
                 copy(2, ds[9])
@@ -454,11 +454,11 @@ def test_a_hex_compare_in_a_forloop_body_and_a_counter_reset_is_refused():
     tag_map = TagMap([word.map_to(dh[1]), number.map_to(ds[1])], include_system=False)
 
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             with forloop(3):
-                with Rung(word == number):
+                with rung(word == number):
                     copy(1, ds[9])
-        with Rung(x[2]):
+        with rung(x[2]):
             count_up(cnt, 10).reset(word > number)
 
     found = _found(body, CLK_COMPARE_HEX_MIX, tag_map)
@@ -472,7 +472,7 @@ def test_a_hex_compare_in_a_forloop_body_and_a_counter_reset_is_refused():
 
 def test_a_constant_for_count_of_70000_passes():
     def body():
-        with Rung(x[1]):
+        with rung(x[1]):
             with forloop(70000):
                 copy(1, ds[1])
 

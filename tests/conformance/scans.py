@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import TIMED_OUT
-from pyrung.core import Rung, copy, math, on_delay
+from pyrung.core import copy, math, on_delay, rung
 
 #: Scans a case records by default.
 WINDOW = 8
@@ -40,7 +40,7 @@ def count_scans(slot: Any, window: int = WINDOW) -> None:
 
     This is the case's first rung.
     """
-    with Rung(slot.Cmd != 0, slot.Scratch <= window):
+    with rung(slot.Cmd != 0, slot.Scratch <= window):
         math(slot.Scratch + 1, slot.Scratch)
 
 
@@ -49,9 +49,9 @@ def trace(slot: Any, bit: Any, window: int = WINDOW) -> None:
 
     A count with its first and last scan pins a contiguous run exactly.
     """
-    with Rung(slot.Cmd != 0, slot.Scratch <= window, bit, slot.Result1 == 0):
+    with rung(slot.Cmd != 0, slot.Scratch <= window, bit, slot.Result1 == 0):
         copy(slot.Scratch, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch <= window, bit):
+    with rung(slot.Cmd != 0, slot.Scratch <= window, bit):
         math(slot.Result1 + 1, slot.Result1)
         copy(slot.Scratch, slot.Result3)
 
@@ -63,7 +63,7 @@ def edges(edge: Any, slot: Any, count: Any, at: Any = None, window: int = WINDOW
     every scan whatever the rest of the rung says.  Whether a CLICK edge contact
     behind an open contact still tracks its bit is a probe of its own.
     """
-    with Rung(edge, slot.Cmd != 0, slot.Scratch <= window):
+    with rung(edge, slot.Cmd != 0, slot.Scratch <= window):
         math(count + 1, count)
         if at is not None:
             copy(slot.Scratch, at)
@@ -76,13 +76,13 @@ def firings(edge: Any, slot: Any, dest: Any, *more: Any, window: int = WINDOW) -
     contacts follow it.  A window of 9 scans or fewer keeps every scan one
     digit.  An Int holds at most four of them (32767).
     """
-    with Rung(edge, slot.Cmd != 0, slot.Scratch <= window, *more):
+    with rung(edge, slot.Cmd != 0, slot.Scratch <= window, *more):
         math(dest * 10 + slot.Scratch, dest)
 
 
 def done(slot: Any, window: int = WINDOW) -> None:
     """Raise ``Fired`` once the window is recorded.  The case's last rung."""
-    with Rung(slot.Cmd != 0, slot.Scratch > window):
+    with rung(slot.Cmd != 0, slot.Scratch > window):
         copy(1, slot.Fired)
 
 
@@ -92,7 +92,7 @@ def deadline(slot: Any, timer: Any, limit_ms: int, *, steps: bool = True) -> Non
     *timer* is a ``ClickTimer`` the case owns.  Set *limit_ms* to about 3 times what the
     case takes.  Put these rungs last.  See :func:`time_out` for what *steps* does.
     """
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(timer, limit_ms)
     time_out(slot, timer.Done, steps=steps)
 
@@ -105,7 +105,7 @@ def time_out(slot: Any, *when: Any, steps: bool = True) -> None:
     *steps* off for a case whose ``Scratch`` counts scans, since a count past a threshold
     would run its last rungs.
     """
-    with Rung(slot.Cmd != 0, slot.Fired == 0, *when):
+    with rung(slot.Cmd != 0, slot.Fired == 0, *when):
         math(slot.Scratch + TIMED_OUT, slot.Fired)
         if steps:
             copy(slot.Fired, slot.Scratch)

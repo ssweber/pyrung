@@ -18,12 +18,12 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     SystemState,
     coast_run,
     copy,
     math,
     out,
+    rung,
     rung_firings,
 )
 from pyrung.core.coast_run import coast_until
@@ -315,7 +315,7 @@ def _random_scans(rng: random.Random, count: int) -> list[dict[int, dict[str, An
     scans = []
     for scan_id in range(1, count + 1):
         scan = {}
-        for rung in (0, 1, 2):
+        for rung_index in (0, 1, 2):
             if rng.random() < 0.6:
                 writes: dict[str, Any] = {}
                 if rng.random() < 0.7:
@@ -328,7 +328,7 @@ def _random_scans(rng: random.Random, count: int) -> list[dict[int, dict[str, An
                     )
                 if rng.random() < 0.7:
                     writes["b"] = rng.choice((True, False))
-                scan[rung] = writes
+                scan[rung_index] = writes
         scans.append(scan)
     return scans
 
@@ -350,32 +350,32 @@ def _gap_fuzz(seed: int) -> tuple[RungFiringTimelines, RungFiringTimelines, int]
         for first, last in gaps:
             if scan_id == first:
                 ours.note_gap(first, last)
-        for rung, writes in scan.items():
-            stepped.append(rung, scan_id, writes)
+        for rung_index, writes in scan.items():
+            stepped.append(rung_index, scan_id, writes)
             if not any(start <= scan_id <= end for start, end in gaps):
-                ours.append(rung, scan_id, writes)
+                ours.append(rung_index, scan_id, writes)
     rng.shuffle(gaps)
     for first, last in gaps:
         anchor = rng.randrange(0, first)
         replay = RungFiringTimelines(capped=False)
         for scan_id in range(anchor + 1, last + 1):
-            for rung, writes in scans[scan_id - 1].items():
-                replay.append(rung, scan_id, writes)
+            for rung_index, writes in scans[scan_id - 1].items():
+                replay.append(rung_index, scan_id, writes)
         ours.replace_range(replay, first, last)
     return ours, stepped, count
 
 
 def _assert_alike(seed: int) -> None:
     ours, stepped, count = _gap_fuzz(seed)
-    for rung in (0, 1, 2):
-        one = frozenset((rung,))
+    for rung_index in (0, 1, 2):
+        one = frozenset((rung_index,))
         for tag in ("a", "b"):
             for scan_id in range(count + 2):
                 mine, theirs = (
-                    ours.value_at(rung, tag, scan_id),
-                    stepped.value_at(rung, tag, scan_id),
+                    ours.value_at(rung_index, tag, scan_id),
+                    stepped.value_at(rung_index, tag, scan_id),
                 )
-                where = (rung, tag, scan_id)
+                where = (rung_index, tag, scan_id)
                 assert mine is theirs or (
                     _UNKNOWN_VALUE not in (mine, theirs) and mine == theirs
                 ), where
@@ -588,20 +588,20 @@ Shown = Int("EntryShown")
 
 def _flasher_program() -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math((Phase + 1) % 6, Phase)
-        with Rung(Phase < 3):
+        with rung(Phase < 3):
             out(Light)
     return program
 
 
 def _held_count_program() -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math((Phase + 1) % 3, Phase)
-        with Rung(Phase == 0):
+        with rung(Phase == 0):
             math(Count + 1, Count)
-        with Rung():
+        with rung():
             copy(Count, Shown)
     return program
 
@@ -633,13 +633,13 @@ def test_runs_with_gaps_settle_to_the_records_stepping_keeps() -> None:
     # The first run keeps Enable off, so Shown holds 0 across the gap after it.  Stepping
     # keeps that as one range.  The later runs count, and each reaches past the limit.
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math((Phase + 1) % 3, Phase)
-        with Rung(Phase == 0, Enable):
+        with rung(Phase == 0, Enable):
             math(Count + 1, Count)
-        with Rung():
+        with rung():
             copy(Count, Shown)
-        with Rung(Shown > 5):
+        with rung(Shown > 5):
             out(Lamp)
     plc = PLC(program, dt=0.01)
     twin = PLC(program, dt=0.01)
@@ -654,13 +654,13 @@ def test_runs_with_gaps_settle_to_the_records_stepping_keeps() -> None:
     for name in ("_rung_firing_timelines", "_committed_tag_timelines"):
         ours, stepped = getattr(plc, name), getattr(twin, name)
         assert ours._unknown_keys == stepped._unknown_keys, name
-        for rung, tag in ours._value_timelines.keys() | stepped._value_timelines.keys():
+        for rung_id, tag in ours._value_timelines.keys() | stepped._value_timelines.keys():
             for scan_id in range(1, last + 1):
                 mine, theirs = (
-                    ours.value_at(rung, tag, scan_id),
-                    stepped.value_at(rung, tag, scan_id),
+                    ours.value_at(rung_id, tag, scan_id),
+                    stepped.value_at(rung_id, tag, scan_id),
                 )
-                where = (name, rung, tag, scan_id)
+                where = (name, rung_id, tag, scan_id)
                 assert mine is theirs or (
                     _UNKNOWN_VALUE not in (mine, theirs) and mine == theirs
                 ), where
@@ -668,7 +668,7 @@ def test_runs_with_gaps_settle_to_the_records_stepping_keeps() -> None:
 
 def _sequencer() -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math((Phase + 1) % 4, Phase)
     return program
 
@@ -704,7 +704,7 @@ def test_a_long_run_with_a_window_settles_to_steppings_records() -> None:
 
 def _toggle() -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math((Phase + 1) % 2, Phase)
     return program
 
@@ -744,7 +744,7 @@ def test_a_long_run_trims_history_to_steppings_floor(history: int, scans: int) -
 def _forty_counts() -> Program:
     with Program(strict=False) as program:
         for k in range(40):
-            with Rung():
+            with rung():
                 math(Int(f"Count{k}") + 1, Int(f"Count{k}"))
     return program
 
@@ -816,7 +816,7 @@ Noise = Int("EntryNoise")
 
 def _noise() -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math((Noise * 31 + 7) % 1009, Noise)
     return program
 

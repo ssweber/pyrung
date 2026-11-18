@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from pyrung.core import Block, Bool, Program, Rung, TagType, latch, out, reset
+from pyrung.core import Block, Bool, Program, TagType, latch, out, reset, rung
 from pyrung.core.analysis.pilot import drive_setup
 from pyrung.core.analysis.pilot.compass import Compass, CompassKnowledge, NavigationCatalog
 from pyrung.core.tag import metadata_edits
@@ -203,11 +203,11 @@ def _slot_program() -> tuple[Program, Block]:
     cmd = Block("PCtxCmd", TagType.INT, 1, 2)
     running = Bool("PCtxRunning")
     with Program(strict=False) as logic:
-        with Rung(cmd[1] == 5):
+        with rung(cmd[1] == 5):
             latch(running)
-        with Rung(cmd[2] == 1):
+        with rung(cmd[2] == 1):
             reset(running)
-        with Rung(running, cmd[1] == 0):
+        with rung(running, cmd[1] == 0):
             out(Bool("PCtxLamp"))
     return logic, cmd
 
@@ -246,7 +246,7 @@ def test_a_program_edit_drops_the_answer(computed: list[Any]) -> None:
     drive_setup.build_prover_context(logic)
     stop = Bool("PCtxStop", external=True)
     with logic:
-        with Rung(stop):
+        with rung(stop):
             out(Bool("PCtxStopped"))
     assert logic._cached_prover_context is None
     after = drive_setup.build_prover_context(logic)

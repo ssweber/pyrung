@@ -19,7 +19,6 @@ from pyrung import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     call,
@@ -29,6 +28,7 @@ from pyrung import (
     on_delay,
     out,
     reset,
+    rung,
     shift,
     subroutine,
     toggle,
@@ -91,7 +91,7 @@ def _count_kernel_scans(plc: PLC) -> dict[str, int]:
 
 
 def _timer() -> None:
-    with Rung():
+    with rung():
         on_delay(T, preset=7350)
 
 
@@ -101,25 +101,25 @@ def _timer() -> None:
 
 
 def _one_shot_copy() -> None:
-    with Rung(T2.Done):
+    with rung(T2.Done):
         copy(1, Cmd, oneshot=True)
-    with Rung(Cmd == 0):
+    with rung(Cmd == 0):
         math(N + 1, N)
-    with Rung():
+    with rung():
         copy(0, Cmd)
-    with Rung():
+    with rung():
         on_delay(T2, preset=200)
     _timer()
 
 
 def _one_shot_copy_wrapping() -> None:
-    with Rung(T2.Done):
+    with rung(T2.Done):
         copy(1, Cmd, oneshot=True)
-    with Rung(Cmd == 0):
+    with rung(Cmd == 0):
         math((N + 1) % 7, N)
-    with Rung():
+    with rung():
         copy(0, Cmd)
-    with Rung():
+    with rung():
         on_delay(T2, preset=200)
     _timer()
 
@@ -133,48 +133,48 @@ def _transient(fire: Body) -> Body:
     def body() -> None:
         _timer()
         fire()
-        with Rung(~F):
+        with rung(~F):
             math(N + 1, N)
-        with Rung():
+        with rung():
             reset(F)
-        with Rung(G):
+        with rung(G):
             out(A)
 
     return body
 
 
 def _fire_one_shot_out() -> None:
-    with Rung(A):
+    with rung(A):
         out(F, oneshot=True)
 
 
 def _fire_one_shot_copy() -> None:
-    with Rung(A):
+    with rung(A):
         copy(1, F, oneshot=True)
 
 
 def _fire_toggle() -> None:
-    with Rung(A):
+    with rung(A):
         toggle(F)
 
 
 def _fire_in_a_subroutine() -> None:
-    with Rung():
+    with rung():
         call("Fire")
     with subroutine("Fire"):
-        with Rung(A):
+        with rung(A):
             copy(1, F, oneshot=True)
 
 
 def _shift_clock_edge() -> None:
     _timer()
-    with Rung(G):
+    with rung(G):
         shift(Bits.select(1, 8)).clock(A).reset(R)
-    with Rung(~Bits[1]):
+    with rung(~Bits[1]):
         math(N + 1, N)
-    with Rung():
+    with rung():
         reset(Bits.select(1, 8))
-    with Rung(G):
+    with rung(G):
         out(A)
 
 
@@ -243,41 +243,41 @@ class TestAProbeThatLeftMemoryBehind:
 
 def _rebuilt_seconds() -> None:
     _timer()
-    with Rung(A):
+    with rung(A):
         math(T.Acc // 1000, Secs)
-    with Rung(T.Acc >= 7000):
+    with rung(T.Acc >= 7000):
         latch(Hit)
 
 
 def _stale_fault_flag() -> None:
-    with Rung():
+    with rung():
         on_delay(T, preset=40000)
-    with Rung():
+    with rung():
         math(T.Acc + 30000, Q)
 
 
 def _lamp() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         out(Lamp)
     _timer()
 
 
 def _done_read() -> None:
     _lamp()
-    with Rung(T.Done):
+    with rung(T.Done):
         out(Hit)
-    with Rung(Hit):
+    with rung(Hit):
         out(Y)
 
 
 def _clocked() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         math(N + 1, N)
     _timer()
 
 
 def _seconds() -> None:
-    with Rung(system.rtc.second == 30):
+    with rung(system.rtc.second == 30):
         out(Lamp)
     _timer()
 
@@ -305,9 +305,9 @@ class TestPrograms:
 
 def _timer_beside_an_oscillator() -> None:
     # Every scan changes F.
-    with Rung(F):
+    with rung(F):
         on_delay(T, preset=9000).reset(R)
-    with Rung(~F):
+    with rung(~F):
         out(F)
 
 
@@ -380,9 +380,9 @@ class TestAMonitor:
         # Only a change of Hit can fire this.
         def latched() -> None:
             _timer()
-            with Rung(T.Acc >= 2000):
+            with rung(T.Acc >= 2000):
                 latch(Hit)
-            with Rung(Hit):
+            with rung(Hit):
                 out(Y)
 
         def run(jit: bool) -> tuple[list[int], int]:
@@ -402,13 +402,13 @@ class TestAMonitor:
 
 def _seconds_gated() -> None:
     _timer()
-    with Rung(A):
+    with rung(A):
         math(T.Acc // 1000, Secs)
 
 
 def _acc_view() -> None:
     _timer()
-    with Rung():
+    with rung():
         math(T.Acc + 5, Q)
 
 
@@ -476,7 +476,7 @@ class TestADeclaredRead:
     def test_a_read_no_rung_reads_stays_in_the_loop(self) -> None:
         def body() -> None:
             _timer()
-            with Rung(clk100, G):
+            with rung(clk100, G):
                 out(Lamp)
 
         def pred(state: Any) -> bool:
@@ -520,7 +520,7 @@ class TestADeclaredRead:
 
 
 def _oscillator() -> None:
-    with Rung(~F):
+    with rung(~F):
         out(F)
 
 

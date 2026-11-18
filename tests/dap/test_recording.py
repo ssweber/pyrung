@@ -21,13 +21,13 @@ from pyrung.dap.recording import (
 from tests.dap.test_capture import _drain_messages, _repl, _send_request
 
 _SCRIPT = (
-    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, PLC, Program, rung, out\n"
     "\n"
     "button = Bool('Button')\n"
     "light = Bool('Light')\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        out(light)\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"
@@ -435,13 +435,13 @@ class TestReplayWithNoDebugger:
 
 _SIBLING_SCRIPT = (
     "from helpers import LIGHT\n"
-    "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+    "from pyrung.core import Bool, PLC, Program, rung, out\n"
     "\n"
     "button = Bool('Button')\n"
     "light = Bool(LIGHT)\n"
     "\n"
     "with Program(strict=False) as prog:\n"
-    "    with Rung(button):\n"
+    "    with rung(button):\n"
     "        out(light)\n"
     "\n"
     "runner = PLC(prog, dt=0.010)\n"

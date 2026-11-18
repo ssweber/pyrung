@@ -9,7 +9,7 @@ plumbing; wiring it into the planner is a separate step.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Real, Rung, copy
+from pyrung import Bool, Int, Program, Real, copy, rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.crossing import Cmp
@@ -26,7 +26,7 @@ def _installed_plc() -> tuple[PLC, object]:
     Temp = Real("Temp", physical=SENSOR, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Temp >= 5.0):
+        with rung(Enable, Temp >= 5.0):
             copy(1, Stage)
     plc = PLC(prog, dt=0.010)
     Harness(plc).install()
@@ -71,7 +71,7 @@ def test_nonlinear_profile_falls_back_to_empirical() -> None:
     Temp = Real("Temp", physical=fo_sensor, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Temp >= 5.0):
+        with rung(Enable, Temp >= 5.0):
             copy(1, Stage)
     plc = PLC(prog, dt=0.010)
     Harness(plc).install()
@@ -98,7 +98,7 @@ def test_how_threshold_solves_with_driver_not_in_goal() -> None:
     Temp = Real("Temp", physical=SENSOR, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Temp >= 5.0):
+        with rung(Enable, Temp >= 5.0):
             copy(1, Stage)
     plc = PLC(prog, dt=0.010)
 
@@ -113,7 +113,7 @@ def test_how_threshold_path_replays() -> None:
     Temp = Real("Temp", physical=SENSOR, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Temp >= 5.0):
+        with rung(Enable, Temp >= 5.0):
             copy(1, Stage)
 
     path = pilot_how(PLC(prog, dt=0.010), Temp >= 5.0, max_scans=3000)

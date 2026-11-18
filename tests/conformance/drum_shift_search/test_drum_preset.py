@@ -40,7 +40,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, copy, fill, on_delay
+from pyrung.core import copy, fill, on_delay, rung
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put
 from tests.conformance.drum_shift_search.test_drum_pins import time_box
 from tests.conformance.memory import ClickTimer, ds, td
@@ -71,7 +71,7 @@ def _sides(bits: range, steps: range, tds: range) -> list[Side]:
 def _read(slot: Any, sides: list[Side], *when: Any) -> None:
     """Copy each side's step into Result1.., and ``Fired``, on the first scan *when* holds."""
     fields = (slot.Result1, slot.Result2, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, *when):
+    with rung(slot.Cmd != 0, slot.Fired == 0, *when):
         for side, field in zip(sides, fields[: len(sides)], strict=True):
             copy(side.step, field)
         copy(1, slot.Fired)
@@ -102,7 +102,7 @@ def prove_entry_or_first_timing_scan(slot: Any) -> None:
     time_box(slot, at_move, [LONG, p_move, LONG], jog=jog)
     time_box(slot, first_scan, [LONG, p_first, LONG], jog=jog)
     time_box(slot, corrected, [p_back, LONG, LONG], jog=jog_early)
-    with Rung(slot.Cmd != 0, slot.Scratch >= LAST_WRITE):
+    with rung(slot.Cmd != 0, slot.Scratch >= LAST_WRITE):
         on_delay(CLOCK, LONG)
     _read(slot, [at_move, first_scan, corrected], CLOCK.Acc >= SETTLED)
 

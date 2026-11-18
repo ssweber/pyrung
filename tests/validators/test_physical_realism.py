@@ -6,12 +6,12 @@ from pyrung.core import (
     Physical,
     Program,
     Real,
-    Rung,
     TagType,
     copy,
     fill,
     out,
     rise,
+    rung,
 )
 from pyrung.core.validation import (
     PHYS_ANTITOGGLE,
@@ -29,7 +29,7 @@ def test_range_violation_flags_literal_copy_and_fill():
     values.slot(2, min=0, max=10)
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(150, pressure)
             fill(12, values.select(1, 2))
 
@@ -56,7 +56,7 @@ def test_range_violation_describes_one_sided_min_max_limits():
     ceiling = Real("Ceiling", max=100)
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(-1, floor)
             copy(101, ceiling)
 
@@ -71,7 +71,7 @@ def test_range_validator_allows_in_range_literals():
     pressure = Real("Pressure", min=0, max=100, uom="psi")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(50, pressure)
 
     report = validate_physical_realism(prog)
@@ -83,7 +83,7 @@ def test_range_validator_skips_dynamic_writes():
     pressure = Real("Pressure", min=0, max=100, uom="psi")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(source, pressure)
 
     report = validate_physical_realism(prog)
@@ -95,7 +95,7 @@ def test_missing_analog_profile_finding():
     pv = Real("Pv", link="Cmd")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(cmd, pv)
 
     report = validate_physical_realism(prog)
@@ -111,9 +111,9 @@ def test_one_direction_bool_timing_skips_antitoggle():
     seen = Bool("Seen")
 
     with Program() as prog:
-        with Rung(rise(start)):
+        with rung(rise(start)):
             out(enable)
-        with Rung(feedback):
+        with rung(feedback):
             out(seen)
 
     report = validate_physical_realism(prog, dt=0.010)
@@ -131,9 +131,9 @@ def test_both_direction_bool_timing_flags_one_scan_edge_pulse():
     seen = Bool("Seen")
 
     with Program() as prog:
-        with Rung(rise(start)):
+        with rung(rise(start)):
             out(enable)
-        with Rung(feedback):
+        with rung(feedback):
             out(seen)
 
     report = validate_physical_realism(prog, dt=0.010)
@@ -155,11 +155,11 @@ def test_opposing_writes_recommend_tracking_desired_state_separately():
     seen = Bool("Seen")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             out(enable)
-        with Rung(select):
+        with rung(select):
             out(enable)
-        with Rung(feedback):
+        with rung(feedback):
             out(seen)
 
     report = validate_physical_realism(prog, dt=0.010)
@@ -173,7 +173,7 @@ def test_link_to_an_enable_the_program_never_uses():
     seen = Bool("Seen")
 
     with Program() as prog:
-        with Rung(feedback):
+        with rung(feedback):
             out(seen)
 
     report = validate_physical_realism(prog)
@@ -193,9 +193,9 @@ def test_normally_closed_link_resolves_its_enable():
     seen = Bool("Seen")
 
     with Program() as prog:
-        with Rung(rise(start)):
+        with rung(rise(start)):
             out(enable)
-        with Rung(feedback):
+        with rung(feedback):
             out(seen)
 
     report = validate_physical_realism(prog, dt=0.010)

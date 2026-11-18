@@ -15,11 +15,11 @@ from pyrung import (
     Bool,
     Int,
     Program,
-    Rung,
     copy,
     math,
     run_enabled_function,
     run_function,
+    rung,
     subroutine,
 )
 from pyrung import (
@@ -85,11 +85,11 @@ def _program(call: Call) -> Program:
     The callable sits below a write that its scan owes and above the count.
     """
     with Program(strict=False) as program:
-        with Rung(Cnt == 3):
+        with rung(Cnt == 3):
             copy(5, X)
-        with Rung():
+        with rung():
             run_function(call, ins={"c": Cnt}, outs={"seen": Seen})
-        with Rung():
+        with rung():
             math(Cnt + 1, Cnt)
     return program
 
@@ -154,9 +154,9 @@ def test_enabled_function_refused_on_both_paths(make):
         return {"seen": 1}
 
     with Program(strict=False) as program:
-        with Rung(Cnt == 2):
+        with rung(Cnt == 2):
             run_enabled_function(body, outs={"seen": Seen})
-        with Rung():
+        with rung():
             math(Cnt + 1, Cnt)
     plc = make(program)
     plc.run(2)
@@ -236,10 +236,10 @@ def test_a_callable_in_a_subroutine_is_refused(make):
     """
     call = Call()
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             run_subroutine("worker")
         with subroutine("worker"):
-            with Rung():
+            with rung():
                 run_function(call, ins={"c": Cnt}, outs={"seen": Seen})
     plc = make(program)
     plc.step()
@@ -254,7 +254,7 @@ def test_a_kernel_says_whether_it_calls_a_function():
     CompiledPLC skips the marker when this flag is False, so a body must never be left out.
     """
     with Program(strict=False) as plain:
-        with Rung():
+        with rung():
             math(Cnt + 1, Cnt)
     assert compile_kernel(plain).calls_functions is False
     assert compile_kernel(_program(Call())).calls_functions is True
@@ -336,9 +336,9 @@ def test_a_long_run_raises_on_a_lifecycle_call_too(act):
         return {"seen": c}
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             run_function(inner, ins={"c": Cnt}, outs={"seen": Seen})
-        with Rung():
+        with rung():
             math(Cnt + 1, Cnt)
     plc = PLC(program, dt=0.01)
     assert plc._compiled_replay_supported_kernel() is None
@@ -851,9 +851,9 @@ def _self_stepper(fires_at: int) -> tuple[PLC, Any]:
         return {"seen": c}
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             run_function(inner, ins={"c": Cnt}, outs={"seen": Seen})
-        with Rung():
+        with rung():
             math(Cnt + 1, Cnt)
     plc = PLC(program, dt=0.01)
     return plc, inner

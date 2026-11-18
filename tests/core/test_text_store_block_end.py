@@ -28,11 +28,11 @@ from pyrung.core import (
     CompiledPLC,
     Int,
     Program,
-    Rung,
     TagType,
     copy,
     fill,
     out,
+    rung,
     system,
     to_text,
     to_value,
@@ -112,7 +112,7 @@ def test_a_real_into_text_writes_what_fits(engine, form, start, text, monkeypatc
     watch = _watched(txt, 994, 1000)
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(1.5, df[1])
             copy(start, ds[1])
             if form == "pointer":
@@ -121,7 +121,7 @@ def test_a_real_into_text_writes_what_fits(engine, form, start, text, monkeypatc
                 copy(df[1], txt[start], convert=to_text())
             else:
                 copy(df[1], txt[start])
-        with Rung(*(tag == "#" for tag in watch)):
+        with rung(*(tag == "#" for tag in watch)):
             out(seen)
 
     values, names = _scan(prog, engine, [*watch, SC43, SC44], monkeypatch)
@@ -138,9 +138,9 @@ def test_a_text_literal_writes_what_fits(engine, monkeypatch):
     txt = blocks.txt
     watch = _watched(txt, 996, 1000)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("ABCDEFG", txt[997])
-        with Rung(*(tag == "#" for tag in watch)):
+        with rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
@@ -156,11 +156,11 @@ def test_digits_into_numbers_write_what_fits(engine, monkeypatch):
     ds, txt = blocks.ds, blocks.txt
     watch = _watched(ds, 4498, 4500)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("123", txt[1])
             copy(txt[1], ds[4499], convert=to_value)
             copy("1234", ds[4499], convert=to_value)
-        with Rung(*(tag == 9 for tag in watch)):
+        with rung(*(tag == 9 for tag in watch)):
             out(Bool("Seen"))
 
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
@@ -177,10 +177,10 @@ def test_a_bad_digit_past_the_end_still_faults(engine, monkeypatch):
     ds = blocks.ds
     watch = _watched(ds, 4499, 4500)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(7, ds[4499])
             copy("12x", ds[4499], convert=to_value)
-        with Rung(*(tag == 9 for tag in watch)):
+        with rung(*(tag == 9 for tag in watch)):
             out(Bool("Seen"))
 
     values, _names = _scan(prog, engine, [*watch, SC43], monkeypatch)
@@ -196,10 +196,10 @@ def test_a_text_from_outside_the_block_writes_nothing(engine, pointer, flag, mon
     txt, ds = blocks.txt, blocks.ds
     watch = _watched(txt, 1, 2)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(pointer, ds[1])
             copy("ABC", txt[ds[1]])
-        with Rung(*(tag == "#" for tag in watch)):
+        with rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
     values, names = _scan(prog, engine, [*watch, SC43, SC44], monkeypatch)
@@ -214,10 +214,10 @@ def test_a_block_of_ones_own_ends_the_text(engine, monkeypatch):
     msg = Block("Msg", TagType.CHAR, 1, 5)
     watch = _watched(msg, 1, 5)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill("x", msg.select(1, 1))
             copy("ABCDEFG", msg[3])
-        with Rung(msg[5] == "#"):
+        with rung(msg[5] == "#"):
             out(Bool("Seen"))
 
     # Generated CircuitPython holds only the elements the program names.
@@ -236,7 +236,7 @@ def test_the_write_sites_of_a_text_stop_at_the_block_end():
     """Analyses see the elements a literal writes, none past its block."""
     txt = ClickBlocks().txt
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("ABCDEFG", txt[997])
     (instr,) = prog.rungs[0]._execution_items
     names = [getattr(target, "name", None) for target in instruction_write_targets(instr)]
@@ -251,10 +251,10 @@ def test_a_text_into_a_bank_of_another_blocks_object_keeps_its_addresses(engine,
     first, second = ClickBlocks(), ClickBlocks()
     watch = [second.txt[1], first.txt[5]]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill("x", first.txt.select(5, 5))
             copy("AB", second.txt[1])
-        with Rung(*(tag == "#" for tag in watch)):
+        with rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
     # Generated CircuitPython holds only the elements the program names.
@@ -280,11 +280,11 @@ def test_a_text_writes_the_tags_that_hold_the_addresses(engine, monkeypatch):
     unit = txt[996]
     watch = [txt[100], msg[1], msg[2], txt[995], unit, txt[997], txt[998]]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("ABC", txt[100])
             copy("DE", txt[995])
             copy("FG", unit)
-        with Rung(*(tag == "#" for tag in watch)):
+        with rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
@@ -307,9 +307,9 @@ def test_a_text_into_a_mapped_block_ends_with_that_block(engine, bank_read_first
         assert txt[109] is msg[9]
     watch = [msg[9], msg[10], txt[111]]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("ABC", msg[9])
-        with Rung(*(tag == "#" for tag in watch)):
+        with rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)
@@ -343,9 +343,9 @@ def _mapped_scalar_program(kind: str, before: str):
         assert bank[slot._pyrung_block_addr] is target
     watch = [target, *after]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             store()
-        with Rung(*(tag == sentinel for tag in watch)):
+        with rung(*(tag == sentinel for tag in watch)):
             out(Bool("Seen"))
     if before == "legacy_compiled":
         compile_kernel(prog, blockless=False)
@@ -389,9 +389,9 @@ def test_a_text_into_a_block_of_any_name_writes_its_elements(engine, name, monke
     blk = Block(name, TagType.CHAR, 1, 10)
     watch = [blk[1], blk[2], blk[3]]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("ABC", blk[1])
-        with Rung(*(tag == "#" for tag in watch)):
+        with rung(*(tag == "#" for tag in watch)):
             out(Bool("Seen"))
 
     values, names = _scan(prog, engine, [*watch, SC43], monkeypatch)

@@ -22,7 +22,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Word,
     blockcopy,
@@ -30,6 +29,7 @@ from pyrung.core import (
     fill,
     math,
     out,
+    rung,
     to_text,
     to_value,
     unpack_to_words,
@@ -72,7 +72,7 @@ def test_a_register_into_a_word_clamps_above_and_wraps_below(runner_factory, sou
     src = source("Src", default=value)
     dest = Word("Dest", default=7)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(src, dest)
     tags = _one_scan(runner_factory, logic)
     assert (tags["Dest"], bool(tags.get(SC43, False))) == (stored, False)
@@ -85,7 +85,7 @@ def test_an_infinity_into_a_word(runner_factory, value, stored):
     dest = Word("Dest", default=7)
     scale = 10 if value > 0 else -10
     with Program() as logic:
-        with Rung():
+        with rung():
             math(big * scale, inf)
             copy(inf, dest)
     tags = _one_scan(runner_factory, logic)
@@ -97,7 +97,7 @@ def test_a_constant_into_a_word_keeps_its_low_16_bits(runner_factory, value, sto
     dest = Word("Dest", default=7)
     filled = Block("W", TagType.WORD, 1, 2)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(value, dest)
             fill(value, filled.select(1, 2))
     tags = _one_scan(runner_factory, logic)
@@ -112,7 +112,7 @@ def test_a_real_constant_into_a_word_truncates_toward_zero(runner_factory, value
     """Read on a CLICK: copy(1.5, DH1) is 1, 2.5 is 2, -1.5 is FFFFh and 1.4 is 1, into a YD
     too.  The CLICK drops the fraction toward zero and keeps the low 16 bits."""
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(value, dh[1])
             copy(value, _blocks.yd[1])
     tags = _one_scan(runner_factory, logic)
@@ -145,7 +145,7 @@ _NON_FINITE_INTO_INTEGERS = [
 def test_a_non_finite_real_into_an_int_or_a_dint(runner_factory, op, bank, value, stored, flag):
     store = {"copy": copy, "math": math}[op]
     with Program() as logic:
-        with Rung():
+        with rung():
             store(df[1], bank[1])
     tags = _one_scan(runner_factory, logic, {"DF1": value, bank[1].name: 99})
     faults = (tags.get(SC43, False), tags.get(SC44, False), tags.get(SC46, False))
@@ -155,7 +155,7 @@ def test_a_non_finite_real_into_an_int_or_a_dint(runner_factory, op, bank, value
 def test_a_nan_filled_or_block_copied_into_a_dint_is_its_least_value(runner_factory):
     """A Fill and a Block copy store as a Copy does, so a DF NaN into a DD is -2147483648."""
     with Program() as logic:
-        with Rung():
+        with rung():
             fill(df[1], dd.select(1, 2))
             blockcopy(df.select(1, 2), dd.select(3, 4))
     tags = _one_scan(runner_factory, logic, {"DF1": pymath.nan, "DF2": pymath.nan})
@@ -170,7 +170,7 @@ def test_a_word_into_an_int_keeps_its_bits(runner_factory):
     words = Block("W", TagType.WORD, 1, 2)
     ints = Block("I", TagType.INT, 1, 2)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(src, dest)
             copy(low, dest2)
             copy(0xFFFF, words[1])
@@ -185,7 +185,7 @@ def test_a_word_into_a_dint_or_a_real_is_its_value(runner_factory):
     src = Word("Src", default=0xFFFF)
     dint, real = Dint("D"), Real("R")
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(src, dint)
             copy(src, real)
     tags = _one_scan(runner_factory, logic)
@@ -200,7 +200,7 @@ def test_a_number_into_a_bit_is_on_when_nonzero(runner_factory, value, on):
     bit, bit2 = Bool("Bit"), Bool("Bit2")
     bits = Block("B", TagType.BOOL, 1, 2)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(value, bit)
             copy(src, bit2)
             fill(value, bits.select(1, 2))
@@ -220,7 +220,7 @@ def test_a_real_into_a_bit_is_on_when_nonzero_and_finite(runner_factory, value, 
     bit = Bool("Bit")
     bits = Block("B", TagType.BOOL, 1, 2)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(src, bit)
             fill(src, bits.select(1, 2))
     tags = _one_scan(runner_factory, logic, {"Src": value})
@@ -238,7 +238,7 @@ def test_a_math_result_into_a_bit_follows_the_copy_rule(runner_factory, value, o
     src = Real("Src")
     bit = Bool("Bit")
     with Program() as logic:
-        with Rung():
+        with rung():
             math(src * 1, bit)
     tags = _one_scan(runner_factory, logic, {"Src": value})
     assert tags["Bit"] is on
@@ -251,7 +251,7 @@ def test_a_real_copied_or_filled_into_an_int_truncates(runner_factory):
     dest = Int("Dest", default=7)
     ints = Block("I", TagType.INT, 1, 2)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(2.7, dest)
             fill(src, ints.select(1, 2))
     tags = _one_scan(runner_factory, logic)
@@ -263,7 +263,7 @@ def test_a_block_to_value_skips_a_bad_character(runner_factory):
     chars = Block("CH", TagType.CHAR, 1, 3)
     nums = Block("N", TagType.INT, 1, 3)
     with Program() as logic:
-        with Rung():
+        with rung():
             fill(99, nums.select(1, 3))
             blockcopy(chars.select(1, 3), nums.select(1, 3), convert=to_value)
     tags = _one_scan(runner_factory, logic, {"CH1": "1", "CH2": "A", "CH3": "2"})
@@ -274,7 +274,7 @@ def test_a_block_to_value_skips_a_bad_character(runner_factory):
 def test_a_fill_that_clamps_raises_sc43(runner_factory):
     ints = Block("I", TagType.INT, 1, 2)
     with Program() as logic:
-        with Rung():
+        with rung():
             fill(40000, ints.select(1, 2))
     tags = _one_scan(runner_factory, logic)
     assert (tags["I1"], tags["I2"], tags[SC43]) == (32767, 32767, True)
@@ -284,7 +284,7 @@ def test_a_fill_that_fits_raises_no_sc43(runner_factory):
     ints = Block("I", TagType.INT, 1, 2)
     src = Dint("Src", default=5)
     with Program() as logic:
-        with Rung():
+        with rung():
             fill(src, ints.select(1, 2))
     tags = _one_scan(runner_factory, logic)
     assert (tags["I1"], tags.get(SC43, False)) == (5, False)
@@ -295,7 +295,7 @@ def test_a_pointer_past_ds_dh_df_or_txt_leaves_the_destination(runner_factory):
     ds_dest, dh_dest, df_dest, txt_dest = Int("DsDest"), Word("DhDest"), Real("DfDest"), txt[999]
     dd_dest = Dint("DdDest")
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(4501, ptr)
             copy(ds[ptr], ds_dest)
             copy(501, ptr)
@@ -318,7 +318,7 @@ def test_a_pointer_below_a_kept_bank_still_raises_sc44(runner_factory):
     ptr = Int("Ptr")
     dest = Int("Dest", default=99)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(0, ptr)
             copy(ds[ptr], dest)
     tags = _one_scan(runner_factory, logic)
@@ -329,7 +329,7 @@ def test_a_word_as_suppressed_text_is_hex(runner_factory):
     chars = Block("CH", TagType.CHAR, 1, 4)
     src = Word("Src", default=0x00AB)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(src, chars[1], convert=to_text())
     tags = _one_scan(runner_factory, logic)
     assert (tags["CH1"], tags["CH2"], tags.get("CH3", "\x00")) == ("A", "B", "\x00")
@@ -341,7 +341,7 @@ def test_a_nan_reads_all_ones(runner_factory):
     words = Block("W", TagType.WORD, 1, 2)
     big = Real("Big", default=3.0e38)
     with Program() as logic:
-        with Rung():
+        with rung():
             math(big * 10, zero)
             math(zero - zero, nan)
             unpack_to_words(nan, words.select(1, 2))
@@ -353,7 +353,7 @@ def test_a_plain_copy_across_text_converts(runner_factory):
     real = Real("R", default=66.7)
     digit = Int("Digit", default=99)
     with Program() as logic:
-        with Rung():
+        with rung():
             copy("Z", txt[901])
             copy(real, txt[901])
             copy(txt[901], digit)
@@ -374,9 +374,9 @@ def test_a_txt_against_a_two_character_literal_reads_the_next_txt(
     chars = Block("CH", TagType.CHAR, 1, 3)
     same, differs = Bool("Same"), Bool("Differs")
     with Program() as logic:
-        with Rung(chars[1] == "AB"):
+        with rung(chars[1] == "AB"):
             out(same)
-        with Rung(chars[1] != "AB"):
+        with rung(chars[1] != "AB"):
             out(differs)
     tags = _one_scan(runner_factory, logic, {"CH1": first, "CH2": second})
     assert (tags["Same"], tags["Differs"]) == (equal, not equal)
@@ -412,9 +412,9 @@ def test_a_named_array_window_reads_the_next_slots_of_its_layout(runner_factory)
 
     same, differs = Bool("Same"), Bool("Differs")
     with Program() as logic:
-        with Rung(Pair.a[1] == "XY"):
+        with rung(Pair.a[1] == "XY"):
             out(same)
-        with Rung(Pair.a[1] != "XY"):
+        with rung(Pair.a[1] != "XY"):
             out(differs)
     tags = _one_scan(runner_factory, logic, {"Pair1_a": "X", "Pair1_b": "Y", "Pair2_a": "Q"})
     assert (tags["Same"], tags["Differs"]) == (True, False)
@@ -477,13 +477,13 @@ def test_a_mapped_tag_reads_the_txts_after_the_one_it_was_mapped_to(runner_facto
     names = ("OutOfOrder", "Lone", "InOrder", "PaddedHit")
     out_of_order, lone, in_order, padded = (Bool(n) for n in names)
     with Program() as logic:
-        with Rung(bank[5] == "AB"):
+        with rung(bank[5] == "AB"):
             out(out_of_order)
-        with Rung(bank[21] == "AB"):
+        with rung(bank[21] == "AB"):
             out(lone)
-        with Rung(bank[34] == "XY"):
+        with rung(bank[34] == "XY"):
             out(in_order)
-        with Rung(bank[42] == "XY"):
+        with rung(bank[42] == "XY"):
             out(padded)
     hit = {"Msg1": "A", "TXT6": "B", "Code": "A", "TXT22": "B"}
     hit |= {"MsgC4": "X", "TXT35": "Y", "Padded1_b": "X", "TXT43": "Y"}
@@ -513,7 +513,7 @@ def test_a_logical_compare_built_after_mapping_reads_the_hardware(runner_factory
 
     same = Bool("Same")
     with Program() as logic:
-        with Rung(msg[1] == "AB", code == "CD"):
+        with rung(msg[1] == "AB", code == "CD"):
             out(same)
     patch = {"Msg1": "A", "TXT6": "B", "Code": "C", "TXT22": "D"}
     assert _one_scan(runner_factory, logic, {**patch, "Msg2": "Q"})["Same"] is True

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Block, Bool, Int, Program, Rung, TagType, copy, math
+from pyrung.core import Block, Bool, Int, Program, TagType, copy, math, rung
 from pyrung.core.validation import CMP_STEPPER_VALUE_NOT_SET, check
 
 
@@ -16,11 +16,11 @@ def _direct_stepper(compare_value: int) -> Program:
     state = Int("State")
     result = Bool("Result", external=True)
     with Program(strict=False) as program:
-        with Rung(choose_one):
+        with rung(choose_one):
             copy(1, state)
-        with Rung(choose_two):
+        with rung(choose_two):
             copy(2, state)
-        with Rung(state == compare_value):
+        with rung(state == compare_value):
             copy(1, result)
     return program
 
@@ -51,13 +51,13 @@ def test_follows_direct_copy_chain() -> None:
     state = Int("DirectCopiedState")
     result = Bool("DirectCopiedResult", external=True)
     with Program(strict=False) as program:
-        with Rung(choose_one):
+        with rung(choose_one):
             copy(10, request)
-        with Rung(choose_two):
+        with rung(choose_two):
             copy(20, request)
-        with Rung():
+        with rung():
             copy(request, state)
-        with Rung(state == 30):
+        with rung(state == 30):
             copy(1, result)
 
     findings = _findings(program)
@@ -76,13 +76,13 @@ def _indirect_stepper(compare_value: int) -> Program:
     table.slot(2, default=20)
 
     with Program(strict=False) as program:
-        with Rung(choose_one):
+        with rung(choose_one):
             copy(1, pointer)
-        with Rung(choose_two):
+        with rung(choose_two):
             copy(2, pointer)
-        with Rung():
+        with rung():
             copy(table[pointer], state)
-        with Rung(state == compare_value):
+        with rung(state == compare_value):
             copy(1, result)
     return program
 
@@ -104,15 +104,15 @@ def test_unknown_writer_path_punts_instead_of_guessing() -> None:
     state = Int("CopiedState")
     result = Bool("UnknownResult", external=True)
     with Program(strict=False) as program:
-        with Rung(choose_one):
+        with rung(choose_one):
             copy(1, request)
-        with Rung(choose_two):
+        with rung(choose_two):
             copy(2, request)
-        with Rung(use_unknown):
+        with rung(use_unknown):
             copy(unknown, state)
-        with Rung():
+        with rung():
             copy(request, state)
-        with Rung(state == 99):
+        with rung(state == 99):
             copy(1, result)
 
     assert not _findings(program)
@@ -124,11 +124,11 @@ def test_externally_writable_stepper_punts() -> None:
     state = Int("ExternallyWritableState", external=True)
     result = Bool("ExternalStateResult", external=True)
     with Program(strict=False) as program:
-        with Rung(choose_one):
+        with rung(choose_one):
             copy(1, state)
-        with Rung(choose_two):
+        with rung(choose_two):
             copy(2, state)
-        with Rung(state == 99):
+        with rung(state == 99):
             copy(1, result)
 
     assert not _findings(program)
@@ -139,13 +139,13 @@ def test_dynamic_and_defensive_comparisons_stay_quiet() -> None:
     step = Int("ArithmeticStep")
     result = Bool("DynamicResult", external=True)
     with Program(strict=False) as program:
-        with Rung(advance):
+        with rung(advance):
             math(step + 2, step)
-        with Rung(step == 99):
+        with rung(step == 99):
             copy(1, result)
-        with Rung(step != 101):
+        with rung(step != 101):
             copy(1, result)
-        with Rung(step >= 103):
+        with rung(step >= 103):
             copy(1, result)
 
     assert not _findings(program)

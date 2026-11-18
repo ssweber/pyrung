@@ -13,7 +13,6 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     TimeMode,
     copy,
@@ -22,6 +21,7 @@ from pyrung.core import (
     math,
     out,
     rise,
+    rung,
     system,
     to_binary,
     to_value,
@@ -89,11 +89,11 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode(runner_fa
     fixed_mode_value = Bool("FixedModeValue")
 
     with Program() as program:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             out(first_scan_latched)
-        with Rung():
+        with rung():
             copy(system.sys.scan_clock_toggle, clock_value)
-        with Rung():
+        with rung():
             copy(system.sys.fixed_scan_mode, fixed_mode_value)
 
     runner = runner_factory(program)
@@ -121,9 +121,9 @@ def test_clock_rise_fall_edge_detect_not_level():
     rises = Int("Rises")
     falls = Int("Falls")
     with Program() as program:
-        with Rung(rise(system.sys.clock_1s)):
+        with rung(rise(system.sys.clock_1s)):
             math(rises + 1, rises)
-        with Rung(fall(system.sys.clock_1s)):
+        with rung(fall(system.sys.clock_1s)):
             math(falls + 1, falls)
 
     runner = PLC(program, dt=0.010)
@@ -217,7 +217,7 @@ def test_sys_dt_reflects_fold_dt_override_during_macro_skip():
 
 def test_sys_dt_is_read_only_to_user_logic():
     with Program() as program:
-        with Rung():
+        with rung():
             copy(0.5, system.sys.dt)
     runner = PLC(logic=program)
     with pytest.raises(ValueError, match="read-only system point"):
@@ -228,7 +228,7 @@ def test_scan_clock_toggle_derived_edge_rise(runner_factory):
     flag = Bool("Flag")
 
     with Program() as program:
-        with Rung(rise(system.sys.scan_clock_toggle)):
+        with rung(rise(system.sys.scan_clock_toggle)):
             latch(flag)
 
     runner = runner_factory(program)
@@ -248,7 +248,7 @@ def test_scan_clock_toggle_derived_edge_fall(runner_factory):
     flag = Bool("Flag")
 
     with Program() as program:
-        with Rung(fall(system.sys.scan_clock_toggle)):
+        with rung(fall(system.sys.scan_clock_toggle)):
             latch(flag)
 
     runner = runner_factory(program)
@@ -272,9 +272,9 @@ def test_scan_clock_toggle_derived_edge_alternates(runner_factory):
     fall_count = Int("FallCount")
 
     with Program() as program:
-        with Rung(rise(system.sys.scan_clock_toggle)):
+        with rung(rise(system.sys.scan_clock_toggle)):
             math(rise_count + 1, rise_count)
-        with Rung(fall(system.sys.scan_clock_toggle)):
+        with rung(fall(system.sys.scan_clock_toggle)):
             math(fall_count + 1, fall_count)
 
     runner = runner_factory(program)
@@ -407,7 +407,7 @@ def test_rtc_values_are_not_stored_in_state_memory():
 
 def test_read_only_system_points_reject_logic_and_patch_writes(runner_factory):
     with Program() as program:
-        with Rung():
+        with rung():
             out(system.sys.always_on)
     runner = runner_factory(program)
 
@@ -420,7 +420,7 @@ def test_read_only_system_points_reject_logic_and_patch_writes(runner_factory):
 
 def test_storage_sd_read_only_status_points_reject_logic_patch_and_force(runner_factory):
     with Program() as program:
-        with Rung():
+        with rung():
             out(system.storage.sd.ready)
     runner = runner_factory(program)
 
@@ -477,7 +477,7 @@ def test_fault_division_error_clears_next_scan_by_the_held_oneshot_math(runner_f
     Enable = Bool("Enable")
 
     with Program() as program:
-        with Rung(Enable):
+        with rung(Enable):
             math(A / B, Result, oneshot=True)
 
     runner = runner_factory(program)
@@ -497,7 +497,7 @@ def test_fault_out_of_range_clears_next_scan_by_the_held_oneshot_math(runner_fac
     Enable = Bool("Enable")
 
     with Program() as program:
-        with Rung(Enable):
+        with rung(Enable):
             math(A + B, Result, oneshot=True)
 
     runner = runner_factory(program)
@@ -520,7 +520,7 @@ def test_fault_out_of_range_carries_until_a_copy_runs(runner_factory):
     Enable = Bool("Enable")
 
     with Program() as program:
-        with Rung(Enable):
+        with rung(Enable):
             copy(CH[1], Dest, oneshot=True, convert=to_value)
 
     runner = runner_factory(program)
@@ -547,7 +547,7 @@ def test_fault_address_error_carries_until_a_copy_runs(runner_factory):
     Enable = Bool("Enable")
 
     with Program() as program:
-        with Rung(Enable):
+        with rung(Enable):
             copy(DS[Pointer], CH[1], oneshot=True, convert=to_binary)
 
     runner = runner_factory(program)

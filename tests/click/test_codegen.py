@@ -33,7 +33,6 @@ from pyrung.core import (
     Or,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     rung,
@@ -2130,7 +2129,7 @@ class TestRoundTrip:
         from pyrung.core import PLC
 
         with Program() as logic:
-            with Rung(x[1]):
+            with rung(x[1]):
                 math(ds.select(1, 4).max(), ds[100])
                 math(ds.select(1, 4).min(), ds[101])
                 math(ds.select(1, 4).median(), ds[102])

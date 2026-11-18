@@ -18,7 +18,7 @@ from pyrung.conformance._case import (
 from pyrung.conformance._confirm import Confirmation, is_confirmed
 from pyrung.conformance._ladder import case_label, check_disjoint, emit_case
 from pyrung.conformance._slot import SLOT_FIELDS, make_slot
-from pyrung.core import PLC, Program, Rung, call, subroutine
+from pyrung.core import PLC, Program, call, rung, subroutine
 from pyrung.core.state import value_changed
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
@@ -76,7 +76,7 @@ def run(cases: Sequence[Case] | Group, *, scan_limit_ms: int | None = None) -> l
                 emit_case(group_name, c, slot, i)
         else:
             for _ in range(group.calls):
-                with Rung():
+                with rung():
                     call(group.subroutine)
             with subroutine(group.subroutine):
                 for i, c in enumerate(case_list, start=1):

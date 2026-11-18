@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from pyrung import cli
-from pyrung.core import Bool, Program, Rung, out
+from pyrung.core import Bool, Program, out, rung
 
 
 def test_main_parses_ladder_check(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,7 +52,7 @@ def test_check_prints_findings_and_exits_on_errors(
 ) -> None:
     read_only = Bool("ReadOnly", readonly=True)
     with Program() as program:
-        with Rung():
+        with rung():
             out(read_only)
     monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
     args = argparse.Namespace(
@@ -73,7 +73,7 @@ def test_check_clean_program_succeeds(
     button = Bool("Button")
     light = Bool("Light")
     with Program() as program:
-        with Rung(button):
+        with rung(button):
             out(light)
     monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
     args = argparse.Namespace(
@@ -90,7 +90,7 @@ def test_check_uses_project_config_and_explicit_config_override(tmp_path, monkey
 
     read_only = Bool("ReadOnly", readonly=True)
     with Program() as program:
-        with Rung():
+        with rung():
             out(read_only)
     monkeypatch.setattr(cli, "_find_program", lambda _module: (program, SimpleNamespace()))
     monkeypatch.chdir(tmp_path)

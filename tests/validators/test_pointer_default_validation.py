@@ -1,6 +1,6 @@
 """Tests for indirect pointer default validation."""
 
-from pyrung import Bool, Rung, call, copy, return_early, subroutine
+from pyrung import Bool, call, copy, return_early, rung, subroutine
 from pyrung.core import Block, Dint, Int, Program, TagType, math
 from pyrung.core.validation.pointer_default import (
     PTR_DEFAULT_BEFORE_BLOCK_START,
@@ -15,7 +15,7 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         report = validate_pointer_defaults(prog)
@@ -43,7 +43,7 @@ class TestPointerDefaultValidator:
         dst_ptr = Int("DstPtr")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(ds[src_ptr], dd[dst_ptr])
 
         report = validate_pointer_defaults(prog)
@@ -60,9 +60,9 @@ class TestPointerDefaultValidator:
         dest_b = Dint("DestB")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest_a)
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest_b)
 
         report = validate_pointer_defaults(prog)
@@ -77,7 +77,7 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         report = validate_pointer_defaults(prog)
@@ -90,7 +90,7 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         report = validate_pointer_defaults(prog)
@@ -104,7 +104,7 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 math(base + 1, actual_ptr)
                 copy(ds[actual_ptr], dest)
 
@@ -119,9 +119,9 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(src, ptr)
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         report = validate_pointer_defaults(prog)
@@ -135,9 +135,9 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 math(base + 1, ptr)
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         report = validate_pointer_defaults(prog)
@@ -151,7 +151,7 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(src, ptr)
                 copy(ds[ptr], dest)
 
@@ -167,9 +167,9 @@ class TestPointerDefaultValidator:
         enable = Bool("Enable")
 
         with Program() as prog:
-            with Rung(enable):
+            with rung(enable):
                 copy(src, ptr)
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         report = validate_pointer_defaults(prog)
@@ -184,15 +184,15 @@ class TestPointerDefaultValidator:
 
         @subroutine("sub")
         def sub():
-            with Rung(guard < 1):
+            with rung(guard < 1):
                 return_early()
-            with Rung():
+            with rung():
                 copy(5, ptr)
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 call(sub)
 
         report = validate_pointer_defaults(prog)
@@ -205,7 +205,7 @@ class TestPointerDefaultValidator:
         dest = Dint("Dest")
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(ds[ptr], dest)
 
         selected = prog.check(select={PTR_DEFAULT_BEFORE_BLOCK_START})

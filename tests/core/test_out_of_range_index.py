@@ -28,12 +28,12 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     copy,
     latch,
     math,
     out,
+    rung,
     system,
 )
 from pyrung.core.condition_trace import ConditionTraceEngine
@@ -151,7 +151,7 @@ def _build_compares(s_value: int) -> tuple[Program, dict[str, bool], dict[str, A
                 expected[name] = bool(fn(left_value, right_value))
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for i in range(1, 11):
                 copy(_tbl(i), Tbl[i])
             copy(s_value, S)
@@ -161,9 +161,9 @@ def _build_compares(s_value: int) -> tuple[Program, dict[str, bool], dict[str, A
             copy(0, Z)
             copy(_IN_RANGE, K)
         for condition, coil in coils.values():
-            with Rung(condition):
+            with rung(condition):
                 out(coil)
-        with Rung():
+        with rung():
             out(Last)
 
     tags: dict[str, Any] = {name: coil for name, (_cond, coil) in coils.items()}
@@ -201,24 +201,24 @@ def test_sparse_gap_and_real_and_char_blocks_read_zero(engine: str, monkeypatch)
     Tail = Bool("Tail")
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(11, Sparse[1])
             copy(77, Sparse[7])
             copy(1.5, Reals[1])
             copy("x", Chars[1])
             copy(5, G)
             copy(9, H)
-        with Rung(Sparse[G] == 0):
+        with rung(Sparse[G] == 0):
             out(InGap)
-        with Rung(Sparse[G + 0] != 0):
+        with rung(Sparse[G + 0] != 0):
             out(GapNonzero)
-        with Rung(Reals[H] == 0.0):
+        with rung(Reals[H] == 0.0):
             out(RealZero)
-        with Rung(Reals[H + 0] < 0.5):
+        with rung(Reals[H + 0] < 0.5):
             out(RealBelow)
-        with Rung(Chars[H] == BLANK_CHAR):  # a blank Char
+        with rung(Chars[H] == BLANK_CHAR):  # a blank Char
             out(CharBlank)
-        with Rung():
+        with rung():
             out(Tail)
 
     tags = {
@@ -258,21 +258,21 @@ def test_zero_based_block_reads_zero_below_its_start(engine: str, monkeypatch) -
     Tail = Bool("Tail")
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for i in range(0, 5):
                 copy(i + 1, Zb[i])
             latch(Flags[0])
             copy(-1, M)
             copy(0, K)
-        with Rung(Zb[M] == 0):
+        with rung(Zb[M] == 0):
             out(Below)
-        with Rung(Zb[K - 1] < Zb[K]):
+        with rung(Zb[K - 1] < Zb[K]):
             out(BelowExpr)
-        with Rung(Zb[K] == 1):
+        with rung(Zb[K] == 1):
             out(First)
-        with Rung(Flags[M] == False):  # noqa: E712 - builds a condition
+        with rung(Flags[M] == False):  # noqa: E712 - builds a condition
             out(BoolBelow)
-        with Rung():
+        with rung():
             out(Tail)
 
     tags = {
@@ -305,7 +305,7 @@ def test_bank_aliased_block_reads_zero_outside_range(
     coils = {name: Bool(name) for name in ("Past", "In", "ExprPast", "Tail")}
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for i in range(1, 6):
                 copy(i * 10, Tl[i])
             copy(10, ds[106])
@@ -319,13 +319,13 @@ def test_bank_aliased_block_reads_zero_outside_range(
             past, inside, expr_past = Tl[P] == 0, Tl[Q] == 30, Tl[Q + 3] == 0
         else:
             past, inside, expr_past = ds[P] == 0, ds[Q] == 30, ds[P - 1] == 0
-        with Rung(past):
+        with rung(past):
             out(coils["Past"])
-        with Rung(inside):
+        with rung(inside):
             out(coils["In"])
-        with Rung(expr_past):
+        with rung(expr_past):
             out(coils["ExprPast"])
-        with Rung():
+        with rung():
             out(coils["Tail"])
 
     if engine == "kernel_blockless" and via == "window":
@@ -382,7 +382,7 @@ def _build_reads() -> tuple[Program, dict[str, Any]]:
     }
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for i in range(1, 11):
                 copy(_tbl(i), Tbl[i])
             copy(50, P)
@@ -392,12 +392,12 @@ def _build_reads() -> tuple[Program, dict[str, Any]]:
             for dest in dests.values():
                 copy(7, dest)
         for name, instruction in sources.items():
-            with Rung():
+            with rung():
                 instruction(dests[name])
-            with Rung(system.fault.address_error):
+            with rung(system.fault.address_error):
                 out(flags[name])
             if name == "D_calc_div0":
-                with Rung(system.fault.division_error):
+                with rung(system.fault.division_error):
                     out(Bool("Div0"))
 
     tags: dict[str, Any] = dict(dests)
@@ -494,10 +494,10 @@ def _pointer_program(
     S = Int("KS", external=True, min=0, max=5, default=1)
     A = Bool("KA")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             for i in range(1, 11):
                 copy(_tbl(i), Tbl[i])
-        with Rung(cond(Tbl, P, S)):
+        with rung(cond(Tbl, P, S)):
             latch(A)
     return logic, A
 

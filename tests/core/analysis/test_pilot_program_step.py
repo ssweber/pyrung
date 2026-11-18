@@ -9,13 +9,13 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     call,
     copy,
     latch,
     on_delay,
     reset,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
@@ -50,12 +50,12 @@ def _timer_producer_program(
     command = Int("Command")
     timer = Timer.clone("T")
     with Program(strict=False) as program:
-        with Rung(run):
+        with rung(run):
             on_delay(timer, preset, unit)
-        with Rung(timer.Done):
+        with rung(timer.Done):
             copy(1, command)
         if clobber:
-            with Rung():
+            with rung():
                 copy(0, command)
     return program, run, command, timer
 
@@ -226,12 +226,12 @@ def test_program_step_keeps_only_the_current_alternative_to_its_exact_producer()
     phase = Int("CurrentAlternativePhase")
     command = Int("CurrentAlternativeCommand")
     with Program(strict=False) as program:
-        with Rung(start, state == idle):
+        with rung(start, state == idle):
             copy(execute, state)
-        with Rung(resume, state == held):
+        with rung(resume, state == held):
             copy(execute, state)
             copy(1, phase)
-        with Rung(state == execute, phase == 1):
+        with rung(state == execute, phase == 1):
             copy(10, command)
 
     plc = PLC(program)
@@ -255,9 +255,9 @@ def test_spent_oneshot_clobber_is_not_reported_as_a_live_program_input() -> None
     suppress = Bool("SpentClobberSuppress", external=True)
     state = Int("SpentClobberState")
     with Program(strict=False) as program:
-        with Rung(start):
+        with rung(start):
             copy(1, state, oneshot=True)
-        with Rung(~suppress):
+        with rung(~suppress):
             copy(9, state, oneshot=True)
 
     plc = PLC(program)
@@ -339,9 +339,9 @@ def test_structural_channel_motion_after_the_exact_producer_is_observed_once() -
 
     state = Int("ObservedSuccessorState", default=70)
     with Program(strict=False) as program:
-        with Rung(state == 70):
+        with rung(state == 70):
             copy(80, state)
-        with Rung(state == 80):
+        with rung(state == 80):
             copy(81, state)
 
     plc = PLC(program)
@@ -375,9 +375,9 @@ def test_selected_chart_channel_is_structural_without_opaque_role_discovery() ->
 
     state = Int("SelectedChartState", default=50)
     with Program(strict=False) as program:
-        with Rung(state == 50):
+        with rung(state == 50):
             copy(60, state)
-        with Rung(state == 60):
+        with rung(state == 60):
             copy(92, state)
 
     plc = PLC(program)
@@ -409,9 +409,9 @@ def test_structural_hazard_does_not_replace_an_unmet_selected_input() -> None:
     input_ready = Bool("SelectedInputReady", external=True)
     state = Int("SelectedInputState", default=40)
     with Program(strict=False) as program:
-        with Rung(state == 40, input_ready):
+        with rung(state == 40, input_ready):
             copy(41, state)
-        with Rung(state == 40):
+        with rung(state == 40):
             copy(91, state)
 
     plc = PLC(program)
@@ -442,11 +442,11 @@ def test_projection_traces_the_exact_producer_occurrence_view() -> None:
 
     @subroutine("IssueCommand")
     def issue_command():
-        with Rung(gate):
+        with rung(gate):
             copy(1, command)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             latch(gate)
             call(issue_command)
             reset(gate)
@@ -476,11 +476,11 @@ def test_repeated_producer_occurrences_decline_instead_of_using_the_last_view() 
 
     @subroutine("RepeatedProducer")
     def repeated_producer():
-        with Rung():
+        with rung():
             copy(1, command)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call(repeated_producer)
             call(repeated_producer)
 
@@ -509,9 +509,9 @@ def test_unrelated_channel_motion_does_not_accept_a_bypassed_producer_input() ->
     command = Int("Command")
 
     with Program(strict=False) as program:
-        with Rung(And(hazard, state == 6)):
+        with rung(And(hazard, state == 6)):
             copy(11, state)
-        with Rung(And(state == 6, supply)):
+        with rung(And(state == 6, supply)):
             copy(10, command)
 
     plc = PLC(program)
@@ -548,11 +548,11 @@ def test_pipeline_motion_interrupts_an_owned_boundary_without_external_input() -
     command = Int("OwnedCommand")
 
     with Program(strict=False) as program:
-        with Rung(And(hazard, state == 6)):
+        with rung(And(hazard, state == 6)):
             copy(11, state)
-        with Rung(state == 6):
+        with rung(state == 6):
             on_delay(timer, 1, "s")
-        with Rung(timer.Done):
+        with rung(timer.Done):
             copy(10, command)
 
     plc = PLC(program)
@@ -602,15 +602,15 @@ def _sequencer_program():
     command = Int("SeqCommand")
 
     with Program(strict=False) as program:
-        with Rung(And(Or(step == 3, button), ready)):
+        with rung(And(Or(step == 3, button), ready)):
             latch(gate)
-        with Rung(gate):
+        with rung(gate):
             copy(10, command)
-        with Rung(advance):
+        with rung(advance):
             copy(3, step)
-        with Rung(And(step == 2, enable)):
+        with rung(And(step == 2, enable)):
             latch(advance)
-        with Rung(step == 4):
+        with rung(step == 4):
             latch(ready)
     return program, button, enable, step, command
 
@@ -667,9 +667,9 @@ def test_input_must_reach_the_exact_producer_not_merely_move_its_channel() -> No
     command = Int("BarrierCommand")
 
     with Program(strict=False) as program:
-        with Rung(And(hazard, state == 6)):
+        with rung(And(hazard, state == 6)):
             copy(11, state)
-        with Rung(And(state == 6, supply)):
+        with rung(And(state == 6, supply)):
             copy(10, command)
 
     plc = PLC(program)

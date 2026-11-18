@@ -901,7 +901,7 @@ def _emit_rung_header(
     indent: int,
     rung_number: int | None = None,
 ) -> None:
-    """Emit comment() call (if any) followed by 'with Rung(...):' line."""
+    """Emit comment() call (if any) followed by 'with rung(...):' line."""
     pad = "    " * indent
     if rung.comment:
         _emit_comment(lines, rung.comment, indent)
@@ -998,7 +998,7 @@ def _build_conditions_str(
     nicknames: dict[str, str] | None,
     structured_map: TagMap | None = None,
 ) -> str:
-    """Build the condition string for a Rung() constructor."""
+    """Build the condition string for a rung() constructor."""
     return _render_condition_tree(rung.condition_tree, collection, nicknames, structured_map)
 
 

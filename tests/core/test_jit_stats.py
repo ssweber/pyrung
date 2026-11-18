@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Rung, Timer, copy, math, on_delay
+from pyrung import PLC, Bool, Int, Program, Timer, copy, math, on_delay, rung
 from pyrung.core import compiled_run, jit_stats, scan_trace
 from pyrung.core.coast_run import coast_until
 
@@ -32,9 +32,9 @@ def production(monkeypatch: pytest.MonkeyPatch) -> None:
 def _timer(preset_ms: int) -> PLC:
     """Return a PLC with a timer that runs while Go is on, and sets N to 5 once it is done."""
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             on_delay(T, preset_ms, "ms")
-        with Rung(T.Done):
+        with rung(T.Done):
             copy(5, N)
     plc = PLC(program, dt=0.01)
     plc.patch({Go.name: True})
@@ -105,9 +105,9 @@ def test_a_guard_that_fails_ends_its_stretch_and_is_named() -> None:
 def test_scans_a_run_takes_back_count_where_they_run_again() -> None:
     Lim = Int("JsLim", min=0, max=50)
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             on_delay(T, 15_000, "ms")
-        with Rung(T.Done):
+        with rung(T.Done):
             math(Lim + 1, Lim)
     plc = PLC(program, dt=0.01)
     plc.patch({Go.name: True})

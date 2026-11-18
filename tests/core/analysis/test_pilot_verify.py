@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung import Bool, Int, Program, Rung, out
+from pyrung import Bool, Int, Program, out, rung
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReceipt,
 )
@@ -118,7 +118,7 @@ def _target_landing_attempt(
     observations: tuple[EffectObservation, ...] = (),
 ) -> tuple[_ExecutedAttempt, SimpleNamespace]:
     with Program() as program:
-        with Rung(source):
+        with rung(source):
             out(target)
     plc = PLC(program, dt=0.010)
     policy = ActPolicy(
@@ -159,7 +159,7 @@ def test_execution_span_keeps_one_detached_epoch_owner_across_the_next_fork() ->
     command = Bool("ReceiptCommand", external=True)
     result = Bool("ReceiptResult")
     with Program() as program:
-        with Rung(command):
+        with rung(command):
             out(result)
 
     source = PLC(program)
@@ -478,7 +478,7 @@ class TestGateSpin:
         Source = Bool("SpinSource", external=True)
         Dest = Bool("SpinDest")
         with Program() as prog:
-            with Rung(Source):
+            with rung(Source):
                 out(Dest)
         plc = PLC(prog, dt=0.010)
         snap = dict(plc.state.tags)
@@ -498,7 +498,7 @@ class TestGateSpin:
         source = Bool("ExcursionSource", external=True)
         dest = Bool("ExcursionDest")
         with Program() as program:
-            with Rung(source):
+            with rung(source):
                 out(dest)
         plc = PLC(program, dt=0.010)
         plc.step()

@@ -42,7 +42,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, latch, math, out, reset, system
+from pyrung.core import copy, fill, latch, math, out, reset, rung, system
 from pyrung.core.expression import sqrt
 from tests.conformance.memory import c, dd, df
 from tests.conformance.probe_kit import class_of, finish, flag_bit, once
@@ -55,14 +55,14 @@ SC46 = system.fault.math_operation_error
 
 def prove_wide_values(slot: Any) -> None:
     low, scale, absolute = dd[51], dd[53], dd[54]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-2147483648, low)
         copy(100000, scale)
         copy(99, absolute)
         math(abs(low), absolute)
     flag_bit(slot, SC43, slot.Result4, 1)
     class_of(slot, absolute, [-2147483648, 2147483647, 0, 99], slot.Result1)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(absolute / scale, slot.Result2)
     finish(slot)
 
@@ -76,7 +76,7 @@ WINDOW = 8
 
 def _guarded(slot: Any, now: Any, taken: Any) -> None:
     """*now* on, once, on the first scan from 2 whose SC46 is off right here."""
-    with Rung(slot.Scratch > 1, slot.Scratch <= WINDOW, ~taken, ~SC46):
+    with rung(slot.Scratch > 1, slot.Scratch <= WINDOW, ~taken, ~SC46):
         out(now)
         latch(taken)
 
@@ -84,7 +84,7 @@ def _guarded(slot: Any, now: Any, taken: Any) -> None:
 def prove_error_terms(slot: Any) -> None:
     seven, zero, minus = dd[61], dd[62], df[11]
     count_scans(slot, WINDOW)
-    with Rung(slot.Scratch == 1):
+    with rung(slot.Scratch == 1):
         copy(7, seven)
         copy(0, zero)
         copy(-4.0, minus)
@@ -92,30 +92,30 @@ def prove_error_terms(slot: Any) -> None:
         copy(99, slot.Result2)
         copy(99, slot.Result3)
         copy(99, slot.Result4)
-    with Rung(slot.Scratch == 2):
+    with rung(slot.Scratch == 2):
         math(seven / zero + 5, slot.Result1)
-    with Rung(slot.Scratch == 2, SC40):
+    with rung(slot.Scratch == 2, SC40):
         math(slot.ErrorCode + 1, slot.ErrorCode)
-    with Rung(slot.Scratch == 2):
+    with rung(slot.Scratch == 2):
         math((seven / zero + 1) * 5, slot.Result2)
-    with Rung(slot.Scratch == 2, SC40):
+    with rung(slot.Scratch == 2, SC40):
         math(slot.ErrorCode + 2, slot.ErrorCode)
     root_now, root_taken, power_now, power_taken, power_sc43 = (c[n] for n in range(181, 186))
     _guarded(slot, root_now, root_taken)
-    with Rung(root_now):
+    with rung(root_now):
         math(sqrt(minus) + 5, slot.Result3)
-    with Rung(root_now, SC46):
+    with rung(root_now, SC46):
         math(slot.ErrorCode + 4, slot.ErrorCode)
     _guarded(slot, power_now, power_taken)
-    with Rung(power_now):
+    with rung(power_now):
         math(zero**zero, slot.Result4)
-    with Rung(power_now, SC43):
+    with rung(power_now, SC43):
         out(power_sc43)
-    with Rung(power_now, SC40):
+    with rung(power_now, SC40):
         math(slot.ErrorCode + 8, slot.ErrorCode)
-    with Rung(power_now, SC46):
+    with rung(power_now, SC46):
         math(slot.ErrorCode + 32, slot.ErrorCode)
-    with Rung(power_sc43):
+    with rung(power_sc43):
         math(slot.ErrorCode + 16, slot.ErrorCode)
     done(slot, WINDOW)
 
@@ -133,7 +133,7 @@ REAL_READINGS = (5.0, 0.0, 99.0)
 def prove_error_terms_real(slot: Any) -> None:
     seven, zero, minus = dd[63], dd[64], df[15]
     results = [df[n] for n in (12, 13, 14)]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(7, seven)
         copy(0, zero)
         copy(-4.0, minus)
@@ -145,11 +145,11 @@ def prove_error_terms_real(slot: Any) -> None:
     fields = (slot.Result1, slot.Result2, slot.Result3)
     for result, field in zip(results, fields, strict=True):
         class_of(slot, result, REAL_READINGS, field)
-        with Rung(*once(slot), result >= 3.0e38):
+        with rung(*once(slot), result >= 3.0e38):
             copy(4, field)
-        with Rung(*once(slot), result <= -3.0e38):
+        with rung(*once(slot), result <= -3.0e38):
             copy(5, field)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(results[0] * 10, slot.Result4)
         math(results[2] * 10, slot.ErrorCode)
     finish(slot)

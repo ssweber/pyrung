@@ -41,13 +41,13 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     copy,
     math,
     on_delay,
     out,
     rise,
+    rung,
 )
 
 # ---------------------------------------------------------------------------
@@ -68,14 +68,14 @@ def _momentary_program(with_alternate: bool) -> tuple[Program, object, dict[str,
         if with_alternate:
             # Two ways to Step==2: the momentary command Cmd, or the slow dwell
             # (hold Slow, let the timer complete) — OR arms of one writer.
-            with Rung(Or(Cmd, Dwell.Done)):
+            with rung(Or(Cmd, Dwell.Done)):
                 copy(2, Step)
-            with Rung(Slow, Step == 1):
+            with rung(Slow, Step == 1):
                 on_delay(Dwell, 30, "ms")
         else:
-            with Rung(Cmd):
+            with rung(Cmd):
                 copy(2, Step)
-        with Rung(Step == 2):
+        with rung(Step == 2):
             out(Filling)
 
     return prog, Filling, {"Cmd": Cmd, "Slow": Slow}
@@ -126,7 +126,7 @@ def _route_program() -> tuple[Program, object, dict[str, object]]:
     Manual = Bool("Manual", external=True)
     Running = Bool("Running")
     with Program() as prog:
-        with Rung(Or(Auto, Manual)):
+        with rung(Or(Auto, Manual)):
             out(Running)
     return prog, Running, {"Auto": Auto, "Manual": Manual}
 
@@ -156,13 +156,13 @@ def _wink_program() -> tuple[Program, object, object, dict[str, object]]:
     Mid = Bool("Mid")
     Target = Bool("Target")
     with Program() as prog:
-        with Rung(Or(Go, Run)):
+        with rung(Or(Go, Run)):
             out(Run)
-        with Rung(Run, Step < 3):
+        with rung(Run, Step < 3):
             math(Step + 1, Step)
-        with Rung(Step == 2):
+        with rung(Step == 2):
             out(Mid)
-        with Rung(Step == 3):
+        with rung(Step == 3):
             out(Target)
     return prog, Target, Mid, {"Go": Go}
 
@@ -208,13 +208,13 @@ def _folded_wink_program() -> tuple[Program, object, object]:
     Mid = Bool("Mid")
     Target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(Or(Start, Run)):
+        with rung(Or(Start, Run)):
             out(Run)
-        with Rung(Run):
+        with rung(Run):
             on_delay(Tmr, 1000, "ms")
-        with Rung(And(Tmr.Acc >= 300, Tmr.Acc < 400)):
+        with rung(And(Tmr.Acc >= 300, Tmr.Acc < 400)):
             out(Mid)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Target)
     return prog, Target, Mid
 
@@ -236,11 +236,11 @@ def test_opaque_avoid_is_endpoint_and_real_observed_scan_only() -> None:
     Tmr = Timer.clone("OpaqueTmr")
     Target = Bool("OpaqueTarget")
     with Program(strict=False) as prog:
-        with Rung(Or(Start, Run)):
+        with rung(Or(Start, Run)):
             out(Run)
-        with Rung(Run):
+        with rung(Run):
             on_delay(Tmr, 1000, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Target)
 
     path = PLC(prog, dt=0.010).how(
@@ -281,11 +281,11 @@ def test_program_continuation_preserves_its_settle_trajectory(monkeypatch) -> No
     Mid = Bool("Mid")
     Target = Bool("Target")
     with Program(strict=False) as prog:
-        with Rung(Run, Step < 3):
+        with rung(Run, Step < 3):
             math(Step + 1, Step)
-        with Rung(Step == 2):
+        with rung(Step == 2):
             out(Mid)
-        with Rung(Step == 3):
+        with rung(Step == 3):
             out(Target)
 
     work = PLC(prog, dt=0.010)
@@ -377,12 +377,12 @@ def _multi_avoid_program(with_clean: bool) -> tuple[Program, object, dict[str, o
     Filling = Bool("Filling")
     with Program(strict=False) as prog:
         if with_clean:
-            with Rung(Or(A, B, C)):
+            with rung(Or(A, B, C)):
                 copy(2, Step)
         else:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 copy(2, Step)
-        with Rung(Step == 2):
+        with rung(Step == 2):
             out(Filling)
     return prog, Filling, {"A": A, "B": B, "C": C}
 

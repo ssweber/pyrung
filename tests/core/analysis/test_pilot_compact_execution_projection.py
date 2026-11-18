@@ -10,13 +10,13 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     branch,
     call,
     copy,
     out,
     reset,
     rise,
+    rung,
     subroutine,
     system,
 )
@@ -39,11 +39,11 @@ def _guard_surface_program():
     entry = Bool("CompactEntry", default=True)
     edge = Bool("CompactEdge", external=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             out(pending)
-        with Rung(pending, entry, system.sys.always_on, _MissingDefaultIsSeven(), rise(edge)):
+        with rung(pending, entry, system.sys.always_on, _MissingDefaultIsSeven(), rise(edge)):
             out(Bool("CompactAnchorOut"))
-        with Rung(entry).continued():
+        with rung(entry).continued():
             out(Bool("CompactContinuedOut"))
             with branch(pending):
                 out(Bool("CompactBranchOut"))
@@ -89,16 +89,16 @@ def _nested_displacement_projection():
     result = Bool("CompactNestedResult")
 
     with Program() as program:
-        with Rung():
+        with rung():
             out(result)
-        with Rung(Or(top, top_skipped)):
+        with rung(Or(top, top_skipped)):
             call("CompactMiddle")
         with subroutine("CompactMiddle"):
-            with Rung(Or(middle, middle_skipped)):
+            with rung(Or(middle, middle_skipped)):
                 copy(unrelated_data, scratch)
                 call("CompactLeaf")
         with subroutine("CompactLeaf"):
-            with Rung(leaf):
+            with rung(leaf):
                 reset(result)
 
     plc = PLC(program)

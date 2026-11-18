@@ -76,7 +76,7 @@ def _repl(
 
 def _harness_script() -> str:
     return (
-        "from pyrung.core import Bool, Field, PLC, Program, Rung, out, udt\n"
+        "from pyrung.core import Bool, Field, PLC, Program, rung, out, udt\n"
         "from pyrung.core.physical import Physical\n"
         "\n"
         "SWITCH = Physical('Switch', on_delay='20ms', off_delay='10ms')\n"
@@ -88,7 +88,7 @@ def _harness_script() -> str:
         "\n"
         "Cmd = Bool('Cmd')\n"
         "with Program() as prog:\n"
-        "    with Rung(Cmd):\n"
+        "    with rung(Cmd):\n"
         "        out(Device[1].En)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"
@@ -97,13 +97,13 @@ def _harness_script() -> str:
 
 def _plain_script() -> str:
     return (
-        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Program, rung, out\n"
         "\n"
         "button = Bool('Button')\n"
         "light = Bool('Light')\n"
         "\n"
         "with Program() as prog:\n"
-        "    with Rung(button):\n"
+        "    with rung(button):\n"
         "        out(light)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"

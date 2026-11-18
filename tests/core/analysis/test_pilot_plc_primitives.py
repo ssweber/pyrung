@@ -18,7 +18,7 @@ import math
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
+from pyrung import Bool, Int, Program, Timer, copy, on_delay, out, rung
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.coast import (
     _coast_holding_state,
@@ -80,9 +80,9 @@ def _timer_program():
     Tmr = Timer.clone("Tmr")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, 100, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Done)
     return prog
 
@@ -103,11 +103,11 @@ def _variant_named_timer_program():
     # strict=False so the raw OnDelayInstruction can be added inside the rung
     # (the DSL builder always mints convention-named UDT bits).
     with Program(strict=False) as prog:
-        with Rung(Enable):
+        with rung(Enable):
             _current_rung()._rung.add_instruction(
                 OnDelayInstruction(Ready, Count, 100, Enable, None, "ms", tt_bit=Active)
             )
-        with Rung(Ready):
+        with rung(Ready):
             out(Out)
     return prog
 
@@ -129,11 +129,11 @@ def _role_program():
     State = Int("State", default=1)
     Target = Bool("Target")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, 100, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             copy(2, State)
-        with Rung(State == 9):
+        with rung(State == 9):
             out(Target)
     return prog
 
@@ -149,11 +149,11 @@ def _free_timer_program():
     Mirror = Bool("Mirror")
     Target = Bool("Target")
     with Program() as prog:
-        with Rung():
+        with rung():
             on_delay(Tmr, 80, "ms")
-        with Rung(Input):
+        with rung(Input):
             out(Mirror)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Target)
     return prog
 
@@ -344,9 +344,9 @@ def _scoped_input_program():
     Out = Bool("Out")
     ScopeSeen = Bool("ScopeSeen")
     with Program() as prog:
-        with Rung(In):
+        with rung(In):
             out(Out)
-        with Rung(Scope):
+        with rung(Scope):
             out(ScopeSeen)
     return prog, In, Scope
 
@@ -423,9 +423,9 @@ class TestPilotRungs:
         ProgressB = Bool("ProgressB", external=True)
         Never = Bool("Never", external=True)
         with Program() as prog:
-            with Rung(In):
+            with rung(In):
                 out(Bool("ReceiptOut"))
-            with Rung(ProgressA, ProgressB, Never):
+            with rung(ProgressA, ProgressB, Never):
                 out(Bool("ProgressSeen"))
         plc = PLC(prog, dt=0.010)
         continuing = PilotRung(
@@ -480,7 +480,7 @@ class TestPilotRungs:
         Go = Bool("NanGo", external=True)
         Level = Real("NanLevel", external=True)
         with Program() as prog:
-            with Rung(In, Scope, Go, Level > 0):
+            with rung(In, Scope, Go, Level > 0):
                 out(Bool("NanOut"))
         plc = PLC(prog, dt=0.010)
         in_flight = PilotRung(
@@ -512,7 +512,7 @@ class TestPilotRungs:
         Start = Bool("ProgressLifetime_Start", external=True)
         Progress = Bool("ProgressLifetime_Progress", external=True)
         with Program() as prog:
-            with Rung(In, Start, Progress):
+            with rung(In, Start, Progress):
                 out(Bool("ProgressLifetime_Seen"))
         plc = PLC(prog, dt=0.010)
         operation = PilotRung(
@@ -596,7 +596,7 @@ class TestPilotRungs:
     def test_route_constraint_lowers_to_runtime_comparison(self):
         Value = Int("ConstraintValue")
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(0, Value)
 
         plc = PLC(prog, dt=0.010)
@@ -620,7 +620,7 @@ class TestPilotRungs:
     def test_route_constraint_supports_up_and_down_boundaries(self, op, condition_type):
         Value = Int(f"ConstraintValue_{condition_type.__name__}")
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(0, Value)
 
         condition = _constraint_condition(PLC(prog), Cmp(Value.name, op, 50))
@@ -631,7 +631,7 @@ class TestPilotRungs:
         Value = Int("ConstraintValue")
         Preset = Int("ConstraintPreset")
         with Program() as prog:
-            with Rung():
+            with rung():
                 copy(Preset, Value)
 
         plc = PLC(prog)
@@ -665,7 +665,7 @@ def _single_input_program():
     In = Bool("In", external=True)
     Out = Bool("Out")
     with Program() as prog:
-        with Rung(In):
+        with rung(In):
             out(Out)
     return prog
 
@@ -700,7 +700,7 @@ def _harness_feedback_program():
     Feedback = Bool("Feedback", physical=FB, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Feedback):
+        with rung(Enable, Feedback):
             copy(1, Stage)
     return prog
 

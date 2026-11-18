@@ -12,12 +12,12 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     call,
     count_up,
     forloop,
     out,
     rise,
+    rung,
     subroutine,
     system,
 )
@@ -83,10 +83,10 @@ def test_call_handler_preserves_subroutine_context_and_call_stack() -> None:
 
     with Program(strict=False) as logic:
         with subroutine("work"):
-            with Rung():
+            with rung():
                 out(sub)
 
-        with Rung():
+        with rung():
             call("work")
             out(done)
 
@@ -106,7 +106,7 @@ def test_forloop_handler_emits_nested_child_instruction_steps() -> None:
     pulse = Bool("Pulse")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(2):
                 out(pulse)
 
@@ -126,7 +126,7 @@ def test_forloop_handler_runs_no_iteration_for_a_non_finite_count() -> None:
     count = Real("Count")
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             with forloop(count):
                 out(pulse)
 
@@ -145,7 +145,7 @@ def _bare_body_edge_reset_program() -> Program:
     cnt = Counter.clone("Cnt")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             with forloop(3):
                 count_up(cnt, 100).reset(rise(x))
     return logic
@@ -207,7 +207,7 @@ def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:
     light = Bool("Light")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     runner = PLC(logic)

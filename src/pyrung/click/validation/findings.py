@@ -287,7 +287,7 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     if code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED:
         return (
             "Click contacts are BOOL-only; numeric truthiness is not portable. "
-            "Rewrite as Rung(tag != 0) (or Rung(tag == 0) for inverted intent)."
+            "Rewrite as rung(tag != 0) (or rung(tag == 0) for inverted intent)."
         )
 
     if code == CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED:

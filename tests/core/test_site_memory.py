@@ -10,7 +10,6 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     branch,
     call,
     count_down,
@@ -20,6 +19,7 @@ from pyrung.core import (
     math,
     out,
     rise,
+    rung,
     subroutine,
 )
 from pyrung.core.instruction.coils import OutInstruction
@@ -47,16 +47,16 @@ def _program() -> tuple[Program, object]:
     cnt = Counter.clone("Cnt")
     shared = rise(A)
     with Program(strict=False) as logic:
-        with Rung(shared, B):
+        with rung(shared, B):
             out(C, oneshot=True)
             with branch(fall(D)):
                 out(D)
-        with Rung(shared):
+        with rung(shared):
             count_up(cnt, preset=3).reset(shared)
-        with Rung(A):
+        with rung(A):
             call("sub")
         with subroutine("sub"):
-            with Rung(rise(B)):
+            with rung(rise(B)):
                 math(N + 1, N, oneshot=True)
     return logic, shared
 
@@ -107,7 +107,7 @@ class TestBindSites:
         down = Counter.clone("Down")
         edge = rise(A)
         with Program(strict=False) as logic:
-            with Rung(edge):
+            with rung(edge):
                 count_down(down, preset=3).reset(B)
         table = site_table_of(logic)
         assert table is not None
@@ -246,7 +246,7 @@ class TestBareListKeysAreUnique:
         PLC([loose])
         assert loose._instructions[0].state_key == "i1"
         with Program(strict=False) as logic:
-            with Rung(A):
+            with rung(A):
                 out(Bool("M"), oneshot=True)
         plc = PLC([loose, *logic.rungs])
         assert logic.rungs[0]._instructions[0].state_key == "i1"
@@ -262,10 +262,10 @@ class TestBareListKeysAreUnique:
         """Two programs that both keep memory under i1 scan as one copied list."""
         A = Bool("A")
         with Program(strict=False) as first:
-            with Rung(A):
+            with rung(A):
                 out(Bool("F"), oneshot=True)
         with Program(strict=False) as second:
-            with Rung(A):
+            with rung(A):
                 out(Bool("S"), oneshot=True)
         plc = PLC([*first.rungs, *second.rungs])
         assert _list_keys(plc) == ["i1", "i2"]
@@ -281,10 +281,10 @@ class TestBareListKeysAreUnique:
         Y = Bool("Y")
         Q = Bool("Q")
         with Program(strict=False) as pa:
-            with Rung(rise(X)):
+            with rung(rise(X)):
                 out(Y)
         with Program(strict=False) as pb:
-            with Rung(rise(Y)):
+            with rung(rise(Y)):
                 out(Q)
         plc = PLC([*pa.rungs, *pb.rungs])
         keys = _list_keys(plc)
@@ -330,9 +330,9 @@ class TestKeysNeverRestampedAcrossPrograms:
     def _first() -> tuple[Program, object]:
         shared = rise(Bool("B"))
         with Program(strict=False) as p1:
-            with Rung(rise(Bool("A"))):
+            with rung(rise(Bool("A"))):
                 out(Bool("YA"))
-            with Rung(shared):
+            with rung(shared):
                 out(Bool("YB"))
         return p1, shared
 
@@ -343,7 +343,7 @@ class TestKeysNeverRestampedAcrossPrograms:
     def test_an_edge_shared_with_a_later_program_keeps_its_key(self):
         p1, shared = self._first()
         with Program(strict=False) as p2:
-            with Rung(shared):
+            with rung(shared):
                 out(Bool("Z"))
         assert self._p1_keys(p1) == ["e1", "e2"]
         assert p1.rungs[1]._conditions[0] is shared
@@ -357,7 +357,7 @@ class TestKeysNeverRestampedAcrossPrograms:
         plc = PLC(p1)
         assert _rise_b_reaches(plc, "YB")
         with Program(strict=False) as p2:
-            with Rung(shared):
+            with rung(shared):
                 out(Bool("Z"))
         assert self._p1_keys(p1) == ["e1", "e2"]
         assert _rise_b_reaches(PLC(p2), "Z")
@@ -371,7 +371,7 @@ class TestKeysNeverRestampedAcrossPrograms:
         shared_rung = p1.rungs[1]
         instruction = shared_rung._instructions[0]
         with Program(strict=False) as p2:
-            with Rung(Bool("C")):
+            with rung(Bool("C")):
                 out(Bool("W"), oneshot=True)
             p2._add_rung(shared_rung)
         assert p1.rungs[1] is shared_rung
@@ -398,11 +398,11 @@ def _counter_program(*, insert_rung: bool) -> Program:
     E = Bool("E")
     with Program(strict=False) as logic:
         if insert_rung:
-            with Rung(A):
+            with rung(A):
                 out(E, oneshot=True)
-        with Rung(A):
+        with rung(A):
             out(P, oneshot=True)
-        with Rung(A):
+        with rung(A):
             out(Q, oneshot=True)
     return logic
 
@@ -428,7 +428,7 @@ class TestRemap:
         A = Bool("A")
         R = Bool("R")
         with Program(strict=False) as new:
-            with Rung(A):
+            with rung(A):
                 out(R, oneshot=True)
         memory = {"_oneshot:i1": True, "_oneshot:i2": True, "_oneshot:i3": True}
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
@@ -443,14 +443,14 @@ class TestRemap:
         P = Bool("P")
         Q = Bool("Q")
         with Program(strict=False) as old:
-            with Rung(X):
+            with rung(X):
                 out(P, oneshot=True)
-            with Rung(Z):
+            with rung(Z):
                 out(Q, oneshot=True)
         with Program(strict=False) as new:
-            with Rung(Z):
+            with rung(Z):
                 out(Q, oneshot=True)
-            with Rung(Y):
+            with rung(Y):
                 out(P, oneshot=True)
         memory = {"_oneshot:i1": True, "_oneshot:i2": True}
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
@@ -462,14 +462,14 @@ class TestRemap:
         A = Bool("A")
         P = Bool("P")
         with Program(strict=False) as old:
-            with Rung(A):
+            with rung(A):
                 out(P, oneshot=True)
-            with Rung(A):
+            with rung(A):
                 out(P, oneshot=True)
         with Program(strict=False) as new:
-            with Rung(A):
+            with rung(A):
                 out(P, oneshot=True)
-            with Rung(A):
+            with rung(A):
                 out(P, oneshot=True)
         memory = {"_oneshot:i1": True, "_oneshot:i2": False}
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
@@ -497,12 +497,12 @@ class TestRemap:
         B = Bool("B")
         P = Bool("P")
         with Program(strict=False) as old:
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(P)
         with Program(strict=False) as new:
-            with Rung(B):
+            with rung(B):
                 out(Bool("Extra"))
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(P)
         old_table = site_table_of(old)
         new_table = site_table_of(new)
@@ -525,16 +525,16 @@ class TestRemap:
         P = Bool("P")
         Q = Bool("Q")
         with Program(strict=False) as old:
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(P)
-            with Rung(fall(A)):
+            with rung(fall(A)):
                 out(Q)
         with Program(strict=False) as new:
-            with Rung(rise(Bool("B"))):
+            with rung(rise(Bool("B"))):
                 out(Bool("Extra"))
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(P)
-            with Rung(fall(A)):
+            with rung(fall(A)):
                 out(Q)
         memory = {"_edge:e1": True, "_edge:e2": False}
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
@@ -561,23 +561,23 @@ def _every_memory_kind(*, preset: int = 10, jump_step: int = 1) -> Program:
     A = Bool("A")
     t = Timer.clone("Mt", count=5)
     with Program(strict=False) as logic:
-        with Rung(A):
+        with rung(A):
             count_up(Counter.clone("Up"), preset=preset).down(Bool("Dn")).reset(Bool("R1"))
-        with Rung(A):
+        with rung(A):
             count_down(Counter.clone("Down"), preset=-preset).reset(Bool("R2"))
-        with Rung(A):
+        with rung(A):
             out(Bool("Pulse"), oneshot=True)
-        with Rung(A):
+        with rung(A):
             toggle(Bool("Lamp"))
-        with Rung(A):
+        with rung(A):
             debounce(Bool("Tank"), on=(t[1], preset), off=(t[2], 20))
-        with Rung(A):
+        with rung(A):
             flasher(Bool("Beacon"), on=(t[3], preset), off=(t[4], 20))
-        with Rung(A):
+        with rung(A):
             timed(Bool("Horn"), t[5], preset)
-        with Rung(A):
+        with rung(A):
             shift(Block("Sh", TagType.BOOL, 1, 4).select(1, 4)).clock(Bool("Clk")).reset(Bool("R3"))
-        with Rung(A):
+        with rung(A):
             time_drum(
                 outputs=[Bool("Td1")],
                 presets=[Int("TdPre"), preset],
@@ -586,7 +586,7 @@ def _every_memory_kind(*, preset: int = 10, jump_step: int = 1) -> Program:
                 accumulator=Dint("TdAcc"),
                 completion_flag=Bool("TdDone"),
             ).reset(Bool("R4")).jump(Bool("J4"), step=jump_step).jog(Bool("G4"))
-        with Rung(A):
+        with rung(A):
             event_drum(
                 outputs=[Bool("Ed1")],
                 events=[Bool("Ev1"), Bool("Ev2")],
@@ -625,7 +625,7 @@ class TestReloadInputMemory:
 
     _COUNTER = (
         "with Program(strict=False) as logic:\n"
-        "    with Rung(A):\n"
+        "    with rung(A):\n"
         "        count_up(ctr, preset={preset}).down(Bool('Dn')).reset(Bool('R1'))\n"
     )
 
@@ -635,7 +635,7 @@ class TestReloadInputMemory:
             (("down(Bool('Dn'))", "down(Bool('Dn2'))"), ["_cu:i1"]),
             (("reset(Bool('R1'))", "reset(Bool('R1b'))"), ["_cd:i1", "_cu:i1"]),
             (("count_up(ctr,", "count_up(ctr2,"), []),
-            (("with Rung(A):", "with Rung(A, Bool('B')):"), []),
+            (("with rung(A):", "with rung(A, Bool('B')):"), []),
         ],
         ids=["down_leg", "reset_leg", "target", "contacts"],
     )
@@ -670,7 +670,7 @@ class TestReloadInputMemory:
 
         def build(preset: int, reset: str) -> Program:
             with Program(strict=False) as logic:
-                with Rung(A):
+                with rung(A):
                     count_down(ctr, preset=preset).reset(Bool(reset))
             return logic
 
@@ -687,7 +687,7 @@ class TestReloadInputMemory:
 
         def build(second_event: str, jump_step: int) -> Program:
             with Program(strict=False) as logic:
-                with Rung(A):
+                with rung(A):
                     event_drum(
                         outputs=[Bool("Ed1")],
                         events=[Bool("Ev1"), Bool(second_event)],
@@ -713,7 +713,7 @@ class TestReloadInputMemory:
     def _build(source: str) -> Program:
         namespace = {
             "Program": Program,
-            "Rung": Rung,
+            "rung": rung,
             "Bool": Bool,
             "count_up": count_up,
             "out": out,
@@ -733,9 +733,9 @@ class TestReloadInputMemory:
 
         def build(lo: int, value: int) -> Program:
             with Program(strict=False) as logic:
-                with Rung(A):
+                with rung(A):
                     out(bits.select(lo, lo + 3), oneshot=True)
-                with Rung(A):
+                with rung(A):
                     copy(value, N, oneshot=True)
             return logic
 
@@ -754,9 +754,9 @@ class TestReloadInputMemory:
 
         def build(preset: int) -> Program:
             with Program(strict=False) as logic:
-                with Rung(A):
+                with rung(A):
                     count_up(ctr, preset=preset).reset(Bool("R"))
-                with Rung(A):
+                with rung(A):
                     count_up(ctr, preset=preset + 1).reset(Bool("R"))
             return logic
 
@@ -769,17 +769,17 @@ class TestReloadInputMemory:
 
 _A_HELD_SOURCE = """
 with Program(strict=False) as logic:
-{extra}    with Rung(rise(A)):
+{extra}    with rung(rise(A)):
         out(Y1)
 """
-_A_EXTRA_RUNG = "    with Rung(rise(A)):\n        out(Y0)\n"
+_A_EXTRA_RUNG = "    with rung(rise(A)):\n        out(Y0)\n"
 
 
 def _a_program(*, extra: bool) -> Program:
     """``rise(A) -> Y1``; *extra* inserts ``rise(A) -> Y0`` above it, on its line."""
     namespace = {
         "Program": Program,
-        "Rung": Rung,
+        "rung": rung,
         "rise": rise,
         "out": out,
         "A": Bool("A"),
@@ -811,16 +811,16 @@ class TestReloadEdgeMemory:
     def test_two_contacts_on_one_tag_keep_their_memory_when_lines_shift(self):
         A = Bool("A")
         with Program(strict=False) as old:
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(Bool("P"))
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(Bool("Q"))
         with Program(strict=False) as new:
-            with Rung(rise(Bool("B"))):
+            with rung(rise(Bool("B"))):
                 out(Bool("Extra"))
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(Bool("P"))
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(Bool("Q"))
         memory = {"_edge:e1": True, "_edge:e2": False}
         remapped, dropped = remap_site_memory(memory, site_table_of(old), site_table_of(new))
@@ -905,9 +905,9 @@ class TestReloadEdgeMemory:
         A = Bool("A", external=True)
         Z = Bool("Z")
         with Program(strict=False) as logic:
-            with Rung(rise(Z)):
+            with rung(rise(Z)):
                 out(Bool("Y1"))
-            with Rung(A):
+            with rung(A):
                 out(Z)
         return logic
 
@@ -916,10 +916,10 @@ class TestReloadEdgeMemory:
         """``rise(Z) -> Y1`` in a subroutine called only while Go is on."""
         Z = Bool("Z", external=True)
         with Program(strict=False) as logic:
-            with Rung(Bool("Go", external=True)):
+            with rung(Bool("Go", external=True)):
                 call("EdgeSub")
             with subroutine("EdgeSub"):
-                with Rung(rise(Z)):
+                with rung(rise(Z)):
                     out(Bool("Y1"))
         return logic
 
@@ -967,11 +967,11 @@ class TestReloadEdgeMemory:
 def _two_contacts_on_a() -> Program:
     A = Bool("A")
     with Program(strict=False) as prog:
-        with Rung(rise(A)):
+        with rung(rise(A)):
             out(Bool("P"))
-        with Rung(fall(A)):
+        with rung(fall(A)):
             out(Bool("Q"))
-        with Rung(rise(Bool("B"))):
+        with rung(rise(Bool("B"))):
             out(Bool("R"))
     return prog
 
@@ -1040,17 +1040,17 @@ class TestEdgeFrames:
         cnt = Counter.clone("FrameCnt")
         body = Counter.clone("FrameBody")
         with Program(strict=False) as logic:
-            with Rung(rise(A)):
+            with rung(rise(A)):
                 out(G)
                 with branch(fall(B)):
                     out(H)
                     with branch(rise(C)):
                         out(G)
-            with Rung().continued():
+            with rung().continued():
                 count_up(cnt, preset=3).reset(rise(D))
-            with Rung():
+            with rung():
                 with forloop(2):
-                    with Rung(fall(E), rise(F)):
+                    with rung(fall(E), rise(F)):
                         out(H)
                     count_up(body, preset=3).reset(fall(A))
         return logic

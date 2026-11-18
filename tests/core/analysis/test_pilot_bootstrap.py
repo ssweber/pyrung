@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from pyrung import PLC, Bool, Program, Rung, latch, out
+from pyrung import PLC, Bool, Program, latch, out, rung
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot import entry_execution as entry_execution_module
 from pyrung.core.analysis.pilot.api import pilot_events
@@ -86,9 +86,9 @@ def test_rejected_entry_observation_stops_instead_of_retrying_scan_zero() -> Non
     running = Bool("RejectedEntry_Running")
     done = Bool("RejectedEntry_Done")
     with Program() as logic:
-        with Rung(start):
+        with rung(start):
             latch(running)
-        with Rung(running):
+        with rung(running):
             out(done)
 
     events = list(

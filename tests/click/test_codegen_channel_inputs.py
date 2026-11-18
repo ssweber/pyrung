@@ -7,7 +7,7 @@ from pyclickplc.addresses import get_addr_key
 from pyclickplc.nicknames import read_csv, write_csv
 from test_codegen_project import _exec_project
 
-from pyrung import Bool, Program, Real, Rung, copy, out
+from pyrung import Bool, Program, Real, copy, out, rung
 from pyrung.click import (
     ClickBlocks,
     TagMap,
@@ -27,10 +27,10 @@ def test_channel_input_reaches_samples_without_marking_output_external(
     source, output, sample = Real("LaserMeasurement"), Real("LaserOutput"), Real("DelayedLaser")
     enable, result = Bool("Sample"), Bool("Result")
     with Program() as program:
-        with Rung(enable):
+        with rung(enable):
             copy(source, sample)
             copy(sample, output)
-        with Rung(sample >= 95):
+        with rung(sample >= 95):
             out(result)
     mapping = TagMap(
         {

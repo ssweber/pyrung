@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Bool, Int, Program, Real, Rung, copy
+from pyrung import Bool, Int, Program, Real, copy, rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
@@ -28,7 +28,7 @@ def _on_delay_program():
     Feedback = Bool("Feedback", physical=MOTOR_FB, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Feedback):
+        with rung(Enable, Feedback):
             copy(1, Stage)
     return prog, Stage, Enable, Feedback
 
@@ -64,7 +64,7 @@ def _off_delay_program():
     Feedback = Bool("Feedback", physical=MOTOR_FB, link="Enable", default=True)
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(~Enable, ~Feedback):
+        with rung(~Enable, ~Feedback):
             copy(1, Stage)
     return prog, Stage, Enable, Feedback
 
@@ -100,7 +100,7 @@ def _profile_program():
     Temp = Real("Temp", physical=SENSOR, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Temp >= 5.0):
+        with rung(Enable, Temp >= 5.0):
             copy(1, Stage)
     return prog, Stage, Enable, Temp
 
@@ -147,7 +147,7 @@ def test_timed_and_toggle_solve(physical: Physical, released: bool) -> None:
     Stage = Int("Stage")
     enable = ~Enable if released else Enable
     with Program() as prog:
-        with Rung(enable, Feedback):
+        with rung(enable, Feedback):
             copy(1, Stage)
     plc = PLC(prog, dt=0.010)
     path = pilot_how(plc, Stage == 1, max_scans=3000)

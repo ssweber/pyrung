@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Or, Rung, copy, debounce, math, off_delay, on_delay, out
+from pyrung.core import Or, copy, debounce, math, off_delay, on_delay, out, rung
 from tests.conformance.memory import ClickTimer, c, t
 from tests.conformance.scans import count_scans, done, scans_for
 
@@ -38,22 +38,22 @@ DEB_ON, DEB_OFF, TON, TOF = (ClickTimer(n) for n in range(111, 115))
 
 
 def prove_off_side_lag(slot: Any) -> None:
-    rung, deb = c[221], c[222]
+    rung_bit, deb = c[221], c[222]
     count_scans(slot, WINDOW)
-    with Rung(slot.Cmd != 0, Or(*[slot.Scratch == n for n in ON_SCANS])):
-        out(rung)
-    with Rung(rung):
+    with rung(slot.Cmd != 0, Or(*[slot.Scratch == n for n in ON_SCANS])):
+        out(rung_bit)
+    with rung(rung_bit):
         debounce(deb, on=(DEB_ON, 0), off=(DEB_OFF, 0))
-    with Rung(rung):
+    with rung(rung_bit):
         on_delay(TON, 0)
-    with Rung(rung):
+    with rung(rung_bit):
         off_delay(TOF, 0)
     fields = (slot.Result1, slot.Result2, slot.Result3, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW):
         for field in fields:
             math(field * 2, field)
-    for bit, field in zip((deb, TON.Done, TOF.Done, rung), fields, strict=True):
-        with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW, bit):
+    for bit, field in zip((deb, TON.Done, TOF.Done, rung_bit), fields, strict=True):
+        with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW, bit):
             math(field + 1, field)
     done(slot, WINDOW)
 

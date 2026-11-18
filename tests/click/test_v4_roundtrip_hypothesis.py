@@ -20,7 +20,6 @@ from pyrung.core import (
     And,
     Or,
     Program,
-    Rung,
     Timer,
     break_loop,
     continue_loop,
@@ -29,6 +28,7 @@ from pyrung.core import (
     forloop,
     math,
     randint,
+    rung,
     timed,
     toggle,
 )
@@ -90,7 +90,7 @@ def _emit(instruction: tuple, k: int, timers: list, rands: list) -> None:
                 if leaf == "inc":
                     math(total + 1, total)
                 else:
-                    with Rung(total >= at):
+                    with rung(total >= at):
                         break_loop() if leaf == "break" else continue_loop()
     elif kind == "agg":
         _, agg, lo, hi = instruction
@@ -112,12 +112,12 @@ def _build(spec: Spec) -> tuple[Program, TagMap, list]:
             for instruction in instructions:
                 k += 1
                 if instruction[0] == "for":
-                    with Rung(_cond(cond)):
+                    with rung(_cond(cond)):
                         _emit(instruction, k, timers, rands)
                 else:
                     plain.append((instruction, k))
             if plain:
-                with Rung(_cond(cond)):
+                with rung(_cond(cond)):
                     for instruction, at in plain:
                         _emit(instruction, at, timers, rands)
     entries = []

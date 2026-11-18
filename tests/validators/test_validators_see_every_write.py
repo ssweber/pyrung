@@ -12,7 +12,6 @@ from pyrung.core import (
     Int,
     Physical,
     Program,
-    Rung,
     TagType,
     Word,
     copy,
@@ -21,6 +20,7 @@ from pyrung.core import (
     latch,
     math,
     out,
+    rung,
     unpack_to_bits,
 )
 from pyrung.core.validation import (
@@ -53,7 +53,7 @@ def test_choices_reports_a_fill_into_slots_with_choices() -> None:
     modes.slot(2, choices={0: "Off", 1: "On"})
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill(9, modes.select(1, 2))
 
     assert _findings(validate_choices(prog)) == [
@@ -66,7 +66,7 @@ def test_choices_reports_a_copy_in_a_forloop_body() -> None:
     mode = Int("Mode", choices={0: "Off", 1: "On"})
 
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             with forloop(3):
                 copy(9, mode)
 
@@ -83,7 +83,7 @@ def test_stuck_bits_skips_a_readonly_or_external_tag_latched_in_a_forloop_body()
     hmi = Bool("Hmi", external=True)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             with forloop(2):
                 latch(held)
                 latch(hmi)
@@ -95,11 +95,11 @@ def test_stuck_bits_reads_a_fill_as_a_latch_or_a_reset() -> None:
     lamps = Block("Lamps", TagType.BOOL, 1, 4)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             latch(lamps.select(1, 2))
-        with Rung(Guard):
+        with rung(Guard):
             fill(False, lamps.select(1, 2))
-        with Rung(Trigger):
+        with rung(Trigger):
             fill(True, lamps.select(3, 4))
 
     assert _findings(validate_stuck_bits(prog)) == [
@@ -113,9 +113,9 @@ def test_stuck_bits_skips_a_bit_another_instruction_writes() -> None:
     pattern = Word("Pattern", external=True)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             latch(bits[1])
-        with Rung(Guard):
+        with rung(Guard):
             unpack_to_bits(pattern, bits.select(1, 16))
 
     assert _findings(validate_stuck_bits(prog)) == []
@@ -126,9 +126,9 @@ def test_stuck_bits_skips_a_bit_a_pointer_may_reset() -> None:
     ptr = Int("Ptr", min=1, max=2)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             latch(bits[1])
-        with Rung(Guard):
+        with rung(Guard):
             copy(0, bits[ptr])
 
     assert _findings(validate_stuck_bits(prog)) == []
@@ -142,7 +142,7 @@ def test_stuck_bits_skips_a_bit_a_pointer_in_the_same_rung_may_reset() -> None:
     big_ptr = Int("BigPtr", external=True)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             latch(small[1])
             copy(0, small[small_ptr])
             latch(big[5])
@@ -156,9 +156,9 @@ def test_stuck_bits_reports_a_latch_a_pointer_only_sets() -> None:
     idx = Int("AlarmIdx", min=1, max=16)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             latch(alarms[3])
-        with Rung(Guard):
+        with rung(Guard):
             copy(1, alarms[idx])
 
     assert _findings(validate_stuck_bits(prog)) == [(COIL_STUCK_HIGH, "Alarms3")]
@@ -168,9 +168,9 @@ def test_stuck_bits_skips_spares_only_a_fill_clears() -> None:
     coils = Block("Coils", TagType.BOOL, 1, 8)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             latch(coils.select(1, 4))
-        with Rung(Guard):
+        with rung(Guard):
             fill(False, coils.select(1, 8))
 
     assert _findings(validate_stuck_bits(prog)) == []
@@ -188,9 +188,9 @@ def test_link_to_an_enable_only_a_fill_writes_is_known() -> None:
     )
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             fill(True, motors.select(1, 3))
-        with Rung(feedback):
+        with rung(feedback):
             out(Seen)
 
     assert _findings(validate_physical_realism(prog)) == []
@@ -205,9 +205,9 @@ def test_link_to_an_enable_a_pointer_may_write_is_known() -> None:
     )
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             copy(1, coils[ptr])
-        with Rung(feedback):
+        with rung(feedback):
             out(Seen)
 
     assert PHYS_LINK_UNKNOWN not in [code for code, _ in _findings(validate_physical_realism(prog))]
@@ -219,9 +219,9 @@ def test_missing_profile_reports_a_feedback_only_math_reads() -> None:
     doubled = Int("Doubled")
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             copy(3, speed)
-        with Rung():
+        with rung():
             math(feedback * 2, doubled)
 
     assert _findings(validate_physical_realism(prog)) == [(PHYS_MISSING_PROFILE, "SpeedFb")]
@@ -239,9 +239,9 @@ def test_static_on_left_counts_a_write_through_a_pointer() -> None:
     setpoint = Int("Setpoint", external=True)
 
     with Program(strict=False) as prog:
-        with Rung(Trigger):
+        with rung(Trigger):
             copy(reading, levels[ptr])
-        with Rung(setpoint < levels[2]):
+        with rung(setpoint < levels[2]):
             out(Seen)
 
     assert [f.code for f in validate_cmp_conditions(prog).findings] == [CMP_STATIC_ON_LEFT]

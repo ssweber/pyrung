@@ -79,7 +79,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, latch, math, out, reset, system, to_ascii, to_text
+from pyrung.core import copy, fill, latch, math, out, reset, rung, system, to_ascii, to_text
 from pyrung.core.expression import randint
 from tests.conformance.memory import c, dd, df, dh, ds, txt
 from tests.conformance.scans import count_scans, done, scans_for
@@ -111,17 +111,17 @@ class Probes:
         self, slot: Any, op: Callable[[], None], flag: Any, field: Any, bit: int = 1
     ) -> None:
         now, taken = c[next(self.free)], c[next(self.free)]
-        with Rung(slot.Scratch > STAGE_SCAN, slot.Scratch <= WINDOW, ~taken, ~flag):
+        with rung(slot.Scratch > STAGE_SCAN, slot.Scratch <= WINDOW, ~taken, ~flag):
             out(now)
             latch(taken)
-        with Rung(now):
+        with rung(now):
             op()
-        with Rung(now, flag):
+        with rung(now, flag):
             math(field + bit, field)
 
 
 def _stage(slot, *instructions):
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         for instruction in instructions:
             instruction()
 
@@ -204,7 +204,7 @@ def prove_rand_other_stores(slot):
     probe(slot, real_op, SC43, slot.ErrorCode, 4)
     probe(slot, equal_op, SC46, slot.ErrorCode, 8)
     probe(slot, equal_op, SC43, slot.ErrorCode, 16)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         math(wide - 70000, slot.Result1)
         copy(word, slot.Result2)
         math(real - 70000, slot.Result3)
@@ -267,15 +267,15 @@ def prove_inf_and_nan_to_text(slot):
 
     probe(slot, minus_op, SC43, flags, 1)
     probe(slot, nan_op, SC43, flags, 2)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         _code_pair(txt[521], txt[522], slot.Result1, scratch)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         _code_pair(txt[523], txt[524], slot.Result2, scratch)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         _code_pair(txt[531], txt[532], slot.Result3, scratch)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         _code_pair(txt[533], txt[534], slot.Result4, scratch)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         copy(txt[525], last, convert=to_ascii)
         math(flags + last * 4, slot.ErrorCode)
     done(slot, WINDOW)
@@ -283,10 +283,10 @@ def prove_inf_and_nan_to_text(slot):
 
 def _class_of(value, readings, into, end):
     """Set *into* to the first reading whose number equals *value*, or to 5 if none does."""
-    with Rung(*end):
+    with rung(*end):
         copy(5, into)
     for number, reading in readings:
-        with Rung(*end, value == number):
+        with rung(*end, value == number):
             copy(reading, into)
 
 
@@ -343,7 +343,7 @@ def prove_real_into_text_and_fill(slot):
 
     probe(slot, real_to_text, SC43, slot.Result4, 1)
     probe(slot, clamping_copy, SC43, slot.Result4, 2)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         copy(txt[851], slot.Result1, convert=to_ascii)
         copy(txt[851], slot.Result2)
         copy(ds[4499], slot.Result3)

@@ -14,13 +14,13 @@ from pyrung.core import (
     PLC,
     Block,
     Program,
-    Rung,
     SystemState,
     Tag,
     TagType,
     copy,
     math,
     out,
+    rung,
     unpack_to_words,
 )
 
@@ -182,7 +182,7 @@ def test_yd_write_can_be_overwritten_by_rung_outputs_in_same_scan():
     mapping = TagMap({drive: y[1]})
 
     with Program() as logic:
-        with Rung():
+        with rung():
             out(drive)
 
     runner = PLC(logic=logic, initial_state=SystemState().with_tags({"Drive": False}))
@@ -375,7 +375,7 @@ def test_a_nan_that_a_math_computes_reads_all_ones():
     inf = Tag("Inf", TagType.REAL)
     level = Tag("Level", TagType.REAL)
     with Program() as logic:
-        with Rung():
+        with rung():
             math(inf - inf, level)
             copy(inf - inf, df[3])
     runner = PLC(logic=logic)
@@ -394,7 +394,7 @@ def test_an_unpack_copy_of_a_nan_that_a_client_wrote_keeps_its_bits():
     # A CLICK unpacks the NaN 0x0000:0x7FC0 to those words (modbus_raw/df_quiet_nan).
     level = Tag("Level", TagType.REAL)
     with Program() as logic:
-        with Rung():
+        with rung():
             unpack_to_words(level, dh.select(1, 2))
             copy(level, df[2])
     runner = PLC(logic=logic)
@@ -427,9 +427,9 @@ def test_a_df_word_written_alone_keeps_the_other_word():
 
 def test_a_write_to_an_x_t_or_ct_bit_is_stored_and_a_rung_reads_it():
     with Program() as logic:
-        with Rung(t[1]):
+        with rung(t[1]):
             out(c[1])
-        with Rung(ct[1]):
+        with rung(ct[1]):
             out(c[2])
     runner = PLC(logic=logic)
     provider = ClickDataProvider(runner, TagMap(), blocks=(x, c, t, ct))

@@ -17,13 +17,17 @@ from . import _state
 from ._program import Program
 from ._state import _current_forloop_body, _pop_rung_context, _push_rung_context
 
+# pyrung exports the rung context manager under each of these names. The source
+# lookups match a `with` item that calls any of them.
+_RUNG_NAMES = ("rung", "Rung", "RungContext")
+
 
 def _set_scope_end_line(
     rung: RungLogic,
     *,
     source_file: str | None,
     source_line: int | None,
-    context_name: str,
+    context_name: str | tuple[str, ...],
 ) -> None:
     """Populate end-line metadata for a scope-backed rung."""
     rung.end_line = _capture_with_end_line(
@@ -37,10 +41,10 @@ class Rung:
     """Context manager for defining a rung.
 
     Example:
-        with Rung(Button):
+        with rung(Button):
             out(Light)
 
-        with Rung(Step == 0):
+        with rung(Step == 0):
             out(Light1)
             copy(1, Step, oneshot=True)
     """
@@ -50,7 +54,7 @@ class Rung:
         self._loop = _current_forloop_body()
         if self._loop is None and _state._building.forloops:
             raise RuntimeError(
-                "Rung() inside forloop() must sit directly in the loop body, "
+                "rung() inside forloop() must sit directly in the loop body, "
                 "not inside another body rung"
             )
         source_file, source_line = _capture_source(depth=2)
@@ -59,7 +63,7 @@ class Rung:
         condition_arg_lines = _capture_with_call_arg_lines(
             source_file,
             source_line,
-            context_name="Rung",
+            context_name=_RUNG_NAMES,
         )
 
         # Consume any pending comment() call.
@@ -99,7 +103,7 @@ class Rung:
         execution scope (main or the current subroutine).
 
         Returns:
-            self, for chaining: ``with Rung(B).continued(): ...``
+            self, for chaining: ``with rung(B).continued(): ...``
         """
         if self._loop is not None:
             raise RuntimeError("continued() is not permitted on a forloop body rung")
@@ -156,14 +160,14 @@ class Rung:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
             if exc_type is None:
-                self._assert_required_builders_resolved("Rung")
+                self._assert_required_builders_resolved("rung")
         finally:
             _pop_rung_context()
         _set_scope_end_line(
             self._rung,
             source_file=self._rung.source_file,
             source_line=self._rung.source_line,
-            context_name="Rung",
+            context_name=_RUNG_NAMES,
         )
         if self._loop is not None:
             self._loop._add_body_rung(self._rung)
@@ -180,13 +184,13 @@ _MAX_COMMENT_LENGTH = 1400
 def comment(text: str) -> None:
     """Attach a comment to the next rung.
 
-    The comment is consumed by the immediately following ``Rung()`` constructor.
+    The comment is consumed by the immediately following ``rung()`` constructor.
     Must be called inside a ``Program`` context.
 
     Example::
 
         comment("UnitMode Change")
-        with Rung(C_UnitModeChgRequest):
+        with rung(C_UnitModeChgRequest):
             copy(1, C_UnitModeChgRequestBool, oneshot=True)
     """
     prog = Program._current()

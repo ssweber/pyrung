@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from pyrung.core import PLC, Bool, Coupling, Harness, Program, Real, Rung, out
+from pyrung.core import PLC, Bool, Coupling, Harness, Program, Real, out, rung
 from pyrung.core.harness import link_problem, plant_state_tags, rename_coil_state
 from pyrung.core.physical import Physical
 
@@ -24,13 +24,13 @@ TempHigh = Bool("TempHigh")
 
 def _plc() -> PLC:
     with Program() as logic:
-        with Rung(Cmd):
+        with rung(Cmd):
             out(Motor)
-        with Rung(Aux):
+        with rung(Aux):
             out(Running)
-        with Rung(Spare):
+        with rung(Spare):
             out(Lamp)
-        with Rung(Temp > 50.0):
+        with rung(Temp > 50.0):
             out(TempHigh)
     return PLC(logic, dt=0.010)
 

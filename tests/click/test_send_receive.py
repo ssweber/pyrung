@@ -6,7 +6,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType
+from pyrung.core import PLC, Block, Bool, Int, Program, TagType, rung
 from pyrung.core.instruction.send_receive import ModbusTcpTarget
 
 _TARGET = ModbusTcpTarget("test", "127.0.0.1", port=502, device_id=1)
@@ -33,7 +33,7 @@ def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPat
     ExCode = Int("ExCode")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             click_send_receive.send(
                 target=_TARGET_17,
                 remote_start="DS1",
@@ -97,7 +97,7 @@ def test_send_enable_drop_lets_pending_complete_and_latches_success(
     ExCode = Int("ExCode")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             click_send_receive.send(
                 target=_TARGET,
                 remote_start="DS1",
@@ -162,7 +162,7 @@ def test_send_re_enable_after_success_clears_latch_and_restarts(
     ExCode = Int("ExCode")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             click_send_receive.send(
                 target=_TARGET,
                 remote_start="DS1",
@@ -214,7 +214,7 @@ def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch
     Local = Block("Local", TagType.INT, 1, 2)
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             click_send_receive.receive(
                 target=ModbusTcpTarget("test3", "127.0.0.1", port=502, device_id=3),
                 remote_start="DS1",
@@ -261,7 +261,7 @@ def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
     Dest = Int("Dest")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             click_send_receive.receive(
                 target=_TARGET,
                 remote_start="DS1",
@@ -298,7 +298,7 @@ def test_send_count_mismatch_raises():
 
     with pytest.raises(ValueError, match="does not match the 1 tag"):
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 click_send_receive.send(
                     target=_TARGET,
                     remote_start="DS1",
@@ -323,7 +323,7 @@ def test_receive_count_mismatch_raises():
 
     with pytest.raises(ValueError, match="does not match the 1 tag"):
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 click_send_receive.receive(
                     target=_TARGET,
                     remote_start="DS1",
@@ -347,7 +347,7 @@ def test_receive_validates_status_tag_types():
     ExCode = Int("ExCode")
 
     with Program():
-        with Rung(Enable):
+        with rung(Enable):
             with pytest.raises(TypeError, match="must be BOOL"):
                 click_send_receive.receive(
                     target=_TARGET,
@@ -371,7 +371,7 @@ def test_receive_validates_exception_response_type():
     BadExCode = Bool("BadExCode")
 
     with Program():
-        with Rung(Enable):
+        with rung(Enable):
             with pytest.raises(TypeError, match="must be INT or DINT"):
                 click_send_receive.receive(
                     target=_TARGET,
@@ -448,7 +448,7 @@ def test_device_id_from_a_ds_tag_is_read_as_each_request_starts(
     operand = {"source": Value} if instruction == "send" else {"dest": Value}
     build = getattr(click_send_receive, instruction)
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             build(target=target, remote_start="DS1", **operand)
 
     runner = PLC(logic=logic)

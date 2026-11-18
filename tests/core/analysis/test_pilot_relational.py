@@ -7,7 +7,7 @@ child (steering unchanged), and distance counts the predicate once.
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, out
+from pyrung import PLC, Bool, Int, Program, Real, copy, out, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.trace import trace_back
@@ -39,7 +39,7 @@ def test_relational_prereq_surfaces_as_node() -> None:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(A > B):
+        with rung(A > B):
             out(Target)
 
     pdg = build_program_graph(prog)
@@ -69,7 +69,7 @@ def test_relational_node_counts_once_in_distance() -> None:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(A > B):
+        with rung(A > B):
             out(Target)
 
     pdg = build_program_graph(prog)
@@ -86,7 +86,7 @@ def test_relational_prereq_solves_end_to_end() -> None:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(A > B):
+        with rung(A > B):
             out(Target)
 
     plc = PLC(prog, dt=0.010)
@@ -109,7 +109,7 @@ def test_relational_emits_both_levers() -> None:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(A > B):
+        with rung(A > B):
             out(Target)
 
     pdg = build_program_graph(prog)
@@ -138,9 +138,9 @@ def test_lever_selection_uses_rhs_when_lhs_blocked() -> None:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(2, A)
-        with Rung(A > B):
+        with rung(A > B):
             out(Target)
 
     plc = PLC(prog, dt=0.010)
@@ -179,9 +179,9 @@ def test_literal_inequality_prereq_through_bool_chain() -> None:
     Alarm = Bool("Alarm")
 
     with Program() as prog:
-        with Rung(Temp > 75):
+        with rung(Temp > 75):
             out(Hot)
-        with Rung(Hot):
+        with rung(Hot):
             out(Alarm)
 
     plc = PLC(prog, dt=0.010)
@@ -201,11 +201,11 @@ def test_program_owned_relational_guard_surfaces_active_clobber_permissive() -> 
     Up = Bool("OwnedRange_Up")
 
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             copy(40, Step)
-        with Rung(~Permissive):
+        with rung(~Permissive):
             copy(99, Step)
-        with Rung(Step >= 40, Step < 50):
+        with rung(Step >= 40, Step < 50):
             out(Up)
 
     events = []
@@ -227,9 +227,9 @@ def test_program_owned_witness_preserves_boundary_scalar_type() -> None:
     Target = Bool("OwnedCoordinate_Target")
 
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             copy(1, Bound)
-        with Rung(ProcessValue < Bound):
+        with rung(ProcessValue < Bound):
             out(Target)
 
     events = []
@@ -260,9 +260,9 @@ def test_relational_guard_defers_to_concrete_demand() -> None:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(ModeSel >= 1):
+        with rung(ModeSel >= 1):
             copy(ModeSel, Mode)
-        with Rung(Mode == 2):
+        with rung(Mode == 2):
             out(Target)
 
     plc = PLC(prog, dt=0.010)
@@ -288,7 +288,7 @@ def test_relational_target_literal_threshold() -> None:
     Hot = Bool("Hot")
 
     with Program() as prog:
-        with Rung(Temp > 75):
+        with rung(Temp > 75):
             out(Hot)
 
     plc = PLC(prog, dt=0.010)
@@ -306,7 +306,7 @@ def test_relational_target_tag_vs_tag() -> None:
     Flag = Bool("Flag")
 
     with Program() as prog:
-        with Rung(A > B):
+        with rung(A > B):
             out(Flag)
 
     plc = PLC(prog, dt=0.010)
@@ -338,9 +338,9 @@ def test_relational_frontier_coasts_to_converge() -> None:
     Stage = Int("Stage")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(8, Limit)
-        with Rung(Enable, Temp >= Limit):
+        with rung(Enable, Temp >= Limit):
             copy(1, Stage)
 
     plc = PLC(prog, dt=0.010)

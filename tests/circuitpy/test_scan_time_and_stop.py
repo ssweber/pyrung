@@ -16,7 +16,7 @@ import pytest
 
 from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, generate_circuitpy
 from pyrung.click import TagMap
-from pyrung.core import PLC, Int, Program, Rung, Timer, copy, math, on_delay, out
+from pyrung.core import PLC, Int, Program, Timer, copy, math, on_delay, out, rung
 from pyrung.core.system_points import system
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.circuitpy.test_system_points import _StubBase
@@ -118,7 +118,7 @@ def test_timer_keeps_ms_at_long_uptime(monkeypatch, uptime_s):
     # add 10 ms each. A float monotonic() at this uptime moves in steps of
     # 31 ms (28 h) or 250 ms (11 d), so the timer would lose time.
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(Ton, preset=1000, unit="Tms")
 
     hw = _hw()
@@ -148,9 +148,9 @@ FirstAcc = Int("FirstAcc", retentive=False)
 
 def _first_acc_program() -> Program:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(Ton, preset=10000, unit="Tms")
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(Ton.Acc, FirstAcc)
     return prog
 
@@ -187,9 +187,9 @@ ModeScans = Int("ModeScans", retentive=True)
 
 def _count_program() -> Program:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(RunScans + 1, RunScans)
-        with Rung(system.sys.mode_run):
+        with rung(system.sys.mode_run):
             math(ModeScans + 1, ModeScans)
     return prog
 
@@ -269,11 +269,11 @@ def test_sc50_from_a_rung_releases_at_switch_stop_then_run(monkeypatch, scans, r
 def _rung_stop_program() -> Program:
     # The second scan writes SC50; SC11 is read after it.
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(RunScans + 1, RunScans)
-        with Rung(system.sys.mode_run):
+        with rung(system.sys.mode_run):
             math(ModeScans + 1, ModeScans)
-        with Rung(RunScans == 2):
+        with rung(RunScans == 2):
             out(system.sys.cmd_mode_stop)
     return prog
 

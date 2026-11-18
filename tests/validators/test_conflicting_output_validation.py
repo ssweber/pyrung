@@ -12,7 +12,6 @@ from pyrung.core import (
     Or,
     OutputBlock,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -27,6 +26,7 @@ from pyrung.core import (
     on_delay,
     out,
     reset,
+    rung,
     shift,
     subroutine,
 )
@@ -68,9 +68,9 @@ ManualMode = Bool("ManualMode")
 class TestDirectDuplicateOut:
     def test_non_exclusive_conditions(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -88,12 +88,12 @@ class TestDirectDuplicateOut:
 class TestSubroutineDuplicateOut:
     def test_same_subroutine(self):
         with Program() as prog:
-            with Rung():
+            with rung():
                 call("init")
             with subroutine("init"):
-                with Rung(ButtonA):
+                with rung(ButtonA):
                     out(Light)
-                with Rung(ButtonB):
+                with rung(ButtonB):
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -109,15 +109,15 @@ class TestSubroutineDuplicateOut:
 class TestMutuallyExclusiveSubroutines:
     def test_state_machine_subroutines(self):
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 call("sub_idle")
-            with Rung(State == 2):
+            with rung(State == 2):
                 call("sub_run")
             with subroutine("sub_idle"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_run"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -132,12 +132,12 @@ class TestMutuallyExclusiveSubroutines:
 class TestSingleSubroutineMultipleCallers:
     def test_no_conflict(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 call("handler")
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 call("handler")
             with subroutine("handler"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -154,9 +154,9 @@ class TestSameScopeAlwaysConflicts:
     def test_compare_eq_different_constants(self):
         """State==1 vs State==2 in main: both outs execute, last one stomps."""
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 out(Light)
-            with Rung(State == 2):
+            with rung(State == 2):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -165,9 +165,9 @@ class TestSameScopeAlwaysConflicts:
     def test_complementary_bit_conditions(self):
         """Flag vs ~Flag in main: both outs execute, last one stomps."""
         with Program() as prog:
-            with Rung(Flag):
+            with rung(Flag):
                 out(Light)
-            with Rung(~Flag):
+            with rung(~Flag):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -182,7 +182,7 @@ class TestSameScopeAlwaysConflicts:
 class TestBranchNonExclusive:
     def test_different_conditions_not_exclusive(self):
         with Program() as prog:
-            with Rung():
+            with rung():
                 with branch(ButtonA):
                     out(Light)
                 with branch(ButtonB):
@@ -202,7 +202,7 @@ class TestBranchExclusive:
     def test_exclusive_branch_conditions_still_conflict(self):
         """Branches always execute; disabled branch resets the target."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 with branch(State == 1):
                     out(Light)
                 with branch(State == 2):
@@ -220,7 +220,7 @@ class TestBranchExclusive:
 class TestNoInstructions:
     def test_empty_program(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -236,7 +236,7 @@ class TestNoInstructions:
 class TestSingleOut:
     def test_no_conflict(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -251,9 +251,9 @@ class TestSingleOut:
 class TestLatchResetExcluded:
     def test_latch_not_flagged(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 latch(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 latch(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -261,9 +261,9 @@ class TestLatchResetExcluded:
 
     def test_reset_not_flagged(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 reset(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 reset(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -281,9 +281,9 @@ class TestBlockRangeTarget:
         first = Y.select(1, 4)
         second = Y.select(1, 4)
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(first)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 out(second)
 
         report = validate_conflicting_outputs(prog)
@@ -300,12 +300,12 @@ class TestBlockRangeTarget:
 class TestMixedMainSubroutine:
     def test_non_exclusive(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 call("sub")
             with subroutine("sub"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -322,12 +322,12 @@ class TestMixedMainSubroutineAlwaysConflicts:
     def test_mixed_is_always_conflict(self):
         """Main out always resets; order-dependent stomping."""
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 out(Light)
-            with Rung(State == 2):
+            with rung(State == 2):
                 call("sub")
             with subroutine("sub"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -343,9 +343,9 @@ class TestEqualityComplement:
     def test_eq_ne_same_scope_still_conflict(self):
         """State==1 vs State!=1 in main: both outs always execute."""
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 out(Light)
-            with Rung(State != 1):
+            with rung(State != 1):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -360,9 +360,9 @@ class TestEqualityComplement:
 class TestUnconditionalRungs:
     def test_unconditional_conflict(self):
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Light)
-            with Rung():
+            with rung():
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -377,11 +377,11 @@ class TestUnconditionalRungs:
 class TestThreeWayConflict:
     def test_three_sites_one_finding(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 out(Light)
-            with Rung(ButtonC):
+            with rung(ButtonC):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -397,9 +397,9 @@ class TestThreeWayConflict:
 class TestRangeComplement:
     def test_lt_ge_same_scope_conflict(self):
         with Program() as prog:
-            with Rung(State < 5):
+            with rung(State < 5):
                 out(Light)
-            with Rung(State >= 5):
+            with rung(State >= 5):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -407,9 +407,9 @@ class TestRangeComplement:
 
     def test_le_gt_same_scope_conflict(self):
         with Program() as prog:
-            with Rung(State <= 5):
+            with rung(State <= 5):
                 out(Light)
-            with Rung(State > 5):
+            with rung(State > 5):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -424,9 +424,9 @@ class TestRangeComplement:
 class TestTimerConflict:
     def test_shared_done_bit(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 on_delay(Timer[1], preset=1000)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
@@ -434,9 +434,9 @@ class TestTimerConflict:
 
     def test_shared_accumulator(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 on_delay(Timer[1], preset=1000)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
@@ -451,9 +451,9 @@ class TestTimerConflict:
 class TestCounterConflict:
     def test_shared_accumulator(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 count_up(Counter[1], preset=10).reset(ResetBtn)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 count_up(Counter[1], preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
@@ -461,9 +461,9 @@ class TestCounterConflict:
 
     def test_data_write_to_accumulator_is_not_duplicate_owner(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 math(Counter[1].Acc + 5, Counter[1].Acc)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 count_up(Counter[1], preset=10).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
@@ -473,9 +473,9 @@ class TestCounterConflict:
 class TestAccumulatorDataWriteAllowed:
     def test_timer_acc_zero_copy_is_not_duplicate_owner(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 copy(0, Timer[1].Acc)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 on_delay(Timer[1], preset=1000)
 
         report = validate_conflicting_outputs(prog)
@@ -490,9 +490,9 @@ class TestAccumulatorDataWriteAllowed:
 class TestTimerOutConflict:
     def test_timer_done_bit_vs_out(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 on_delay(Timer2, preset=1000)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 on_delay(Timer2, preset=2000)
 
         report = validate_conflicting_outputs(prog)
@@ -517,7 +517,7 @@ class TestDrumSameScopeConflict:
         Ev2 = Bool("Ev2")
 
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 event_drum(
                     outputs=[D_out1, D_out2],
                     events=[Ev1, Ev2],
@@ -525,7 +525,7 @@ class TestDrumSameScopeConflict:
                     current_step=D_step1,
                     completion_flag=D_flag1,
                 ).reset(ResetBtn)
-            with Rung(State == 2):
+            with rung(State == 2):
                 event_drum(
                     outputs=[D_out1, D_out2],
                     events=[Ev1, Ev2],
@@ -549,12 +549,12 @@ class TestDrumSameScopeConflict:
         Ev1 = Bool("Ev1_s")
 
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 call("drum_a")
-            with Rung(State == 2):
+            with rung(State == 2):
                 call("drum_b")
             with subroutine("drum_a"):
-                with Rung():
+                with rung():
                     event_drum(
                         outputs=[D_out1],
                         events=[Ev1],
@@ -563,7 +563,7 @@ class TestDrumSameScopeConflict:
                         completion_flag=D_flag1,
                     ).reset(ResetBtn)
             with subroutine("drum_b"):
-                with Rung():
+                with rung():
                     event_drum(
                         outputs=[D_out1],
                         events=[Ev1],
@@ -587,9 +587,9 @@ class TestShiftOutConflict:
         ClockBit = Bool("ClockBit")
 
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 shift(C.select(1, 4)).clock(ClockBit).reset(ResetBtn)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 out(C.select(1, 4))
 
         report = validate_conflicting_outputs(prog)
@@ -606,10 +606,10 @@ class TestEdgeCases:
     def test_uncalled_subroutine_no_finding(self):
         """Uncalled subroutine out() does not conflict with anything."""
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Light)
             with subroutine("unused"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -618,7 +618,7 @@ class TestEdgeCases:
     def test_same_rung_same_instruction_not_duplicate(self):
         """A single out() instruction is never a conflict by itself."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -626,9 +626,9 @@ class TestEdgeCases:
 
     def test_summary_with_findings(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -636,9 +636,9 @@ class TestEdgeCases:
 
     def test_different_targets_no_conflict(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 out(Light)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 out(Motor)
 
         report = validate_conflicting_outputs(prog)
@@ -646,9 +646,9 @@ class TestEdgeCases:
 
     def test_off_delay_conflict(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 off_delay(Timer3, preset=1000)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 off_delay(Timer3, preset=2000)
 
         report = validate_conflicting_outputs(prog)
@@ -656,9 +656,9 @@ class TestEdgeCases:
 
     def test_count_down_conflict(self):
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 count_down(Counter2, preset=10).reset(ResetBtn)
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 count_down(Counter2, preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
@@ -667,9 +667,9 @@ class TestEdgeCases:
     def test_exclusive_conditions_same_scope_still_conflict(self):
         """Timers in same scope always execute — conditions don't help."""
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 on_delay(Timer4, preset=1000)
-            with Rung(State == 2):
+            with rung(State == 2):
                 on_delay(Timer4, preset=2000)
 
         report = validate_conflicting_outputs(prog)
@@ -679,15 +679,15 @@ class TestEdgeCases:
     def test_exclusive_timers_in_subroutines(self):
         """Timers in different subroutines with exclusive callers are safe."""
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 call("timer_a")
-            with Rung(State == 2):
+            with rung(State == 2):
                 call("timer_b")
             with subroutine("timer_a"):
-                with Rung():
+                with rung():
                     on_delay(Timer5, preset=1000)
             with subroutine("timer_b"):
-                with Rung():
+                with rung():
                     on_delay(Timer5, preset=2000)
 
         report = validate_conflicting_outputs(prog)
@@ -700,15 +700,15 @@ class TestCallerExclusivityPatterns:
     def test_complementary_bit_callers(self):
         """BitCondition vs NormallyClosedCondition on callers → safe."""
         with Program() as prog:
-            with Rung(Flag):
+            with rung(Flag):
                 call("sub_on")
-            with Rung(~Flag):
+            with rung(~Flag):
                 call("sub_off")
             with subroutine("sub_on"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_off"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -717,15 +717,15 @@ class TestCallerExclusivityPatterns:
     def test_eq_ne_callers(self):
         """CompareEq vs CompareNe on callers → safe."""
         with Program() as prog:
-            with Rung(State == 1):
+            with rung(State == 1):
                 call("sub_eq")
-            with Rung(State != 1):
+            with rung(State != 1):
                 call("sub_ne")
             with subroutine("sub_eq"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_ne"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -734,15 +734,15 @@ class TestCallerExclusivityPatterns:
     def test_range_complement_callers(self):
         """CompareLt vs CompareGe on callers → safe."""
         with Program() as prog:
-            with Rung(State < 5):
+            with rung(State < 5):
                 call("sub_low")
-            with Rung(State >= 5):
+            with rung(State >= 5):
                 call("sub_high")
             with subroutine("sub_low"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_high"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -751,15 +751,15 @@ class TestCallerExclusivityPatterns:
     def test_non_exclusive_callers_conflict(self):
         """Non-exclusive callers → conflict even across subroutines."""
         with Program() as prog:
-            with Rung(ButtonA):
+            with rung(ButtonA):
                 call("sub_a")
-            with Rung(ButtonB):
+            with rung(ButtonB):
                 call("sub_b")
             with subroutine("sub_a"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_b"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -778,21 +778,21 @@ class TestOneHotAliasExclusivity:
     def test_one_hot_decoded_callers_exclusive(self):
         """Or(ProdMode, MaintMode) vs ManualMode → exclusive via Mode decode."""
         with Program() as prog:
-            with Rung(Mode == 1):
+            with rung(Mode == 1):
                 out(ProdMode)
-            with Rung(Mode == 2):
+            with rung(Mode == 2):
                 out(MaintMode)
-            with Rung(Mode == 3):
+            with rung(Mode == 3):
                 out(ManualMode)
-            with Rung(Or(ProdMode, MaintMode)):
+            with rung(Or(ProdMode, MaintMode)):
                 call("set_outputs")
-            with Rung(ManualMode):
+            with rung(ManualMode):
                 call("set_outputs_manual")
             with subroutine("set_outputs"):
-                with Rung(Flag):
+                with rung(Flag):
                     out(Light)
             with subroutine("set_outputs_manual"):
-                with Rung(Flag):
+                with rung(Flag):
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -802,17 +802,17 @@ class TestOneHotAliasExclusivity:
         """Both callers gated on the SAME decoded bit → resolves to Mode==1 twice,
         which is satisfiable → the conflict still reports (no over-suppression)."""
         with Program() as prog:
-            with Rung(Mode == 1):
+            with rung(Mode == 1):
                 out(ProdMode)
-            with Rung(ProdMode):
+            with rung(ProdMode):
                 call("sub_a")
-            with Rung(ProdMode):
+            with rung(ProdMode):
                 call("sub_b")
             with subroutine("sub_a"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_b"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -822,21 +822,21 @@ class TestOneHotAliasExclusivity:
         """A bit with a latch writer is not purely combinational, so it cannot be
         alias-resolved — exclusivity is unprovable and the conflict still reports."""
         with Program() as prog:
-            with Rung(Mode == 1):
+            with rung(Mode == 1):
                 out(ProdMode)
-            with Rung(ResetBtn):
+            with rung(ResetBtn):
                 latch(ProdMode)
-            with Rung(Mode == 3):
+            with rung(Mode == 3):
                 out(ManualMode)
-            with Rung(ProdMode):
+            with rung(ProdMode):
                 call("sub_a")
-            with Rung(ManualMode):
+            with rung(ManualMode):
                 call("sub_b")
             with subroutine("sub_a"):
-                with Rung():
+                with rung():
                     out(Light)
             with subroutine("sub_b"):
-                with Rung():
+                with rung():
                     out(Light)
 
         report = validate_conflicting_outputs(prog)
@@ -865,7 +865,7 @@ class TestSendReceiveStatusTagConflicts:
         ExCode = Int("ExCode")
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 send(
                     target=target,
                     remote_start="DS1",
@@ -875,7 +875,7 @@ class TestSendReceiveStatusTagConflicts:
                     error=Error,
                     exception_response=ExCode,
                 )
-            with Rung(Enable):
+            with rung(Enable):
                 send(
                     target=target,
                     remote_start="DS2",
@@ -909,7 +909,7 @@ class TestSendReceiveStatusTagConflicts:
         RecvEx = Int("RecvEx")
 
         with Program() as prog:
-            with Rung(EnableSend):
+            with rung(EnableSend):
                 send(
                     target=target,
                     remote_start="DS1",
@@ -919,7 +919,7 @@ class TestSendReceiveStatusTagConflicts:
                     error=SendErr,
                     exception_response=SendEx,
                 )
-            with Rung(EnableRecv):
+            with rung(EnableRecv):
                 receive(
                     target=target,
                     remote_start="DS2",
@@ -942,7 +942,7 @@ class TestSendReceiveStatusTagConflicts:
         Source = Int("Source")
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 send(
                     target=target,
                     remote_start="DS1",
@@ -952,7 +952,7 @@ class TestSendReceiveStatusTagConflicts:
                     error=Bool("Error1"),
                     exception_response=Int("Ex1"),
                 )
-            with Rung(Enable):
+            with rung(Enable):
                 send(
                     target=target,
                     remote_start="DS2",

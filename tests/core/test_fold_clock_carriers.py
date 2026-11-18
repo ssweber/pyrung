@@ -23,7 +23,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -39,6 +38,7 @@ from pyrung import (
     return_early,
     rise,
     run_function,
+    rung,
     subroutine,
 )
 from pyrung.core.runner import PLC
@@ -81,7 +81,7 @@ def _program(body: Body) -> Callable[[], Program]:
         with Program(strict=False) as prog:
             body()
             # Counts the scans since the hit: a latch alone hides a late landing.
-            with Rung(Hit):
+            with rung(Hit):
                 math(Since + 1, Since)
         return prog
 
@@ -138,41 +138,41 @@ def _assert_lands_as_stepped(body: Body, *conditions: Any) -> None:
 
 
 def _timer() -> None:
-    with Rung():
+    with rung():
         on_delay(T, 30_000)
 
 
 def _blink() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         out(F)
 
 
 def _blinks() -> None:
     _blink()
-    with Rung(clk1s):
+    with rung(clk1s):
         out(G)
 
 
 def _crossing() -> None:
     _blink()
     _timer()
-    with Rung(F, T.Acc >= 205):
+    with rung(F, T.Acc >= 205):
         latch(Hit)
 
 
 def _crossing_above_a_write() -> None:
     _blink()
     _timer()
-    with Rung(F, T.Acc >= Th):
+    with rung(F, T.Acc >= Th):
         latch(Hit)
-    with Rung():
+    with rung():
         copy(205, Th)
 
 
 def _two_blinks(gated: Body) -> Body:
     def body() -> None:
         _blinks()
-        with Rung(F, G):
+        with rung(F, G):
             gated()
         _timer()
 
@@ -181,183 +181,183 @@ def _two_blinks(gated: Body) -> Body:
 
 def _threshold_below_two_blinks() -> None:
     _blinks()
-    with Rung(F, G):
+    with rung(F, G):
         copy(200, Th)
     _timer()
-    with Rung(T.Acc >= Th):
+    with rung(T.Acc >= Th):
         latch(Hit)
 
 
 def _chain_of_two() -> None:
     _blink()
-    with Rung(F):
+    with rung(F):
         out(H)
     _timer()
-    with Rung(H, T.Acc >= 205):
+    with rung(H, T.Acc >= 205):
         latch(Hit)
 
 
 def _pulse_and_a_blink() -> None:
-    with Rung(rise(clk100)):
+    with rung(rise(clk100)):
         out(H)
-    with Rung(clk1s):
+    with rung(clk1s):
         out(G)
-    with Rung(H, G):
+    with rung(H, G):
         math(N + 1, N)
 
 
 def _chain_of_two_clocks() -> None:
     _blinks()
-    with Rung(F, G):
+    with rung(F, G):
         out(H)
-    with Rung(H):
+    with rung(H):
         out(Lamp)
-    with Rung(Lamp):
+    with rung(Lamp):
         math(N + 1, N)
     _timer()
 
 
 def _done_mirror() -> None:
     _blinks()
-    with Rung():
+    with rung():
         on_delay(T, 207)
-    with Rung(T.Done):
+    with rung(T.Done):
         out(H)
-    with Rung(F, G, H):
+    with rung(F, G, H):
         latch(Hit)
 
 
 def _copied_blink() -> None:
     _blink()
-    with Rung():
+    with rung():
         copy(F, V)
-    with Rung(V == 1, T.Acc >= 205):
+    with rung(V == 1, T.Acc >= 205):
         latch(Hit)
     _timer()
 
 
 def _stepped_value() -> None:
     _blink()
-    with Rung(F):
+    with rung(F):
         copy(1, V)
-    with Rung(~F):
+    with rung(~F):
         copy(0, V)
-    with Rung(V == 1, T.Acc >= 205):
+    with rung(V == 1, T.Acc >= 205):
         latch(Hit)
     _timer()
 
 
 def _clock_on_the_call() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         call("s")
     _timer()
     with subroutine("s"):
-        with Rung(T.Acc >= 205):
+        with rung(T.Acc >= 205):
             latch(Hit)
 
 
 def _blink_on_the_call() -> None:
     _blink()
-    with Rung(F):
+    with rung(F):
         call("s")
     _timer()
     with subroutine("s"):
-        with Rung(T.Acc >= 205):
+        with rung(T.Acc >= 205):
             latch(Hit)
 
 
 def _second_blink_in_the_sub() -> None:
     _blinks()
-    with Rung(F):
+    with rung(F):
         call("s")
     _timer()
     with subroutine("s"):
-        with Rung(G):
+        with rung(G):
             latch(Hit)
 
 
 def _blink_written_in_a_sub() -> None:
-    with Rung():
+    with rung():
         call("s")
-    with Rung(clk1s):
+    with rung(clk1s):
         out(G)
     _timer()
-    with Rung(F, G):
+    with rung(F, G):
         math(N + 1, N)
     with subroutine("s"):
-        with Rung(clk100):
+        with rung(clk100):
             out(F)
 
 
 def _sampled_by_a_blink_on_the_call() -> None:
     # H only updates while F runs the subroutine, so it depends on the order of edges.
     _blinks()
-    with Rung(F):
+    with rung(F):
         call("s")
     _timer()
-    with Rung(H):
+    with rung(H):
         math(N + 1, N)
     with subroutine("s"):
-        with Rung(G):
+        with rung(G):
             out(H)
 
 
 def _blink_return_early() -> None:
     _blinks()
-    with Rung():
+    with rung():
         call("s")
     _timer()
     with subroutine("s"):
-        with Rung(F):
+        with rung(F):
             return_early()
-        with Rung(G):
+        with rung(G):
             math(N + 1, N)
 
 
 def _branch_comparison() -> None:
     _blink()
     _timer()
-    with Rung(F):
+    with rung(F):
         with branch(T.Acc >= 205):
             latch(Hit)
 
 
 def _branch_second_blink() -> None:
     _blinks()
-    with Rung(F):
+    with rung(F):
         with branch(G):
             latch(Hit)
     _timer()
 
 
 def _blink_written_in_a_branch() -> None:
-    with Rung():
+    with rung():
         with branch(clk100):
             out(F)
     _timer()
-    with Rung(F, T.Acc >= 205):
+    with rung(F, T.Acc >= 205):
         latch(Hit)
 
 
 def _loop_body_second_blink() -> None:
     _blinks()
-    with Rung(F):
+    with rung(F):
         with forloop(2):
-            with Rung(G):
+            with rung(G):
                 out(H)
-    with Rung(H):
+    with rung(H):
         math(N + 1, N)
     _timer()
 
 
 def _two_clocks_latch_and_reset(reader: bool) -> Body:
     def body() -> None:
-        with Rung(clk100):
+        with rung(clk100):
             latch(X)
-        with Rung(clk1s):
+        with rung(clk1s):
             reset(X)
         if reader:
-            with Rung(X):
+            with rung(X):
                 math(N + 1, N)
         _timer()
 
@@ -366,34 +366,34 @@ def _two_clocks_latch_and_reset(reader: bool) -> Body:
 
 def _two_blinks_latch_and_reset() -> None:
     _blinks()
-    with Rung(F):
+    with rung(F):
         latch(X)
-    with Rung(G):
+    with rung(G):
         reset(X)
-    with Rung(X):
+    with rung(X):
         math(N + 1, N)
     _timer()
 
 
 def _two_clocks_copied() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         copy(1, V)
-    with Rung(clk1s):
+    with rung(clk1s):
         copy(0, V)
-    with Rung(V == 1):
+    with rung(V == 1):
         out(H)
-    with Rung(H):
+    with rung(H):
         math(N + 1, N)
     _timer()
 
 
 def _standing_value_in_three_steps() -> None:
     # The value settles only over several phases, and no reader shows it.
-    with Rung(clk100):
+    with rung(clk100):
         copy(7, V)
-    with Rung(~clk100):
+    with rung(~clk100):
         copy(V, W)
-    with Rung(clk100):
+    with rung(clk100):
         copy(W, Z)
     _timer()
 
@@ -401,18 +401,18 @@ def _standing_value_in_three_steps() -> None:
 def _between_out_comparison() -> None:
     _blink()
     _timer()
-    with Rung(F, T.Acc >= 205):
+    with rung(F, T.Acc >= 205):
         latch(Hit)
-    with Rung(Mode):
+    with rung(Mode):
         out(F)
 
 
 def _between_out_second_clock(gated: Body) -> Body:
     def body() -> None:
         _blink()
-        with Rung(F, clk1s):
+        with rung(F, clk1s):
             gated()
-        with Rung(Mode):
+        with rung(Mode):
             out(F)
         _timer()
 
@@ -420,34 +420,34 @@ def _between_out_second_clock(gated: Body) -> Body:
 
 
 def _between_copy_comparison() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         copy(1, V)
     _timer()
-    with Rung(V == 1, T.Acc >= 205):
+    with rung(V == 1, T.Acc >= 205):
         latch(Hit)
-    with Rung():
+    with rung():
         copy(0, V)
 
 
 def _between_into_a_rebuilt_bit() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         copy(1, V)
-    with Rung(V == 1):
+    with rung(V == 1):
         out(H)
-    with Rung():
+    with rung():
         copy(0, V)
     _timer()
-    with Rung(H, T.Acc >= 205):
+    with rung(H, T.Acc >= 205):
         latch(Hit)
 
 
 def _between_indirect_write() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         copy(1, Bank[Ptr])
     _timer()
-    with Rung(Bank[3] == 1, T.Acc >= 205):
+    with rung(Bank[3] == 1, T.Acc >= 205):
         latch(Hit)
-    with Rung():
+    with rung():
         copy(0, Bank[3])
 
 
@@ -572,69 +572,69 @@ def _indicator() -> None:
 
 def _indicator_and_lamp() -> None:
     _blink()
-    with Rung(F):
+    with rung(F):
         out(Lamp)
     _timer()
 
 
 def _indicator_on_a_stored_gate() -> None:
     _blink()
-    with Rung(F, Mode):
+    with rung(F, Mode):
         out(Lamp)
     _timer()
 
 
 def _indicator_of_two_blinks() -> None:
     _blinks()
-    with Rung(F, G):
+    with rung(F, G):
         out(Lamp)
     _timer()
 
 
 def _indicator_chain_of_two_blinks() -> None:
     _blinks()
-    with Rung(F, G):
+    with rung(F, G):
         out(H)
-    with Rung(H):
+    with rung(H):
         out(Lamp)
     _timer()
 
 
 def _indicator_latched_once() -> None:
     _blink()
-    with Rung(F):
+    with rung(F):
         latch(H)
     _timer()
 
 
 def _indicator_in_a_subroutine() -> None:
-    with Rung():
+    with rung():
         call("s")
     _timer()
-    with Rung(F):
+    with rung(F):
         out(Lamp)
     with subroutine("s"):
-        with Rung(clk100):
+        with rung(clk100):
             out(F)
 
 
 def _indicator_written_around() -> None:
     _blink()
-    with Rung(F):
+    with rung(F):
         out(Lamp)
-    with Rung(Mode):
+    with rung(Mode):
         out(F)
     _timer()
 
 
 def _indicator_of_a_rebuilt_value() -> None:
-    with Rung():
+    with rung():
         copy(0, V)
-    with Rung(clk100):
+    with rung(clk100):
         copy(1, V)
-    with Rung(clk1s):
+    with rung(clk1s):
         copy(2, V)
-    with Rung(V == 1):
+    with rung(V == 1):
         out(Lamp)
     _timer()
 
@@ -676,9 +676,9 @@ class TestAnIndicatorStaysInTheLoop:
 
 
 def _one_shot_blink() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         out(F, oneshot=True)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
     _timer()
 
@@ -687,24 +687,24 @@ Bits = Block("Bits", TagType.BOOL, 1, 4)
 
 
 def _blink_read_through_a_pointer() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         out(Bits[2])
     _timer()
-    with Rung(Bits[Ptr] == 1, T.Acc >= 205):
+    with rung(Bits[Ptr] == 1, T.Acc >= 205):
         latch(Hit)
 
 
 def _blink_into_a_range() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         out(Bits.select(1, 2))
-    with Rung(Bits[2]):
+    with rung(Bits[2]):
         out(Lamp)
     _timer()
 
 
 def _indicator_read_above_its_writer() -> None:
     # The reader sees the blink of the last scan, so it is one scan late.
-    with Rung(F):
+    with rung(F):
         out(Lamp)
     _blink()
     _timer()
@@ -712,11 +712,11 @@ def _indicator_read_above_its_writer() -> None:
 
 def _indicator_feeds_latch() -> None:
     A, B = Bool("A"), Bool("B")
-    with Rung(clk100):
+    with rung(clk100):
         out(A)
-    with Rung(A):
+    with rung(A):
         out(B)
-    with Rung(B):
+    with rung(B):
         latch(Hit)
     _timer()
 
@@ -724,30 +724,30 @@ def _indicator_feeds_latch() -> None:
 def _blink_in_an_uncalled_subroutine() -> None:
     # No main rung reaches this writer, so it has no position above its reader.
     with subroutine("Never"):
-        with Rung(clk100):
+        with rung(clk100):
             out(F)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
     _timer()
 
 
 def _seal_in_on_a_clock() -> None:
     # The same rung reads and writes F, so F is not a function of its scan.
-    with Rung(Or(clk100, F)):
+    with rung(Or(clk100, F)):
         out(F)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
     _timer()
 
 
 def _branch_lamp_above_its_writer() -> None:
     # H reads the F from the previous scan.
-    with Rung(Mode):
+    with rung(Mode):
         with branch(F):
             out(H)
         with branch(clk100):
             out(F)
-    with Rung(H):
+    with rung(H):
         out(Lamp)
     _timer()
 
@@ -760,14 +760,14 @@ def _function_over_a_gated_blink(calls: list[int]) -> Body:
 
     def body() -> None:
         _timer()
-        with Rung(G):
+        with rung(G):
             call("Blink")
         with subroutine("Blink"):
-            with Rung(clk1s):
+            with rung(clk1s):
                 out(F)
-        with Rung():
+        with rung():
             run_function(alternate, outs={"v": F})
-        with Rung(F):
+        with rung(F):
             out(Lamp)
 
     return body
@@ -775,7 +775,7 @@ def _function_over_a_gated_blink(calls: list[int]) -> Body:
 
 def _clock_over_a_counting_branch() -> None:
     _timer()
-    with Rung(clk100):
+    with rung(clk100):
         out(F)
         with branch(G):
             math(N + 1, N)
@@ -783,38 +783,38 @@ def _clock_over_a_counting_branch() -> None:
 
 def _blink_in_a_branch_read_below() -> None:
     _timer()
-    with Rung(G):
+    with rung(G):
         with branch(clk100):
             out(F)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
 
 
 def _branch_reads_a_sibling_coil() -> None:
     _timer()
-    with Rung(G):
+    with rung(G):
         with branch(clk100):
             out(F)
         with branch(F):
             out(H)
-    with Rung(H):
+    with rung(H):
         math(N + 1, N)
 
 
 def _branch_above_its_writer() -> None:
     _timer()
-    with Rung(G):
+    with rung(G):
         with branch(F):
             out(H)
         with branch(clk100):
             out(F)
-    with Rung(H):
+    with rung(H):
         math(N + 1, N)
 
 
 def _edge_in_a_branch_under_a_clock() -> None:
     _timer()
-    with Rung(clk100):
+    with rung(clk100):
         out(F)
         with branch(rise(G)):
             out(H)
@@ -822,66 +822,66 @@ def _edge_in_a_branch_under_a_clock() -> None:
 
 def _one_shot_in_a_branch() -> None:
     _timer()
-    with Rung(clk100):
+    with rung(clk100):
         with branch(G):
             out(F, oneshot=True)
-    with Rung(F):
+    with rung(F):
         math(N + 1, N)
 
 
 def _contact_on_an_accumulator() -> None:
     _timer()
-    with Rung(T.Acc, clk100):
+    with rung(T.Acc, clk100):
         out(F)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
 
 
 def _contact_on_a_wrapping_value() -> None:
     _timer()
-    with Rung():
+    with rung():
         math((V + 1) % 7, V)
-    with Rung(V, clk100):
+    with rung(V, clk100):
         out(F)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
 
 
 def _contact_on_a_rebuilt_view() -> None:
     _timer()
-    with Rung():
+    with rung():
         math(T.Acc // 100, V)
-    with Rung(V, clk100):
+    with rung(V, clk100):
         out(F)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
 
 
 def _contact_on_first_scan() -> None:
     _timer()
-    with Rung(system.sys.first_scan, clk100):
+    with rung(system.sys.first_scan, clk100):
         out(F)
-    with Rung(F):
+    with rung(F):
         math(N + 1, N)
 
 
 def _contact_on_a_fault_flag() -> None:
     _timer()
-    with Rung():
+    with rung():
         math(T.Acc + 30000, V)
-    with Rung(system.fault.out_of_range, clk100):
+    with rung(system.fault.out_of_range, clk100):
         out(F)
-    with Rung(F):
+    with rung(F):
         math(N + 1, N)
 
 
 def _contact_on_a_comparison_result() -> None:
     _timer()
-    with Rung(clk100, X):
+    with rung(clk100, X):
         out(F)
-    with Rung(F):
+    with rung(F):
         out(Lamp)
-    with Rung(T.Acc >= 2000):
+    with rung(T.Acc >= 2000):
         out(X)
 
 
@@ -963,10 +963,10 @@ class TestAPlainRung:
 
 def _compare(threshold: int, clock: Any) -> Body:
     def body() -> None:
-        with Rung(clock):
+        with rung(clock):
             out(F)
         _timer()
-        with Rung(F, T.Acc >= threshold):
+        with rung(F, T.Acc >= threshold):
             latch(Hit)
 
     return body
@@ -975,10 +975,10 @@ def _compare(threshold: int, clock: Any) -> Body:
 def _one_shot_window(threshold: int, clock: Any) -> Body:
     # True for only a few edges: a window over them misses it for good.
     def body() -> None:
-        with Rung(clock):
+        with rung(clock):
             out(F)
         _timer()
-        with Rung(F, T.Acc >= threshold, T.Acc < threshold + 120):
+        with rung(F, T.Acc >= threshold, T.Acc < threshold + 120):
             latch(Hit)
 
     return body
@@ -988,24 +988,24 @@ def _two_gates_on_a_comparison(threshold: int) -> Body:
     def body() -> None:
         _blinks()
         _timer()
-        with Rung(F, G, T.Acc >= threshold):
+        with rung(F, G, T.Acc >= threshold):
             latch(Hit)
 
     return body
 
 
 def _two_clocks_on_a_rung() -> None:
-    with Rung(clk100, clk1s):
+    with rung(clk100, clk1s):
         math(N + 1, N)
     _timer()
 
 
 def _constant_then_blink() -> None:
-    with Rung(clk100):
+    with rung(clk100):
         copy(7, V)
-    with Rung(clk1s):
+    with rung(clk1s):
         out(F)
-    with Rung(F, V == 7):
+    with rung(F, V == 7):
         math(N + 1, N)
 
 
@@ -1013,20 +1013,20 @@ def _seed_282_shape(preset: int) -> Body:
     # From the fuzzer: a chain from a blink into a call and into a latch that holds itself.
     def body() -> None:
         B0, B1, B3, B4, M1 = Bool("B0"), Bool("B1"), Bool("B3"), Bool("B4"), Bool("M1")
-        with Rung():
+        with rung():
             on_delay(T, preset)
-        with Rung(clk100):
+        with rung(clk100):
             out(B0)
-        with Rung(B0):
+        with rung(B0):
             out(B1)
-        with Rung(B1):
+        with rung(B1):
             call("s")
-        with Rung(B3, B1):
+        with rung(B3, B1):
             latch(B1)
         with subroutine("s"):
-            with Rung(B1, M1, T.Done):
+            with rung(B1, M1, T.Done):
                 reset(B4)
-            with Rung(B1, B1):
+            with rung(B1, B1):
                 latch(B3)
 
     return body

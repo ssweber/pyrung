@@ -19,7 +19,7 @@ The machine-local fill project is the live tier of this gate (not CI).
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Or, Program, Real, Rung, Timer, copy, math, on_delay, out
+from pyrung import PLC, Bool, Int, Or, Program, Real, Timer, copy, math, on_delay, out, rung
 from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.simplified import Atom
@@ -48,15 +48,15 @@ def _fill_band_program() -> tuple[Program, object]:
     Filling = Bool("Filling")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(100.0, Raw)
             math(Raw - Level, PV)
             math(SetPoint - Band, Lower)
-        with Rung(HMI_on, Step == 1, PV < Lower):
+        with rung(HMI_on, Step == 1, PV < Lower):
             on_delay(Dwell, 50, "ms")
-        with Rung(Dwell.Done):
+        with rung(Dwell.Done):
             copy(2, Step)
-        with Rung(Step == 2):
+        with rung(Step == 2):
             out(Filling)
 
     return prog, Filling
@@ -136,31 +136,31 @@ def _transient_stepper_program() -> tuple[Program, object, dict[str, object]]:
     Filling = Bool("Filling")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             math(100.0 - Level, PV)
             math(SetPoint - Band, Lower)
             math(Step % 2, IsEven)
-        with Rung(Status == 1):
+        with rung(Status == 1):
             out(StatusShot, oneshot=True)
-        with Rung(Or(StatusShot, IsEven != 1)):
+        with rung(Or(StatusShot, IsEven != 1)):
             math(Step + 1, Step)
-        with Rung(StatusShot):
+        with rung(StatusShot):
             copy(0, Status)
-        with Rung(Step == 1):
+        with rung(Step == 1):
             out(SubOff)
-        with Rung(Step == 3):
+        with rung(Step == 3):
             out(SubOn)
-        with Rung(Step == 5):
+        with rung(Step == 5):
             out(SubFilling)
-        with Rung(Step == 5, Reset):
+        with rung(Step == 5, Reset):
             math(Step - 1, Step, oneshot=True)
-        with Rung(SubOff, HMI_on):
+        with rung(SubOff, HMI_on):
             copy(1, Status, oneshot=True)
-        with Rung(SubOn, PV < Lower):
+        with rung(SubOn, PV < Lower):
             on_delay(Dwell, 10, "ms")
-        with Rung(SubOn, Dwell.Done):
+        with rung(SubOn, Dwell.Done):
             copy(1, Status)
-        with Rung(Or(SubFilling, ManualFill)):
+        with rung(Or(SubFilling, ManualFill)):
             out(Filling)
 
     return prog, Filling, {"Reset": Reset, "ManualFill": ManualFill}

@@ -44,7 +44,7 @@ def rise(tag: Tag | ImmediateRef) -> RisingEdgeCondition:
     True only on 0->1 transition. Requires PLC to track previous values.
 
     Example:
-        with Rung(rise(Button)):
+        with rung(rise(Button)):
             latch(MotorRunning)  # Latches on button press, not while held
     """
     return _make_condition(RisingEdgeCondition, tag)
@@ -56,7 +56,7 @@ def fall(tag: Tag | ImmediateRef) -> FallingEdgeCondition:
     True only on 1->0 transition. Requires PLC to track previous values.
 
     Example:
-        with Rung(fall(Button)):
+        with rung(fall(Button)):
             reset(MotorRunning)  # Resets when button is released
     """
     return _make_condition(FallingEdgeCondition, tag)
@@ -68,14 +68,14 @@ def Or(
     """OR condition - true when any sub-condition is true.
 
     Use this to combine multiple conditions with OR logic within a rung.
-    Multiple conditions passed directly to Rung() are ANDed together.
+    Multiple conditions passed directly to rung() are ANDed together.
 
     Example:
-        with Rung(Step == 1, Or(Start, CmdStart)):
+        with rung(Step == 1, Or(Start, CmdStart)):
             out(Light)  # True if Step==1 AND (Start OR CmdStart)
 
         # Grouped AND inside OR (explicit):
-        with Rung(Or(Start, And(AutoMode, Ready), RemoteStart)):
+        with rung(Or(Start, And(AutoMode, Ready), RemoteStart)):
             out(Light)
 
     Args:
@@ -104,10 +104,10 @@ def And(
     grouped condition trees with Or().
 
     Example:
-        with Rung(And(Ready, AutoMode)):
+        with rung(And(Ready, AutoMode)):
             out(StartPermissive)
 
-        with Rung(Or(And(Ready, AutoMode), RemoteStart)):
+        with rung(Or(And(Ready, AutoMode), RemoteStart)):
             out(StartPermissive)
     """
     return _make_condition(

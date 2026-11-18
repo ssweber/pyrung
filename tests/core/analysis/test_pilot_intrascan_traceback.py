@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from pyrung import PLC, Bool, Int, Or, Program, Rung, branch, call, copy, out, subroutine
+from pyrung import PLC, Bool, Int, Or, Program, branch, call, copy, out, rung, subroutine
 from pyrung.core.analysis.pilot.attempt_observation import _observe_intrascan_act_occurrence
 from pyrung.core.analysis.pilot.effects import occurrence_snapshot
 from pyrung.core.analysis.pilot.intrascan_research import (
@@ -27,14 +27,14 @@ def test_traceback_research_detaches_exact_handoff_without_advancing_source() ->
 
     @subroutine("trace_route")
     def trace_route() -> None:
-        with Rung(~link, step <= 20):
+        with rung(~link, step <= 20):
             copy(98, step)
-        with Rung(link):
+        with rung(link):
             with branch(step == 98):
                 copy(10, step)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call(trace_route)
 
     source = PLC(program)
@@ -151,9 +151,9 @@ def test_direct_boundary_reads_rearmed_oneshot_from_instruction_memory() -> None
     step = Int("DirectTraceStep", default=98)
 
     with Program(strict=False) as program:
-        with Rung(~link, step <= 20):
+        with rung(~link, step <= 20):
             copy(98, step, oneshot=True)
-        with Rung(link):
+        with rung(link):
             with branch(step == 98):
                 copy(10, step, oneshot=True)
 
@@ -213,16 +213,16 @@ def test_program_owned_branch_need_realizes_through_one_natural_stage_scan() -> 
 
     @subroutine("owned_trace_route")
     def owned_trace_route() -> None:
-        with Rung(~link, step <= 20):
+        with rung(~link, step <= 20):
             copy(98, step)
-        with Rung(link):
+        with rung(link):
             with branch(step == 98):
                 copy(10, step)
             with branch(step <= 20):
                 copy(94, step)
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call(owned_trace_route)
 
     source = PLC(program)
@@ -286,9 +286,9 @@ def test_unavailable_program_producer_becomes_an_exact_navigation_goal() -> None
 
     @subroutine("frontier_trace_route")
     def frontier_trace_route() -> None:
-        with Rung(~link, step <= 20):
+        with rung(~link, step <= 20):
             copy(98, step, oneshot=True)
-        with Rung(link):
+        with rung(link):
             with branch(step == 98):
                 copy(10, step, oneshot=True)
 
@@ -297,13 +297,13 @@ def test_unavailable_program_producer_becomes_an_exact_navigation_goal() -> None
         # at 98. Reset can create the needed <=20 value early, but the normal
         # main-program cascade then carries either 98 or 10 through 22 to 40
         # before the later subroutine producer reads it.
-        with Rung(reset, step >= 90):
+        with rung(reset, step >= 90):
             copy(10, step, oneshot=True)
-        with Rung(Or(step == 98, step == 10)):
+        with rung(Or(step == 98, step == 10)):
             copy(22, step)
-        with Rung(step == 22):
+        with rung(step == 22):
             copy(40, step)
-        with Rung():
+        with rung():
             call(frontier_trace_route)
 
     source = PLC(program)
@@ -385,19 +385,19 @@ def test_prevented_overwrite_becomes_a_condition_valued_producer_goal() -> None:
 
     @subroutine("prevention_trace_consumer")
     def prevention_trace_consumer() -> None:
-        with Rung(~link, step <= 20):
+        with rung(~link, step <= 20):
             copy(98, step, oneshot=True)
 
     with Program(strict=False) as program:
-        with Rung(mode_reset):
+        with rung(mode_reset):
             copy(0, route_mode, oneshot=True)
-        with Rung(reset, step >= 90):
+        with rung(reset, step >= 90):
             copy(10, step, oneshot=True)
-        with Rung(Or(step == 98, step == 10), route_mode == 100):
+        with rung(Or(step == 98, step == 10), route_mode == 100):
             copy(22, step)
-        with Rung(step == 22):
+        with rung(step == 22):
             copy(40, step)
-        with Rung():
+        with rung():
             call(prevention_trace_consumer)
 
     initial = SystemState(scan_id=1).with_tags({step.name: 98, route_mode.name: 100})
@@ -508,7 +508,7 @@ def test_exact_counterfactual_reports_a_retained_oneshot_edge_blocker() -> None:
     step = Int("EdgeTraceStep", default=40)
 
     with Program(strict=False) as program:
-        with Rung(link):
+        with rung(link):
             with branch(step == 98):
                 copy(10, step, oneshot=True)
 
@@ -564,9 +564,9 @@ def test_real_program_producer_can_reach_the_consumer_horizon_without_a_fake_pat
     result = Int("NaturalHorizonResult")
 
     with Program(strict=False) as program:
-        with Rung(start):
+        with rung(start):
             out(ready)
-        with Rung(ready):
+        with rung(ready):
             copy(1, result)
 
     source = PLC(program)

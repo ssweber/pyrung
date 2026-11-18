@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Dint, Int, Program, Rung, Timer, copy, latch, on_delay, out, time_drum
+from pyrung import Bool, Dint, Int, Program, Timer, copy, latch, on_delay, out, rung, time_drum
 from pyrung.core import PLC, coast_run
 from pyrung.core.analysis.pilot import api, pilot_events
 from pyrung.core.analysis.pilot.budget import STRETCH_SCANS_PER_UNIT
@@ -35,11 +35,11 @@ def _chain(first: int, second: int, unit: str) -> tuple[Program, Bool]:
     t1 = Timer.clone("LwT1")
     t2 = Timer.clone("LwT2")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             on_delay(t1, preset=first, unit=unit)
-        with Rung(t1.Done):
+        with rung(t1.Done):
             on_delay(t2, preset=second, unit=unit)
-        with Rung(t2.Done):
+        with rung(t2.Done):
             latch(lamp)
             copy(5, Int("LwStage"))
     return prog, lamp
@@ -50,9 +50,9 @@ def _one_timer(preset: int, unit: str, coil: Any = latch) -> tuple[Program, Bool
     lamp = Bool("LwLamp")
     t1 = Timer.clone("LwT1")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             on_delay(t1, preset=preset, unit=unit)
-        with Rung(t1.Done):
+        with rung(t1.Done):
             coil(lamp)
     return prog, lamp
 
@@ -63,11 +63,11 @@ def _soak() -> tuple[Program, Bool]:
     soak = Timer.clone("LwSoak")
     done = Bool("LwDone")
     with Program(strict=False) as prog:
-        with Rung(start):
+        with rung(start):
             latch(run)
-        with Rung(run):
+        with rung(run):
             on_delay(soak, 120, "s")
-        with Rung(soak.Done):
+        with rung(soak.Done):
             out(done)
     return prog, done
 
@@ -80,15 +80,15 @@ def _soak_beside_an_oscillator() -> tuple[Program, Bool]:
     watchdog = Timer.clone("LwWatchdog")
     done = Bool("LwDone")
     with Program(strict=False) as prog:
-        with Rung(start):
+        with rung(start):
             latch(run)
-        with Rung(run):
+        with rung(run):
             on_delay(soak, 60, "s")
-        with Rung():
+        with rung():
             on_delay(watchdog, 200, "ms").reset(osc)
-        with Rung(soak.Done):
+        with rung(soak.Done):
             out(done)
-        with Rung(~osc):
+        with rung(~osc):
             out(osc)
     return prog, done
 
@@ -97,7 +97,7 @@ def _drum() -> tuple[Program, Bool]:
     done = Bool("LwDrumDone")
     start = Bool("LwStart", external=True)
     with Program(strict=False) as prog:
-        with Rung(start):
+        with rung(start):
             time_drum(
                 outputs=[Bool("LwO1"), Bool("LwO2")],
                 presets=[20, 40],
@@ -260,13 +260,13 @@ def test_a_goal_no_rung_can_reach_declines_at_once() -> None:
     t1 = Timer.clone("LwT1")
     t2 = Timer.clone("LwT2")
     with Program(strict=False) as prog:
-        with Rung(go, ~t2.Done):
+        with rung(go, ~t2.Done):
             on_delay(t1, preset=30, unit="sec")
-        with Rung(t1.Done, ~t2.Done):
+        with rung(t1.Done, ~t2.Done):
             on_delay(t2, preset=30, unit="sec")
-        with Rung(t1.Done, t2.Done):
+        with rung(t1.Done, t2.Done):
             latch(block)
-        with Rung(block, ~block):
+        with rung(block, ~block):
             latch(lamp)
     path = _how(prog, lamp)
     assert not path.reachable
@@ -279,9 +279,9 @@ def test_a_wait_under_a_hold_that_never_ends_stops_at_the_ledger() -> None:
     lamp = Bool("LwLamp")
     t1 = Timer.clone("LwT1")
     with Program(strict=False) as prog:
-        with Rung(go, ~t1.Done):
+        with rung(go, ~t1.Done):
             on_delay(t1, preset=10, unit="sec")
-        with Rung(t1.Acc > 20000):
+        with rung(t1.Acc > 20000):
             latch(lamp)
     path = _how(prog, lamp)
     assert not path.reachable
@@ -290,7 +290,7 @@ def test_a_wait_under_a_hold_that_never_ends_stops_at_the_ledger() -> None:
 
 def _timer_program() -> Program:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(Timer.clone("LwPlain"), 3_000, "s")
     return prog
 

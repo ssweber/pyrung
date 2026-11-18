@@ -38,7 +38,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, call, forloop, out, reset, subroutine
+from pyrung.core import call, forloop, out, reset, rung, subroutine
 from tests.conformance.drum_rig import (
     Pair,
     Resources,
@@ -69,9 +69,9 @@ def _drive(slot: Any, p: Pair, skip: Any) -> None:
     """
     on_scans(slot, p.jog, 1)
     on_scans(slot, p.events[0], 2)
-    with Rung(slot.Scratch >= 3, slot.Scratch <= 4):
+    with rung(slot.Scratch >= 3, slot.Scratch <= 4):
         out(skip)
-    with Rung(slot.Scratch == 3):
+    with rung(slot.Scratch == 3):
         reset(p.time.b)
         reset(p.event.b)
 
@@ -91,7 +91,7 @@ def prove_uncalled_subroutine(slot):
     p = r.alloc(0, jog=True)
     count_scans(slot)
     _drive(slot, p, skip)
-    with Rung(~skip):
+    with rung(~skip):
         call("Conf_DrumIdle_Pair")
     with subroutine("Conf_DrumIdle_Pair"):
         emit_pair(slot, p, jog=True)
@@ -104,7 +104,7 @@ def prove_drum_in_skipped_loop(slot):
     p = r.alloc(0, jog=True)
     count_scans(slot)
     _drive(slot, p, skip)
-    with Rung(~skip):
+    with rung(~skip):
         with forloop(1):
             emit_pair(slot, p, jog=True)
     _record(slot, p)

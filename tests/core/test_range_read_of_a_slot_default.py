@@ -23,11 +23,11 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     copy,
     math,
     out,
+    rung,
 )
 from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.core.scan_loop_counts import NEVER, ScansOutsideLoop
@@ -69,7 +69,7 @@ def _calc_on(kind: str, slots: Callable[[], Block]) -> Callable[[], Program]:
     def build() -> Program:
         block = slots()
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 math(getattr(block.select(1, 3), kind)() + 1, Int("Seen"))
         return program
 
@@ -80,7 +80,7 @@ def _sum_on_the_rail(slots: Callable[[], Block]) -> Callable[[], Program]:
     def build() -> Program:
         block = slots()
         with Program(strict=False) as program:
-            with Rung(block.select(1, 3).sum() > 5):
+            with rung(block.select(1, 3).sum() > 5):
                 out(Bool("By"))
         return program
 
@@ -91,7 +91,7 @@ def _sum_as_a_copy_source(slots: Callable[[], Block]) -> Callable[[], Program]:
     def build() -> Program:
         block = slots()
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 copy(block.select(1, 3).sum(), Int("Seen"))
         return program
 
@@ -101,7 +101,7 @@ def _sum_as_a_copy_source(slots: Callable[[], Block]) -> Callable[[], Program]:
 def _real_sum() -> Program:
     block = _real_slots()
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(block.select(1, 3).sum(), Real("Seen"))
     return program
 
@@ -113,7 +113,7 @@ def _sum_into_its_own_range() -> Program:
     """
     block = Block("DS", TagType.INT, 1, 2, default_factory=lambda _addr: 9)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(block.select(1, 2).sum() + 1, block[1])
     return program
 

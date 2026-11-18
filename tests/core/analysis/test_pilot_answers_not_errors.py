@@ -18,7 +18,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     copy,
@@ -27,6 +26,7 @@ from pyrung import (
     math,
     on_delay,
     out,
+    rung,
     system,
 )
 from pyrung.core.analysis.graph import PlanStatus
@@ -70,9 +70,9 @@ class TestArithmeticInARung:
         enable = Bool("Enable", external=True)
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(watch, 1000)
-            with Rung(watch.Acc + 1 >= limit):
+            with rung(watch.Acc + 1 >= limit):
                 latch(hit)
         return program, hit, watch, enable
 
@@ -90,9 +90,9 @@ class TestArithmeticInARung:
         limit = Int("Limit", default=20)
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(Bool("Enable", external=True)):
+            with rung(Bool("Enable", external=True)):
                 on_delay(watch, 1000)
-            with Rung(watch.Acc >= limit + 1 if form == "ge" else watch.Acc == limit + 10):
+            with rung(watch.Acc >= limit + 1 if form == "ge" else watch.Acc == limit + 10):
                 latch(hit)
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
@@ -108,9 +108,9 @@ class TestArithmeticInARung:
         table = Block("Tb", TagType.INT, 1, 3)
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(Bool("Ld", external=True)):
+            with rung(Bool("Ld", external=True)):
                 copy(7, table[2])
-            with Rung(level == table[Int("P", external=True, min=1, max=3)], level > 5):
+            with rung(level == table[Int("P", external=True, min=1, max=3)], level > 5):
                 latch(hit)
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
@@ -125,11 +125,11 @@ class TestArithmeticInARung:
         table = Block("Tb", TagType.INT, 1, 3)
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(Bool("Dummy")):
+            with rung(Bool("Dummy")):
                 copy(table[pointer], Int("Sink"))
-            with Rung(Bool("Start", external=True)):
+            with rung(Bool("Start", external=True)):
                 copy(5, level)
-            with Rung(level == 5):
+            with rung(level == 5):
                 latch(hit)
         plc = PLC(program, dt=0.01)
         plc.patch({"Tb1": entry, "P": 1})
@@ -145,9 +145,9 @@ class TestArithmeticInARung:
         )
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(left == right + 2):
+            with rung(left == right + 2):
                 out(Bool("Two"))
-            with Rung(left != right + 2, Bool("Go", external=True)):
+            with rung(left != right + 2, Bool("Go", external=True)):
                 latch(hit)
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
@@ -163,9 +163,9 @@ class TestArithmeticInARung:
         setpoint = Int("Sp", default=30)
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(Bool("SetSp", external=True)):
+            with rung(Bool("SetSp", external=True)):
                 copy(1, setpoint)
-            with Rung(level == setpoint + 2):
+            with rung(level == setpoint + 2):
                 latch(hit)
         plan = PLC(program, dt=0.01).how(hit, **BOUND)
         assert plan.status is PlanStatus.REACHED, plan.reason
@@ -195,9 +195,9 @@ class TestTargetForms:
         other = Bool("Other", external=True)
         hit = Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(watch, 100)
-            with Rung(watch.Done, other):
+            with rung(watch.Done, other):
                 latch(hit)
         return program, watch, other, hit
 
@@ -219,9 +219,9 @@ class TestTargetForms:
         setpoint = Int("Sp", default=500)
         enable, hit = Bool("Enable", external=True), Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(watch, 2000)
-            with Rung(watch.Acc >= setpoint):
+            with rung(watch.Acc >= setpoint):
                 latch(hit)
         plan = PLC(program, dt=0.01).how(watch.Acc >= setpoint, **BOUND)
         if plan.status is PlanStatus.REACHED:
@@ -249,7 +249,7 @@ class TestTargetForms:
         table = Block("Tb", TagType.INT, 1, 3)
         entry = Int("P", external=True, min=1, max=2)
         with Program(strict=False) as program:
-            with Rung(Bool("Grab", external=True)):
+            with rung(Bool("Grab", external=True)):
                 copy(Int("Lvl", external=True, min=0, max=20), held)
         element = table[entry + 1] if offset else table[entry]
         with pytest.raises(ValueError, match="compared with a pointer element"):
@@ -308,7 +308,7 @@ class TestGoalsOnSlotsARangeWrites:
     def _reach(self, write: Any, goal: Any) -> PlanStatus:
         go, done = Bool("Go", external=True), Bool("X")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 write()
                 latch(done)
         return PLC(program, dt=0.01).how(*goal(done), **BOUND).status
@@ -336,7 +336,7 @@ class TestGoalsOnSlotsARangeWrites:
         go, done = Bool("Go", external=True), Bool("X")
         bank = Block("B", TagType.INT, 1, 5)
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 fill(7, bank.select(1, 3))
                 latch(done)
         plan = PLC(program, dt=0.01).how(bank[3] >= 5, **BOUND)
@@ -349,9 +349,9 @@ class TestAnOperandNoRungHasGiven:
     def test_a_system_tag_no_scan_has_written(self) -> None:
         go, count = Bool("Go", external=True), Int("Count")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 math(count + 1, count)
-            with Rung(go):
+            with rung(go):
                 copy(7, system.rtc.new_second)
         plc = PLC(program, dt=0.01)
         plc.step()
@@ -367,7 +367,7 @@ class TestAnOperandNoRungHasGiven:
     def test_a_tag_only_a_patch_or_force_by_name_gives(self, given: str) -> None:
         go, count = Bool("Go", external=True), Int("Count")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 math(count + 1, count)
         plc = PLC(program, dt=0.01)
         plc.step()
@@ -388,9 +388,9 @@ class TestAnOperandNoRungHasGiven:
         go, trip = Bool("Go", external=True), Bool("Trip", external=True)
         stuck, count, limit = Bool("Stuck"), Int("Count"), Int("Lim")
         with Program(strict=False) as program:
-            with Rung(trip):
+            with rung(trip):
                 latch(stuck)
-            with Rung(go, ~stuck):
+            with rung(go, ~stuck):
                 math(count + 1, count)
         plc = PLC(program, dt=0.01)
         plc.patch({"Trip": True})
@@ -426,7 +426,7 @@ class TestOpaqueAvoids:
         go = Bool("Go", external=True)
         done = Bool("Done")
         with Program(strict=False) as program:
-            with Rung(go):
+            with rung(go):
                 copy(5, bank[index])
                 latch(done)
         return program, done, bank[index]
@@ -452,15 +452,15 @@ class TestOpaqueAvoidGoesTrueMidCoast:
         index = Int("Idx", external=True, default=1)
         run, hit = Bool("Run", external=True), Bool("Hit")
         with Program(strict=False) as program:
-            with Rung(run):
+            with rung(run):
                 on_delay(timer, 2000)
-            with Rung(timer.Acc >= 500, timer.Acc < 600):
+            with rung(timer.Acc >= 500, timer.Acc < 600):
                 copy(9, bank[1])
                 copy(9, plain)
-            with Rung(timer.Acc >= 600):
+            with rung(timer.Acc >= 600):
                 copy(0, bank[1])
                 copy(0, plain)
-            with Rung(timer.Done):
+            with rung(timer.Done):
                 latch(hit)
         return program, hit, bank, plain, index
 

@@ -82,7 +82,7 @@ def _wait_for(
 
 
 _PROGRAM = """\
-from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy
+from pyrung.core import Bool, Int, PLC, Program, rung, out, copy
 
 button = Bool("Button")
 light = Bool("Light")
@@ -90,9 +90,9 @@ level = Int("Level")
 latched = Int("Latched")
 
 with Program(strict=False) as prog:
-    with Rung(button):
+    with rung(button):
         out(light)
-    with Rung():
+    with rung():
         copy(level, latched)
 
 runner = PLC(prog, dt=0.010)
@@ -100,7 +100,7 @@ runner = PLC(prog, dt=0.010)
 
 _CLICK_PROGRAM = """\
 from pyrung.click import ClickBlocks, TagMap
-from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy
+from pyrung.core import Bool, Int, PLC, Program, rung, out, copy
 
 blocks = ClickBlocks()
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks
@@ -111,9 +111,9 @@ speed = Int("Speed")
 stop_pb = x.slot(2, name="Stop_PB")
 
 with Program(strict=False) as prog:
-    with Rung(start, ~x[2]):
+    with rung(start, ~x[2]):
         out(motor)
-    with Rung():
+    with rung():
         copy(speed, ds[10])
 
 mapping = TagMap({start: x[1], motor: y[1], speed: ds[1]})
@@ -260,7 +260,7 @@ def test_frames_show_no_change_when_an_equal_value_is_written(tmp_path: Path):
 
     The frame shows no change.
     """
-    source = """from pyrung.core import Bool, Int, PLC, Program, Real, Rung, math, out
+    source = """from pyrung.core import Bool, Int, PLC, Program, Real, rung, math, out
 
 Coiled = Int("Coiled")
 Gained = Real("Gained")
@@ -268,11 +268,11 @@ Never = Bool("Never")
 Ticks = Int("Ticks")
 
 with Program(strict=False) as prog:
-    with Rung(Never):
+    with rung(Never):
         out(Coiled)
-    with Rung():
+    with rung():
         math(0.0 * -1.0, Gained)
-    with Rung():
+    with rung():
         math(Ticks + 1, Ticks)
 
 runner = PLC(prog, dt=0.010)

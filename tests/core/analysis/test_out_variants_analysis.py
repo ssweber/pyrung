@@ -16,13 +16,13 @@ from pyrung import (
     Bool,
     Counter,
     Program,
-    Rung,
     Timer,
     count_up,
     debounce,
     flasher,
     out,
     rise,
+    rung,
     timed,
     toggle,
 )
@@ -48,9 +48,9 @@ def _coil(verb: str, target: Bool) -> None:
 def _program(verb: str) -> Program:
     btn, y, z = Bool("Btn", external=True), Bool("Y"), Bool("Z")
     with Program(strict=False) as logic:
-        with Rung(btn):
+        with rung(btn):
             _coil(verb, y)
-        with Rung(y):
+        with rung(y):
             out(z)
     return logic
 
@@ -106,9 +106,9 @@ def test_pilot_counts_the_coil_edges(verb: str) -> None:
     C = Counter.clone("AC")
     btn, y = Bool("Btn", external=True), Bool("Y")
     with Program(strict=False) as logic:
-        with Rung(btn):
+        with rung(btn):
             _coil(verb, y)
-        with Rung(rise(y)):
+        with rung(rise(y)):
             count_up(C, 3).reset(Bool("Rst", external=True))
 
     path = pilot_how(PLC(logic, dt=0.010), C.Done, max_scans=600)
@@ -124,9 +124,9 @@ def test_pilot_counts_debounced_edges() -> None:
     C = Counter.clone("AC")
     btn, y = Bool("Btn", external=True), Bool("Y")
     with Program(strict=False) as logic:
-        with Rung(btn):
+        with rung(btn):
             debounce(y, on=(T[1], 30), off=(T[2], 20))
-        with Rung(rise(y)):
+        with rung(rise(y)):
             count_up(C, 3).reset(Bool("Rst", external=True))
 
     path = pilot_how(PLC(logic, dt=0.010), C.Done, max_scans=600)

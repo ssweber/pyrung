@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, copy, math, out
+from pyrung import PLC, Bool, Int, Program, copy, math, out, rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.tag import Tag
 
@@ -26,11 +26,11 @@ def _fill_program() -> tuple[Program, Tag]:
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             math(SetPoint - Band, Lower)
-        with Rung(TareBtn):
+        with rung(TareBtn):
             copy(PV, SetPoint)
-        with Rung(PV >= Lower):
+        with rung(PV >= Lower):
             out(Target)
 
     return prog, Target

@@ -11,7 +11,6 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     SystemState,
     TagType,
     Timer,
@@ -21,6 +20,7 @@ from pyrung.core import (
     forloop,
     on_delay,
     out,
+    rung,
 )
 from pyrung.core.instruction import control
 from pyrung.core.instruction.control import for_loop_iterations
@@ -32,7 +32,7 @@ def test_forloop_literal_count_executes_body_n_times():
     counter = Int("Counter")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(5):
                 copy(counter + 1, counter)
 
@@ -45,7 +45,7 @@ def test_forloop_count_from_tag_is_resolved_each_scan():
     counter = Int("Counter")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(count):
                 copy(counter + 1, counter)
 
@@ -63,7 +63,7 @@ def test_forloop_tag_count_zero_runs_no_iteration():
     counter = Int("Counter")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(count):
                 copy(counter + 1, counter)
 
@@ -109,7 +109,7 @@ def test_forloop_count_is_read_by_its_width(loops, count, iterations, runner_fac
     counter = Dint("Counter")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(loops):
                 copy(counter + 1, counter)
 
@@ -125,7 +125,7 @@ def test_forloop_dint_element_count_is_read_whole(runner_factory):
     counter = Dint("Counter")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(counts[pointer]):
                 copy(counter + 1, counter)
 
@@ -155,7 +155,7 @@ def test_forloop_constant_count_is_read_whole(runner_factory):
     counter = Dint("Counter")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(70000):
                 copy(counter + 1, counter)
 
@@ -187,7 +187,7 @@ def test_forloop_idx_supports_indirect_addressing():
     dst = Block("Dst", TagType.INT, 1, 10)
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(3) as loop:
                 copy(src[loop.idx + 1], dst[loop.idx + 1])
 
@@ -217,7 +217,7 @@ def test_forloop_literal_count_outside_signed_32_bit_raises(count):
 def test_branch_inside_forloop_is_rejected():
     with pytest.raises(RuntimeError, match="branch\\(\\) is not permitted inside forloop\\(\\)"):
         with Program(strict=False):
-            with Rung():
+            with rung():
                 with forloop(2):
                     with branch():
                         pass
@@ -231,7 +231,7 @@ def test_forloop_rung_false_skips_body(runner_factory):
     counter = Int("Counter")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             with forloop(2):
                 out(light)
                 copy(counter + 1, counter, oneshot=True)
@@ -263,7 +263,7 @@ def test_forloop_own_oneshot_rearms_when_rung_false(runner_factory):
     counter = Int("Counter")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             with forloop(2, oneshot=True):
                 copy(counter + 1, counter)
 
@@ -290,7 +290,7 @@ def test_forloop_rung_false_holds_body_timer_and_counter(runner_factory):
     counter = Counter.clone("C")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             with forloop(1):
                 on_delay(timer, 30000)
                 count_up(counter, 100).reset(rst)
@@ -317,7 +317,7 @@ def test_oneshot_forloop_state_is_memory_backed_for_parity():
     count = Int("Count")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             with forloop(count, oneshot=True):
                 out(target)
 
@@ -338,11 +338,11 @@ def test_multiple_forloops_in_different_rungs_are_independent():
     b = Int("B")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(2):
                 copy(a + 1, a)
 
-        with Rung():
+        with rung():
             with forloop(3):
                 copy(b + 1, b)
 
@@ -357,7 +357,7 @@ def test_walker_recurses_into_forloop_children():
     target = Int("Target")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             with forloop(2):
                 copy(1, target)
 

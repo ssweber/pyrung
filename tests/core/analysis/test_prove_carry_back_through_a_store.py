@@ -17,11 +17,11 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     TagType,
     copy,
     math,
     out,
+    rung,
     unpack_to_bits,
 )
 from pyrung.core.compiled_plc import CompiledPLC
@@ -55,7 +55,7 @@ def _rungs(*pairs: tuple[Any, ...]) -> Program:
     """Return a program of ``(body, *conditions)`` rungs."""
     with Program(strict=False) as program:
         for body, *conditions in pairs:
-            with Rung(*conditions):
+            with rung(*conditions):
                 body()
     return program
 

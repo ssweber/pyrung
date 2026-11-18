@@ -50,7 +50,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, flasher, math, out, reset
+from pyrung.core import copy, fill, flasher, math, out, reset, rung
 from tests.conformance.memory import ClickTimer, c, ds, td
 from tests.conformance.probe_kit import end_at, in_window, ms_clock, once
 
@@ -68,31 +68,31 @@ def _flasher_off(slot: Any, name: str, off: int) -> None:
     first = TIMERS[name]
     preset, control_preset = ds[PRESETS[name]], ds[PRESETS[name] + 1]
     clock = ms_clock(slot, first)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(off, preset)
         copy(ON_MS, control_preset)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(coil, on=(ClickTimer(first + 1), ON_MS), off=(ClickTimer(first + 2), preset))
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         flasher(
             control,
             on=(ClickTimer(first + 3), ON_MS),
             off=(ClickTimer(first + 4), control_preset),
         )
     window = in_window(slot, clock, LOW, HIGH)
-    with Rung(*window, coil):
+    with rung(*window, coil):
         math(slot.Result1 + 1, slot.Result1)
-    with Rung(*window, coil, ~last):
+    with rung(*window, coil, ~last):
         math(slot.Result2 + 1, slot.Result2)
-    with Rung(*window):
+    with rung(*window):
         math(slot.Result3 + 1, slot.Result3)
-    with Rung(*window, control, ~control_last):
+    with rung(*window, control, ~control_last):
         math(slot.Result4 + 1, slot.Result4)
-    with Rung(coil):
+    with rung(coil):
         out(last)
-    with Rung(control):
+    with rung(control):
         out(control_last)
-    with Rung(*once(slot), clock >= END):
+    with rung(*once(slot), clock >= END):
         math(td[first + 1] * 180 + td[first + 2], slot.ErrorCode)
     end_at(slot, clock, END)
 

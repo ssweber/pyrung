@@ -241,13 +241,13 @@ class TestOneShotBehavior:
 
     def test_out_oneshot_executes_once(self):
         """One-shot OUT fires on first enabled scan, writes False on subsequent."""
-        from pyrung.core import PLC, Program, Rung, out
+        from pyrung.core import PLC, Program, out, rung
 
         Enable = Bool("Enable", external=True)
         Light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Light, oneshot=True)
 
         plc = PLC(logic, dt=0.010)
@@ -261,13 +261,13 @@ class TestOneShotBehavior:
 
     def test_oneshot_resets_after_rung_false(self):
         """One-shot resets when rung goes false, then fires again on re-enable."""
-        from pyrung.core import PLC, Program, Rung, out
+        from pyrung.core import PLC, Program, out, rung
 
         Enable = Bool("Enable", external=True)
         Light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Light, oneshot=True)
 
         plc = PLC(logic, dt=0.010)
@@ -2023,11 +2023,11 @@ class TestNopInstruction:
     def test_nop_dsl_in_rung(self):
         """nop() works in a rung context."""
         from pyrung.click import nop
-        from pyrung.core import Program, Rung, comment
+        from pyrung.core import Program, comment, rung
 
         with Program() as logic:
             comment("Header")
-            with Rung():
+            with rung():
                 nop()
 
         assert len(logic.rungs) == 1
@@ -2036,24 +2036,24 @@ class TestNopInstruction:
     def test_nop_rejects_other_instructions(self):
         """Cannot add instructions after nop()."""
         from pyrung.click import nop
-        from pyrung.core import Bool, Program, Rung, out
+        from pyrung.core import Bool, Program, out, rung
 
         Light = Bool("Light")
         with pytest.raises(RuntimeError, match="ends its rung"):
             with Program():
-                with Rung():
+                with rung():
                     nop()
                     out(Light)
 
     def test_nop_rejects_if_instructions_exist(self):
         """Cannot add nop() if rung already has instructions."""
         from pyrung.click import nop
-        from pyrung.core import Bool, Program, Rung, out
+        from pyrung.core import Bool, Program, out, rung
 
         Light = Bool("Light")
         with pytest.raises(RuntimeError, match="only instruction"):
             with Program():
-                with Rung():
+                with rung():
                     out(Light)
                     nop()
 
@@ -2067,11 +2067,11 @@ class TestBlankCharIsNul:
 
     @staticmethod
     def _run(build, patches=None):
-        from pyrung.core import PLC, Program, Rung
+        from pyrung.core import PLC, Program, rung
 
         Go = Bool("Go", default=True)
         with Program(strict=False) as logic:
-            with Rung(Go):
+            with rung(Go):
                 build()
         plc = PLC(logic, dt=0.01)
         if patches:

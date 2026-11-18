@@ -29,7 +29,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, math, off_delay, on_delay, time_drum
+from pyrung.core import copy, math, off_delay, on_delay, rung, time_drum
 from pyrung.core.system_points import system
 from tests.conformance.memory import ClickTimer, c, ds, td
 from tests.conformance.probe_kit import between
@@ -51,44 +51,44 @@ def count_scans(slot: Any) -> None:
 
     The count holds at the top of its Int.
     """
-    with Rung(slot.Cmd != 0, slot.Scratch < 32767):
+    with rung(slot.Cmd != 0, slot.Scratch < 32767):
         math(slot.Scratch + 1, slot.Scratch)
 
 
 def latch_count(slot: Any, done: Any, into: Any) -> None:
     """Copy into *into* the scan on which *done* first holds."""
-    with Rung(slot.Cmd != 0, done, into == 0):
+    with rung(slot.Cmd != 0, done, into == 0):
         copy(slot.Scratch, into)
 
 
 def fire_with_the_scan_setting(slot: Any) -> None:
     """Set ``Fired`` once both counts are in, and record what the scan was set to on that scan."""
     answered = [slot.Cmd != 0, slot.Fired == 0, slot.Result1 != 0, slot.Result2 != 0]
-    with Rung(*answered, system.sys.fixed_scan_mode):
+    with rung(*answered, system.sys.fixed_scan_mode):
         copy(1, slot.ErrorCode)
-    with Rung(*answered):
+    with rung(*answered):
         copy(system.sys.scan_time_fixed_setup_ms, slot.Result3)
         copy(system.sys.scan_time_max_ms, slot.Result4)
         copy(1, slot.Fired)
 
 
 def _prove_scan_setup(slot: Any) -> None:
-    with Rung(slot.Cmd != 0, slot.Scratch < 3):
+    with rung(slot.Cmd != 0, slot.Scratch < 3):
         math(slot.Scratch + 1, slot.Scratch)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(system.sys.scan_time_fixed_setup_ms, slot.Result2)
         copy(system.sys.scan_time_current_ms, slot.Result3)
         copy(system.sys.scan_time_max_ms, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, system.sys.fixed_scan_mode):
+    with rung(slot.Cmd != 0, slot.Fired == 0, system.sys.fixed_scan_mode):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Fired == 0, slot.Scratch >= 3):
         copy(1, slot.Fired)
 
 
 def _prove_seconds_and_ms(slot: Any) -> None:
     seconds, millis = ClickTimer(21), ClickTimer(22)
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(seconds, preset=1, unit="Ts")
         on_delay(millis, preset=1000, unit="Tms")
     latch_count(slot, seconds.Done, slot.Result1)
@@ -104,11 +104,11 @@ def _prove_off_delay_and_drum(slot: Any) -> None:
     """Count the off-delay from the scan the rung falls and the drum's step from its first scan."""
     timer = ClickTimer(31)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch <= _RUNG_ON):
+    with rung(slot.Cmd != 0, slot.Scratch <= _RUNG_ON):
         off_delay(timer, preset=1, unit="Ts")
-    with Rung(slot.Cmd != 0, slot.Scratch > _RUNG_ON, ~timer.Done, slot.Result1 == 0):
+    with rung(slot.Cmd != 0, slot.Scratch > _RUNG_ON, ~timer.Done, slot.Result1 == 0):
         math(slot.Scratch - _RUNG_ON, slot.Result1)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         time_drum(
             outputs=[c[3]],
             presets=[1, 32000],

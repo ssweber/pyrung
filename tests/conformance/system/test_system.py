@@ -119,7 +119,6 @@ from __future__ import annotations
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
-    Rung,
     copy,
     count_up,
     fall,
@@ -129,6 +128,7 @@ from pyrung.core import (
     on_delay,
     out,
     rise,
+    rung,
 )
 from pyrung.core.system_points import system
 from tests.conformance.memory import ClickCounter, ClickTimer, c, dd, dh
@@ -149,7 +149,7 @@ LONG_SCAN_MS = 40
 
 def _record(slot, field, *conditions):
     """Append the scan number, as a digit, to *field* on scans 2..8 where *conditions* hold."""
-    with Rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW, *conditions):
+    with rung(slot.Cmd != 0, slot.Scratch >= 2, slot.Scratch <= WINDOW, *conditions):
         math(field * 10 + slot.Scratch, field)
 
 
@@ -170,12 +170,12 @@ def _fault_case(slot, flag, base, fault, other_kind, same_kind):
     probes = [c[base + i] for i in range(3)]
     steps = (lambda: copy(slot.Scratch, dd[base + 9]), other_kind, same_kind)
     count_scans(slot)
-    with Rung(*_on_fault_scans(slot)):
+    with rung(*_on_fault_scans(slot)):
         fault()
     for step, probe in zip(steps, probes, strict=True):
-        with Rung(*_in_window(slot)):
+        with rung(*_in_window(slot)):
             step()
-        with Rung(*_in_window(slot), flag):
+        with rung(*_in_window(slot), flag):
             out(probe)
     for field, probe in zip((slot.Result1, slot.Result2, slot.Result3), probes, strict=True):
         _record(slot, field, probe)
@@ -244,11 +244,11 @@ def _refault_case(slot, flag, base, fault, steps, records=None, fault_scans_only
     probes = [c[base + i] for i in range(len(steps))]
     count_scans(slot)
     for step, probe in zip(steps, probes, strict=True):
-        with Rung(*_on_fault_scans(slot)):
+        with rung(*_on_fault_scans(slot)):
             fault()
         if step is not None:
             step()
-        with Rung(*_in_window(slot), flag):
+        with rung(*_in_window(slot), flag):
             out(probe)
     fields = [getattr(slot, name) for name in _REFAULT_FIELDS]
     for into, probe in zip(records or fields, probes, strict=False):
@@ -257,7 +257,7 @@ def _refault_case(slot, flag, base, fault, steps, records=None, fault_scans_only
         else:
             _record(slot, into, probe)
     if records is not None:
-        with Rung(slot.Cmd != 0, slot.Scratch > WINDOW):
+        with rung(slot.Cmd != 0, slot.Scratch > WINDOW):
             for field, into in zip(fields, records, strict=False):
                 copy(into, field)
     done(slot)
@@ -270,19 +270,19 @@ def _other_instructions(slot, base, timer, counter):
     """
 
     def coil():
-        with Rung(*_in_window(slot)):
+        with rung(*_in_window(slot)):
             out(c[base + 5])
 
     def open_rung():
-        with Rung(*_in_window(slot), c[base + 6]):
+        with rung(*_in_window(slot), c[base + 6]):
             latch(c[base + 7])
 
     def ton():
-        with Rung(*_in_window(slot)):
+        with rung(*_in_window(slot)):
             on_delay(ClickTimer(timer), 30000)
 
     def ctu():
-        with Rung(*_in_window(slot)):
+        with rung(*_in_window(slot)):
             count_up(ClickCounter(counter), 1000).reset(slot.Cmd == 0)
 
     return [None, coil, open_rung, ton, ctu]
@@ -318,7 +318,7 @@ def prove_division_flag_vs_hex_math(slot):
     # Fired is 0 until the window is recorded: the divisor.
     def step(instruction):
         def run():
-            with Rung(*_in_window(slot)):
+            with rung(*_in_window(slot)):
                 instruction()
 
         return run
@@ -342,11 +342,11 @@ def prove_scan_counter_steps_by_one(slot):
     # pyrung's SD9 wraps from 32767 to 0, a step of -32767.
     counter = system.sys.scan_counter
     count_scans(slot)
-    with Rung(*_in_window(slot)):
+    with rung(*_in_window(slot)):
         math(counter - slot.Result2, slot.Result3)
-    with Rung(*_in_window(slot), slot.Scratch >= 2, Or(slot.Result3 == 1, slot.Result3 == -32767)):
+    with rung(*_in_window(slot), slot.Scratch >= 2, Or(slot.Result3 == 1, slot.Result3 == -32767)):
         math(slot.Result1 + 1, slot.Result1)
-    with Rung(*_in_window(slot)):
+    with rung(*_in_window(slot)):
         copy(counter, slot.Result2)
     done(slot)
 
@@ -357,11 +357,11 @@ def prove_scan_clock_follows_counter(slot):
     count_scans(slot)
     edges(rise(clock), slot, slot.Result1)
     edges(fall(clock), slot, slot.Result1)
-    with Rung(*_in_window(slot)):
+    with rung(*_in_window(slot)):
         math(system.sys.scan_counter % 2, slot.Result3)
-    with Rung(*_in_window(slot), clock, slot.Result3 == 0):
+    with rung(*_in_window(slot), clock, slot.Result3 == 0):
         math(slot.Result2 + 1, slot.Result2)
-    with Rung(*_in_window(slot), ~clock, slot.Result3 == 1):
+    with rung(*_in_window(slot), ~clock, slot.Result3 == 1):
         math(slot.Result2 + 1, slot.Result2)
     done(slot)
 
@@ -372,14 +372,14 @@ def prove_clock_bits_toggle_at_their_rate(slot):
     # the last rung zeroes the counts.  Once Fired is up, nothing restarts.
     window = ClickTimer(101)
     scan_ms = system.sys.scan_time_current_ms
-    with Rung(slot.Cmd != 0, Or(slot.Fired != 0, scan_ms <= LONG_SCAN_MS)):
+    with rung(slot.Cmd != 0, Or(slot.Fired != 0, scan_ms <= LONG_SCAN_MS)):
         on_delay(window, CLOCK_WINDOW_MS)
     for clock, field in zip(CLOCKS, (slot.Result1, slot.Result2), strict=True):
-        with Rung(rise(clock), slot.Cmd != 0, ~window.Done):
+        with rung(rise(clock), slot.Cmd != 0, ~window.Done):
             math(field + 1, field)
-    with Rung(slot.Cmd != 0, window.Done):
+    with rung(slot.Cmd != 0, window.Done):
         copy(1, slot.Fired)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, scan_ms > LONG_SCAN_MS):
+    with rung(slot.Cmd != 0, slot.Fired == 0, scan_ms > LONG_SCAN_MS):
         copy(0, slot.Result1)
         copy(0, slot.Result2)
 
@@ -389,11 +389,11 @@ def prove_mode_bits_on_in_run(slot):
         (system.sys.mode_run, slot.Result1),
         (system.sys.mode_switch_run, slot.Result2),
     ):
-        with Rung(slot.Cmd != 0, slot.Fired == 0, bit):
+        with rung(slot.Cmd != 0, slot.Fired == 0, bit):
             copy(1, field)
-        with Rung(slot.Cmd != 0, slot.Fired == 0, ~bit):
+        with rung(slot.Cmd != 0, slot.Fired == 0, ~bit):
             copy(2, field)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
@@ -401,10 +401,10 @@ def prove_rtc_seconds_advance(slot):
     # Result2 = SD26 when the timer starts; Result1 = seconds passed, mod 60.
     window = ClickTimer(111)
     second = system.rtc.second
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(window, RTC_WINDOW_MS)
         copy(second, slot.Result2, oneshot=True)
-    with Rung(slot.Cmd != 0, window.Done):
+    with rung(slot.Cmd != 0, window.Done):
         math((second - slot.Result2 + 60) % 60, slot.Result1, oneshot=True)
         copy(1, slot.Fired)
 
@@ -413,13 +413,13 @@ def prove_first_scan_counter_and_clock(slot):
     # Outside the Cmd gate, on the first scan only: DD981 = SD9, DD982 = 1,
     # DD983 = SC3.  The reset leaves them alone.
     first = system.sys.first_scan
-    with Rung(first):
+    with rung(first):
         copy(system.sys.scan_counter, dd[981])
         copy(1, dd[982])
         copy(0, dd[983])
-    with Rung(first, system.sys.scan_clock_toggle):
+    with rung(first, system.sys.scan_clock_toggle):
         copy(1, dd[983])
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(dd[981], slot.Result1)
         copy(dd[982], slot.Result2)
         copy(dd[983], slot.Result3)
@@ -429,13 +429,13 @@ def prove_first_scan_counter_and_clock(slot):
 def prove_scan_counter_wraps_to_zero(slot):
     # Outside the Cmd gate: DD991 is the least SD9 since the first scan.
     counter = system.sys.scan_counter
-    with Rung(system.sys.first_scan):
+    with rung(system.sys.first_scan):
         copy(counter, dd[991])
-    with Rung(counter < dd[991]):
+    with rung(counter < dd[991]):
         copy(counter, dd[991])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, dd[991] < 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0, dd[991] < 0):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 

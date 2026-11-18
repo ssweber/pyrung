@@ -135,7 +135,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, latch, math, out, reset, system, to_ascii, to_text
+from pyrung.core import copy, fill, latch, math, out, reset, rung, system, to_ascii, to_text
 from pyrung.core.expression import randint, sin, sqrt
 from tests.conformance.memory import c, dd, df, txt
 from tests.conformance.scans import count_scans, done, scans_for
@@ -178,18 +178,18 @@ def _probe(slot, now, taken, op, flag, field, bit):
     """Run *op* once, on the first scan from 3 with *flag* off right before it;
     add *bit* to *field* if *flag* is on right after it.
     """
-    with Rung(slot.Cmd != 0, slot.Scratch > STAGE_SCAN, slot.Scratch <= WINDOW, ~taken, ~flag):
+    with rung(slot.Cmd != 0, slot.Scratch > STAGE_SCAN, slot.Scratch <= WINDOW, ~taken, ~flag):
         out(now)
         latch(taken)
-    with Rung(now):
+    with rung(now):
         op()
-    with Rung(now, flag):
+    with rung(now, flag):
         math(field + bit, field)
 
 
 def _stage(slot, *instructions):
     """Run *instructions* on scan 2, before every probe."""
-    with Rung(slot.Cmd != 0, slot.Scratch == STAGE_SCAN):
+    with rung(slot.Cmd != 0, slot.Scratch == STAGE_SCAN):
         for instruction in instructions:
             instruction()
 
@@ -348,7 +348,7 @@ def prove_pointer_past_bank(slot):
 
         probe(slot, op, SC43, flags, first_bit)
         probe(slot, op, SC44, flags, first_bit * 2)
-    with Rung(
+    with rung(
         *_end(slot),
         dd[534] != 99,
         dd[534] != dd[1000],
@@ -375,12 +375,12 @@ def prove_power_overflow_is_inf(slot):
 
     probe(slot, positive, SC43, slot.Result2)
     probe(slot, negative, SC43, slot.Result4)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         math(df[473] / 2, df[475])
         math(df[474] / 2, df[476])
-    with Rung(*_end(slot), df[475] >= 3.0e38):
+    with rung(*_end(slot), df[475] >= 3.0e38):
         copy(1, slot.Result1)
-    with Rung(*_end(slot), df[476] <= -3.0e38):
+    with rung(*_end(slot), df[476] <= -3.0e38):
         copy(1, slot.Result3)
     done(slot, WINDOW)
 
@@ -395,9 +395,9 @@ def prove_real_intermediate_range(slot):
         math(df[481] * 10 / 100, df[482])
 
     probe(slot, op, SC43, slot.Result3)
-    with Rung(*_end(slot), df[482] >= 2.9e37, df[482] <= 3.1e37):
+    with rung(*_end(slot), df[482] >= 2.9e37, df[482] <= 3.1e37):
         copy(1, slot.Result1)
-    with Rung(*_end(slot), df[482] >= 3.0e38):
+    with rung(*_end(slot), df[482] >= 3.0e38):
         copy(1, slot.Result2)
     done(slot, WINDOW)
 
@@ -420,10 +420,10 @@ def prove_inf_and_nan_arithmetic(slot):
     for k, flag in enumerate((SC43, SC46)):
         probe(slot, not_a_number, flag, slot.Result4, 1 << k)
     end = _end(slot)
-    with Rung(*end, doubled >= 3.0e38):
+    with rung(*end, doubled >= 3.0e38):
         copy(1, slot.Result1)
     for bit, compare in ((1, nan == nan), (2, nan > 0), (4, nan < 0), (8, nan != nan)):
-        with Rung(*end, compare):
+        with rung(*end, compare):
             math(slot.Result3 + bit, slot.Result3)
     done(slot, WINDOW)
 
@@ -449,10 +449,10 @@ def prove_non_finite_math_into_int(slot):
     for k, op in enumerate((inf_int, nan_int, inf_dint)):
         probe(slot, op, SC43, slot.Result4, 1 << k)
     end = _end(slot)
-    with Rung(*end):
+    with rung(*end):
         copy(5, slot.Result3)
     for value, reading in ((0, 1), (99, 2), (2147483647, 3), (-2147483648, 4)):
-        with Rung(*end, dd[521] == value):
+        with rung(*end, dd[521] == value):
             copy(reading, slot.Result3)
     done(slot, WINDOW)
 
@@ -489,7 +489,7 @@ def prove_copy_inf_to_text(slot):
         copy(inf, txt[401], convert=to_text())
 
     probe(slot, op, SC43, slot.Result2)
-    with Rung(*_end(slot)):
+    with rung(*_end(slot)):
         copy(txt[401], slot.Result1, convert=to_ascii)
         copy(txt[402], slot.Result3, convert=to_ascii)
         copy(txt[403], slot.Result4, convert=to_ascii)
@@ -516,9 +516,9 @@ def prove_non_finite_functions(slot):
     probe(slot, root_op, SC46, slot.ErrorCode)
     end = _end(slot)
     for reading, left in ((1, sine == 0), (2, sine == 1.0), (4, sine != sine)):
-        with Rung(*end, left):
+        with rung(*end, left):
             copy(reading, slot.Result1)
-    with Rung(*end, root == 0):
+    with rung(*end, root == 0):
         copy(1, slot.Result4)
     done(slot, WINDOW)
 

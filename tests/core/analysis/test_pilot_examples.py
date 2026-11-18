@@ -77,7 +77,7 @@ def _smoke_autonomous_calc():
 
 
 def _smoke_scalar_shift():
-    from pyrung import Bool, Int, Program, Rung, copy, rise
+    from pyrung import Bool, Int, Program, copy, rise, rung
 
     push = Bool("PilotSmokeShift_Push", external=True)
     value = Int("PilotSmokeShift_Value", external=True)
@@ -85,7 +85,7 @@ def _smoke_scalar_shift():
     second = Int("PilotSmokeShift_Second")
 
     with Program() as logic:
-        with Rung(rise(push)):
+        with rung(rise(push)):
             copy(first, second)
             copy(value, first)
 

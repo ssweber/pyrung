@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, copy, math
+from pyrung import Bool, Int, Program, copy, math, rung
 from pyrung.core.analysis.simplified import And, Atom, Const, Or
 from pyrung.core.analysis.sp_values import (
     _extract_condition_values,
@@ -97,21 +97,21 @@ class TestWrittenValueIndirect:
         Gate = Bool("Gate", external=True)
         Dest = Int("Dest")
         with Program() as prog:
-            with Rung(Gate):
+            with rung(Gate):
                 copy(blk[Ptr], Dest)
-        rung = prog.rungs[0]
+        rung0 = prog.rungs[0]
 
-        assert _written_value_for_tag(rung, "Dest") is UNKNOWN
+        assert _written_value_for_tag(rung0, "Dest") is UNKNOWN
 
     def test_scalar_copy_source_still_literal(self):
         Gate = Bool("Gate", external=True)
         Dest = Int("Dest")
         with Program() as prog:
-            with Rung(Gate):
+            with rung(Gate):
                 copy(7, Dest)
-        rung = prog.rungs[0]
+        rung0 = prog.rungs[0]
 
-        wv = _written_value_for_tag(rung, "Dest")
+        wv = _written_value_for_tag(rung0, "Dest")
         assert isinstance(wv, Literal)
         assert wv.value == 7
 
@@ -122,11 +122,11 @@ class TestWrittenValueArithmetic:
         Step = Int("Step")
         Enable = Bool("Enable", external=True)
         with Program() as prog:
-            with Rung(Enable, Step == 0):
+            with rung(Enable, Step == 0):
                 math(Step + 1, Step)
-        rung = prog.rungs[0]
+        rung0 = prog.rungs[0]
 
-        wv = _written_value_for_tag(rung, "Step")
+        wv = _written_value_for_tag(rung0, "Step")
         assert isinstance(wv, Affine)
         assert wv.source == "Step"
         assert wv.offset == 1
@@ -136,11 +136,11 @@ class TestWrittenValueArithmetic:
         Step = Int("Step")
         Enable = Bool("Enable", external=True)
         with Program() as prog:
-            with Rung(Enable, Step == 5):
+            with rung(Enable, Step == 5):
                 math(Step - 1, Step)
-        rung = prog.rungs[0]
+        rung0 = prog.rungs[0]
 
-        wv = _written_value_for_tag(rung, "Step")
+        wv = _written_value_for_tag(rung0, "Step")
         assert isinstance(wv, Affine)
         assert wv.source == "Step"
         assert wv.offset == -1

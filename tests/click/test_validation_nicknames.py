@@ -3,7 +3,7 @@
 import pytest
 from pyclickplc.validation import NICKNAME_MAX_LENGTH
 
-from pyrung import Bool, Program, Rung, out
+from pyrung import Bool, Program, out, rung
 from pyrung.click import ClickBlocks, TagMap
 from pyrung.click.ladder import LadderExportError, pyrung_to_ladder
 from pyrung.click.validation import CLK_NICKNAME_TOO_LONG
@@ -20,7 +20,7 @@ def test_mapped_tag_nickname_over_limit():
     blocks = ClickBlocks()
     start = Bool(LONG)
     with Program() as logic:
-        with Rung(start):
+        with rung(start):
             out(blocks.y[1])
 
     mapping = TagMap({start: blocks.x[1]}, include_system=False)
@@ -35,7 +35,7 @@ def test_nickname_at_limit_passes():
     blocks = ClickBlocks()
     start = Bool(LIMIT)
     with Program() as logic:
-        with Rung(start):
+        with rung(start):
             out(blocks.y[1])
 
     mapping = TagMap({start: blocks.x[1]}, include_system=False)
@@ -46,7 +46,7 @@ def test_bank_slot_nickname_over_limit():
     blocks = ClickBlocks()
     blocks.c.slot(2, name=LONG)
     with Program() as logic:
-        with Rung(blocks.c[2]):
+        with rung(blocks.c[2]):
             out(blocks.y[1])
 
     findings = _too_long(TagMap({}, include_system=False).validate(logic, mode="strict"))
@@ -58,7 +58,7 @@ def test_bank_slot_nickname_over_limit():
 def test_unused_mapped_tag_is_located_in_tag_map():
     blocks = ClickBlocks()
     with Program() as logic:
-        with Rung(blocks.x[1]):
+        with rung(blocks.x[1]):
             out(blocks.y[1])
 
     mapping = TagMap({Bool(LONG): blocks.c[1]}, include_system=False)
@@ -71,7 +71,7 @@ def test_warn_mode_reports_a_hint():
     blocks = ClickBlocks()
     start = Bool(LONG)
     with Program() as logic:
-        with Rung(start):
+        with rung(start):
             out(blocks.y[1])
 
     report = TagMap({start: blocks.x[1]}, include_system=False).validate(logic)
@@ -83,7 +83,7 @@ def test_ladder_export_refuses_long_nickname():
     blocks = ClickBlocks()
     start = Bool(LONG)
     with Program() as logic:
-        with Rung(start):
+        with rung(start):
             out(blocks.y[1])
 
     with pytest.raises(LadderExportError, match=CLK_NICKNAME_TOO_LONG):

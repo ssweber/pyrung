@@ -39,7 +39,7 @@ from pyrung.conformance import (
     wait_for_scan_counter_wrap,
 )
 from pyrung.conformance._modbus import MAX_SCAN_DT_S, scan_counter_wrapped
-from pyrung.core import Rung, copy, math, on_delay
+from pyrung.core import copy, math, on_delay, rung
 from tests.conformance import suite
 from tests.conformance.memory import ClickTimer
 from tests.conformance.probe_kit import reading_lines, record_run
@@ -169,9 +169,9 @@ def test_the_groups_apart_on_a_local_target(
 
 def _prove_fires_after_half_a_second(slot):
     timer = ClickTimer(1)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(timer, preset=500)
-    with Rung(slot.Cmd != 0, timer.Done):
+    with rung(slot.Cmd != 0, timer.Done):
         copy(1, slot.Fired)
 
 
@@ -216,19 +216,19 @@ def test_wait_for_scan_counter_wrap_reads_sd9_and_times_out() -> None:
 
 
 def _prove_constant(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(7, slot.Result1)
         copy(1, slot.Fired)
 
 
 def _prove_other_constant(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(8, slot.Result1)
         copy(1, slot.Fired)
 
 
 def _prove_nothing(slot):
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(5, slot.Result1)
 
 
@@ -466,7 +466,7 @@ def test_in_process_only_case_is_reported_skipped() -> None:
 
 
 def _prove_counts_runs(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         math(ds[4000] + 1, ds[4000])
         copy(ds[4000], slot.Result1)
         copy(1, slot.Fired)
@@ -523,7 +523,7 @@ def _init_stages_five(slot):
 
 
 def _prove_copies_scratch(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(slot.Scratch, slot.Result1)
         copy(1, slot.Fired)
 

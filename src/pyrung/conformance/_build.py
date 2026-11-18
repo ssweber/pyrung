@@ -34,7 +34,7 @@ from pyrung.conformance._slot import (
     slot_register,
 )
 from pyrung.conformance._tee import draw_tees
-from pyrung.core import Int, Program, Rung, call, copy, subroutine, system
+from pyrung.core import Int, Program, call, copy, rung, subroutine, system
 
 if TYPE_CHECKING:
     from pyrung.click import TagMap
@@ -347,29 +347,29 @@ def build_program(
         )
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(program_hash, program_hash_tag)
         # The harness writes 0 here before a run and reads it after.
         scan_ms = system.sys.scan_time_current_ms
-        with Rung(scan_ms > longest_scan_tag):
+        with rung(scan_ms > longest_scan_tag):
             copy(scan_ms, longest_scan_tag)
         for gb in built:
             if gb.group.in_main:
                 continue
             for _ in range(gb.group.calls):
-                with Rung():
+                with rung():
                     call(gb.subroutine)
         for gb in built:
             if gb.group.in_main:
                 continue
             with subroutine(gb.subroutine):
-                with Rung():
+                with rung():
                     copy(gb.group_hash, gb.hash_tag)
                 _case_rungs(gb.name, gb.cases, gb.slot)
         # In-main groups last: their rungs follow every call rung of main.
         for gb in built:
             if gb.group.in_main:
-                with Rung():
+                with rung():
                     copy(gb.group_hash, gb.hash_tag)
                 _case_rungs(gb.name, gb.cases, gb.slot)
 

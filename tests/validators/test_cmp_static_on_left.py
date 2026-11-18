@@ -23,7 +23,7 @@ the meaningful case is a static *tag* on the left, which ``Tag.__lt__`` preserve
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, Timer, copy, math, on_delay
+from pyrung.core import Bool, Int, Program, Timer, copy, math, on_delay, rung
 from pyrung.core.validation.report import check
 
 
@@ -39,9 +39,9 @@ def _eq_exempt_program() -> Program:
     running = Int("Running")  # program-written below → dynamic
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung(out):
+        with rung(out):
             copy(1, running)
-        with Rung(lo_limit == running):
+        with rung(lo_limit == running):
             copy(1, out)
     return prog
 
@@ -62,9 +62,9 @@ def _calc_right_program() -> Program:
     calc_out = Int("CalcOut")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung(out):
+        with rung(out):
             math(a + b, calc_out)
-        with Rung(lo_limit < calc_out):
+        with rung(lo_limit < calc_out):
             copy(1, out)
     return prog
 
@@ -75,7 +75,7 @@ def _computed_right_program() -> Program:
     b = Int("B", external=True)
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung(lo_limit < (a + b)):
+        with rung(lo_limit < (a + b)):
             copy(1, out)
     return prog
 
@@ -111,9 +111,9 @@ def _escalation_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, setpoint, "sec")
-        with Rung(setpoint > tmr.Acc):
+        with rung(setpoint > tmr.Acc):
             copy(1, out)
     return prog
 
@@ -124,9 +124,9 @@ def _fallback_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(tmr, lo_limit, "sec")
-        with Rung(lo_limit < tmr.Acc):
+        with rung(lo_limit < tmr.Acc):
             copy(1, out)
     return prog
 
@@ -163,22 +163,22 @@ def _correct_forms_program() -> Program:
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung(out):
+        with rung(out):
             math(a + b, calc_out)
-        with Rung(out):
+        with rung(out):
             math(a + 1, calc_a)
-        with Rung(out):
+        with rung(out):
             math(b + 1, calc_b)
-        with Rung():
+        with rung():
             on_delay(tmr, 5, "sec")
         # dynamic (Math) on left, literal right — correct
-        with Rung(calc_out > 3):
+        with rung(calc_out > 3):
             copy(1, out)
         # dynamic (accumulator) on left, static right — correct (bench form)
-        with Rung(tmr.Acc > limit):
+        with rung(tmr.Acc > limit):
             copy(1, out)
         # dynamic vs dynamic — no canonical side, exempt
-        with Rung(calc_a > calc_b):
+        with rung(calc_a > calc_b):
             copy(1, out)
     return prog
 
@@ -191,9 +191,9 @@ def _external_sensor_program() -> Program:
     band = Int("LowBandTemp")  # Math-derived threshold — written
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
-        with Rung(out):
+        with rung(out):
             math(setpoint - 5, band)
-        with Rung(dryer_temp < band):
+        with rung(dryer_temp < band):
             copy(1, out)
     return prog
 

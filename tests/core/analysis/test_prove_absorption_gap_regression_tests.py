@@ -7,11 +7,11 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     copy,
     count_down,
     count_up,
     out,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -32,11 +32,11 @@ class TestCountDownAbsorptionGaps:
         counter = Counter.clone("DataFedCtd")
 
         with Program(strict=False) as logic:
-            with Rung(enable):
+            with rung(enable):
                 count_down(counter, preset=-5).reset(reset_helper)
-            with Rung():
+            with rung():
                 copy(counter.Acc, acc_mirror)
-            with Rung(acc_mirror <= -3):
+            with rung(acc_mirror <= -3):
                 out(reset_helper)
 
         result = _classify_dimensions(logic)
@@ -53,11 +53,11 @@ class TestCountDownAbsorptionGaps:
         helper = Bool("Helper")
 
         with Program(strict=False) as logic:
-            with Rung(enable):
+            with rung(enable):
                 count_up(counter_a, 100).reset(counter_a.Done)
-            with Rung(counter_a.Done):
+            with rung(counter_a.Done):
                 out(helper)
-            with Rung(gate):
+            with rung(gate):
                 count_down(counter_b, preset=-5).reset(helper)
 
         result = _classify_dimensions(logic)

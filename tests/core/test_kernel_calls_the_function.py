@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, math, run_function
+from pyrung import Bool, Int, Program, math, run_function, rung
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core.analysis.prove import Intractable, _build_prior_facts
 from pyrung.core.compiled_plc import CompiledPLC
@@ -24,9 +24,9 @@ MODULE_VALUE = 7
 
 def _program(fn, *, ins=None) -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(A + 1, A)
-        with Rung(Run):
+        with rung(Run):
             run_function(fn, ins=ins if ins is not None else {"v": A}, outs={"out": B})
     return program
 
@@ -111,11 +111,11 @@ def test_a_kernel_runs_no_text_of_the_function():
 )
 def test_analysis_takes_any_callable_a_scan_can_call(fn):
     with Program(strict=False) as program:
-        with Rung(In1):
+        with rung(In1):
             run_function(fn, ins={"v": A}, outs={"out": B})
-        with Rung(B == 1):
+        with rung(B == 1):
             math(1, A)
-        with Rung(In1):
+        with rung(In1):
             math(1, Lamp)
 
     assert compile_kernel(program, blockless=True, proof_metadata=True).source

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from pyrung import Bool, Program, Rung, copy, out
+from pyrung import Bool, Program, copy, out, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.reverse_semantics import (
@@ -55,7 +55,7 @@ def test_pilot_skips_writer_with_contradictory_reverse() -> None:
     source = Bool("ReverseSemanticsSource", external=True)
     target = Bool("ReverseSemanticsTarget")
     with Program() as program:
-        with Rung(source):
+        with rung(source):
             out(target)
 
     tree = trace_back(
@@ -77,7 +77,7 @@ def test_pilot_trace_preserves_selected_crossing_exactness(monkeypatch) -> None:
     source = Bool("ReverseFidelitySource", external=True)
     target = Bool("ReverseFidelityTarget")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(source, target)
 
     original_reverse = crossings.reverse

@@ -12,12 +12,12 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     Tag,
     TagType,
     TimeMode,
     copy,
     out,
+    rung,
     system,
 )
 
@@ -47,7 +47,7 @@ def test_step_after_stop_performs_stop_to_run_transition_and_resets_runtime_scop
     first_scan_latched = Bool("FirstScanLatched")
 
     with Program() as program:
-        with Rung():
+        with rung():
             copy(system.sys.first_scan, first_scan_latched)
 
     runner = PLC(logic=program)
@@ -137,7 +137,7 @@ def test_stop_restart_preserves_rtc_continuity():
 
 def test_cmd_mode_stop_written_in_scan_transitions_runner_to_stop():
     with Program() as program:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             out(system.sys.cmd_mode_stop)
 
     runner = PLC(logic=program)
@@ -183,9 +183,9 @@ def _mode_program() -> tuple[Program, Bool, Bool, Int]:
     level = Int("ModeLevel", retentive=False)
     latched = Int("ModeLatched")
     with Program() as program:
-        with Rung(button):
+        with rung(button):
             out(lamp)
-        with Rung():
+        with rung():
             copy(level, latched)
     return program, button, lamp, level
 

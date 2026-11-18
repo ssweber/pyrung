@@ -13,7 +13,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     copy,
     count_up,
@@ -21,6 +20,7 @@ from pyrung.core import (
     on_delay,
     out,
     rise,
+    rung,
 )
 from pyrung.core.analysis.graph import Plan, PlanStep
 from pyrung.core.analysis.pilot.overlay import PilotRung
@@ -47,9 +47,9 @@ def _simple_latch_program() -> tuple[Program, Bool, Bool, Bool]:
     Running = Bool("Running")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             latch(Running)
-        with Rung(Running):
+        with rung(Running):
             out(Done)
     return prog, Start, Running, Done
 
@@ -61,9 +61,9 @@ def _two_step_program() -> tuple[Program, Bool, Bool, Bool, Bool]:
     Ready = Bool("Ready")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             latch(Ready)
-        with Rung(Ready, Confirm):
+        with rung(Ready, Confirm):
             out(Done)
     return prog, Start, Confirm, Ready, Done
 
@@ -73,7 +73,7 @@ def _unreachable_program() -> tuple[Program, Bool, Bool]:
     Input = Bool("Input", external=True)
     Impossible = Bool("Impossible")
     with Program() as prog:
-        with Rung(Input):
+        with rung(Input):
             out(Input)  # self-referential, doesn't write Impossible
     return prog, Input, Impossible
 
@@ -525,9 +525,9 @@ class TestPLCHow:
         Auto = Bool("Auto")
         Done = Bool("Done")
         with Program() as prog:
-            with Rung(Start):
+            with rung(Start):
                 latch(Auto)
-            with Rung(Or(Manual, Auto)):
+            with rung(Or(Manual, Auto)):
                 out(Done)
 
         plc = PLC(prog, dt=0.010)
@@ -588,7 +588,7 @@ class TestPLCHow:
         State = Int("State")
         K = Int("K", readonly=True, default=3)
         with Program() as prog:
-            with Rung(Start):
+            with rung(Start):
                 copy(3, State)
         plc = PLC(prog, dt=0.010)
         with pytest.raises(ValueError, match="not a concrete value"):
@@ -606,9 +606,9 @@ class TestPLCHow:
         Armed = Bool("Armed")
         Output = Bool("Output")
         with Program() as prog:
-            with Rung(Enable, Gate):
+            with rung(Enable, Gate):
                 latch(Armed)
-            with Rung(Armed):
+            with rung(Armed):
                 out(Output)
 
         plc = PLC(prog, dt=0.010)
@@ -655,9 +655,9 @@ def _timer_program() -> tuple[Program, Bool, Timer, Bool]:
     T1 = Timer.clone("T1")
     Output = Bool("Output")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(T1, preset=500)
-        with Rung(T1.Done):
+        with rung(T1.Done):
             out(Output)
     return prog, Enable, T1, Output
 
@@ -668,9 +668,9 @@ def _counter_program() -> tuple[Program, Bool, Counter, Bool]:
     C1 = Counter.clone("C1")
     Output = Bool("Output")
     with Program() as prog:
-        with Rung(rise(Trigger)):
+        with rung(rise(Trigger)):
             count_up(C1, preset=5).reset(Reset)
-        with Rung(C1.Done):
+        with rung(C1.Done):
             out(Output)
     return prog, Trigger, C1, Output
 

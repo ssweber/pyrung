@@ -27,23 +27,23 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     copy,
     fill,
+    rung,
 )
 from tests.conformance.memory import dh, ds, txt
 from tests.conformance.probe_kit import finish, once
 
 
 def prove_word_and_wide_compare(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0xFFFF, dh[70])
         copy(5000, ds[3925])
-    with Rung(*once(slot), dh[70] > 0x7FFF):
+    with rung(*once(slot), dh[70] > 0x7FFF):
         copy(1, slot.Result1)
-    with Rung(*once(slot), dh[70] == 0xFFFF):
+    with rung(*once(slot), dh[70] == 0xFFFF):
         copy(1, slot.Result2)
-    with Rung(*once(slot), ds[3925] < 70000):
+    with rung(*once(slot), ds[3925] < 70000):
         copy(1, slot.Result3)
     finish(slot)
 
@@ -54,20 +54,20 @@ def init_word_and_wide_compare(slot):
 
 
 def prove_char_two_char_literal(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy("A", txt[771])
         copy("B", txt[772])
         copy("A", txt[773])
         copy("C", txt[774])
         copy("B", txt[775])
         copy("A", txt[776])
-    with Rung(*once(slot), txt[771] == "AB"):
+    with rung(*once(slot), txt[771] == "AB"):
         copy(1, slot.Result1)
-    with Rung(*once(slot), txt[773] == "AB"):
+    with rung(*once(slot), txt[773] == "AB"):
         copy(1, slot.Result2)
-    with Rung(*once(slot), txt[775] == "AB"):
+    with rung(*once(slot), txt[775] == "AB"):
         copy(1, slot.Result3)
-    with Rung(*once(slot), txt[776] == "A"):
+    with rung(*once(slot), txt[776] == "A"):
         copy(1, slot.Result4)
     finish(slot)
 

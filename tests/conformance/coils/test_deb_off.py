@@ -38,7 +38,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, debounce, on_delay, out
+from pyrung.core import Or, copy, debounce, on_delay, out, rung
 from tests.conformance.memory import ClickTimer, c
 from tests.conformance.scans import deadline
 
@@ -64,36 +64,36 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 
 def prove_off_td_with_coil_off(slot: Any) -> None:
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 3)):
         out(INPUT)
-    with Rung(INPUT):
+    with rung(INPUT):
         debounce(DEB_A, on=(A_ON, 300), off=(A_OFF, 1000))
-    with Rung(INPUT):
+    with rung(INPUT):
         debounce(DEB_B, on=(B_ON, 0), off=(B_OFF, 1000))
-    with Rung(*_step(slot, 1)):
+    with rung(*_step(slot, 1)):
         on_delay(BEFORE, 3000)
-    with Rung(*_step(slot, 5)):
+    with rung(*_step(slot, 5)):
         on_delay(AFTER, 3000)
-    with Rung(*_step(slot, 6)):
+    with rung(*_step(slot, 6)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 5), AFTER.Acc >= WAIT):
+    with rung(*_step(slot, 5), AFTER.Acc >= WAIT):
         copy(A_OFF.Acc, slot.Result3)
         copy(B_OFF.Acc, slot.Result4)
         copy(6, slot.Scratch)
-    with Rung(*_step(slot, 4)):
+    with rung(*_step(slot, 4)):
         copy(A_OFF.Acc, slot.Result2)
         copy(5, slot.Scratch)
-    with Rung(*_step(slot, 3), A_ON.Acc >= PULSE):
+    with rung(*_step(slot, 3), A_ON.Acc >= PULSE):
         copy(KEPT, A_OFF.Acc)
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2)):
+    with rung(*_step(slot, 2)):
         copy(A_OFF.Acc, slot.Result1)
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), BEFORE.Acc >= WAIT):
+    with rung(*_step(slot, 1), BEFORE.Acc >= WAIT):
         copy(A_OFF.Acc, slot.ErrorCode)
         copy(KEPT, A_OFF.Acc)
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0)):
+    with rung(*_step(slot, 0)):
         copy(KEPT, A_OFF.Acc)
         copy(1, slot.Scratch)
     deadline(slot, DEADLINE, DEADLINE_MS)

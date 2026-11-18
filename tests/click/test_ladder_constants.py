@@ -22,7 +22,7 @@ from pyrung import PLC
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.translator import click_real_literal
 from pyrung.click.ladder.types import LadderBundle, LadderExportError
-from pyrung.core import Program, Rung
+from pyrung.core import Program, rung
 from pyrung.core.expression import lsh
 from pyrung.core.program import copy, fill, math, out, search
 from tests.click.helpers import exec_with_source, round_trip_logic, strip_pyrung_boilerplate
@@ -56,23 +56,23 @@ def _bundle(*rows: tuple[str, str]) -> LadderBundle:
 
 def test_hex_contexts_export_hex_constants():
     with Program() as logic:
-        with Rung():
+        with rung():
             math(dh[221] + 255, dh[222])
-        with Rung():
+        with rung():
             math(dh[1] & 0x00FF, dh[2])
-        with Rung():
+        with rung():
             math(lsh(dh[1], 4), dh[3])
-        with Rung():
+        with rung():
             copy(10, dh[4])
-        with Rung():
+        with rung():
             copy(-1, dh[5])
-        with Rung():
+        with rung():
             fill(10, dh.select(7, 9))
-        with Rung(dh[1] == 0xABCD):
+        with rung(dh[1] == 0xABCD):
             out(c[1])
-        with Rung(dh[1] != 0):
+        with rung(dh[1] != 0):
             out(c[2])
-        with Rung():
+        with rung():
             search(dh.select(1, 3) == 10, result=ds[1], found=c[3])
     assert _tokens(logic) == [
         "math(DH221 + FFh,DH222,mode=hex)",
@@ -91,9 +91,9 @@ def test_hex_contexts_export_hex_constants():
 
 def test_decimal_contexts_stay_decimal():
     with Program() as logic:
-        with Rung(ds[1] == 10):
+        with rung(ds[1] == 10):
             copy(10, ds[2])
-        with Rung():
+        with rung():
             math(ds[1] + 10, ds[3])
     assert _tokens(logic) == [
         "DS1==10",
@@ -105,7 +105,7 @@ def test_decimal_contexts_stay_decimal():
 def test_hex_compare_outside_word_range_rejected():
     """Refuse DH1 == -1. It is never true in pyrung, but CLICK's FFFFh would be."""
     with Program() as logic:
-        with Rung(dh[1] == -1):
+        with rung(dh[1] == -1):
             out(c[1])
     with pytest.raises(LadderExportError, match="outside 0..65535"):
         pyrung_to_ladder(logic, TagMap())
@@ -113,11 +113,11 @@ def test_hex_compare_outside_word_range_rejected():
 
 def test_hex_constants_round_trip_with_pyrung_meaning():
     with Program() as logic:
-        with Rung():
+        with rung():
             math(dh[221] + 10, dh[222])
-        with Rung(dh[1] == 0xC100):
+        with rung(dh[1] == 0xC100):
             copy(0xDD01, dh[2])
-        with Rung():
+        with rung():
             copy(-1, dh[3])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
@@ -139,7 +139,7 @@ def test_native_padded_hex_compare_reads_back():
 def test_unpadded_hex_that_looks_like_an_address_round_trips(value: int):
     """Read ``C1h`` and ``DD01h`` as constants, not as the C1 or DD1 registers."""
     with Program() as logic:
-        with Rung(dh[1] == value):
+        with rung(dh[1] == value):
             copy(value, dh[2])
             math(dh[1] + value, dh[3])
     code, before, after = round_trip_logic(logic, TagMap())
@@ -191,11 +191,11 @@ def test_click_real_literal_rejects_unrepresentable(value: float):
 
 def test_real_constants_export_click_style():
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(3.14, df[1])
-        with Rung():
+        with rung():
             copy(3e38, df[2])
-        with Rung(df[1] > 1e-10):
+        with rung(df[1] > 1e-10):
             math(df[1] * 2.5e20, df[3])
     assert _tokens(logic) == [
         "copy(3.14,DF1)",
@@ -210,7 +210,7 @@ def test_unrepresentable_real_rejected(value: float):
     # The DSL refuses a REAL literal past CLICK's range. As a backstop, the
     # exporter has no spelling for one either.
     with Program():
-        with Rung():
+        with rung():
             with pytest.raises(ValueError, match="outside the REAL range|is NaN. A REAL constant"):
                 copy(value, df[1])
     assert click_real_literal(value) is None
@@ -224,21 +224,21 @@ def test_negative_operands_export_click_style():
     as ``( 0 - DS2 )``.
     """
     with Program() as logic:
-        with Rung():
+        with rung():
             math(ds[1] + -5, ds[2])
-        with Rung():
+        with rung():
             math(df[1] * -2.5, df[2])
-        with Rung():
+        with rung():
             math(ds[1] * -ds[2], ds[3])
-        with Rung():
+        with rung():
             math(-5 + ds[1], ds[4])
-        with Rung():
+        with rung():
             math(-ds[1], ds[5])
-        with Rung():
+        with rung():
             math(-ds[1] * ds[2], ds[6])
-        with Rung():
+        with rung():
             math(ds[1] - -(ds[2] + 1), ds[7])
-        with Rung():
+        with rung():
             math(dh[1] + -dh[2], dh[3])
     assert _tokens(logic) == [
         "math(DS1 + ( -5 ),DS2,mode=decimal)",
@@ -254,17 +254,17 @@ def test_negative_operands_export_click_style():
 
 def test_negative_operands_round_trip():
     with Program() as logic:
-        with Rung():
+        with rung():
             math(ds[1] + -5, ds[2])
-        with Rung():
+        with rung():
             math(df[1] * -2.5, df[2])
-        with Rung():
+        with rung():
             math(ds[1] * -ds[2], ds[3])
-        with Rung():
+        with rung():
             math(-ds[1], ds[5])
-        with Rung():
+        with rung():
             math(-ds[1] * ds[2], ds[6])
-        with Rung():
+        with rung():
             math(ds[1] - -(ds[2] + 1), ds[7])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
@@ -272,9 +272,9 @@ def test_negative_operands_round_trip():
 
 def test_real_exponent_round_trips():
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(3e38, df[1])
-        with Rung(df[1] > 1e-10):
+        with rung(df[1] > 1e-10):
             math(df[1] * 2.5e20, df[3])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code
@@ -292,19 +292,19 @@ def test_blank_text_constants_export_as_ascii_code():
     On CLICK, ``""`` writes nothing, and a raw NUL in quotes ends the constant.
     """
     with Program() as logic:
-        with Rung():
+        with rung():
             fill("\x00", txt.select(1, 2))
-        with Rung():
+        with rung():
             copy("", txt[3])
-        with Rung():
+        with rung():
             copy("\x00", txt[4])
-        with Rung(txt[1] == "\x00"):
+        with rung(txt[1] == "\x00"):
             out(c[1])
-        with Rung(txt[2] != ""):
+        with rung(txt[2] != ""):
             out(c[2])
-        with Rung():
+        with rung():
             search(txt.select(1, 4) == "\x00", result=ds[1], found=c[3])
-        with Rung():
+        with rung():
             copy("AB", txt.select(5, 6))
     tokens = _tokens(logic)
     assert tokens == [
@@ -323,7 +323,7 @@ def test_blank_text_constants_export_as_ascii_code():
 
 def test_text_constant_with_embedded_nul_rejected():
     with Program() as logic:
-        with Rung():
+        with rung():
             copy("A\x00", txt.select(1, 2))
     with pytest.raises(LadderExportError, match="holds a NUL"):
         pyrung_to_ladder(logic, TagMap())
@@ -331,15 +331,15 @@ def test_text_constant_with_embedded_nul_rejected():
 
 def test_blank_text_constants_import_as_nul():
     with Program() as logic:
-        with Rung():
+        with rung():
             copy("A", txt[1])
             copy("B", txt[2])
             copy("C", txt[3])
-        with Rung():
+        with rung():
             fill("\x00", txt.select(1, 2))
-        with Rung():
+        with rung():
             copy("", txt[3])
-        with Rung(txt[1] == ""):
+        with rung(txt[1] == ""):
             out(c[1])
     code, before, after = round_trip_logic(logic, TagMap())
     assert after == before, code

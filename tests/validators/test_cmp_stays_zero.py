@@ -10,13 +10,13 @@ from pyrung.core import (
     Int,
     Physical,
     Program,
-    Rung,
     Tag,
     TagType,
     Timer,
     copy,
     count_up,
     on_delay,
+    rung,
     time_drum,
     time_event_drum,
 )
@@ -36,7 +36,7 @@ def _comparison_program(limit: Tag) -> Program:
     value = Int("Value", default=1, readonly=True)
     result = Bool("Result", external=True)
     with Program(strict=False) as program:
-        with Rung(value >= limit):
+        with rung(value >= limit):
             copy(1, result)
     return program
 
@@ -75,9 +75,9 @@ class TestOperandNoWriter:
         value = Int("Value", default=1, readonly=True)
         result = Bool("Result", external=True)
         with Program(strict=False) as program:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 copy(5, limit)
-            with Rung(value >= limit):
+            with rung(value >= limit):
                 copy(1, result)
 
         assert not _codes(program, CMP_OPERAND_NO_WRITER)
@@ -98,11 +98,11 @@ class TestOperandNoWriter:
         # The runtime moves these, and the ladder can't write them.
         result = Bool("Result", external=True)
         with Program(strict=False) as program:
-            with Rung(system.rtc.hour >= 8):
+            with rung(system.rtc.hour >= 8):
                 copy(1, result)
-            with Rung(system.rtc.minute < system.rtc.second):
+            with rung(system.rtc.minute < system.rtc.second):
                 copy(1, result)
-            with Rung(system.sys.scan_counter == 5):
+            with rung(system.sys.scan_counter == 5):
                 copy(1, result)
 
         assert not _codes(program, CMP_OPERAND_NO_WRITER)
@@ -116,7 +116,7 @@ class TestOperandNoWriter:
         value = Int("Value", default=1, readonly=True)
         result = Bool("Result", external=True)
         with Program(strict=False) as program:
-            with Rung(value >= 0):
+            with rung(value >= 0):
                 copy(1, result)
 
         assert not _codes(program, CMP_OPERAND_NO_WRITER)
@@ -125,9 +125,9 @@ class TestOperandNoWriter:
         flag = Int("NumericFlag")
         result = Bool("BoolishResult", external=True)
         with Program(strict=False) as program:
-            with Rung(flag == 1):
+            with rung(flag == 1):
                 copy(1, result)
-            with Rung(flag != 0):
+            with rung(flag != 0):
                 copy(1, result)
 
         assert not _codes(program, CMP_OPERAND_NO_WRITER)
@@ -136,7 +136,7 @@ class TestOperandNoWriter:
         state = Int("State")
         result = Bool("StateResult", external=True)
         with Program(strict=False) as program:
-            with Rung(state == 7):
+            with rung(state == 7):
                 copy(1, result)
 
         findings = _codes(program, CMP_OPERAND_NO_WRITER)
@@ -152,9 +152,9 @@ class TestPresetStaysZero:
         enable = Bool("Enable", external=True)
         reset = Bool("Reset", external=True)
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(timer, timer_preset)
-            with Rung(enable):
+            with rung(enable):
                 count_up(counter, counter_preset).reset(reset)
 
         findings = _codes(program, CMP_PRESET_STAYS_ZERO)
@@ -170,7 +170,7 @@ class TestPresetStaysZero:
         timer = Timer.clone("Elapsed")
         enable = Bool("Enable", external=True)
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(timer, 0)
 
         assert not _codes(program, CMP_PRESET_STAYS_ZERO)
@@ -182,11 +182,11 @@ class TestPresetStaysZero:
         external_timer = Timer.clone("ExternalDelay")
         enable = Bool("Enable", external=True)
         with Program(strict=False) as program:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 copy(50, written)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(written_timer, written)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(external_timer, external)
 
         assert not _codes(program, CMP_PRESET_STAYS_ZERO)
@@ -194,7 +194,7 @@ class TestPresetStaysZero:
     def test_linked_preset_is_clean(self) -> None:
         enable = Bool("Enable", external=True)
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(Timer.clone("LinkedDelay"), Int("LinkedPreset", link="Enable"))
 
         assert not _codes(program, CMP_PRESET_STAYS_ZERO)
@@ -202,7 +202,7 @@ class TestPresetStaysZero:
     def test_system_tag_preset_is_clean(self) -> None:
         enable = Bool("Enable", external=True)
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(Timer.clone("ClockDelay"), system.rtc.second)
 
         assert not _codes(program, CMP_PRESET_STAYS_ZERO)
@@ -213,9 +213,9 @@ class TestPresetStaysZero:
         enable = Bool("Enable", external=True)
         result = Bool("Result", external=True)
         with Program(strict=False) as program:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(timer, preset)
-            with Rung(timer.Acc >= preset):
+            with rung(timer.Acc >= preset):
                 copy(1, result)
 
         findings = _codes(
@@ -239,9 +239,9 @@ class TestDrumPresetStaysZero:
             "unit": "ms",
         }
         with Program(strict=False) as program:
-            with Rung(system.sys.first_scan):
+            with rung(system.sys.first_scan):
                 copy(500, Int("Written"))
-            with Rung(enable):
+            with rung(enable):
                 time_drum(
                     presets=[first, 100],
                     current_step=Int("Step1"),
@@ -249,7 +249,7 @@ class TestDrumPresetStaysZero:
                     completion_flag=Bool("Done1"),
                     **args,
                 ).reset(reset)
-            with Rung(enable):
+            with rung(enable):
                 time_event_drum(
                     presets=[None, second],
                     events=[Bool("Go", external=True), None],

@@ -27,7 +27,7 @@ from pyrung.click.validation import (
     validate_click_program,
 )
 from pyrung.core import Word, randint, to_ascii, to_value
-from pyrung.core.program import Program, Rung, blockcopy, copy, fill, latch, math, out, reset
+from pyrung.core.program import Program, blockcopy, copy, fill, latch, math, out, reset, rung
 from tests.click.helpers import round_trip_logic
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -36,7 +36,7 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = Click
 def _program(write) -> Program:
     prog = Program(strict=False)
     with prog:
-        with Rung(x[1]):
+        with rung(x[1]):
             write()
     return prog
 
@@ -336,7 +336,7 @@ def test_a_constant_past_16_bits_into_a_word_mapped_to_dh_is_refused():
     setpoint = Word("Setpoint")
     prog = Program(strict=False)
     with prog:
-        with Rung(x[1]):
+        with rung(x[1]):
             copy(70000, setpoint)
     tag_map = TagMap([setpoint.map_to(dh[5])])
     report = validate_click_program(prog, tag_map, mode="strict")

@@ -380,7 +380,7 @@ def _subroutine_lines(subs: list[SubroutineSpec], indent: str = "        ") -> l
         lines.append(f"{indent}with subroutine({sub.name!r}):")
         for rs in sub.rungs:
             conds = ", ".join(_cond_code(c) for c in rs.conditions)
-            lines.append(f"{indent}    with Rung({conds}):")
+            lines.append(f"{indent}    with rung({conds}):")
             lines.extend(_rung_body_lines(rs, indent=f"{indent}        "))
     return lines
 
@@ -438,7 +438,7 @@ def format_parity_reproducer(
     lines.append("    with Program(strict=False) as logic:")
     for rs in spec.rungs:
         conds = ", ".join(_cond_code(c) for c in rs.conditions)
-        lines.append(f"        with Rung({conds}):")
+        lines.append(f"        with rung({conds}):")
         lines.extend(_rung_body_lines(rs))
     if spec.subroutines:
         lines.extend(_subroutine_lines(spec.subroutines))

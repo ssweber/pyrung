@@ -15,11 +15,11 @@ from pyrung.core import (
     Bool,
     Dint,
     Program,
-    Rung,
     call,
     copy,
     forloop,
     out,
+    rung,
     subroutine,
 )
 
@@ -32,13 +32,13 @@ def _loop_program(count: Callable[[], object], before: Callable[[object], None] 
     with Program(strict=False) as logic:
         if before is not None:
             before(n)
-        with Rung():
+        with rung():
             with forloop(n):
                 call("work")
-        with Rung(y2):
+        with rung(y2):
             out(y3)
         with subroutine("work"):
-            with Rung():
+            with rung():
                 copy(btn, y2)
     return logic
 

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from pyrung import Bool, Int, Program, Rung, copy, math, run_function
+from pyrung import Bool, Int, Program, copy, math, run_function, rung
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.core.function_source import embedded_source, is_the_function
 from pyrung.core.runner import PLC
@@ -28,9 +28,9 @@ _modules = itertools.count()
 
 def _program(*functions):
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(A + 1, A)
-        with Rung(Run):
+        with rung(Run):
             for fn, out in zip(functions, (B, C), strict=False):
                 run_function(fn, ins={"v": A}, outs={"out": out})
     return program
@@ -68,7 +68,7 @@ def _from_code_py(fn, name: str, v: int = 0):
     hardware = P1AM()
     hardware.slot(1, "P1-08SIM")
     with Program(strict=False) as program:
-        with Rung(Run):
+        with rung(Run):
             run_function(fn, ins={"v": A}, outs={"out": B})
     code = generate_circuitpy(program, hardware, target_scan_ms=10.0).code
     for node in ast.parse(code).body:
@@ -341,11 +341,11 @@ def test_a_kernel_calls_a_function_named_like_what_it_calls(tmp_path, monkeypatc
 def _stores_two_ways(fn):
     """Build a program whose generated code clamps a copy, wraps a Math and calls *fn*."""
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(A + 1, A)
             math(A * 40000, Wrapped)
             copy(70000, Clamped)
-        with Rung(Run):
+        with rung(Run):
             run_function(fn, ins={"v": A}, outs={"out": B})
     return program
 

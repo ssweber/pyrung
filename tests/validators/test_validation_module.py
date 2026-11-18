@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pyrung import Block, Bool, Program, Rung, TagType, latch, out, reset
+from pyrung import Block, Bool, Program, TagType, latch, out, reset, rung
 from pyrung.validation import (
     CheckConfig,
     FindingDisplay,
@@ -52,15 +52,15 @@ def _mixed_program() -> Program:
     lamp = Bool("Lamp")
     coils = Block("C", TagType.BOOL, 1, 5)
     with Program() as prog:
-        with Rung(button_a):
+        with rung(button_a):
             reset(coils.select(1, 5))
-        with Rung(button_b):
+        with rung(button_b):
             latch(light)
-        with Rung(button_a):
+        with rung(button_a):
             reset(motor)
-        with Rung(button_a):
+        with rung(button_a):
             out(lamp)
-        with Rung(button_b):
+        with rung(button_b):
             out(lamp)
     return prog
 

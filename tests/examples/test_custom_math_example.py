@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from examples.custom_math import weighted_average
-from pyrung.core import PLC, Bool, Int, Program, Real, Rung, run_function
+from pyrung.core import PLC, Bool, Int, Program, Real, run_function, rung
 
 
 def test_weighted_average_end_to_end():
@@ -16,7 +16,7 @@ def test_weighted_average_end_to_end():
     Average = Real("Average")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_function(
                 weighted_average,
                 ins={"sensor1": Sensor1, "sensor2": Sensor2, "sensor3": Sensor3},
@@ -46,7 +46,7 @@ def test_weighted_average_zero_weight_sum_returns_zero():
     Result = Real("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_function(
                 weighted_average,
                 ins={

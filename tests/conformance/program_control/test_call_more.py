@@ -20,12 +20,12 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     copy,
     count_up,
     math,
     on_delay,
     out,
+    rung,
     time_drum,
 )
 from tests.conformance.memory import ClickCounter, ClickTimer, c, ctd, ds, td
@@ -35,22 +35,22 @@ from tests.conformance.probe_kit import once
 def prove_called_twice(slot):
     # Scratch flips on every call: 1 on the first call of a scan, 0 on the second.
     second = slot.Scratch == 0
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         math(1 - slot.Scratch, slot.Scratch)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ClickTimer(249), 30000)
-    with Rung(slot.Cmd != 0, second):
+    with rung(slot.Cmd != 0, second):
         on_delay(ClickTimer(250), 30000).reset(slot.Cmd == 0)
     held, late, a, b, flag = c[1732], c[1733], c[1734], c[1735], c[1736]
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         out(held)
-    with Rung(slot.Cmd != 0, second):
+    with rung(slot.Cmd != 0, second):
         out(late)
-    with Rung(held):
+    with rung(held):
         count_up(ClickCounter(148), 30000).reset(slot.Cmd == 0)
-    with Rung(late):
+    with rung(late):
         count_up(ClickCounter(150), 30000).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         time_drum(
             outputs=[a, b],
             presets=[30000, 30000],
@@ -61,22 +61,22 @@ def prove_called_twice(slot):
             completion_flag=flag,
         ).reset(slot.Cmd == 0)
     ready = (*once(slot), second, td[250] >= 200)
-    with Rung(*ready):
+    with rung(*ready):
         math(td[249] - td[250] * 3 / 2, slot.ErrorCode)
-    with Rung(*ready, slot.ErrorCode > 0):
+    with rung(*ready, slot.ErrorCode > 0):
         copy(1, slot.Result1)
-    with Rung(*ready, slot.ErrorCode <= 0):
+    with rung(*ready, slot.ErrorCode <= 0):
         copy(2, slot.Result1)
-    with Rung(*ready):
+    with rung(*ready):
         copy(ctd[148], slot.Result2)
         math(td[243] - td[250] * 3 / 2, slot.ErrorCode)
-    with Rung(*ready, ctd[150] > 1):
+    with rung(*ready, ctd[150] > 1):
         copy(1, slot.Result3)
-    with Rung(*ready, slot.ErrorCode > 0):
+    with rung(*ready, slot.ErrorCode > 0):
         copy(1, slot.Result4)
-    with Rung(*ready, slot.ErrorCode <= 0):
+    with rung(*ready, slot.ErrorCode <= 0):
         copy(2, slot.Result4)
-    with Rung(*ready):
+    with rung(*ready):
         copy(0, slot.ErrorCode)
         copy(1, slot.Fired)
 

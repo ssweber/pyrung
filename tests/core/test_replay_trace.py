@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Rung, program
+from pyrung import program, rung
 from pyrung.core import PLC, Bool, Dint, math, out
 from pyrung.core.debug_trace import RungTrace
 
@@ -30,9 +30,9 @@ def _build_source(cycles: int = 6, checkpoint_interval: int = 100) -> PLC:
 
     @program
     def ladder() -> None:
-        with Rung(a):
+        with rung(a):
             out(b)
-        with Rung(b):
+        with rung(b):
             math(c + 1, c)
 
     plc = PLC(logic=ladder, dt=0.01, checkpoint_interval=checkpoint_interval)

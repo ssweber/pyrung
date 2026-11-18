@@ -13,7 +13,6 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     Timer,
     branch,
     event_drum,
@@ -21,6 +20,7 @@ from pyrung.core import (
     on_delay,
     out,
     reset,
+    rung,
     scan_trace,
     time_drum,
     time_event_drum,
@@ -37,7 +37,7 @@ def test_event_drum_requires_reset_builder() -> None:
 
     with pytest.raises(RuntimeError, match="event_drum"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 event_drum(
                     outputs=[y1],
                     events=[e1],
@@ -56,7 +56,7 @@ def test_time_drum_requires_reset_builder() -> None:
 
     with pytest.raises(RuntimeError, match="time_drum"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 time_drum(
                     outputs=[y1],
                     presets=[100],
@@ -78,7 +78,7 @@ def test_drum_is_terminal_in_flow() -> None:
 
     with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 event_drum(
                     outputs=[y1],
                     events=[e1],
@@ -104,7 +104,7 @@ def test_event_drum_paused_takes_jump_jog_and_reset_without_writing_outputs(
     e2 = Bool("E2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[y1, y2],
                 events=[e1, e2],
@@ -167,7 +167,7 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry(runner_facto
     e3 = Bool("E3")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[y1, y2, y3],
                 events=[e1, e2, e3],
@@ -214,10 +214,10 @@ def test_event_drum_events_read_at_box_entry(runner_factory) -> None:
     y2 = Bool("Y2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             with branch(go):
                 latch(event)
-        with Rung(enable).continued():
+        with rung(enable).continued():
             event_drum(
                 outputs=[y1, y2],
                 events=[event, event],
@@ -252,7 +252,7 @@ def test_time_drum_reset_wins_then_jump_beats_jog(runner_factory) -> None:
     y4 = Bool("Y4")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[y1, y2, y3, y4],
                 presets=[1, 1, 1, 1],
@@ -304,7 +304,7 @@ def test_time_drum_completion_outputs_stay_off_through_a_jump_until_a_jog(
     runner_factory,
 ) -> None:
     with Program() as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             time_drum(
                 outputs=[Bool("Y1"), Bool("Y2")],
                 presets=[20, 20],
@@ -351,7 +351,7 @@ def test_event_drum_own_end_does_nothing_under_the_flag(runner_factory) -> None:
 
     The step's event does nothing (``drum_settle/event_drum_after_completion``)."""
     with Program() as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             event_drum(
                 outputs=[Bool("Y1"), Bool("Y2")],
                 events=[Bool("E1"), Bool("E2")],
@@ -395,9 +395,9 @@ def test_time_drum_jump_reads_at_box_entry(runner_factory) -> None:
     y2 = Bool("Y2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             latch(jump)
-        with Rung(enable).continued():
+        with rung(enable).continued():
             time_drum(
                 outputs=[y1, y2],
                 presets=[1000, 1000],
@@ -425,7 +425,7 @@ def test_time_drum_ignores_jump_target_out_of_range(runner_factory) -> None:
     y1 = Bool("Y1")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[y1],
                 presets=[1000],
@@ -456,7 +456,7 @@ def test_event_drum_completion_sticky_until_reset(runner_factory) -> None:
     e2 = Bool("E2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[y1, y2],
                 events=[e1, e2],
@@ -505,7 +505,7 @@ def test_time_drum_accumulates_and_resets_accumulator_on_step_transition(runner_
     y2 = Bool("Y2")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[y1, y2],
                 presets=[50, 100],
@@ -544,10 +544,10 @@ def _time_event_drum_program(
     pattern = [[step == row for step in range(len(presets))] for row in range(len(presets))]
     with Program(strict=False) as logic:
         if latch_event is not None:
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 with branch(Bool("Go")):
                     latch(latch_event)
-        drum_rung = Rung(Bool("Enable"))
+        drum_rung = rung(Bool("Enable"))
         if latch_event is not None:
             drum_rung.continued()
         with drum_rung:
@@ -566,7 +566,7 @@ def _time_event_drum_program(
 def test_time_event_drum_requires_reset_builder() -> None:
     with pytest.raises(RuntimeError, match="time_event_drum"):
         with Program():
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 time_event_drum(
                     outputs=[Bool("Y1")],
                     presets=[100],
@@ -591,7 +591,7 @@ def test_time_event_drum_rejects_bad_steps(
 ) -> None:
     with pytest.raises(ValueError, match=match):
         with Program():
-            with Rung(Bool("Enable")):
+            with rung(Bool("Enable")):
                 time_event_drum(
                     outputs=[Bool("Y1"), Bool("Y2")],
                     presets=presets,
@@ -668,7 +668,7 @@ def test_time_event_drum_outputs_stay_off_after_completion_until_a_jog(
     runner_factory,
 ) -> None:
     with Program() as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             time_event_drum(
                 outputs=[Bool("Y1"), Bool("Y2")],
                 presets=[None, None],
@@ -738,7 +738,7 @@ def test_time_event_drum_events_read_at_box_entry(runner_factory) -> None:
 
 def test_time_event_drum_tag_presets_jump_and_jog(runner_factory) -> None:
     with Program() as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             time_event_drum(
                 outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
                 presets=[Int("P1"), None, 20],
@@ -770,7 +770,7 @@ def test_time_event_drum_tag_presets_jump_and_jog(runner_factory) -> None:
 
 def _long_run_time_program(kind: str) -> Program:
     with Program(strict=False) as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if kind == "time":
                 time_drum(
                     outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
@@ -792,16 +792,16 @@ def _long_run_time_program(kind: str) -> Program:
                     accumulator=Int("Acc"),
                     completion_flag=Bool("Done"),
                 ).reset(Bool("Reset")).jump(Bool("Jump"), step=2).jog(Bool("Jog"))
-        with Rung(Bool("Y3")):
+        with rung(Bool("Y3")):
             out(Bool("Lamp"))
-        with Rung(Bool("Done")):
+        with rung(Bool("Done")):
             out(Bool("DoneLamp"))
     return logic
 
 
 def _long_run_event_program() -> Program:
     with Program(strict=False) as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             event_drum(
                 outputs=[Bool("Y1"), Bool("Y2")],
                 events=[Bool("E1"), Bool("E2")],
@@ -809,7 +809,7 @@ def _long_run_event_program() -> Program:
                 current_step=Int("Step"),
                 completion_flag=Bool("Done"),
             ).reset(Bool("Reset")).jump(Bool("Jump"), step=1).jog(Bool("Jog"))
-        with Rung(Bool("Y2")):
+        with rung(Bool("Y2")):
             out(Bool("Lamp"))
     return logic
 
@@ -878,7 +878,7 @@ def test_drum_reads_its_pins_before_it_corrects_an_invalid_step(kind: str) -> No
         "completion_flag": Bool("Done"),
     }
     with Program(strict=False) as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if kind == "event":
                 drum = event_drum(events=[Bool("E1"), Bool("E2"), Bool("E3")], **builder_args)
             elif kind == "time":
@@ -917,7 +917,7 @@ def test_drum_reads_its_jump_step_before_it_moves(kind: str, backend) -> None:
         "completion_flag": Bool("Done"),
     }
     with Program(strict=False) as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if kind == "event":
                 drum = event_drum(events=[Bool("E1"), Bool("E2"), Bool("E3")], **builder_args)
             elif kind == "time":
@@ -958,11 +958,11 @@ def _two_step_drum(kind: str, jump_step: Any = 1) -> Program:
         "completion_flag": Bool("Done"),
     }
     with Program(strict=False) as logic:
-        with Rung(Bool("ClearA")):
+        with rung(Bool("ClearA")):
             reset(Bool("A"))
-        with Rung(Bool("ClearB")):
+        with rung(Bool("ClearB")):
             reset(Bool("B"))
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if kind == "event":
                 drum = event_drum(events=[Bool("E1"), Bool("E2")], **args)
             elif kind == "time":
@@ -1216,7 +1216,7 @@ def _preset_drum(kind: str, presets: list[Any]) -> Program:
         "completion_flag": Bool("Done"),
     }
     with Program(strict=False) as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if kind == "time":
                 drum = time_drum(presets=presets, accumulator=Int("Acc"), **args)
             else:
@@ -1349,7 +1349,7 @@ def _three_step_drum_with_events(kind: str) -> Program:
     }
     events = [Bool("E1"), Bool("E2"), Bool("E3")]
     with Program(strict=False) as logic:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if kind == "event":
                 drum = event_drum(events=events, **args)
             else:
@@ -1407,9 +1407,9 @@ def _busy_drum(kind: str, zero: bool = False) -> Program:
         "completion_flag": Bool("Done"),
     }
     with Program(strict=False) as logic:
-        with Rung(Bool("ClearA")):
+        with rung(Bool("ClearA")):
             reset(Bool("A"))
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             if kind == "event":
                 drum = event_drum(events=[Bool("E1"), Bool("E2"), Bool("E3")], **args)
             elif kind == "time":
@@ -1505,7 +1505,7 @@ def _waiting_drum(kind: str, rung_above: Callable[[], None], enable: Bool) -> Pr
     }
     with Program(strict=False) as logic:
         rung_above()
-        with Rung(enable):
+        with rung(enable):
             if kind == "event":
                 drum = event_drum(events=[Bool("E1"), Bool("E2")], **args)
             elif kind == "time":
@@ -1570,7 +1570,7 @@ def test_a_rung_returning_inside_a_long_run_writes_the_row_on_that_scan(kind: st
     late = Timer.clone("Late")
 
     def above() -> None:
-        with Rung(Bool("Start")):
+        with rung(Bool("Start")):
             on_delay(late, 2_000)
 
     plc = _equal_stepping(
@@ -1587,9 +1587,9 @@ def test_a_flag_cleared_inside_a_long_run_frees_the_drum_on_that_scan(kind: str)
     late = Timer.clone("Late")
 
     def above() -> None:
-        with Rung(Bool("Start")):
+        with rung(Bool("Start")):
             on_delay(late, 2_000)
-        with Rung(late.Done):
+        with rung(late.Done):
             reset(Bool("Done"))
 
     plc = _equal_stepping(

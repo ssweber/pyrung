@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung import Bool, Int, Or, Program, Rung, latch, out
+from pyrung import Bool, Int, Or, Program, latch, out, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.incidents import DeviationIncident
@@ -55,13 +55,13 @@ class TestExposureGuard:
         LintAlarm = Bool("LintAlarm")
 
         with Program() as prog:
-            with Rung(State == 3):
+            with rung(State == 3):
                 out(InStarting)
-            with Rung(State == 12):
+            with rung(State == 12):
                 out(InUnholding)
-            with Rung(Or(InStarting, InUnholding), ~Door):
+            with rung(Or(InStarting, InUnholding), ~Door):
                 latch(Alarm)
-            with Rung(Or(InStarting, InUnholding), ~Lint):
+            with rung(Or(InStarting, InUnholding), ~Lint):
                 latch(LintAlarm)
 
         plc = PLC(prog, dt=0.010)
@@ -104,7 +104,7 @@ class TestExposureGuard:
         Alarm = Bool("Alarm")
 
         with Program() as prog:
-            with Rung(~Guard):
+            with rung(~Guard):
                 latch(Alarm)
 
         plc = PLC(prog, dt=0.010)

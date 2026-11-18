@@ -75,7 +75,6 @@ from typing import Any
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
-    Rung,
     copy,
     count_up,
     event_drum,
@@ -85,6 +84,7 @@ from pyrung.core import (
     out,
     pack_bits,
     reset,
+    rung,
     search,
     shift,
     system,
@@ -115,13 +115,13 @@ def _in_window(slot: Any) -> tuple[Any, ...]:
 
 def _read(slot: Any, flag: Any, coil: Any) -> None:
     """Turn *coil* on while *flag* is on, right after the step."""
-    with Rung(*_in_window(slot), flag):
+    with rung(*_in_window(slot), flag):
         out(coil)
 
 
 def _pack(slot: Any, scan: int, first: int, last: int, field: Any) -> None:
     """Pack the coils C<first>..C<last> into *field* as bits on *scan*, below every probe."""
-    with Rung(slot.Cmd != 0, slot.Scratch == scan):
+    with rung(slot.Cmd != 0, slot.Scratch == scan):
         pack_bits(c.select(first, last), field)
 
 
@@ -164,24 +164,24 @@ class _Steps:
         never = slot.Scratch == NEVER
 
         def false_math() -> None:
-            with Rung(never):
+            with rung(never):
                 math(self.ds_n(self.MATH) + 1, self.ds_n(self.MATH))
 
         def false_copy() -> None:
-            with Rung(never):
+            with rung(never):
                 copy(1, self.ds_n(self.COPY))
 
         def false_pointer_copy() -> None:
-            with Rung(never):
+            with rung(never):
                 copy(dd[self.ds_n(self.GOOD)], self.dd_n(1))
 
         def false_math_with_contact() -> None:
-            with Rung(never, flag):
+            with rung(never, flag):
                 math(self.ds_n(self.CONTACT) + 1, self.ds_n(self.CONTACT))
 
         def box(build: Callable[[], object]) -> Callable[[], None]:
             def step() -> None:
-                with Rung(*_in_window(slot)):
+                with rung(*_in_window(slot)):
                     build()
 
             return step
@@ -240,7 +240,7 @@ def _flag_steps(
     """
     count_scans(slot)
     for step, coil in zip(steps, coils, strict=True):
-        with Rung(*_raising(slot)):
+        with rung(*_raising(slot)):
             raise_flag()
         if step is not None:
             step()
@@ -299,11 +299,11 @@ def prove_sc40_steps(slot: Any) -> None:
     never = slot.Scratch == NEVER
 
     def false_math() -> None:
-        with Rung(never):
+        with rung(never):
             math(SC40_MATH + 1, SC40_MATH)
 
     def false_math_with_contact() -> None:
-        with Rung(never, SC40):
+        with rung(never, SC40):
             math(SC40_CONTACT + 1, SC40_CONTACT)
 
     _flag_steps(
@@ -374,19 +374,19 @@ def prove_unpowered_division(slot: Any) -> None:
     never = slot.Scratch == NEVER
     count_scans(slot)
     # Scan 3: a clean Math settles SC40.  Then a division sits on a false rung.
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         math(slot.Scratch + 1, clean)
-    with Rung(never):
+    with rung(never):
         math(1 / zero, dd[111])
     _read(slot, SC40, clean_coil)
     # Scan 4: a true division raises SC40.  Then a division sits on a false rung.
-    with Rung(slot.Cmd != 0, slot.Scratch == 4):
+    with rung(slot.Cmd != 0, slot.Scratch == 4):
         math(1 / zero, dd[112])
-    with Rung(never):
+    with rung(never):
         math(1 / zero, dd[113])
     _read(slot, SC40, cleared_coil)
     # Scan 5: the raise alone.
-    with Rung(slot.Cmd != 0, slot.Scratch == 5):
+    with rung(slot.Cmd != 0, slot.Scratch == 5):
         math(1 / zero, dd[114])
     _read(slot, SC40, control_coil)
     for scan, coil, field in (
@@ -394,7 +394,7 @@ def prove_unpowered_division(slot: Any) -> None:
         (4, cleared_coil, slot.Result2),
         (5, control_coil, slot.Result3),
     ):
-        with Rung(slot.Cmd != 0, slot.Scratch == scan, coil):
+        with rung(slot.Cmd != 0, slot.Scratch == scan, coil):
             copy(1, field)
     done(slot)
 
@@ -428,13 +428,13 @@ def prove_oneshot_held(slot: Any) -> None:
     count_scans(slot)
     held = (slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 4)
     for (flag, op), coil in zip(ops, coils[:5], strict=True):
-        with Rung(*_raising(slot)):
+        with rung(*_raising(slot)):
             raises[flag]()
-        with Rung(*held):
+        with rung(*held):
             op()
         _read(slot, flag, coil)
     for flag, coil in zip((SC44, SC43, SC40), coils[5:], strict=True):
-        with Rung(*_raising(slot)):
+        with rung(*_raising(slot)):
             raises[flag]()
         _read(slot, flag, coil)
     first = ONESHOT_COILS.start
@@ -463,26 +463,26 @@ def prove_pointer_minus_one(slot: Any) -> None:
         copy(dd[minus], dd[118])  # a pointer of -1: SC44
 
     count_scans(slot)
-    with Rung(*_raising(slot)):
+    with rung(*_raising(slot)):
         by_minus()
     _read(slot, SC44, coils[0])
-    with Rung(*_raising(slot)):
+    with rung(*_raising(slot)):
         by_minus()
-    with Rung(*_in_window(slot)):
+    with rung(*_in_window(slot)):
         on_delay(ClickTimer(253), 30000)
     _read(slot, SC44, coils[1])
-    with Rung(*_raising(slot)):
+    with rung(*_raising(slot)):
         by_minus()
-    with Rung(*_in_window(slot)):
+    with rung(*_in_window(slot)):
         count_up(ClickCounter(5), 1000).reset(slot.Cmd == 0)
     _read(slot, SC44, coils[2])
-    with Rung(*_raising(slot)):
+    with rung(*_raising(slot)):
         copy(dd[zero], dd[119])  # no DD0: SC44
     _read(slot, SC44, coils[3])
     first = MINUS_COILS.start
     _pack(slot, 3, first, first + 2, slot.Result1)
     _pack(slot, 4, first, first + 2, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, coils[3]):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, coils[3]):
         copy(1, slot.Result3)
     done(slot)
 
@@ -503,12 +503,12 @@ def prove_math_after_sqrt(slot: Any) -> None:
     minus, counted = df[51], ds[3993]
     count_scans(slot)
     _read(slot, SC46, before)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         math(sqrt(minus), df[52])
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 3, slot.Scratch == 4)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 3, slot.Scratch == 4)):
         math(counted + 1, counted)
     _read(slot, SC46, after)
-    with Rung(slot.Cmd != 0, slot.Scratch == 5):
+    with rung(slot.Cmd != 0, slot.Scratch == 5):
         math(sqrt(minus), df[53])
     _read(slot, SC46, control)
     for scan, coil, field in (
@@ -517,7 +517,7 @@ def prove_math_after_sqrt(slot: Any) -> None:
         (3, before, slot.Result3),
         (4, after, slot.Result4),
     ):
-        with Rung(slot.Cmd != 0, slot.Scratch == scan, coil):
+        with rung(slot.Cmd != 0, slot.Scratch == scan, coil):
             copy(1, field)
     done(slot)
 

@@ -18,11 +18,11 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     immediate,
     run_enabled_function,
     run_function,
+    rung,
 )
 from pyrung.core.runner import PLC, calls_that_depend_on_more_than_their_inputs
 
@@ -34,7 +34,7 @@ _calls = {"n": 0}
 
 def _program(fn: Any, ins: dict[str, Any] | None = None) -> Program:
     with Program(strict=False) as program:
-        with Rung(In1):
+        with rung(In1):
             run_function(fn, ins={"v": In1} if ins is None else ins, outs={"out": Alarm})
     return program
 
@@ -242,7 +242,7 @@ def _unread_output(wrap: Any = lambda tag: tag) -> tuple[Program, Any, dict[str,
         return {"out": v}
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             run_enabled_function(passes, ins={"v": run}, outs={"out": wrap(alarm)})
     return program, ~alarm, {"Run": True}, "Alarm", True
 
@@ -259,7 +259,7 @@ def _output_through_a_pointer() -> tuple[Program, Any, dict[str, Any], str, Any]
         return {"out": 1 if v else 0}
 
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             run_function(one, ins={"v": In1}, outs={"out": slots[idx]})
     return program, slots[2] == 0, {"In1": True, "Idx": 2}, "Dq2", 1
 

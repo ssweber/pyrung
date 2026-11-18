@@ -9,7 +9,7 @@ operand values.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Or, Program, Rung, copy, math, out
+from pyrung import Bool, Int, Or, Program, copy, math, out
 from pyrung.core import call, subroutine
 from pyrung.core.analysis.causal import recorded as recorded_module
 from pyrung.core.analysis.causal.crossings_recorded import (
@@ -29,9 +29,9 @@ def _sum_program() -> Program:
     total = Int("Total")
     flag = Bool("Flag")
     with Program() as prog:
-        with Rung(total != 0):
+        with rung(total != 0):
             out(flag)
-        with Rung():
+        with rung():
             math(blk.select(1, 3).sum(), total)
     return prog
 
@@ -215,9 +215,9 @@ def _gated_sum_program() -> Program:
     total = Int("Total")
     flag = Bool("Flag")
     with Program() as prog:
-        with Rung(total != 0):
+        with rung(total != 0):
             out(flag)
-        with Rung(enable):
+        with rung(enable):
             math(blk.select(1, 3).sum(), total)
     return prog
 
@@ -257,9 +257,9 @@ def test_cause_crosses_subroutine_aggregate_writer() -> None:
             math(blk.select(1, 3).sum(), total)
 
     with Program() as prog:
-        with Rung(total != 0):
+        with rung(total != 0):
             out(flag)
-        with Rung(enable):
+        with rung(enable):
             call(agg)
 
     runner = PLC(prog, dt=0.010)
@@ -290,14 +290,14 @@ def test_cause_uses_exact_nested_caller_reads_instead_of_static_leaves() -> None
     result = Bool("CauseNestedResult")
 
     with Program() as program:
-        with Rung(Or(top, top_skipped)):
+        with rung(Or(top, top_skipped)):
             call("CauseMiddle")
         with subroutine("CauseMiddle"):
-            with Rung(Or(middle, middle_skipped)):
+            with rung(Or(middle, middle_skipped)):
                 copy(unrelated, scratch)
                 call("CauseLeaf")
         with subroutine("CauseLeaf"):
-            with Rung(leaf):
+            with rung(leaf):
                 out(result)
 
     runner = PLC(program)
@@ -321,9 +321,9 @@ def test_cause_crosses_branch_writer() -> None:
     flag = Bool("Flag")
 
     with Program() as prog:
-        with Rung(total != 0):
+        with rung(total != 0):
             out(flag)
-        with Rung():
+        with rung():
             with branch(enable):
                 math(blk.select(1, 3).sum(), total)
 
@@ -355,9 +355,9 @@ def test_cause_crosses_multi_branch_writer_union() -> None:
     flag = Bool("Flag")
 
     with Program() as prog:
-        with Rung(total != 0):
+        with rung(total != 0):
             out(flag)
-        with Rung():
+        with rung():
             with branch(sel_a):
                 math(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
             with branch(sel_b):
@@ -392,9 +392,9 @@ def _two_branch_same_tag_program() -> Program:
     total = Int("Total")
     flag = Bool("Flag")
     with Program() as prog:
-        with Rung(total != 0):
+        with rung(total != 0):
             out(flag)
-        with Rung():
+        with rung():
             with branch(sel_a):
                 math(blk.select(1, 3).sum(), total)  # footprint DS1..DS3
             with branch(sel_b):
@@ -438,9 +438,9 @@ def test_cause_multi_writer_branches_no_cross_contamination() -> None:
     y = Int("Y")
     flag = Bool("Flag")
     with Program() as prog:
-        with Rung(x != 0):
+        with rung(x != 0):
             out(flag)
-        with Rung():
+        with rung():
             with branch(sel_a):
                 math(blk.select(1, 3).sum(), x)  # writes X, reads DS1..DS3
             with branch(sel_b):
@@ -471,9 +471,9 @@ def _indirect_copy_program() -> Program:
     dest = Int("Dest")
     flag = Bool("Flag")
     with Program() as prog:
-        with Rung(dest != 0):
+        with rung(dest != 0):
             out(flag)
-        with Rung():
+        with rung():
             copy(blk[ptr], dest)
     return prog
 

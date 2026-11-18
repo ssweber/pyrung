@@ -8,7 +8,7 @@ import pytest
 
 from pyrung.click.tag_map import TagMeta, parse_tag_meta
 from pyrung.click.tag_map._parsers import format_tag_meta
-from pyrung.core import PLC, Bool, Harness, Program, Real, Rung, out
+from pyrung.core import PLC, Bool, Harness, Program, Real, out, rung
 from pyrung.core.physical import (
     PHYSICAL_KEYS,
     PHYSICAL_KINDS,
@@ -249,9 +249,9 @@ class TestEveryKindRunsInTheHarness:
     def test_timed_and_toggle_install(self, keywords):
         fb = Bool("Fb", physical=Physical("Fb", **keywords), link="Cmd")
         with Program(strict=False) as prog:
-            with Rung(Bool("Cmd")):
+            with rung(Bool("Cmd")):
                 out(Bool("Lamp"))
-            with Rung(fb):
+            with rung(fb):
                 out(Bool("Seen"))
         plc = PLC(prog, dt=0.010)
         Harness(plc).install()
@@ -260,9 +260,9 @@ class TestEveryKindRunsInTheHarness:
     def test_a_ramp_still_runs(self):
         temp = Real("Temp", physical=Physical("Temp", ramp_on=10.0), link="Heat")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 out(Bool("Heat"))
-            with Rung(temp > 5.0):
+            with rung(temp > 5.0):
                 out(Bool("Hot"))
         plc = PLC(prog, dt=0.100)
         Harness(plc).install()

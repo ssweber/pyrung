@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Real, Rung, copy, math
+from pyrung.core import Bool, Int, Program, Real, copy, math, rung
 from pyrung.core.validation.report import check
 
 CODE = "CMP_EQ_ON_COMPUTED_REAL"
@@ -25,9 +25,9 @@ def test_calc_written_real_eq_is_flagged():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             math(raw * 0.1, scaled)
-        with Rung(scaled == 2.5):
+        with rung(scaled == 2.5):
             copy(1, out)
 
     (hit,) = _hits(_prog(build))
@@ -42,11 +42,11 @@ def test_ne_and_reversed_operands_flagged():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             math(raw * 0.1, scaled)
-        with Rung(scaled != 2.5):
+        with rung(scaled != 2.5):
             copy(1, out)
-        with Rung(Real("Target", external=True) == scaled):
+        with rung(Real("Target", external=True) == scaled):
             copy(1, out)
 
     assert len(_hits(_prog(build))) == 2
@@ -58,10 +58,10 @@ def test_copy_of_calc_real_flagged():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             math(raw / 3, scaled)
             copy(scaled, held)
-        with Rung(held == 2.5):
+        with rung(held == 2.5):
             copy(1, out)
 
     assert len(_hits(_prog(build))) == 1
@@ -71,7 +71,7 @@ def test_inline_computed_real_flagged():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung((raw * 0.1) == 2.5):
+        with rung((raw * 0.1) == 2.5):
             copy(1, out)
 
     assert len(_hits(_prog(build))) == 1
@@ -82,7 +82,7 @@ def test_unwritten_real_exempt():
     setpoint = Real("Setpoint")
 
     def build(en, out):
-        with Rung(raw == 2.5, setpoint != 1.5):
+        with rung(raw == 2.5, setpoint != 1.5):
             copy(1, out)
 
     assert not _hits(_prog(build))
@@ -94,10 +94,10 @@ def test_real_copied_from_constant_or_int_exempt():
     held = Real("Held")
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             copy(2.5, level)
             copy(counts, held)
-        with Rung(level == 2.5, held == 3.0):
+        with rung(level == 2.5, held == 3.0):
             copy(1, out)
 
     assert not _hits(_prog(build))
@@ -108,11 +108,11 @@ def test_compare_with_zero_exempt():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             math(raw * 0.1, scaled)
-        with Rung(scaled == 0):
+        with rung(scaled == 0):
             copy(1, out)
-        with Rung(scaled != 0):
+        with rung(scaled != 0):
             copy(0, out)
 
     assert not _hits(_prog(build))
@@ -123,9 +123,9 @@ def test_ordered_compares_exempt():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             math(raw * 0.1, scaled)
-        with Rung(scaled >= 2.5, scaled < 9.0):
+        with rung(scaled >= 2.5, scaled < 9.0):
             copy(1, out)
 
     assert not _hits(_prog(build))
@@ -136,9 +136,9 @@ def test_integer_calc_into_real_exempt():
     a = Int("A", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             math(a + 1, total)
-        with Rung(total == 5):
+        with rung(total == 5):
             copy(1, out)
 
     assert not _hits(_prog(build))
@@ -149,9 +149,9 @@ def test_integer_tag_eq_exempt():
     a = Int("A", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             math(a + 1, n)
-        with Rung(n == 5):
+        with rung(n == 5):
             copy(1, out)
 
     assert not _hits(_prog(build))
@@ -162,9 +162,9 @@ def test_copy_of_float_expression_flagged():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             copy(raw * 0.1, scaled)
-        with Rung(scaled == 2.5):
+        with rung(scaled == 2.5):
             copy(1, out)
 
     assert len(_hits(_prog(build))) == 1
@@ -176,11 +176,11 @@ def test_zero_on_left_exempt():
 
     # Python reflects `0 == tag` to `tag == 0`, so build the compare both ways.
     def build_zero(en, out):
-        with Rung(en):
+        with rung(en):
             math(raw * 0.1, scaled)
-        with Rung(0 == scaled):
+        with rung(0 == scaled):
             copy(1, out)
-        with Rung(0.0 != scaled):
+        with rung(0.0 != scaled):
             copy(0, out)
 
     assert not _hits(_prog(build_zero))
@@ -194,9 +194,9 @@ def test_block_indexed_real_does_not_crash():
     raw = Real("Raw", external=True)
 
     def build(en, out):
-        with Rung(en):
+        with rung(en):
             copy(raw, blk[idx])
-        with Rung(blk[idx] == 2.5):
+        with rung(blk[idx] == 2.5):
             copy(1, out)
 
     assert not _hits(_prog(build))
@@ -213,5 +213,5 @@ def test_calc_into_pointer_destination_raises_type_error():
     for dest in (blk[idx], blk[idx + 1]):
         with pytest.raises(TypeError, match="not a pointer address"):
             with Program(strict=False):
-                with Rung(Bool("En", external=True)):
+                with rung(Bool("En", external=True)):
                     math(raw * 0.5, dest)

@@ -57,16 +57,16 @@ def _stopped_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _runner_script(*, dt: float = 0.010) -> str:
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy\n"
+        "from pyrung.core import Bool, Int, PLC, Program, rung, out, copy\n"
         "\n"
         "button = Bool('Button')\n"
         "light = Bool('Light')\n"
         "counter = Int('Counter')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(button):\n"
+        "    with rung(button):\n"
         "        out(light)\n"
-        "    with Rung():\n"
+        "    with rung():\n"
         "        copy(0, counter)\n"
         "\n"
         f"runner = PLC(prog, dt={dt!r})\n"
@@ -75,16 +75,16 @@ def _runner_script(*, dt: float = 0.010) -> str:
 
 def _how_script() -> str:
     return (
-        "from pyrung.core import Bool, PLC, Program, Rung, out, latch\n"
+        "from pyrung.core import Bool, PLC, Program, rung, out, latch\n"
         "\n"
         "start = Bool('Start', external=True)\n"
         "running = Bool('Running')\n"
         "done = Bool('Done')\n"
         "\n"
         "with Program() as prog:\n"
-        "    with Rung(start):\n"
+        "    with rung(start):\n"
         "        latch(running)\n"
-        "    with Rung(running):\n"
+        "    with rung(running):\n"
         "        out(done)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"
@@ -94,7 +94,7 @@ def _how_script() -> str:
 def _how_multi_avoid_script() -> str:
     """``Filling`` reachable via three OR levers — the union-avoid shape."""
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, Or, copy, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, rung, Or, copy, out\n"
         "\n"
         "a = Bool('A', external=True)\n"
         "b = Bool('B', external=True)\n"
@@ -103,9 +103,9 @@ def _how_multi_avoid_script() -> str:
         "filling = Bool('Filling')\n"
         "\n"
         "with Program() as prog:\n"
-        "    with Rung(Or(a, b, c)):\n"
+        "    with rung(Or(a, b, c)):\n"
         "        copy(2, step)\n"
-        "    with Rung(step == 2):\n"
+        "    with rung(step == 2):\n"
         "        out(filling)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"
@@ -127,7 +127,7 @@ def _setup_how_multi_avoid(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
 def _compound_script() -> str:
     """Mode change resets the step sequencer — the compound-goal shape."""
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy\n"
+        "from pyrung.core import Bool, Int, PLC, Program, rung, copy\n"
         "\n"
         "go1 = Bool('Go1', external=True)\n"
         "go2 = Bool('Go2', external=True)\n"
@@ -136,11 +136,11 @@ def _compound_script() -> str:
         "step = Int('Step')\n"
         "\n"
         "with Program() as prog:\n"
-        "    with Rung(go1, step == 0):\n"
+        "    with rung(go1, step == 0):\n"
         "        copy(1, step)\n"
-        "    with Rung(go2, step == 1):\n"
+        "    with rung(go2, step == 1):\n"
         "        copy(2, step)\n"
-        "    with Rung(mode_btn, mode == 0):\n"
+        "    with rung(mode_btn, mode == 0):\n"
         "        copy(2, mode)\n"
         "        copy(0, step)\n"
         "\n"
@@ -359,15 +359,15 @@ class TestRun:
 
 def _ticks_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, math, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, rung, math, out\n"
         "\n"
         "ticks = Int('Ticks')\n"
         "done = Bool('Done')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung():\n"
+        "    with rung():\n"
         "        math(ticks + 1, ticks)\n"
-        "    with Rung(ticks >= 5):\n"
+        "    with rung(ticks >= 5):\n"
         "        out(done)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"
@@ -469,7 +469,7 @@ class TestRunUntil:
 def _setup_failing_scan(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
     # The third scan raises partway, after Ticks reaches 3.
     script = (
-        "from pyrung.core import Int, PLC, Program, Rung, math, run_function\n"
+        "from pyrung.core import Int, PLC, Program, rung, math, run_function\n"
         "\n"
         "ticks = Int('Ticks')\n"
         "\n"
@@ -477,9 +477,9 @@ def _setup_failing_scan(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
         "    raise RuntimeError('boom')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung():\n"
+        "    with rung():\n"
         "        math(ticks + 1, ticks)\n"
-        "    with Rung(ticks >= 3):\n"
+        "    with rung(ticks >= 3):\n"
         "        run_function(boom, ins={'t': ticks})\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"
@@ -1362,7 +1362,7 @@ class TestHelpAndErrors:
 
 def _udt_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, Real, Field, Physical, PLC, Program, Rung, out, udt\n"
+        "from pyrung.core import Bool, Int, Real, Field, Physical, PLC, Program, rung, out, udt\n"
         "\n"
         "@udt()\n"
         "class Pump:\n"
@@ -1372,7 +1372,7 @@ def _udt_script() -> str:
         "enable = Bool('Enable', external=True)\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(enable):\n"
+        "    with rung(enable):\n"
         "        out(Pump.Running)\n"
         "        out(Pump.Speed)\n"
         "\n"

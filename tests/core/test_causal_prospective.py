@@ -21,7 +21,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     copy,
     latch,
@@ -30,6 +29,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung,
 )
 from pyrung.core import runner as runner_module
 from pyrung.core.analysis.causal.projected import projected_cause
@@ -57,13 +57,13 @@ def _build_worked_example():
     Cmd_Run = Bool("Cmd_Run")
 
     with Program() as logic:
-        with Rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
+        with rung(And(Sensor_Pressure, Permissive_OK, ~Faulted)):
             latch(Sts_FaultTripped)
 
-        with Rung(And(Sts_FaultTripped, Cmd_Reset)):
+        with rung(And(Sts_FaultTripped, Cmd_Reset)):
             reset(Sts_FaultTripped)
 
-        with Rung(Sts_FaultTripped):
+        with rung(Sts_FaultTripped):
             out(Alarm_Horn)
             reset(Cmd_Run)
 
@@ -146,7 +146,7 @@ class TestProjectedCauseStranded:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
             # No reset rung for X
 
@@ -167,7 +167,7 @@ class TestProjectedCauseStranded:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 out(X)
 
         runner = PLC(logic)
@@ -187,7 +187,7 @@ class TestProjectedCauseStranded:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
 
         runner = PLC(logic)
@@ -244,7 +244,7 @@ class TestProjectedCauseStranded:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
 
         runner = PLC(logic)
@@ -274,9 +274,9 @@ class TestProjectedCauseStranded:
         InternalGate = Bool("InternalGate")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
-            with Rung(InternalGate):
+            with rung(InternalGate):
                 reset(X)
 
         runner = PLC(logic)
@@ -300,9 +300,9 @@ class TestProjectedCauseStranded:
         C = Bool("C")
 
         with Program() as logic:
-            with Rung(And(A, B, C)):
+            with rung(And(A, B, C)):
                 reset(X)
-            with Rung(A):
+            with rung(A):
                 reset(X)
 
         runner = PLC(logic)
@@ -315,11 +315,11 @@ class TestProjectedCauseStranded:
         C2 = Bool("C2")
 
         with Program() as logic2:
-            with Rung(A2):
+            with rung(A2):
                 latch(X2)
-            with Rung(And(A2, B2, C2)):
+            with rung(And(A2, B2, C2)):
                 reset(X2)
-            with Rung(B2):
+            with rung(B2):
                 reset(X2)
 
         runner2 = PLC(logic2)
@@ -350,11 +350,11 @@ class TestProjectedCauseNumericConditions:
         Mode = Int("Mode")
 
         with Program() as logic:
-            with Rung(Start):
+            with rung(Start):
                 latch(X)
-            with Rung(SeedMode):
+            with rung(SeedMode):
                 copy(2, Mode)
-            with Rung(Mode == 4):
+            with rung(Mode == 4):
                 reset(X)
 
         runner = PLC(logic)
@@ -373,11 +373,11 @@ class TestProjectedCauseNumericConditions:
         Level = Int("Level")
 
         with Program() as logic:
-            with Rung(Start):
+            with rung(Start):
                 latch(X)
-            with Rung(LevelCmd):
+            with rung(LevelCmd):
                 copy(1, Level)
-            with Rung(Level >= 5):
+            with rung(Level >= 5):
                 reset(X)
 
         runner = PLC(logic)
@@ -397,12 +397,12 @@ class TestProjectedCauseNumericConditions:
         Limit = Int("Limit")
 
         with Program() as logic:
-            with Rung(Start):
+            with rung(Start):
                 latch(X)
-            with Rung(Seed):
+            with rung(Seed):
                 copy(10, Level)
                 copy(5, Limit)
-            with Rung(Level < Limit + 2):
+            with rung(Level < Limit + 2):
                 reset(X)
 
         runner = PLC(logic)
@@ -422,12 +422,12 @@ class TestProjectedCauseNumericConditions:
         Limit = Int("Limit")
 
         with Program() as logic:
-            with Rung(Start):
+            with rung(Start):
                 latch(X)
-            with Rung(Seed):
+            with rung(Seed):
                 copy(10, Level)
                 copy(0, Limit)
-            with Rung(Level < Limit):
+            with rung(Level < Limit):
                 reset(X)
 
         runner = PLC(logic)
@@ -460,12 +460,12 @@ class TestProjectedCauseNumericConditions:
         Limit = Int("Limit")
 
         with Program() as logic:
-            with Rung(Start):
+            with rung(Start):
                 latch(X)
-            with Rung(Seed):
+            with rung(Seed):
                 copy(10, Level)
                 copy(0, Limit)
-            with Rung(Level < Limit + 2):
+            with rung(Level < Limit + 2):
                 reset(X)
 
         runner = PLC(logic)
@@ -497,11 +497,11 @@ class TestProjectedCauseNumericConditions:
         PV = Int("PV")
 
         with Program() as logic:
-            with Rung(Start):
+            with rung(Start):
                 latch(X)
-            with Rung(Seed):
+            with rung(Seed):
                 copy(100, PV)
-            with Rung(PV < 50):
+            with rung(PV < 50):
                 reset(X)
 
         runner = PLC(logic)
@@ -546,13 +546,13 @@ class TestProjectedOraclePinning:
         x_FB = Bool("x_FB")
 
         with Program(strict=False) as logic:
-            with Rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
+            with rung(CurStep == 1, x_TimerDone, x_FB):  # transition trigger
                 copy(1, Trans)
-            with Rung():  # parity (derived from CurStep)
+            with rung():  # parity (derived from CurStep)
                 math(CurStep % 2, valstepisodd)
-            with Rung(valstepisodd != 1, xPause == 0):  # even-step advance
+            with rung(valstepisodd != 1, xPause == 0):  # even-step advance
                 math(CurStep + 1, CurStep)
-            with Rung(Trans == 1):  # transition advance
+            with rung(Trans == 1):  # transition advance
                 math(CurStep + 1, CurStep)
 
         runner = PLC(logic)
@@ -588,9 +588,9 @@ class TestProjectedOraclePinning:
         SCB = Bool("SCB")
 
         with Program(strict=False) as logic:
-            with Rung(S_Clearing):  # counterfactual writer
+            with rung(S_Clearing):  # counterfactual writer
                 copy(1, SCB)
-            with Rung(S_Starting, Blower__init == 1):  # live writer
+            with rung(S_Starting, Blower__init == 1):  # live writer
                 copy(1, SCB)
 
         runner = PLC(logic)
@@ -630,7 +630,7 @@ class TestProjectedCauseEdgeCases:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         runner = PLC(logic)
@@ -645,7 +645,7 @@ class TestProjectedCauseEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 latch(X)
 
         runner = PLC(logic)
@@ -663,7 +663,7 @@ class TestProjectedCauseEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -694,7 +694,7 @@ class TestProjectedCauseEdgeCases:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
 
         runner = PLC(logic)
@@ -720,7 +720,7 @@ class TestProjectedEffect:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
         runner = PLC(logic)
@@ -759,7 +759,7 @@ class TestProjectedEffect:
         Isolated = Bool("Isolated")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 latch(Isolated)
 
         runner = PLC(logic)
@@ -780,9 +780,9 @@ class TestProjectedEffect:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
-            with Rung(B):
+            with rung(B):
                 latch(Y)
 
         runner = PLC(logic)
@@ -805,9 +805,9 @@ class TestProjectedEffect:
         Latched = Bool("Latched")
 
         with Program() as logic:
-            with Rung(rise(Button)):
+            with rung(rise(Button)):
                 out(Pulse)
-            with Rung(rise(Pulse)):
+            with rung(rise(Pulse)):
                 latch(Latched)
 
         # Set both contacts' memory on, as it stays when a contact goes unscanned.
@@ -829,7 +829,7 @@ class TestProjectedEffectEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -845,7 +845,7 @@ class TestProjectedEffectEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -863,7 +863,7 @@ class TestProjectedEffectEdgeCases:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(Or(A, B)):
+            with rung(Or(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -907,13 +907,13 @@ class TestProjectedCauseBlockedUpstream:
         Impossible = Bool("Impossible")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
-            with Rung(Impossible):
+            with rung(Impossible):
                 latch(Gate)
-            with Rung(Impossible):
+            with rung(Impossible):
                 latch(Impossible)  # self-referencing, never fires from False
-            with Rung(Gate):
+            with rung(Gate):
                 reset(X)
 
         runner = PLC(logic)
@@ -939,13 +939,13 @@ class TestProjectedCauseBlockedUpstream:
         Impossible = Bool("Impossible")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
-            with Rung(Impossible):
+            with rung(Impossible):
                 latch(Gate)
-            with Rung(Impossible):
+            with rung(Impossible):
                 latch(Impossible)
-            with Rung(Gate):
+            with rung(Gate):
                 reset(X)
 
         runner = PLC(logic)
@@ -980,17 +980,17 @@ class TestProjectedCauseCopyWriters:
 
         @subroutine("jump_state")
         def jump_state():
-            with Rung(Req != 0):
+            with rung(Req != 0):
                 copy(Req, Cur)
                 copy(0, Req)
                 return_early()
-            with Rung():
+            with rung():
                 copy(1, Tail)
 
         with Program() as logic:
-            with Rung(Go):
+            with rung(Go):
                 copy(4, Req)
-            with Rung(Req != 0):
+            with rung(Req != 0):
                 call(jump_state)
 
         return logic
@@ -1042,7 +1042,7 @@ class TestProjectedCauseCopyWriters:
         Dst = Int("Dst")
 
         with Program() as logic:
-            with Rung(Gate):
+            with rung(Gate):
                 copy(Src, Dst)
 
         runner = PLC(logic)
@@ -1057,7 +1057,7 @@ class TestProjectedCauseCopyWriters:
     def test_impossible_stored_copy_target_is_not_a_projected_writer(self) -> None:
         dest = Int("Dest")
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(40_000, dest)
 
         runner = PLC(logic)
@@ -1078,7 +1078,7 @@ class TestProjectedEffectUnreachable:
         Counter = Int("Counter")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 out(Counter)
 
         runner = PLC(logic)
@@ -1102,7 +1102,7 @@ class TestProjectedEffectUnreachable:
         A = Bool("A")
 
         with Program() as logic:
-            with Rung(Orphan):
+            with rung(Orphan):
                 out(A)
 
         runner = PLC(logic)
@@ -1131,11 +1131,11 @@ class TestProjectedEffectCascading:
         D = Bool("D")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(B)
-            with Rung(B):
+            with rung(B):
                 out(C)
-            with Rung(C):
+            with rung(C):
                 out(D)
 
         runner = PLC(logic)
@@ -1164,9 +1164,9 @@ class TestProjectedEffectCascading:
         Permit = Bool("Permit")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(B)
-            with Rung(And(B, Permit)):
+            with rung(And(B, Permit)):
                 out(C)
 
         runner = PLC(logic)
@@ -1191,7 +1191,7 @@ class TestProjectedCauseConjunctiveRoots:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(And(A, B)):
+            with rung(And(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -1212,7 +1212,7 @@ class TestProjectedCauseConjunctiveRoots:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(And(A, B)):
+            with rung(And(A, B)):
                 latch(X)
 
         runner = PLC(logic)
@@ -1286,7 +1286,7 @@ class TestProjectedChainAccessors:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         runner = PLC(logic)
@@ -1303,7 +1303,7 @@ class TestProjectedChainAccessors:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         runner = PLC(logic)
@@ -1318,7 +1318,7 @@ class TestProjectedChainAccessors:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         runner = PLC(logic)
@@ -1353,12 +1353,12 @@ class TestProjectedCauseWithAssume:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 latch(Fault)
-            with Rung(And(Fault, ResetReady)):
+            with rung(And(Fault, ResetReady)):
                 reset(Fault)
             # ResetReady written by ladder → has a PDG writer
-            with Rung(Trigger):
+            with rung(Trigger):
                 out(ResetReady)
 
         runner = PLC(logic)
@@ -1404,7 +1404,7 @@ class TestProjectedCauseWithAssume:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(X)
 
         runner = PLC(logic)
@@ -1440,11 +1440,11 @@ class TestProjectedCauseStructural:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(TriggerGate):
+            with rung(TriggerGate):
                 out(Gate)
-            with Rung(SeedSrc):
+            with rung(SeedSrc):
                 copy(4, Src)
-            with Rung(Ready, Gate):
+            with rung(Ready, Gate):
                 copy(Src, Dest)
 
         return logic
@@ -1537,7 +1537,7 @@ class TestProjectedEffectWithAssume:
 
         with Program() as logic:
             # X fires only when both A and Guard are True
-            with Rung(And(A, Guard)):
+            with rung(And(A, Guard)):
                 out(X)
 
         runner = PLC(logic)
@@ -1559,7 +1559,7 @@ class TestProjectedEffectWithAssume:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         runner = PLC(logic)
@@ -1583,7 +1583,7 @@ class TestRecoversWithAssume:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Trigger):
+            with rung(Trigger):
                 latch(HmiAck)
 
         runner = PLC(logic)
@@ -1608,11 +1608,11 @@ class TestRecoversWithAssume:
         Trigger = Bool("Trigger")
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 latch(Fault)
-            with Rung(And(Fault, ResetReady)):
+            with rung(And(Fault, ResetReady)):
                 reset(Fault)
-            with Rung(Trigger):
+            with rung(Trigger):
                 out(ResetReady)
 
         runner = PLC(logic)
@@ -1632,7 +1632,7 @@ class TestRecoversWithAssume:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(Sensor):
+            with rung(Sensor):
                 out(X)
 
         runner = PLC(logic)
@@ -1659,7 +1659,7 @@ class TestSimulateScan:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         state = SystemState().with_tags({"A": True})
@@ -1676,7 +1676,7 @@ class TestSimulateScan:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dest)
 
         state = SystemState().with_tags({"Enable": True, "Src": 42})
@@ -1694,7 +1694,7 @@ class TestSimulateScan:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A + B, Result)
 
         state = SystemState().with_tags({"Enable": True, "A": 10, "B": 20})
@@ -1710,7 +1710,7 @@ class TestSimulateScan:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         state = SystemState().with_tags({"A": False})
@@ -1727,7 +1727,7 @@ class TestSimulateScan:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dest)
 
         state = SystemState().with_tags({"Enable": True, "Src": 99})
@@ -1743,7 +1743,7 @@ class TestSimulateScan:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         state = SystemState().with_tags({"A": True})
@@ -1761,9 +1761,9 @@ class TestSimulateScan:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Mid)
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Mid, Dest)
 
         state = SystemState().with_tags({"Enable": True, "Src": 7})
@@ -1782,7 +1782,7 @@ class TestRungProducesValue:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         state = SystemState()
@@ -1797,7 +1797,7 @@ class TestRungProducesValue:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dest)
 
         state = SystemState().with_tags({"Src": 42})
@@ -1813,7 +1813,7 @@ class TestRungProducesValue:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Gate):
+            with rung(Gate):
                 math(A + 10, Result)
 
         state = SystemState().with_tags({"A": 5})
@@ -1831,7 +1831,7 @@ class TestProjectedCauseCopyCalc:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dest)
 
         runner = PLC(logic)
@@ -1852,7 +1852,7 @@ class TestProjectedCauseCopyCalc:
         Src = Int("FidelitySrc")
         Dest = Int("FidelityDest")
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dest)
 
         original_reverse = crossings.reverse
@@ -1878,7 +1878,7 @@ class TestProjectedCauseCopyCalc:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Gate):
+            with rung(Gate):
                 math(A + 10, Result)
 
         runner = PLC(logic)
@@ -1902,7 +1902,7 @@ class TestProjectedCauseCopyCalc:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(42, Dest)
 
         runner = PLC(logic)
@@ -1923,7 +1923,7 @@ class TestProjectedEffectCopyCalc:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dest)
 
         runner = PLC(logic)
@@ -1942,7 +1942,7 @@ class TestProjectedEffectCopyCalc:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 copy(Src, Dest)
 
         runner = PLC(logic)
@@ -1960,7 +1960,7 @@ class TestProjectedEffectCopyCalc:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A * 2, Result)
 
         runner = PLC(logic)
@@ -1979,7 +1979,7 @@ class TestProjectedEffectCopyCalc:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A * 2, Result)
 
         runner = PLC(logic)
@@ -1996,7 +1996,7 @@ class TestProjectedEffectCopyCalc:
         Dest = Int("Dest")
 
         with Program() as logic:
-            with Rung():
+            with rung():
                 copy(Src, Dest)
 
         runner = PLC(logic)
@@ -2019,11 +2019,11 @@ class TestProjectedAfterACompiledRun:
         Start, Gate, Lamp, Horn = Bool("PcStart"), Bool("PcGate"), Bool("PcLamp"), Bool("PcHorn")
         Wait = Timer.clone("PcWait")
         with Program() as logic:
-            with Rung(Start):
+            with rung(Start):
                 on_delay(Wait, 15000)
-            with Rung(Wait.Done, Gate):
+            with rung(Wait.Done, Gate):
                 out(Lamp)
-            with Rung(Lamp):
+            with rung(Lamp):
                 out(Horn)
         runner = PLC(logic, dt=0.01)
         runner.patch({Start.name: True})

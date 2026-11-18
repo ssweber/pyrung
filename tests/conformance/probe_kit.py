@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from pyrung.conformance import Case, CaseResult, record_confirmations
-from pyrung.core import Rung, copy, latch, math, on_delay, out
+from pyrung.core import copy, latch, math, on_delay, out, rung
 from tests.conformance.memory import ClickTimer, td
 
 
@@ -34,20 +34,20 @@ def once(slot: Any) -> tuple[Any, Any]:
 
 def finish(slot: Any) -> None:
     """Raise ``Fired`` in the case's last rung."""
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1, slot.Fired)
 
 
 def class_of(slot: Any, value: Any, readings: Sequence[Any], into: Any) -> None:
     """``into`` = 1 when *value* equals ``readings[0]``, 2 for the next, 0 for none."""
     for number, reading in enumerate(readings, start=1):
-        with Rung(*once(slot), value == reading):
+        with rung(*once(slot), value == reading):
             copy(number, into)
 
 
 def flag_bit(slot: Any, flag: Any, into: Any, bit: int = 1) -> None:
     """Add *bit* to ``into`` when *flag* is on.  Use it on the rung right after the op."""
-    with Rung(*once(slot), flag):
+    with rung(*once(slot), flag):
         math(into + bit, into)
 
 
@@ -192,21 +192,21 @@ class GuardedProbes:
     ) -> None:
         """*also*: other ``(flag, bit)`` pairs to read right after the op."""
         now, taken = next(self.free), next(self.free)
-        with Rung(slot.Scratch > self.stage_scan, slot.Scratch <= self.window, ~taken, ~flag):
+        with rung(slot.Scratch > self.stage_scan, slot.Scratch <= self.window, ~taken, ~flag):
             out(now)
             latch(taken)
-        with Rung(now):
+        with rung(now):
             op()
-        with Rung(now, flag):
+        with rung(now, flag):
             math(field + bit, field)
         for other, other_bit in also:
-            with Rung(now, other):
+            with rung(now, other):
                 math(field + other_bit, field)
 
 
 def ms_clock(slot: Any, n: int, preset: int = 5000) -> Any:
     """Add a TON of *n* from ``Cmd``.  Its TD is the case's clock, in ms."""
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ClickTimer(n), preset)
     return td[n]
 
@@ -218,5 +218,5 @@ def in_window(slot: Any, clock: Any, low: int, high: int) -> tuple[Any, ...]:
 
 def end_at(slot: Any, clock: Any, ms: int) -> None:
     """Raise ``Fired`` once *clock* reaches *ms*."""
-    with Rung(*once(slot), clock >= ms):
+    with rung(*once(slot), clock >= ms):
         copy(1, slot.Fired)

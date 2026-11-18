@@ -16,13 +16,13 @@ from pyrung import (
     Counter,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     count_up,
     event_drum,
     on_delay,
     out,
+    rung,
     shift,
     time_drum,
     time_event_drum,
@@ -56,9 +56,9 @@ def _plain_timer_program() -> Program:
     T = Timer.clone("T")
     Out = Bool("Out")
     with Program() as prog:
-        with Rung(run):
+        with rung(run):
             on_delay(T, 50, "ms")  # plain TON, no reset
-        with Rung(T.Done):
+        with rung(T.Done):
             out(Out)
     return prog
 
@@ -86,9 +86,9 @@ class TestAdvanceIndex:
         run_b = Bool("run_b", external=True)
         timer = Timer.clone("Shared")
         with Program(strict=False) as prog:
-            with Rung(run_a):
+            with rung(run_a):
                 on_delay(timer, 10, "ms")
-            with Rung(run_b):
+            with rung(run_b):
                 on_delay(timer, 20, "ms")
 
         index = build_advance_index(prog)
@@ -107,7 +107,7 @@ class TestSequencerAdvance:
         done = Bool("EventDone")
         output = Bool("EventOutput")
         with Program() as prog:
-            with Rung(enable):
+            with rung(enable):
                 event_drum(
                     outputs=[output],
                     events=events,
@@ -129,7 +129,7 @@ class TestSequencerAdvance:
         done = Bool("TimeDone")
         output = Bool("TimeOutput")
         with Program() as prog:
-            with Rung(enable):
+            with rung(enable):
                 time_drum(
                     outputs=[output],
                     presets=[20, 20, 20],
@@ -154,7 +154,7 @@ class TestSequencerAdvance:
         step = Int("TEStep")
         done = Bool("TEDone")
         with Program() as prog:
-            with Rung(enable):
+            with rung(enable):
                 time_event_drum(
                     outputs=[Bool("TEOut1"), Bool("TEOut2")],
                     presets=[20, None, 30, None],
@@ -214,7 +214,7 @@ class TestSequencerAdvance:
                 common["events"] = [None, None]
             make = time_drum if kind == "time" else time_event_drum
             with Program(strict=False) as prog:
-                with Rung(enable):
+                with rung(enable):
                     make(**common).reset(Bool("ZeroReset", external=True))
             zero = PLC(prog, dt=0.010)
             zero.step()
@@ -229,7 +229,7 @@ class TestSequencerAdvance:
         reset = Bool("ShiftReset", external=True)
         bits = Block("PilotShift", TagType.BOOL, 1, 3)
         with Program() as prog:
-            with Rung(data):
+            with rung(data):
                 shift(bits.select(1, 3)).clock(clock).reset(reset)
 
         events = []
@@ -279,9 +279,9 @@ class TestDoneBoundaryHypotheses:
         rst = Bool("rst", external=True)
         Out = Bool("Out")
         with Program() as prog:
-            with Rung(pulse):
+            with rung(pulse):
                 count_up(Counter[1], preset=3).reset(rst)
-            with Rung(Counter[1].Done):
+            with rung(Counter[1].Done):
                 out(Out)
 
         plc = PLC(prog, dt=0.010)

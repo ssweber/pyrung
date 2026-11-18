@@ -3,7 +3,7 @@
 Provides DSL syntax for building PLC programs:
 
     with Program() as logic:
-        with Rung(Button):
+        with rung(Button):
             out(Light)
 
     runner = PLC(logic)

@@ -16,7 +16,7 @@ punt — it can't silently skip the crossing.
 
 from __future__ import annotations
 
-from pyrung import Int, Program, Rung, blockcopy, copy, fill, math
+from pyrung import Int, Program, blockcopy, copy, fill, math, rung
 from pyrung.core.analysis.crossings.indirect_dest import writable_slots
 from pyrung.core.analysis.pdg import _build_writer_instrs, build_program_graph
 from pyrung.core.analysis.steerable import compute_steerable
@@ -42,13 +42,13 @@ def test_writable_slots_resolves_affine_pointer_region() -> None:
     ptr = Int("Ptr")
     src = Int("Src")
     with Program(strict=False) as logic:
-        with Rung(root == 0):
+        with rung(root == 0):
             copy(16, root)
-        with Rung(root == 1):
+        with rung(root == 1):
             copy(0, root)
-        with Rung():
+        with rung():
             math(root + 200, ptr)
-        with Rung():
+        with rung():
             copy(src, ds[ptr])
 
     slots = writable_slots(
@@ -68,11 +68,11 @@ def test_writable_slots_punts_on_computed_root_without_literal_domain() -> None:
     ptr = Int("Ptr")
     src = Int("Src")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             math(other * 10 + 3, root)  # root computed, no literal writes
-        with Rung():
+        with rung():
             math(root + 200, ptr)
-        with Rung():
+        with rung():
             copy(src, ds[ptr])
 
     slots = writable_slots(
@@ -88,13 +88,13 @@ def test_writable_slots_punts_on_nonaffine_pointer() -> None:
     ptr = Int("Ptr")
     src = Int("Src")
     with Program(strict=False) as logic:
-        with Rung(root == 0):
+        with rung(root == 0):
             copy(3, root)
-        with Rung(root == 1):
+        with rung(root == 1):
             copy(5, root)
-        with Rung():
+        with rung():
             math(root * 10, ptr)  # scale 10 — not bijective
-        with Rung():
+        with rung():
             copy(src, ds[ptr])
 
     slots = writable_slots(
@@ -109,7 +109,7 @@ def test_writable_slots_uses_declared_pointer_domain() -> None:
     ptr = Int("Ptr", external=True, min=210, max=212)
     src = Int("Src")
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(src, ds[ptr])
 
     slots = writable_slots(
@@ -131,17 +131,17 @@ def _band_program() -> tuple[Program, Block]:
     ptr = Int("Ptr")
     src = Int("Src")
     with Program(strict=False) as logic:
-        with Rung(root == 0):
+        with rung(root == 0):
             copy(16, root)
-        with Rung(root == 5):
+        with rung(root == 5):
             copy(0, root)
-        with Rung():
+        with rung():
             math(root + 200, ptr)
-        with Rung():
+        with rung():
             copy(src, ds[ptr])
-        with Rung():
+        with rung():
             fill(0, ds.select(201, 300))  # the clear-only writer over the band
-        with Rung():
+        with rung():
             # A band reader (mirrors the burner's A_AlmExtent sum) so the band
             # slots are genuine steerable levers before attribution demotes them.
             blockcopy(ds.select(201, 300), Block("MIRROR", TagType.INT, 1, 100).select(1, 100))
@@ -176,15 +176,15 @@ def _never_written_band_program() -> tuple[Program, Block]:
     ptr = Int("Ptr")
     src = Int("Src")
     with Program(strict=False) as logic:
-        with Rung(root == 0):
+        with rung(root == 0):
             copy(16, root)
-        with Rung(root == 5):
+        with rung(root == 5):
             copy(0, root)
-        with Rung():
+        with rung():
             math(root + 200, ptr)
-        with Rung():
+        with rung():
             copy(src, ds[ptr])  # over-cap indirect write, dropped without the crossing
-        with Rung():
+        with rung():
             blockcopy(ds.select(201, 300), Block("MIRROR", TagType.INT, 1, 100).select(1, 100))
     return logic, ds
 

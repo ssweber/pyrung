@@ -65,7 +65,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, event_drum, math, out, time_drum, time_event_drum
+from pyrung.core import Or, copy, event_drum, math, out, rung, time_drum, time_event_drum
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, pattern_for, pool_of, put, track
 from tests.conformance.memory import dd, ds, td
 from tests.conformance.scans import count_scans, done, scans_for
@@ -135,7 +135,7 @@ def time_side(
     jump: Any = None,
     jump_step: Any = None,
 ) -> None:
-    with Rung(*_gate(slot, pause, False)):
+    with rung(*_gate(slot, pause, False)):
         drum = time_drum(
             outputs=[s.a, s.b],
             presets=list(presets),
@@ -161,7 +161,7 @@ def te_side(
     reset: Any = None,
     free: bool = False,
 ) -> None:
-    with Rung(*_gate(slot, pause, free)):
+    with rung(*_gate(slot, pause, free)):
         drum = time_event_drum(
             outputs=[s.a, s.b],
             presets=list(presets) if presets is not None else [None] * len(events),
@@ -187,7 +187,7 @@ def event_side(
     reset: Any = None,
     free: bool = False,
 ) -> None:
-    with Rung(*_gate(slot, pause, free)):
+    with rung(*_gate(slot, pause, free)):
         drum = event_drum(
             outputs=[s.a, s.b],
             events=list(events),
@@ -199,12 +199,12 @@ def event_side(
 
 
 def pause_on(slot: Any, bit: Any, first: int, last: int) -> None:
-    with Rung(slot.Scratch >= first, slot.Scratch <= last):
+    with rung(slot.Scratch >= first, slot.Scratch <= last):
         out(bit)
 
 
 def snap_two(slot: Any, top: Side, under: Side, scan: int, into: Any) -> None:
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         math(top.state * 100 + under.state, into)
 
 
@@ -213,7 +213,7 @@ def acc_thousands(slot: Any, s: Side, scan: int, into: Any) -> None:
 
     An Acc staged at 9000 reads 9 up to 9999, so a few scans of up to 50 ms leave it alone.
     """
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         math(s.acc / 1000, into)
 
 
@@ -222,9 +222,9 @@ def moves(slot: Any, acc: Any, prev: Any, first: int, last: int, into: Any) -> N
 
     Call this below the drum's rung.
     """
-    with Rung(slot.Scratch >= first, slot.Scratch <= last, acc > prev):
+    with rung(slot.Scratch >= first, slot.Scratch <= last, acc > prev):
         math(into + 1, into)
-    with Rung():
+    with rung():
         copy(acc, prev)
 
 
@@ -252,7 +252,7 @@ def prove_te_event_after_reset(slot):
     te, ev = r.side(0), r.side(1)
     reset, e1, e2, e3 = r.take(4)
     count_scans(slot)
-    with Rung(Or(slot.Cmd == 0, slot.Scratch == 3)):
+    with rung(Or(slot.Cmd == 0, slot.Scratch == 3)):
         out(reset)
     on_scans(slot, e1, 1, 4, 6)
     on_scans(slot, e2, 6)
@@ -292,7 +292,7 @@ def prove_te_level_from_scan_1(slot):
     te, ev = r.side(0), r.side(1)
     e1, e2 = r.take(2)
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         out(e1)
     te_side(slot, te, [e1, e2])
     event_side(slot, ev, [e1, e2])

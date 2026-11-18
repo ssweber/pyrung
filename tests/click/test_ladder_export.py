@@ -34,12 +34,12 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     Tag,
     TagType,
     Timer,
     immediate,
     randint,
+    rung,
 )
 from pyrung.core.program import (
     blockcopy,
@@ -122,7 +122,7 @@ def test_header_and_width_invariants():
     B = Bool("B")
 
     with Program() as logic:
-        with Rung(A):
+        with rung(A):
             out(B)
 
     mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
@@ -139,7 +139,7 @@ def test_named_click_slots_ending_in_digits_export_as_hardware_addresses():
     blocks.c.slot(1, name="RecordTopThickness")
 
     with Program() as logic:
-        with Rung(blocks.x[1], blocks.x[2]):
+        with rung(blocks.x[1], blocks.x[2]):
             out(blocks.c[1])
 
     bundle = pyrung_to_ladder(logic, TagMap({}, include_system=False))
@@ -156,7 +156,7 @@ def test_unmapped_raw_click_address_name_still_exports():
     RawOutput = Bool("C1")
 
     with Program() as logic:
-        with Rung(RawInput):
+        with rung(RawInput):
             out(RawOutput)
 
     bundle = pyrung_to_ladder(logic, TagMap({}, include_system=False))
@@ -173,7 +173,7 @@ def test_unmapped_numbered_nickname_is_not_treated_as_click_address():
     RawOutput = Bool("C1")
 
     with Program() as logic:
-        with Rung(Motor10):
+        with rung(Motor10):
             out(RawOutput)
 
     with pytest.raises(LadderExportError, match="Tag 'Motor10' is not mapped"):
@@ -186,7 +186,7 @@ def test_export_roundtrip_guard_rejects_missing_pin_row():
 
     logic, mapping = build_program(
         """
-        with Rung(X1):
+        with rung(X1):
             on_delay(Timer[1], preset=100, unit="Tms").reset(X2)
         """
     )
@@ -208,7 +208,7 @@ def test_and_example_golden():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1, X2):
+            with rung(X1, X2):
                 out(Y1)
         """,
         """
@@ -221,7 +221,7 @@ def test_or_expansion_with_trailing_and_golden():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(Or(X1, X2), C1):
+            with rung(Or(X1, X2), C1):
                 out(Y1)
         """,
         """
@@ -328,7 +328,7 @@ def test_contact_after_or_merge_shares_the_merge_cell(conditions: str, rows: lis
     _assert_or_merge(
         f"""
         with Program() as p:
-            with Rung({conditions}):
+            with rung({conditions}):
                 out(Y1)
         """,
         _rows(*rows),
@@ -359,7 +359,7 @@ def test_a_text_compare_with_a_longer_literal_stays_one_compare_in_an_or(build, 
     # Underneath, TXT1 != "AB" is an Or of one compare per character.
     outputs = sum(row.split(",")[-1].startswith("out(") for row in rows)
     with Program(strict=False) as logic:
-        with Rung(*build()):
+        with rung(*build()):
             for index in range(outputs):
                 out(c[index + 1])
     bundle = pyrung_to_ladder(logic, TagMap({}, include_system=False))
@@ -387,7 +387,7 @@ def test_or_merge_keeps_its_bare_t(conditions: str, rows: list[str]):
     _assert_or_merge(
         f"""
         with Program() as p:
-            with Rung({conditions}):
+            with rung({conditions}):
                 out(Y1)
         """,
         _rows(*rows),
@@ -400,7 +400,7 @@ def test_or_merge_carries_a_branch_split():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(Or(X1, X2)):
+            with rung(Or(X1, X2)):
                 out(Y1)
                 with branch(C1):
                     out(Y2)
@@ -416,7 +416,7 @@ def test_contact_merged_with_or_then_split_keeps_the_split_marker():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(Or(X1, X2), X3):
+            with rung(Or(X1, X2), X3):
                 out(Y1)
                 out(Y2)
         """,
@@ -431,7 +431,7 @@ def test_merged_contact_reads_back_as_the_or_it_was_written_as():
     logic, mapping = build_program(
         """
         with Program() as p:
-            with Rung(DS1 != 0, Or(DS2 == 2, DS2 >= 4), DS2 <= 6):
+            with rung(DS1 != 0, Or(DS2 == 2, DS2 >= 4), DS2 <= 6):
                 out(C1)
         """
     )
@@ -448,7 +448,7 @@ def test_branch_row_is_continuation_after_parent_conditions():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
                 with branch(X2):
                     out(Y2)
@@ -464,7 +464,7 @@ def test_multiple_branches_stack_vertical_markers():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
                 with branch(X2):
                     out(Y2)
@@ -483,7 +483,7 @@ def test_parent_instruction_after_branch_stays_on_parent_path():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
                 with branch(X2):
                     out(Y2)
@@ -501,7 +501,7 @@ def test_branch_local_or_expands_with_click_topology():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
                 with branch(Or(X2, X3)):
                     out(Y2)
@@ -518,7 +518,7 @@ def test_branch_local_or_with_series_suffix_stays_mechanical():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
                 with branch(Or(X2, X3), X4):
                     out(Y2)
@@ -535,7 +535,7 @@ def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
                 with branch(Or(X2, X3), X4):
                     out(Y2)
@@ -554,7 +554,7 @@ def test_branch_with_series_then_local_or_keeps_click_merge_topology():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 with branch(X2, Or(X3, X4)):
                     out(Y1)
                 out(Y2)
@@ -571,7 +571,7 @@ def test_branch_with_series_then_three_way_local_or_keeps_parent_continuation_vi
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 with branch(X2, Or(X3, X4, X5)):
                     out(Y1)
                 out(Y2)
@@ -589,7 +589,7 @@ def test_multiple_instruction_rows_share_powered_path():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1, X2):
+            with rung(X1, X2):
                 out(Y1)
                 latch(Y2)
                 reset(Y3)
@@ -606,7 +606,7 @@ def test_immediate_contact_and_coils_render_canonical_tokens():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(immediate(X1)):
+            with rung(immediate(X1)):
                 out(immediate(Y1))
                 latch(immediate(Y2))
                 reset(immediate(Y3))
@@ -624,7 +624,7 @@ def test_immediate_contiguous_range_renders_compact_token():
     Outputs = Block("Outputs", TagType.BOOL, 1, 4)
 
     with Program() as logic:
-        with Rung(Start):
+        with rung(Start):
             out(immediate(Outputs.select(1, 4)))
 
     mapping = TagMap(
@@ -647,7 +647,7 @@ def test_vertical_wire_stack_for_three_or_branches():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(Or(X1, X2, X3), C1):
+            with rung(Or(X1, X2, X3), C1):
                 out(Y1)
         """,
         """
@@ -662,7 +662,7 @@ def test_builder_pin_rows_are_independent_continuations():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 count_up(Counter[1], preset=5).down(X2).reset(X3)
         """,
         """
@@ -677,7 +677,7 @@ def test_forloop_lowers_to_for_body_and_next_rows():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 with forloop(3, oneshot=True):
                     out(Y1)
         """,
@@ -694,16 +694,16 @@ def test_subroutine_files_sorted_and_return_tailed(tmp_path: Path):
     SubOut = Bool("SubOut")
 
     with Program() as logic:
-        with Rung(Start):
+        with rung(Start):
             call("beta-two")
             call("alpha")
 
         with subroutine("alpha"):
-            with Rung():
+            with rung():
                 out(SubOut)
 
         with subroutine("beta-two"):
-            with Rung():
+            with rung():
                 return_early()
 
     mapping = TagMap({Start: x[1], SubOut: y[1]}, include_system=False)
@@ -742,9 +742,9 @@ def test_bundle_writes_one_rung_source_entry_per_click_rung(tmp_path: Path):
     Light2 = Bool("Light2")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Light1)
-        with Rung(Enable).continued():
+        with rung(Enable).continued():
             out(Light2)
 
     mapping = TagMap(
@@ -776,10 +776,10 @@ def test_bundle_writes_one_rung_source_entry_per_click_rung(tmp_path: Path):
 
 def test_the_click_rungs_of_a_rung_with_no_contact_share_its_source_span():
     with Program() as logic:
-        with Rung():
+        with rung():
             out(y[1])
             out(y[2])
-        with Rung(x[1]):
+        with rung(x[1]):
             out(y[3])
 
     bundle = pyrung_to_ladder(logic, TagMap(include_system=False))
@@ -797,9 +797,9 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
     Found = Bool("Found")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             search(Chars.select(1, 4) == 'sub"name', result=Result, found=Found)
-        with Rung(Enable):
+        with rung(Enable):
             search(Chars.select(1, 4) == "normal", result=Result, found=Found)
 
     mapping = TagMap(
@@ -828,7 +828,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
     Found = Bool("Found")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             search(Chars.select(1, 4) == 'sub"name', result=Result, found=Found)
 
     mapping = TagMap(
@@ -882,15 +882,15 @@ def test_tokens_include_explicit_defaults_and_oneshot():
     PackDest = Int("PackDest")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Light)
-        with Rung(Enable):
+        with rung(Enable):
             copy(5, Dest1)
-        with Rung(Enable):
+        with rung(Enable):
             math(Dest1 + 1, Dest2)
-        with Rung(Enable):
+        with rung(Enable):
             search(Data.select(1, 2) == 1, result=Result, found=Found)
-        with Rung(Enable):
+        with rung(Enable):
             pack_text(Chars.select(1, 2), PackDest)
 
     mapping = TagMap(
@@ -924,7 +924,7 @@ def test_calc_hex_token_uses_inferred_hex_mode():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 math(DH1 | DH2, DH3)
         """,
         """
@@ -942,7 +942,7 @@ def test_calc_exports_wide_constants_as_written_once_allowed():
     logic, mapping = build_program(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 math(DD1 / 3000000000, DS1)
         """
     )
@@ -970,28 +970,28 @@ def test_calc_token_uses_click_native_operators():
 
     with Program() as logic:
         # Decimal-mode operators
-        with Rung(Enable):
+        with rung(Enable):
             math(A**2, Result)  # Power → ^
-        with Rung(Enable):
+        with rung(Enable):
             math(A % B, Result)  # Modulo → MOD
-        with Rung(Enable):
+        with rung(Enable):
             math(A + B, Result)  # Addition with spaces
-        with Rung(Enable):
+        with rung(Enable):
             math(sqrt(A), Result)  # MathFuncExpr → uppercase Click name
         # Hex-mode operators (WORD tags)
-        with Rung(Enable):
+        with rung(Enable):
             math(H1[1] << 3, HDest[1])  # Left shift operator → LSH
-        with Rung(Enable):
+        with rung(Enable):
             math(H1[1] >> 1, HDest[1])  # Right shift operator → RSH
-        with Rung(Enable):
+        with rung(Enable):
             math(lsh(H1[1], 4), HDest[1])  # ShiftFuncExpr
-        with Rung(Enable):
+        with rung(Enable):
             math(rsh(H1[1], 2), HDest[1])  # ShiftFuncExpr
-        with Rung(Enable):
+        with rung(Enable):
             math(H1[1] & H2[1], HDest[1])  # AND
-        with Rung(Enable):
+        with rung(Enable):
             math(H1[1] | H2[1], HDest[1])  # OR
-        with Rung(Enable):
+        with rung(Enable):
             math(H1[1] ^ H2[1], HDest[1])  # XOR
 
     mapping = TagMap(
@@ -1062,7 +1062,7 @@ def test_calc_math_func_names_use_click_convention():
 
     for func, click_name in func_and_click_name:
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(func(A), Result)
 
         mapping = TagMap(
@@ -1083,7 +1083,7 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
     Dest = Int("Dest")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(A + H[1], Dest)
 
     mapping = TagMap(
@@ -1153,27 +1153,27 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
     RecvEx = Int("RecvEx")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             blockcopy(SrcBlock.select(1, 3), DstBlock.select(1, 3), oneshot=True)
-        with Rung(Enable):
+        with rung(Enable):
             fill(7, DstBlock.select(1, 3), oneshot=True)
-        with Rung(Enable):
+        with rung(Enable):
             pack_bits(Bits.select(1, 16), DWord, oneshot=True)
-        with Rung(Enable):
+        with rung(Enable):
             pack_words(Words.select(1, 2), DWord, oneshot=True)
-        with Rung(Enable):
+        with rung(Enable):
             unpack_to_bits(DWord, Bits.select(1, 32), oneshot=True)
-        with Rung(Enable):
+        with rung(Enable):
             unpack_to_words(DWord, Words.select(1, 2), oneshot=True)
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Timer[1], preset=100).reset(TonReset)
-        with Rung(Enable):
+        with rung(Enable):
             off_delay(Timer2, preset=50)
-        with Rung(Enable):
+        with rung(Enable):
             count_down(Counter3, preset=9).reset(CdReset)
-        with Rung(Enable):
+        with rung(Enable):
             shift(Bits.select(1, 8)).clock(ShiftClock).reset(ShiftReset)
-        with Rung(Enable):
+        with rung(Enable):
             event_drum(
                 outputs=[DrumOut1, DrumOut2],
                 events=[Event1, Event2],
@@ -1181,7 +1181,7 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
                 current_step=DrumStep,
                 completion_flag=DrumDone,
             ).reset(DrumReset).jump(DrumJump, step=DrumStep).jog(DrumJog)
-        with Rung(Enable):
+        with rung(Enable):
             time_drum(
                 outputs=[DrumOut1, DrumOut2],
                 presets=[100, 200],
@@ -1190,7 +1190,7 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
                 accumulator=DrumAcc,
                 completion_flag=DrumDone,
             ).reset(DrumReset).jump(DrumJump, step=DrumStep).jog(DrumJog)
-        with Rung(Enable):
+        with rung(Enable):
             send(
                 target=ModbusTcpTarget("plc1", "127.0.0.1", port=502, device_id=3),
                 remote_start="DS1",
@@ -1200,7 +1200,7 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
                 error=SendError,
                 exception_response=SendEx,
             )
-        with Rung(Enable):
+        with rung(Enable):
             receive(
                 target=ModbusTcpTarget("plc2", "127.0.0.1", port=502, device_id=4),
                 remote_start="DS2",
@@ -1289,7 +1289,7 @@ def test_precheck_and_issue_payload():
     Dest = Int("Dest")
 
     with Program() as logic:
-        with Rung():
+        with rung():
             copy(A * 2, Dest)
 
     mapping = TagMap({A: ds[1], Dest: ds[2]}, include_system=False)
@@ -1315,7 +1315,7 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
     Outputs = Block("Outputs", TagType.BOOL, 1, 4)
 
     with Program() as logic:
-        with Rung(Start):
+        with rung(Start):
             out(immediate(Outputs.select(1, 4)))
 
     mapping = TagMap(
@@ -1351,7 +1351,7 @@ def test_immediate_contact_outside_x_fails_with_explicit_diagnostic():
     Coil = Bool("Coil")
 
     with Program() as logic:
-        with Rung(immediate(Sensor)):
+        with rung(immediate(Sensor)):
             out(Coil)
 
     mapping = TagMap({Sensor: c[1], Coil: y[1]}, include_system=False)
@@ -1371,7 +1371,7 @@ def test_immediate_in_copy_fails_with_context_diagnostic():
     Dest = Int("Dest")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(immediate(Source), Dest)
 
     mapping = TagMap(
@@ -1403,15 +1403,15 @@ def test_nested_subroutine_call_issue_includes_source_location():
     SubOut = Bool("SubOut")
 
     with Program() as logic:
-        with Rung(A):
+        with rung(A):
             call("outer")
 
         with subroutine("outer"):
-            with Rung():
+            with rung():
                 call("inner")
 
         with subroutine("inner"):
-            with Rung():
+            with rung():
                 out(SubOut)
 
     mapping = TagMap({A: x[1], SubOut: y[1]}, include_system=False)
@@ -1438,7 +1438,7 @@ def test_comment_single_line():
         """
         with Program() as p:
             comment("Turn on B when A is true.")
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
         """,
         """
@@ -1453,7 +1453,7 @@ def test_comment_multi_line():
         """
         with Program() as p:
             comment("Line one.\\nLine two.")
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
         """,
         """
@@ -1468,7 +1468,7 @@ def test_no_comment_no_extra_rows():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 out(Y1)
         """,
         """
@@ -1485,7 +1485,7 @@ def test_comment_with_branches():
 
     with Program() as logic:
         comment("Branching rung.")
-        with Rung(A):
+        with rung(A):
             with branch(Mode):
                 out(Y1)
             with branch(~Mode):
@@ -1503,7 +1503,7 @@ def test_empty_branch_comment_fails_round_trip_validation():
     logic, mapping = build_program("""
         with Program() as p:
             comment("No rows should be emitted.")
-            with Rung(X1):
+            with rung(X1):
                 with branch(C1):
                     pass
     """)
@@ -1591,7 +1591,7 @@ def test_native_pattern_1_mid_rung_or():
     Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(X001, Or(X002, C1)):
+        with rung(X001, Or(X002, C1)):
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], Y001: y[1]}, include_system=False)
@@ -1610,7 +1610,7 @@ def test_native_pattern_2_series_ors():
     Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(Or(X001, X002), Or(C1, C2)):
+        with rung(Or(X001, X002), Or(C1, C2)):
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1]}, include_system=False)
@@ -1629,7 +1629,7 @@ def test_native_pattern_3_or_plus_branch():
     Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(Or(X001, X002)):
+        with rung(Or(X001, X002)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1654,7 +1654,7 @@ def test_native_pattern_4_three_way_or_plus_branch():
     Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(Or(X001, X002, X003)):
+        with rung(Or(X001, X002, X003)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1682,7 +1682,7 @@ def test_native_pattern_5_combined_or_multi_output_branch():
     Y003 = Bool("Y003")
 
     with Program() as logic:
-        with Rung(X001, Or(X002, X003, X004)):
+        with rung(X001, Or(X002, X003, X004)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1719,7 +1719,7 @@ def test_native_pattern_6_mid_rung_or_with_nested_all_of():
     Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(X001, Or(X002, And(C1, C2, C3), X003)):
+        with rung(X001, Or(X002, And(C1, C2, C3), X003)):
             out(Y001)
 
     mapping = TagMap(
@@ -1744,7 +1744,7 @@ def test_native_pattern_7_or_with_two_branches():
     Y003 = Bool("Y003")
 
     with Program() as logic:
-        with Rung(Or(X001, X002)):
+        with rung(Or(X001, X002)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1773,7 +1773,7 @@ def test_native_pattern_8_series_ors_plus_branch():
     Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(Or(X001, X002), Or(C1, C2)):
+        with rung(Or(X001, X002), Or(C1, C2)):
             out(Y001)
             with branch(X003):
                 out(Y002)
@@ -1796,7 +1796,7 @@ def test_calc_sum_expr_renders_colon_range():
     Dest = Block("Dest", TagType.WORD, 1, 1)
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(DH.select(1, 5).sum(), Dest[1])
 
     mapping = TagMap(
@@ -1815,7 +1815,7 @@ def test_calc_sum_expr_hex_mode():
     Dest = Block("Dest", TagType.WORD, 1, 1)
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(DH.select(1, 3).sum(), Dest[1])
 
     mapping = TagMap(
@@ -1834,7 +1834,7 @@ def test_calc_sum_expr_decimal_mode():
     Result = Int("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(DS.select(1, 5).sum(), Result)
 
     mapping = TagMap(
@@ -1857,7 +1857,7 @@ def test_calc_range_aggregate_renders_click_name(method, click_name):
     Result = Int("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(getattr(DS.select(1, 5), method)(), Result)
 
     mapping = TagMap(
@@ -1876,7 +1876,7 @@ def test_calc_range_aggregate_hex_mode():
     Dest = Block("Dest", TagType.WORD, 1, 1)
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(DH.select(1, 3).max(), Dest[1])
 
     mapping = TagMap(
@@ -1895,7 +1895,7 @@ def test_calc_bool_range_sum_renders_plain_sum():
     Count = Int("Count")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(Flags.select(1, 8).sum(), Count)
 
     mapping = TagMap(
@@ -1914,7 +1914,7 @@ def test_calc_abs_renders_uppercase():
     Result = Int("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(abs(Delta), Result)
             math(abs(Delta - 5) * 2, Result)
 
@@ -1936,7 +1936,7 @@ def test_calc_randint_renders_rand():
     Result = Int("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(randint(1, 100), Result)
             math(randint(Lo, Hi) * 2, Result)
 
@@ -1958,7 +1958,7 @@ def test_calc_randint_of_words_is_hex():
     Result = Tag("Result", TagType.WORD)
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(randint(Lo, Hi), Result)
 
     mapping = TagMap(
@@ -1977,7 +1977,7 @@ def test_calc_grouping_parens_render_spaced():
     Result = Int("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(A * (B + 1), Result)
             math(-(A + 2), Result)
 
@@ -1998,7 +1998,7 @@ def test_calc_range_aggregate_composes_with_abs():
     Result = Int("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(DS.select(1, 5).max() + abs(Delta), Result)
 
     mapping = TagMap(
@@ -2026,7 +2026,7 @@ def test_summary_has_no_rename_for_math():
     Result = Int("Result")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(A + B, Result)
 
     mapping = TagMap(
@@ -2040,7 +2040,7 @@ def test_summary_has_no_rename_for_math():
     assert s.summary() == "Added:   end() on main"
 
     with pytest.warns(FutureWarning), Program() as old:
-        with Rung(Enable):
+        with rung(Enable):
             calc(A + B, Result)
     assert pyrung_to_ladder(old, mapping).export_summary.renames == ()
 
@@ -2051,7 +2051,7 @@ def test_summary_has_no_renames_without_one():
     Light = Bool("Light")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Light)
 
     mapping = TagMap(
@@ -2070,10 +2070,10 @@ def test_summary_counts_forloop_next():
     Light = Bool("Light")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3):
                 out(Light)
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
                 out(Light)
 
@@ -2096,10 +2096,10 @@ def test_summary_counts_subroutine_return():
     Light = Bool("Light")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             call("MySub")
         with subroutine("MySub"):
-            with Rung(Enable):
+            with rung(Enable):
                 out(Light)
 
     mapping = TagMap(
@@ -2118,12 +2118,12 @@ def test_summary_return_not_counted_when_explicit():
     Light = Bool("Light")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             call("MySub")
         with subroutine("MySub"):
-            with Rung(Enable):
+            with rung(Enable):
                 out(Light)
-            with Rung():
+            with rung():
                 return_early()
 
     mapping = TagMap(
@@ -2141,12 +2141,12 @@ def test_conditional_return_at_end_still_gets_tail():
     Light = Bool("Light")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             call("MySub")
         with subroutine("MySub"):
-            with Rung(Enable):
+            with rung(Enable):
                 out(Light)
-            with Rung(Enable):
+            with rung(Enable):
                 return_early()
 
     mapping = TagMap({Enable: x[1], Light: y[1]}, include_system=False)
@@ -2166,7 +2166,7 @@ def test_summary_end_always_present():
     Light = Bool("Light")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Light)
 
     mapping = TagMap(
@@ -2187,15 +2187,15 @@ def test_summary_str_format():
     Coil = Bool("Coil")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             math(A + B, Result)
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3):
                 out(Coil)
-        with Rung(Enable):
+        with rung(Enable):
             call("MySub")
         with subroutine("MySub"):
-            with Rung(Enable):
+            with rung(Enable):
                 out(Coil)
 
     mapping = TagMap(
@@ -2213,7 +2213,7 @@ def test_send_rtu_target_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1"),
                     remote_start="DS1",
@@ -2234,7 +2234,7 @@ def test_receive_rtu_target_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=3, com_port="cpu2"),
                     remote_start="DS1",
@@ -2255,7 +2255,7 @@ def test_send_modbus_address_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusTcpTarget("plc2", "192.168.1.2", device_id=1),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
@@ -2276,7 +2276,7 @@ def test_receive_modbus_address_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusTcpTarget("plc2", "192.168.1.2", device_id=1),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
@@ -2319,7 +2319,7 @@ def test_click_v4_target_forms_export(target, token):
     _assert_export_main_rows(
         f"""
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 send(target={target}, remote_start="DS1", source=DS1, sending=C1, success=C2,
                      error=C3, exception_response=DS2)
         """,
@@ -2338,7 +2338,7 @@ def test_device_id_outside_ds_is_refused(register):
     logic, mapping = build_program(
         f"""
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 receive(target=ModbusTcpTarget("plc2", "192.168.1.2", device_id={register}),
                         remote_start="DS1", dest=DS1)
         """
@@ -2356,7 +2356,7 @@ def test_to_text_exponential_from_an_integer_is_refused(source):
     logic, mapping = build_program(
         f"""
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 copy({source}, TXT1, convert=to_text(exponential=True))
         """
     )
@@ -2389,7 +2389,7 @@ def test_to_text_writes_the_flag_its_source_type_has(source, rendered, convert, 
     _assert_export_main_rows(
         f"""
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 copy({source}, TXT1, convert={convert})
         """,
         f"""
@@ -2402,7 +2402,7 @@ def test_send_rtu_modbus_address_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
@@ -2423,7 +2423,7 @@ def test_receive_rtu_modbus_address_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
@@ -2456,7 +2456,7 @@ def test_receive_modbus_address_keeps_its_notation(remote_start, dest, csv_addre
     _assert_export_main_rows(
         f"""
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusTcpTarget("plc2", "192.168.1.2", device_id=1),
                     remote_start={remote_start},
@@ -2477,7 +2477,7 @@ def test_send_block_range_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 send(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
@@ -2498,7 +2498,7 @@ def test_receive_block_range_token():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 receive(
                     target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
@@ -2523,7 +2523,7 @@ def test_nested_branch_export_pushes_later_siblings_down():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(X1):
+            with rung(X1):
                 with branch(X2):
                     out(Y1)
                     with branch(X3):
@@ -2545,7 +2545,7 @@ def test_branch_rendered_height_over_32_rows_raises_clear_error():
     outputs = [Bool(f"O{i}") for i in range(1, 34)]
 
     with Program(strict=False) as logic:
-        with Rung(A):
+        with rung(A):
             out(outputs[0])
             for condition, out_tag in zip(conditions, outputs[1:], strict=True):
                 with branch(condition):
@@ -2583,9 +2583,9 @@ class TestContinuedExport:
         _assert_export_main_rows(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
-                with Rung(X2).continued():
+                with rung(X2).continued():
                     out(Y2)
             """,
             """
@@ -2599,11 +2599,11 @@ class TestContinuedExport:
         _assert_export_main_rows(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
                     with branch(X3):
                         out(Y2)
-                with Rung(X2).continued():
+                with rung(X2).continued():
                     out(Y3)
             """,
             """
@@ -2618,9 +2618,9 @@ class TestContinuedExport:
         _assert_export_main_rows(
             """
             with Program() as p:
-                with Rung(X1):
+                with rung(X1):
                     out(Y1)
-                with Rung(X2, C1).continued():
+                with rung(X2, C1).continued():
                     out(Y2)
             """,
             """
@@ -2647,7 +2647,7 @@ class TestIndexedMarkers:
         A = Bool("A")
         B = Bool("B")
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(B)
         mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
         bundle = pyrung_to_ladder(logic, mapping)
@@ -2659,9 +2659,9 @@ class TestIndexedMarkers:
         B = Bool("B")
         C = Bool("C")
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(B)
-            with Rung(A):
+            with rung(A):
                 out(C)
         mapping = TagMap({A: x[1], B: y[1], C: y[2]}, include_system=False)
         bundle = pyrung_to_ladder(logic, mapping, index=True)
@@ -2675,9 +2675,9 @@ class TestIndexedMarkers:
         B = Bool("B")
         C = Bool("C")
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(B)
-            with Rung(A).continued():
+            with rung(A).continued():
                 out(C)
         mapping = TagMap({A: x[1], B: y[1], C: y[2]}, include_system=False)
         bundle = pyrung_to_ladder(logic, mapping, index=True)
@@ -2690,7 +2690,7 @@ class TestIndexedMarkers:
         A = Bool("A")
         B = Bool("B")
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 with forloop(3):
                     out(B)
         mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
@@ -2705,14 +2705,14 @@ class TestIndexedMarkers:
         A = Bool("A")
         B = Bool("B")
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(B)
-            with Rung(A):
+            with rung(A):
                 call("Sub1")
             with subroutine("Sub1"):
-                with Rung(A):
+                with rung(A):
                     out(B)
-                with Rung(A):
+                with rung(A):
                     out(B)
         mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
         bundle = pyrung_to_ladder(logic, mapping, index=True)
@@ -2737,7 +2737,7 @@ class TestIndexedMarkers:
 
 def _single_fill_tokens(body, *, allow: tuple[str, ...] = ()) -> list[str]:
     with Program(strict=False) as logic:
-        with Rung(x[1]):
+        with rung(x[1]):
             body()
     bundle = pyrung_to_ladder(logic, TagMap(), allow=allow)
     return [row[-1] for row in bundle.main_rows[1:] if row[-1] not in ("", "end()")]
@@ -2745,7 +2745,7 @@ def _single_fill_tokens(body, *, allow: tuple[str, ...] = ()) -> list[str]:
 
 def test_one_register_fill_exports_the_full_row_of_a_single_copy():
     with Program(strict=False) as logic:
-        with Rung(x[1]):
+        with rung(x[1]):
             fill(7, ds.select(5, 5), oneshot=True)
     rows = pyrung_to_ladder(logic, TagMap()).main_rows
     expected = _literal_csv_rows(
@@ -2812,7 +2812,7 @@ def test_pointer_range_fill_is_still_refused():
     ptr = Int("Ptr")
     with pytest.raises(LadderExportError, match="CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"):
         with Program(strict=False) as logic:
-            with Rung(x[1]):
+            with rung(x[1]):
                 fill(1, ds.select(ptr, ptr))
         pyrung_to_ladder(logic, TagMap({ptr: ds[1]}, include_system=False))
 
@@ -2823,7 +2823,7 @@ def test_one_register_fill_and_its_copy_store_alike(value):
 
     def run(build):
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 build()
         runner = PLC(logic)
         runner.step()
@@ -2840,7 +2840,7 @@ def test_one_register_fill_costs_what_the_copy_costs():
 
     def total(build):
         with Program(strict=False) as logic:
-            with Rung(x[1]):
+            with rung(x[1]):
                 build()
         return estimate_steps(pyrung_to_ladder(logic, TagMap())).total
 

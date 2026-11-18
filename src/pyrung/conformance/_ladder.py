@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.conformance._case import Case, describe_expect
 from pyrung.conformance._slot import SLOT_FIELDS, make_slot
-from pyrung.core import Program, Rung, comment, copy, fill
+from pyrung.core import Program, comment, copy, fill, rung
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 
 if TYPE_CHECKING:
@@ -42,14 +42,14 @@ def emit_case(group: str, c: Case, slots: _NamedArrayRuntime, index: int) -> Non
     """Add case *c*'s rungs, on slot *index* of *slots*, to the current program."""
     slot = slots[index]
     comment(case_comment(group, c))
-    with Rung(slot.Cmd == 0):
+    with rung(slot.Cmd == 0):
         fill(0, slots.instance(index))
         if c.init is not None:
             c.init(slot)
         if c.ready is None:
             copy(1, slot.Ready)
     if c.ready is not None:
-        with Rung(slot.Cmd == 0, *_conditions(c.ready(slot))):
+        with rung(slot.Cmd == 0, *_conditions(c.ready(slot))):
             copy(1, slot.Ready)
     c.ladder(slot)
 

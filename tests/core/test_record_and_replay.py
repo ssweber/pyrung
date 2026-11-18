@@ -43,7 +43,7 @@ from datetime import datetime
 
 import pytest
 
-from pyrung import Rung, program
+from pyrung import program, rung
 from pyrung.core import PLC, Bool, Dint, math, out
 
 # --------------------------------------------------------------------------- #
@@ -362,9 +362,9 @@ def test_replay_with_logic_present() -> None:
 
     @program
     def ladder() -> None:
-        with Rung(a):
+        with rung(a):
             out(b)
-        with Rung(b):
+        with rung(b):
             math(c + 1, c)
 
     source = PLC(logic=ladder, dt=0.01)

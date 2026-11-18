@@ -22,7 +22,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     coast_run,
@@ -34,6 +33,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung,
     rung_firings,
     runner,
     scan_trace,
@@ -74,157 +74,157 @@ Bank = Block("AdvBank", TagType.INT, 1, 8)
 @case
 def moved_write_overwritten_later():
     # A rung attempts a moving value, and a later rung overwrites it. Committed never moves.
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc, X)
-    with Rung():
+    with rung():
         copy(0, X)
 
 
 @case
 def consume_on_read_temp():
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc, Tmp)
-    with Rung():
+    with rung():
         math(Tmp + 1, Y)
-    with Rung():
+    with rung():
         copy(0, Tmp)
 
 
 @case
 def same_rung_two_values():
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc, X)
         copy(T.Acc + 1, X)
 
 
 @case
 def two_writers_same_moved_value():
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc, X)
-    with Rung():
+    with rung():
         copy(T.Acc, X)
 
 
 @case
 def timer_saturates():
-    with Rung():
+    with rung():
         on_delay(T, 32000)
-    with Rung(T.Done):
+    with rung(T.Done):
         latch(Hit)
 
 
 @case
 def staircase_mirror():
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc // 1000, X)
-    with Rung(X == 3):
+    with rung(X == 3):
         out(BX)
 
 
 @case
 def indirect_moving_pointer():
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         math((T.Acc // 500) % 8 + 1, Idx)
-    with Rung():
+    with rung():
         copy(7, Bank[Idx])
 
 
 @case
 def bool_copy_of_clock_unguarded():
-    with Rung(system.sys.clock_100ms):
+    with rung(system.sys.clock_100ms):
         out(BX)
-    with Rung(BX):
+    with rung(BX):
         math(X + 1, X)
 
 
 @case
 def edge_count_on_clock():
-    with Rung(rise(system.sys.clock_100ms)):
+    with rung(rise(system.sys.clock_100ms)):
         math(X + 1, X)
 
 
 @case
 def oneshot_on_done():
-    with Rung():
+    with rung():
         on_delay(T, 700)
-    with Rung(T.Done):
+    with rung(T.Done):
         copy(5, X, oneshot=True)
-    with Rung(T.Done):
+    with rung(T.Done):
         reset(Tmp)
 
 
 @case
 def self_calc_every_scan():
-    with Rung():
+    with rung():
         math(X + 7, X)
-    with Rung(X > 100):
+    with rung(X > 100):
         copy(0, X)
 
 
 @case
 def real_ramp():
-    with Rung():
+    with rung():
         math(R1 + 0.5, R1)
-    with Rung(R1 > 700.0):
+    with rung(R1 > 700.0):
         latch(Hit)
 
 
 @case
 def dint_big_delta():
-    with Rung():
+    with rung():
         math(D1 + BigStep, D1)
-    with Rung(D1 > 100000000):
+    with rung(D1 > 100000000):
         latch(Hit)
 
 
 @case
 def rung_with_no_moving_input_but_later_writer_moves():
-    with Rung():
+    with rung():
         copy(5, Y)
-    with Rung():
+    with rung():
         on_delay(T, 2000)
-    with Rung(T.Acc > 1000):
+    with rung(T.Acc > 1000):
         copy(9, Y)
 
 
 @case
 def rtc_second_mirror():
-    with Rung():
+    with rung():
         copy(system.rtc.second, X)
-    with Rung(X == 7):
+    with rung(X == 7):
         out(BX)
 
 
 @case
 def same_value_rewrite_by_a_different_rung():
     # The value stays; who writes it changes when a timer crosses.
-    with Rung():
+    with rung():
         on_delay(T, 900)
-    with Rung(T.Done):
+    with rung(T.Done):
         copy(3, Y)
-    with Rung(~T.Done):
+    with rung(~T.Done):
         copy(3, Y)
 
 
 @case
 def attempted_differs_from_commit_by_later_constant():
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         out(BX)
-    with Rung(T.Acc > 500):
+    with rung(T.Acc > 500):
         out(BX, False) if False else copy(1, Y)
 
 
@@ -341,16 +341,16 @@ class TestAgainstStepping:
 
 
 def _ramp() -> None:
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc // 500, X)
-    with Rung(X == 3):
+    with rung(X == 3):
         out(BX)
 
 
 def _count_while_forced() -> None:
-    with Rung(A):
+    with rung(A):
         math(X + 1, X)
 
 
@@ -358,11 +358,11 @@ InsideT = Timer.clone("InsideT")
 
 
 def _set_and_reset_inside_a_wait() -> None:
-    with Rung():
+    with rung():
         on_delay(InsideT, 32_000)
-    with Rung(InsideT.Acc == 10_000):
+    with rung(InsideT.Acc == 10_000):
         latch(Hit)
-    with Rung(InsideT.Acc == 20_000):
+    with rung(InsideT.Acc == 20_000):
         reset(Hit)
 
 
@@ -684,22 +684,22 @@ class TestARungThatFiresInsideARange:
 
 def _writes_two_values_a_scan() -> None:
     # A loop's record cannot say which attempt was the rung's last.
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc, X)
         math(T.Acc + 1, X)
-    with Rung(X > 2):
+    with rung(X > 2):
         out(Hit)
 
 
 def _writes_too_many_values() -> None:
     # A stepped run's record gives up on a column this various.
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         math(T.Acc * T.Acc % 1009, X)
-    with Rung(X > 2):
+    with rung(X > 2):
         out(Hit)
 
 
@@ -834,7 +834,7 @@ def test_a_saturated_timer_is_a_path_of_its_own() -> None:
 
     def saturates() -> None:
         T = Timer.clone("SatT")
-        with Rung():
+        with rung():
             on_delay(T, 100)
 
     plc = _runner(saturates, 0.5)
@@ -1029,11 +1029,11 @@ Toggle = Bool("AdvToggle")
 
 
 def _fires_every_other_scan() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         math(X + 1, X)
-    with Rung():
+    with rung():
         on_delay(T, 30000)
 
 
@@ -1058,10 +1058,10 @@ Counts = [Int(f"AdvCount{rung}") for rung in range(3)]
 
 
 def _three_counts() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
     for count in Counts:
-        with Rung(Toggle):
+        with rung(Toggle):
             math(count + 1, count)
 
 
@@ -1261,11 +1261,11 @@ SetY = Int("AdvSetY")
 
 
 def _ramp_then_set() -> None:
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung():
+    with rung():
         copy(T.Acc // 500, X)
-    with Rung(X >= 1):
+    with rung(X >= 1):
         copy(7, SetY)
 
 
@@ -1292,11 +1292,11 @@ FlipY = Int("AdvFlipY")
 
 
 def _flips_between_two_values() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         copy(5, FlipY)
-    with Rung(~Toggle):
+    with rung(~Toggle):
         copy(7, FlipY)
 
 
@@ -1340,13 +1340,13 @@ TurnRamp = Real("AdvTurnRamp")
 
 
 def _takes_turns_beside_a_ramp() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         copy(5, FlipY)
-    with Rung(~Toggle):
+    with rung(~Toggle):
         copy(7, FlipY)
-    with Rung():
+    with rung():
         math(TurnRamp + 0.1, TurnRamp)
 
 

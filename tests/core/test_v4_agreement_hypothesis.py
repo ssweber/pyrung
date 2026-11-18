@@ -31,7 +31,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     break_loop,
@@ -42,6 +41,7 @@ from pyrung.core import (
     forloop,
     math,
     randint,
+    rung,
     scan_trace,
     timed,
     toggle,
@@ -184,7 +184,7 @@ def _emit(instruction: tuple, k: int) -> None:
                 if leaf == "inc":
                     math(total + 1, total)
                 else:
-                    with Rung(loop.idx == at):
+                    with rung(loop.idx == at):
                         break_loop() if leaf == "break" else continue_loop()
     elif kind == "agg":
         _, agg, lo, hi = instruction
@@ -200,7 +200,7 @@ def _build(spec: Spec) -> Program:
     k = 0
     with Program(strict=False) as logic:
         for cond, instructions in spec.rungs:
-            with Rung(_build_cond(cond)):
+            with rung(_build_cond(cond)):
                 for instruction in instructions:
                     k += 1
                     _emit(instruction, k)

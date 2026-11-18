@@ -13,7 +13,7 @@ import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder.types import LadderBundle
-from pyrung.core import And, Counter, Program, Rung
+from pyrung.core import And, Counter, Program, rung
 from pyrung.core.program import (
     count_down,
     count_up,
@@ -74,7 +74,7 @@ _PINS = {
 def _rail_program(kind: str) -> Program:
     """Return the box with every pin wired from the rail and the shared contacts copied in."""
     with Program(strict=False) as logic:
-        with Rung(*_SHARED, _ENABLE_TAIL):
+        with rung(*_SHARED, _ENABLE_TAIL):
             box = _box(kind)
             for name, own in _PINS[kind]:
                 cond = And(*_SHARED, own)

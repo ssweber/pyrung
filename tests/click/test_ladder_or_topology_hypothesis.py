@@ -19,7 +19,7 @@ from hypothesis import strategies as st
 pytestmark = pytest.mark.hypothesis
 
 from pyrung.click import ClickBlocks, LadderExportError, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.core import And, Bool, Counter, Int, Or, Program, Rung
+from pyrung.core import And, Bool, Counter, Int, Or, Program, rung
 from pyrung.core.program import count_up, out
 from pyrung.core.tag import TagType
 from tests.click.drawing_rule import assert_same_logic, check_scope, contact_size
@@ -166,7 +166,7 @@ def _export(conditions, tags):
     Y_OUT = Bool("Y_OUT")
 
     with Program() as logic:
-        with Rung(*conditions):
+        with rung(*conditions):
             out(Y_OUT)
 
     tag_map_dict = _make_tag_map(tags)
@@ -372,7 +372,7 @@ def _export_nested(conditions, tags, outputs, pin):
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, *_ = ClickBlocks()
     coils = [Bool(f"Y_OUT{k}") for k in range(outputs)]
     with Program(strict=False) as logic:
-        with Rung(*conditions):
+        with rung(*conditions):
             for coil in coils:
                 out(coil)
             if pin is not None:

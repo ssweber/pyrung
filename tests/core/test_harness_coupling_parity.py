@@ -18,7 +18,7 @@ hold.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Real, Rung, copy
+from pyrung import Bool, Int, Program, Real, copy, rung
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
@@ -45,7 +45,7 @@ def _analog_prog() -> Program:
     Temp = Real("Temp", physical=PARITY_THERMAL, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Temp >= 5.0):
+        with rung(Enable, Temp >= 5.0):
             copy(1, Stage)
     return prog
 
@@ -55,7 +55,7 @@ def _bool_prog(on_delay: str = "0.2s", off_delay: str = "0.1s") -> Program:
     Fb = Bool("Fb", physical=Physical("M", on_delay=on_delay, off_delay=off_delay), link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Fb):
+        with rung(Enable, Fb):
             copy(1, Stage)
     return prog
 
@@ -128,9 +128,9 @@ def test_out_driven_command_feedback_lands_next_scan() -> None:
     Fb = Bool("Fb", physical=Physical("M", on_delay="0ms", off_delay="0ms"), link="Enable")
     Seen = Int("Seen")
     with Program() as prog:
-        with Rung(Cmd):
+        with rung(Cmd):
             out(Enable)
-        with Rung(Fb):
+        with rung(Fb):
             copy(1, Seen)
 
     plc = PLC(prog, dt=0.1)
@@ -167,7 +167,7 @@ def _bool_dwell_plc(dt: float = 0.010):
     Fb = Bool("Fb", physical=Physical("M", on_delay="2s", off_delay="500ms"), link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Fb):
+        with rung(Enable, Fb):
             copy(1, Stage)
     plc = PLC(prog, dt=dt)
     Harness(plc).install()

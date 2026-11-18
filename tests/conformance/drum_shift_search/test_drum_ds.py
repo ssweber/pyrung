@@ -49,7 +49,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, copy, fill, reset
+from pyrung.core import copy, fill, reset, rung
 from tests.conformance.drum_rig import LONG, Pool, Side, on_scans, put, track
 from tests.conformance.drum_shift_search.test_drum_pins import snap, te_box, time_box
 from tests.conformance.memory import c, dd, ds, td
@@ -81,7 +81,7 @@ def prove_ds_preset_ends(slot: Any) -> None:
     time_box(slot, by_move, [5, p_zero, LONG])
     time_box(slot, control, [1, LONG, LONG])
     fields = (slot.Result1, slot.Result2, slot.Result3, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, control.step == 2, control.acc >= SETTLED):
+    with rung(slot.Cmd != 0, slot.Fired == 0, control.step == 2, control.acc >= SETTLED):
         for side, field in zip(sides, fields, strict=True):
             copy(side.step, field)
         copy(1, slot.Fired)
@@ -139,7 +139,7 @@ def prove_bad_jump_on_return(slot: Any) -> None:
     on_scans(slot, jog, 2)
     on_scans(slot, pause, 4, 5)
     on_scans(slot, jump, 6)
-    with Rung(slot.Scratch == 4):
+    with rung(slot.Scratch == 4):
         for s in (tm_p, te_p, tm_q, te_q):
             reset(s.a)
             reset(s.b)

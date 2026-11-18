@@ -25,11 +25,11 @@ from pyrung.core import (
     CompiledPLC,
     Int,
     Program,
-    Rung,
     TagType,
     copy,
     math,
     out,
+    rung,
 )
 from pyrung.core.kernel import CompiledKernel
 from tests.circuitpy.test_codegen import _run_single_scan_source
@@ -76,11 +76,11 @@ def _program(name_slot: Any, *, pointer: int = 3) -> Program:
     seen = Int("Seen")
     name = name_slot(slots)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(count + 1, count)
-        with Rung():
+        with rung():
             copy(count, name)
-        with Rung():
+        with rung():
             copy(slots[index], seen)
     return program
 
@@ -194,7 +194,7 @@ def test_generated_circuitpy_reads_a_name_on_a_hardware_input(
     button = Bool("Fl")
     button.map_to(inputs[2])
     with Program(strict=False) as program:
-        with Rung(button):
+        with rung(button):
             out(outputs[1])
 
     result = generate_circuitpy(program, hw, target_scan_ms=10.0, runstop=None)

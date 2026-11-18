@@ -18,7 +18,7 @@ from pyclickplc.modbus import plc_to_modbus
 
 from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, generate_circuitpy
 from pyrung.click import ClickBlocks, TagMap
-from pyrung.core import PLC, Block, Bool, Dint, Int, Program, Real, Rung, TagType, copy, out
+from pyrung.core import PLC, Block, Bool, Dint, Int, Program, Real, TagType, copy, out, rung
 from tests.circuitpy.test_codegen import _run_single_scan_source
 from tests.core.test_indirect_expr_compare import _StubBase
 
@@ -41,9 +41,9 @@ def _run(result: Any, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 def _read_by_name_and_pointer(name: Any, slots: Block, addr: int, by_type: Any = Int) -> Program:
     index = Int("Jx", default=addr)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(name, by_type("By"))
-        with Rung():
+        with rung():
             copy(slots[index], by_type("Seen"))
     return program
 
@@ -99,7 +99,7 @@ def _slot_default_read_only_through_the_pointer() -> Program:
     slots = Block("Cb", TagType.INT, 1, 8)
     slots.slot(3, default=5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[Int("Jx", default=3)], Int("Seen"))
     return program
 
@@ -108,7 +108,7 @@ def _slot_range_default() -> Program:
     slots = Block("Cb", TagType.INT, 1, 8)
     slots.slot(2, 6, default=5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[Int("Jx", default=6)], Int("Seen"))
     return program
 
@@ -116,7 +116,7 @@ def _slot_range_default() -> Program:
 def _default_factory() -> Program:
     slots = Block("Cb", TagType.INT, 1, 8, default_factory=lambda addr: addr * 10)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[Int("Jx", default=3)], Int("Seen"))
     return program
 
@@ -125,7 +125,7 @@ def _sparse_block() -> Program:
     slots = Block("Sp", TagType.INT, 1, 200, valid_ranges=((1, 8), (101, 108)))
     slots.slot(102, default=6)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[Int("Jx", default=102)], Int("Seen"))
     return program
 
@@ -135,9 +135,9 @@ def _bool_contact() -> Program:
     name = Bool("En", default=True)
     name.map_to(slots[3])
     with Program(strict=False) as program:
-        with Rung(name):
+        with rung(name):
             out(Bool("By"))
-        with Rung():
+        with rung():
             copy(slots[Int("Jx", default=3)], Bool("Seen"))
     return program
 
@@ -147,9 +147,9 @@ def _comparison_on_a_setpoint() -> Program:
     setpoint = Int("Setpoint", default=100)
     setpoint.map_to(slots[3])
     with Program(strict=False) as program:
-        with Rung(Int("Pv", default=50) < setpoint):
+        with rung(Int("Pv", default=50) < setpoint):
             out(Bool("By"))
-        with Rung():
+        with rung():
             copy(slots[Int("Jx", default=3)], Int("Seen"))
     return program
 
@@ -192,7 +192,7 @@ def test_a_big_block_seeds_only_what_differs() -> None:
         for addr, value in defaults:
             slots.slot(addr, default=value)
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 copy(slots[Int("Jx", default=31)], Int("Seen"))
         return _generate(program).code
 
@@ -322,7 +322,7 @@ def test_the_wire_refuses_a_slot_default_no_register_can_hold(
     blocks.ds.slot(30, default=99999)
     by = Int("By")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(blocks.ds[Int("Jx", default=31)], by)
     tag_map = TagMap({by: blocks.ds[100]}, include_system=False)
     namespace = _run(_generate(program, tag_map), monkeypatch)
@@ -351,7 +351,7 @@ class _Color(enum.IntEnum):
 
 def _read_slot_through_a_pointer(slots: Block, addr: int) -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[Int("Jx", default=addr)], Int("Seen"))
     return program
 
@@ -581,12 +581,12 @@ def _interpreter_after_stop_run(program: Program) -> Any:
 def _written_through_a_pointer(slots: Block, addr: int, *rungs: Any) -> Program:
     index = Int("Jx", default=addr, retentive=True)
     with Program(strict=False) as program:
-        with Rung(Bool("Tr", retentive=False)):
+        with rung(Bool("Tr", retentive=False)):
             copy(7, slots[index])
-        with Rung():
+        with rung():
             copy(slots[index], Int("Seen", retentive=False))
         for source, target in rungs:
-            with Rung():
+            with rung():
                 copy(source, target)
     return program
 
@@ -682,7 +682,7 @@ def test_an_input_block_keeps_this_scans_read_at_stop_to_run(
     inputs = hw.slot(1, "P1-08SIM")
     index = Int("Jx", default=2, retentive=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(inputs[index], Bool("Seen", retentive=False))
 
     class _Reads(_StubBase):
@@ -711,9 +711,9 @@ def _output_slot_program(*, retentive: bool = False, default: bool = True) -> tu
     outputs.slot(2, default=default, retentive=retentive)
     index = Int("Jx", default=2, retentive=True)
     with Program(strict=False) as program:
-        with Rung(Bool("Tr", retentive=False)):
+        with rung(Bool("Tr", retentive=False)):
             copy(not default, outputs[index])
-        with Rung():
+        with rung():
             copy(outputs[index], Bool("Seen", retentive=False))
     return hw, program
 

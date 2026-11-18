@@ -218,12 +218,12 @@ def test_a_text_window_traces_as_the_compare_written() -> None:
 
 
 def test_the_debugger_shows_a_text_window_on_its_source_line() -> None:
-    from pyrung.core import PLC, Program, Rung, out
+    from pyrung.core import PLC, Program, out, rung
 
     txt = Block("TXT", TagType.CHAR, 1, 10)
     hit = Bool("Hit")
     with Program(strict=False) as logic:
-        with Rung(txt[1] == "AB"):
+        with rung(txt[1] == "AB"):
             out(hit)
     line = logic.rungs[0]._conditions[0].source_line
 

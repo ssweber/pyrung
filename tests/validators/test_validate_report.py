@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import Bool, Program, Rung, latch, out
+from pyrung.core import Bool, Program, latch, out, rung
 from pyrung.core.validation.registry import RULES, VALIDATOR_ORDER
 from pyrung.core.validation.report import ALL_RULES, ValidationReport, check
 
@@ -13,9 +13,9 @@ def _error_and_warning_program():
     bit = Bool("Bit")
     ro = Bool("ReadonlyTag", readonly=True)
     with Program() as prog:
-        with Rung(go):
+        with rung(go):
             latch(bit)
-        with Rung(go):
+        with rung(go):
             out(ro)
     return prog
 
@@ -25,7 +25,7 @@ class TestValidateAllRuns:
         btn = Bool("Btn")
         motor = Bool("Motor")
         with Program() as prog:
-            with Rung(btn):
+            with rung(btn):
                 out(motor)
         report = check(prog, select={"ALL"})
         assert isinstance(report, ValidationReport)
@@ -37,7 +37,7 @@ class TestValidateAllRuns:
         go = Bool("Go")
         latch_bit = Bool("LatchBit")
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(latch_bit)
         report = check(prog, select={"ALL"})
         assert report
@@ -49,9 +49,9 @@ class TestValidateAllRuns:
         b = Bool("B")
         motor = Bool("Motor")
         with Program() as prog:
-            with Rung(a):
+            with rung(a):
                 out(motor)
-            with Rung(b):
+            with rung(b):
                 out(motor)
         report = check(prog, select={"ALL"})
         codes = {f.code for f in report}
@@ -61,7 +61,7 @@ class TestValidateAllRuns:
         btn = Bool("Btn")
         ro = Bool("ReadonlyTag", readonly=True)
         with Program() as prog:
-            with Rung(btn):
+            with rung(btn):
                 out(ro)
         report = check(prog, select={"ALL"})
         codes = {f.code for f in report}
@@ -81,7 +81,7 @@ class TestValidationContext:
         btn = Bool("Btn")
         motor = Bool("Motor")
         with Program() as prog:
-            with Rung(btn):
+            with rung(btn):
                 out(motor)
 
         calls = {"graph": 0, "produced": 0, "reach": 0}
@@ -154,7 +154,7 @@ class TestSelectIgnore:
         go = Bool("Go")
         bit = Bool("Bit")
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(bit)
         return prog
 
@@ -180,7 +180,7 @@ class TestSelectIgnore:
         go = Bool("Go")
         bit = Bool("Bit")
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(bit)
         report = check(
             prog,
@@ -192,7 +192,7 @@ class TestSelectIgnore:
     def test_unknown_rule_raises(self):
         btn = Bool("Btn")
         with Program() as prog:
-            with Rung(btn):
+            with rung(btn):
                 out(Bool("X"))
         with pytest.raises(ValueError, match="Unknown rule code"):
             check(prog, select={"NOT_A_RULE"})
@@ -201,7 +201,7 @@ class TestSelectIgnore:
         go = Bool("Go")
         bit = Bool("Bit")
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(bit)
         report = check(prog, select={"COIL_STUCK_HIGH"}, ignore={"COIL_STUCK_HIGH"})
         assert len(report) == 0
@@ -217,7 +217,7 @@ class TestProgramCheckMethod:
         btn = Bool("Btn")
         motor = Bool("Motor")
         with Program() as prog:
-            with Rung(btn):
+            with rung(btn):
                 out(motor)
         report = prog.check()
         assert isinstance(report, ValidationReport)
@@ -231,7 +231,7 @@ class TestProgramCheckMethod:
         go = Bool("Go")
         bit = Bool("Bit")
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(bit)
         report = prog.check(select={"COIL_STUCK_HIGH"})
         assert report
@@ -244,7 +244,7 @@ class TestValidationReport:
         bit_a = Bool("BitA")
         bit_b = Bool("BitB")
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(bit_a)
                 latch(bit_b)
         report = check(prog, select={"COIL_STUCK_HIGH"})
@@ -254,7 +254,7 @@ class TestValidationReport:
         go = Bool("Go")
         bit = Bool("Bit")
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(bit)
         report = check(prog, select={"COIL_STUCK_HIGH"})
         findings_list = list(report)
@@ -313,9 +313,9 @@ class TestSeverity:
         bit = Bool("Bit")
         ro = Bool("ReadonlyTag", readonly=True)
         with Program() as prog:
-            with Rung(go):
+            with rung(go):
                 latch(bit)  # STUCK_HIGH -> warning
-            with Rung(go):
+            with rung(go):
                 out(ro)  # READONLY_WRITE -> error
         return prog
 
@@ -327,9 +327,9 @@ class TestSeverity:
     def test_conflicting_output_is_error(self):
         a, b, motor = Bool("A"), Bool("B"), Bool("Motor")
         with Program() as prog:
-            with Rung(a):
+            with rung(a):
                 out(motor)
-            with Rung(b):
+            with rung(b):
                 out(motor)
         report = check(prog, select={"COIL_CONFLICTING_OUTPUT"})
         assert report
@@ -353,7 +353,7 @@ class TestSeverity:
     def test_clean_program_has_no_errors(self):
         btn, motor = Bool("Btn"), Bool("Motor")
         with Program() as prog:
-            with Rung(btn):
+            with rung(btn):
                 out(motor)
         report = check(prog, select={"ALL"})
         assert not report.errors()  # the new recommended CI idiom

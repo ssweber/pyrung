@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, run_enabled_function
+from pyrung.core import PLC, Bool, Int, Program, run_enabled_function, rung
 
 
 def test_run_enabled_function_invoked_every_scan_with_enabled_transitions():
@@ -18,7 +18,7 @@ def test_run_enabled_function_invoked_every_scan_with_enabled_transitions():
         return {"calls": len(seen), "enabled": enabled}
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_enabled_function(callback, outs={"calls": Calls, "enabled": EnabledSeen})
 
     runner = PLC(logic=logic)
@@ -46,7 +46,7 @@ def test_run_enabled_function_receives_resolved_kwargs():
         return {"sum": a + b}
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_enabled_function(callback, ins={"a": A, "b": B}, outs={"sum": Sum})
 
     runner = PLC(logic=logic)
@@ -63,7 +63,7 @@ def test_run_enabled_function_runs_when_rung_false():
         return {"calls": 1 if enabled else 2}
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_enabled_function(callback, outs={"calls": Calls})
 
     runner = PLC(logic=logic)
@@ -90,7 +90,7 @@ def test_run_enabled_function_class_state_persists_across_scans():
     acc = Accumulator()
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_enabled_function(acc, ins={"value": Value}, outs={"total": Total})
 
     runner = PLC(logic=logic)
@@ -117,7 +117,7 @@ def test_run_enabled_function_writes_multiple_output_tags():
         return {"sending": enabled, "success": False, "error": not enabled}
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             run_enabled_function(
                 callback,
                 outs={"sending": Sending, "success": Success, "error": Error},
@@ -135,14 +135,14 @@ def test_run_enabled_function_writes_multiple_output_tags():
 def test_run_enabled_function_outside_rung_raises_runtime_error():
     with pytest.raises(RuntimeError) as exc_info:
         run_enabled_function(lambda enabled: {"ok": enabled})
-    assert str(exc_info.value) == "run_enabled_function() must be called inside a Rung context"
+    assert str(exc_info.value) == "run_enabled_function() must be called inside a rung() context"
 
 
 def test_run_enabled_function_non_callable_raises_type_error():
     Enable = Bool("Enable")
     with pytest.raises(TypeError) as exc_info:
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 run_enabled_function(123)
     assert str(exc_info.value) == "run_enabled_function() fn must be callable, got int"
 
@@ -155,7 +155,7 @@ def test_run_enabled_function_async_function_rejected():
 
     with pytest.raises(TypeError) as exc_info:
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 run_enabled_function(callback)
     assert (
         str(exc_info.value)
@@ -171,7 +171,7 @@ def test_run_enabled_function_requires_enabled_arg_in_signature():
 
     with pytest.raises(TypeError) as exc_info:
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 run_enabled_function(callback)
     assert "run_enabled_function() ins keys" in str(exc_info.value)
 
@@ -186,6 +186,6 @@ def test_run_enabled_function_ins_keys_must_match_signature():
 
     with pytest.raises(TypeError) as exc_info:
         with Program():
-            with Rung(Enable):
+            with rung(Enable):
                 run_enabled_function(callback, ins={"a": 1, "b": 2}, outs={"out": Output})
     assert "run_enabled_function() ins keys" in str(exc_info.value)

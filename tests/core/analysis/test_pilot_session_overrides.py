@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Program, Rung, Timer, latch, on_delay, out, reset, system
+from pyrung import PLC, Bool, Program, Timer, latch, on_delay, out, reset, rung, system
 from pyrung.core.analysis.graph import PlanStatus
 
 
@@ -22,7 +22,7 @@ def _follow(plc, plan):
 def _latch_on_go():
     go, hit = Bool("Go"), Bool("Hit")
     with Program(strict=False) as logic:
-        with Rung(go):
+        with rung(go):
             latch(hit)
     return logic, hit
 
@@ -78,9 +78,9 @@ def test_only_the_force_in_the_way_is_released() -> None:
 def test_a_force_that_keeps_resetting_the_goal_is_released() -> None:
     gate, stop, kept = Bool("Gate"), Bool("Stop"), Bool("Kept")
     with Program(strict=False) as logic:
-        with Rung(gate):
+        with rung(gate):
             latch(kept)
-        with Rung(stop):
+        with rung(stop):
             reset(kept)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -95,7 +95,7 @@ def test_a_force_that_keeps_resetting_the_goal_is_released() -> None:
 def test_a_force_on_the_goal_itself_is_released() -> None:
     go, lamp = Bool("Go"), Bool("Lamp")
     with Program(strict=False) as logic:
-        with Rung(go):
+        with rung(go):
             out(lamp)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -142,9 +142,9 @@ def test_a_pending_patch_counts_toward_the_plan_and_is_not_its_step() -> None:
     enable, hit = Bool("En"), Bool("Hit")
     wait = Timer.clone("W")
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(wait, 3000)
-        with Rung(wait.Done):
+        with rung(wait.Done):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -162,9 +162,9 @@ def test_a_pending_patch_counts_toward_the_plan_and_is_not_its_step() -> None:
 def test_a_goal_a_pending_patch_is_about_to_undo_is_not_already_reached() -> None:
     go, stop, run = Bool("Go"), Bool("Stop"), Bool("Run")
     with Program(strict=False) as logic:
-        with Rung(go):
+        with rung(go):
             latch(run)
-        with Rung(stop):
+        with rung(stop):
             reset(run)
     plc = PLC(logic, dt=0.01)
     plc.patch({"Go": True})
@@ -241,9 +241,9 @@ def test_a_force_that_only_ran_the_budget_out_still_gets_the_try_without_it() ->
     enable, hit = Bool("En", external=True), Bool("Hit")
     wait = Timer.clone("W")
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             on_delay(wait, 3000)
-        with Rung(wait.Done):
+        with rung(wait.Done):
             latch(hit)
     plc = PLC(logic, dt=0.01)
     plc.step()
@@ -264,7 +264,7 @@ def test_a_force_that_only_ran_the_budget_out_still_gets_the_try_without_it() ->
 def test_a_restart_still_releases_every_force_and_says_so() -> None:
     hit = Bool("Hit")
     with Program(strict=False) as logic:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             out(hit)
     plc = PLC(logic, dt=0.01)
     plc.force(Bool("Unrelated"), True)

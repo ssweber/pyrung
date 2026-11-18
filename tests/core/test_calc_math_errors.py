@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, Program, Real, Rung, copy, math, out, system
+from pyrung.core import Bool, Int, Program, Real, copy, math, out, rung, system
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.expression import (
     MathDomainError,
@@ -51,12 +51,12 @@ def _program(func, dest_type=Real):
     seen = Bool("Seen", retentive=False)
     after = Int("After")
     with Program() as program:
-        with Rung(go):
+        with rung(go):
             copy(99, dest)
             math(func(x), dest)
-        with Rung(SC46):
+        with rung(SC46):
             out(seen)
-        with Rung(go):
+        with rung(go):
             copy(7, after)
     return program, x, go
 
@@ -136,7 +136,7 @@ def test_non_finite_operand_is_a_division_error_not_a_domain_error(runner_factor
     zero = Real("Zero")
     dest = Real("Dest")
     with Program() as program:
-        with Rung():
+        with rung():
             math(sqrt(x / zero), dest)
     plc = runner_factory(program)
     plc.step()
@@ -153,7 +153,7 @@ def test_unrestricted_functions_of_a_non_finite_operand_do_not_stop(runner_facto
     zero = Real("Zero")
     dest = Real("Dest")
     with Program() as program:
-        with Rung():
+        with rung():
             math(func(x / zero), dest)
     plc = runner_factory(program)
     plc.step()
@@ -179,26 +179,26 @@ def _error_then(later) -> tuple[Program, Bool]:
     dest, other = Real("Dest"), Real("Other")
     seen = Bool("Seen")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(sqrt(x), dest)
-        with Rung(SC46):
+        with rung(SC46):
             out(seen)
         later(other)
     return program, seen
 
 
 def _plain_math(other):
-    with Rung():
+    with rung():
         math(other + 1, other)
 
 
 def _math_on_a_false_rung(other):
-    with Rung(Bool("Never")):
+    with rung(Bool("Never")):
         math(other + 1, other)
 
 
 def _a_copy(other):
-    with Rung():
+    with rung():
         copy(1, other)
 
 
@@ -226,9 +226,9 @@ def test_sc46_carries_into_the_next_scan(runner_factory):
     dest = Real("Dest")
     seen_at_top = Bool("SeenAtTop")
     with Program(strict=False) as program:
-        with Rung(SC46):
+        with rung(SC46):
             out(seen_at_top)
-        with Rung():
+        with rung():
             math(sqrt(x), dest)
     plc = runner_factory(program)
     plc.step()
@@ -240,9 +240,9 @@ def test_sc46_carries_into_the_next_scan(runner_factory):
 def test_pdg_sees_the_calc_write_sc46():
     x, dest, seen = Real("X"), Real("Dest"), Bool("Seen")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(sqrt(x), dest)
-        with Rung(SC46):
+        with rung(SC46):
             out(seen)
     graph = build_program_graph(program)
     assert graph.writers_of[SC46.name] == frozenset({0})

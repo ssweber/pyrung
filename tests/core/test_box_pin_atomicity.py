@@ -34,7 +34,6 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     Tag,
     TagType,
     Timer,
@@ -48,6 +47,7 @@ from pyrung.core import (
     out,
     reset,
     rise,
+    rung,
     shift,
     time_drum,
     time_event_drum,
@@ -105,35 +105,35 @@ class Kind:
 
 
 def _count_up(w: Wire) -> None:
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         count_up(Ct, 4).down(w.pin(P1)).reset(w.pin(P2))
-    with Rung(Ct.Done):
+    with rung(Ct.Done):
         out(Out)
 
 
 def _count_down(w: Wire) -> None:
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         count_down(Ct, -3).reset(w.pin(P2))
-    with Rung(Ct.Done):
+    with rung(Ct.Done):
         out(Out)
 
 
 def _on_delay(w: Wire) -> None:
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         on_delay(Tm, 30).reset(w.pin(P2))
-    with Rung(Tm.Done):
+    with rung(Tm.Done):
         out(Out)
 
 
 def _shift(w: Wire) -> None:
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         shift(S.select(1, 4)).clock(w.pin(P1)).reset(w.pin(P2))
 
 
 def _drum(w: Wire, *, jump_to: int = 2) -> None:
-    with Rung(DoStage):
+    with rung(DoStage):
         copy(Stage, Step)
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         event_drum(
             outputs=[Y1, Y2],
             events=[E1, E2, E3],
@@ -340,12 +340,12 @@ def test_invalid_step_with_reset_pin_matches_in_both_forms() -> None:
 
 
 def _up2(w: Wire) -> None:
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         count_up(Ct, 2).down(w.pin(P1)).reset(w.pin(P2))
 
 
 def _down2(w: Wire) -> None:
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         count_down(Ct, -2).reset(w.pin(P2))
 
 
@@ -481,7 +481,7 @@ def test_pin_reads_precede_the_box_write(name: str, shared: bool, backend: str, 
 
 
 def _timer_reset(w: Wire) -> None:
-    with Rung(*w.enable(En)):
+    with rung(*w.enable(En)):
         on_delay(Tm, 30).reset(w.pin(P2))
 
 
@@ -514,19 +514,19 @@ DrumAcc = Int("DrumAcc")
 
 
 def _output_writer_above() -> None:
-    with Rung(A):
+    with rung(A):
         reset(Y1)
 
 
 def _stage() -> None:
-    with Rung(DoStage):
+    with rung(DoStage):
         copy(Stage, Step)
 
 
 def _event_drum_box() -> None:
     _output_writer_above()
     _stage()
-    with Rung(En):
+    with rung(En):
         event_drum(
             outputs=[Y1, Y2],
             events=[E1, E2, E3],
@@ -539,7 +539,7 @@ def _event_drum_box() -> None:
 def _time_drum_box() -> None:
     _output_writer_above()
     _stage()
-    with Rung(En):
+    with rung(En):
         time_drum(
             outputs=[Y1, Y2],
             presets=[30, 40, 50],
@@ -554,7 +554,7 @@ def _time_drum_box() -> None:
 def _time_event_drum_box() -> None:
     _output_writer_above()
     _stage()
-    with Rung(En):
+    with rung(En):
         time_event_drum(
             outputs=[Y1, Y2],
             presets=[30, None, 50],
@@ -578,7 +578,7 @@ def test_first_scan_times_alike_given_the_same_time(monkeypatch) -> None:
     """
     timer = Timer.clone("BootTimer")
     with Program(strict=False) as logic:
-        with Rung(En):
+        with rung(En):
             on_delay(timer, 60_000)
     rows = [{"En": True}] * 4
     want = [(10,), (20,), (30,), (40,)]
@@ -588,7 +588,7 @@ def test_first_scan_times_alike_given_the_same_time(monkeypatch) -> None:
 
 def _for_body_time_drum() -> Program:
     with Program(strict=False) as logic:
-        with Rung(En):
+        with rung(En):
             with forloop(2):
                 time_drum(
                     outputs=[Y1, Y2],

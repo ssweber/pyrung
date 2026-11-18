@@ -4,7 +4,7 @@ import operator
 
 import pytest
 
-from pyrung import Bool, Dint, Int, Program, Real, Rung, Word, copy, out
+from pyrung import Bool, Dint, Int, Program, Real, Word, copy, out, rung
 
 
 @pytest.mark.parametrize("factory", [Int, Dint, Word, Real])
@@ -14,7 +14,7 @@ from pyrung import Bool, Dint, Int, Program, Real, Rung, Word, copy, out
 def test_unwritten_zero_flag_is_not_reported_as_constant(factory, compare, value, explicit_default):
     flag = factory("Flag", **({"default": 0} if explicit_default else {}))
     with Program() as program:
-        with Rung(compare(flag, value)):
+        with rung(compare(flag, value)):
             out(Bool("Result"))
     assert not program.check()
     assert not program.check(select={"CMP"})
@@ -23,7 +23,7 @@ def test_unwritten_zero_flag_is_not_reported_as_constant(factory, compare, value
 def test_sfc_call_and_pause_flags_are_not_assumed_constant():
     call_flag, pause_flag = Int("SFCExample.xCall"), Int("SFCExample.xPause")
     with Program() as program:
-        with Rung(call_flag == 1, pause_flag != 1):
+        with rung(call_flag == 1, pause_flag != 1):
             out(Bool("Result"))
     assert not program.check()
     assert not program.check(select={"CMP"})
@@ -35,7 +35,7 @@ def test_sfc_call_and_pause_flags_are_not_assumed_constant():
 def test_declared_constraints_still_expose_impossible_boolean_comparison(contract):
     flag = Int("Flag", **contract)
     with Program() as program:
-        with Rung(flag == 1):
+        with rung(flag == 1):
             out(Bool("Result"))
     assert "CMP_ALWAYS_FALSE" in {finding.code for finding in program.check()}
 
@@ -43,9 +43,9 @@ def test_declared_constraints_still_expose_impossible_boolean_comparison(contrac
 def test_known_ladder_writes_still_expose_impossible_boolean_comparison():
     flag = Int("Flag")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(0, flag)
-        with Rung(flag == 1):
+        with rung(flag == 1):
             out(Bool("Result"))
     assert "CMP_ALWAYS_FALSE" in {finding.code for finding in program.check()}
 
@@ -53,7 +53,7 @@ def test_known_ladder_writes_still_expose_impossible_boolean_comparison():
 def test_boolean_flag_exemption_does_not_hide_contradictory_rung():
     flag = Int("Flag")
     with Program() as program:
-        with Rung(flag == 0, flag == 1):
+        with rung(flag == 0, flag == 1):
             out(Bool("Result"))
     assert "RUNG_CONTRADICTION" in {finding.code for finding in program.check()}
 
@@ -62,10 +62,10 @@ def test_no_writer_hints_share_one_concise_repair():
     unknown = Int("Limit")
     configured = Int("Limit", default=0)
     with Program() as missing_source:
-        with Rung(unknown == 7):
+        with rung(unknown == 7):
             out(Bool("Result"))
     with Program() as constant:
-        with Rung(configured == 7):
+        with rung(configured == 7):
             out(Bool("Result"))
     (missing,) = missing_source.check(select={"CMP_OPERAND_NO_WRITER"})
     (impossible,) = constant.check(select={"CMP_ALWAYS_FALSE"})

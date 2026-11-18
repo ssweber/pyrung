@@ -22,7 +22,7 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import example, given, note, settings
 
-from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, math, on_delay, out
+from pyrung import Bool, Counter, Int, Program, Timer, count_up, math, on_delay, out, rung
 from pyrung.core import rise, system
 from pyrung.core.runner import PLC
 
@@ -86,14 +86,14 @@ def _build(spec: dict):
     with Program(strict=False) as prog:
         if spec["src"] == "timer":
             src = Timer.clone("Tmr")
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(src, spec["preset"], "ms")
         else:
             src = Counter.clone("Ctr")
             # A counter counts rising edges: the 100 ms clock ramps it.
-            with Rung(Enable, system.sys.clock_100ms):
+            with rung(Enable, system.sys.clock_100ms):
                 count_up(src, spec["preset"]).reset(Reset)
-        with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
+        with rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
             if spec["body"] == "calc":
                 math(A + B, Extent)
             else:
@@ -217,17 +217,17 @@ def _build_stable(spec: dict):
     with Program(strict=False) as prog:
         if spec["src"] == "timer":
             src = Timer.clone("Tmr")
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(src, spec["preset"], "ms")
         else:
             src = Counter.clone("Ctr")
             Reset = Bool("Reset", external=True)
             # A counter counts rising edges: the 100 ms clock ramps it.
-            with Rung(Enable, system.sys.clock_100ms):
+            with rung(Enable, system.sys.clock_100ms):
                 count_up(src, spec["preset"]).reset(Reset)
 
         # Reads the accumulator: its clock ends every window
-        with Rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
+        with rung(rise(clock_tag), _cmp(src.Acc, spec["form"], spec["threshold"])):
             math(src.Acc, AccView)
 
         # Read only external inputs
@@ -235,12 +235,12 @@ def _build_stable(spec: dict):
             if body == "calc":
                 tag = Int(f"Stable{i}")
                 stable_tags.append(f"Stable{i}")
-                with Rung(rise(clock_tag)):
+                with rung(rise(clock_tag)):
                     math(A + B + i, tag)
             else:
                 tag = Bool(f"FBeat{i}")
                 stable_tags.append(f"FBeat{i}")
-                with Rung(rise(clock_tag)):
+                with rung(rise(clock_tag)):
                     out(tag)
 
     return prog, src.Done, frozenset(stable_tags)
@@ -299,8 +299,8 @@ _READERS = [
     "eq",  # flips twice: reaching k and passing it
     "expr",  # (acc // d) == k
     "display",  # math(acc // d, Disp), nothing reads Disp
-    "stored",  # math(acc // d, Q) then Rung(Q == k)
-    "snapshot",  # Rung(rise(X)): copy(acc, Snap) then Rung(Snap > k)
+    "stored",  # math(acc // d, Q) then rung(Q == k)
+    "snapshot",  # rung(rise(X)): copy(acc, Snap) then rung(Snap > k)
     "operand",  # acc compared against the other source's acc
 ]
 
@@ -355,7 +355,7 @@ def _build_composite(spec: dict):
             if kind.startswith("counter"):
                 # A counter counts rising edges: the 100 ms clock ramps it.
                 gate = (*gate, system.sys.clock_100ms)
-            with Rung(*gate):
+            with rung(*gate):
                 if kind.startswith("timer"):
                     unit = "s" if kind == "timer_s" else "ms"
                     on_delay(blocks[i], 30 if unit == "s" else 30_000, unit)
@@ -377,14 +377,14 @@ def _build_composite(spec: dict):
             elif shape == "expr":
                 _reader_body(j, r, (acc // d) == k)
             elif shape == "display":
-                with Rung():
+                with rung():
                     math(acc // d, Int(f"Disp{j}"))
             elif shape == "stored":
-                with Rung():
+                with rung():
                     math(acc // d, Int(f"Q{j}"))
                 _reader_body(j, r, Int(f"Q{j}") == k)
             elif shape == "snapshot":
-                with Rung(rise(Bool(f"X{j}"))):
+                with rung(rise(Bool(f"X{j}"))):
                     copy(acc, Int(f"Snap{j}"))
                 _reader_body(j, r, Int(f"Snap{j}") > k)
             elif shape == "operand":
@@ -395,7 +395,7 @@ def _build_composite(spec: dict):
 def _reader_body(j: int, r: dict, cond) -> None:
     from pyrung import latch
 
-    with Rung(cond):
+    with rung(cond):
         if r["count"]:
             math(Int(f"N{j}") + 1, Int(f"N{j}"))
         else:

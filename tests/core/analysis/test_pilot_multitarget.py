@@ -15,12 +15,12 @@ from pyrung.core import (
     Int,
     Or,
     Program,
-    Rung,
     copy,
     latch,
     out,
     reset,
     rise,
+    rung,
 )
 
 
@@ -34,9 +34,9 @@ def _two_step():
     Ready = Bool("Ready")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             latch(Ready)
-        with Rung(Ready, Confirm):
+        with rung(Ready, Confirm):
             out(Done)
     return prog, Ready, Done
 
@@ -50,11 +50,11 @@ def _shared_prereq():
     Out1 = Bool("Out1")
     Out2 = Bool("Out2")
     with Program() as prog:
-        with Rung(Start):
+        with rung(Start):
             latch(Running)
-        with Rung(Running, A):
+        with rung(Running, A):
             latch(Out1)
-        with Rung(Running, B):
+        with rung(Running, B):
             latch(Out2)
     return prog, Out1, Out2
 
@@ -66,11 +66,11 @@ def _state_machine():
     Stage = Int("Stage")  # 0=PARKED, 1=RUNNING
     Flag = Bool("Flag")
     with Program() as prog:
-        with Rung(Stage == 0, rise(Enter)):
+        with rung(Stage == 0, rise(Enter)):
             copy(1, Stage)
-        with Rung(Stage == 1):
+        with rung(Stage == 1):
             latch(Flag)
-        with Rung(Home):
+        with rung(Home):
             reset(Flag)
             copy(0, Stage)
     return prog, Stage, Flag
@@ -84,13 +84,13 @@ def _dodge():
     Stage = Int("Stage")  # 0=PARKED, 1=RUNNING
     Z = Bool("Z")
     with Program() as prog:
-        with Rung(Stage == 0, rise(EnterRun)):
+        with rung(Stage == 0, rise(EnterRun)):
             copy(1, Stage)
-        with Rung(Stage == 1):
+        with rung(Stage == 1):
             latch(Z)  # route alpha — path drives Stage off PARKED
-        with Rung(ManualZ):
+        with rung(ManualZ):
             latch(Z)  # route beta — clean
-        with Rung(Home):
+        with rung(Home):
             reset(Z)
             copy(0, Stage)
     return prog, Z, Stage
@@ -159,9 +159,9 @@ def test_joint_goal_chooses_compatible_input_route(reverse):
     X = Bool("X")
     Y = Bool("Y")
     with Program() as prog:
-        with Rung(A, ~B):
+        with rung(A, ~B):
             out(X)
-        with Rung(Or(B, C)):
+        with rung(Or(B, C)):
             out(Y)
     plc = PLC(prog)
     events = []
@@ -182,7 +182,7 @@ def test_joint_relational_bounds_preserve_their_predicates():
     X = Int("X", external=True, default=5)
     Output = Int("Output")
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(X, Output)
     path = PLC(prog).how(X > 0, X < 10)
     assert path.reachable, path.reason
@@ -196,7 +196,7 @@ def test_joint_relational_bounds_are_driven_together():
     X = Int("X", external=True, default=0)
     Output = Int("Output")
     with Program() as prog:
-        with Rung():
+        with rung():
             copy(X, Output)
     path = PLC(prog).how(X > 3, X < 10, max_scans=30)
     assert path.reachable, path.reason
@@ -209,9 +209,9 @@ def test_joint_goal_can_temporarily_displace_a_satisfied_member():
     X = Bool("X")
     Y = Bool("Y")
     with Program() as prog:
-        with Rung(~B):
+        with rung(~B):
             out(X)
-        with Rung(B):
+        with rung(B):
             latch(Y)
     plc = PLC(prog)
     plc.step()
@@ -231,9 +231,9 @@ def test_joint_timer_goals_have_independent_producer_guards():
     First = Timer.clone("First")
     Second = Timer.clone("Second")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             on_delay(First, 30, "ms")
-        with Rung(B):
+        with rung(B):
             on_delay(Second, 50, "ms")
     path = PLC(prog, dt=0.010).how(First.Done, Second.Done, max_scans=30)
     assert path.reachable, path.reason

@@ -111,7 +111,6 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     And,
     Or,
-    Rung,
     branch,
     copy,
     count_up,
@@ -120,6 +119,7 @@ from pyrung.core import (
     math,
     out,
     rise,
+    rung,
 )
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.scans import WINDOW, count_scans, done, firings, scans_for
@@ -157,7 +157,7 @@ def prove_edge_on_branch_reads_row_above(slot):
     # X = C401, on for scans 3..5, written by the trunk's first row.
     bit = c[401]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         with branch(slot.Scratch >= 3, slot.Scratch <= 5):
             out(bit)
         with branch(rise(bit)):
@@ -175,11 +175,11 @@ def prove_edge_under_unpowered_branch(slot):
     # is the trunk's own output, there so the gate stays a branch.
     bit, gate = c[411], c[412]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
         out(bit)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
         out(gate)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         out(c[413])
         with branch(gate):
             with branch(rise(bit)):
@@ -196,11 +196,11 @@ def prove_continued_after_box_rereads_trunk(slot):
     # box rung's contacts, ~Done first.
     counter = ClickCounter(191)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2, ~counter.Done):
+    with rung(slot.Cmd != 0, slot.Scratch == 2, ~counter.Done):
         count_up(counter, 1).reset(slot.Cmd == 0)
-    with Rung(~counter.Done, slot.Scratch == 2, slot.Cmd != 0).continued():
+    with rung(~counter.Done, slot.Scratch == 2, slot.Cmd != 0).continued():
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2, counter.Done):
+    with rung(slot.Cmd != 0, slot.Scratch == 2, counter.Done):
         copy(1, slot.Result2)
     done(slot)
 
@@ -211,15 +211,15 @@ def prove_edge_on_box_path_after_false_contact(slot):
     bit, gate, never = c[1], c[2], c[3]
     up, down = ClickCounter(192), ClickCounter(193)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         out(bit)
-    with Rung(slot.Cmd != 0, slot.Scratch == 5):
+    with rung(slot.Cmd != 0, slot.Scratch == 5):
         out(gate)
-    with Rung(gate, rise(bit), slot.Cmd != 0):
+    with rung(gate, rise(bit), slot.Cmd != 0):
         count_up(up, 100).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0, never):
+    with rung(slot.Cmd != 0, never):
         count_up(down, 100).down(And(gate, rise(bit))).reset(slot.Cmd == 0)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(up.Acc, slot.Result1)
         copy(down.Acc, slot.Result2)
     done(slot)
@@ -230,11 +230,11 @@ def prove_edge_after_false_contact_in_branch(slot):
     # output, above the branches.
     bit, gate = c[11], c[12]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 6):
         out(bit)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 5, slot.Scratch == 8)):
         out(gate)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         out(c[13])
         with branch(gate, rise(bit)):
             math(slot.Result1 * 10 + slot.Scratch, slot.Result1)
@@ -252,14 +252,14 @@ def prove_correction_scan_with_free_enable(slot):
     # drum's enable is Cmd != 0 and its jog pin the jog bit alone.
     a, b, event, flag, jog = c[21], c[22], c[23], c[25], c[26]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(event)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(5, slot.Result1)
         out(jog)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[a, b],
             events=[event, c[24]],
@@ -267,13 +267,13 @@ def prove_correction_scan_with_free_enable(slot):
             current_step=slot.Result1,
             completion_flag=flag,
         ).reset(slot.Cmd == 0).jog(jog)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(slot.Result1, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, flag):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, flag):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, b):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, b):
         copy(1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, a):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, a):
         copy(1, slot.Result4)
     done(slot)
 

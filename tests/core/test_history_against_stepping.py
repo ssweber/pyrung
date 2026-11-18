@@ -19,7 +19,6 @@ from pyrung import (
     Bool,
     Int,
     Program,
-    Rung,
     Timer,
     copy,
     math,
@@ -27,6 +26,7 @@ from pyrung import (
     out,
     rise,
     run_function,
+    rung,
 )
 from pyrung.core import compiled_run, scan_trace
 from pyrung.core.scan_log import ScanLog
@@ -79,13 +79,13 @@ def _assert_history(plc: PLC, truth: dict[int, Any], scans: Iterable[int] | None
 
 def _stops_itself() -> Program:
     with Program(strict=False) as program:
-        with Rung(Run):
+        with rung(Run):
             on_delay(T, 1_000)
-        with Rung(T.Done):
+        with rung(T.Done):
             out(system.sys.cmd_mode_stop)
-        with Rung(Run):
+        with rung(Run):
             out(Lamp)
-        with Rung():
+        with rung():
             math(N + 1, N)
     return program
 
@@ -148,7 +148,7 @@ def _forces_in_effect(plc: PLC) -> dict[int, dict[str, Any]]:
 
 def _lamp_follows_run() -> Program:
     with Program(strict=False) as program:
-        with Rung(Run):
+        with rung(Run):
             out(Lamp)
     return program
 
@@ -187,16 +187,16 @@ def test_a_compiled_run_logs_the_forces_stepping_logs(
 
 def _reads_the_clock(apply_after_ms: int = 30_000) -> Program:
     with Program(strict=False) as program:
-        with Rung(Run):
+        with rung(Run):
             on_delay(T, apply_after_ms)
-        with Rung(rise(T.Done)):
+        with rung(rise(T.Done)):
             copy(10, system.rtc.new_second)
             copy(5, system.rtc.new_minute)
             copy(1, system.rtc.new_hour)
             out(system.rtc.apply_time)
-        with Rung():
+        with rung():
             copy(system.rtc.hour, Hour)
-        with Rung():
+        with rung():
             copy(system.rtc.second, Second)
     return program
 
@@ -264,16 +264,16 @@ def test_an_apply_of_an_undone_scan_goes_with_it(
     Bounded = Int("HsBounded", min=0, max=10)
 
     def fill() -> None:
-        with Rung(Run):
+        with rung(Run):
             on_delay(T, 500)
-        with Rung(rise(T.Done)):
+        with rung(rise(T.Done)):
             copy(1, system.rtc.new_hour)
             copy(5, system.rtc.new_minute)
             copy(10, system.rtc.new_second)
             out(system.rtc.apply_time)
-        with Rung(T.Done):
+        with rung(T.Done):
             copy(99, Bounded)
-        with Rung():
+        with rung():
             copy(system.rtc.hour, Hour)
 
     with Program(strict=False) as program:
@@ -314,20 +314,20 @@ def test_a_trim_keeps_the_clock_of_the_scans_it_keeps() -> None:
 
 def _new_second_at_its_default() -> Program:
     with Program(strict=False) as program:
-        with Rung(Run):
+        with rung(Run):
             on_delay(T, 1_000)
-        with Rung(T.Done):
+        with rung(T.Done):
             copy(0, system.rtc.new_second)
-        with Rung(system.rtc.new_second == 0):
+        with rung(system.rtc.new_second == 0):
             out(Lamp)
     return program
 
 
 def _only_reads_new_second() -> Program:
     with Program(strict=False) as program:
-        with Rung(system.rtc.new_second == 0):
+        with rung(system.rtc.new_second == 0):
             out(Lamp)
-        with Rung():
+        with rung():
             math(N + 1, N)
     return program
 
@@ -369,7 +369,7 @@ def test_a_seek_of_a_forced_absent_tag(replay_path: str, value: int, adds: bool)
 def test_a_seek_of_a_rung_that_reads_the_scan_time_minimum(replay_path: str) -> None:
     """The first scan's hook starts it from the scan time, or a kernel leaves it at 0."""
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(system.sys.scan_time_min_ms, N)
     plc = PLC(program, dt=0.01)
     truth: dict[int, Any] = {}
@@ -516,7 +516,7 @@ def _uses_builtins_that_answer_from_their_arguments(value: int) -> dict[str, int
 def _lockstep_function(fn: Callable[..., Any]) -> tuple[PLC, PLC, dict]:
     def build() -> Program:
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 run_function(fn, ins={"value": N}, outs={"out": N})
         return program
 
@@ -597,9 +597,9 @@ def test_a_mutable_default_is_the_function_s_own_list(
 
     def build() -> PLC:
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 math(N + 1, N)
-            with Rung(Lamp):
+            with rung(Lamp):
                 run_function(fn, ins={"value": N}, outs={"out": Counted})
         plc = PLC(program, dt=0.01)
         plc.patch({Lamp: True})
@@ -647,7 +647,7 @@ def test_a_plant_function_that_could_keep_something_runs_itself(fine_loop: None)
 
     def build() -> PLC:
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 out(Lamp)
         plc = PLC(program, dt=0.01)
         plc._synthesis = Synthesis(plant=[function_rung(fn, ins={"value": N}, outs={"out": N})])

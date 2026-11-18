@@ -18,7 +18,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     branch,
     copy,
     fill,
@@ -26,6 +25,7 @@ from pyrung import (
     math,
     out,
     run_enabled_function,
+    rung,
 )
 from pyrung.click import ClickBlocks
 from pyrung.core.analysis.pdg import build_program_graph
@@ -43,9 +43,9 @@ SOURCE = Int("Source", external=True, choices={0: "zero", 100: "hundred"})
 
 def _program(dest: Any, element: Any) -> Program:
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, dest)
-        with Rung(element > 50):
+        with rung(element > 50):
             out(Bool("High"))
     return prog
 
@@ -95,13 +95,13 @@ def test_a_reached_element_has_no_domain_and_no_copy_takes_one() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     shown = Int("Shown")
     with Program(strict=False) as prog:
-        with Rung(Bool("Set", external=True)):
+        with rung(Bool("Set", external=True)):
             copy(3, big[5])
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT])
-        with Rung(Bool("Show", external=True)):
+        with rung(Bool("Show", external=True)):
             copy(big[5], shown)
-        with Rung(shown > 50):
+        with rung(shown > 50):
             out(Bool("ShownHigh"))
     ctx = passes._PassContext(program=prog, dt=0.01)
     prior = passes._run_prior_pipeline(ctx)
@@ -125,9 +125,9 @@ def test_check_does_not_call_a_reached_element_unwritten() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     limit = Int("Limit", external=True)
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT])
-        with Rung(limit >= big[5]):
+        with rung(limit >= big[5]):
             out(Bool("Reached"))
     findings = check(prog, select={CMP_OPERAND_NO_WRITER})
     assert not [f for f in findings if f.code == CMP_OPERAND_NO_WRITER]
@@ -136,11 +136,11 @@ def test_check_does_not_call_a_reached_element_unwritten() -> None:
 def test_a_latch_a_pointer_write_may_clear_is_not_stuck() -> None:
     bits = Block("Bits", TagType.BOOL, 1, 2000)
     with Program(strict=False) as prog:
-        with Rung(Bool("Arm", external=True)):
+        with rung(Bool("Arm", external=True)):
             latch(bits[5])
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(Bool("Clear", external=True), bits[AT])
-        with Rung(bits[5]):
+        with rung(bits[5]):
             out(Bool("Armed"))
     assert not validate_stuck_bits(prog).findings
 
@@ -148,9 +148,9 @@ def test_a_latch_a_pointer_write_may_clear_is_not_stuck() -> None:
 def test_a_fill_window_reaches_every_element() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             fill(SOURCE, big.select(AT, AT + 1))
-        with Rung(big[5] > 50):
+        with rung(big[5] > 50):
             out(Bool("High"))
     graph = build_program_graph(prog)
     assert graph.unlisted_writers_of("Big5")
@@ -164,14 +164,14 @@ def _acknowledge(read_at: int, *conditions: Any, pointer: Any = None) -> Program
     at = pointer if pointer is not None else Int("AckAt")
     shown = Int("Shown")
     with Program(strict=False) as prog:
-        with Rung(Bool("Set", external=True)):
+        with rung(Bool("Set", external=True)):
             copy(3, big[read_at])
-        with Rung(*(conditions or (cmd >= 1, cmd <= 100))):
+        with rung(*(conditions or (cmd >= 1, cmd <= 100))):
             math(cmd * 10 + 2999, at)
             copy(SOURCE, big[at])
-        with Rung(Bool("Show", external=True)):
+        with rung(Bool("Show", external=True)):
             copy(big[read_at], shown)
-        with Rung(shown > 50):
+        with rung(shown > 50):
             out(Bool("ShownHigh"))
     return prog
 
@@ -206,7 +206,7 @@ def test_a_write_earlier_in_the_rung_drops_the_bound() -> None:
     big = Block("Ack", TagType.INT, 1, 4500)
     at = Int("AckAt")
     with Program(strict=False) as prog:
-        with Rung(cmd >= 1, cmd <= 100):
+        with rung(cmd >= 1, cmd <= 100):
             copy(Int("Other", external=True), cmd)
             math(cmd * 10 + 2999, at)
             copy(SOURCE, big[at])
@@ -230,7 +230,7 @@ def test_a_branch_keeps_the_bounds_of_its_rung() -> None:
     big = Block("Ack", TagType.INT, 1, 4500)
     at = Int("AckAt")
     with Program(strict=False) as prog:
-        with Rung(cmd >= 1):
+        with rung(cmd >= 1):
             with branch(cmd <= 100):
                 math(cmd * 10 + 2999, at)
                 copy(SOURCE, big[at])
@@ -244,11 +244,11 @@ def test_a_ladder_write_past_a_declared_bound_still_counts() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     at = Int("BoundedAt", min=0, max=10)
     with Program(strict=False) as prog:
-        with Rung(Bool("SetAt", external=True)):
+        with rung(Bool("SetAt", external=True)):
             math(SOURCE * 0 + 50, at)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[at + 1])
-        with Rung(big[51] > 50):
+        with rung(big[51] > 50):
             out(Bool("High"))
     _listed, unlisted = _writer_nodes(prog, "Big51")
     assert unlisted
@@ -262,10 +262,10 @@ def test_a_pointer_listed_by_its_choices_reaches_only_those() -> None:
     listed = Int("Listed", choices={10: "ten", 20: "twenty"})
     at = big[100]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Int("Anything", external=True) * 1, listed)
             copy(SOURCE, big[listed])
-        with Rung(cmd >= 1, cmd <= 100):
+        with rung(cmd >= 1, cmd <= 100):
             math(cmd * 10 + 2999, at)
             copy(SOURCE, big[at])
     assert _reach(prog) == frozenset(range(3009, 4000, 10))
@@ -282,11 +282,11 @@ def test_a_write_on_a_false_rung_gets_no_bound() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     p = Int("P", default=1)
     with Program(strict=False) as prog:
-        with Rung(Bool("Go", external=True)):
+        with rung(Bool("Go", external=True)):
             math(Int("Src", external=True) * 1, p)
-        with Rung(p >= 1, p <= 10):
+        with rung(p >= 1, p <= 10):
             run_enabled_function(_stamp, outs={"v": big[p]})
-        with Rung(big[500] > 50):
+        with rung(big[500] > 50):
             out(Bool("High"))
     _listed, unlisted = _writer_nodes(prog, "Big500")
     assert unlisted
@@ -299,17 +299,17 @@ def _mapped_onto_a_bank() -> Program:
     logical = Block("Logi", TagType.INT, 1, 10)
     logical.map_to(bank.select(1001, 1010))
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, bank[AT])
-        with Rung(Bool("Set", external=True)):
+        with rung(Bool("Set", external=True)):
             copy(3, cmd)
             copy(3, logical[5])
-        with Rung(Bool("Show", external=True)):
+        with rung(Bool("Show", external=True)):
             copy(cmd, Int("Shown"))
             copy(logical[5], Int("Shown2"))
-        with Rung(Int("Shown") > 50):
+        with rung(Int("Shown") > 50):
             out(Bool("High"))
-        with Rung(Int("Shown2") > 50):
+        with rung(Int("Shown2") > 50):
             out(Bool("High2"))
     return prog
 
@@ -343,15 +343,15 @@ def test_a_rest_value_holds_no_claim_on_an_element_a_pointer_may_write() -> None
     big = Block("Big", TagType.INT, 1, 2000)
     element = big[5]
     with Program(strict=False) as prog:
-        with Rung(Bool("Go", external=True)):
+        with rung(Bool("Go", external=True)):
             copy(7, element)
-        with Rung(element == 7):
+        with rung(element == 7):
             out(Bool("Seven"))
-        with Rung():
+        with rung():
             copy(0, element)
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, big[AT])
-        with Rung(element > 50):
+        with rung(element > 50):
             out(Bool("High"))
     graph = build_program_graph(prog)
     assert program_facts.scan_transient_rest("Big5", graph, prog) == (False, None)
@@ -366,11 +366,11 @@ def test_a_tag_mapped_onto_two_slots_is_reached_at_either() -> None:
     twice.map_to(bank[200])
     at = Int("TwiceAt")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(Int("Ext", external=True) * 1, at)
-        with Rung(WRITE, at >= 100, at <= 100):
+        with rung(WRITE, at >= 100, at <= 100):
             copy(SOURCE, bank[at])
-        with Rung(twice > 50):
+        with rung(twice > 50):
             out(Bool("High"))
     assert _reach(prog) == frozenset({100})
     _listed, unlisted = _writer_nodes(prog, "Twice")
@@ -382,9 +382,9 @@ def test_a_plain_tag_named_like_a_slot_is_reached() -> None:
     bank = Block("Bank", TagType.INT, 1, 2000)
     same = Int("Bank100")
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, bank[AT])
-        with Rung(same > 50):
+        with rung(same > 50):
             out(Bool("High"))
     _listed, unlisted = _writer_nodes(prog, "Bank100")
     assert unlisted
@@ -396,7 +396,7 @@ def test_a_huge_block_finds_a_tag_by_its_slot_name_without_a_walk() -> None:
     plain = Int("Huge5")
     renamed = Int("Renamed")
     with Program(strict=False) as prog:
-        with Rung(WRITE):
+        with rung(WRITE):
             copy(SOURCE, huge[AT])
             copy(1, plain)
             copy(1, renamed)

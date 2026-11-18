@@ -5,14 +5,14 @@ from __future__ import annotations
 import pytest
 
 from pyrung.click.raw import RawInstruction, raw
-from pyrung.core import PLC, Bool, Program, Rung
+from pyrung.core import PLC, Bool, Program, rung
 
 
 def test_raw_attaches_instruction_and_is_noop():
     Enable = Bool("Enable")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             raw("Copy", "0x2711,1,6066=Y001,3218=8193,0000=")
 
     runner = PLC(logic=logic)
@@ -21,9 +21,9 @@ def test_raw_attaches_instruction_and_is_noop():
 
     # raw is a no-op — just verify the runner doesn't crash
     # and the instruction was attached
-    rung = logic.rungs[0]
-    assert len(rung._instructions) == 1
-    instr = rung._instructions[0]
+    rung0 = logic.rungs[0]
+    assert len(rung0._instructions) == 1
+    instr = rung0._instructions[0]
     assert isinstance(instr, RawInstruction)
     assert instr.class_name == "Copy"
     assert instr.fields == "0x2711,1,6066=Y001,3218=8193,0000="
@@ -33,7 +33,7 @@ def test_raw_disabled_is_noop():
     Enable = Bool("Enable")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             raw("Cnt", "0x2719,1,6068=CT1,3218=8300,0000=")
 
     runner = PLC(logic=logic)
@@ -68,7 +68,7 @@ def test_raw_survives_csv_import_and_export():
     x = ClickBlocks()[0]
     Enable = Bool("Enable")
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             raw("Email", '0x2737,1,6235="TEST",607c=C1,3218=9748,0000=')
 
     bundle = pyrung_to_ladder(logic, TagMap({Enable: x[1]}, include_system=False))

@@ -31,7 +31,7 @@ Covers:
 
 from __future__ import annotations
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, copy, out
+from pyrung.core import PLC, Bool, Int, Program, copy, out, rung
 
 
 def test_pdg_filter_drops_unconsumed_non_bool_writes() -> None:
@@ -41,7 +41,7 @@ def test_pdg_filter_drops_unconsumed_non_bool_writes() -> None:
     Sink = Int("Sink")  # written but never read
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(Source, Sink)
 
     runner = PLC(logic)
@@ -73,7 +73,7 @@ def test_pdg_filter_keeps_unconsumed_bool_writes() -> None:
     Unused_But_Preserved = Bool("Unused_But_Preserved")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Unused_But_Preserved)
 
     runner = PLC(logic)
@@ -108,10 +108,10 @@ def test_pdg_filter_keeps_consumed_writes() -> None:
     Unused = Int("Unused")  # not consumed, not Bool → filtered
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Signal)
             copy(Readings, Unused)
-        with Rung(Signal):
+        with rung(Signal):
             pass  # makes Signal consumed
 
     runner = PLC(logic)
@@ -135,7 +135,7 @@ def test_pdg_filter_mixed_rung_keeps_bool_drops_int() -> None:
     Counter = Int("Counter")  # non-Bool, unconsumed
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Flag)
             copy(Source, Counter)
 
@@ -163,7 +163,7 @@ def test_record_all_tags_bypasses_pdg_filter() -> None:
     Unused = Int("Unused")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(Source, Unused)
 
     runner = PLC(logic, record_all_tags=True)
@@ -183,10 +183,10 @@ def test_pdg_filter_matches_unfiltered_on_consumed_writes() -> None:
 
     def build() -> object:
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 out(Flag)
                 copy(Source, Sink)
-            with Rung(Flag):
+            with rung(Flag):
                 pass
         return logic
 
@@ -226,7 +226,7 @@ def test_pdg_filter_preserves_fired_status_when_all_writes_filtered() -> None:
     TerminalB = Int("TerminalB")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(SourceA, TerminalA)
             copy(SourceB, TerminalB)
 
@@ -253,7 +253,7 @@ def test_pdg_filter_consumed_set_survives_reboot() -> None:
     Unused = Int("Unused")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             out(Flag)
             copy(Source, Unused)
 
@@ -301,7 +301,7 @@ def test_pdg_filter_preserved_across_fork() -> None:
     Unused = Int("Unused")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             copy(Source, Unused)
 
     parent = PLC(logic, record_all_tags=True)
@@ -336,7 +336,7 @@ def test_pdg_filter_drops_counter_accumulator_pattern() -> None:
     Trigger = Bool("Trigger")
 
     with Program() as logic:
-        with Rung(Trigger):
+        with rung(Trigger):
             on_delay(Timer[1], preset=100)
 
     runner = PLC(logic, dt=0.010)

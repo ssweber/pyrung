@@ -141,7 +141,7 @@ def out(
     Resets to False when rung goes false.
 
     Example:
-        with Rung(Button):
+        with rung(Button):
             out(Light)
             out(Y.select(1, 4))
     """
@@ -158,7 +158,7 @@ def latch(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | Immedia
     Use reset() to turn off.
 
     Example:
-        with Rung(StartButton):
+        with rung(StartButton):
             latch(MotorRunning)
             latch(C.select(1, 8))
     """
@@ -175,7 +175,7 @@ def reset(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | Immedia
     initialization default.
 
     Example:
-        with Rung(StopButton):
+        with rung(StopButton):
             reset(MotorRunning)
             reset(C.select(1, 8))
     """
@@ -198,7 +198,7 @@ def copy(
     conversion (see :mod:`pyrung.core.copy_converters`).
 
     Example:
-        with Rung(Button):
+        with rung(Button):
             copy(5, StepNumber)
     """
     if isinstance(source, bool) and convert is None:
@@ -272,7 +272,7 @@ def blockcopy(
     block conversion.  Only ``value`` and ``ascii`` modes are supported.
 
     Example:
-        with Rung(CopyEnable):
+        with rung(CopyEnable):
             blockcopy(DS.select(1, 10), DD.select(1, 10))
 
     Args:
@@ -292,7 +292,7 @@ def fill(value: Any, dest: Any, *, oneshot: bool = False) -> None:
     Writes a constant value to every element in a BlockRange.
 
     Example:
-        with Rung(ClearEnable):
+        with rung(ClearEnable):
             fill(0, DS.select(1, 100))
 
     Args:
@@ -388,7 +388,7 @@ class _MathInstruction:
     - Infers decimal/hex behavior from referenced tag types
 
     Example:
-        with Rung(Enable):
+        with rung(Enable):
             math(DS1 * DS2 + DS3, Result)
             math(MaskA & MaskB, MaskResult)
 
@@ -505,21 +505,21 @@ def call(target: str | SubroutineFunc) -> None:
     Accepts either a string name or a @subroutine-decorated function.
 
     Example:
-        with Rung(Button):
+        with rung(Button):
             call("init_sequence")
 
         with subroutine("init_sequence"):
-            with Rung():
+            with rung():
                 out(Light)
 
         # Or with decorator:
         @subroutine("init")
         def init_sequence():
-            with Rung():
+            with rung():
                 out(Light)
 
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 call(init_sequence)
     """
     ctx, source_file, source_line = _capture_instruction_context("call", source_depth=3)
@@ -543,7 +543,7 @@ def return_early() -> None:
 
     Example:
         with subroutine("my_sub"):
-            with Rung(Abort):
+            with rung(Abort):
                 return_early()
     """
     ctx, source_file, source_line = _capture_instruction_context("return_early", source_depth=3)
@@ -558,7 +558,7 @@ def _loop_exit_context(func_name: str) -> tuple[Any, str | None, int | None]:
     if getattr(ctx, "_loop", None) is None:
         raise RuntimeError(
             f"{func_name}() works only inside a forloop. Put it in a Rung with a contact in "
-            f"the loop body, as in: with forloop(...): with Rung(...): {func_name}()"
+            f"the loop body, as in: with forloop(...): with rung(...): {func_name}()"
         )
     body_rung = ctx._rung
     if len(body_rung._conditions) <= body_rung._branch_condition_start:
@@ -572,9 +572,9 @@ def break_loop() -> None:
     Must sit in a body rung with a contact (CLICK Break).
 
     Example:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(10) as loop:
-                with Rung(Fault):
+                with rung(Fault):
                     break_loop()
     """
     ctx, source_file, source_line = _loop_exit_context("break_loop")
@@ -587,9 +587,9 @@ def continue_loop() -> None:
     Must sit in a body rung with a contact (CLICK Continue).
 
     Example:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(10) as loop:
-                with Rung(Src[loop.idx] == 0):
+                with rung(Src[loop.idx] == 0):
                     continue_loop()
                 copy(Src[loop.idx], Dst[loop.idx])
     """

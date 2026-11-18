@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 from pyrsistent import pvector
 
-from pyrung import PLC, Int, Program, Rung, copy
+from pyrung import PLC, Int, Program, copy, rung
 from pyrung.core.analysis.pilot.compass import ProbeExhaustedObservation
 from pyrung.core.analysis.pilot.drive_setup import prepare_drive, prepare_target_context
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -23,7 +23,7 @@ def _oriented_world():
     Count = Int("Count", external=True, default=1)
     Output = Int("Output")
     with Program() as program:
-        with Rung():
+        with rung():
             copy(Count, Output)
     setup = prepare_drive(PLC(program), unlink=None)
     ctx, _ = prepare_target_context(setup, "Output", 3, None, max_scans=30, avoid_pred=None)

@@ -40,7 +40,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Rung, copy, off_delay
+from pyrung.core import copy, off_delay, rung
 from tests.conformance.memory import ClickTimer
 from tests.conformance.scans import deadline
 
@@ -56,30 +56,30 @@ def prove_done_after_td_zeroed(slot: Any) -> None:
     def step(n: int) -> tuple[Any, Any]:
         return (slot.Cmd != 0, slot.Scratch == n)
 
-    with Rung(*step(0)):
+    with rung(*step(0)):
         off_delay(TOF, PRESET)
-    with Rung(*step(5)):
+    with rung(*step(5)):
         copy(1, slot.Fired)
-    with Rung(*step(4), ~TOF.Done, TOF.Acc >= PRESET):
+    with rung(*step(4), ~TOF.Done, TOF.Acc >= PRESET):
         copy(1, slot.Result4)
-    with Rung(*step(4), ~TOF.Done, TOF.Acc < PRESET):
+    with rung(*step(4), ~TOF.Done, TOF.Acc < PRESET):
         copy(2, slot.Result4)
-    with Rung(*step(4), ~TOF.Done):
+    with rung(*step(4), ~TOF.Done):
         copy(5, slot.Scratch)
-    with Rung(*step(3), TOF.Done):
+    with rung(*step(3), TOF.Done):
         copy(1, slot.Result2)
-    with Rung(*step(3), TOF.Acc < PRESET):
+    with rung(*step(3), TOF.Acc < PRESET):
         copy(1, slot.Result3)
-    with Rung(*step(3)):
+    with rung(*step(3)):
         copy(4, slot.Scratch)
-    with Rung(*step(2)):
+    with rung(*step(2)):
         copy(0, TOF.Acc)
         copy(3, slot.Scratch)
-    with Rung(*step(1), TOF.Acc >= PAST_PRESET, TOF.Done):
+    with rung(*step(1), TOF.Acc >= PAST_PRESET, TOF.Done):
         copy(1, slot.Result1)
-    with Rung(*step(1), TOF.Acc >= PAST_PRESET):
+    with rung(*step(1), TOF.Acc >= PAST_PRESET):
         copy(2, slot.Scratch)
-    with Rung(*step(0), TOF.Done):
+    with rung(*step(0), TOF.Done):
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(292), DEADLINE_MS)
 

@@ -7,7 +7,7 @@ replay-confirmed holds or correctly avoids nogooding the action.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, copy, latch, out, reset
+from pyrung import Bool, Int, Program, copy, latch, out, reset, rung
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
@@ -41,15 +41,15 @@ def _excursion_program():
         link="y_Started",
     )
     with Program() as prog:
-        with Rung(x_Start):
+        with rung(x_Start):
             latch(y_Motor)
-        with Rung(y_Motor):
+        with rung(y_Motor):
             out(y_Started)
-        with Rung(y_Started_Fb, ~x_Hold):
+        with rung(y_Started_Fb, ~x_Hold):
             reset(y_Motor)
         # The target lies beyond the clobber.  Observing y_Motor itself would
         # stop on its transient pulse and never exercise excursion recovery.
-        with Rung(y_Motor, y_Started_Fb):
+        with rung(y_Motor, y_Started_Fb):
             out(y_Ready)
     return prog, y_Motor, y_Ready
 
@@ -124,13 +124,13 @@ def _no_hold_excursion_program():
         link="y_Started",
     )
     with Program() as prog:
-        with Rung(x_Start):
+        with rung(x_Start):
             latch(y_Motor)
-        with Rung(y_Motor):
+        with rung(y_Motor):
             out(y_Started)
-        with Rung(y_Started_Fb):
+        with rung(y_Started_Fb):
             reset(y_Motor)
-        with Rung(y_Motor, y_Started_Fb):
+        with rung(y_Motor, y_Started_Fb):
             copy(1, y_Stage)
     return prog, y_Motor, y_Stage
 
@@ -197,7 +197,7 @@ def test_spin_still_nogooded() -> None:
     x_B = Bool("x_B", external=True)
     y_Out = Bool("y_Out")
     with Program() as prog:
-        with Rung(x_A, x_B):
+        with rung(x_A, x_B):
             out(y_Out)
 
     plc = PLC(prog, dt=0.010)

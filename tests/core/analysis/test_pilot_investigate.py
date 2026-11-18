@@ -14,7 +14,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     Timer,
     call,
     copy,
@@ -23,6 +22,7 @@ from pyrung import (
     on_delay,
     out,
     rise,
+    rung,
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
@@ -108,21 +108,21 @@ def test_nested_closure_reproves_individual_scopes_with_a_shared_joint_cut():
     Command = Int("CompositeEnvelope_Command")
 
     with Program() as program:
-        with Rung(Mode, Or(State == 3, State == 11), ~Door):
+        with rung(Mode, Or(State == 3, State == 11), ~Door):
             latch(DoorAlarm)
-        with Rung(Mode, Or(State == 3, State == 11), ~Lint):
+        with rung(Mode, Or(State == 3, State == 11), ~Lint):
             latch(LintAlarm)
         # Neither individual assignment disables this writer; the pair does.
-        with Rung(Mode, State == 6, Or(~Door, ~Lint)):
+        with rung(Mode, State == 6, Or(~Door, ~Lint)):
             copy(4, Command)
         # A door-only sibling must not broaden the lint correction.
-        with Rung(Mode, State == 17, ~Door):
+        with rung(Mode, State == 17, ~Door):
             copy(4, Command)
-        with Rung(DoorAlarm):
+        with rung(DoorAlarm):
             copy(4, Command)
-        with Rung(LintAlarm):
+        with rung(LintAlarm):
             copy(4, Command)
-        with Rung(Command == 4):
+        with rung(Command == 4):
             copy(8, State)
 
     ctx = SimpleNamespace(pdg=build_program_graph(program), program=program)
@@ -195,22 +195,22 @@ def test_producer_envelope_follows_recorded_cascade_and_retains_escape_condition
 
     with Program() as program:
         with subroutine("EnvelopeFaults"):
-            with Rung(Or(State == 3, State == 11), ~Door):
+            with rung(Or(State == 3, State == 11), ~Door):
                 latch(Alarm)
-            with Rung(State == 6, ~Door):
+            with rung(State == 6, ~Door):
                 copy(4, Command)
             # This sibling really is step-dependent; projection must retain
             # that escape condition rather than generalizing over State=12.
-            with Rung(State == 12, Step == 7, ~Door):
+            with rung(State == 12, Step == 7, ~Door):
                 copy(4, Command)
             # Door-dependent shared plumbing outside the recorded cascade.
-            with Rung(State == 12, ~Door):
+            with rung(State == 12, ~Door):
                 out(Warning)
-        with Rung(Mode):
+        with rung(Mode):
             call("EnvelopeFaults")
-        with Rung(Alarm):
+        with rung(Alarm):
             copy(4, Command)
-        with Rung(Command == 4):
+        with rung(Command == 4):
             copy(8, State)
 
     pdg = build_program_graph(program)
@@ -253,9 +253,9 @@ def test_producer_envelope_punts_when_lever_is_mixed_with_context():
         # One nested condition cannot be projected into independent lever and
         # context terms without Boolean reconstruction. The sound result is the
         # ordinary exact EarnedWork fallback.
-        with Rung(And(State == 3, ~Door)):
+        with rung(And(State == 3, ~Door)):
             latch(Alarm)
-        with Rung(Alarm):
+        with rung(Alarm):
             copy(8, State)
 
     pdg = build_program_graph(program)
@@ -283,13 +283,13 @@ class TestPreciseCauses:
         State = Int("Release_State", default=3)
 
         with Program() as prog:
-            with Rung(Door):
+            with rung(Door):
                 out(DoorImage)
-            with Rung(LintDoor):
+            with rung(LintDoor):
                 out(LintDoorImage)
-            with Rung(Enter):
+            with rung(Enter):
                 copy(6, State)
-            with Rung(State == 6, Or(~DoorImage, ~LintDoorImage)):
+            with rung(State == 6, Or(~DoorImage, ~LintDoorImage)):
                 copy(10, State)
 
         plc = PLC(prog, dt=0.010)
@@ -345,21 +345,21 @@ class TestPreciseCauses:
         Unrelated = Int("Precise_Unrelated")
 
         with Program() as prog:
-            with Rung(State == 6):
+            with rung(State == 6):
                 out(Execute)
-            with Rung(Enter):
+            with rung(Enter):
                 copy(6, State)
-            with Rung(Execute, Or(~Door, ~LintDoor)):
+            with rung(Execute, Or(~Door, ~LintDoor)):
                 copy(4, Cmd)
-            with Rung(Cmd == 4):
+            with rung(Cmd == 4):
                 copy(10, Requested)
-            with Rung(Requested != 0):
+            with rung(Requested != 0):
                 copy(Requested, State)
                 copy(0, Requested)
                 copy(0, Cmd)
             # A steady false default elsewhere in the program is support for
             # nothing on the fired causal path and must never become a hold.
-            with Rung(~FirstScan):
+            with rung(~FirstScan):
                 copy(0, Unrelated)
 
         plc = PLC(prog, dt=0.010)
@@ -433,11 +433,11 @@ class TestPreciseCauses:
         State = Int("OutCut_State")
 
         with Program() as prog:
-            with Rung(Door):
+            with rung(Door):
                 out(Image)
-            with Rung(Init):
+            with rung(Init):
                 copy(6, State)
-            with Rung(~Image):
+            with rung(~Image):
                 copy(10, State)
 
         plc = PLC(prog, dt=0.010)
@@ -497,9 +497,9 @@ class TestLatchExposureHypotheses:
         State = Bool("State")
         Alarm = Bool("Alarm")
         with Program() as prog:
-            with Rung(Enter):
+            with rung(Enter):
                 out(State)
-            with Rung(State, ~Guard):
+            with rung(State, ~Guard):
                 latch(Alarm)
 
         plc = PLC(prog, dt=0.010)
@@ -533,11 +533,11 @@ class TestLatchExposureHypotheses:
         A1 = Bool("A1")
         A2 = Bool("A2")
         with Program() as prog:
-            with Rung(Enter):
+            with rung(Enter):
                 out(State)
-            with Rung(State, ~G1):
+            with rung(State, ~G1):
                 latch(A1)
-            with Rung(State, ~G2):
+            with rung(State, ~G2):
                 latch(A2)
 
         plc = PLC(prog, dt=0.010)
@@ -594,9 +594,9 @@ class TestLivenessHypotheses:
         WD = Timer.clone("WD")
         Err = Bool("Err")
         with Program() as prog:
-            with Rung():
+            with rung():
                 on_delay(WD, 30, "ms").reset(~Sensor)
-            with Rung(WD.Done):
+            with rung(WD.Done):
                 out(Err)
 
         plc = PLC(prog, dt=0.010)
@@ -635,11 +635,11 @@ class TestLivenessHypotheses:
         OnWD = Timer.clone("OnWD")  # resets on ~Sensor -> counts while True
         Err = Bool("Err")
         with Program() as prog:
-            with Rung():
+            with rung():
                 on_delay(OffWD, 30, "ms").reset(Sensor)
-            with Rung():
+            with rung():
                 on_delay(OnWD, 30, "ms").reset(~Sensor)
-            with Rung(Or(OffWD.Done, OnWD.Done)):
+            with rung(Or(OffWD.Done, OnWD.Done)):
                 out(Err)
 
         plc = PLC(prog, dt=0.010)
@@ -675,11 +675,11 @@ class TestLivenessHypotheses:
         W2 = Timer.clone("W2")
         E = Bool("E")
         with Program() as prog:
-            with Rung():
+            with rung():
                 on_delay(W1, 30, "ms").reset(~S1)
-            with Rung():
+            with rung():
                 on_delay(W2, 30, "ms").reset(~S2)
-            with Rung(W1.Done):
+            with rung(W1.Done):
                 out(E)
 
         plc = PLC(prog, dt=0.010)
@@ -728,15 +728,15 @@ def _shaft_rotate_program() -> Program:
     Fault = Bool("Fault")
     Running = Bool("Running")
     with Program() as prog:
-        with Rung():
+        with rung():
             on_delay(SensorOffWD, 50, "ms").reset(Rotate)
-        with Rung():
+        with rung():
             on_delay(SensorOnWD, 50, "ms").reset(~Rotate)
-        with Rung(Or(SensorOffWD.Done, SensorOnWD.Done)):
+        with rung(Or(SensorOffWD.Done, SensorOnWD.Done)):
             latch(Fault)
-        with Rung(~Fault):
+        with rung(~Fault):
             on_delay(RunDelay, 200, "ms")
-        with Rung(RunDelay.Done):
+        with rung(RunDelay.Done):
             out(Running)
     return prog
 
@@ -832,9 +832,9 @@ class TestShaftRotateLiveness:
         contact = Bool("MappedRotateContact")
         watchdog = Timer.clone("MappedRotateWD")
         with Program() as program:
-            with Rung(physical):
+            with rung(physical):
                 out(contact)
-            with Rung():
+            with rung():
                 on_delay(watchdog, 50, "ms").reset(contact)
 
         plc = PLC(program, dt=0.010)
@@ -884,13 +884,13 @@ def _conj_reset_target_program() -> Program:
     Fault = Bool("Fault")
     Running = Bool("Running")
     with Program() as prog:
-        with Rung():
+        with rung():
             on_delay(WD, 50, "ms").reset(And(A, B))
-        with Rung(WD.Done):
+        with rung(WD.Done):
             latch(Fault)
-        with Rung(~Fault):
+        with rung(~Fault):
             on_delay(RunDelay, 200, "ms")
-        with Rung(RunDelay.Done):
+        with rung(RunDelay.Done):
             out(Running)
     return prog
 
@@ -906,9 +906,9 @@ class TestMultiReadCorrections:
         WD = Timer.clone("WD")
         Err = Bool("Err")
         with Program() as prog:
-            with Rung():
+            with rung():
                 on_delay(WD, 30, "ms").reset(And(A, B))
-            with Rung(WD.Done):
+            with rung(WD.Done):
                 out(Err)
 
         plc = PLC(prog, dt=0.010)
@@ -947,9 +947,9 @@ class TestMultiReadCorrections:
         WD = Timer.clone("WD")
         Err = Bool("Err")
         with Program() as prog:
-            with Rung():
+            with rung():
                 on_delay(WD, 30, "ms").reset(And(Enable, Mode == 2))
-            with Rung(WD.Done):
+            with rung(WD.Done):
                 out(Err)
 
         plc = PLC(prog, dt=0.010)
@@ -987,11 +987,11 @@ class TestMultiReadCorrections:
         WD = Timer.clone("WD")
         Err = Bool("Err")
         with Program() as prog:
-            with Rung(Locked):
+            with rung(Locked):
                 out(Internal)  # Internal only rises via the unsteerable Locked
-            with Rung():
+            with rung():
                 on_delay(WD, 30, "ms").reset(And(A, Internal))
-            with Rung(WD.Done):
+            with rung(WD.Done):
                 out(Err)
 
         plc = PLC(prog, dt=0.010)
@@ -1023,9 +1023,9 @@ class TestMultiReadCorrections:
         T = Timer.clone("T")
         Out = Bool("Out")
         with Program() as prog:
-            with Rung(And(run1, run2)):
+            with rung(And(run1, run2)):
                 on_delay(T, 50, "ms")
-            with Rung(T.Done):
+            with rung(T.Done):
                 out(Out)
 
         plc = PLC(prog, dt=0.010)
@@ -1106,7 +1106,7 @@ def _seal_in_program() -> Program:
     Hold = Bool("Hold", external=True)
     Out = Bool("Out")
     with Program() as prog:
-        with Rung(Or(rise(Command), And(Out, Hold))):
+        with rung(Or(rise(Command), And(Out, Hold))):
             out(Out)
     return prog
 
@@ -1388,11 +1388,11 @@ def _clobber_copy_program() -> Program:
     Mode = Int("Mode", external=True, choices={1: "Idle", 2: "Run", 3: "Stop"})
     State = Int("State")
     with Program() as prog:
-        with Rung(Locked):
+        with rung(Locked):
             out(Internal)
-        with Rung(And(Internal, Mode == 2)):
+        with rung(And(Internal, Mode == 2)):
             copy(0, State)
-        with Rung(rise(Command)):
+        with rung(rise(Command)):
             copy(5, State)
     return prog
 
@@ -1413,15 +1413,15 @@ def _liveword_clobber_program() -> Program:
     Mask = Int("Mask")
     State = Int("State")
     with Program() as prog:
-        with Rung(Sel):
+        with rung(Sel):
             copy(4, RawMask)
-        with Rung(~Sel):
+        with rung(~Sel):
             copy(0, RawMask)
-        with Rung():
+        with rung():
             math(RawMask & 4, Mask)
-        with Rung(Mask != 0):
+        with rung(Mask != 0):
             copy(0, State)
-        with Rung(rise(Command)):
+        with rung(rise(Command)):
             copy(5, State)
     return prog
 
@@ -1534,7 +1534,7 @@ def _change_program() -> Program:
     A = Bool("A", external=True)
     B = Bool("B")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(B)
     return prog
 
@@ -1580,9 +1580,9 @@ def _oscillating_done_program() -> Program:
     T = Timer.clone("T")
     Latched = Bool("Latched")
     with Program() as prog:
-        with Rung(~T.Done):
+        with rung(~T.Done):
             on_delay(T, 30, "ms")  # Done oscillates: ~3 scans off, 1 scan on
-        with Rung(T.Done):
+        with rung(T.Done):
             latch(Latched)  # the first Done rise latches Latched permanently
     return prog
 

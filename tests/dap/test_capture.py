@@ -51,16 +51,16 @@ def _single_response(messages: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _runner_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy\n"
+        "from pyrung.core import Bool, Int, PLC, Program, rung, out, copy\n"
         "\n"
         "button = Bool('Button')\n"
         "light = Bool('Light')\n"
         "counter = Int('Counter')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(button):\n"
+        "    with rung(button):\n"
         "        out(light)\n"
-        "    with Rung():\n"
+        "    with rung():\n"
         "        copy(0, counter)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"
@@ -611,7 +611,7 @@ class TestReplayHarnessModes:
 
 def _values_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Real, Rung, copy, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Real, rung, copy, out\n"
         "\n"
         "button = Bool('Button')\n"
         "light = Bool('Light')\n"
@@ -619,12 +619,12 @@ def _values_script() -> str:
         "state = Int('State', choices={1: 'IDLE', 2: 'HELD'})\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(button):\n"
+        "    with rung(button):\n"
         "        out(light)\n"
         "        copy(2, state)\n"
-        "    with Rung(~button):\n"
+        "    with rung(~button):\n"
         "        copy(1, state)\n"
-        "    with Rung():\n"
+        "    with rung():\n"
         "        copy(temp, temp)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"
@@ -746,7 +746,7 @@ def _watch(adapter: DAPAdapter, out: io.BytesIO, expression: str) -> tuple[bool,
 
 def _udt_choices_script() -> str:
     return (
-        "from pyrung.core import Bool, Field, Int, PLC, Program, Rung, copy, udt\n"
+        "from pyrung.core import Bool, Field, Int, PLC, Program, rung, copy, udt\n"
         "\n"
         "@udt()\n"
         "class Pump:\n"
@@ -755,9 +755,9 @@ def _udt_choices_script() -> str:
         "button = Bool('Button')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(button):\n"
+        "    with rung(button):\n"
         "        copy(2, Pump.State)\n"
-        "    with Rung(~button):\n"
+        "    with rung(~button):\n"
         "        copy(1, Pump.State)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"

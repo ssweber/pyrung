@@ -53,22 +53,22 @@ B = a branch snapshots where it leaves its parent):
 from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, branch, copy, latch, math, out, reset
+from pyrung.core import branch, copy, latch, math, out, reset, rung
 from tests.conformance.memory import c
 from tests.conformance.scans import count_scans, done, scans_for
 
 
 def prove_memory_is_immediate(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(42, slot.Scratch)
         copy(slot.Scratch, slot.Result1)
         copy(1, slot.Fired)
 
 
 def prove_global_mutation(slot):
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(99, slot.Scratch)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(slot.Scratch, slot.Result1)
         copy(1, slot.Fired)
 
@@ -76,21 +76,21 @@ def prove_global_mutation(slot):
 def prove_branch_sees_rung_entry(slot):
     # The rung's own first row sets the bit its parent contact reads (C1601)
     # and the bit its branches read (C1602).  Both are off on entry.
-    with Rung(slot.Cmd != 0, slot.Fired == 0, ~c[1601]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, ~c[1601]):
         latch(c[1601])
         latch(c[1602])
         with branch(~c[1602]):
             copy(1, slot.Result1)
         with branch(c[1602]):
             copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_nested_branches_see_rung_entry(slot):
     # C1611 is set above the outer branch, C1612 inside it above the inner
     # ones.  C1613 is never written: the outer branch's contact is always on.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[1611])
         with branch(~c[1613]):
             latch(c[1612])
@@ -98,7 +98,7 @@ def prove_nested_branches_see_rung_entry(slot):
                 copy(1, slot.Result1)
             with branch(~c[1612]):
                 copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
@@ -106,12 +106,12 @@ def prove_branch_and_with_parent(slot):
     # C1621 and C1622 are never written, so they are off.  Two branches per
     # rung: a rung with one branch and nothing else exports as plain series
     # contacts.
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[1621]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[1621]):
         with branch(~c[1621]):
             copy(1, slot.Result1)
         with branch(~c[1622]):
             copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with branch(c[1621]):
             copy(1, slot.Result3)
         with branch(~c[1621]):
@@ -130,21 +130,21 @@ def prove_last_rung_wins_shared_coil(slot):
     # between its two rungs and below them.
     w = LAST_RUNG_WINDOW
     count_scans(slot, w)
-    with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
+    with rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
         math(slot.Result1 + 1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1632]):
+    with rung(slot.Cmd != 0, slot.Scratch <= w, c[1632]):
         math(slot.Result2 + 1, slot.Result2)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         out(c[1631])
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         out(c[1632])
-    with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
+    with rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
         math(slot.Result3 + 1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         out(c[1631])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         out(c[1632])
-    with Rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
+    with rung(slot.Cmd != 0, slot.Scratch <= w, c[1631]):
         math(slot.Result4 + 1, slot.Result4)
     done(slot, w)
 
@@ -152,32 +152,32 @@ def prove_last_rung_wins_shared_coil(slot):
 def prove_continued_shares_snapshot(slot):
     # Four wires of one CLICK rung.  The first sets C1641 and the second needs
     # it off; the third sets C1642 and the fourth needs it off.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[1641])
-    with Rung(~c[1641], slot.Cmd != 0, slot.Fired == 0).continued():
+    with rung(~c[1641], slot.Cmd != 0, slot.Fired == 0).continued():
         copy(1, slot.Result1)
-    with Rung(slot.Fired == 0, slot.Cmd != 0).continued():
+    with rung(slot.Fired == 0, slot.Cmd != 0).continued():
         latch(c[1642])
-    with Rung(~c[1642], slot.Cmd != 0, slot.Fired == 0).continued():
+    with rung(~c[1642], slot.Cmd != 0, slot.Fired == 0).continued():
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
 def prove_continued_chain_breaks(slot):
     # A chain (C1651 set, then a continued wire), a normal rung that sets
     # C1652, and a chain continuing that normal rung.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[1651])
-    with Rung(~c[1651], slot.Cmd != 0, slot.Fired == 0).continued():
+    with rung(~c[1651], slot.Cmd != 0, slot.Fired == 0).continued():
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[1652])
-    with Rung(~c[1652], slot.Cmd != 0, slot.Fired == 0).continued():
+    with rung(~c[1652], slot.Cmd != 0, slot.Fired == 0).continued():
         copy(1, slot.Result2)
-    with Rung(c[1651], slot.Cmd != 0, slot.Fired == 0).continued():
+    with rung(c[1651], slot.Cmd != 0, slot.Fired == 0).continued():
         copy(1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 

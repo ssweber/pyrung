@@ -6,7 +6,6 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -18,6 +17,7 @@ from pyrung.core import (
     off_delay,
     on_delay,
     out,
+    rung,
     shift,
     time_drum,
 )
@@ -38,7 +38,7 @@ def test_count_up_missing_reset_raises() -> None:
 
     with pytest.raises(RuntimeError, match="count_up"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 count_up(Counter[1], preset=5)
 
 
@@ -47,7 +47,7 @@ def test_count_down_missing_reset_raises() -> None:
 
     with pytest.raises(RuntimeError, match="count_down"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 count_down(Counter2, preset=5)
 
 
@@ -60,7 +60,7 @@ def test_event_drum_missing_reset_raises() -> None:
 
     with pytest.raises(RuntimeError, match="event_drum"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 event_drum(
                     outputs=[out1],
                     events=[event1],
@@ -79,7 +79,7 @@ def test_time_drum_missing_reset_raises() -> None:
 
     with pytest.raises(RuntimeError, match="time_drum"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 time_drum(
                     outputs=[out1],
                     presets=[100],
@@ -97,7 +97,7 @@ def test_shift_missing_reset_raises() -> None:
 
     with pytest.raises(RuntimeError, match="shift"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 shift(bits.select(1, 4)).clock(clock)
 
 
@@ -107,7 +107,7 @@ def test_pending_required_builder_blocks_following_dsl_statements() -> None:
 
     with pytest.raises(RuntimeError, match="count_up"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 count_up(Counter3, preset=5)
                 out(light)
 
@@ -120,7 +120,7 @@ def test_pending_required_builder_blocks_branch_entry() -> None:
 
     with pytest.raises(RuntimeError, match="count_up"):
         with Program(strict=False):
-            with Rung(enable):
+            with rung(enable):
                 builder = count_up(Counter4, preset=5)
                 with branch(mode):
                     out(light)
@@ -134,7 +134,7 @@ def test_parent_flow_terminal_blocks_following_instruction() -> None:
 
     with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 count_up(Counter5, preset=5).reset(reset)
                 out(light)
 
@@ -147,7 +147,7 @@ def test_parent_flow_terminal_blocks_following_branch() -> None:
 
     with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 count_down(Counter6, preset=5).reset(reset)
                 with branch(mode):
                     out(light)
@@ -161,7 +161,7 @@ def test_branch_flow_terminal_blocks_following_branch_local_instruction() -> Non
 
     with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 with branch(mode):
                     count_up(Counter7, preset=5).reset(reset)
                     out(light)
@@ -180,7 +180,7 @@ def test_box_with_pins_in_a_branch_ends_the_whole_rung() -> None:
 
     with pytest.raises(RuntimeError, match=r"Move out\(\) \(line \d+\) off this rung") as info:
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 with branch(mode_a):
                     count_up(Counter8, preset=5).reset(reset)
                 with branch(mode_b):
@@ -199,7 +199,7 @@ def test_box_with_pins_refuses_an_output_above_it() -> None:
 
     with pytest.raises(RuntimeError, match=r"count_up\(\) .* Move latch\(\) .* a rung above"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 latch(seen)
                 with branch(mode):
                     count_up(Counter8, preset=5).reset(reset)
@@ -211,7 +211,7 @@ def test_box_with_pins_alone_in_a_branch_is_accepted() -> None:
     reset = Bool("Reset")
 
     with Program():
-        with Rung(enable):
+        with rung(enable):
             with branch(mode):
                 count_up(Counter8, preset=5).reset(reset)
 
@@ -224,11 +224,11 @@ def test_box_with_pins_splits_into_continued_rungs() -> None:
     lamp = Bool("Lamp")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             latch(seen)
-        with Rung(enable, auto).continued():
+        with rung(enable, auto).continued():
             count_up(Counter8, preset=10).reset(reset)
-        with Rung(enable).continued():
+        with rung(enable).continued():
             out(lamp)
     assert len(logic.rungs) == 3
 
@@ -240,7 +240,7 @@ def test_box_with_pins_beside_bare_body_rows_in_a_forloop_is_accepted() -> None:
     lamp = Bool("Lamp")
 
     with Program():
-        with Rung(enable):
+        with rung(enable):
             with forloop(2):
                 out(lamp)
                 count_up(Counter8, preset=5).reset(reset)
@@ -254,7 +254,7 @@ def test_box_with_pins_before_a_bare_body_row_in_a_forloop_is_accepted() -> None
     done = Bool("Done")
 
     with Program() as logic:
-        with Rung(enable):
+        with rung(enable):
             with forloop(2):
                 count_up(Counter8, preset=5).reset(reset)
                 out(lamp)
@@ -273,9 +273,9 @@ def test_box_with_pins_beside_an_output_in_a_forloop_body_rung_is_refused() -> N
 
     with pytest.raises(RuntimeError, match="has pins, so it ends its rung") as info:
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 with forloop(2):
-                    with Rung(mode):
+                    with rung(mode):
                         out(lamp)
                         count_up(Counter8, preset=5).reset(reset)
     # A body rung has no .continued(): the fix is a body rung of its own.
@@ -291,7 +291,7 @@ def test_ton_allows_following_instruction_and_branch() -> None:
     branch_light = Bool("BranchLight")
 
     with Program():
-        with Rung(enable):
+        with rung(enable):
             on_delay(Timer[1], preset=5)
             out(light)
             with branch(mode):
@@ -305,7 +305,7 @@ def test_tof_allows_following_instruction_and_branch() -> None:
     branch_light = Bool("BranchLight")
 
     with Program():
-        with Rung(enable):
+        with rung(enable):
             off_delay(Timer2, preset=5)
             out(light)
             with branch(mode):
@@ -319,7 +319,7 @@ def test_rton_is_terminal_in_same_flow() -> None:
 
     with pytest.raises(RuntimeError, match="has pins, so it ends its rung"):
         with Program():
-            with Rung(enable):
+            with rung(enable):
                 on_delay(Timer3, preset=5).reset(reset)
                 out(light)
 
@@ -337,7 +337,7 @@ def test_event_drum_chain_can_finalize_with_reset_then_jump_and_jog() -> None:
     event2 = Bool("Event2")
 
     with Program():
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[out1, out2],
                 events=[event1, event2],
@@ -359,7 +359,7 @@ def test_time_drum_chain_can_finalize_with_reset_then_jump_and_jog() -> None:
     out2 = Bool("Out2")
 
     with Program():
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[out1, out2],
                 presets=[100, 100],

@@ -8,7 +8,7 @@ Usage::
 
     from pyrung.click import raw
 
-    with Rung(StartButton):
+    with rung(StartButton):
         raw("Email", "0x2737,1,60a5=1,60a6=,...")
 """
 

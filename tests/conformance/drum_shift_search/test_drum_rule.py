@@ -70,7 +70,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, reset
+from pyrung.core import copy, reset, rung
 from tests.conformance.drum_rig import (
     Pair,
     Resources,
@@ -111,7 +111,7 @@ def prove_writes_on_move_only(slot):
 
     def a_above(p: Pair) -> None:
         _up_to_step_2(slot, p)
-        with Rung(slot.Scratch == 3):
+        with rung(slot.Scratch == 3):
             reset(p.time.b)
             reset(p.event.b)
 
@@ -138,7 +138,7 @@ def prove_writes_on_return(slot):
 
     def a_above(p: Pair) -> None:
         _up_to_step_2(slot, p)
-        with Rung(slot.Scratch >= 3, slot.Scratch <= 4):
+        with rung(slot.Scratch >= 3, slot.Scratch <= 4):
             from pyrung.core import out
 
             out(p.pause)
@@ -180,7 +180,7 @@ def prove_bad_step_and_first_scan_jog(slot):
     b = r.pair(1, jog=True, te_jog=True, above=b_above)
     # The step registers are 0 when the first scan comes. The reset of the drums writes
     # step 1 on every idle scan, so this rung comes after them.
-    with Rung(slot.Cmd == 0):
+    with rung(slot.Cmd == 0):
         copy(0, b.time.step)
         copy(0, b.event.step)
     track_both(slot, b)
@@ -207,7 +207,7 @@ def prove_correction_moves(slot):
     snap(slot, p, 3, slot.Result2)
     snap(slot, p, 4, slot.Result3)
     snap(slot, p, 5, slot.Result4)
-    with Rung(slot.Scratch == 4):
+    with rung(slot.Scratch == 4):
         copy(p.time.acc, slot.ErrorCode)
     done(slot)
 

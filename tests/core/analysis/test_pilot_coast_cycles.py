@@ -13,7 +13,6 @@ from pyrung import (
     Dint,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     copy,
@@ -22,6 +21,7 @@ from pyrung import (
     math,
     on_delay,
     out,
+    rung,
     time_drum,
     time_event_drum,
 )
@@ -46,13 +46,13 @@ def _active_hold_soak(soak_ms: int = 5000, wd_ms: int = 200) -> Program:
     Done = Bool("Done")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             on_delay(Soak, soak_ms, "ms")
-        with Rung():
+        with rung():
             on_delay(WD, wd_ms, "ms").reset(Osc)
-        with Rung(Soak.Done):
+        with rung(Soak.Done):
             out(Done)
-        with Rung(~Osc):
+        with rung(~Osc):
             out(Osc)
     return prog
 
@@ -63,9 +63,9 @@ class TestBitEqual:
         Mirror = Bool("LogicalBudgetMirror")
         Soak = Timer.clone("LogicalBudgetSoak")
         with Program() as program:
-            with Rung(Held):
+            with rung(Held):
                 out(Mirror)
-            with Rung():
+            with rung():
                 on_delay(Soak, 50_000, "ms")
 
         replay = PLC(program)
@@ -90,9 +90,9 @@ class TestBitEqual:
         Soak = Timer.clone("LayeredSoak")
         Done = Bool("LayeredDone")
         with Program() as program:
-            with Rung():
+            with rung():
                 on_delay(Soak, 5000, "ms")
-            with Rung(Soak.Done):
+            with rung(Soak.Done):
                 out(Done)
 
         ref = PLC(program)
@@ -119,9 +119,9 @@ class TestBitEqual:
         Soak = Dint("LayeredReceipt")
         SoakDone = Bool("LayeredReceiptDone")
         with Program() as program:
-            with Rung():
+            with rung():
                 math(Soak + 1, Soak)
-            with Rung(Soak >= 100):
+            with rung(Soak >= 100):
                 out(SoakDone)
 
         ref = PLC(program)
@@ -180,13 +180,13 @@ class TestBitEqual:
         Done = Bool("SubtickDone")
         Mirror = Bool("SubtickMirror")
         with Program() as program:
-            with Rung(Osc):
+            with rung(Osc):
                 out(Mirror)
-            with Rung():
+            with rung():
                 on_delay(Soak, 2, "s")
-            with Rung(Soak.Done):
+            with rung(Soak.Done):
                 out(Done)
-            with Rung(~Osc):
+            with rung(~Osc):
                 out(Osc)
 
         ref = PLC(program, dt=0.010)
@@ -215,13 +215,13 @@ class TestBitEqual:
         Done = Bool("MinuteDone")
         Mirror = Bool("MinuteMirror")
         with Program() as program:
-            with Rung(Osc):
+            with rung(Osc):
                 out(Mirror)
-            with Rung():
+            with rung():
                 on_delay(Soak, 2, "min")
-            with Rung(Soak.Done):
+            with rung(Soak.Done):
                 out(Done)
-            with Rung(~Osc):
+            with rung(~Osc):
                 out(Osc)
 
         ref = PLC(program, dt=0.010)
@@ -266,16 +266,16 @@ class TestBitEqual:
             "completion_flag": Done,
         }
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 on_delay(Long, 3000)
-            with Rung(Long.Acc < 1500):
+            with rung(Long.Acc < 1500):
                 copy(2, Step)
-            with Rung():
+            with rung():
                 if kind == "time":
                     time_drum(**args).reset(Bool("DrumReset"))
                 else:
                     time_event_drum(events=[None, None, None], **args).reset(Bool("DrumReset"))
-            with Rung():
+            with rung():
                 copy(3, Step)
 
         def done(state: Any) -> bool:
@@ -301,9 +301,9 @@ class TestBitEqual:
         Output = Bool("DrumOutput")
         Mirror = Bool("DrumMirror")
         with Program() as program:
-            with Rung(Osc):
+            with rung(Osc):
                 out(Mirror)
-            with Rung(Auto):
+            with rung(Auto):
                 time_drum(
                     outputs=[Output],
                     presets=[1, 2],
@@ -313,7 +313,7 @@ class TestBitEqual:
                     accumulator=Acc,
                     completion_flag=Done,
                 ).reset(Reset)
-            with Rung(~Osc):
+            with rung(~Osc):
                 out(Osc)
 
         def run(*, jit: bool) -> tuple[PLC, dict[str, int]]:
@@ -359,23 +359,23 @@ def _oscillation_fed_counter(
     WD = Timer.clone("CfWD")
     with Program(strict=False) as prog:
         if read_above:
-            with Rung(C.Acc >= preset - 3):
+            with rung(C.Acc >= preset - 3):
                 latch(Bool("Hit"))
         if period3:
             # The pulse is on for one scan in three.
-            with Rung(~Osc, ~A):
+            with rung(~Osc, ~A):
                 out(A)
-            with Rung(A):
+            with rung(A):
                 out(Osc)
         else:
-            with Rung(~Osc):
+            with rung(~Osc):
                 out(Osc)
-        with Rung(Osc):
+        with rung(Osc):
             count_up(C, preset).reset(Bool("CfRst", external=True))
-        with Rung():
+        with rung():
             on_delay(WD, 200, "ms").reset(Osc)
         if with_clock:
-            with Rung(system.sys.clock_1s):
+            with rung(system.sys.clock_1s):
                 out(Bool("Blink"))
     return prog, C
 
@@ -429,15 +429,15 @@ def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
     Blink = Bool("Blink")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             math(Ctr + 1, Ctr)
-        with Rung():
+        with rung():
             on_delay(WD, 200, "ms").reset(Osc)
-        with Rung(system.sys.clock_1s):
+        with rung(system.sys.clock_1s):
             out(Blink)
-        with Rung(Ctr >= soak_counts):
+        with rung(Ctr >= soak_counts):
             out(Done)
-        with Rung(~Osc):
+        with rung(~Osc):
             out(Osc)
     return prog
 
@@ -490,15 +490,15 @@ def _rtc_reader_cycle_program() -> Program:
     T = Bool("RcT")
     Tmr = Timer.clone("RcTmr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
-        with Rung(~T):
+        with rung(~T):
             out(T)
-        with Rung():
+        with rung():
             math(Sec // 30, Half)
-        with Rung(Half == 1):
+        with rung(Half == 1):
             latch(Seen)
-        with Rung():
+        with rung():
             on_delay(Tmr, 300_000)
     return prog
 
@@ -569,37 +569,37 @@ def _clock_mirror_cycle_program(
     Hit = Bool("CmHit")
     Tmr = Timer.clone("CmTmr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
-        with Rung():
+        with rung():
             math(system.rtc.hour * 100 + system.rtc.minute, HHMM)
-        with Rung(~T):
+        with rung(~T):
             out(T)
-        with Rung(system.sys.clock_1s):
+        with rung(system.sys.clock_1s):
             out(Blink)
-        with Rung(rise(Alarm)):
+        with rung(rise(Alarm)):
             copy(Hist1, Hist2)
             copy(Sec, Hist1)
         if live_stamp:
-            with Rung(Or(Stopped, Alarm)):
+            with rung(Or(Stopped, Alarm)):
                 math(Sec // 30, StopSec)
-            with Rung(StopSec > 0):
+            with rung(StopSec > 0):
                 out(Bool("CmStopSecHigh"))
         if continued or continued_live:
-            with Rung():
+            with rung():
                 copy(0, X)
-            with Rung(X == 0):
+            with rung(X == 0):
                 out(Snap)
-            with Rung():
+            with rung():
                 copy(1, X)
-            with Rung().continued():
+            with rung().continued():
                 with branch(X == (1 if continued_live else 0)):
                     math(Sec // 30, Half)
-            with Rung(Half == 1):
+            with rung(Half == 1):
                 out(Bool("CmHalfOn"))
-        with Rung():
+        with rung():
             on_delay(Tmr, 20, "s")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Hit)
     return prog
 
@@ -761,11 +761,11 @@ class TestAcrossAClamp:
             T, Hit = Bool("PjT"), Bool("PjHit")
             Tmr = Timer.clone("PjTmr")
             with Program(strict=False) as prog:
-                with Rung(~T):
+                with rung(~T):
                     out(T)
-                with Rung():
+                with rung():
                     on_delay(Tmr, 300 if unit == "s" else 300_000, unit)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Hit)
             return prog
 
@@ -800,13 +800,13 @@ class TestReadsTheIntegerAccumulator:
             Tmr = Timer.clone("IaTmr")
             cond = {"gt": Tmr.Acc > k, "ge": Tmr.Acc >= k, "eq": Tmr.Acc == k}[form]
             with Program(strict=False) as prog:
-                with Rung(~T):
+                with rung(~T):
                     out(T)
-                with Rung():
+                with rung():
                     on_delay(Tmr, 60, "s")
-                with Rung(cond):
+                with rung(cond):
                     math(N + 1, N)
-                with Rung(cond):
+                with rung(cond):
                     out(Hit)
             return prog
 
@@ -888,22 +888,22 @@ class TestDrumStep:
                 "unit": "ms",
             }
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Long"), 60_000)
                 if above is not None:
-                    with Rung():
+                    with rung():
                         copy(above, Step)
-                with Rung(En):
+                with rung(En):
                     if kind == "time":
                         time_drum(**args).reset(R)
                     else:
                         time_event_drum(events=[None, None, None], **args).reset(R)
                 if below is not None:
-                    with Rung():
+                    with rung():
                         copy(below, Step)
-                with Rung(O2):
+                with rung(O2):
                     math(N + 1, N)
-                with Rung(Flag):
+                with rung(Flag):
                     on_delay(Timer.clone("Rd"), 60_000)
             return prog
 
@@ -945,9 +945,9 @@ class TestDrumStep:
         def build() -> Program:
             Tog = Bool("Tog")
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
-                with Rung(Bool("En")):
+                with rung(Bool("En")):
                     time_drum(
                         outputs=[Bool("O1"), Bool("O2")],
                         pattern=[[1, 0], [0, 1]],
@@ -975,25 +975,25 @@ class TestWrittenInputs:
         def build() -> Program:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
                 if above is not None:
-                    with Rung():
+                    with rung():
                         copy(above, P)
                 if comparison:
-                    with Rung():
+                    with rung():
                         on_delay(T, 30_000)
-                    with Rung(T.Acc >= P):
+                    with rung(T.Acc >= P):
                         latch(Hit)
                 else:
-                    with Rung():
+                    with rung():
                         on_delay(T, P)
-                    with Rung(T.Done):
+                    with rung(T.Done):
                         latch(Hit)
                 if below is not None:
-                    with Rung():
+                    with rung():
                         copy(below, P)
-                with Rung(Bool("Hit")):
+                with rung(Bool("Hit")):
                     math(Int("Since") + 1, Int("Since"))
             return prog
 
@@ -1037,17 +1037,17 @@ class TestWrittenInputs:
         def build() -> Program:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
-                with Rung(Tog):
+                with rung(Tog):
                     copy(first[0], P)
-                with Rung(~Tog):
+                with rung(~Tog):
                     copy(first[1], P)
-                with Rung():
+                with rung():
                     on_delay(T, 30_000)
-                with Rung(T.Acc >= P):
+                with rung(T.Acc >= P):
                     latch(Hit)
-                with Rung(Bool("Hit")):
+                with rung(Bool("Hit")):
                     math(Int("Since") + 1, Int("Since"))
             return prog
 
@@ -1060,24 +1060,24 @@ class TestWrittenInputs:
         def build() -> Program:
             Tog, P, Ctr, Hit = Bool("Tog"), Int("P"), Counter.clone("Ctr"), Bool("Hit")
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
-                with Rung():
+                with rung():
                     copy(20, P)
-                with Rung(Tog):
+                with rung(Tog):
                     if what == "preset":
                         count_up(Ctr, P).reset(Bool("CR"))
                     else:
                         count_up(Ctr, 20_000).reset(Bool("CR"))
                 if what == "preset":
-                    with Rung(Ctr.Done):
+                    with rung(Ctr.Done):
                         latch(Hit)
                 else:
-                    with Rung(Ctr.Acc >= P):
+                    with rung(Ctr.Acc >= P):
                         latch(Hit)
-                with Rung():
+                with rung():
                     copy(5000, P)
-                with Rung(Bool("Hit")):
+                with rung(Bool("Hit")):
                     math(Int("Since") + 1, Int("Since"))
             return prog
 
@@ -1110,19 +1110,19 @@ class TestInputWrites:
             Tog, T, Hit = Bool("Tog"), Timer.clone("T"), Bool("Hit")
             Ptr, Cmd = Int("Ptr"), Bool("Cmd")
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
                 if above is not None:
-                    with Rung():
+                    with rung():
                         copy(above, Big[5])
-                with Rung():
+                with rung():
                     on_delay(T, Big[5])
-                with Rung(T.Done):
+                with rung(T.Done):
                     latch(Hit)
                 if below is not None:
-                    with Rung():
+                    with rung():
                         copy(below, Big[Ptr])
-                with Rung(*(() if writer_on else (Cmd,))):
+                with rung(*(() if writer_on else (Cmd,))):
                     copy(9, Big[Int("Ptr2")])
             return prog
 
@@ -1158,15 +1158,15 @@ class TestInputWrites:
             Big = self.BIG
             Tog, T, Hit, Ptr = Bool("Tog"), Timer.clone("T"), Bool("Hit"), Int("Ptr")
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
-                with Rung():
+                with rung():
                     math(Ptr + 1, Ptr)
-                with Rung():
+                with rung():
                     on_delay(T, Big[50])
-                with Rung(T.Done):
+                with rung(T.Done):
                     latch(Hit)
-                with Rung(Ptr >= 1):
+                with rung(Ptr >= 1):
                     copy(20, Big[Ptr])
             return prog
 
@@ -1182,15 +1182,15 @@ class TestInputWrites:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
             gate = {"on": Tog, "off": ~Tog, "never": Bool("Never")}
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
-                with Rung(gate[above]):
+                with rung(gate[above]):
                     copy(2000, P)
-                with Rung():
+                with rung():
                     on_delay(T, P)
-                with Rung(T.Done):
+                with rung(T.Done):
                     latch(Hit)
-                with Rung(gate[below]):
+                with rung(gate[below]):
                     copy(5000, P)
             return prog
 
@@ -1218,15 +1218,15 @@ class TestInputWrites:
         def build() -> Program:
             Tog, P, T, Hit = Bool("Tog"), Int("P"), Timer.clone("T"), Bool("Hit")
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
-                with Rung(T.Acc >= 1000):
+                with rung(T.Acc >= 1000):
                     copy(200, P)
-                with Rung():
+                with rung():
                     on_delay(T, P)
-                with Rung(T.Done):
+                with rung(T.Done):
                     latch(Hit)
-                with Rung(T.Acc >= 1000):
+                with rung(T.Acc >= 1000):
                     copy(5000, P)
             return prog
 
@@ -1244,17 +1244,17 @@ class TestInputWrites:
         Tog, T, Hit = Bool("Tog"), Timer.clone("T"), Bool("Hit")
         Sec, Blink, Cmd, Ptr = Int("CwSec"), Bool("Blink"), Bool("Cmd"), Int("Ptr")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 copy(system.rtc.second, Sec)
-            with Rung(~Tog):
+            with rung(~Tog):
                 out(Tog)
-            with Rung(system.sys.clock_1s):
+            with rung(system.sys.clock_1s):
                 out(Blink)
-            with Rung():
+            with rung():
                 on_delay(T, Big[5])
-            with Rung(T.Done):
+            with rung(T.Done):
                 latch(Hit)
-            with Rung(Cmd):
+            with rung(Cmd):
                 copy(Sec, Big[Ptr])
         return prog
 

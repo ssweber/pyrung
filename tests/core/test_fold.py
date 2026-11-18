@@ -19,7 +19,6 @@ from pyrung import (
     Int,
     Or,
     Program,
-    Rung,
     TagType,
     Timer,
     Word,
@@ -30,6 +29,7 @@ from pyrung import (
     on_delay,
     out,
     reset,
+    rung,
 )
 from pyrung.core import fall, fill, forloop, rise, search, system
 from pyrung.core import runner as runner_module
@@ -51,9 +51,9 @@ def _timer_program(preset_ms: int = 500) -> tuple[Program, Timer]:
     Done = Bool("Done")
 
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Done)
 
     return prog, Tmr
@@ -67,9 +67,9 @@ def _counter_program(preset: int = 100) -> tuple[Program, Counter]:
     Done = Bool("Done")
 
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             count_up(Ctr, preset).reset(ResetCmd)
-        with Rung(Ctr.Done):
+        with rung(Ctr.Done):
             out(Done)
 
     return prog, Ctr
@@ -83,11 +83,11 @@ def _churn_timer_program(preset_ms: int = 500) -> tuple[Program, Timer]:
     Cycle = Int("Cycle")
 
     with Program() as prog:
-        with Rung():
+        with rung():
             math((Cycle + 1) % 2, Cycle)
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Done)
 
     return prog, Tmr
@@ -238,7 +238,7 @@ class TestFoldPauseBreakpoint:
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, 5000, "ms")
 
         from pyrung.core.runner import PLC
@@ -398,9 +398,9 @@ class TestSystemClockFold:
         Tmr = Timer.clone("Tmr")
         Ticks = Int("Ticks")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, 100_000, "ms")
-            with Rung(rise(system.sys.clock_1s)):
+            with rung(rise(system.sys.clock_1s)):
                 math(Ticks + 1, Ticks)
         return prog
 
@@ -428,9 +428,9 @@ class TestSystemClockFold:
         Tmr = Timer.clone("Tmr")
         Ticks = Int("Ticks")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, 100_000, "ms")
-            with Rung(system.sys.scan_counter == 25):
+            with rung(system.sys.scan_counter == 25):
                 math(Ticks + 1, Ticks)
         return prog
 
@@ -456,9 +456,9 @@ class TestSystemClockFold:
         Tmr = Timer.clone("Tmr")
         Ticks = Int("Ticks")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, 100_000, "ms")
-            with Rung(rise(system.sys.scan_clock_toggle)):
+            with rung(rise(system.sys.scan_clock_toggle)):
                 math(Ticks + 1, Ticks)
         return prog
 
@@ -513,11 +513,11 @@ class TestResolvedOnReadSignalFold:
         B = Int("B", external=True)
         Extent = Int("Extent")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, preset_ms, "ms")
-            with Rung(Tmr.Done):
+            with rung(Tmr.Done):
                 out(Done)
-            with Rung(rise(system.sys.clock_1s)):
+            with rung(rise(system.sys.clock_1s)):
                 math(A + B, Extent)
         return prog
 
@@ -566,11 +566,11 @@ class TestResolvedOnReadSignalFold:
         Extent = Int("Extent")
         Ticks = Int("Ticks")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, preset_ms, "ms")
-            with Rung(rise(system.sys.clock_1s)):
+            with rung(rise(system.sys.clock_1s)):
                 math(A + B, Extent)  # stable inputs
-            with Rung(rise(system.sys.clock_1s)):
+            with rung(rise(system.sys.clock_1s)):
                 math(Ticks + 1, Ticks)  # self-referential
         return prog
 
@@ -602,9 +602,9 @@ class TestClockBesideAComparison:
             Enable = Bool("Enable", external=True)
             Tmr = Timer.clone("Tmr")
             with Program() as prog:
-                with Rung(Enable):
+                with rung(Enable):
                     on_delay(Tmr, 1_000_000, "ms")
-                with Rung(rise(system.sys.clock_1s), gate(Tmr)):
+                with rung(rise(system.sys.clock_1s), gate(Tmr)):
                     out(Bool("Beat"))
             return prog
 
@@ -650,11 +650,11 @@ class TestClockSaturationFold:
         B = Int("B", external=True)
         Extent = Int("Extent")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, preset_ms, "ms")
-            with Rung(Tmr.Done):
+            with rung(Tmr.Done):
                 out(Done)
-            with Rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
+            with rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
                 math(A + B, Extent)
         return prog
 
@@ -703,11 +703,11 @@ class TestClockSaturationFold:
         Tmr = Timer.clone("Tmr")
         Bucket = Int("Bucket")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, preset_ms, "ms")
             # While Acc <= 100 the gate is false (Bucket frozen at 0); the edge
             # at which Acc first exceeds 100 must fire exactly once.
-            with Rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
+            with rung(rise(system.sys.clock_1s), Tmr.Acc > 100):
                 out(Bucket)
         return prog
 
@@ -749,13 +749,13 @@ class TestClockPulseFoldRegression:
         with Program(strict=False) as prog:
             if src == "timer":
                 s = Timer.clone("Tmr")
-                with Rung(Enable):
+                with rung(Enable):
                     on_delay(s, preset, "ms")
             else:
                 s = Counter.clone("Ctr")
-                with Rung(Enable):
+                with rung(Enable):
                     count_up(s, preset).reset(Reset)
-            with Rung(rise(clock_tag), s.Acc > threshold):
+            with rung(rise(clock_tag), s.Acc > threshold):
                 out(Beat)
         return prog, s.Done
 
@@ -801,7 +801,7 @@ class TestUnreadAccumulatorFold:
         Enable = Bool("Enable", external=True)
         Tmr = Timer.clone("Tmr")
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 on_delay(Tmr, preset_ms, "ms")
         return prog, Tmr
 
@@ -866,11 +866,11 @@ class TestAffineAccumulatorViews:
             Done = Bool("Done")
 
             with Program() as program:
-                with Rung(Enable):
+                with rung(Enable):
                     on_delay(Tmr, 1000, "ms")
-                with Rung():
+                with rung():
                     math(1000 - Tmr.Acc, Remaining)
-                with Rung(Remaining < 500):
+                with rung(Remaining < 500):
                     out(Done)
             return program
 
@@ -904,9 +904,9 @@ class TestRungsAcrossAWindow:
 
         def build() -> Program:
             with Program() as prog:
-                with Rung(Bool("Enable", external=True)):
+                with rung(Bool("Enable", external=True)):
                     on_delay(Timer.clone("Tmr"), 100_000, "ms")
-                with Rung(rise(system.sys.clock_1s), Bool("Sensor", external=True)):
+                with rung(rise(system.sys.clock_1s), Bool("Sensor", external=True)):
                     out(Bool("Indicator"))
             return prog
 
@@ -926,9 +926,9 @@ class TestRungsAcrossAWindow:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program() as prog:
-                with Rung(Bool("Enable", external=True)):
+                with rung(Bool("Enable", external=True)):
                     on_delay(Tmr, 1000, "ms")
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Done"))
             return prog
 
@@ -943,11 +943,11 @@ class TestRungsAcrossAWindow:
             Tmr = Timer.clone("Tmr")
             Flag = Bool("Flag")
             with Program() as prog:
-                with Rung(Bool("Enable", external=True)):
+                with rung(Bool("Enable", external=True)):
                     on_delay(Tmr, 1000, "ms")
-                with Rung(Bool("Sensor", external=True)):
+                with rung(Bool("Sensor", external=True)):
                     out(Flag)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Flag)
             return prog
 
@@ -959,11 +959,11 @@ class TestRungsAcrossAWindow:
         def build() -> Program:
             Mid, Final = Bool("Mid"), Bool("Final")
             with Program() as prog:
-                with Rung(Bool("Enable", external=True)):
+                with rung(Bool("Enable", external=True)):
                     on_delay(Timer.clone("Tmr"), 100_000, "ms")
-                with Rung(Bool("Sensor", external=True)):
+                with rung(Bool("Sensor", external=True)):
                     out(Mid)
-                with Rung(Mid):
+                with rung(Mid):
                     out(Final)
             return prog
 
@@ -990,13 +990,13 @@ class TestRungsAcrossAWindow:
 
         def build() -> Program:
             with Program() as prog:
-                with Rung(Enable):
+                with rung(Enable):
                     on_delay(Tmr, 5000, "ms")
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Done)
-                with Rung(rise(system.sys.clock_1s), Sensor):
+                with rung(rise(system.sys.clock_1s), Sensor):
                     out(Indicator)
-                with Rung(rise(system.sys.clock_1s)):
+                with rung(rise(system.sys.clock_1s)):
                     math(Tmr.Acc, AccView)
             return prog
 
@@ -1018,11 +1018,11 @@ class TestRungsAcrossAWindow:
 
         def build() -> Program:
             with Program() as prog:
-                with Rung(system.sys.clock_100ms):
+                with rung(system.sys.clock_100ms):
                     out(Lamp)
-                with Rung(Lamp):
+                with rung(Lamp):
                     out(Bool("Lamp2"))
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Tmr"), 100_000, "ms")
             return prog
 
@@ -1051,7 +1051,7 @@ class TestRungsAcrossAWindow:
 
 def _self_feeding_calc():
     X = Int("X", default=1)
-    with Rung():
+    with rung():
         math((X * 3) % 7, X)
     return X == 5
 
@@ -1061,9 +1061,9 @@ def _scan_counter_calc():
 
     X = Int("X")
     Seen = Bool("Seen")
-    with Rung():
+    with rung():
         math(system.sys.scan_counter % 50, X)
-    with Rung(X == 40):
+    with rung(X == 40):
         latch(Seen)
     return Seen
 
@@ -1072,7 +1072,7 @@ def _sum_expr_calc():
     from pyrung import Block, TagType
 
     DS = Block("DS", TagType.INT, 1, 2)
-    with Rung():
+    with rung():
         math((DS.select(1, 2).sum() + 1) % 7, DS[1])
     return DS[1] == 5
 
@@ -1081,7 +1081,7 @@ def _shift_func_calc():
     from pyrung.core.expression import rro
 
     X = Int("X", default=1)
-    with Rung():
+    with rung():
         math(rro(X, 1), X)
     return X == 4
 
@@ -1092,7 +1092,7 @@ def _math_func_calc():
 
     # sqrt(R * R) == |R|: a per-scan +1 ramp the affine matcher cannot see.
     R = Real("R")
-    with Rung():
+    with rung():
         math(sqrt(R * R) + 1.0, R)
     return R >= 503.0
 
@@ -1102,21 +1102,21 @@ def _back_edge_chain():
     needs one scan per rung to reach the top."""
     stages = [Bool(f"Stage{i}") for i in range(8)]
     Sensor = Bool("Sensor", external=True)
-    with Rung(stages[1]):
+    with rung(stages[1]):
         out(stages[0])
-    with Rung(stages[2]):
+    with rung(stages[2]):
         out(stages[1])
-    with Rung(stages[3]):
+    with rung(stages[3]):
         out(stages[2])
-    with Rung(stages[4]):
+    with rung(stages[4]):
         out(stages[3])
-    with Rung(stages[5]):
+    with rung(stages[5]):
         out(stages[4])
-    with Rung(stages[6]):
+    with rung(stages[6]):
         out(stages[5])
-    with Rung(stages[7]):
+    with rung(stages[7]):
         out(stages[6])
-    with Rung(Sensor):
+    with rung(Sensor):
         out(stages[7])
     return stages[0]
 
@@ -1137,10 +1137,10 @@ def _gated_hit_program(shape: Callable[[], Any]) -> tuple[Program, Bool, Timer]:
     Hit = Bool("Hit")
     Tmr = Timer.clone("Tmr")
     with Program(strict=False) as prog:
-        with Rung(Go):
+        with rung(Go):
             on_delay(Tmr, 5000)
         gate = shape()
-        with Rung(Tmr.Done, gate):
+        with rung(Tmr.Done, gate):
             out(Hit)
     return prog, Hit, Tmr
 
@@ -1217,7 +1217,7 @@ class TestScanVaryingValuesAreExact:
                 "shift": lsh(X, 1),
             }[form]
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(expr, X)
             return prog
 
@@ -1238,13 +1238,13 @@ def _first_scan_init_program() -> tuple[Program, Bool]:
     Hit = Bool("Hit")
     Tmr = Timer.clone("Tmr")
     with Program(strict=False) as prog:
-        with Rung(system.sys.first_scan):
+        with rung(system.sys.first_scan):
             copy(7, Init)
-        with Rung(system.sys.clock_1s, Init == 7):
+        with rung(system.sys.clock_1s, Init == 7):
             out(Blink)
-        with Rung():
+        with rung():
             on_delay(Tmr, 5000)
-        with Rung(Tmr.Done, Blink):
+        with rung(Tmr.Done, Blink):
             out(Hit)
     return prog, Hit
 
@@ -1257,13 +1257,13 @@ def _not_first_scan_counter_program() -> tuple[Program, Bool]:
     Tmr = Timer.clone("Tmr")
     N = Int("N")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             on_delay(Tmr, 1000)
-        with Rung(~system.sys.first_scan):
+        with rung(~system.sys.first_scan):
             out(Z)
-        with Rung(Z):
+        with rung(Z):
             math(N + 1, N)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Hit)
     return prog, Hit
 
@@ -1302,11 +1302,11 @@ class TestFirstScanWindowConstant:
         def build() -> Program:
             Armed, Lamp = Bool("Armed"), Bool("Lamp")
             with Program(strict=False) as prog:
-                with Rung(system.sys.first_scan):
+                with rung(system.sys.first_scan):
                     latch(Armed)
-                with Rung(system.sys.clock_1s, Armed):
+                with rung(system.sys.clock_1s, Armed):
                     out(Lamp)
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Tmr"), 100_000)
             return prog
 
@@ -1366,9 +1366,9 @@ def _rtc_latch_program() -> tuple[Program, Bool]:
     X = Bool("X")
     Tmr = Timer.clone("Tmr")
     with Program(strict=False) as prog:
-        with Rung(system.rtc.second == 30):
+        with rung(system.rtc.second == 30):
             latch(X)
-        with Rung():
+        with rung():
             on_delay(Tmr, 60, "s")  # a crossing that bounds every window
     return prog, X
 
@@ -1383,9 +1383,9 @@ def _rtc_gated_counter_program() -> Program:
     N = Dint("N")
     Tmr = Timer.clone("Tmr")
     with Program(strict=False) as prog:
-        with Rung(system.rtc.second < 30):
+        with rung(system.rtc.second < 30):
             math(N + 1, N)
-        with Rung():
+        with rung():
             on_delay(Tmr, 60_000)
     return prog
 
@@ -1398,13 +1398,13 @@ def _rtc_mirror_only_program() -> tuple[Program, Bool]:
     Tmr = Timer.clone("Tmr")
     Hit = Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
-        with Rung():
+        with rung():
             math(system.rtc.hour * 100 + system.rtc.minute, HHMM)
-        with Rung():
+        with rung():
             on_delay(Tmr, 60_000)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Hit)
     return prog, Hit
 
@@ -1513,9 +1513,9 @@ class TestFoldLandingTime:
             X = Bool("EdgeSeen")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung(rise(system.sys.clock_1s)):
+                with rung(rise(system.sys.clock_1s)):
                     latch(X)
-                with Rung():
+                with rung():
                     on_delay(Tmr, 10_000)
             plc = PLC(prog, dt=0.010)
             plc.step()
@@ -1543,9 +1543,9 @@ class TestAClockEdgeAfterTheProbe:
             A, B, Extent = Int("A", external=True), Int("B", external=True), Int("Extent")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung(Enable):
+                with rung(Enable):
                     on_delay(Tmr, 19_006, "ms")
-                with Rung(rise(system.sys.clock_1s), Tmr.Acc > 8_505):
+                with rung(rise(system.sys.clock_1s), Tmr.Acc > 8_505):
                     math(A + B, Extent)
             plc = PLC(prog, dt=0.005)
             plc.patch({"Enable": True, "A": 0, "B": 1})
@@ -1584,26 +1584,26 @@ def _rtc_mirror_program(
     Hit = Bool("Hit")
     Tmr = Timer.clone("Tmr")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
-        with Rung():
+        with rung():
             math(system.rtc.hour * 100 + system.rtc.minute, HHMM)
-        with Rung(Or(rise(Alarm), Manual != 0)):
+        with rung(Or(rise(Alarm), Manual != 0)):
             copy(Hist2, Hist3)
             copy(Hist1, Hist2)
             copy(Sec, Hist1)
         if stop_stamp:
-            with Rung(Stopped):
+            with rung(Stopped):
                 copy(Sec, StopSec, oneshot=True)
         if live_stamp:
             # Read below, so StopSec is not unread churn: it stays guarded.
-            with Rung(Stopped):
+            with rung(Stopped):
                 math(StopSec + Sec, StopSec)
-            with Rung(StopSec > 30_000):
+            with rung(StopSec > 30_000):
                 out(Bool("StopSecHigh"))
-        with Rung():
+        with rung():
             on_delay(Tmr, 5000)
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Hit)
     return prog, Hit
 
@@ -1741,31 +1741,31 @@ def _branch_position_program(shape: str) -> Program:
     Sec, X, Snap, Half, Seen = Int("Sec"), Int("X"), Bool("Snap"), Int("Half"), Bool("Seen")
     Tmr, Hit = Timer.clone("Tmr"), Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
-        with Rung():
+        with rung():
             copy(0, X)
-        with Rung(X == 0):
+        with rung(X == 0):
             out(Snap)
         if shape == "continued":
-            with Rung():
+            with rung():
                 copy(1, X)
-            with Rung().continued():
+            with rung().continued():
                 with branch(X == 0):
                     math(Sec // 30, Half)
         else:
-            with Rung():
+            with rung():
                 if shape == "below":
                     copy(1, X)
                 with branch(X == 0):
                     math(Sec // 30, Half)
                 if shape == "above":
                     copy(1, X)
-        with Rung(Half == 1):
+        with rung(Half == 1):
             latch(Seen)
-        with Rung():
+        with rung():
             on_delay(Tmr, 60, "s")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Hit)
     return prog
 
@@ -1779,44 +1779,44 @@ def _rtc_reader_shape(shape: str) -> Program:
 
     @subroutine("R")
     def reader() -> None:
-        with Rung():
+        with rung():
             math(Sec // 30, Half)
 
     @subroutine("S")
     def stamper() -> None:
-        with Rung(system.sys.clock_1s):
+        with rung(system.sys.clock_1s):
             return_early()
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
 
     with Program(strict=False) as prog:
         if shape == "return_early":
-            with Rung():
+            with rung():
                 call(stamper)
-            with Rung(Req):
+            with rung(Req):
                 math(Sec // 30, Half)
         else:
-            with Rung():
+            with rung():
                 copy(system.rtc.second, Sec)
         if shape == "called":
-            with Rung(Req):
+            with rung(Req):
                 call(reader)
         elif shape == "branch_call":
-            with Rung():
+            with rung():
                 with branch(Req):
                     call(reader)
         elif shape == "forloop":
-            with Rung(Req):
+            with rung(Req):
                 with forloop(2):
                     math(Sec // 30, Half)
         elif shape == "plain":
-            with Rung(Req):
+            with rung(Req):
                 math(Sec // 30, Half)
-        with Rung(Half == 1):
+        with rung(Half == 1):
             latch(Seen)
-        with Rung():
+        with rung():
             on_delay(Tmr, 60, "s")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Hit)
     return prog
 
@@ -1839,9 +1839,9 @@ class TestSoftRtcRefusals:
         def build() -> Program:
             Sec, Echo = Int("Sec"), Int("Echo")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(Sec, Echo)
-                with Rung():
+                with rung():
                     copy(system.rtc.second, Sec)
             return prog
 
@@ -1851,9 +1851,9 @@ class TestSoftRtcRefusals:
         def build() -> Program:
             Sec, X = Int("Sec"), Bool("X")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(system.rtc.second, Sec)
-                with Rung(Sec == 30):
+                with rung(Sec == 30):
                     latch(X)
             return prog
 
@@ -1863,9 +1863,9 @@ class TestSoftRtcRefusals:
         def build() -> Program:
             Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(system.rtc.second, Sec)
-                with Rung(Req):
+                with rung(Req):
                     copy(Sec, Log)
             return prog
 
@@ -1885,9 +1885,9 @@ class TestSoftRtcRefusals:
         def build() -> Program:
             Big, Req, Log = Int("Big"), Bool("Req"), Int("Log")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(system.rtc.second * 1000, Big)
-                with Rung(Req):
+                with rung(Req):
                     copy(Big, Log)
             return prog
 
@@ -1898,11 +1898,11 @@ class TestSoftRtcRefusals:
         def build() -> Program:
             Sec, Req, Log = Int("Sec"), Bool("Req"), Int("Log")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(system.rtc.second, Sec)
-                with Rung(Req):
+                with rung(Req):
                     copy(Sec, Log)
-                with Rung(system.fault.out_of_range):
+                with rung(system.fault.out_of_range):
                     latch(Bool("Err"))
             return prog
 
@@ -1912,9 +1912,9 @@ class TestSoftRtcRefusals:
         def build() -> Program:
             Sec, Gated = Int("Sec"), Int("Gated")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(system.rtc.second, Sec)
-                with Rung(system.sys.clock_1s):
+                with rung(system.sys.clock_1s):
                     copy(system.rtc.second, Gated)
             return prog
 
@@ -1924,9 +1924,9 @@ class TestSoftRtcRefusals:
         def build() -> Program:
             Sec, Tot = Int("Sec"), Int("Tot")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(system.rtc.second, Sec)
-                with Rung():
+                with rung():
                     math(Tot + system.rtc.second, Tot)
             return prog
 
@@ -1973,7 +1973,7 @@ class TestClickMathInTheLoop:
             Mod, ModZero, Pow, Dbl, Abs = (Int(name) for name in ("Mod", "Zm", "Pw", "Db", "Ab"))
             Floor = Int("Floor")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(Tick + 1, Tick)
                     math(Tick % 60, Sec)
                     math(Sec - 30, Back)
@@ -2036,29 +2036,29 @@ def _forced_gate_program(edge: bool) -> Program:
     Sec, Log, G, Seen = Int("Sec"), Int("Log"), Bool("G"), Bool("Seen")
     Tmr, Hit = Timer.clone("Tmr"), Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(system.rtc.second, Sec)
         if edge:
-            with Rung():
+            with rung():
                 call("Reader")
-            with Rung(Tmr.Acc < 0):
+            with rung(Tmr.Acc < 0):
                 out(G)  # False mid-scan; forced True
-            with Rung():
+            with rung():
                 call("Reader")
         else:
-            with Rung(Tmr.Acc >= 0):
+            with rung(Tmr.Acc >= 0):
                 out(G)  # True mid-scan; forced False
-            with Rung(G):
+            with rung(G):
                 copy(Sec, Log)
-        with Rung(Log == 30):
+        with rung(Log == 30):
             latch(Seen)
-        with Rung():
+        with rung():
             on_delay(Tmr, 60, "s")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Hit)
         if edge:
             with subroutine("Reader"):
-                with Rung(fall(G)):
+                with rung(fall(G)):
                     copy(Sec, Log)
     return prog
 
@@ -2108,13 +2108,13 @@ class TestSoftRtcCallablePredicate:
             Sec, Hit, Req, Log = Int("Sec"), Bool("Hit"), Bool("Req"), Int("Log")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(system.rtc.second, Sec)
-                with Rung(Req):
+                with rung(Req):
                     copy(Sec, Log)
-                with Rung():
+                with rung():
                     on_delay(Tmr, 60, "s")
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Hit)
             return prog
 
@@ -2139,9 +2139,9 @@ class TestRtcNearDatetimeMax:
 
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(system.rtc.day, Int("D"))
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Tmr"), 100, "s")
             return prog
 
@@ -2167,9 +2167,9 @@ class TestLandingScanRaises:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5, "s")
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     run_function(boom)
             return prog
 
@@ -2237,7 +2237,7 @@ class TestClockEdgeProbe:
     def _level_gated(work: str) -> Callable[[], Program]:
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung(system.sys.clock_1s):
+                with rung(system.sys.clock_1s):
                     if work == "calc":
                         math(Dint("C_Acc") + 1, Dint("C_Acc"))
                     else:
@@ -2261,11 +2261,11 @@ class TestClockEdgeProbe:
     def _edge_pulses() -> Program:
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
-            with Rung(rise(system.sys.clock_1s)):
+            with rung(rise(system.sys.clock_1s)):
                 out(Bool("P"))
-            with Rung(fall(system.sys.clock_1s)):
+            with rung(fall(system.sys.clock_1s)):
                 out(Bool("Q"))
-            with Rung():
+            with rung():
                 on_delay(Tmr, 60_000)
         return prog
 
@@ -2280,19 +2280,19 @@ class TestClockEdgeProbe:
         C, D = Int("C"), Int("D")
         clock = system.sys.clock_1s
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 on_delay(Timer.clone("Tmr"), 30_000)
-            with Rung(C == 0):
+            with rung(C == 0):
                 copy(1, D)
-            with Rung(C == 1):
+            with rung(C == 1):
                 copy(0, D)
-            with Rung():
+            with rung():
                 copy(D, C)
-            with Rung(rise(clock), C == 0):
+            with rung(rise(clock), C == 0):
                 copy(1, D)
-            with Rung(rise(clock), C == 1):
+            with rung(rise(clock), C == 1):
                 copy(0, D)
-            with Rung(rise(clock)):
+            with rung(rise(clock)):
                 copy(D, C)
         return prog
 
@@ -2314,11 +2314,11 @@ class TestTimerCarryExact:
 
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(Tmr.Acc, Int("Snap"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, preset, unit)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2353,13 +2353,13 @@ class TestTimerCarryExact:
             Tmr = Timer.clone("Tmr")
             C = Counter.clone("C")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Long, 32_000)
-                with Rung(system.sys.clock_1s):
+                with rung(system.sys.clock_1s):
                     on_delay(Tmr, 30, "s")
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
-                with Rung(rise(system.sys.clock_1s)):
+                with rung(rise(system.sys.clock_1s)):
                     count_up(C, 100_000).reset(Bool("CR"))
             return prog
 
@@ -2377,9 +2377,9 @@ class TestTimerCarryExact:
         def build() -> Program:
             Long = Timer.clone("Long")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Long, 32_000, unit)
-                with Rung(Long.Done):
+                with rung(Long.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2403,16 +2403,16 @@ class TestSelfFeedingChurnExact:
             Tot = Int("Tot")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     body(Tot)
                 if read:
-                    with Rung(Tot > 100):
+                    with rung(Tot > 100):
                         out(Bool("TotHigh"))
-                with Rung(system.fault.out_of_range):
+                with rung(system.fault.out_of_range):
                     latch(Bool("FaultSeen"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2454,15 +2454,15 @@ class TestSelfFeedingChurnExact:
             Narrow = Int("Narrow")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(Wide + 7, Wide)
-                with Rung():
+                with rung():
                     copy(Wide, Narrow)
-                with Rung(system.fault.out_of_range):
+                with rung(system.fault.out_of_range):
                     latch(Bool("FaultSeen"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2488,18 +2488,18 @@ class TestSelfFeedingChurnExact:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
                 if store_first:
-                    with Rung():
+                    with rung():
                         store(Wide, View)
                     reader(View)
-                with Rung():
+                with rung():
                     math(Wide + step, Wide)
                 if not store_first:
-                    with Rung():
+                    with rung():
                         store(Wide, View)
                     reader(View)
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -2527,7 +2527,7 @@ class TestSelfFeedingChurnExact:
     ) -> None:
         def reader(_view: Any) -> None:
             N = Int("N")
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 math(N + 1, N)
 
         build = self._view_of_a_moving_tag(store, reader, step=step, store_first=store_first)
@@ -2550,7 +2550,7 @@ class TestSelfFeedingChurnExact:
         self, store: Any, store_first: bool
     ) -> None:
         def reader(_view: Any) -> None:
-            with Rung(system.fault.out_of_range):
+            with rung(system.fault.out_of_range):
                 out(Bool("Hit"))
 
         plc = _assert_fold_is_exact(
@@ -2591,15 +2591,15 @@ class TestSelfFeedingChurnExact:
             N = Int("N")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung(system.sys.clock_100ms):
+                with rung(system.sys.clock_100ms):
                     count_up(Cnt, 100_000).reset(Bool("CR"))
-                with Rung():
+                with rung():
                     copy(Cnt.Acc, Narrow)
-                with Rung(system.fault.out_of_range):
+                with rung(system.fault.out_of_range):
                     math(N + 1, N)
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2608,7 +2608,7 @@ class TestSelfFeedingChurnExact:
 
     def test_a_view_read_past_its_wrap_stops_as_stepping(self) -> None:
         def reader(view: Any) -> None:
-            with Rung(view < 0):
+            with rung(view < 0):
                 out(Bool("Hit"))
 
         plc = _assert_fold_is_exact(
@@ -2630,7 +2630,7 @@ class TestSelfFeedingChurnExact:
         and with no reader of the flag only a wrap makes it read differently."""
 
         def reader(v: Any) -> None:
-            with Rung(v == 32_767):
+            with rung(v == 32_767):
                 math(Int("N") + 1, Int("N"))
 
         store = (lambda a, b: copy(a, b)) if view == "copy" else (lambda a, b: math(a + 0, b))
@@ -2648,14 +2648,14 @@ class TestSelfFeedingChurnExact:
             View = Word("View")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(Wide + step, Wide)
-                with Rung():
+                with rung():
                     copy(Wide, View)
                 reader(View)
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -2686,7 +2686,7 @@ class TestSelfFeedingChurnExact:
         range it reads like no line."""
 
         def reader(v: Any) -> None:
-            with Rung(read(v)):
+            with rung(read(v)):
                 math(Int("N") + 1, Int("N"))
 
         _assert_fold_is_exact(
@@ -2699,7 +2699,7 @@ class TestSelfFeedingChurnExact:
         """Past 65535 a register clamps into a Word (a CLICK reading): 65537 reads 65535."""
 
         def reader(v: Any) -> None:
-            with Rung(v == 65_535):
+            with rung(v == 65_535):
                 out(Bool("Hit"))
 
         folded = _assert_fold_is_exact(
@@ -2712,7 +2712,7 @@ class TestSelfFeedingChurnExact:
         """Below 0 a register wraps into a Word: -7 reads 65529."""
 
         def reader(v: Any) -> None:
-            with Rung(v == 65_529):
+            with rung(v == 65_529):
                 out(Bool("Hit"))
 
         folded = _assert_fold_is_exact(
@@ -2725,7 +2725,7 @@ class TestSelfFeedingChurnExact:
         """The wrap only ends a window at the edge: inside the range they stay long."""
 
         def reader(v: Any) -> None:
-            with Rung(v > 1_000_000):
+            with rung(v > 1_000_000):
                 math(Int("N") + 1, Int("N"))
 
         build = self._copy_into_a_word(1, reader)
@@ -2765,17 +2765,17 @@ class TestSelfFeedingChurnExact:
             Same = Dint("Same")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(Wide + 7, Wide)
-                with Rung():
+                with rung():
                     math(expr_of(Wide), Same)
-                with Rung(Same == 123_456_789):
+                with rung(Same == 123_456_789):
                     out(Bool("Never"))
-                with Rung(system.fault.out_of_range):
+                with rung(system.fault.out_of_range):
                     latch(Bool("FaultSeen"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 30_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2800,13 +2800,13 @@ class TestSelfFeedingChurnExact:
             Copied = Int("Copied")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung():
+                with rung():
                     copy(Tmr.Acc, Copied)
-                with Rung(system.fault.out_of_range):
+                with rung(system.fault.out_of_range):
                     out(Bool("FaultNow"))
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2819,15 +2819,15 @@ class TestSelfFeedingChurnExact:
             Osc = Bool("Osc")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung(~Osc):
+                with rung(~Osc):
                     out(Osc)  # a period-2 cycle: the ordinary fold never sees a plateau
-                with Rung():
+                with rung():
                     math(Tot + 7, Tot)
-                with Rung(Tot > 30_000):
+                with rung(Tot > 30_000):
                     out(Bool("High"))
-                with Rung(system.fault.out_of_range):
+                with rung(system.fault.out_of_range):
                     out(Bool("FaultNow"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 60_000)
             return prog
 
@@ -2860,13 +2860,13 @@ class TestSelfFeedingChurnExact:
             Seen = Counter.clone("Seen")
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math((Phase + 1) % 5, Phase)
-                with Rung(Phase == 2):
+                with rung(Phase == 2):
                     count_up(Seen, 10_000).reset(Bool("SR"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -2881,7 +2881,7 @@ class TestFoldLandingCheckpoint:
     def _program() -> Program:
         C = Counter.clone("C")
         with Program(strict=False) as prog:
-            with Rung(system.sys.clock_100ms):
+            with rung(system.sys.clock_100ms):
                 count_up(C, 100_000).reset(Bool("CR"))
         return prog
 
@@ -2909,15 +2909,15 @@ class TestClockEdgesAsRead:
         def build() -> Program:
             S = Int("S")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("A"), 30_000)
-                with Rung(rise(getattr(system.sys, clock))):
+                with rung(rise(getattr(system.sys, clock))):
                     if pulse:
                         out(Bool("P"))
                     else:
                         math(S + 3, S)
                 if pulse:
-                    with Rung(Bool("P")):
+                    with rung(Bool("P")):
                         math(S + 1, S)
             return prog
 
@@ -2935,7 +2935,7 @@ class TestClockEdgesAsRead:
         def build() -> Program:
             S = Int("S")
             with Program(strict=False) as prog:
-                with Rung(rise(system.sys.clock_100ms)):
+                with rung(rise(system.sys.clock_100ms)):
                     math(S + 3, S)
             return prog
 
@@ -2966,17 +2966,17 @@ class TestFlagsFollowInsideAWindow:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     raises()
-                with Rung(flag):
+                with rung(flag):
                     out(Bool("Between"))
-                with Rung():
+                with rung():
                     settles()
-                with Rung(flag):
+                with rung(flag):
                     out(Bool("After"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, preset)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -3162,15 +3162,15 @@ class TestFlagsFollowInsideAWindow:
             Tmr = Timer.clone("Tmr")
             ptr = Int("Walk")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 3_000)
-                with Rung():
+                with rung():
                     math(start + step * (Tmr.Acc // 1_000), ptr)
-                with Rung():
+                with rung():
                     faulting(ptr)
-                with Rung(self.SC44):
+                with rung(self.SC44):
                     latch(Bool("Saw"))
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -3180,11 +3180,11 @@ class TestFlagsFollowInsideAWindow:
     @pytest.mark.parametrize("store_first", [False, True], ids=["store_below", "store_above"])
     def test_a_moving_store_raises_between_and_a_copy_clears_after(self, store_first: bool) -> None:
         def reader(_view: Any) -> None:
-            with Rung(self.SC43):
+            with rung(self.SC43):
                 out(Bool("Hit"))
-            with Rung():
+            with rung():
                 copy(1, Int("Plain"))
-            with Rung(self.SC43):
+            with rung(self.SC43):
                 out(Bool("After"))
 
         plc = _assert_fold_is_exact(
@@ -3204,7 +3204,7 @@ class TestFlagsFollowInsideAWindow:
     ) -> None:
         def later(_view: Any) -> None:
             if cleared:
-                with Rung():
+                with rung():
                     copy(1, Int("Plain"))
 
         plc = _assert_fold_is_exact(
@@ -3229,12 +3229,12 @@ class TestFlagsFollowInsideAWindow:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 32_000)
-                with Rung():
+                with rung():
                     math(Tmr.Acc + 10_000, Int("View"))
                 if cleared:
-                    with Rung():
+                    with rung():
                         copy(1, Int("Plain"))
             return prog
 
@@ -3248,16 +3248,16 @@ class TestFlagsFollowInsideAWindow:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 32_000)
-                with Rung():
+                with rung():
                     math(Tmr.Acc + 10_000, Int("View"))
-                with Rung(self.SC43):
+                with rung(self.SC43):
                     out(Bool("Hit"))
                 if cleared:
-                    with Rung():
+                    with rung():
                         copy(1, Int("Plain"))
-                with Rung(self.SC43):
+                with rung(self.SC43):
                     out(Bool("After"))
             return prog
 
@@ -3291,17 +3291,17 @@ class TestFlagsFollowInsideAWindow:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Acc > 1_000):
+                with rung(Tmr.Acc > 1_000):
                     copy(Dint("Big", default=99_999), Int("Small"))
-                with Rung(self.SC43):
+                with rung(self.SC43):
                     out(Bool("Between"))
-                with Rung(Tmr.Acc > at):
+                with rung(Tmr.Acc > at):
                     copy(1, Int("Plain"))
-                with Rung(self.SC43):
+                with rung(self.SC43):
                     math(Int("Seen") + 1, Int("Seen"))
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -3315,18 +3315,18 @@ class TestFlagsFollowInsideAWindow:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
                 if store_first:
-                    with Rung():
+                    with rung():
                         math(100 / Wide, Int("Quotient"))
-                with Rung():
+                with rung():
                     math(Wide + 7, Wide)
                 if not store_first:
-                    with Rung():
+                    with rung():
                         math(100 / Wide, Int("Quotient"))
-                with Rung(self.SC40):
+                with rung(self.SC40):
                     math(Int("Seen") + 1, Int("Seen"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 5_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -3341,15 +3341,15 @@ class TestFlagsFollowInsideAWindow:
             Tmr = Timer.clone("Tmr")
             table = Block("FoldTbl", TagType.INT, 1, 500, default_factory=lambda _addr: 3)
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(Wide + step, Wide)
-                with Rung():
+                with rung():
                     copy(table[Wide], Int("Read"))
-                with Rung(self.SC44):
+                with rung(self.SC44):
                     math(Int("Seen") + 1, Int("Seen"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 2_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -3363,16 +3363,16 @@ class TestFlagsFollowInsideAWindow:
             Tmr = Timer.clone("Tmr")
             table = Block("FoldTbl", TagType.INT, 1, 500, default_factory=lambda _addr: 3)
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(Wide + 7, Wide)
-                with Rung():
+                with rung():
                     copy(table[Wide], Int("Read"))
                 if read_it:
-                    with Rung(Int("Read") == 0):
+                    with rung(Int("Read") == 0):
                         math(Int("Seen") + 1, Int("Seen"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 2_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("End"))
             return prog
 
@@ -3382,7 +3382,7 @@ class TestFlagsFollowInsideAWindow:
 
 
 def copy_rung(dest: Any) -> None:
-    with Rung():
+    with rung():
         copy(1, dest)
 
 
@@ -3396,10 +3396,10 @@ class TestUnseenStopsStayExact:
         def build() -> Program:
             T = Int("T")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     math(T + (Int("K") if step_tag else 1), T)
                 if timer:
-                    with Rung():
+                    with rung():
                         on_delay(Timer.clone("Tmr"), 30_000)
             return prog
 
@@ -3447,9 +3447,9 @@ class TestUnseenStopsStayExact:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 3_000)
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -3476,9 +3476,9 @@ class TestUnseenStopsStayExact:
         def build() -> Program:
             Osc = Bool("Osc")
             with Program(strict=False) as prog:
-                with Rung(~Osc):
+                with rung(~Osc):
                     out(Osc)  # a period-2 cycle
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Tmr"), 60_000)
             return prog
 
@@ -3504,11 +3504,11 @@ class TestTagStepSelfCalcGuardedWhenRead:
 
         T = Int("T")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(T + Int("K"), T)
-            with Rung((T // 100) == 3):
+            with rung((T // 100) == 3):
                 latch(Bool("L"))
-            with Rung(T > 2_000):
+            with rung(T > 2_000):
                 out(Bool("Hit"))
         return prog
 
@@ -3517,11 +3517,11 @@ class TestTagStepSelfCalcGuardedWhenRead:
         P = Int("P")
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(P - Int("K"), P)
-            with Rung():
+            with rung():
                 on_delay(Tmr, P)
-            with Rung(Tmr.Done):
+            with rung(Tmr.Done):
                 out(Bool("Hit"))
         return prog
 
@@ -3530,11 +3530,11 @@ class TestTagStepSelfCalcGuardedWhenRead:
         T = Int("T")
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(T - Int("K"), T)
-            with Rung():
+            with rung():
                 on_delay(Tmr, 30_000)
-            with Rung(Tmr.Acc > T):
+            with rung(Tmr.Acc > T):
                 out(Bool("Hit"))
         return prog
 
@@ -3560,13 +3560,13 @@ class TestFoldedHistoryReplays:
         C = Counter.clone("C")
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(T + 3, T)
-            with Rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
+            with rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
                 count_up(C, 1_000).reset(Bool("CR"))
-            with Rung():
+            with rung():
                 on_delay(Tmr, 7_000)
-            with Rung(Tmr.Done):
+            with rung(Tmr.Done):
                 out(Bool("Hit"))
         return prog
 
@@ -3599,13 +3599,13 @@ def _scan_stamp_program(source: Callable[[], None], reader: Any, above: bool) ->
     """
     SC = Dint("SC")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(SC + 1, SC)
         if not above:
             source()
-        with Rung(reader()):
+        with rung(reader()):
             out(Bool("L"))
-        with Rung(rise(Bool("L"))):
+        with rung(rise(Bool("L"))):
             from pyrung import copy
 
             copy(SC, Int("Stamp"))
@@ -3634,7 +3634,7 @@ class TestReadAboveTheSource:
         gate = (system.sys.clock_100ms,) if kind == "counter" else ()
 
         def source() -> None:
-            with Rung(*gate):
+            with rung(*gate):
                 body()
 
         return lambda: _scan_stamp_program(source, reader, above)
@@ -3656,7 +3656,7 @@ class TestEqualityFall:
         T = Timer.clone("T")
 
         def source() -> None:
-            with Rung():
+            with rung():
                 on_delay(T, 30, unit)
 
         def reader() -> Any:
@@ -3684,7 +3684,7 @@ class TestResetPulseInProbe:
             # A counter counts edges: the 100 ms clock gives it some.
             gate = () if kind == "rto" else (system.sys.clock_100ms,)
             with Program(strict=False) as prog:
-                with Rung(*gate):
+                with rung(*gate):
                     if kind == "up":
                         count_up(Counter.clone("C"), 5_000).reset(pulse)
                     elif kind == "down":
@@ -3710,7 +3710,7 @@ class TestClockGatedTimeDrum:
         from pyrung import time_drum
 
         def source() -> None:
-            with Rung(system.sys.clock_1s) if gate else Rung():
+            with rung(system.sys.clock_1s) if gate else rung():
                 time_drum(
                     outputs=[Bool("O1"), Bool("O2")],
                     presets=[3_000, 1_500],
@@ -3756,22 +3756,22 @@ class TestTimedDrumCorrectedEveryScan:
     def _build(cls, kind: str, writer: str) -> Callable[[], Program]:
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Long"), 60_000)
                 if writer == "above":
-                    with Rung(Bool("Stage")):
+                    with rung(Bool("Stage")):
                         copy(0, Int("Step"))
                 if writer == "wire above":
                     # The rung above the drum's continued rung.
-                    with Rung(Bool("En")):
+                    with rung(Bool("En")):
                         copy(0, Int("Step"))
-                drum_rung = Rung(Bool("En"))
+                drum_rung = rung(Bool("En"))
                 if writer == "wire above":
                     drum_rung.continued()
                 with drum_rung:
                     cls._drum(kind).reset(Bool("R"))
                 if writer == "below":
-                    with Rung(Bool("Stage")):
+                    with rung(Bool("Stage")):
                         copy(0, Int("Step"))
             return prog
 
@@ -3814,9 +3814,9 @@ class TestTimedDrumCorrectedEveryScan:
 
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(2, Int("Step"))
-                with Rung(Bool("En")):
+                with rung(Bool("En")):
                     self._drum(kind).reset(Bool("R"))
             return prog
 
@@ -3869,18 +3869,18 @@ class TestTimedDrumReadsAnotherStep:
     ) -> Callable[[], Program]:
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Long"), 60_000)
                 if above is not None:
-                    with Rung(Bool("Stage")):
+                    with rung(Bool("Stage")):
                         copy(above, Int("Step"))
-                with Rung(Bool("En")):
+                with rung(Bool("En")):
                     cls._drum(kind, presets).reset(Bool("R"))
                 if below is not None:
-                    with Rung(Bool("Stage")):
+                    with rung(Bool("Stage")):
                         copy(below, Int("Step"))
                 if reader:  # What the drum did, each scan it holds.
-                    with Rung(Bool("O2")):
+                    with rung(Bool("O2")):
                         math(Int("N") + 1, Int("N"))
             return prog
 
@@ -3993,14 +3993,14 @@ class TestTimedDrumReadsAnotherStep:
             bank = Block("Bank", TagType.INT, 1, 4)
             step = Int("Step") if how == "calc" else bank[2]
             with Program(strict=False) as program:
-                with Rung(Bool("Stage")):
+                with rung(Bool("Stage")):
                     if how == "calc":
                         math(Int("Step") * 0 + 1, Int("Step"))
                     elif how == "pointer":
                         copy(1, bank[Int("I", default=2)])
                     else:
                         copy(1, bank[2])
-                with Rung(Bool("En")):
+                with rung(Bool("En")):
                     time_drum(
                         outputs=[Bool("O1")],
                         pattern=[[1], [0]],
@@ -4026,21 +4026,21 @@ class TestTimedDrumReadsAnotherStep:
 
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     copy(200, limit)
                 if reader == "preset":
-                    with Rung():
+                    with rung():
                         on_delay(timer, limit)
-                    with Rung():
+                    with rung():
                         copy(5000, limit)
-                    with Rung(timer.Done):
+                    with rung(timer.Done):
                         out(Bool("Hit"))
                 else:
-                    with Rung():
+                    with rung():
                         on_delay(timer, 60_000)
-                    with Rung(timer.Acc >= limit):
+                    with rung(timer.Acc >= limit):
                         latch(Bool("Hit"))
-                    with Rung():
+                    with rung():
                         copy(5000, limit)
             return prog
 
@@ -4071,11 +4071,11 @@ class TestDrumOneTimeScans:
     def _build(cls, kind: str) -> Callable[[], Program]:
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Long"), 60_000)
-                with Rung():
+                with rung():
                     cls._drum(kind).reset(Bool("R")).jog(Bool("J"))
-                with Rung(rise(Bool("Go"))):
+                with rung(rise(Bool("Go"))):
                     copy(5, Int("Step"))
                     latch(Bool("J"))
             return prog
@@ -4100,13 +4100,13 @@ class TestDrumOneTimeScans:
 
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung(Bool("En")):
+                with rung(Bool("En")):
                     self._drum(kind).reset(Bool("R"))
-                with Rung(Bool("O1")):
+                with rung(Bool("O1")):
                     on_delay(reader, 60_000)
-                with Rung():
+                with rung():
                     reset(Bool("O1"))
-                with Rung(Bool("Go")):
+                with rung(Bool("Go")):
                     latch(Bool("En"))
             return prog
 
@@ -4150,25 +4150,25 @@ class TestReadsOutsideTheCrossings:
         DS = Block("DS", TagType.INT, 1, 3_000)
         with Program(strict=False) as prog:
             if shape in ("expr", "index", "index_copy", "operand", "both_moving"):
-                with Rung():
+                with rung():
                     math(T + 1 if shape != "operand" else T - 3, T)
             if shape == "both_moving":
-                with Rung():
+                with rung():
                     math(U - 2, U)
             if shape in ("preset", "counter_preset"):
-                with Rung():
+                with rung():
                     math(P - 1, P)
             if shape in ("operand", "stateful", "copied", "expr_timer", "preset"):
-                with Rung():
+                with rung():
                     on_delay(Tmr, P if shape == "preset" else 20_000)
             # A counter counts edges: these count the 100 ms clock's rises.
             if shape == "counter_preset":
-                with Rung(system.sys.clock_100ms):
+                with rung(system.sys.clock_100ms):
                     count_up(C, P).reset(Bool("CR"))
             if shape == "reset_cond":
-                with Rung(system.sys.clock_100ms):
+                with rung(system.sys.clock_100ms):
                     count_up(C, 1_000).reset(Bool("CR"))
-                with Rung():
+                with rung():
                     on_delay(Tmr, 2_000).reset(C.Acc == 100)
             reader = {
                 "expr": lambda: (T // 100) == 3,
@@ -4180,23 +4180,23 @@ class TestReadsOutsideTheCrossings:
                 "stateful": lambda: Y > 0,
             }.get(shape)
             if shape == "index_copy":
-                with Rung():
+                with rung():
                     copy(DS[T], Q)
                 reader = lambda: Q == 5  # noqa: E731
             if shape == "copied":
-                with Rung():
+                with rung():
                     math(Tmr.Acc // 5_000, Q)
             if shape == "stateful":
-                with Rung():
+                with rung():
                     math(Y + Tmr.Acc // 5_000, Y)
             if reader is not None:
-                with Rung(reader()):
+                with rung(reader()):
                     latch(Bool("L"))
-            with Rung(rise(Bool("L"))):
+            with rung(rise(Bool("L"))):
                 copy(T, Int("TAtL"))
-            with Rung(T > 2_000):  # a far crossing that opens windows
+            with rung(T > 2_000):  # a far crossing that opens windows
                 out(Bool("Far"))
-            with Rung(Tmr.Done if shape != "counter_preset" else C.Done):
+            with rung(Tmr.Done if shape != "counter_preset" else C.Done):
                 out(Bool("Done"))
         return prog
 
@@ -4228,7 +4228,7 @@ class TestReadsOutsideTheCrossings:
     @staticmethod
     def _timer_only() -> Program:
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 on_delay(Timer.clone("Tmr"), 30_000)
         return prog
 
@@ -4278,19 +4278,19 @@ class TestReadsOutsideTheCrossings:
 
         Tmr, N = Timer.clone("Tmr"), Dint("N")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(N + 1, N)  # per-scan work (a counter would count once)
-            with Rung():
+            with rung():
                 on_delay(Tmr, 20_000)
             if shape == "display":
                 # Nothing reads the display: the landing scan rebuilds it.
-                with Rung():
+                with rung():
                     math(30_000 - Tmr.Acc, Int("Left"))
             else:
                 # A snapshot gated by an edge never fires inside a window.
-                with Rung(rise(Bool("X"))):
+                with rung(rise(Bool("X"))):
                     copy(N, Int("Snap"))
-                with Rung(Int("Snap") > 5):
+                with rung(Int("Snap") > 5):
                     out(Bool("Big"))
         return prog
 
@@ -4326,17 +4326,17 @@ class TestIndexedDisplays:
         DS = Block("DS", TagType.INT, 1, 100)
         Idx, Q = Int("Idx", default=5), Int("Q")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 on_delay(Tmr, 20_000)
-            with Rung():
+            with rung():
                 math(Tmr.Acc // 1_000, DS[5])
             if reader == "contact":
-                with Rung(DS[Idx] == 3):
+                with rung(DS[Idx] == 3):
                     latch(Bool("Hit"))
             elif reader == "copy":
-                with Rung():
+                with rung():
                     copy(DS[Idx], Q)
-                with Rung(Q == 3):
+                with rung(Q == 3):
                     latch(Bool("Hit"))
         return prog
 
@@ -4364,7 +4364,7 @@ class TestCallableReadsThePlc:
     def test_a_closure_over_the_plc_is_traced(self) -> None:
         def build() -> Program:
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Timer.clone("Tmr"), 5_000)
             return prog
 
@@ -4385,13 +4385,13 @@ class TestFoldedHistoryQueries:
         C = Counter.clone("C")
         Tmr = Timer.clone("Tmr")
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 math(T + 3, T)
-            with Rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
+            with rung(Bool("En"), system.sys.clock_100ms):  # counts the clock's rises
                 count_up(C, 1_000).reset(Bool("CR"))
-            with Rung():
+            with rung():
                 on_delay(Tmr, 7_000)
-            with Rung(Tmr.Done):
+            with rung(Tmr.Done):
                 out(Bool("Hit"))
         return prog
 
@@ -4473,18 +4473,18 @@ class TestLandingDtReadouts:
         def build() -> Program:
             Tmr = Timer.clone("Tmr")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(Tmr, 3_000)
                 if reader == "dt":
-                    with Rung(system.sys.dt > 0.05):
+                    with rung(system.sys.dt > 0.05):
                         latch(Bool("Big"))
                 elif reader == "current":
-                    with Rung(system.sys.scan_time_current_ms > 50):
+                    with rung(system.sys.scan_time_current_ms > 50):
                         latch(Bool("Big"))
                 elif reader == "max":
-                    with Rung(system.sys.scan_time_max_ms > 50):
+                    with rung(system.sys.scan_time_max_ms > 50):
                         latch(Bool("Big"))
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 
@@ -4509,11 +4509,11 @@ class TestTimeEventDrum:
         W, T2 = Timer.clone("W"), Timer.clone("T2")
 
         def source() -> None:
-            with Rung():
+            with rung():
                 on_delay(T2, 30_000)
-            with Rung(Bool("O2")):
+            with rung(Bool("O2")):
                 on_delay(W, 2_500)
-            with Rung(system.sys.clock_1s) if gate else Rung():
+            with rung(system.sys.clock_1s) if gate else rung():
                 time_event_drum(
                     outputs=[Bool("O1"), Bool("O2"), Bool("O3")],
                     presets=[3_000, None, 1_500],
@@ -4540,9 +4540,9 @@ class TestTimeEventDrum:
 
         W = Timer.clone("W")
         with Program(strict=False) as prog:
-            with Rung(Bool("O2")):
+            with rung(Bool("O2")):
                 on_delay(W, 4_000)
-            with Rung():
+            with rung():
                 time_event_drum(
                     outputs=[Bool("O1"), Bool("O2")],
                     presets=[600, None],
@@ -4553,7 +4553,7 @@ class TestTimeEventDrum:
                     accumulator=Int("DAcc"),
                     completion_flag=Bool("DDone"),
                 ).reset(Bool("R"))
-            with Rung(Bool("DDone") if read_done else Bool("O1")):
+            with rung(Bool("DDone") if read_done else Bool("O1")):
                 out(Bool("L"))
         return prog
 
@@ -4602,7 +4602,7 @@ class TestOutVariants:
         }
 
         def source() -> None:
-            with Rung(Bool("In")):
+            with rung(Bool("In")):
                 verbs[verb]()
 
         return lambda: _scan_stamp_program(source, readers[reader], above=False)
@@ -4669,44 +4669,44 @@ class TestContestedTimer:
 
             @subroutine("S")
             def sub() -> None:
-                with Rung(Sel == 1):
+                with rung(Sel == 1):
                     on_delay(Tmr, 300, "ms")
 
             with Program(strict=False) as prog:
                 if kind == "two_on_delays":
-                    with Rung(A):
+                    with rung(A):
                         on_delay(Tmr, 300, "ms")
-                    with Rung(B):
+                    with rung(B):
                         on_delay(Tmr, 300, "ms")
                 elif kind == "two_off_delays":
-                    with Rung(B):
+                    with rung(B):
                         off_delay(Tmr, 300, "ms")
-                    with Rung(A):
+                    with rung(A):
                         off_delay(Tmr, 300, "ms")
                 elif kind == "copy_before":
-                    with Rung(Btn):
+                    with rung(Btn):
                         copy(0, Tmr.Acc)
-                    with Rung(B):
+                    with rung(B):
                         on_delay(Tmr, 300, "ms")
                 elif kind == "copy_after":
-                    with Rung(B):
+                    with rung(B):
                         on_delay(Tmr, 300, "ms")
-                    with Rung(Tmr.Done):
+                    with rung(Tmr.Done):
                         out(Bool("Seen"))
-                    with Rung(Btn):
+                    with rung(Btn):
                         copy(0, Tmr.Acc)
                 elif kind == "sub_twice":
                     for sel in (0, 1):
-                        with Rung():
+                        with rung():
                             copy(sel, Sel)
-                        with Rung():
+                        with rung():
                             call(sub)
                 elif kind == "forloop":
-                    with Rung(B), forloop(2):
+                    with rung(B), forloop(2):
                         on_delay(Tmr, 300, "ms")
-                with Rung():
+                with rung():
                     on_delay(Slow, 60_000, "ms")
-                with Rung(Tmr.Done):
+                with rung(Tmr.Done):
                     out(Bool("Hit"))
             return prog
 

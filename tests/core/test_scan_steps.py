@@ -11,7 +11,6 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     branch,
@@ -24,6 +23,7 @@ from pyrung.core import (
     on_delay,
     out,
     return_early,
+    rung,
     shift,
     subroutine,
     time_drum,
@@ -38,9 +38,9 @@ def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
     light2 = Bool("Light2")
 
     with Program(strict=False) as logic:
-        with Rung(start):
+        with rung(start):
             out(light1)
-        with Rung(light1):
+        with rung(light1):
             out(light2)
 
     runner = PLC(logic)
@@ -77,7 +77,7 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
     output = Bool("Output")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             out(output)
 
     runner = PLC(logic)
@@ -105,7 +105,7 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
     output = Bool("Output")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             out(output)
 
     runner = PLC(logic)
@@ -141,7 +141,7 @@ def test_step_and_scan_steps_have_equivalent_results():
     light = Bool("Light")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             out(light)
 
     via_step = PLC(logic)
@@ -164,10 +164,10 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
 
     with Program(strict=False) as logic:
         with subroutine("init_sub"):
-            with Rung():
+            with rung():
                 out(sub_light)
 
-        with Rung():
+        with rung():
             call("init_sub")
             with branch():
                 out(branch_light)
@@ -196,14 +196,14 @@ def test_scan_steps_debug_handles_return_early_and_skips_later_subroutine_rungs(
 
     with Program(strict=False) as logic:
         with subroutine("work"):
-            with Rung():
+            with rung():
                 out(first)
-            with Rung():
+            with rung():
                 return_early()
-            with Rung():
+            with rung():
                 out(skipped)
 
-        with Rung():
+        with rung():
             call("work")
             out(done)
 
@@ -224,7 +224,7 @@ def test_scan_steps_debug_does_not_yield_unpowered_branch():
     top_out = Bool("TopOut")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             with branch():
                 out(branch_out)
             out(top_out)
@@ -246,10 +246,10 @@ def test_scan_steps_debug_emits_branch_then_subroutine_then_rung():
 
     with Program(strict=False) as logic:
         with subroutine("sub"):
-            with Rung(step == 1):
+            with rung(step == 1):
                 out(sub_light)
 
-        with Rung(step == 0):
+        with rung(step == 0):
             with branch(auto):
                 out(branch_done)
                 copy(1, step, oneshot=True)
@@ -272,7 +272,7 @@ def test_scan_steps_debug_solves_a_branch_when_it_reaches_it():
     branch_out = Bool("BranchOut")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             latch(mode)
             with branch(mode):
                 out(branch_out)
@@ -305,19 +305,19 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
     bits = Block("C", TagType.BOOL, 1, 8)
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             count_up(Counter[1], preset=5).down(down).reset(reset)
 
-        with Rung(enable):
+        with rung(enable):
             count_down(Counter2, preset=5).reset(reset)
 
-        with Rung(enable):
+        with rung(enable):
             on_delay(Timer[1], preset=50).reset(reset)
 
-        with Rung(enable):
+        with rung(enable):
             shift(bits.select(1, 4)).clock(clock).reset(reset)
 
-        with Rung(enable):
+        with rung(enable):
             event_drum(
                 outputs=[drum_out1, drum_out2],
                 events=[drum_event1, drum_event2],
@@ -326,7 +326,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
                 completion_flag=drum_done,
             ).reset(reset).jump(jump, step=drum_step).jog(jog)
 
-        with Rung(enable):
+        with rung(enable):
             time_drum(
                 outputs=[drum_out1, drum_out2],
                 presets=[50, 50],
@@ -394,9 +394,9 @@ def test_scan_steps_debug_instruction_helper_trace_reads_at_box_entry():
     reset = Bool("Reset")
 
     with Program(strict=False) as logic:
-        with Rung(enable):
+        with rung(enable):
             latch(reset)
-        with Rung(enable).continued():
+        with rung(enable).continued():
             on_delay(Timer[1], preset=50).reset(reset)
 
     runner = PLC(logic, dt=0.010)

@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import Bool, Int, Program, Real, Rung, Timer, copy, latch, on_delay, out
+from pyrung import Bool, Int, Program, Real, Timer, copy, latch, on_delay, out, rung
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.harness import Coupling, Harness
 from pyrung.core.physical import Physical
@@ -29,7 +29,7 @@ def _coupling_program() -> Program:
     Fb = Bool("Fb", physical=_SWITCH, link="Enable")
     Stage = Int("Stage")
     with Program() as prog:
-        with Rung(Enable, Fb):
+        with rung(Enable, Fb):
             copy(1, Stage)
     return prog
 
@@ -78,7 +78,7 @@ def test_holds_live_on_overlay_not_program_or_deploy_root() -> None:
     Enable = Bool("Enable", external=True)
     Held = Bool("Held", external=True)
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             copy(1, Int("Stage"))
     plc = PLC(prog, dt=0.1)
     plc._synthesis = Synthesis(holds=[copy_hold_rung(value=True, dest=Held)])
@@ -244,7 +244,7 @@ def _late_link_program() -> Program:
     Fb = Bool("Fb")
     Stage = Int("Stage")
     with Program(strict=False) as prog:
-        with Rung(Enable, Fb):
+        with rung(Enable, Fb):
             copy(1, Stage)
     return prog
 
@@ -417,9 +417,9 @@ def _late_ramp_recording() -> tuple[PLC, dict[int, Any]]:
     Temp = Real("Temp", physical=Physical("Therm", ramp_on=1.0, ramp_off=-0.5), link="Enable")
     Enable, Lamp, Hit = Bool("Enable"), Bool("Lamp"), Bool("Hit")
     with Program(strict=False) as prog:
-        with Rung(Enable):
+        with rung(Enable):
             out(Lamp)
-        with Rung(Temp >= 3.0):
+        with rung(Temp >= 3.0):
             latch(Hit)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Enable": True})
@@ -461,11 +461,11 @@ def test_a_replay_of_a_scan_a_reload_edited_starts_from_the_edit() -> None:
     fb = Bool("ReloadFb", physical=Physical("S", on_delay="300ms"), link="ReloadEn")
     enable, lamp, toggle = Bool("ReloadEn"), Bool("ReloadLamp"), Bool("ReloadTog")
     with Program(strict=False) as prog:
-        with Rung(~toggle):
+        with rung(~toggle):
             out(toggle)
-        with Rung(toggle):
+        with rung(toggle):
             out(enable)
-        with Rung(fb):
+        with rung(fb):
             out(lamp)
     plc = PLC(prog, dt=0.01, checkpoint_interval=100)
     Harness(plc).install()
@@ -493,11 +493,11 @@ def test_history_keeps_a_reload_edit_off_a_checkpoint() -> None:
     fb = Bool("OffGridFb", physical=Physical("S", on_delay="300ms"), link="OffGridEn")
     enable, lamp, toggle = Bool("OffGridEn"), Bool("OffGridLamp"), Bool("OffGridTog")
     with Program(strict=False) as prog:
-        with Rung(~toggle):
+        with rung(~toggle):
             out(toggle)
-        with Rung(toggle):
+        with rung(toggle):
             out(enable)
-        with Rung(fb):
+        with rung(fb):
             out(lamp)
     plc = PLC(prog, dt=0.01, cache=0, checkpoint_interval=200)
     Harness(plc).install()
@@ -523,7 +523,7 @@ def test_history_keeps_the_memory_an_uninstall_with_no_overlay_drops() -> None:
     """With no overlay, an uninstall has no plant to keep, so it only drops coil memory."""
     toggle = Bool("NoOverlayTog")
     with Program(strict=False) as prog:
-        with Rung(~toggle):
+        with rung(~toggle):
             out(toggle)
     stale = "_debounce_rung:plant:fb.NoOverlayFb"
     plc = PLC(prog, dt=0.01, cache=0, initial_state=SystemState().with_memory({stale: True}))
@@ -566,11 +566,11 @@ def test_a_replay_before_a_coupling_change_has_no_harness() -> None:
         "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Enable"
     )
     with Program(strict=False) as program:
-        with Rung(enable):
+        with rung(enable):
             on_delay(timer, preset=800_000)
-        with Rung():
+        with rung():
             copy(temp, shown)
-        with Rung(shown >= 100.0):
+        with rung(shown >= 100.0):
             out(over)
     plc = PLC(program, dt=0.01)
     harness = Harness(plc)
@@ -607,9 +607,9 @@ def test_a_replay_with_no_change_keeps_its_harness() -> None:
         "Temp", physical=Physical("TempSensor", approach_to=100.0, approach_rate=5.0), link="Enable"
     )
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(temp, Real("Shown"))
-        with Rung(enable):
+        with rung(enable):
             out(Bool("Lamp"))
     plc = PLC(program, dt=0.01)
     Harness(plc).install()

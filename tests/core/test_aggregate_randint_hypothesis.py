@@ -36,11 +36,11 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Word,
     math,
     randint,
+    rung,
     system,
 )
 
@@ -117,7 +117,7 @@ def _dest_names(src: str) -> list[tuple[str, str, tuple[int, int], str]]:
 def _build_aggregate_program() -> tuple[Program, dict]:
     dests: dict[tuple, object] = {}
     with Program(strict=False) as logic:
-        with Rung(Go):
+        with rung(Go):
             for src in SOURCES:
                 block = SOURCES[src][0]
                 for key in _dest_names(src):
@@ -205,7 +205,7 @@ def _build_division_programs() -> dict[tuple[str, str], tuple[Program, object]]:
         for dest_type, ctor in DIV_DESTS.items():
             dest = ctor(f"AgDivOut_{kind}_{dest_type}")
             with Program(strict=False) as logic:
-                with Rung(Go):
+                with rung(Go):
                     math(getattr(DIV_SRC.select(1, 5), kind)() / Divisor, dest)
             programs[(kind, dest_type)] = (logic, dest)
     return programs
@@ -250,7 +250,7 @@ HiTag = Int("RiHi")
 def _randint_program(lo, hi):
     expr = randint(lo, hi)
     with Program(strict=False) as logic:
-        with Rung(Go):
+        with rung(Go):
             math(expr, Draw)
             math(expr, Draw2)
     return logic, expr
@@ -322,7 +322,7 @@ def test_randint_long_run_and_history_replay_equal_stepping(bounds):
 def test_randint_tag_bounds_are_read_each_scan(lo, hi, scans):
     expr = randint(LoTag, HiTag)
     with Program(strict=False) as logic:
-        with Rung(Go):
+        with rung(Go):
             math(expr, Draw)
     plc, kernel = PLC(logic), CompiledPLC(logic)
     for low, high in scans:
@@ -367,7 +367,7 @@ def _real_sum_on_each_backend(values: list[float]) -> list[float]:
     block = Block("AgRS", TagType.REAL, 1, len(values))
     dest = Real("AgRSOut")
     with Program(strict=False) as logic:
-        with Rung(Go):
+        with rung(Go):
             math(block.select(1, len(values)).sum(), dest)
     results = []
     for runner in (PLC(logic), CompiledPLC(logic)):

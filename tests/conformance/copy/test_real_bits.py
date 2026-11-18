@@ -40,10 +40,10 @@ from __future__ import annotations
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     copy,
     fill,
     math,
+    rung,
     system,
     to_ascii,
     to_text,
@@ -56,12 +56,12 @@ SC43 = system.fault.out_of_range
 
 
 def _raw(slot, source, first):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         unpack_to_words(source, dh.select(first, first + 1))
 
 
 def prove_minus_zero_math(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0.0, df[20])
         math(df[20] * -1.0, df[21])
         copy(df[21], df[22])
@@ -69,9 +69,9 @@ def prove_minus_zero_math(slot):
     _raw(slot, df[22], 472)
     class_of(slot, dh[471], [0x8000, 0], slot.Result1)
     class_of(slot, dh[470], [0], slot.ErrorCode)
-    with Rung(*once(slot), df[21] == 0):
+    with rung(*once(slot), df[21] == 0):
         copy(1, slot.Result2)
-    with Rung(*once(slot), df[21] < 0):
+    with rung(*once(slot), df[21] < 0):
         copy(1, slot.Result3)
     class_of(slot, dh[473], [0x8000, 0], slot.Result4)
     finish(slot)
@@ -83,7 +83,7 @@ def init_minus_zero_math(slot):
 
 
 def prove_minus_zero_shapes(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0.0, df[30])
         math(-1.0 * df[30], df[31])
         math(df[30] / -1.0, df[32])
@@ -99,7 +99,7 @@ def prove_minus_zero_shapes(slot):
     class_of(slot, dh[477], [0x8000, 0], slot.Result2)
     class_of(slot, dh[479], [0x8000, 0], slot.Result3)
     class_of(slot, dh[481], [0x8000, 0], slot.Result4)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(txt[546], slot.ErrorCode, convert=to_ascii)
     finish(slot)
 
@@ -111,7 +111,7 @@ def init_minus_zero_shapes(slot):
 
 
 def prove_non_finite_raw_bits(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(3.0e38, df[40])
         math(df[40] * 10, df[41])
         math(df[40] * -10, df[42])
@@ -122,12 +122,12 @@ def prove_non_finite_raw_bits(slot):
     class_of(slot, dh[483], [0x7F80], slot.Result1)
     class_of(slot, dh[485], [0xFF80], slot.Result2)
     # By XOR 0x0080: a constant that reads C0 stops the workspace round trip (DH490).
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0x80, dh[491])
         math(dh[487] ^ dh[491], dh[490])
     class_of(slot, dh[490], [0x7F40, 0xFF40, 0xFF7F], slot.Result3)
     class_of(slot, dh[486], [0, 0xFFFF], slot.Result4)
-    with Rung(*once(slot), dh[482] == 0, dh[484] == 0):
+    with rung(*once(slot), dh[482] == 0, dh[484] == 0):
         copy(1, slot.ErrorCode)
     finish(slot)
 
@@ -139,19 +139,19 @@ def init_non_finite_raw_bits(slot):
 
 
 def prove_underflow(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1.0e-20, df[50])
         copy(1.0e-30, df[51])
         math(df[50] * df[50], df[52])
     _raw(slot, df[52], 488)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(df[51] * df[51], df[53])
     flag_bit(slot, SC43, slot.Result3, 1)
-    with Rung(*once(slot), df[52] == 0):
+    with rung(*once(slot), df[52] == 0):
         copy(1, slot.Result1)
-    with Rung(*once(slot), df[53] == 0):
+    with rung(*once(slot), df[53] == 0):
         copy(1, slot.Result2)
-    with Rung(*once(slot), dh[488] != 0):
+    with rung(*once(slot), dh[488] != 0):
         copy(1, slot.Result4)
     finish(slot)
 
@@ -162,7 +162,7 @@ def init_underflow(slot):
 
 
 def prove_float32_equality(slot):
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(0.1, df[60])
         copy(0.2, df[61])
         math(df[60] + df[61], df[62])
@@ -171,13 +171,13 @@ def prove_float32_equality(slot):
         copy(0.5, df[64])
         copy(0.25, df[65])
         math(df[64] + df[65], df[66])
-    with Rung(*once(slot), df[62] == 0.3):
+    with rung(*once(slot), df[62] == 0.3):
         copy(1, slot.Result1)
-    with Rung(*once(slot), dd[850] == df[63]):
+    with rung(*once(slot), dd[850] == df[63]):
         copy(1, slot.Result2)
-    with Rung(*once(slot), df[60] == 0.1):
+    with rung(*once(slot), df[60] == 0.1):
         copy(1, slot.Result3)
-    with Rung(*once(slot), df[66] == 0.75):
+    with rung(*once(slot), df[66] == 0.75):
         copy(1, slot.Result4)
     finish(slot)
 

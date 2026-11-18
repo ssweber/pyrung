@@ -83,7 +83,6 @@ from collections.abc import Callable
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
     Block,
-    Rung,
     TagType,
     blockcopy,
     copy,
@@ -96,6 +95,7 @@ from pyrung.core import (
     pack_text,
     pack_words,
     reset,
+    rung,
     search,
     shift,
     system,
@@ -117,14 +117,14 @@ NUL = "\x00"
 
 
 def _stage(slot, *instructions):
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         for instruction in instructions:
             instruction()
 
 
 def _read(slot, scan, flag, field, bit, *, on=True):
     """Add *bit* to *field* on *scan* if *flag* is on right now, or off if ``on`` is false."""
-    with Rung(slot.Scratch == scan, flag if on else ~flag):
+    with rung(slot.Scratch == scan, flag if on else ~flag):
         math(field + bit, field)
 
 
@@ -181,13 +181,13 @@ def prove_bulk_ops_clear_flags(slot):
     scan = FIRST_PROBE
     for kind, flag, field in (("43", SC43, slot.Result1), ("44", SC44, slot.Result2)):
         for k, op in enumerate(ops):
-            with Rung(slot.Scratch == scan):
+            with rung(slot.Scratch == scan):
                 _raise(kind, big=big, tmp=tmp, pointer=pointer)
                 op()
             _read(slot, scan, flag, field, 1 << k, on=False)
             scan += 1
     for k, (kind, flag) in enumerate((("43", SC43), ("44", SC44))):
-        with Rung(slot.Scratch == scan):
+        with rung(slot.Scratch == scan):
             _raise(kind, big=big, tmp=tmp, pointer=pointer)
         _read(slot, scan, flag, slot.Result3, 1 << k)
         scan += 1
@@ -209,9 +209,9 @@ def prove_oneshot_that_does_not_fire(slot):
         ("44", SC44, lambda dest: math(dest + 1, dest, oneshot=True)),
     ]
     for k, (kind, flag, op) in enumerate(probes):
-        with Rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
+        with rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
             _raise(kind, big=big, tmp=tmp, zero=zero, pointer=pointer)
-        with Rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
+        with rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
             op(dd[700 + k])
         _read(slot, FIRST_PROBE, flag, slot.Result2, 1 << k, on=False)
         _read(slot, FIRST_PROBE + 1, flag, slot.Result1, 1 << k)
@@ -242,9 +242,9 @@ def prove_boxes_leave_flags(slot):
     for j, box in enumerate(boxes):
         first = FIRST_PROBE + 3 * j
         for f, (kind, _flag, _field) in enumerate(flags):
-            with Rung(slot.Scratch == first + f):
+            with rung(slot.Scratch == first + f):
                 _raise(kind, big=big, tmp=tmp, zero=zero, pointer=pointer)
-        with Rung(slot.Scratch >= first, slot.Scratch <= first + 2):
+        with rung(slot.Scratch >= first, slot.Scratch <= first + 2):
             box()
         for f, (_kind, flag, field) in enumerate(flags):
             _read(slot, first + f, flag, field, 1 << j)
@@ -264,12 +264,12 @@ def prove_source_flag_is_read_before_the_copy_settles(slot):
     )
     for k, (kind, flag, seen, saw, off) in enumerate(probes):
         scan = FIRST_PROBE + k
-        with Rung(slot.Scratch == scan):
+        with rung(slot.Scratch == scan):
             _raise(kind, big=big, tmp=tmp, pointer=pointer)
             copy(flag, seen)
-        with Rung(slot.Scratch == scan, seen):
+        with rung(slot.Scratch == scan, seen):
             copy(1, saw)
-        with Rung(slot.Scratch == scan, ~flag):
+        with rung(slot.Scratch == scan, ~flag):
             copy(1, off)
     done(slot, WINDOW)
 
@@ -293,12 +293,12 @@ def prove_source_flag_in_a_math(slot):
     count_scans(slot, WINDOW)
     tmp, zero, number = dd[715], dd[716], dd[717]
     sc = _SC40Window("SC", TagType.BOOL, 1, 1000)
-    with Rung(slot.Scratch == FIRST_PROBE):
+    with rung(slot.Scratch == FIRST_PROBE):
         math(100 / zero, tmp)
         math(sc.select(40, 40).sum() + 5, number)
-    with Rung(slot.Scratch == FIRST_PROBE, ~SC40):
+    with rung(slot.Scratch == FIRST_PROBE, ~SC40):
         copy(1, slot.Result2)
-    with Rung(slot.Scratch == FIRST_PROBE):
+    with rung(slot.Scratch == FIRST_PROBE):
         copy(number, slot.Result1)
     done(slot, WINDOW)
 

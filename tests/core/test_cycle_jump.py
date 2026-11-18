@@ -24,7 +24,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     Timer,
     coast_run,
     copy,
@@ -34,6 +33,7 @@ from pyrung.core import (
     math,
     on_delay,
     out,
+    rung,
     scan_trace,
     system,
 )
@@ -156,31 +156,31 @@ T = Timer.clone("CycT")
 
 
 def _timer_flip() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         math(Count + 1, Count)
-    with Rung():
+    with rung():
         on_delay(T, 30000)
-    with Rung(T.Done):
+    with rung(T.Done):
         latch(Hit)
 
 
 def _rtc_flip() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         math(Count + 1, Count)
-    with Rung():
+    with rung():
         copy(system.rtc.second, Sec)
-    with Rung(Sec == 30):
+    with rung(Sec == 30):
         latch(Hit)
 
 
 def _real_flip() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         math(Ramp + 0.5, Ramp)
 
 
@@ -196,36 +196,36 @@ Swap = Real("CycSwap")
 
 
 def _nan_swap() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         math(Count + 1, Count)
-    with Rung():
+    with rung():
         on_delay(T, 30000)
     # Two NaNs with other bits trade places on every scan, so each cycle ends as it began.
-    with Rung():
+    with rung():
         copy(Quiet, Swap)
         copy(Negative, Quiet)
         copy(Swap, Negative)
 
 
 def _clamp_flip() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         math(Count + 1, Count)
-    with Rung():
+    with rung():
         copy(Count * 10, Small)
 
 
 def _counter_flip() -> None:
-    with Rung(~Toggle):
+    with rung(~Toggle):
         out(Toggle)
-    with Rung(Toggle):
+    with rung(Toggle):
         math(Count + 1, Count)
-    with Rung(Toggle):
+    with rung(Toggle):
         count_up(C, preset=3000).reset(Clear)
-    with Rung(C.Done):
+    with rung(C.Done):
         latch(Counted)
 
 
@@ -490,9 +490,9 @@ def _counting_run(mode: str, monkeypatch: pytest.MonkeyPatch) -> tuple[int, list
     moving = Dint("CycMoving")
     timer = Timer.clone("CycAsked")
     with Program(strict=False) as program:
-        with Rung(~timer.Done):
+        with rung(~timer.Done):
             on_delay(timer, 1000)
-        with Rung():
+        with rung():
             copy(moving + 1, moving)
     plc = PLC(program, dt=0.01)
     plc.step()

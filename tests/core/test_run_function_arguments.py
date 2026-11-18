@@ -15,12 +15,12 @@ from pyrung import (
     Bool,
     Int,
     Program,
-    Rung,
     TagType,
     copy,
     math,
     run_enabled_function,
     run_function,
+    rung,
 )
 from pyrung.circuitpy import P1AM, generate_circuitpy
 from pyrung.circuitpy.codegen import compile_kernel
@@ -46,9 +46,9 @@ SCANS = 2500
 def _called(fn, *, ins=None, outs=None, enabled=False) -> Program:
     call = run_enabled_function if enabled else run_function
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(A + 1, A)
-        with Rung(Run):
+        with rung(Run):
             call(fn, ins=ins if ins is not None else {"v": A}, outs=outs or {"out": B})
     return program
 
@@ -56,7 +56,7 @@ def _called(fn, *, ins=None, outs=None, enabled=False) -> Program:
 def _always_called(fn, *, ins, outs=None, enabled=False) -> Program:
     call = run_enabled_function if enabled else run_function
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             call(fn, ins=ins, outs=outs or {"out": B})
     return program
 
@@ -149,7 +149,7 @@ class TestDeclaredOrder:
     def test_an_out_through_an_index_uses_the_index_as_declared(self, engine, monkeypatch):
         at_one, at_two = Int("AtOne"), Int("AtTwo")
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 run_function(index_then_value, outs={"a": DS[Idx], "z": Idx})
                 copy(DS[1], at_one)
                 copy(DS[2], at_two)
@@ -238,9 +238,9 @@ class TestConstants:
     @pytest.mark.parametrize("engine", ENGINES)
     def test_a_dict_keeps_what_the_function_put_in_it(self, engine, monkeypatch):
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 math(A + 1, A)
-            with Rung():
+            with rung():
                 run_function(counts, ins={"v": A, "seen": {}}, outs={"out": B})
         assert _run_on(program, engine, (B,), monkeypatch, scans=3) == (3,)
 
@@ -248,9 +248,9 @@ class TestConstants:
     def test_two_calls_with_one_list_share_it(self, engine, monkeypatch):
         memo: list = []
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 run_function(grows, ins={"v": A, "memo": memo}, outs={"out": A})
-            with Rung():
+            with rung():
                 run_function(grows, ins={"v": A, "memo": memo}, outs={"out": B})
         assert _run_on(program, engine, (B,), monkeypatch) == (2,)
 
@@ -360,7 +360,7 @@ class TestConstants:
     def test_code_py_refuses_a_list_two_constants_share(self, wrap_first, wrap_second):
         shared = [0]
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 run_function(constant, ins={"v": A, "value": wrap_first(shared)}, outs={"out": B})
                 run_function(constant, ins={"v": A, "value": wrap_second(shared)}, outs={"out": A})
         with pytest.raises(ValueError, match="shares a list or dict"):
@@ -380,7 +380,7 @@ class TestConstants:
         def build() -> Program:
             shared = [0]
             with Program(strict=False) as program:
-                with Rung():
+                with rung():
                     run_function(bump, ins={"v": A, "m": shared}, outs={"out": C})
                     run_function(read_nested, ins={"v": A, "m": [shared]}, outs={"out": B})
             return program
@@ -403,11 +403,11 @@ class TestConstants:
         C = Int("C")
         shared = [0]
         with Program(strict=False) as one:
-            with Rung():
+            with rung():
                 run_function(bump, ins={"v": A, "m": shared}, outs={"out": B})
                 run_function(bump, ins={"v": A, "m": shared}, outs={"out": C})
         with Program(strict=False) as two:
-            with Rung():
+            with rung():
                 run_function(bump, ins={"v": A, "m": [0]}, outs={"out": B})
                 run_function(bump, ins={"v": A, "m": [0]}, outs={"out": C})
         assert "_fc_0 = [0]" in _generate(one).code

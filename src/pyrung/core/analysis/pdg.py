@@ -1473,7 +1473,7 @@ def _extract_instruction_writes(
     flags the instruction can set (``_fault_writes``).  They stay out of the
     node's ``writes`` (an instruction's declared destinations).  They count in
     ``writers_of``, the def-use chains and the cones for the flags a rung reads
-    (``ProgramGraph.fault_writes``).  So ``Rung(fault.division_error)`` depends
+    (``ProgramGraph.fault_writes``).  So ``rung(fault.division_error)`` depends
     on the divisor.
     """
     writes: set[str] = set()

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
+from pyrung import Bool, Int, Program, Timer, copy, on_delay, out, rung
 from pyrung.core.analysis.pilot.coast import TARGET, value_trigger
 from pyrung.core.analysis.pilot.execution import MotionKind
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -45,7 +45,7 @@ def _follow_program() -> Program:
     In = Bool("In", external=True)
     Out = Bool("Out")
     with Program() as prog:
-        with Rung(In):
+        with rung(In):
             out(Out)
     return prog
 
@@ -56,9 +56,9 @@ def _stage_program(target_val: int) -> Program:
     Tmr = Timer.clone("Tmr")
     Stage = Int("Stage", default=0)
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, 30, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             copy(target_val, Stage)
     return prog
 
@@ -68,9 +68,9 @@ def _timer_program() -> Program:
     Tmr = Timer.clone("Tmr")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, 100, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Done)
     return prog
 
@@ -84,13 +84,13 @@ def _competing_coast_program() -> Program:
     Goal = Bool("CompetingGoal")
     State = Int("CompetingState", default=3)
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(GlobalTmr, 30, "ms")
             on_delay(DepartureTmr, 50, "ms")
             on_delay(HeadingTmr, 100, "ms")
-        with Rung(GlobalTmr.Done):
+        with rung(GlobalTmr.Done):
             out(Goal)
-        with Rung(DepartureTmr.Done):
+        with rung(DepartureTmr.Done):
             copy(6, State)
     return prog
 
@@ -360,9 +360,9 @@ class TestCompassObservations:
         action_effect = Bool("CompassActionEffect")
         ambient_effect = Bool("CompassAmbientEffect")
         with Program() as program:
-            with Rung(action):
+            with rung(action):
                 out(action_effect)
-            with Rung(ambient_source):
+            with rung(ambient_source):
                 out(ambient_effect)
 
         plc = PLC(program, dt=0.010)
@@ -420,9 +420,9 @@ class TestCompassObservations:
         intermediate = Bool("CompassLocalIntermediate")
         effect = Bool("CompassLocalEffect")
         with Program() as program:
-            with Rung(action):
+            with rung(action):
                 out(intermediate)
-            with Rung(intermediate):
+            with rung(intermediate):
                 out(effect)
 
         plc = PLC(program, dt=0.010)
@@ -456,9 +456,9 @@ class TestCompassObservations:
         with Program() as program:
             # Read the intermediate before its writer so the effect follows on
             # the next scan rather than the action's own scan.
-            with Rung(intermediate):
+            with rung(intermediate):
                 out(effect)
-            with Rung(action):
+            with rung(action):
                 out(intermediate)
 
         plc = PLC(program, dt=0.010)
@@ -483,7 +483,7 @@ class TestCompassObservations:
         action = Bool("CompassOldControl", external=True)
         effect = Bool("CompassOldEffect")
         with Program() as program:
-            with Rung(action):
+            with rung(action):
                 out(effect)
 
         plc = PLC(program, dt=0.010)

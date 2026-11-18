@@ -65,7 +65,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, debounce, flasher, on_delay, reset, timed, toggle
+from pyrung.core import Or, copy, debounce, flasher, on_delay, reset, rung, timed, toggle
 from tests.conformance.memory import ClickTimer, c, t, td
 from tests.conformance.scans import deadline
 
@@ -75,13 +75,13 @@ DEADLINE_MS = 1000
 
 def prove_toggle_flips_once_per_edge(slot):
     # O1: the rung goes true and stays true, and the bit flips once.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         toggle(c[1801])
-    with Rung(slot.Cmd != 0, c[1801]):
+    with rung(slot.Cmd != 0, c[1801]):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, ~c[1801]):
+    with rung(slot.Cmd != 0, ~c[1801]):
         copy(2, slot.Result1)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(1, slot.Fired, oneshot=True)
 
 
@@ -91,15 +91,15 @@ def _step(slot: Any, n: int) -> tuple[Any, Any]:
 
 def prove_debounce_td_keeps_counting(slot):
     # O2: the on side fires at 100 ms.  The case ends on the scan that its TD reaches 300.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         debounce(c[1811], on=(ClickTimer(301), 100), off=(ClickTimer(311), 1000))
-    with Rung(slot.Cmd != 0, c[1811]):
+    with rung(slot.Cmd != 0, c[1811]):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 1)):
+    with rung(*_step(slot, 1)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 0), td[301] >= 300, c[1811]):
+    with rung(*_step(slot, 0), td[301] >= 300, c[1811]):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 0), td[301] >= 300):
+    with rung(*_step(slot, 0), td[301] >= 300):
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(299), DEADLINE_MS)
 
@@ -107,96 +107,96 @@ def prove_debounce_td_keeps_counting(slot):
 def prove_debounce_bounce_restarts_on_side(slot):
     # O3: the input is on until the on TD reads 200, off for 100 ms on T302, then on.
     # T302 times again from the second rise.
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3)):
         debounce(c[1821], on=(ClickTimer(303), 300), off=(ClickTimer(304), 1000))
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch >= 3)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch >= 3)):
         on_delay(ClickTimer(302), 2000)
-    with Rung(*_step(slot, 5)):
+    with rung(*_step(slot, 5)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 4), td[302] >= 400, c[1821]):
+    with rung(*_step(slot, 4), td[302] >= 400, c[1821]):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 4), td[302] >= 400):
+    with rung(*_step(slot, 4), td[302] >= 400):
         copy(5, slot.Scratch)
-    with Rung(*_step(slot, 3), td[302] >= 200, c[1821]):
+    with rung(*_step(slot, 3), td[302] >= 200, c[1821]):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 3), td[302] >= 200):
+    with rung(*_step(slot, 3), td[302] >= 200):
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2)):
+    with rung(*_step(slot, 2)):
         copy(3, slot.Scratch)
-    with Rung(*_step(slot, 1), td[302] >= 100):
+    with rung(*_step(slot, 1), td[302] >= 100):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), td[303] >= 200):
+    with rung(*_step(slot, 0), td[303] >= 200):
         copy(1, slot.Scratch)
 
 
 def prove_flasher_restarts_with_on_phase(slot):
     # O4: 300 ms phases.  The rung drops once the off TD reads 150, for 100 ms on T305 and one
     # scan more, which resets T305.  T305 then times from the restart.
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 0, slot.Scratch >= 3)):
         flasher(c[1831], on=(ClickTimer(306), 300), off=(ClickTimer(307), 300))
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch >= 3)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 1, slot.Scratch >= 3)):
         on_delay(ClickTimer(305), 2000)
-    with Rung(*_step(slot, 5)):
+    with rung(*_step(slot, 5)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 4), td[305] >= 200, c[1831]):
+    with rung(*_step(slot, 4), td[305] >= 200, c[1831]):
         copy(1, slot.Result4)
-    with Rung(*_step(slot, 4), td[305] >= 200):
+    with rung(*_step(slot, 4), td[305] >= 200):
         copy(5, slot.Scratch)
-    with Rung(*_step(slot, 3), td[305] >= 50, c[1831]):
+    with rung(*_step(slot, 3), td[305] >= 50, c[1831]):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 3), td[305] >= 50):
+    with rung(*_step(slot, 3), td[305] >= 50):
         copy(4, slot.Scratch)
-    with Rung(*_step(slot, 2)):
+    with rung(*_step(slot, 2)):
         copy(3, slot.Scratch)
     falling = (*_step(slot, 1), td[305] >= 100)
-    with Rung(*falling, td[306] == 0):
+    with rung(*falling, td[306] == 0):
         copy(1, slot.Result1)
-    with Rung(*falling, td[306] >= 300):
+    with rung(*falling, td[306] >= 300):
         copy(2, slot.Result1)
-    with Rung(*falling, td[307] == 0):
+    with rung(*falling, td[307] == 0):
         copy(1, slot.Result3)
-    with Rung(*falling, td[307] > 0, td[307] < 300):
+    with rung(*falling, td[307] > 0, td[307] < 300):
         copy(2, slot.Result3)
-    with Rung(*falling, td[307] < 200):
+    with rung(*falling, td[307] < 200):
         copy(1, slot.ErrorCode)
-    with Rung(*falling, td[307] >= 200):
+    with rung(*falling, td[307] >= 200):
         copy(2, slot.ErrorCode)
-    with Rung(*falling):
+    with rung(*falling):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), td[307] >= 150):
+    with rung(*_step(slot, 0), td[307] >= 150):
         copy(1, slot.Scratch)
 
 
 def prove_timed_needs_fresh_edge(slot):
     # O5: a 200 ms pulse with the rung held.  T308 times 200 ms more from the pulse's end.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         timed(c[1841], ClickTimer(309), 200)
-    with Rung(*_step(slot, 1)):
+    with rung(*_step(slot, 1)):
         on_delay(ClickTimer(308), 2000)
-    with Rung(*_step(slot, 2)):
+    with rung(*_step(slot, 2)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 1), c[1841]):
+    with rung(*_step(slot, 1), c[1841]):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 1), td[308] >= 200):
+    with rung(*_step(slot, 1), td[308] >= 200):
         copy(2, slot.Scratch)
-    with Rung(*_step(slot, 0), c[1841]):
+    with rung(*_step(slot, 0), c[1841]):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 0), td[309] >= 200):
+    with rung(*_step(slot, 0), td[309] >= 200):
         copy(1, slot.Scratch)
 
 
 def prove_out_coil_sets_timer_done(slot):
     # O6: checks whether the coil writes its T<n>.  The case ends on the scan that the on TD
     # reaches 300.
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         debounce(c[1851], on=(ClickTimer(310), 200), off=(ClickTimer(312), 1000))
-    with Rung(slot.Cmd != 0, t[310]):
+    with rung(slot.Cmd != 0, t[310]):
         copy(1, slot.Result1)
-    with Rung(*_step(slot, 1)):
+    with rung(*_step(slot, 1)):
         copy(1, slot.Fired)
-    with Rung(*_step(slot, 0), td[310] >= 300, c[1851]):
+    with rung(*_step(slot, 0), td[310] >= 300, c[1851]):
         copy(1, slot.Result2)
-    with Rung(*_step(slot, 0), td[310] >= 300):
+    with rung(*_step(slot, 0), td[310] >= 300):
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(300), DEADLINE_MS)
 

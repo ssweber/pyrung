@@ -68,7 +68,6 @@ from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.core import (
-    Rung,
     blockcopy,
     copy,
     count_up,
@@ -80,6 +79,7 @@ from pyrung.core import (
     pack_text,
     pack_words,
     reset,
+    rung,
     search,
     shift,
     system,
@@ -100,7 +100,7 @@ FIRST_PROBE = 3
 
 def _read(slot: Any, scan: int, flag: Any, field: Any, bit: int, *, on: bool = True) -> None:
     """Add *bit* to *field* on *scan* if *flag* is on (``on``) or off right now."""
-    with Rung(slot.Scratch == scan, flag if on else ~flag):
+    with rung(slot.Scratch == scan, flag if on else ~flag):
         math(field + bit, field)
 
 
@@ -112,7 +112,7 @@ BOX_WINDOW = 20
 def prove_boxes_by_pointer(slot: Any) -> None:
     count_scans(slot, BOX_WINDOW)
     big, clamped, minus, zero, sink = dd[1], ds[3905], ds[3906], ds[3907], dd[2]
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         copy(40000, big)
         copy(-1, minus)
         copy(0, zero)
@@ -136,16 +136,16 @@ def prove_boxes_by_pointer(slot: Any) -> None:
     ]
     # The controls: each raise alone, on scans 3, 4 and 5.
     for k, (raise_flag, flag) in enumerate(raises):
-        with Rung(slot.Scratch == FIRST_PROBE + k):
+        with rung(slot.Scratch == FIRST_PROBE + k):
             raise_flag()
         _read(slot, FIRST_PROBE + k, flag, slot.Result4, 1 << k)
     fields = (slot.Result1, slot.Result2, slot.Result3)
     for j, box in enumerate(boxes):
         first = FIRST_PROBE + 3 + 3 * j
         for k, (raise_flag, _flag) in enumerate(raises):
-            with Rung(slot.Scratch == first + k):
+            with rung(slot.Scratch == first + k):
                 raise_flag()
-        with Rung(slot.Scratch >= first, slot.Scratch <= first + 2):
+        with rung(slot.Scratch >= first, slot.Scratch <= first + 2):
             box()
         for k, ((_raise, flag), field) in enumerate(zip(raises, fields, strict=True)):
             _read(slot, first + k, flag, field, 1 << j)
@@ -163,16 +163,16 @@ def prove_ton_ctu_by_pointer(slot: Any) -> None:
     count_scans(slot)
     minus, zero, sink = ds[3909], ds[3910], dd[8]
     window = (slot.Cmd != 0, slot.Scratch <= 8)
-    with Rung(slot.Scratch == 1):
+    with rung(slot.Scratch == 1):
         copy(-1, minus)
         copy(0, zero)
 
     def ton() -> None:
-        with Rung(*window):
+        with rung(*window):
             on_delay(ClickTimer(102), 30000)
 
     def ctu() -> None:
-        with Rung(*window):
+        with rung(*window):
             count_up(ClickCounter(2), 1000).reset(slot.Cmd == 0)
 
     steps: list[tuple[Callable[[], None] | None, Any]] = [
@@ -181,9 +181,9 @@ def prove_ton_ctu_by_pointer(slot: Any) -> None:
         (ctu, slot.Result3),
     ]
     for step, field in steps:
-        with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        with rung(slot.Cmd != 0, slot.Scratch == 3):
             copy(dd[zero], sink)
-        with Rung(slot.Cmd != 0, slot.Scratch == 4):
+        with rung(slot.Cmd != 0, slot.Scratch == 4):
             copy(dd[minus], sink)
         if step is not None:
             step()
@@ -234,7 +234,7 @@ def _raise_sc43(big: Any, clamped: Any) -> None:
 def prove_bulk_ops_settle_sc43(slot: Any) -> None:
     count_scans(slot, HALF_WINDOW)
     big, clamped = dd[21], ds[3911]
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         copy(40000, big)
         copy("1", txt[1])
         copy("2", txt[2])
@@ -249,12 +249,12 @@ def prove_bulk_ops_settle_sc43(slot: Any) -> None:
     ]
     scan = FIRST_PROBE
     for k, op in enumerate(ops):
-        with Rung(slot.Scratch == scan):
+        with rung(slot.Scratch == scan):
             _raise_sc43(big, clamped)
             op()
         _read(slot, scan, SC43, slot.Result1, 1 << k, on=False)
         scan += 1
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         _raise_sc43(big, clamped)
     _read(slot, scan, SC43, slot.Result2, 1)
     done(slot, HALF_WINDOW)
@@ -271,21 +271,21 @@ def init_bulk_ops_settle_sc43(slot: Any) -> None:
 def prove_oneshot_settles_sc43(slot: Any) -> None:
     count_scans(slot, HALF_WINDOW)
     big, clamped = dd[32], ds[3912]
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         copy(40000, big)
     probes: list[Callable[[Any], object]] = [
         lambda dest: copy(1, dest, oneshot=True),
         lambda dest: math(dest + 1, dest, oneshot=True),
     ]
     for k, op in enumerate(probes):
-        with Rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
+        with rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
             _raise_sc43(big, clamped)
-        with Rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
+        with rung(slot.Scratch >= FIRST_PROBE, slot.Scratch <= FIRST_PROBE + 1):
             op(dd[33 + k])
         _read(slot, FIRST_PROBE, SC43, slot.Result2, 1 << k, on=False)
         _read(slot, FIRST_PROBE + 1, SC43, slot.Result1, 1 << k)
     control = FIRST_PROBE + 2
-    with Rung(slot.Scratch == control):
+    with rung(slot.Scratch == control):
         _raise_sc43(big, clamped)
     _read(slot, control, SC43, slot.Result3, 1)
     done(slot, HALF_WINDOW)
@@ -299,17 +299,17 @@ def init_oneshot_settles_sc43(slot: Any) -> None:
 def prove_source_sc43(slot: Any) -> None:
     count_scans(slot, HALF_WINDOW)
     big, clamped, seen = dd[35], ds[3913], c[173]
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         copy(40000, big)
-    with Rung(slot.Scratch == FIRST_PROBE):
+    with rung(slot.Scratch == FIRST_PROBE):
         _raise_sc43(big, clamped)
         copy(SC43, seen)
-    with Rung(slot.Scratch == FIRST_PROBE, seen):
+    with rung(slot.Scratch == FIRST_PROBE, seen):
         copy(1, slot.Result1)
-    with Rung(slot.Scratch == FIRST_PROBE, ~SC43):
+    with rung(slot.Scratch == FIRST_PROBE, ~SC43):
         copy(1, slot.Result2)
     control = FIRST_PROBE + 1
-    with Rung(slot.Scratch == control):
+    with rung(slot.Scratch == control):
         _raise_sc43(big, clamped)
     _read(slot, control, SC43, slot.Result3, 1)
     done(slot, HALF_WINDOW)
@@ -328,17 +328,17 @@ DF_INTO_DD = (2147483647, 1410065408, 99, 0, -2147483648)
 def prove_df_into_dd(slot: Any) -> None:
     count_scans(slot, HALF_WINDOW)
     big, scale, into = df[1], dd[36], dd[37]
-    with Rung(slot.Scratch == STAGE_SCAN):
+    with rung(slot.Scratch == STAGE_SCAN):
         copy(1.0e10, big)
         copy(100000, scale)
         copy(99, into)
-    with Rung(slot.Scratch == FIRST_PROBE):
+    with rung(slot.Scratch == FIRST_PROBE):
         copy(big, into)
     _read(slot, FIRST_PROBE, SC43, slot.Result3, 1)
     for number, reading in enumerate(DF_INTO_DD, start=1):
-        with Rung(slot.Scratch == FIRST_PROBE + 1, into == reading):
+        with rung(slot.Scratch == FIRST_PROBE + 1, into == reading):
             copy(number, slot.Result1)
-    with Rung(slot.Scratch == FIRST_PROBE + 1):
+    with rung(slot.Scratch == FIRST_PROBE + 1):
         math(into / scale, slot.Result2)
     done(slot, HALF_WINDOW)
 

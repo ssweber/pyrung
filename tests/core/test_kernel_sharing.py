@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Block, Bool, Int, Program, Rung, TagType, Timer, blockcopy, copy, on_delay
+from pyrung import PLC, Block, Bool, Int, Program, TagType, Timer, blockcopy, copy, on_delay, rung
 from pyrung.circuitpy.codegen import compile_kernel, render_kernel
 from pyrung.circuitpy.codegen.context import describe_static_range
 from pyrung.core import jit_stats, scan_trace
@@ -35,9 +35,9 @@ def _no_collector(monkeypatch: pytest.MonkeyPatch) -> None:
 def _program() -> Program:
     """Return a program that runs a timer while Go is on and sets N to 5 once it is done."""
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             on_delay(T, 10_000, "ms")
-        with Rung(T.Done):
+        with rung(T.Done):
             copy(5, N)
     return program
 
@@ -89,7 +89,7 @@ def test_two_runners_on_one_program_keep_their_own_scans() -> None:
 def test_the_code_kept_is_bounded() -> None:
     for preset in range(render_kernel.MAX_CACHED_CODE + 2):
         with Program(strict=False) as program:
-            with Rung(Go):
+            with rung(Go):
                 on_delay(T, 1000 + preset, "ms")
         PLC(program, dt=0.01)._compiled_replay_supported_kernel()
     assert len(render_kernel._CODE_BY_SOURCE) == render_kernel.MAX_CACHED_CODE
@@ -142,9 +142,9 @@ def _names_item_by_item(program: Program) -> frozenset[str]:
 def _copy_program() -> Program:
     """Return a program with a block copy and a rung that reads one cell of the bank it fills."""
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             blockcopy(Bank.select(1, 20), Bank.select(21, 40))
-        with Rung(Bank[3] > 2):
+        with rung(Bank[3] > 2):
             copy(5, N)
     return program
 
@@ -216,7 +216,7 @@ def test_absent_scalars_stay_at_the_kernel_default_after_a_later_slot_default() 
     bank = Block("KsLate", TagType.INT, 1, 5)
     late = bank[1]
     with Program(strict=False) as program:
-        with Rung(Go):
+        with rung(Go):
             copy(late, N)
     kernel = compile_kernel(program)
     assert late.name in dict(kernel._scalar_defaults)

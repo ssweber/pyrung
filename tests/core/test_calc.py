@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, Rung, math, out, system
+from pyrung.core import PLC, Bool, CompiledPLC, Dint, Int, Program, Real, math, out, rung, system
 
 
 class TestCalcInstruction:
@@ -15,7 +15,7 @@ class TestCalcInstruction:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A + B, Result)
 
         runner = runner_factory(logic)
@@ -30,7 +30,7 @@ class TestCalcInstruction:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A + 1, Result)
 
         runner = runner_factory(logic)
@@ -45,7 +45,7 @@ class TestCalcInstruction:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A / B, Result)
 
         runner = runner_factory(logic)
@@ -70,11 +70,11 @@ class TestCalcInstruction:
         Flagged = Bool("Flagged")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(Num / 65536, ByConstant)
-            with Rung(system.fault.division_error):
+            with rung(system.fault.division_error):
                 out(Flagged)
-            with Rung(Enable):
+            with rung(Enable):
                 math(Num / Den, ByTag)
                 math(Num / 65536, IntoDint)
                 math(Den * 0 + 4294967303, Low)
@@ -96,7 +96,7 @@ class TestCalcInstruction:
         Result = Real("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A * B, Result)
 
         runner = runner_factory(logic)
@@ -111,7 +111,7 @@ class TestCalcInstruction:
         Result = Real("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 # 3.0E+38 ** 10 overflows a float: +Inf, as 3.0E+38 * 3.0E+38 is.
                 math(Source**10, Result)
 
@@ -130,7 +130,7 @@ class TestCalcInstruction:
         Result = Dint("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math((A + B) * C, Result)
 
         runner = runner_factory(logic)
@@ -144,7 +144,7 @@ class TestCalcInstruction:
         Result = Int("Result")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(A + 1, Result)
 
         runner = runner_factory(logic)
@@ -235,7 +235,7 @@ class TestCalcRangeAggregates:
         Enable = Bool("Enable")
         DS = Block("DS", TagType.INT, 1, 6)
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(expression_for(DS), dest)
         runner = runner_factory(logic)
         runner.patch({"Enable": True, **{f"DS{i}": v for i, v in enumerate(values, start=1)}})
@@ -292,7 +292,7 @@ class TestCalcRangeAggregates:
         DH = Block("DH", TagType.WORD, 1, 3)
         Out = Word("Out")
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(DH.select(1, 3).max(), Out)
         runner = runner_factory(logic)
         runner.patch({"Enable": True, "DH1": 0x0001, "DH2": 0xFFFF, "DH3": 0x8000})
@@ -306,7 +306,7 @@ class TestCalcRangeAggregates:
         C = Block("C", TagType.BOOL, 1, 5)
         Count = Int("Count")
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 math(C.select(1, 5).sum(), Count)
                 math(C.select(1, 1).sum(), Int("One"))
         runner = runner_factory(logic)

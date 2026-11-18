@@ -6,7 +6,7 @@ is never true at a scan boundary. PILOT must fire the whole chain mid-scan.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, call, copy, latch, out, reset, rise, subroutine
+from pyrung import Bool, Int, Program, call, copy, latch, out, reset, rise, rung, subroutine
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.runner import PLC
 
@@ -28,13 +28,13 @@ def _handshake_program():
     Target = Bool("Target")
 
     with Program() as prog:
-        with Rung(rise(Req), ModeSel >= 1, ModeSel <= 3):
+        with rung(rise(Req), ModeSel >= 1, ModeSel <= 3):
             latch(ReqBool)
-        with Rung(ReqBool, Mode == 0):
+        with rung(ReqBool, Mode == 0):
             copy(ModeSel, Mode)
-        with Rung(ReqBool):
+        with rung(ReqBool):
             reset(ReqBool)
-        with Rung(Mode == 2):
+        with rung(Mode == 2):
             out(Target)
 
     return prog, Target
@@ -78,23 +78,23 @@ def _packml_chain_program():
 
     @subroutine("mode_sub")
     def mode_sub():
-        with Rung(ProdMode):
+        with rung(ProdMode):
             copy(1, UnitMode, oneshot=True)
-        with Rung(UnitMode >= 1, UnitMode <= 3):
+        with rung(UnitMode >= 1, UnitMode <= 3):
             copy(UnitMode, ModeCur)
-        with Rung():
+        with rung():
             copy(0, ReqBool)
-        with Rung():
+        with rung():
             copy(0, UnitMode)
-        with Rung():
+        with rung():
             reset(ChgReq)
 
     with Program() as prog:
-        with Rung(ChgReq):
+        with rung(ChgReq):
             copy(1, ReqBool, oneshot=True)
-        with Rung(ReqBool == 1):
+        with rung(ReqBool == 1):
             call(mode_sub)
-        with Rung(ModeCur == 1):
+        with rung(ModeCur == 1):
             out(Target)
 
     return prog, Target

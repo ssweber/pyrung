@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, blockcopy, copy, out
+from pyrung.core import PLC, Block, Bool, Int, Program, TagType, blockcopy, copy, out, rung
 from pyrung.core.analysis.pilot.coast import value_trigger
 from pyrung.core.analysis.pilot.drive_setup import prepare_drive
 from pyrung.core.analysis.pilot.last_resort import _input_values
@@ -37,7 +37,7 @@ def _readonly_slots() -> tuple[Program, Bool]:
     ptr = Int("Ptr", min=2, max=3, default=2, readonly=True)
     done = Bool("Done")
     with Program(strict=False) as prog:
-        with Rung(cmd[ptr] == True):  # noqa: E712
+        with rung(cmd[ptr] == True):  # noqa: E712
             out(done)
     return prog, done
 
@@ -69,7 +69,7 @@ def test_the_levers_and_their_resting_values_do_not_depend_on_an_earlier_how() -
     ptr = Int("Ptr", min=1, max=4, default=1)
     done = Bool("Done")
     with Program(strict=False) as prog:
-        with Rung(cmd[ptr] == True):  # noqa: E712
+        with rung(cmd[ptr] == True):  # noqa: E712
             out(done)
     before, after = _before_and_after(prog, done)
 
@@ -88,9 +88,9 @@ def _retentive_slot() -> tuple[Program, Bool]:
     go = Bool("Go")
     done = Bool("Done")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             copy(7, ds[ptr])
-        with Rung(ds[ptr] == 7):
+        with rung(ds[ptr] == 7):
             out(done)
     return prog, done
 
@@ -129,9 +129,9 @@ def test_a_slot_copied_through_a_range_is_reached_whichever_plc_asks() -> None:
     ptr = Int("Ptr", min=1, max=4, default=2, readonly=True)
     done = Bool("Done")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             blockcopy(cmd.select(1, 4), sink.select(1, 4))
-        with Rung(sink[ptr] == False):  # noqa: E712
+        with rung(sink[ptr] == False):  # noqa: E712
             out(done)
     before, after = _before_and_after(prog, done)
 
@@ -151,7 +151,7 @@ def test_a_slot_is_tried_at_values_it_does_not_hold_whichever_plc_asks() -> None
     ptr = Int("Ptr", min=1, max=4, default=2, readonly=True)
     done = Bool("Done")
     with Program(strict=False) as prog:
-        with Rung(cmd[ptr] == False, vals[ptr] == 2):  # noqa: E712
+        with rung(cmd[ptr] == False, vals[ptr] == 2):  # noqa: E712
             out(done)
     before, after = _before_and_after(prog, done)
 

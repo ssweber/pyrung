@@ -23,7 +23,7 @@ from collections.abc import Callable
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
-from pyrung.core import PLC, Counter, Or, Program, Rung, Timer
+from pyrung.core import PLC, Counter, Or, Program, Timer, rung
 from pyrung.core.program import (
     branch,
     call,
@@ -54,19 +54,19 @@ def _drum() -> None:
 
 
 def _coil_before_drum() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         latch(c[3])
         _drum()
 
 
 def _coil_before_rton() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
         on_delay(Timer[1], preset=100, unit="Tms").reset(x[2])
 
 
 def _counter_in_branch_beside_coil() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         with branch(x[2]):
             latch(c[1])
         with branch(x[3]):
@@ -74,7 +74,7 @@ def _counter_in_branch_beside_coil() -> None:
 
 
 def _shift_in_nested_branch() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
         with branch(x[2]):
             with branch(x[3]):
@@ -82,32 +82,32 @@ def _shift_in_nested_branch() -> None:
 
 
 def _outputs_below_box() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         with branch(x[6]):
             count_up(Counter[1], preset=3).reset(x[4])
         out(y[2])
 
 
 def _box_in_continued_rung_beside_coil() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
-    with Rung(x[2]).continued():
+    with rung(x[2]).continued():
         latch(c[9])
         with branch(x[7]):
             count_up(Counter[1], preset=3).reset(x[4])
 
 
 def _trunk_written_before_box() -> None:
-    with Rung(c[5]):
+    with rung(c[5]):
         reset(c[5])
         with branch(x[2]):
             count_up(Counter[1], preset=10).reset(x[4])
 
 
 def _box_in_forloop_body_rung_beside_coil() -> None:
-    with Rung(x[3]):
+    with rung(x[3]):
         with forloop(3):
-            with Rung(x[1]):
+            with rung(x[1]):
                 out(y[1])
                 shift(c.select(11, 18)).clock(x[4]).reset(x[5])
 
@@ -128,100 +128,100 @@ REFUSED: dict[str, Callable[[], None]] = {
 
 
 def _drum_below_coil() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         latch(c[3])
-    with Rung(x[1]).continued():
+    with rung(x[1]).continued():
         _drum()
 
 
 def _rton_below_coil() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
-    with Rung(x[1]).continued():
+    with rung(x[1]).continued():
         on_delay(Timer[1], preset=100, unit="Tms").reset(x[2])
 
 
 def _counter_below_coil() -> None:
-    with Rung(x[1], x[2]):
+    with rung(x[1], x[2]):
         latch(c[1])
-    with Rung(x[1], x[3]).continued():
+    with rung(x[1], x[3]).continued():
         count_up(Counter[1], preset=10).reset(x[4])
 
 
 def _shift_below_coil() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
-    with Rung(x[1], x[2], x[3]).continued():
+    with rung(x[1], x[2], x[3]).continued():
         shift(c.select(11, 18)).clock(x[4]).reset(x[5])
 
 
 def _wires_below_box() -> None:
-    with Rung(x[1], x[6]):
+    with rung(x[1], x[6]):
         count_up(Counter[1], preset=3).reset(x[4])
-    with Rung(x[1]).continued():
+    with rung(x[1]).continued():
         out(y[2])
         with branch(Counter[1].Done):
             out(y[3])
 
 
 def _box_on_a_continued_wire() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
-    with Rung(x[2]).continued():
+    with rung(x[2]).continued():
         latch(c[9])
-    with Rung(x[2], x[7]).continued():
+    with rung(x[2], x[7]).continued():
         count_up(Counter[1], preset=3).reset(x[4])
-    with Rung(x[2]).continued():
+    with rung(x[2]).continued():
         out(y[2])
 
 
 def _box_reads_the_wire_above() -> None:
     # The wire of the box reads C5 as it is at this point, after the reset above.
-    with Rung(c[5]):
+    with rung(c[5]):
         reset(c[5])
-    with Rung(c[5], x[2]).continued():
+    with rung(c[5], x[2]).continued():
         count_up(Counter[1], preset=10).reset(x[4])
 
 
 def _two_boxes() -> None:
-    with Rung(x[1], x[2]):
+    with rung(x[1], x[2]):
         count_up(Counter[1], preset=3).reset(x[4])
-    with Rung(x[1]).continued():
+    with rung(x[1]).continued():
         out(y[1])
-    with Rung(x[1], x[3]).continued():
+    with rung(x[1], x[3]).continued():
         shift(c.select(11, 18)).clock(x[4]).reset(x[5])
-    with Rung(x[1]).continued():
+    with rung(x[1]).continued():
         out(y[2])
 
 
 def _no_trunk_contact() -> None:
-    with Rung():
+    with rung():
         out(y[1])
-    with Rung(x[5]).continued():
+    with rung(x[5]).continued():
         count_up(Counter[1], preset=3).reset(x[4])
-    with Rung().continued():
+    with rung().continued():
         out(y[2])
 
 
 def _box_in_a_subroutine() -> None:
-    with Rung():
+    with rung():
         call("Sub")
     with subroutine("Sub"):
-        with Rung(c[5]):
+        with rung(c[5]):
             reset(c[5])
-        with Rung(c[5], x[2]).continued():
+        with rung(c[5], x[2]).continued():
             count_up(Counter[1], preset=10).reset(x[4])
 
 
 def _box_alone_then_continued() -> None:
-    with Rung(Or(x[1], x[2])):
+    with rung(Or(x[1], x[2])):
         count_up(Counter[1], preset=10).down(x[3]).reset(x[4])
-    with Rung(x[5]).continued():
+    with rung(x[5]).continued():
         latch(c[1])
 
 
 def _ton_beside_coil() -> None:
-    with Rung(x[1]):
+    with rung(x[1]):
         out(y[1])
         on_delay(Timer[1], preset=100, unit="Tms")
 
@@ -243,10 +243,10 @@ WRITTEN: dict[str, Callable[[], None]] = {
 
 
 def _box_in_its_only_branch() -> None:
-    # This draws as X1 then X2 in series on one row, the same cells as Rung(x[1], x[2]).
+    # This draws as X1 then X2 in series on one row, the same cells as rung(x[1], x[2]).
     # The rows cannot say where the rung ends and the branch begins. So it reads back as
     # that rung, with the same drawing and the same readings.
-    with Rung(x[1]):
+    with rung(x[1]):
         with branch(x[2]):
             count_up(Counter[1], preset=10).reset(x[4])
 
@@ -410,11 +410,11 @@ def test_the_wire_below_a_box_is_a_rung_of_its_own():
 
 def test_box_in_forloop_body_is_a_body_rung_of_its_own():
     def shape() -> None:
-        with Rung(x[3]):
+        with rung(x[3]):
             with forloop(3):
-                with Rung(x[1]):
+                with rung(x[1]):
                     out(y[1])
-                with Rung(x[1]):
+                with rung(x[1]):
                     shift(c.select(11, 18)).clock(x[4]).reset(x[5])
 
     bundle = pyrung_to_ladder(_build(shape), _tag_map())
@@ -435,7 +435,7 @@ def test_bare_box_then_a_bare_row_in_a_forloop_body_round_trips():
     """
 
     def shape() -> None:
-        with Rung(x[1]):
+        with rung(x[1]):
             with forloop(2):
                 count_up(Counter[1], preset=3).reset(x[4])
                 out(y[1])

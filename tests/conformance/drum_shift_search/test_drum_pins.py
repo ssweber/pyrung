@@ -158,13 +158,13 @@ from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
 from pyrung.core import (
     Or,
-    Rung,
     copy,
     event_drum,
     forloop,
     math,
     on_delay,
     reset,
+    rung,
     time_drum,
     time_event_drum,
 )
@@ -269,7 +269,7 @@ def time_box(
     step: Any = None,
     rst: Any = None,
 ) -> None:
-    with Rung(*_gate(slot, pause)):
+    with rung(*_gate(slot, pause)):
         drum = time_drum(
             outputs=[s.a, s.b],
             presets=list(presets),
@@ -294,7 +294,7 @@ def te_box(
     step: Any = None,
     rst: Any = None,
 ) -> None:
-    with Rung(*_gate(slot, pause)):
+    with rung(*_gate(slot, pause)):
         drum = time_event_drum(
             outputs=[s.a, s.b],
             presets=list(presets) if presets is not None else [None] * len(events),
@@ -319,7 +319,7 @@ def event_box(
     step: Any = None,
     rst: Any = None,
 ) -> None:
-    with Rung(*_gate(slot, pause)):
+    with rung(*_gate(slot, pause)):
         drum = event_drum(
             outputs=[s.a, s.b],
             events=list(events),
@@ -331,17 +331,17 @@ def event_box(
 
 
 def snap(slot: Any, top: Side, under: Side, scan: int, into: Any) -> None:
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         math(top.state * 100 + under.state, into)
 
 
 def hundreds(slot: Any, s: Side, scan: int, into: Any) -> None:
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         math(s.acc / 100, into)
 
 
 def over(slot: Any, s: Side, base: int, scan: int, into: Any) -> None:
-    with Rung(slot.Scratch == scan):
+    with rung(slot.Scratch == scan):
         math(s.acc - base, into)
 
 
@@ -649,10 +649,10 @@ def prove_flag_cleared(slot):
     put(slot, 7, LONG + 100, a.acc)
     put(slot, 7, LONG + 100, b.acc)
     for side in (a, b):
-        with Rung(slot.Scratch == 6):
+        with rung(slot.Scratch == 6):
             reset(side.flag)
     for side in (d, e):
-        with Rung(slot.Scratch == 6):
+        with rung(slot.Scratch == 6):
             reset(side.flag)
     time_box(slot, a, [LONG, LONG], jog=jog, jump=jump, step=_EXTRA[6])
     te_box(slot, b, [e1, e2], [LONG, LONG], jog=jog, jump=jump, step=_EXTRA[6])
@@ -762,15 +762,15 @@ def prove_te_event_before_time(slot):
     clock = ClickTimer(_TDS[2 * 26 + 1])
     put(slot, 3, 32760, te.acc)
     te_box(slot, te, [e3, e4], [LONG, LONG])
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         on_delay(clock, LONG)
-    with Rung(slot.Result4 == 0, clock.Acc >= SETTLED, te.acc == 32767):
+    with rung(slot.Result4 == 0, clock.Acc >= SETTLED, te.acc == 32767):
         copy(1, slot.Result4)
-    with Rung(slot.Result4 == 0, clock.Acc >= SETTLED, te.acc < 0):
+    with rung(slot.Result4 == 0, clock.Acc >= SETTLED, te.acc < 0):
         copy(2, slot.Result4)
-    with Rung(slot.Result4 == 0, clock.Acc >= SETTLED):
+    with rung(slot.Result4 == 0, clock.Acc >= SETTLED):
         copy(3, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Scratch > WINDOW, slot.Result4 != 0):
+    with rung(slot.Cmd != 0, slot.Scratch > WINDOW, slot.Result4 != 0):
         copy(1, slot.Fired)
 
 
@@ -794,7 +794,7 @@ def prove_preset_from_ds(slot):
     for side in (tm, te, zero, negative):
         track(slot, side)
     snap(slot, tm, te, 5, slot.Result2)
-    with Rung(slot.Scratch == 4):
+    with rung(slot.Scratch == 4):
         copy(zero.step, slot.Result3)
         copy(negative.step, slot.Result4)
     done(slot)
@@ -804,14 +804,14 @@ def prove_units(slot):
     r = rig(31)
     secs, mins = r.side(0), r.side(1)
     clock = ClickTimer(_TDS[-1])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(clock, 3000)
     count_scans(slot, 3)
-    with Rung(slot.Scratch == 3):
+    with rung(slot.Scratch == 3):
         copy(secs.acc, slot.Result4)
     time_box(slot, secs, [LONG, LONG], unit="s")
     time_box(slot, mins, [LONG, LONG], unit="min")
-    with Rung(slot.Cmd != 0, slot.Fired == 0, td[_TDS[-1]] >= 2100):
+    with rung(slot.Cmd != 0, slot.Fired == 0, td[_TDS[-1]] >= 2100):
         copy(secs.acc, slot.Result2)
         copy(mins.acc, slot.Result3)
         copy(1, slot.Fired)
@@ -823,19 +823,19 @@ def prove_drum_in_loop(slot):
     jogged, evd = q.side(0), q.side(1)
     jog, e1, e2 = r.take(3)
     clock = ClickTimer(_TDS[-2])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(clock, 3000)
     count_scans(slot, 3)
     on_scans(slot, jog, 3)
     on_scans(slot, e1, 3)
     time_box(slot, outside, [LONG, LONG])
     # The For's own rung is always true, so its drums take the reset when Cmd drops.
-    with Rung():
+    with rung():
         with forloop(3):
             time_box(slot, inside, [LONG, LONG])
             time_box(slot, jogged, [LONG, LONG, LONG, LONG], jog=jog)
             event_box(slot, evd, [e1, e2, e2, e2])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, td[_TDS[-2]] >= 150):
+    with rung(slot.Cmd != 0, slot.Fired == 0, td[_TDS[-2]] >= 150):
         math(inside.acc * 10 / outside.acc, slot.Result2)
         copy(jogged.step, slot.Result3)
         copy(evd.step, slot.Result4)
@@ -861,7 +861,7 @@ def prove_single_step(slot):
     track(slot, te)
     snap(slot, tm, ev, 3, slot.Result2)
     snap(slot, tm, ev, 5, slot.Result3)
-    with Rung(slot.Scratch == 4):
+    with rung(slot.Scratch == 4):
         copy(te.state, slot.Result4)
     done(slot)
 

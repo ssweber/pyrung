@@ -25,7 +25,7 @@ from typing import Any
 
 from pyrsistent import pvector
 
-from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
+from pyrung import And, Bool, Or, Program, latch, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
@@ -114,7 +114,7 @@ def _oneshot_plc() -> PLC:
     A = Bool("A", external=True)
     B = Bool("B")
     with Program() as prog:
-        with Rung(A):
+        with rung(A):
             out(B)
     return PLC(prog, dt=0.010)
 
@@ -1320,7 +1320,7 @@ def _seal_in_regression_inputs():
     Hold = Bool("Hold", external=True)
     Out = Bool("Out")
     with Program() as prog:
-        with Rung(Or(rise(Command), And(Out, Hold))):
+        with rung(Or(rise(Command), And(Out, Hold))):
             out(Out)
 
     pdg = build_program_graph(prog)
@@ -1669,11 +1669,11 @@ def _three_step_program() -> tuple[Program, Bool]:
     s2 = Bool("s2")
     s3 = Bool("s3")
     with Program() as prog:
-        with Rung(a):
+        with rung(a):
             latch(s1)
-        with Rung(s1, b):
+        with rung(s1, b):
             latch(s2)
-        with Rung(s2, c):
+        with rung(s2, c):
             latch(s3)
     return prog, s3
 

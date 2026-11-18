@@ -37,7 +37,6 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     Word,
@@ -54,6 +53,7 @@ from pyrung.core import (
     pack_text,
     pack_words,
     reset,
+    rung,
     search,
     shift,
     sqrt,
@@ -212,15 +212,15 @@ _STEPS = {**_MATH, **_COPY, **_NEITHER}
 
 def _flag_after(fault: Callable[[], object], flag: Any, step: Callable[[], object]) -> Program:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("12", _Chars[1])
-        with Rung():
+        with rung():
             fault()
-        with Rung(flag):
+        with rung(flag):
             out(Bool("Raised"))
-        with Rung():
+        with rung():
             step()
-        with Rung(flag):
+        with rung(flag):
             out(Bool("Left"))
     return prog
 
@@ -263,9 +263,9 @@ def test_on_a_false_rung_a_math_clears_and_a_copy_does_not(
     step, stays = _ON_A_FALSE_RUNG[step_name]
     never = Bool("Never")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fault()
-        with Rung(never):
+        with rung(never):
             step()
     assert _run(prog, engine, (flag,), monkeypatch) == (stays,)
 
@@ -297,13 +297,13 @@ def test_a_oneshot_that_does_not_fire(engine, fault_name, oneshot, kept, monkeyp
     flag, fault = _FAULTS[fault_name]
     cleared, left = Bool("Cleared"), Bool("Kept")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fault()
-        with Rung():
+        with rung():
             _ONESHOTS[oneshot]()
-        with Rung(system.sys.first_scan, ~flag):
+        with rung(system.sys.first_scan, ~flag):
             latch(cleared)
-        with Rung(~system.sys.first_scan, flag):
+        with rung(~system.sys.first_scan, flag):
             latch(left)
     assert _run(prog, engine, (cleared, left), monkeypatch, scans=2) == (True, kept)
 
@@ -313,13 +313,13 @@ def test_each_flag_follows_on_its_own(engine, monkeypatch) -> None:
     """A Math clears each flag it does not raise and sets each flag it does raise."""
     at_div, at_range = Bool("AtDiv"), Bool("AtRange")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(100 / _Zero, _Sink)  # SC40 only
-        with Rung(SC40, ~SC43):
+        with rung(SC40, ~SC43):
             out(at_div)
-        with Rung():
+        with rung():
             math(_Big + 0, _Sink)  # SC43 only
-        with Rung(~SC40, SC43):
+        with rung(~SC40, SC43):
             out(at_range)
     assert _run(prog, engine, (at_div, at_range), monkeypatch) == (True, True)
 
@@ -335,11 +335,11 @@ def test_a_flag_carries_into_the_next_scan(engine, fault_name, monkeypatch) -> N
     armed = Bool("Armed")
     at_top = Bool("AtTop")
     with Program(strict=False) as prog:
-        with Rung(flag):
+        with rung(flag):
             latch(at_top)
-        with Rung(~armed):
+        with rung(~armed):
             fault()
-        with Rung():
+        with rung():
             out(armed)
     left = fault_name.endswith("_copy")
     assert _run(prog, engine, (at_top, flag), monkeypatch, scans=2) == (True, left)
@@ -351,19 +351,19 @@ def test_a_carried_flag_waits_for_an_instruction_that_follows_it(engine, monkeyp
     armed = Bool("Armed")
     before, after = Bool("Before"), Bool("After")
     with Program(strict=False) as prog:
-        with Rung(~armed):
+        with rung(~armed):
             copy(_Tbl[_Zero], _Sink)
-        with Rung(armed):
+        with rung(armed):
             out(_Coil)
-        with Rung(armed):
+        with rung(armed):
             on_delay(_Tmr, preset=1000, unit="Ts")
-        with Rung(armed, SC44):
+        with rung(armed, SC44):
             latch(before)
-        with Rung(armed):
+        with rung(armed):
             copy(1, _Other)
-        with Rung(armed, SC44):
+        with rung(armed, SC44):
             latch(after)
-        with Rung():
+        with rung():
             out(armed)
     assert _run(prog, engine, (before, after, SC44), monkeypatch, scans=2) == (
         True,
@@ -382,7 +382,7 @@ def test_a_copy_clears_the_flag_before_it_reads_it(engine, flag, fault, monkeypa
     """Match CLICK: ``flag_probe/source_flag_is_read_before_the_copy_settles``."""
     seen = Bool("SeenFlag", default=True)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fault()
             copy(flag, seen)
     assert _run(prog, engine, (seen, flag), monkeypatch) == (False, False)
@@ -393,7 +393,7 @@ def test_a_calc_clears_the_flag_before_it_reads_it(engine, monkeypatch) -> None:
     """Match CLICK: ``flag_probe/source_flag_in_a_math``."""
     number = Int("Number")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(100 / _Zero, _Sink)
             math(SC40 + 5, number)
     assert _run(prog, engine, (number, SC40), monkeypatch) == (5, False)
@@ -428,7 +428,7 @@ def test_a_read_past_the_block_is_the_types_zero_with_no_flag(
     table = Block("Typed", tag_type, 1, 4)
     past, _, _ = _pointers()
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(table[past], dest)
     value, sc43, sc44 = _run(prog, engine, (dest, SC43, SC44), monkeypatch)
     assert value == zero
@@ -440,7 +440,7 @@ def test_a_read_past_the_block_through_an_expression(engine, monkeypatch) -> Non
     past, _, inside = _pointers()
     for_copy, for_calc = Int("ForCopy", default=7), Int("ForCalc", default=7)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(_Tbl[past + 1], for_copy)
             math(_Tbl[inside + 100], for_calc)
     assert _run(prog, engine, (for_copy, for_calc, SC44), monkeypatch) == (0, 0, False)
@@ -460,7 +460,7 @@ def test_a_read_below_the_block_is_an_address_error_and_writes_nothing(
 ) -> None:
     _, below, _ = _pointers()
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             op(_Tbl[below], _Kept)
     assert _run(prog, engine, (_Kept, SC44, SC43), monkeypatch) == (7, True, False)
 
@@ -472,7 +472,7 @@ def test_a_converter_reads_past_the_block_as_the_types_zero(engine, monkeypatch)
     code = Int("Code", default=7)
     digits = Block("Digits", TagType.CHAR, 1, 1)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("9", digits[1])
             copy(text[past], code, convert=to_ascii)
             copy(_Tbl[past], digits[1], convert=to_text())
@@ -499,13 +499,13 @@ def test_a_write_past_the_block_is_dropped_with_no_flag(engine, write, monkeypat
     first, second = Int("First"), Int("Second")
     at_sc44, at_sc43 = Bool("AtSc44"), Bool("AtSc43")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             write(table[past])
-        with Rung(SC44):
+        with rung(SC44):
             out(at_sc44)
-        with Rung(SC43):
+        with rung(SC43):
             out(at_sc43)
-        with Rung():
+        with rung():
             copy(table[1], first)
             copy(table[2], second)
     assert _run(prog, engine, (first, second, at_sc44, at_sc43), monkeypatch) == (
@@ -521,7 +521,7 @@ def test_a_write_below_the_block_is_an_address_error(engine, monkeypatch) -> Non
     _, below, _ = _pointers()
     table = Block("Dest", TagType.INT, 1, 2)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(5, table[below])
     assert _run(prog, engine, (SC44, SC43), monkeypatch) == (True, False)
 
@@ -532,7 +532,7 @@ def test_a_store_past_the_block_clears_the_flag_it_follows(engine, monkeypatch) 
     past, _, _ = _pointers()
     table = Block("Dest", TagType.INT, 1, 2)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(_Big, _Sink)
             copy(5, table[past])
     assert _run(prog, engine, (SC43,), monkeypatch) == (False,)
@@ -543,7 +543,7 @@ def test_a_converter_write_past_the_block_is_dropped(engine, monkeypatch) -> Non
     past, _, _ = _pointers()
     text = Block("Text", TagType.CHAR, 1, 4)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(5, text[past], convert=to_text())
     assert _run(prog, engine, (SC44, SC43), monkeypatch) == (False, False)
 
@@ -562,13 +562,13 @@ def test_pack_and_unpack_through_a_pointer(engine, op_name, monkeypatch) -> None
     op = _PACK_THROUGH_POINTER[op_name]
     at_past = Bool("AtPast")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy("12", _Chars[1])
-        with Rung():
+        with rung():
             op(_Tbl[past])
-        with Rung(SC44):
+        with rung(SC44):
             out(at_past)
-        with Rung():
+        with rung():
             op(_Tbl[below])
     assert _run(prog, engine, (at_past, SC44), monkeypatch) == (False, True)
 
@@ -578,11 +578,11 @@ def test_pack_text_refuses_text_before_it_looks_at_a_pointer(engine, monkeypatch
     past, below, _ = _pointers()
     at_past = Bool("AtPast")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             pack_text(_Chars.select(1, 2), _Tbl[past])
-        with Rung(SC43, ~SC44):
+        with rung(SC43, ~SC44):
             out(at_past)
-        with Rung():
+        with rung():
             pack_text(_Chars.select(1, 2), _Tbl[below])
     assert _run(prog, engine, (at_past, SC43, SC44), monkeypatch) == (True, True, False)
 
@@ -614,7 +614,7 @@ def test_a_flag_nothing_reads_settles_the_same(runner, steps, up) -> None:
     }
     with Program(strict=False) as prog:
         for name in steps:
-            with Rung():
+            with rung():
                 actions[name]()
     plc = runner(prog, dt=0.010)
     plc.step()
@@ -627,7 +627,7 @@ def test_a_flag_nothing_reads_settles_the_same(runner, steps, up) -> None:
 def test_instructions_declare_every_flag_they_follow() -> None:
     """``_fault_writes`` lists each clear as a write, so the PDG and the prover see it."""
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for step in (*_MATH.values(), *_COPY.values()):
                 step()
     for instruction in prog.rungs[0]._instructions:
@@ -731,9 +731,9 @@ def test_a_window_out_of_its_block_is_an_address_error(engine, op_name, monkeypa
     """
     op, untouched, value = _WINDOW_OUT[op_name]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _window_stage()
-        with Rung():
+        with rung():
             op()
     assert _run(prog, engine, (SC44, SC43, untouched), monkeypatch) == (True, False, value)
 
@@ -741,7 +741,7 @@ def test_a_window_out_of_its_block_is_an_address_error(engine, op_name, monkeypa
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_window_inside_its_block_runs(engine, monkeypatch) -> None:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill(5, _WinU.select(_WinFive, _WinSix))
     assert _run(prog, engine, (SC44, _WinU[5], _WinU[6]), monkeypatch) == (False, 5, 5)
 
@@ -775,11 +775,11 @@ def test_a_search_over_a_dynamic_window(engine, name, monkeypatch) -> None:
     op, address = _SEARCHES[name]
     result = Int("WinCursor") if name.startswith("continuous") else _WinResult
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(8, _WinU[7])
             copy("A", _WinChars[2])
             copy("B", _WinChars[3])
-        with Rung():
+        with rung():
             op()
     assert _run(prog, engine, (result, _WinFound, SC44), monkeypatch) == (address, True, False)
 
@@ -788,9 +788,9 @@ def test_a_window_past_its_block_replays_as_it_ran() -> None:
     ptr = Int("WinPtr", default=1)
     hit = Bool("WinHit")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             fill(5, _WinU.select(ptr, ptr + 1))
-        with Rung(SC44):
+        with rung(SC44):
             latch(hit)
     plc = PLC(prog, dt=0.010)
     plc.step()
@@ -949,9 +949,9 @@ def test_a_dynamic_window_skips_a_gap(engine, op_name, monkeypatch) -> None:
     """
     op, watch, values = _SPARSE_WINDOWS[op_name]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _sparse_stage()
-        with Rung():
+        with rung():
             op()
     assert _run(prog, engine, (SC44, SC43, *watch), monkeypatch) == (False, False, *values)
 
@@ -966,7 +966,7 @@ def test_a_dynamic_window_skips_a_gap(engine, op_name, monkeypatch) -> None:
 )
 def test_a_sparse_window_with_a_bound_out_of_its_block(engine, bounds, monkeypatch) -> None:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _sparse_stage()
             fill(9, _SpU.select(*bounds))
     assert _run(prog, engine, (SC44, _SpU[5]), monkeypatch) == (True, 1)
@@ -976,11 +976,11 @@ def test_a_sparse_window_with_a_bound_out_of_its_block(engine, bounds, monkeypat
 def test_a_shift_over_a_window_skips_a_gap(engine, monkeypatch) -> None:
     clock = Bool("SpClock")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _sparse_stage()
-        with Rung():
+        with rung():
             shift(_SpBits.select(_SpFour, _SpNine)).clock(clock).reset(Bool("SpShiftReset"))
-        with Rung():
+        with rung():
             latch(clock)
     watched = _run(prog, engine, (SC44, _SpBits[4], _SpBits[9]), monkeypatch, scans=2)
     assert watched == (False, True, False)
@@ -993,9 +993,9 @@ def test_a_shift_with_its_window_in_a_gap_refuses_every_scan(
 ) -> None:
     clock = Bool(f"SpGapClock{clock_default}", default=clock_default)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _sparse_stage()
-        with Rung():
+        with rung():
             shift(_SpBits.select(_SpFive, _SpEight)).clock(clock).reset(Bool("SpShiftReset"))
     with pytest.raises(ValueError, match="shift bit_range resolved to an empty range"):
         _run(prog, engine, (SC44,), monkeypatch)
@@ -1006,13 +1006,13 @@ def test_a_shift_refuses_on_the_scan_its_window_moves_into_a_gap(engine, monkeyp
     start = Int("SpShiftStart", default=1)
     end = Int("SpShiftEnd", default=4)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _sparse_stage()
-        with Rung():
+        with rung():
             shift(_SpBits.select(start, end)).clock(Bool("SpShiftClock")).reset(
                 Bool("SpShiftReset")
             )
-        with Rung():
+        with rung():
             copy(5, start)
             copy(8, end)
     assert _run(prog, engine, (SC44,), monkeypatch, scans=1) == (False,)
@@ -1024,9 +1024,9 @@ def test_a_window_across_a_gap_replays_as_it_ran() -> None:
     ptr = Int("SpPtr", default=1)
     hit = Bool("SpHit")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             search(_SpU.select(ptr, ptr + 6) == 7, result=_SpResult, found=hit)
-        with Rung():
+        with rung():
             fill(7, _SpU.select(11, 12))
     plc = PLC(prog, dt=0.010)
     plc.step()
@@ -1067,7 +1067,7 @@ def _src_stage() -> None:
 )
 def test_a_fill_value_below_its_block_is_an_address_error(engine, value, monkeypatch) -> None:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _src_stage()
             fill(value(), _SrcU.select(1, 2))
     assert _run(prog, engine, (SC44, _SrcU[1]), monkeypatch) == (True, 77)
@@ -1076,7 +1076,7 @@ def test_a_fill_value_below_its_block_is_an_address_error(engine, value, monkeyp
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_fill_value_past_its_block_fills_zero(engine, monkeypatch) -> None:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _src_stage()
             fill(_SrcTbl[_SrcPast], _SrcU.select(1, 2))
     assert _run(prog, engine, (SC44, _SrcU[1]), monkeypatch) == (False, 0)
@@ -1084,9 +1084,9 @@ def test_a_fill_value_past_its_block_fills_zero(engine, monkeypatch) -> None:
 
 def _count_program(count: Any) -> Program:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _src_stage()
-        with Rung():
+        with rung():
             with forloop(count):
                 math(_SrcBody + 1, _SrcBody)
     return prog
@@ -1145,7 +1145,7 @@ def test_a_for_count_past_its_block_reads_zero(engine, monkeypatch) -> None:
 )
 def test_a_search_value_below_its_block_is_an_address_error(engine, op, monkeypatch) -> None:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _src_stage()
             op()
     assert _run(prog, engine, (SC44, _SrcResult, _SrcFound), monkeypatch) == (True, 55, False)
@@ -1154,7 +1154,7 @@ def test_a_search_value_below_its_block_is_an_address_error(engine, op, monkeypa
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_search_value_past_its_block_reads_zero(engine, monkeypatch) -> None:
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             _src_stage()
             search(_SrcU.select(1, 2) == _SrcTbl[_SrcPast], result=_SrcResult, found=_SrcFound)
     assert _run(prog, engine, (SC44, _SrcResult, _SrcFound), monkeypatch) == (False, 2, True)
@@ -1165,7 +1165,7 @@ def test_a_search_that_has_nothing_left_does_not_read_its_value(engine, monkeypa
     """A continuous search whose last result was a miss stays a miss and reads no value."""
     missed = Int("SrcMissed", default=-1)
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             search(
                 _SrcU.select(1, 2) == _SrcTbl[_SrcBelow],
                 result=missed,
@@ -1178,7 +1178,7 @@ def test_a_search_that_has_nothing_left_does_not_read_its_value(engine, monkeypa
 def test_the_analyses_see_every_flag_a_for_or_a_search_can_set() -> None:
     def declared(step: Callable[[], object]) -> tuple[str, ...]:
         with Program(strict=False) as prog:
-            with Rung():
+            with rung():
                 step()
         return tuple(prog.rungs[0]._instructions[0]._fault_writes)
 
@@ -1251,7 +1251,7 @@ def test_a_source_reads_a_flag_its_instruction_follows_as_clear(
     read, shown = _FLAG_READS[position]
     followed = fault_name not in _MATH_ONLY or position.startswith("calc")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(1, _FlagInts[1])
             copy(1, _FlagInts[2])
             copy(1, _FlagBools[2])
@@ -1265,7 +1265,7 @@ def test_a_source_reads_a_flag_its_instruction_follows_as_clear(
 def test_a_source_reads_a_clear_flag_as_clear(engine, position, monkeypatch) -> None:
     read, shown = _FLAG_READS[position]
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(1, _FlagInts[1])
             copy(1, _FlagInts[2])
             copy(1, _FlagBools[2])

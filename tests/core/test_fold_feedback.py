@@ -23,7 +23,6 @@ from pyrung import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     blockcopy,
@@ -39,6 +38,7 @@ from pyrung import (
     on_delay,
     out,
     rise,
+    rung,
     subroutine,
     system,
     time_drum,
@@ -96,15 +96,15 @@ def _plant(
     Temp = _temp(profile)
     with Program(strict=False) as prog:
         if toggle:
-            with Rung(~Tog):
+            with rung(~Tog):
                 out(Tog)
         if enable is not None:
             enable()
         else:
-            with Rung():
+            with rung():
                 out(Enable)
         reader(Temp)
-        with Rung():
+        with rung():
             on_delay(T, far_s, "s")
     plc = PLC(prog, dt=0.010)
     Harness(plc).install()
@@ -113,7 +113,7 @@ def _plant(
 
 def _latch_at(threshold: float) -> Callable[[Real], None]:
     def reader(temp: Real) -> None:
-        with Rung(temp >= threshold):
+        with rung(temp >= threshold):
             latch(Hit)
 
     return reader
@@ -205,9 +205,9 @@ class TestRunOverAnalogFeedback:
 
     def test_a_copy_reader_sees_every_value(self) -> None:
         def reader(temp: Real) -> None:
-            with Rung():
+            with rung():
                 copy(temp, Shown)
-            with Rung(Shown >= 5.0):
+            with rung(Shown >= 5.0):
                 latch(Hit)
 
         make = lambda: _plant(RAMP, reader)  # noqa: E731
@@ -219,9 +219,9 @@ class TestRunOverAnalogFeedback:
 
     def test_decay_after_the_enable_drops_is_exact(self) -> None:
         def enable() -> None:
-            with Rung():
+            with rung():
                 on_delay(Win, 1_000)
-            with Rung(~Win.Done):
+            with rung(~Win.Done):
                 out(Enable)
 
         make = lambda: _plant(RAMP, _latch_at(1e30), enable=enable)  # noqa: E731
@@ -237,11 +237,11 @@ class TestRunOverAnalogFeedback:
 
         def make() -> PLC:
             def reader(temp: Real) -> None:
-                with Rung():
+                with rung():
                     on_delay(Win, 7_000)
-                with Rung(Win.Done):
+                with rung(Win.Done):
                     copy(5.0, SetPt)
-                with Rung(temp >= 20.0):
+                with rung(temp >= 20.0):
                     latch(Hit)
 
             return _plant(_approach("SetPt", 0.3), reader)
@@ -277,9 +277,9 @@ class TestFeedbackStaysInTheLoop:
 
     @staticmethod
     def _copy_reader(temp: Real) -> None:
-        with Rung():
+        with rung():
             copy(temp, Shown)
-        with Rung(Shown >= 1e30):
+        with rung(Shown >= 1e30):
             latch(Hit)
 
     def test_a_settled_approach_folds_under_a_copy_reader(self) -> None:
@@ -327,7 +327,7 @@ class TestFeedbackStaysInTheLoop:
 
     def test_a_plant_at_rest_folds_under_a_copy_reader(self) -> None:
         def enable() -> None:
-            with Rung(Tog, ~Tog):
+            with rung(Tog, ~Tog):
                 out(Enable)
 
         plc = _plant(_ramp(1.0), self._copy_reader, enable=enable)
@@ -338,7 +338,7 @@ class TestFeedbackStaysInTheLoop:
 
     def test_an_unread_value_folds(self) -> None:
         def reader(temp: Real) -> None:
-            with Rung():
+            with rung():
                 math(temp * 2.0, Shown)
 
         make = lambda: _plant(RAMP, reader)  # noqa: E731
@@ -366,7 +366,7 @@ class TestFeedbackStaysInTheLoop:
 
     def test_a_coast_runs_beside_a_plant_at_rest(self) -> None:
         def enable() -> None:
-            with Rung(Bool("Never")):
+            with rung(Bool("Never")):
                 out(Enable)
 
         make = lambda: _plant(RAMP, _latch_at(1e30), toggle=True, enable=enable)  # noqa: E731
@@ -377,7 +377,7 @@ class TestFeedbackStaysInTheLoop:
 
     def test_a_coast_runs_over_a_plant_that_repeats_with_it(self) -> None:
         def enable() -> None:
-            with Rung(Tog):
+            with rung(Tog):
                 out(Enable)
 
         ramp = _ramp(1.0, -1.0)
@@ -410,7 +410,7 @@ class TestCoastOverAMovingPlant:
 
     def test_an_enable_toggled_by_the_cycle_is_exact(self) -> None:
         def enable() -> None:
-            with Rung(Tog):
+            with rung(Tog):
                 out(Enable)
 
         make = lambda: _plant(ODD_RAMP, _latch_at(2.0), toggle=True, enable=enable)  # noqa: E731
@@ -448,28 +448,28 @@ class TestCoastOverAMovingPlant:
 
 def _counter() -> Any:
     counter = Counter.clone("C")
-    with Rung(Tog):
+    with rung(Tog):
         count_up(counter, 99999).reset(Bool("R"))
     return counter.Acc
 
 
 def _down_counter() -> Any:
     counter = Counter.clone("C")
-    with Rung(Tog):
+    with rung(Tog):
         count_down(counter, -99999).reset(Bool("R"))
     return counter.Acc
 
 
 def _timer() -> Any:
     timer = Timer.clone("Q")
-    with Rung():
+    with rung():
         on_delay(timer, 900, "s")
     return timer.Acc
 
 
 def _drum() -> Any:
     acc = Int("DAcc")
-    with Rung():
+    with rung():
         time_drum(
             outputs=[Bool("O1"), Bool("O2")],
             presets=[900, 900],
@@ -494,19 +494,19 @@ def _on_an_accumulator(
 
     def make() -> PLC:
         with Program(strict=False) as prog:
-            with Rung(~Tog):
+            with rung(~Tog):
                 out(Tog)
-            with Rung():
+            with rung():
                 out(Enable)
             acc = source()
             shown = acc
             if mirrored:
                 shown = Int("Mir")
-                with Rung():
+                with rung():
                     copy(acc, shown)
-            with Rung(shown >= threshold):
+            with rung(shown >= threshold):
                 latch(Hit)
-            with Rung():
+            with rung():
                 on_delay(T, 40, "s")
         plc = PLC(prog, dt=0.010)
         harness = Harness(plc)
@@ -586,10 +586,10 @@ class TestAPlantLinkedToAnAccumulator:
         def make() -> PLC:
             temp = Real("Temp", physical=Physical("S", ramp_on=1.0, ramp_off=-0.5), link=link)
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
                 source()
-                with Rung(temp >= threshold):
+                with rung(temp >= threshold):
                     latch(Hit)
             plc = PLC(prog, dt=0.010)
             Harness(plc).install()
@@ -689,19 +689,19 @@ def _banked(
         pointer = Int("Idx", default=slot)
         with Program(strict=False) as prog:
             if toggle:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
             if enable:
-                with Rung():
+                with rung():
                     out(Enable)
             else:
-                with Rung(Bool("Never")):
+                with rung(Bool("Never")):
                     out(Enable)
             reader(bank, pointer)
             if named:
-                with Rung(bank[slot] >= 1e30):
+                with rung(bank[slot] >= 1e30):
                     out(Bool("Far"))
-            with Rung():
+            with rung():
                 on_delay(T, 40, "s")
         plc = PLC(prog, dt=0.010)
         harness = Harness(plc)
@@ -715,45 +715,45 @@ def _banked(
 
 
 def _compare_through(bank: Any, pointer: Int) -> None:
-    with Rung(bank[pointer] >= 5.0):
+    with rung(bank[pointer] >= 5.0):
         latch(Hit)
 
 
 def _compare_through_a_bounded_pointer(bank: Any, _pointer: Int) -> None:
-    with Rung(bank[Int("Bounded", default=2, min=1, max=4)] >= 5.0):
+    with rung(bank[Int("Bounded", default=2, min=1, max=4)] >= 5.0):
         latch(Hit)
 
 
 def _copy_through(bank: Any, pointer: Int) -> None:
-    with Rung():
+    with rung():
         copy(bank[pointer], Shown)
-    with Rung(Shown >= 5.0):
+    with rung(Shown >= 5.0):
         latch(Hit)
 
 
 def _compare_in_a_loop(bank: Any, _pointer: Int) -> None:
-    with Rung():
+    with rung():
         with forloop(4) as loop:
-            with Rung(bank[loop.idx + 1] >= 5.0):
+            with rung(bank[loop.idx + 1] >= 5.0):
                 latch(Hit)
 
 
 def _compare_through_two_pointers(bank: Any, pointer: Int) -> None:
-    with Rung(bank[pointer + Int("Off")] >= 5.0):
+    with rung(bank[pointer + Int("Off")] >= 5.0):
         latch(Hit)
 
 
 def _compare_on_a_branch(bank: Any, pointer: Int) -> None:
-    with Rung():
+    with rung():
         with branch(bank[pointer] >= 5.0):
             latch(Hit)
 
 
 def _compare_in_a_subroutine(bank: Any, pointer: Int) -> None:
     with subroutine("ReadBank"):
-        with Rung(bank[pointer] >= 5.0):
+        with rung(bank[pointer] >= 5.0):
             latch(Hit)
-    with Rung():
+    with rung():
         call("ReadBank")
 
 
@@ -808,9 +808,9 @@ class TestPlantReadThroughAPointer:
 
     def test_a_timer_behind_the_read_runs_exact(self) -> None:
         def reader(bank: Any, pointer: Int) -> None:
-            with Rung(bank[pointer] >= 5.0):
+            with rung(bank[pointer] >= 5.0):
                 on_delay(Win, 99, "s")
-            with Rung(Win.Acc > 0):
+            with rung(Win.Acc > 0):
                 latch(Hit)
 
         make = _banked(reader)
@@ -821,7 +821,7 @@ class TestPlantReadThroughAPointer:
 
     def test_an_instruction_condition_runs_exact(self) -> None:
         def reader(bank: Any, pointer: Int) -> None:
-            with Rung():
+            with rung():
                 on_delay(Win, 99, "s").reset(bank[pointer] >= 5.0)
 
         make = _banked(reader)
@@ -833,7 +833,7 @@ class TestPlantReadThroughAPointer:
 
     def test_compiled_replay_seek_matches(self) -> None:
         def reader(bank: Any, pointer: Int) -> None:
-            with Rung(bank[pointer] >= 14.5):
+            with rung(bank[pointer] >= 14.5):
                 latch(Hit)
 
         plc = _banked(reader)()
@@ -862,11 +862,11 @@ class TestPlantReadThroughAPointer:
             temp.map_to(bank[2])
             pointer = Int("Idx", default=2)
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     out(Enable)
-                with Rung(bank[pointer] >= threshold):
+                with rung(bank[pointer] >= threshold):
                     latch(Hit)
-                with Rung():
+                with rung():
                     on_delay(T, 40, "s")
             plc = PLC(prog, dt=0.010)
             Harness(plc).install()
@@ -892,7 +892,7 @@ class TestPointerReadsStayInTheLoop:
 
     def test_a_read_nothing_can_see(self) -> None:
         def reader(bank: Any, pointer: Int) -> None:
-            with Rung():
+            with rung():
                 copy(bank[pointer], Shown)
 
         self._folds(_banked(reader))
@@ -900,14 +900,14 @@ class TestPointerReadsStayInTheLoop:
     def test_a_pointer_into_another_block(self) -> None:
         def reader(_bank: Any, pointer: Int) -> None:
             other = Block("Ot", TagType.REAL, 1, 8)
-            with Rung(other[pointer] >= 5.0):
+            with rung(other[pointer] >= 5.0):
                 latch(Hit)
 
         self._folds(_banked(reader))
 
     def test_a_write_through_a_pointer(self) -> None:
         def reader(bank: Any, pointer: Int) -> None:
-            with Rung(Bool("Never")):
+            with rung(Bool("Never")):
                 copy(0.0, bank[pointer])
 
         self._folds(_banked(reader))
@@ -939,14 +939,14 @@ def _behind_a_pointer(
         index = Int("Jx", default=3)
         with Program(strict=False) as prog:
             if plant:
-                with Rung():
+                with rung():
                     out(Enable)
             writer(slots)
-            with Rung(slots[index] >= 5):
+            with rung(slots[index] >= 5):
                 latch(Hit)
-            with Rung(slots[index] >= 5):
+            with rung(slots[index] >= 5):
                 on_delay(Timer.clone("Q"), 99, "s")
-            with Rung():
+            with rung():
                 on_delay(T, 40, "s")
         plc = PLC(prog, dt=0.010)
         Harness(plc).install()
@@ -958,36 +958,36 @@ def _behind_a_pointer(
 def _copy_a_plant_through_a_pointer(slots: Any) -> None:
     bank = Block("Bk", TagType.REAL, 1, 8)
     bank.slot(2, physical=Physical("S", ramp_on=1.0), link="Enable")
-    with Rung():
+    with rung():
         copy(bank[Int("Idx", default=2)], slots[3])
-    with Rung(bank[2] >= 1e30):
+    with rung(bank[2] >= 1e30):
         out(Bool("Far"))
 
 
 def _copy_a_plant_slot(slots: Any) -> None:
     bank = Block("Bk", TagType.REAL, 1, 8)
     bank.slot(2, physical=Physical("S", ramp_on=1.0), link="Enable")
-    with Rung():
+    with rung():
         copy(bank[2], slots[3])
-    with Rung(bank[2] >= 1e30):
+    with rung(bank[2] >= 1e30):
         out(Bool("Far"))
 
 
 def _copy_a_plant(slots: Any) -> None:
-    with Rung():
+    with rung():
         copy(_temp(_ramp(1.0)), slots[3])
 
 
 def _copy_an_accumulator(slots: Any) -> None:
     timer = Timer.clone("D")
-    with Rung():
+    with rung():
         on_delay(timer, 90, "s")
-    with Rung():
+    with rung():
         copy(timer.Acc, slots[3])
 
 
 def _count_in_a_slot(slots: Any) -> None:
-    with Rung():
+    with rung():
         math(slots[3] + 1, slots[3])
 
 
@@ -1036,11 +1036,11 @@ class TestOutputReadThroughAPointer:
             timer = Timer.clone("D")
             timer.Acc.map_to(blocks.ds[5])
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(timer, 90, "s")
-                with Rung(blocks.ds[Int("Jx", default=5)] >= 5):
+                with rung(blocks.ds[Int("Jx", default=5)] >= 5):
                     latch(Hit)
-                with Rung():
+                with rung():
                     on_delay(T, 40, "s")
             return PLC(prog, dt=0.010)
 
@@ -1059,19 +1059,19 @@ class TestOutputReadThroughAPointer:
             index = Int("Jx", default=1)
             timer = Timer.clone("D")
             with Program(strict=False) as prog:
-                with Rung():
+                with rung():
                     on_delay(timer, 5, "s")
-                with Rung(slots[index + 3] >= 7):
+                with rung(slots[index + 3] >= 7):
                     latch(Hit)
-                with Rung():
+                with rung():
                     copy(slots[index + 2], slots[4])
-                with Rung():
+                with rung():
                     copy(slots[index + 1], slots[3])
-                with Rung():
+                with rung():
                     copy(slots[index], slots[2])
-                with Rung(timer.Done):
+                with rung(timer.Done):
                     copy(7, slots[1])
-                with Rung():
+                with rung():
                     on_delay(T, 40, "s")
             return PLC(prog, dt=0.010)
 
@@ -1089,11 +1089,11 @@ class TestOutputReadThroughAPointer:
             index = Int("Jx", default=3)
             with Program(strict=False) as prog:
                 _copy_an_accumulator(slots)
-                with Rung():
+                with rung():
                     blockcopy(slots.select(index, index + 1), shown.select(1, 2))
-                with Rung(shown[1] >= 5):
+                with rung(shown[1] >= 5):
                     latch(Hit)
-                with Rung():
+                with rung():
                     on_delay(T, 40, "s")
             return PLC(prog, dt=0.010)
 
@@ -1120,22 +1120,22 @@ def _readout_behind_a_pointer(*, cycle: bool, gated: bool, through_copy: bool) -
         timer = Timer.clone("D")
         with Program(strict=False) as prog:
             if cycle:
-                with Rung(~toggle):
+                with rung(~toggle):
                     out(toggle)
-            with Rung():
+            with rung():
                 on_delay(timer, 90, "min")
-            with Rung(go) if gated else Rung():
+            with rung(go) if gated else rung():
                 math(total - timer.Acc, slots[3])
             if through_copy:
                 seen = Int("Seen")
-                with Rung():
+                with rung():
                     copy(slots[index], seen)
-                with Rung(seen != 0, seen <= 58):
+                with rung(seen != 0, seen <= 58):
                     latch(Hit)
             else:
-                with Rung(slots[index] != 0, slots[index] <= 58):
+                with rung(slots[index] != 0, slots[index] <= 58):
                     latch(Hit)
-            with Rung():
+            with rung():
                 on_delay(T, 90, "min")
         return PLC(prog, dt=0.1)
 
@@ -1178,65 +1178,65 @@ def _mapped_slot(slots: Any) -> Int:
 
 
 def _read_by_contact(slots: Any, index: Int) -> None:
-    with Rung(slots[index] == Int("Want")):
+    with rung(slots[index] == Int("Want")):
         latch(Hit)
 
 
 def _clock_copied(slots: Any, index: Int) -> None:
-    with Rung():
+    with rung():
         copy(SECOND, _mapped_slot(slots))
     _read_by_contact(slots, index)
 
 
 def _clock_calculated(slots: Any, index: Int) -> None:
-    with Rung():
+    with rung():
         math(SECOND + 1, _mapped_slot(slots))
     _read_by_contact(slots, index)
 
 
 def _clock_chained(slots: Any, index: Int) -> None:
     middle = Int("Mid")
-    with Rung():
+    with rung():
         copy(SECOND, middle)
-    with Rung():
+    with rung():
         copy(middle, _mapped_slot(slots))
     _read_by_contact(slots, index)
 
 
 def _clock_read_in_a_subroutine(slots: Any, index: Int) -> None:
-    with Rung():
+    with rung():
         copy(SECOND, _mapped_slot(slots))
     with subroutine("Sb"):
         _read_by_contact(slots, index)
-    with Rung():
+    with rung():
         call("Sb")
 
 
 def _clock_read_in_a_loop(slots: Any, index: Int) -> None:
     seen = Int("Seen")
-    with Rung():
+    with rung():
         copy(SECOND, _mapped_slot(slots))
-    with Rung():
+    with rung():
         with forloop(1):
             copy(slots[index], seen)
-    with Rung(seen == Int("Want")):
+    with rung(seen == Int("Want")):
         latch(Hit)
 
 
 def _clock_read_gating_an_out(slots: Any, index: Int) -> None:
     held = Bool("Held")
-    with Rung():
+    with rung():
         copy(SECOND, _mapped_slot(slots))
-    with Rung(slots[index] == Int("Want")):
+    with rung(slots[index] == Int("Want")):
         out(held)
-    with Rung(held):
+    with rung(held):
         latch(Hit)
 
 
 def _clock_in_a_mapped_block(slots: Any, index: Int) -> None:
     names = Block("Sn", TagType.INT, 1, 4)
     names.map_to(slots.select(1, 4))
-    with Rung():
+    with rung():
         copy(SECOND, names[3])
     _read_by_contact(slots, index)
 
@@ -1258,10 +1258,10 @@ def _clock_behind_a_pointer(body: Callable[[Any, Int], None], *, cycle: bool) ->
         index = Int("Jx", default=3)
         with Program(strict=False) as prog:
             if cycle:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
             body(slots, index)
-            with Rung():
+            with rung():
                 on_delay(T, 400, "s")
         plc = PLC(prog, dt=0.010)
         plc.patch({"Want": 7})
@@ -1309,7 +1309,7 @@ class TestAClockCopyThroughAPointer:
             slots = Block("Cb", TagType.INT, 1, 8)
             with Program(strict=False) as prog:
                 _clock_copied(slots, Int("Jx", default=3, min=1, max=8))
-                with Rung():
+                with rung():
                     on_delay(T, 400, "s")
             plc = PLC(prog, dt=0.010)
             plc.patch({"Want": 7})
@@ -1334,7 +1334,7 @@ class TestOutputsThatStayUnread:
             with Program(strict=False) as prog:
                 _copy_an_accumulator(slots)
                 reader(slots)
-                with Rung():
+                with rung():
                     on_delay(T, 40, "s")
             return PLC(prog, dt=0.010)
 
@@ -1346,7 +1346,7 @@ class TestOutputsThatStayUnread:
 
     def test_a_write_through_a_pointer(self) -> None:
         def reader(slots: Any) -> None:
-            with Rung(Bool("Never")):
+            with rung(Bool("Never")):
                 copy(0, slots[Int("Jx", default=3)])
 
         self._folds(reader)
@@ -1354,14 +1354,14 @@ class TestOutputsThatStayUnread:
     def test_a_pointer_into_another_block(self) -> None:
         def reader(_slots: Any) -> None:
             other = Block("Ot", TagType.INT, 1, 8)
-            with Rung(other[Int("Jx", default=3)] >= 5):
+            with rung(other[Int("Jx", default=3)] >= 5):
                 latch(Hit)
 
         self._folds(reader)
 
     def test_a_bounded_pointer_short_of_the_output(self) -> None:
         def reader(slots: Any) -> None:
-            with Rung(slots[Int("Jx", default=5, min=5, max=6)] >= 5):
+            with rung(slots[Int("Jx", default=5, min=5, max=6)] >= 5):
                 latch(Hit)
 
         self._folds(reader)
@@ -1374,12 +1374,12 @@ class TestBoolFeedbackUnderACoast:
     def _bool_plant(physical: Physical, reader: Callable[[Bool], None]) -> PLC:
         Fb = Bool("Fb", physical=physical, link="Enable")
         with Program(strict=False) as prog:
-            with Rung(~Tog):
+            with rung(~Tog):
                 out(Tog)
-            with Rung():
+            with rung():
                 out(Enable)
             reader(Fb)
-            with Rung():
+            with rung():
                 on_delay(T, 40, "s")
         plc = PLC(prog, dt=0.010)
         Harness(plc).install()
@@ -1387,20 +1387,20 @@ class TestBoolFeedbackUnderACoast:
 
     @staticmethod
     def _contact(fb: Bool) -> None:
-        with Rung(fb):
+        with rung(fb):
             latch(Hit)
 
     @staticmethod
     def _first_fall(fb: Bool) -> None:
-        with Rung(fall(fb)):
+        with rung(fall(fb)):
             latch(Hit)
 
     @staticmethod
     def _third_rise(fb: Bool) -> None:
         count = Int("Cnt")
-        with Rung(rise(fb)):
+        with rung(rise(fb)):
             math(count + 1, count)
-        with Rung(count == 3):
+        with rung(count == 3):
             latch(Hit)
 
     # A plain contact sees the flasher on at its first scan, so there is nothing to wait for.
@@ -1435,7 +1435,7 @@ class TestApproachToAKnownTag:
         SetPt = Real("SetPt", default=50.0)
 
         def reader(temp: Real) -> None:
-            with Rung(SetPt > 1000.0, temp >= 0.0):
+            with rung(SetPt > 1000.0, temp >= 0.0):
                 latch(Hit)
 
         plc = _plant(_approach("SetPt", 0.3), reader)
@@ -1457,12 +1457,12 @@ class TestSlotFirstTouchedInsideTheRun:
 
         def make() -> PLC:
             with Program(strict=False) as prog:
-                with Rung(~Tog):
+                with rung(~Tog):
                     out(Tog)
-                with Rung():
+                with rung():
                     on_delay(Delay, 1_000)
                 body(bank, Delay, Hit)
-                with Rung():
+                with rung():
                     on_delay(T, 40, "s")
             plc = PLC(prog, dt=0.010)
             plc.patch(first or {})
@@ -1487,13 +1487,13 @@ class TestSlotFirstTouchedInsideTheRun:
         Ptr, A, B = Int("Ptr"), Int("A"), Int("B")
 
         def body(bank: Any, delay: Timer, hit: Bool) -> None:
-            with Rung(delay.Done):
+            with rung(delay.Done):
                 copy(bank[Ptr], A)
                 math(A + 1, B)
                 copy(B, bank[Ptr])
                 copy(0, A)
                 copy(0, B)
-            with Rung(bank[Ptr] >= 500):
+            with rung(bank[Ptr] >= 500):
                 latch(hit)
 
         self._run(body, 300, {"Ptr": 300})
@@ -1502,13 +1502,13 @@ class TestSlotFirstTouchedInsideTheRun:
         Ptr, A, B = Int("Ptr"), Int("A"), Int("B")
 
         def body(bank: Any, delay: Timer, hit: Bool) -> None:
-            with Rung(delay.Done):
+            with rung(delay.Done):
                 copy(bank[Ptr], A)
                 math(A + 2, B)
                 copy(B, bank[Ptr])
                 copy(0, A)
                 copy(0, B)
-            with Rung(bank[Ptr] == 1_000):
+            with rung(bank[Ptr] == 1_000):
                 latch(hit)
 
         self._run(body, 300, {"Ptr": 300})
@@ -1517,10 +1517,10 @@ class TestSlotFirstTouchedInsideTheRun:
         Ptr, Src = Int("Ptr"), Int("Src")
 
         def body(bank: Any, delay: Timer, hit: Bool) -> None:
-            with Rung(delay.Done):
+            with rung(delay.Done):
                 blockcopy(bank.select(101, 109), bank.select(102, 110))
                 copy(1, bank[Ptr])
-            with Rung(bank[Src] > 0):
+            with rung(bank[Src] > 0):
                 latch(hit)
 
         self._run(body, 110, {"Ptr": 101, "Src": 110})

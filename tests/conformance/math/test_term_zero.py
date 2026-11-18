@@ -42,7 +42,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import Rung, copy, fill, math, out, reset, system
+from pyrung.core import copy, fill, math, out, reset, rung, system
 from tests.conformance.memory import c, dd, df, ds
 from tests.conformance.probe_kit import class_of, finish, once
 
@@ -53,14 +53,14 @@ SC43 = system.fault.out_of_range
 def _coil_bits(slot: Any, coils: list[Any], into: Any) -> None:
     """Add 1, 2, 4, ... to *into* for each coil that is on, in rungs below every op."""
     for k, coil in enumerate(coils):
-        with Rung(*once(slot), coil):
+        with rung(*once(slot), coil):
             math(into + (1 << k), into)
 
 
 def prove_quiet_terms(slot: Any) -> None:
     seven, zero, minus = ds[4041], ds[4042], ds[4043]
     coils = [c[n] for n in range(681, 684)]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(7, seven)
         copy(0, zero)
         copy(-1, minus)
@@ -73,9 +73,9 @@ def prove_quiet_terms(slot: Any) -> None:
         (zero**minus + 5, slot.Result3),
     ]
     for (formula, field), coil in zip(formulas, coils, strict=True):
-        with Rung(*once(slot)):
+        with rung(*once(slot)):
             math(formula, field)
-        with Rung(*once(slot), SC40):
+        with rung(*once(slot), SC40):
             out(coil)
     _coil_bits(slot, coils, slot.ErrorCode)
     finish(slot)
@@ -89,16 +89,16 @@ def init_quiet_terms(slot: Any) -> None:
 def prove_abs_int_min(slot: Any) -> None:
     least, into = ds[4044], dd[131]
     coils = [c[n] for n in range(684, 686)]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(-32768, least)
         copy(99, slot.Result1)
         copy(99, into)
         math(abs(least) + 1, slot.Result1)
-    with Rung(*once(slot), SC43):
+    with rung(*once(slot), SC43):
         out(coils[0])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(abs(least), into)
-    with Rung(*once(slot), SC43):
+    with rung(*once(slot), SC43):
         out(coils[1])
     _coil_bits(slot, coils, slot.ErrorCode)
     class_of(slot, into, [32768, 0, -32768, 99], slot.Result2)
@@ -118,7 +118,7 @@ REAL_READINGS = (0.0, 99.0)
 def prove_real_quiet_terms(slot: Any) -> None:
     seven_half, zero, minus = df[71], df[72], df[73]
     results = (df[74], df[75])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(7.5, seven_half)
         copy(0.0, zero)
         copy(-1.0, minus)
@@ -127,16 +127,16 @@ def prove_real_quiet_terms(slot: Any) -> None:
         math(seven_half % zero, results[0])
         math(zero**minus, results[1])
     for result, field in zip(results, (slot.Result1, slot.Result2), strict=True):
-        with Rung(*once(slot), result >= 3.0e38):
+        with rung(*once(slot), result >= 3.0e38):
             copy(1, field)
-        with Rung(*once(slot), result <= -3.0e38):
+        with rung(*once(slot), result <= -3.0e38):
             copy(2, field)
-        with Rung(*once(slot), result != result):
+        with rung(*once(slot), result != result):
             copy(3, field)
         for number, reading in enumerate(REAL_READINGS, start=4):
-            with Rung(*once(slot), result == reading):
+            with rung(*once(slot), result == reading):
                 copy(number, field)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         math(results[0] * 10, slot.Result3)
         math(results[1] * 10, slot.Result4)
     finish(slot)

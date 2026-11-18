@@ -11,7 +11,6 @@ from pyrung.core import (
     Dint,
     Int,
     Program,
-    Rung,
     Timer,
     copy,
     count_down,
@@ -19,6 +18,7 @@ from pyrung.core import (
     math,
     on_delay,
     out,
+    rung,
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import Intractable
@@ -38,9 +38,9 @@ class TestTimerFastForward:
         t = Timer.clone("T1")
 
         with Program(strict=False) as logic:
-            with Rung(enable):
+            with rung(enable):
                 on_delay(t, preset=5000)
-            with Rung(t.Done):
+            with rung(t.Done):
                 out(Bool("Output"))
 
         result = _classify_dimensions(logic)
@@ -61,12 +61,12 @@ class TestTimerAccumulatorAgainstItsPreset:
         output = Bool("Output")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(1, active_preset)
                 copy(active_preset, copied_preset)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(t, preset=active_preset)
-            with Rung(t.Acc >= active_preset):
+            with rung(t.Acc >= active_preset):
                 out(output)
 
         result = _classify_dimensions(logic)
@@ -92,13 +92,13 @@ class TestAccumulatorThresholds:
         alarm = Bool("AssignedTimerAlarm")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(500, active_threshold)
-            with Rung(force):
+            with rung(force):
                 copy(7, t.Acc)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(t, preset=1000)
-            with Rung(t.Acc > active_threshold):
+            with rung(t.Acc > active_threshold):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -117,15 +117,15 @@ class TestAccumulatorThresholds:
         alarm = Bool("VariableTickAlarm")
 
         with Program(strict=False) as logic:
-            with Rung(sel):
+            with rung(sel):
                 copy(1, stride)
-            with Rung(~sel):
+            with rung(~sel):
                 copy(2, stride)
-            with Rung():
+            with rung():
                 copy(500, threshold)
-            with Rung(enable):
+            with rung(enable):
                 math(ticks + stride, ticks)
-            with Rung(ticks > threshold):
+            with rung(ticks > threshold):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -143,13 +143,13 @@ class TestAccumulatorThresholds:
         alarm = Bool("SavedAccAlarm")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(500, threshold)
-            with Rung(enable):
+            with rung(enable):
                 on_delay(t, preset=1000)
-            with Rung():
+            with rung():
                 copy(t.Acc, saved)
-            with Rung(t.Acc > threshold):
+            with rung(t.Acc > threshold):
                 out(alarm)
 
         result = _classify_dimensions(logic)
@@ -175,11 +175,11 @@ class TestAccumulatorStartValues:
     def test_down_counter_staged_by_a_copy(self):
         tray = Counter.clone("StagedTray")
         with Program(strict=False) as logic:
-            with Rung(Bool("Load", external=True)):
+            with rung(Bool("Load", external=True)):
                 copy(5, tray.Acc)
-            with Rung(Bool("Pick", external=True)):
+            with rung(Bool("Pick", external=True)):
                 count_down(tray, 3).reset(Bool("Clear", external=True))
-            with Rung():
+            with rung():
                 copy(tray.Acc, Dint("TrayLeft"))
         assert _stateful(logic)["StagedTray_Acc"] == (0, 1, 2, 3, 4, 5)
 
@@ -187,22 +187,22 @@ class TestAccumulatorStartValues:
         recipe = Int("Recipe", external=True, min=1, max=2)
         oven = Timer.clone("StagedOven")
         with Program(strict=False) as logic:
-            with Rung(Bool("Resume", external=True)):
+            with rung(Bool("Resume", external=True)):
                 math(recipe * 30, oven.Acc)
-            with Rung(Bool("Heat", external=True)):
+            with rung(Bool("Heat", external=True)):
                 on_delay(oven, 50)
-            with Rung():
+            with rung():
                 copy(oven.Acc, Int("OvenShown"))
         assert _stateful(logic)["StagedOven_Acc"] == tuple(range(61))
 
     def test_up_counter_with_a_down_input_crosses_its_preset_both_ways(self):
         bins = Counter.clone("BothWays")
         with Program(strict=False) as logic:
-            with Rung(Bool("BinIn", external=True)):
+            with rung(Bool("BinIn", external=True)):
                 count_up(bins, 4).down(Bool("BinOut", external=True)).reset(
                     Bool("BinClear", external=True)
                 )
-            with Rung():
+            with rung():
                 copy(bins.Acc, Dint("BinsShown"))
         assert _stateful(logic)["BothWays_Acc"] == (0, 1, 2, 3, 4, 5)
 
@@ -210,13 +210,13 @@ class TestAccumulatorStartValues:
         first, second = Counter.clone("FirstCount"), Counter.clone("SecondCount")
         clear = Bool("CountClear", external=True)
         with Program(strict=False) as logic:
-            with Rung(Bool("Pulse", external=True)):
+            with rung(Bool("Pulse", external=True)):
                 count_up(first, 3).reset(clear)
-            with Rung(Bool("Handover", external=True)):
+            with rung(Bool("Handover", external=True)):
                 copy(first.Acc, second.Acc)
-            with Rung(Bool("Take", external=True)):
+            with rung(Bool("Take", external=True)):
                 count_down(second, -2).reset(clear)
-            with Rung():
+            with rung():
                 copy(second.Acc, Dint("SecondShown"))
         unclassified: set[str] = set()
         stateful = _stateful(logic, unclassified)
@@ -231,15 +231,15 @@ class TestComparedAccumulators:
         lead, trail = Timer.clone("PairLead"), Timer.clone("PairTrail")
         run = Bool("PairRun", external=True)
         with Program(strict=False) as logic:
-            with Rung(run):
+            with rung(run):
                 on_delay(lead, 300)
-            with Rung(run, ~Bool("PairHold", external=True)):
+            with rung(run, ~Bool("PairHold", external=True)):
                 on_delay(trail, 300)
-            with Rung(lead.Acc == trail.Acc, trail.Acc != 0):
+            with rung(lead.Acc == trail.Acc, trail.Acc != 0):
                 out(Bool("PairInStep"))
-            with Rung(lead.Acc > trail.Acc, lead.Acc >= 100):
+            with rung(lead.Acc > trail.Acc, lead.Acc >= 100):
                 out(Bool("PairBehind"))
-            with Rung():
+            with rung():
                 copy(lead.Acc, Int("PairShown"))
                 copy(trail.Acc, Int("PairTrailShown"))
         stateful = _stateful(logic)
@@ -257,7 +257,7 @@ class TestTimeEventDrum:
         from pyrung.core import time_event_drum
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 time_event_drum(
                     outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
                     presets=[30, None, 20],
@@ -268,7 +268,7 @@ class TestTimeEventDrum:
                     accumulator=Int("Acc"),
                     completion_flag=Bool("Done"),
                 ).reset(Bool("R"))
-            with Rung(Bool("Done"), ~Bool("Y3")) if hit_reads_y3 else Rung(Bool("Done")):
+            with rung(Bool("Done"), ~Bool("Y3")) if hit_reads_y3 else rung(Bool("Done")):
                 out(Bool("H"))
         return logic
 

@@ -15,7 +15,6 @@ from pyrung.core import (
     And,
     Bool,
     Program,
-    Rung,
     Timer,
     call,
     latch,
@@ -44,11 +43,11 @@ def _build_recoverable():
     Alarm = Bool("Alarm")
 
     with Program() as logic:
-        with Rung(Sensor):
+        with rung(Sensor):
             latch(Fault)
-        with Rung(And(Fault, Reset)):
+        with rung(And(Fault, Reset)):
             reset(Fault)
-        with Rung(Fault):
+        with rung(Fault):
             out(Alarm)
 
     return logic, Sensor, Fault, Reset, Alarm
@@ -65,9 +64,9 @@ def _build_stranded():
     Alarm = Bool("Alarm")
 
     with Program() as logic:
-        with Rung(Sensor):
+        with rung(Sensor):
             latch(Fault)
-        with Rung(Fault):
+        with rung(Fault):
             out(Alarm)
 
     return logic, Sensor, Fault, Alarm
@@ -78,7 +77,7 @@ def test_synthesis_rungs_do_not_enter_public_coverage_universe() -> None:
     Enable = Bool("CoverageEnable")
     Output = Bool("CoverageOutput")
     with Program() as program:
-        with Rung(Enable):
+        with rung(Enable):
             out(Output)
 
     plc = PLC(program)
@@ -188,9 +187,9 @@ class TestHotRungs:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
-            with Rung(A):
+            with rung(A):
                 out(Y)
 
         runner = PLC(logic)
@@ -208,7 +207,7 @@ class TestHotRungs:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -226,9 +225,9 @@ class TestHotRungs:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
-            with Rung(B):
+            with rung(B):
                 reset(X)
 
         runner = PLC(logic)
@@ -242,7 +241,7 @@ class TestHotRungs:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
 
         runner = PLC(logic)
@@ -271,7 +270,7 @@ class TestSubroutineColdHot:
                 out(Out)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 call(sub)
 
         runner = PLC(prog)
@@ -291,7 +290,7 @@ class TestSubroutineColdHot:
                 out(Out)
 
         with Program() as prog:
-            with Rung(Enable):
+            with rung(Enable):
                 call(sub)
 
         runner = PLC(prog)
@@ -314,7 +313,7 @@ class TestSubroutineColdHot:
                 out(Out)
 
         with Program() as prog:
-            with Rung(Enable):  # main rung index 0
+            with rung(Enable):  # main rung index 0
                 call(sub)
 
         runner = PLC(prog)
@@ -336,9 +335,9 @@ class TestSubroutineColdHot:
                 out(Out)
 
         with Program() as prog:
-            with Rung(A):
+            with rung(A):
                 call(sub)
-            with Rung(B):
+            with rung(B):
                 call(sub)
 
         runner = PLC(prog)
@@ -372,13 +371,13 @@ class TestForkColdHot:
                 out(Every)
 
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Every)
-            with Rung(Go):
+            with rung(Go):
                 latch(Early)
-            with Rung(Late):
+            with rung(Late):
                 latch(Later)
-            with Rung():
+            with rung():
                 call(sub)
         return prog
 
@@ -427,11 +426,11 @@ class TestForkColdHot:
         Start, Every, Seen = Bool("FcStart"), Bool("FcEvery"), Bool("FcSeen")
         Wait = Timer.clone("FcWait")
         with Program() as prog:
-            with Rung():
+            with rung():
                 out(Every)
-            with Rung(Start):
+            with rung(Start):
                 on_delay(Wait, 15000)
-            with Rung(Wait.Done):
+            with rung(Wait.Done):
                 latch(Seen)
 
         def run(*, jit: bool) -> PLC:
@@ -496,7 +495,7 @@ class TestStrandedBits:
         X = Bool("X")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
 
         runner = PLC(logic)
@@ -513,7 +512,7 @@ class TestStrandedBits:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 latch(X)
                 latch(Y)
 

@@ -132,7 +132,7 @@ import pytest
 
 from pyrung.conformance import Endpoint, Group, assert_all_passed, case, read_program_hash, run
 from pyrung.conformance._modbus import wait_scans_after_write
-from pyrung.core import Or, Rung, copy, fill, math, reset, to_ascii, to_binary, unpack_to_words
+from pyrung.core import Or, copy, fill, math, reset, rung, to_ascii, to_binary, unpack_to_words
 from tests.conformance.copy.test_past_bank_write import ADDRESS
 from tests.conformance.memory import c, dd, df, dh, ds, txt
 from tests.conformance.probe_kit import between, class_of, finish, once, record_raw_readings
@@ -200,41 +200,41 @@ def _past_bank_steps(slot: Any) -> None:
     writes 0 there whatever it holds.
     """
     step, found, back = ds[PAST_OP_DS], ds[PAST_FOUND_DS], ds[PAST_BACK_DS]
-    with Rung(slot.Cmd != 0, step != 0):
+    with rung(slot.Cmd != 0, step != 0):
         copy(PATTERN[0], dh[DH_PAIR[0]])
         copy(PATTERN[1], dh[DH_PAIR[1]])
         copy(AFTER_DD, POINTER)
-    with Rung(slot.Cmd != 0, step == 1):
+    with rung(slot.Cmd != 0, step == 1):
         copy(dd[POINTER], AFTER_INTO)
-    with Rung(slot.Cmd != 0, step != 0):
+    with rung(slot.Cmd != 0, step != 0):
         copy(ADDRESS, POINTER)
-    with Rung(slot.Cmd != 0, step == 1):
+    with rung(slot.Cmd != 0, step == 1):
         copy(dd[POINTER], found)
-    with Rung(slot.Cmd != 0, step == 2, found == 0):
+    with rung(slot.Cmd != 0, step == 2, found == 0):
         copy(LADDER_VALUE, dd[POINTER])
-    with Rung(slot.Cmd != 0, step == 4):
+    with rung(slot.Cmd != 0, step == 4):
         copy(0, dd[POINTER])
-    with Rung(slot.Cmd != 0, step >= 2):
+    with rung(slot.Cmd != 0, step >= 2):
         copy(dd[POINTER], back)
 
 
 def prove_raw_values(slot: Any) -> None:
     nan = df[102] - df[102]
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(3.0e38, df[101])
         math(df[101] * 10, df[102])
         math(df[101] * -10, df[103])
         math(nan, df[104])
         copy(2.5, df[105])
         copy(65538, dd[201])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy("A", txt[401])
         copy("B", txt[402])
         copy(200, ds[BYTE_DS])
         copy(ds[BYTE_DS], txt[403], convert=to_binary)
         copy("Y", txt[405])
         copy("Z", txt[406])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         fill(2.5, df.select(111, 113))
         math(nan, df[114])
         math(nan, df[115])
@@ -246,29 +246,29 @@ def prove_raw_values(slot: Any) -> None:
     echo = (slot.Cmd != 0, Or(slot.Fired == 0, slot.Cmd > 1))
     names = list(ECHO_WORDS)
     for start in range(0, len(names), 5):
-        with Rung(*echo):
+        with rung(*echo):
             for name in names[start : start + 5]:
                 first = ECHO_WORDS[name]
                 unpack_to_words(_word_source(name), dh.select(first, first + 1))
-    with Rung(*echo):
+    with rung(*echo):
         for n, into in ECHO_TEXT.items():
             copy(txt[n], ds[into], convert=to_ascii)
         fill(0, ds.select(SCORE_DS, SCORE_DS + len(SCORED) - 1))
     for k, n in enumerate(SCORED):
         score = ds[SCORE_DS + k]
-        with Rung(*echo, df[n] == df[n]):
+        with rung(*echo, df[n] == df[n]):
             math(score + 1, score)
-        with Rung(*echo, df[n] > 3.0e38):
+        with rung(*echo, df[n] > 3.0e38):
             math(score + 2, score)
-        with Rung(*echo, df[n] == 2.5):
+        with rung(*echo, df[n] == 2.5):
             math(score + 4, score)
     _past_bank_steps(slot)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(ds[ECHO_TEXT[401]], slot.Result1)
         copy(ds[ECHO_TEXT[403]], slot.Result2)
     class_of(slot, dh[110], [1, 2], slot.Result3)
     class_of(slot, dh[108], [0x4020, 0], slot.Result4)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         copy(slot.Cmd, slot.Scratch)
     finish(slot)
 

@@ -15,11 +15,11 @@ from pyrung.core import (
     CompiledPLC,
     Dint,
     Program,
-    Rung,
     TagType,
     Word,
     copy,
     math,
+    rung,
     search,
 )
 
@@ -116,15 +116,15 @@ def test_indirect_copy_tag_materialization():
     DS = Block("DS", TagType.INT, 1, 3)
 
     with Program(strict=False) as logic:
-        with Rung(In0):
+        with rung(In0):
             math(W0 + 1, W0)
-        with Rung(In0):
+        with rung(In0):
             copy(W0, W0)
-        with Rung(In0):
+        with rung(In0):
             copy(W0, W0)
-        with Rung(In0):
+        with rung(In0):
             copy(W0, W0)
-        with Rung(In0):
+        with rung(In0):
             copy(0, DS[DS[1]])
 
     interpreted = PLC(logic, dt=0.010)
@@ -155,7 +155,7 @@ def test_unused_indexed_slot_parity():
     DS[1]  # noqa: B018  (the touch is the case)
 
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             search(DS.select(6, 7) != -66, result=D0, found=B1)
 
     interpreted = PLC(logic, dt=DT)

@@ -9,7 +9,7 @@ so WorkingTheory must investigate two backward hops without inventing a
 mid-scan production patch.
 """
 
-from pyrung import PLC, Bool, Int, Or, Program, Rung, call, copy, out, subroutine
+from pyrung import PLC, Bool, Int, Or, Program, call, copy, out, rung, subroutine
 from pyrung.core.state import SystemState
 
 Step = Int("TracebackRouteStep", default=40)
@@ -23,32 +23,32 @@ Completed = Bool("TracebackRouteCompleted")
 
 @subroutine("traceback_route_consumer")
 def traceback_route_consumer() -> None:
-    with Rung(~Link, Step <= 20):
+    with rung(~Link, Step <= 20):
         copy(98, Step, oneshot=True)
 
-    with Rung(Link, Step == 98):
+    with rung(Link, Step == 98):
         copy(10, Step, oneshot=True)
         out(Completed)
 
 
 with Program(strict=False) as logic:
     # Real earlier writer for the program-owned guard exposed after Reset.
-    with Rung(ModeReset):
+    with rung(ModeReset):
         copy(0, RouteMode, oneshot=True)
 
     # Real earlier writer for the <=20 producer guard.
-    with Rung(Reset, Step >= 90):
+    with rung(Reset, Step >= 90):
         copy(10, Step, oneshot=True)
 
     # The two intervening main-program writes model ClickNick's 10 -> 22 -> 40
     # conductivity before ErrorHandling sees the sequence channel.
-    with Rung(Or(Step == 98, Step == 10), RouteMode == 100):
+    with rung(Or(Step == 98, Step == 10), RouteMode == 100):
         copy(22, Step)
 
-    with Rung(Step == 22):
+    with rung(Step == 22):
         copy(40, Step)
 
-    with Rung():
+    with rung():
         call(traceback_route_consumer)
 
 

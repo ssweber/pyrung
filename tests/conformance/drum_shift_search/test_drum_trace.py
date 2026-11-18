@@ -53,7 +53,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from pyrung.conformance import Group, assert_all_passed, case, run
-from pyrung.core import And, Or, Rung, copy, event_drum, math, out, reset
+from pyrung.core import And, Or, copy, event_drum, math, out, reset, rung
 from tests.conformance.memory import c
 from tests.conformance.scans import WINDOW, count_scans, done, scans_for
 
@@ -62,16 +62,16 @@ SCANS = scans_for()
 
 def record_states(slot: Any, a: Any, b: Any, flag: Any, scans: Sequence[int]) -> None:
     """Record the SFBA state in ErrorCode through the window, and in Result2.. on *scans*."""
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW):
         math(slot.Result1 * 1000, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, flag):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, flag):
         math(slot.ErrorCode + 100, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, b):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, b):
         math(slot.ErrorCode + 10, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, a):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, a):
         math(slot.ErrorCode + 1, slot.ErrorCode)
     for scan, into in zip(scans, (slot.Result2, slot.Result3, slot.Result4), strict=True):
-        with Rung(slot.Cmd != 0, slot.Scratch == scan):
+        with rung(slot.Cmd != 0, slot.Scratch == scan):
             copy(slot.ErrorCode, into)
 
 
@@ -79,11 +79,11 @@ def prove_tied_jog(slot):
     # A = C51, B = C52, events C53 and C54, flag C55, jog C56 (scan 3).
     a, b, flag, jog = c[51], c[52], c[55], c[56]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(5, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         out(jog)
-    with Rung(slot.Result1 != 1):
+    with rung(slot.Result1 != 1):
         event_drum(
             outputs=[a, b],
             events=[c[53], c[54]],
@@ -99,16 +99,16 @@ def _free_enable(slot, a, b, event, other_event, flag, jog_bit, *, jog):
     # The event pulses on scan 2, so the drum is on step 2 with B on when the
     # step register is staged out of range on scan 3.
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(event)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(5, slot.Result1)
     if jog:
-        with Rung(slot.Cmd != 0, slot.Scratch == 3):
+        with rung(slot.Cmd != 0, slot.Scratch == 3):
             out(jog_bit)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[a, b],
             events=[event, other_event],
@@ -132,9 +132,9 @@ def prove_jog_again_after_last_step(slot):
     # A = C81, B = C82, the event C83 never on, flag C84, jog C85 (scans 2, 4, 6).
     a, b, event, flag, jog = c[81], c[82], c[83], c[84], c[85]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4, slot.Scratch == 6)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 4, slot.Scratch == 6)):
         out(jog)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[a, b],
             events=[event, event],
@@ -147,7 +147,7 @@ def prove_jog_again_after_last_step(slot):
 
 
 def _running_drum(slot, a, b, event, flag):
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         event_drum(
             outputs=[a, b],
             events=[event, event],
@@ -162,9 +162,9 @@ def prove_output_reset_while_running(slot):
     # above the drum.
     a, b, event, flag = c[86], c[87], c[88], c[89]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(event)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         reset(b)
     _running_drum(slot, a, b, event, flag)
     record_states(slot, a, b, flag, (3, 4, 5))
@@ -176,9 +176,9 @@ def prove_step_written_while_running(slot):
     # written over step 2 on scan 3, above the drum.
     a, b, event, flag = c[91], c[92], c[93], c[94]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 5)):
+    with rung(slot.Cmd != 0, Or(slot.Scratch == 2, slot.Scratch == 5)):
         out(event)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(1, slot.Result1)
     _running_drum(slot, a, b, event, flag)
     record_states(slot, a, b, flag, (3, 4, 5))
@@ -190,13 +190,13 @@ def prove_step_written_while_paused(slot):
     # 3..4).  Step 1 is written over step 2 on scan 3, above the drum.
     a, b, event, flag, pause = c[96], c[97], c[98], c[99], c[100]
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         out(event)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 4):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3, slot.Scratch <= 4):
         out(pause)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, ~pause):
+    with rung(slot.Cmd != 0, ~pause):
         event_drum(
             outputs=[a, b],
             events=[event, event],

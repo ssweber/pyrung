@@ -6,7 +6,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, out
+from pyrung.core import PLC, Bool, Int, Program, out, rung
 from pyrung.core.instruction.send_receive import ModbusTcpTarget
 from pyrung.core.instruction.send_receive import _core as _sr
 from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
@@ -22,7 +22,7 @@ def _make_send_program():
     Error = Bool("Error")
     ExCode = Int("ExCode")
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             _sr.send(
                 target=_TARGET,
                 remote_start="DS1",
@@ -43,7 +43,7 @@ def _make_receive_program():
     Error = Bool("Error")
     ExCode = Int("ExCode")
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             _sr.receive(
                 target=_TARGET,
                 remote_start="DS1",
@@ -229,7 +229,7 @@ def test_send_error_replay(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_rung_conditioned_on_sending_evaluates_during_replay(monkeypatch: pytest.MonkeyPatch):
-    """``with Rung(Sending): ...`` should see correct values during replay."""
+    """``with rung(Sending): ...`` should see correct values during replay."""
     futures = _fake_send_submit(monkeypatch)
 
     Enable = Bool("Enable")
@@ -241,7 +241,7 @@ def test_rung_conditioned_on_sending_evaluates_during_replay(monkeypatch: pytest
     Indicator = Bool("Indicator")
 
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             _sr.send(
                 target=_TARGET,
                 remote_start="DS1",
@@ -251,7 +251,7 @@ def test_rung_conditioned_on_sending_evaluates_during_replay(monkeypatch: pytest
                 error=Error,
                 exception_response=ExCode,
             )
-        with Rung(Sending):
+        with rung(Sending):
             out(Indicator)
 
     runner = PLC(logic=logic)
@@ -312,7 +312,7 @@ def test_compiled_replay_applies_io_tag_writes():
 
     Light = Bool("Light")
     with Program() as simple_logic:
-        with Rung():
+        with rung():
             out(Light)
 
     simple_runner = PLC(logic=simple_logic)
@@ -402,7 +402,7 @@ def test_status_bits_left_off_get_hidden_tags(monkeypatch: pytest.MonkeyPatch):
     Source = Int("Source")
     Success = Bool("Success")
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             _sr.send(target=_TARGET, remote_start="DS1", source=Source, success=Success)
             _sr.send(target=_TARGET, remote_start="DS2", source=Source)
 
@@ -431,7 +431,7 @@ def test_two_programs_in_one_plc_each_replay_their_own_receive(monkeypatch: pyte
 
     def build(dest: str) -> Program:
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 _sr.receive(target=_TARGET, remote_start="DS1", dest=Int(dest))
         return logic
 

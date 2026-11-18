@@ -50,16 +50,16 @@ def _send_request(
 
 def _runner_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, out, copy\n"
+        "from pyrung.core import Bool, Int, PLC, Program, rung, out, copy\n"
         "\n"
         "button = Bool('Button')\n"
         "light = Bool('Light')\n"
         "counter = Int('Counter')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(button):\n"
+        "    with rung(button):\n"
         "        out(light)\n"
-        "    with Rung():\n"
+        "    with rung():\n"
         "        copy(0, counter)\n"
         "\n"
         "runner = PLC(prog, dt=0.010)\n"

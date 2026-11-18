@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, copy, math, out
+from pyrung.core import PLC, Block, Bool, Int, Program, TagType, copy, math, out, rung
 
 
 def _program(kind: str):
@@ -15,12 +15,12 @@ def _program(kind: str):
     hit = Bool("PilotAgg_Hit")
     target = {"max": 9, "min": 3, "median": 8, "mean": 8}[kind]
     with Program(strict=False) as logic:
-        with Rung():
+        with rung():
             copy(ext_a, vals[1])
             copy(ext_b, vals[2])
-        with Rung():
+        with rung():
             math(getattr(vals.select(1, 2), kind)(), result)
-        with Rung(result == target):
+        with rung(result == target):
             out(hit)
     return logic, hit
 

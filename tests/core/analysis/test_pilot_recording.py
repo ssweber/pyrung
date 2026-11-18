@@ -19,11 +19,11 @@ from pyrung import (
     Bool,
     Int,
     Program,
-    Rung,
     Timer,
     copy,
     on_delay,
     out,
+    rung,
 )
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.coast import CoastReceipt
@@ -360,7 +360,7 @@ def test_candidates_built_payload_carries_provenance_without_policy_scores() -> 
     x_Go = Bool("x_Go", external=True)
     y_Out = Bool("y_Out")
     with Program() as logic:
-        with Rung(x_Go):
+        with rung(x_Go):
             out(y_Out)
 
     plc = PLC(logic, dt=0.010)
@@ -397,11 +397,11 @@ def _multi_writer_program() -> tuple[Program, Int]:
     State = Int("State", default=4)
 
     with Program(strict=False) as prog:
-        with Rung(Start, Src == 4):
+        with rung(Start, Src == 4):
             copy(6, Req)
-        with Rung(Unhold, Src == 11):
+        with rung(Unhold, Src == 11):
             copy(6, Req)
-        with Rung(Req == 6):
+        with rung(Req == 6):
             copy(6, State)
 
     return prog, State
@@ -450,11 +450,11 @@ def test_writer_skips_records_avoid_shadowed() -> None:
     Filling = Bool("SkFilling")
     with Program(strict=False) as prog:
         # Two writers of Step==2: the Cmd-gated one (avoided) and the Alt-gated one.
-        with Rung(Cmd):
+        with rung(Cmd):
             copy(2, Step)
-        with Rung(Alt):
+        with rung(Alt):
             copy(2, Step)
-        with Rung(Step == 2):
+        with rung(Step == 2):
             out(Filling)
 
     plc = PLC(prog, dt=0.010)
@@ -477,7 +477,7 @@ def test_plan_carries_journey_on_reachable_target() -> None:
     x_Go = Bool("x_Go", external=True)
     y_Out = Bool("y_Out")
     with Program() as logic:
-        with Rung(x_Go):
+        with rung(x_Go):
             out(y_Out)
 
     plc = PLC(logic, dt=0.010)
@@ -497,9 +497,9 @@ def _momentary_no_alternate() -> tuple[Program, Bool, Bool]:
     Step = Int("Step", default=1)
     Filling = Bool("Filling")
     with Program(strict=False) as prog:
-        with Rung(Cmd):
+        with rung(Cmd):
             copy(2, Step)
-        with Rung(Step == 2):
+        with rung(Step == 2):
             out(Filling)
     return prog, Filling, Cmd
 
@@ -520,9 +520,9 @@ def test_plan_reachable_run_leaves_avoid_names_empty() -> None:
     Done = Bool("Done2")
     Dwell = Timer.clone("Dwell2")
     with Program(strict=False) as prog:
-        with Rung(Cmd):
+        with rung(Cmd):
             on_delay(Dwell, 20, "ms")
-        with Rung(Dwell.Done):
+        with rung(Dwell.Done):
             out(Done)
 
     plc = PLC(prog, dt=0.010)

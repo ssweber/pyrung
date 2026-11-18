@@ -20,11 +20,11 @@ from pyrung import (
     Physical,
     Program,
     Real,
-    Rung,
     Timer,
     debounce,
     flasher,
     out,
+    rung,
     timed,
     toggle,
 )
@@ -54,11 +54,11 @@ def _pair_with(physical: Physical, write: Any, dt: float = 0.010) -> tuple[PLC, 
     Fb = Bool("Fb", physical=physical, link="Cmd")
     Coil = Bool("Coil")
     with Program(strict=False) as logic:
-        with Rung(Cmd):
+        with rung(Cmd):
             write(Coil)
-        with Rung(Btn):
+        with rung(Btn):
             out(Cmd)
-        with Rung(Fb):
+        with rung(Fb):
             out(Bool("Seen"))
     plc = PLC(logic, dt=dt)
     Harness(plc).install()
@@ -196,9 +196,9 @@ def _linked(physical: Physical, *, enabled: bool = False) -> tuple[PLC, Bool, Bo
     En = Bool("En", default=enabled)
     Fb = Bool("Fb", physical=physical, link="En")
     with Program(strict=False) as logic:
-        with Rung(En):
+        with rung(En):
             out(Bool("Echo"))
-        with Rung(Fb):
+        with rung(Fb):
             out(Bool("Seen"))
     plc = PLC(logic, dt=0.010)
     Harness(plc).install()
@@ -390,9 +390,9 @@ class TestAReinstallSettles:
         En = Bool("En", default=True)
         Fb = Bool("Fb", physical=physical, link="En")
         with Program(strict=False) as logic:
-            with Rung(En):
+            with rung(En):
                 out(Bool("Echo"))
-            with Rung(Fb):
+            with rung(Fb):
                 out(Bool("Seen"))
         plc = PLC(logic, dt=0.010)
         prefix = {"toggle": "_toggle", "timed": "_timed_rung", "delay": "_debounce_rung"}
@@ -463,9 +463,9 @@ def _two_links(en_a: bool, en_b: bool, scans: int) -> PLC:
     FbA = Bool("FbA", physical=Physical("A", on_delay="100ms", off_delay="50ms"), link="EnA")
     FbB = Bool("FbB", physical=Physical("B", on_delay="0ms"), link="EnB")
     with Program(strict=False) as logic:
-        with Rung(EnA, EnB):
+        with rung(EnA, EnB):
             out(Bool("Echo"))
-        with Rung(FbA, FbB):
+        with rung(FbA, FbB):
             out(Bool("Seen"))
     plc = PLC(logic, dt=0.010)
     Harness(plc).install()
@@ -517,9 +517,9 @@ class TestALinkCutBeforeAnother:
                 "FbB", physical=Physical("B", flasher_on="30ms", flasher_off="20ms"), link="EnB"
             )
             with Program(strict=False) as logic:
-                with Rung(EnA, EnB):
+                with rung(EnA, EnB):
                     out(Bool("Echo"))
-                with Rung(FbA, FbB):
+                with rung(FbA, FbB):
                     out(Bool("Seen"))
             plc = PLC(logic, dt=0.010)
             Harness(plc).install()
@@ -586,9 +586,9 @@ def test_every_plant_instruction_with_memory_is_keyed_by_the_tag_it_drives() -> 
     FbT = Bool("FbT", physical=Physical("T", timed="30ms"), link="En")
     FbG = Bool("FbG", physical=Physical("G", toggle=True), link="En")
     with Program(strict=False) as logic:
-        with Rung(En):
+        with rung(En):
             out(Bool("Echo"))
-        with Rung(FbD, FbP, FbR > 5.0, FbT, FbG):
+        with rung(FbD, FbP, FbR > 5.0, FbT, FbG):
             out(Bool("Seen"))
     plc = PLC(logic, dt=0.010)
     Harness(plc).install()
@@ -622,7 +622,7 @@ class TestEveryEngineAgrees:
         En = Bool("En", external=True)
         Fb = Bool("Fb", physical=physical, link="En")
         with Program(strict=False) as logic:
-            with Rung(Fb):
+            with rung(Fb):
                 out(Bool("Seen"))
         plc = PLC(logic, dt=0.010, cache=0, history=10_000, checkpoint_interval=5)
         Harness(plc).install()

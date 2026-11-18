@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Int, Program, Rung, copy
+from pyrung import PLC, Int, Program, copy, rung
 from pyrung.core.executor import ConditionViewCapture
 
 
 def test_a_captured_view_reads_the_start_value_of_a_tag_a_later_rung_writes() -> None:
     ptr, seen = Int("Ptr", external=True), Int("Seen")
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             copy(ptr, seen)
-        with Rung():
+        with rung():
             copy(ptr + 4, ptr)
     plc = PLC(prog, dt=0.01)
     plc.patch({"Ptr": 13})

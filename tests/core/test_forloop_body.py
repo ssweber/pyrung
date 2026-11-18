@@ -14,7 +14,6 @@ from pyrung.core import (
     Counter,
     Int,
     Program,
-    Rung,
     ScanContext,
     SystemState,
     TagType,
@@ -30,6 +29,7 @@ from pyrung.core import (
     math,
     out,
     program,
+    rung,
     subroutine,
 )
 from pyrung.core.executor import ConditionViewCapture, execute_program
@@ -92,13 +92,13 @@ def _assert_paths_agree(logic: Program, patch: dict[str, Any], **expected: Any) 
 
 def test_break_and_continue_semantics(runner_factory):
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(5) as loop:
                 math(A + 1, A)
-                with Rung(loop.idx == 2):
+                with rung(loop.idx == 2):
                     continue_loop()
                 math(B + 1, B)
-                with Rung(loop.idx == 3):
+                with rung(loop.idx == 3):
                     break_loop()
                 math(C + 1, C)
 
@@ -113,14 +113,14 @@ def test_break_and_continue_semantics(runner_factory):
 
 def test_continue_on_last_iteration_and_break_in_inner_loop_only(runner_factory):
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3) as outer:
                 with forloop(4) as inner:
                     math(N + 1, N)
-                    with Rung(inner.idx == 1):
+                    with rung(inner.idx == 1):
                         break_loop()
                 math(A + 1, A)
-                with Rung(outer.idx == 2):
+                with rung(outer.idx == 2):
                     continue_loop()
                 math(B + 1, B)
 
@@ -139,11 +139,11 @@ def test_body_rung_contacts_are_evaluated_each_iteration(runner_factory):
     hits = Int("Hits")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(4) as loop:
-                with Rung(flag):
+                with rung(flag):
                     math(hits + 1, hits)
-                with Rung(loop.idx == 1):
+                with rung(loop.idx == 1):
                     latch(flag)
 
     runner = runner_factory(logic)
@@ -158,12 +158,12 @@ def test_body_rung_contact_driven_by_same_iteration_write(runner_factory):
     trip = Bool("Trip")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(5):
                 math(A + 1, A)
-                with Rung(A == 3):
+                with rung(A == 3):
                     out(trip)
-                with Rung(trip):
+                with rung(trip):
                     break_loop()
 
     runner = runner_factory(logic)
@@ -177,7 +177,7 @@ def test_bare_body_helper_leg_reads_the_body_rows_above_it(runner_factory):
     """A bare body instruction is a row of its own.
     Its reset leg reads Rst as the body row above it latched it, on every path and backend."""
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
                 latch(Rst)
                 count_up(CtrA, 100).reset(Rst)
@@ -195,7 +195,7 @@ def test_bare_body_drum_reads_its_pins_before_it_corrects_the_step(backend):
     The jump leg sees the uncorrected step 7, not the 1 that the drum writes."""
     step = Int("Step")
     with Program(strict=False) as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(1):
                 event_drum(
                     outputs=[Bool("Y1"), Bool("Y2"), Bool("Y3")],
@@ -221,9 +221,9 @@ def test_loop_rung_false_leaves_body_rung_outs_alone(runner_factory):
     gate = Bool("Gate")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
-                with Rung(gate):
+                with rung(gate):
                     out(light)
 
     runner = runner_factory(logic)
@@ -240,10 +240,10 @@ def test_loop_rung_false_leaves_body_rung_outs_alone(runner_factory):
 
 def test_body_order_is_source_order():
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2) as loop:
                 math(A + 1, A)
-                with Rung(loop.idx == 0):
+                with rung(loop.idx == 0):
                     math(B + 1, B)
                 math(C + 1, C)
 
@@ -258,10 +258,10 @@ def test_body_order_is_source_order():
 def test_body_instructions_capture_the_loop_and_body_rung_conditions():
     gate = Bool("Gate")
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
                 count_up(CtrA, 10).reset(Rst)
-                with Rung(gate):
+                with rung(gate):
                     count_up(CtrB, 10).reset(Rst)
 
     loop = _loop(logic)
@@ -280,7 +280,7 @@ def test_body_instructions_capture_the_loop_and_body_rung_conditions():
 
 def test_nesting_limit_is_three():
     with Program(strict=False):
-        with Rung():
+        with rung():
             with forloop(2):
                 with forloop(2):
                     with forloop(2) as third:
@@ -289,7 +289,7 @@ def test_nesting_limit_is_three():
 
     with pytest.raises(RuntimeError, match="limited to 3 levels"):
         with Program(strict=False):
-            with Rung():
+            with rung():
                 with forloop(2):
                     with forloop(2):
                         with forloop(2):
@@ -300,55 +300,55 @@ def test_nesting_limit_is_three():
 def test_break_and_continue_need_a_conditioned_body_rung():
     with pytest.raises(RuntimeError, match="works only inside a forloop"):
         with Program(strict=False):
-            with Rung():
+            with rung():
                 with forloop(2):
                     break_loop()
 
     with pytest.raises(RuntimeError, match="at least one contact"):
         with Program(strict=False):
-            with Rung():
+            with rung():
                 with forloop(2):
-                    with Rung():
+                    with rung():
                         continue_loop()
 
     with pytest.raises(RuntimeError, match="works only inside a forloop"):
         with Program(strict=False):
-            with Rung(Enable):
+            with rung(Enable):
                 break_loop()
 
 
 def test_rung_and_branch_placement_inside_loops():
     with pytest.raises(RuntimeError, match="directly in the loop body"):
         with Program(strict=False):
-            with Rung():
+            with rung():
                 with forloop(2):
-                    with Rung(Enable):
-                        with Rung(Enable):
+                    with rung(Enable):
+                        with rung(Enable):
                             pass
 
     with pytest.raises(RuntimeError, match="not permitted inside forloop"):
         with Program(strict=False):
-            with Rung():
+            with rung():
                 with forloop(2):
-                    with Rung(Enable):
+                    with rung(Enable):
                         with branch(Enable):
                             pass
 
     with pytest.raises(RuntimeError, match="continued"):
         with Program(strict=False):
-            with Rung():
+            with rung():
                 with forloop(2):
-                    with Rung(Enable).continued():
+                    with rung(Enable).continued():
                         pass
 
 
 def test_body_rung_does_not_join_the_program():
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
-                with Rung(Enable):
+                with rung(Enable):
                     out(Bool("LightX"))
-        with Rung():
+        with rung():
             out(Bool("LightY"))
 
     assert len(logic.rungs) == 2
@@ -358,10 +358,10 @@ def test_body_rung_does_not_join_the_program():
 def test_comment_attaches_to_body_rung_in_strict_program():
     @program
     def logic():
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(2):
                 comment("Skip odd slots")
-                with Rung(Enable):
+                with rung(Enable):
                     continue_loop()
 
     body_rung = _loop(logic).body_rungs[0]
@@ -372,11 +372,11 @@ def test_comment_attaches_to_body_rung_in_strict_program():
 def test_subroutine_registered_from_a_loop_body_keeps_its_own_rungs():
     @subroutine("work")
     def work():
-        with Rung():
+        with rung():
             math(A + 1, A)
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(3):
                 call(work)
 
@@ -390,11 +390,11 @@ def test_subroutine_registered_from_a_loop_body_keeps_its_own_rungs():
 
 def test_break_instruction_classes():
     with Program() as logic:
-        with Rung():
+        with rung():
             with forloop(2):
-                with Rung(Enable):
+                with rung(Enable):
                     break_loop()
-                with Rung(Enable):
+                with rung(Enable):
                     continue_loop()
 
     rungs = _loop(logic).body_rungs
@@ -407,9 +407,9 @@ def test_oneshot_in_body_rung_rearms_when_its_contact_drops(runner_factory):
     hits = Int("Hits")
 
     with Program() as logic:
-        with Rung(Enable):
+        with rung(Enable):
             with forloop(4) as loop:
-                with Rung(gate[loop.idx] == 1):
+                with rung(gate[loop.idx] == 1):
                     math(hits + 1, hits, oneshot=True)
 
     runner = runner_factory(logic)

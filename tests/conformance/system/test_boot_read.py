@@ -78,7 +78,6 @@ from pyrung.core import (
     PLC,
     Or,
     Program,
-    Rung,
     call,
     copy,
     count_up,
@@ -90,6 +89,7 @@ from pyrung.core import (
     math,
     on_delay,
     out,
+    rung,
     shift,
     subroutine,
     system,
@@ -122,10 +122,10 @@ SC46 = system.fault.math_operation_error
 
 def _noted(mask, *pairs):
     """On the first scan, set *mask* to the sum of the bits whose condition holds."""
-    with Rung(FIRST):
+    with rung(FIRST):
         copy(0, mask)
     for condition, bit in pairs:
-        with Rung(FIRST, *condition):
+        with rung(FIRST, *condition):
             math(mask + bit, mask)
 
 
@@ -154,7 +154,7 @@ def prove_what_survives(slot):
     )
     _noted(pointer_mask, ((td[118] == _SEEN,), 1))
     # Written once per run and kept; the T and CT are the Done of a preset of 1.
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         latch(c[1603])
         copy(_SEEN, td[116])
         copy(_SEEN, ctd[213])
@@ -165,16 +165,16 @@ def prove_what_survives(slot):
         copy("Z", txt[781])
         copy(118, _TD_POINTER)
         copy(_SEEN, td[_TD_POINTER])
-    with Rung(c[1603]):
+    with rung(c[1603]):
         on_delay(ClickTimer(117), 1)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         count_up(ClickCounter(214), 1).reset(c[1620])
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(direct_mask, slot.Result1)
         copy(pointer_mask, slot.Result2)
-    with Rung(*once(slot), system.sys.battery_present):
+    with rung(*once(slot), system.sys.battery_present):
         copy(1, slot.Result3)
-    with Rung(*once(slot)):
+    with rung(*once(slot)):
         copy(1, slot.Fired)
 
 
@@ -184,20 +184,20 @@ def prove_first_scan_edges(slot):
     high = c[1610]
     a, b, flag = c[1614], c[1615], c[1616]
     shot_copy, for_copy = dd[69], dd[70]
-    with Rung():
+    with rung():
         out(high)
-    with Rung(high):
+    with rung(high):
         toggle(tog)
-    with Rung(high):
+    with rung(high):
         copy(1, shot_copy, oneshot=True)
-    with Rung(high):
+    with rung(high):
         out(shot_out, oneshot=True)
-    with Rung(high):
+    with rung(high):
         timed(pulse, ClickTimer(119), 1000)
-    with Rung(high):
+    with rung(high):
         with forloop(1, oneshot=True):
             copy(1, for_copy)
-    with Rung(high):
+    with rung(high):
         event_drum(
             outputs=[a, b],
             events=[high, high],
@@ -205,9 +205,9 @@ def prove_first_scan_edges(slot):
             current_step=ds[4019],
             completion_flag=flag,
         ).reset(c[1617])
-    with Rung(high):
+    with rung(high):
         shift(c.select(1618, 1619)).clock(high).reset(c[1617])
-    with Rung(high):
+    with rung(high):
         flasher(flash, on=(ClickTimer(120), 1000), off=(ClickTimer(121), 1000))
     _noted(
         mask,
@@ -219,18 +219,18 @@ def prove_first_scan_edges(slot):
         ((ds[4019] == 2,), 32),
         ((c[1618],), 64),
     )
-    with Rung(FIRST):
+    with rung(FIRST):
         copy(0, dd[71])
-    with Rung(FIRST, flash):
+    with rung(FIRST, flash):
         copy(1, dd[71])
-    with Rung(FIRST):
+    with rung(FIRST):
         copy(system.sys.scan_counter, dd[72])
-    with Rung(FIRST):
+    with rung(FIRST):
         math(dd[73] + 1, dd[73])
     count_scans(slot, 10)
     # Scratch holds at 11; Fired comes up on this scan, so this reads once.  The count
     # starts over, so the next run counts the boot between them and no other.
-    with Rung(slot.Cmd != 0, slot.Scratch == 11, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 11, slot.Fired == 0):
         copy(mask, slot.Result1)
         copy(dd[72], slot.Result2)
         copy(dd[73], slot.Result3)
@@ -314,25 +314,25 @@ boot_group = Group(
 
 
 def prove_count_forms(slot):
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ClickTimer(123), 1000)
-    with Rung(slot.Cmd != 0, slot.Scratch <= 3, t[123]):
+    with rung(slot.Cmd != 0, slot.Scratch <= 3, t[123]):
         math(slot.Scratch + 1, slot.Scratch)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(65537, dd[61])
         copy(65536, dd[62])
         copy(3, td[125])
         copy(3, ctd[212])
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(dd[61]):
             math(dd[63] + 1, dd[63])
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(dd[62]):
             math(dd[64] + 1, dd[64])
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(td[125]):
             math(slot.Result3 + 1, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         with forloop(ctd[212]):
             math(slot.Result4 + 1, slot.Result4)
     for value, readings, into in (
@@ -340,7 +340,7 @@ def prove_count_forms(slot):
         (dd[64], (0, 65536), slot.Result2),
     ):
         for number, reading in enumerate(readings, start=1):
-            with Rung(slot.Cmd != 0, slot.Scratch == 3, value == reading):
+            with rung(slot.Cmd != 0, slot.Scratch == 3, value == reading):
                 copy(number, into)
     done(slot, 3)
 
@@ -373,19 +373,19 @@ _WAIT = 40
 def prove_math_flags_over_a_scan(slot):
     # The reads come first, above the case's own count.  Main's hash Copy and the groups
     # that main calls before this one run between the op and the reads.
-    with Rung(slot.Cmd != 0, slot.Scratch == _WAIT, SC40):
+    with rung(slot.Cmd != 0, slot.Scratch == _WAIT, SC40):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2, SC46):
+    with rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2, SC46):
         copy(1, slot.Result2)
     count_scans(slot, _WAIT + 4)
-    with Rung(slot.Cmd != 0, slot.Scratch == _WAIT):
+    with rung(slot.Cmd != 0, slot.Scratch == _WAIT):
         math(1 / slot.Result3, slot.Result4)
-    with Rung(slot.Cmd != 0, slot.Scratch == _WAIT, SC40):
+    with rung(slot.Cmd != 0, slot.Scratch == _WAIT, SC40):
         copy(10, slot.ErrorCode)
-    with Rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2):
+    with rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2):
         copy(-1.0, df[204])
         math(sqrt(df[204]), df[204])
-    with Rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2, SC46):
+    with rung(slot.Cmd != 0, slot.Scratch == _WAIT + 2, SC46):
         math(slot.ErrorCode + 1, slot.ErrorCode)
     done(slot, _WAIT + 4)
 
@@ -413,7 +413,7 @@ flag_group = Group(
 def prove_date_and_time_apply(slot):
     rtc = system.rtc
     count_scans(slot, 15)
-    with Rung(slot.Cmd != 0, slot.Scratch == 1):
+    with rung(slot.Cmd != 0, slot.Scratch == 1):
         copy(rtc.year4, dd[74])
         copy(rtc.hour, dd[75])
         copy(rtc.month, dd[84])
@@ -421,29 +421,29 @@ def prove_date_and_time_apply(slot):
         copy(2030, rtc.new_year4)
         copy(rtc.month, rtc.new_month)
         copy(rtc.day, rtc.new_day)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3, rtc.year4 == 2030):
+    with rung(slot.Cmd != 0, slot.Scratch == 3, rtc.year4 == 2030):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch == 3):
+    with rung(slot.Cmd != 0, slot.Scratch == 3):
         copy(dd[74], rtc.new_year4)
-    with Rung(slot.Cmd != 0, slot.Scratch == 5):
+    with rung(slot.Cmd != 0, slot.Scratch == 5):
         math((dd[75] + 1) % 24, dd[76])
         copy(dd[76], rtc.new_hour)
         copy(rtc.minute, rtc.new_minute)
         copy(rtc.second, rtc.new_second)
-    with Rung(slot.Cmd != 0, slot.Scratch == 7, rtc.hour == dd[76]):
+    with rung(slot.Cmd != 0, slot.Scratch == 7, rtc.hour == dd[76]):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch == 7):
+    with rung(slot.Cmd != 0, slot.Scratch == 7):
         copy(dd[75], rtc.new_hour)
         copy(rtc.minute, rtc.new_minute)
         copy(rtc.second, rtc.new_second)
-    with Rung(slot.Cmd != 0, slot.Scratch == 9):
+    with rung(slot.Cmd != 0, slot.Scratch == 9):
         copy(2030, rtc.new_year4)
         copy(13, rtc.new_month)
         copy(25, rtc.new_hour)
         copy(rtc.minute, rtc.new_minute)
         copy(rtc.second, rtc.new_second)
     # Back to what scan 1 saved, on every path, even if the bad date or time was taken.
-    with Rung(slot.Cmd != 0, slot.Scratch == 12):
+    with rung(slot.Cmd != 0, slot.Scratch == 12):
         copy(dd[74], rtc.new_year4)
         copy(dd[84], rtc.new_month)
         copy(dd[85], rtc.new_day)
@@ -451,23 +451,23 @@ def prove_date_and_time_apply(slot):
         copy(rtc.minute, rtc.new_minute)
         copy(rtc.second, rtc.new_second)
     # One Out per apply bit: of several, the last rung would win.
-    with Rung(
+    with rung(
         slot.Cmd != 0,
         Or(slot.Scratch == 1, slot.Scratch == 3, slot.Scratch == 9, slot.Scratch == 12),
     ):
         out(rtc.apply_date)
-    with Rung(
+    with rung(
         slot.Cmd != 0,
         Or(slot.Scratch == 5, slot.Scratch == 7, slot.Scratch == 9, slot.Scratch == 12),
     ):
         out(rtc.apply_time)
-    with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_date_error):
+    with rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_date_error):
         math(slot.Result3 + 10, slot.Result3)
-    with Rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_time_error):
+    with rung(slot.Cmd != 0, slot.Scratch == 10, rtc.apply_time_error):
         math(slot.Result3 + 1, slot.Result3)
     # Two scans after the bad apply, as a good one is read, and a scan before the set-back,
     # so a CLICK that applies at once cannot show the restored clock here.
-    with Rung(
+    with rung(
         slot.Cmd != 0,
         slot.Scratch == 11,
         rtc.year4 == dd[74],
@@ -475,7 +475,7 @@ def prove_date_and_time_apply(slot):
         rtc.hour == dd[75],
     ):
         copy(1, slot.Result4)
-    with Rung(
+    with rung(
         slot.Cmd != 0,
         slot.Scratch == 14,
         rtc.year4 == dd[74],
@@ -546,7 +546,7 @@ def test_what_survives_reads_through_a_boot(engine, boot, battery, after):
     slot = make_slot(1, name=boot_group.title)
     with Program(strict=False) as logic:
         for _ in range(boot_group.calls):
-            with Rung():
+            with rung():
                 call(boot_group.subroutine)
         with subroutine(boot_group.subroutine):
             emit_case("boot_read", survives, slot, 1)

@@ -31,7 +31,7 @@ class Program:
 
     Used as a context manager to capture rungs:
         with Program() as logic:
-            with Rung(Button):
+            with rung(Button):
                 out(Light)
 
     Also works with PLC:
@@ -122,7 +122,7 @@ class Program:
                 else "program"
             )
             raise RuntimeError(
-                f"Rung.continued() cannot be the first rung in a {scope}. "
+                f"rung.continued() cannot be the first rung in a {scope}. "
                 "It continues the rung above it, in the same execution scope."
             )
         target.append(rung)

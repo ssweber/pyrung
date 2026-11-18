@@ -24,13 +24,13 @@ from pyrung.core import (
     Int,
     Program,
     Real,
-    Rung,
     TagType,
     Word,
     blockcopy,
     copy,
     math,
     out,
+    rung,
     search,
 )
 from pyrung.core.compiled_plc import CompiledPLC
@@ -45,10 +45,10 @@ TAGS = {"I": Ii, "D": D, "W": W, "R": R, "C": C, "Enable": Enable}
 
 def _program() -> Program:
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             out(Lamp)
             copy(Ii, D)
-        with Rung(Lamp):
+        with rung(Lamp):
             copy(W, W)
             copy(R, R)
             copy(C, C)
@@ -156,7 +156,7 @@ def test_a_real_still_takes_inf_and_nan(value: float) -> None:
 def test_a_copy_of_a_non_finite_into_a_bool_is_false_on_each_engine(value: float) -> None:
     def program() -> Program:
         with Program(strict=False) as built:
-            with Rung():
+            with rung():
                 copy(Real("Src"), Bool("Dst"))
         return built
 
@@ -182,7 +182,7 @@ def test_a_copy_of_a_non_finite_into_a_bool_is_false_in_generated_code(
     big, inf, src = Real("Big", default=3e38), Real("Inf"), Real("Src")
     dst = Bool("Dst", default=True)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(big * big, inf)
             math(held(big, inf), src)
             copy(src, dst)
@@ -217,9 +217,9 @@ def _slots_only_a_range_uses() -> tuple[Program, Any]:
     slots = Block("DS", TagType.INT, 1, 5)
     run, hit, found = Bool("Run"), Bool("Hit"), Int("Found")
     with Program(strict=False) as program:
-        with Rung(run):
+        with rung(run):
             search(slots.select(1, 3) >= 3.5, result=Int("Result"), found=hit)
-        with Rung(hit):
+        with rung(hit):
             copy(1, found)
     return program, slots
 
@@ -227,7 +227,7 @@ def _slots_only_a_range_uses() -> tuple[Program, Any]:
 def _names_a_slot_only_a_range_uses() -> Program:
     slots, other = Block("DS", TagType.INT, 1, 5), Block("DR", TagType.REAL, 1, 5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             blockcopy(slots.select(1, 3), other.select(1, 3))
     return program
 
@@ -235,7 +235,7 @@ def _names_a_slot_only_a_range_uses() -> Program:
 def _names_a_slot_only_a_pointer_reaches() -> Program:
     slots, pointer = Block("DS", TagType.INT, 1, 5), Int("P", default=1)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[pointer], Real("Shown"))
     return program
 
@@ -262,7 +262,7 @@ def test_a_slot_patched_by_name_refuses_what_it_cannot_hold(engine) -> None:
 def test_a_slot_by_name_means_the_same_before_and_after_it_is_patched_by_tag() -> None:
     slots = Block("DS", TagType.INT, 1, 5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
     plc = PLC(program, dt=0.01)
     held = []
@@ -307,7 +307,7 @@ def test_a_slot_nothing_reaches_means_the_same_whichever_came_first(
 ) -> None:
     slots = Block("DS", TagType.INT, 1, 5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
     plc = engine(program, dt=0.01)
     held = []
@@ -343,7 +343,7 @@ def test_a_name_means_what_the_rungs_say_whatever_else_happened_to_the_program(
 ) -> None:
     slots = Block("DS", TagType.INT, 1, 5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
     happened(slots, program)
     plc = engine(program, dt=0.01)
@@ -358,7 +358,7 @@ def test_a_tag_mapped_onto_a_block_a_rung_uses_holds_its_type_on_both_engines(en
     slots = Block("DS", TagType.INT, 1, 5)
     Int("Mapped").map_to(slots[5])
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
     plc = engine(program, dt=0.01)
     plc.patch({"Mapped": 99999})
@@ -370,7 +370,7 @@ def test_a_tag_mapped_onto_a_block_a_rung_uses_holds_its_type_on_both_engines(en
 def test_a_name_a_rung_names_holds_its_type_on_both_engines(engine) -> None:
     slots = Block("DS", TagType.INT, 1, 5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             copy(slots[5], Int("Shown"))
     plc = engine(program, dt=0.01)
     plc.patch({"DS5": 99999, "Shown": 3.9})
@@ -382,7 +382,7 @@ def test_a_name_a_rung_names_holds_its_type_on_both_engines(engine) -> None:
 def test_a_force_by_tag_does_not_change_what_a_name_means_after_it(engine) -> None:
     spare = Int("Spare")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             out(Bool("Lit"))
     plc = engine(program, dt=0.01)
     plc.force(spare, 99999)
@@ -397,7 +397,7 @@ def test_a_force_by_tag_does_not_change_what_a_name_means_after_it(engine) -> No
 def test_a_fork_keeps_what_a_name_means() -> None:
     slots = Block("DS", TagType.INT, 1, 5)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             blockcopy(slots.select(1, 3), Block("DR", TagType.REAL, 1, 5).select(1, 3))
     plc = PLC(program, dt=0.01)
     plc.patch({slots[5]: 99999})
@@ -411,7 +411,7 @@ def test_a_fork_keeps_what_a_name_means() -> None:
 def test_a_tag_a_harness_registers_is_known_by_name_after_an_override_named_it() -> None:
     spare = Int("Spare2")
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             out(Bool("Lit2"))
     plc = PLC(program, dt=0.01)
     plc.patch({spare: 1})
@@ -453,7 +453,7 @@ def test_a_replay_takes_text_in_a_slot_as_the_scan_did() -> None:
     slots = Block("DS", TagType.INT, 1, 5)
     other = Block("DD", TagType.INT, 1, 5)
     with Program(strict=False) as program:
-        with Rung(Bool("Run")):
+        with rung(Bool("Run")):
             blockcopy(slots.select(1, 3), other.select(1, 3))
     plc = PLC(program, dt=0.01)
     plc.patch_as_recorded({"DS2": "txt"})
@@ -496,7 +496,7 @@ def test_a_kernel_run_starts_from_what_the_tag_holds() -> None:
 def test_a_modbus_read_serves_a_patched_register(value: Any) -> None:
     tag = Int("Mapped")
     with Program(strict=False) as program:
-        with Rung(Enable):
+        with rung(Enable):
             copy(tag, tag)
     plc = PLC(program, dt=0.01)
     provider = ClickDataProvider(plc, TagMap({tag: ds[1]}))

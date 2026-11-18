@@ -19,7 +19,6 @@ from pyrung import (
     Counter,
     Int,
     Program,
-    Rung,
     TagType,
     Timer,
     copy,
@@ -28,6 +27,7 @@ from pyrung import (
     math,
     on_delay,
     out,
+    rung,
 )
 from pyrung.core import And, Or, fall, rise, system
 from pyrung.core.analysis.pilot.coast import (
@@ -147,9 +147,9 @@ def _bool_flip_program(preset_ms: int = 200) -> tuple[Program, Bool]:
     Tmr = Timer.clone("Tmr")
     Done = Bool("Done")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
-        with Rung(Tmr.Done):
+        with rung(Tmr.Done):
             out(Done)
     return prog, Done
 
@@ -164,7 +164,7 @@ def _clock_counter_program(preset: int = 100) -> tuple[Program, Counter]:
     Ctr = Counter.clone("Ctr")
     Reset = Bool("Reset", external=True)
     with Program(strict=False) as prog:
-        with Rung(Enable, system.sys.clock_100ms):
+        with rung(Enable, system.sys.clock_100ms):
             count_up(Ctr, preset).reset(Reset)
     return prog, Ctr
 
@@ -218,9 +218,9 @@ def _churn_plus_timer_program(preset_ms: int = 100_000) -> Program:
     Tmr = Timer.clone("Tmr")
     X = Int("X")
     with Program() as prog:
-        with Rung():
+        with rung():
             math(X + 1, X)  # X := X + 1, unconditional, self-referential
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
     return prog
 
@@ -249,9 +249,9 @@ class TestUnreadOutputs:
         Terminal = Int("Terminal")
         Gate = Bool("Gate", external=True)
         with Program() as program:
-            with Rung():
+            with rung():
                 math(1, Terminal)
-            with Rung(Gate):
+            with rung(Gate):
                 math(2, Terminal)
 
         folded, stepped = _fold_nofold(program, Bool("Never"), max_cycles=50)
@@ -261,7 +261,7 @@ class TestUnreadOutputs:
         Terminal = Int("Terminal")
         Gate = Bool("Gate", external=True)
         with Program() as program:
-            with Rung(Gate):
+            with rung(Gate):
                 math(2, Terminal)
 
         folded, stepped = _fold_nofold(program, Bool("Never"), patch={"Gate": True}, max_cycles=50)
@@ -271,7 +271,7 @@ class TestUnreadOutputs:
     def test_output_the_condition_reads_lands_with_it(self) -> None:
         Terminal = Int("Terminal")
         with Program() as program:
-            with Rung():
+            with rung():
                 math(1, Terminal)
 
         folded, stepped = _fold_nofold(program, Terminal == 1)
@@ -290,7 +290,7 @@ def _timer_no_clock_program(preset_ms: int = 5_000) -> Program:
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
     return prog
 
@@ -331,7 +331,7 @@ def _timed_timer_program(preset_ms: int = 100_000) -> tuple[Program, Timer]:
     Enable = Bool("Enable", external=True)
     Tmr = Timer.clone("Tmr")
     with Program() as prog:
-        with Rung(Enable):
+        with rung(Enable):
             on_delay(Tmr, preset_ms, "ms")
     return prog, Tmr
 
@@ -369,13 +369,13 @@ _Clock = system.sys.clock_1s
 def _coast_plc() -> PLC:
     """Nothing here stops the loop before scan 69 but a trigger's own reads."""
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             on_delay(_CoastT, preset=7350)
-        with Rung():
+        with rung():
             copy(_CoastT.Acc, _Mirror)
-        with Rung(_CoastT.Acc >= 700):
+        with rung(_CoastT.Acc >= 700):
             latch(Bool("CoastLate"))
-        with Rung():
+        with rung():
             copy(_CoastT.Acc, _Bank[2])
     plc = PLC(program, dt=0.010)
     plc.set_rtc(datetime(2026, 1, 1))
@@ -437,12 +437,12 @@ _CoastLate = Bool("CoastLate")
 def _quiet_until_late_plc() -> PLC:
     """A long timer runs; what the conditions below read holds still until scan 70."""
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             on_delay(_CoastT, preset=7350)
-        with Rung(_CoastT.Acc >= 700):
+        with rung(_CoastT.Acc >= 700):
             latch(_CoastLate)
             copy(1, _CoastHeld)
-        with Rung(_CoastOther, _CoastHeld == _CoastLimit, _CoastLimit == 9):
+        with rung(_CoastOther, _CoastHeld == _CoastLimit, _CoastLimit == 9):
             out(Bool("CoastSeen"))
     plc = PLC(program, dt=0.010)
     plc.step()

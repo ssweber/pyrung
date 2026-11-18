@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from pyrung import Or, Program, Rung, Timer, latch, on_delay, out
+from pyrung import Or, Program, Timer, latch, on_delay, out, rung
 from pyrung.core import PLC, Bool, Int
 from pyrung.core.state import SystemState
 
@@ -229,7 +229,7 @@ def test_do_breakpoint_can_force_a_tag() -> None:
     motor = Bool("Motor", external=True)
     lamp = Bool("Lamp")
     with Program() as prog:
-        with Rung(motor):
+        with rung(motor):
             out(lamp)
     runner = PLC(prog)
     runner.when(lambda state: state.scan_id == 1).do(lambda state: runner.force("Motor", True))
@@ -262,15 +262,15 @@ def _watchdog_delay_program() -> Program:
     Fault = Bool("Fault")
     Running = Bool("Running")
     with Program() as prog:
-        with Rung():
+        with rung():
             on_delay(OffWD, 50, "ms").reset(Sensor)
-        with Rung():
+        with rung():
             on_delay(OnWD, 50, "ms").reset(~Sensor)
-        with Rung(Or(OffWD.Done, OnWD.Done)):
+        with rung(Or(OffWD.Done, OnWD.Done)):
             latch(Fault)
-        with Rung(~Fault):
+        with rung(~Fault):
             on_delay(RunDelay, 1000, "ms")
-        with Rung(RunDelay.Done):
+        with rung(RunDelay.Done):
             out(Running)
     return prog
 

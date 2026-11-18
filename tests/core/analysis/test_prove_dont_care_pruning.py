@@ -66,12 +66,12 @@ class TestArithmeticOperand:
 
     @staticmethod
     def _scan_agrees(cond, values: dict) -> bool | None:
-        from pyrung import PLC, Bool, Program, Rung, out
+        from pyrung import PLC, Bool, Program, out, rung
         from pyrung.core.analysis.simplified import _condition_to_expr
 
         coil = Bool("Coil")
         with Program(strict=False) as program:
-            with Rung(cond):
+            with rung(cond):
                 out(coil)
         plc = PLC(program, dt=0.01)
         plc.patch(values)

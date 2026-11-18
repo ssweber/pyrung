@@ -25,10 +25,10 @@ from pyrung.core import (
     Bool,
     CompiledPLC,
     Program,
-    Rung,
     Timer,
     debounce,
     flasher,
+    rung,
     timed,
     toggle,
 )
@@ -64,7 +64,7 @@ def _ticks_to_reach(preset: int, per_scan: Fraction) -> int:
 
 def _build(coil_factory) -> Program:
     with Program(strict=False) as logic:
-        with Rung(Run):
+        with rung(Run):
             coil_factory()
     return logic
 

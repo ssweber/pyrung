@@ -9,11 +9,11 @@ from pyrung.core import (
     Int,
     OutputBlock,
     Program,
-    Rung,
     TagType,
     copy,
     math,
     out,
+    rung,
 )
 from pyrung.core.analysis.prove import Intractable
 from pyrung.core.analysis.prove.classify import _classify_dimensions
@@ -29,7 +29,7 @@ class TestInputBlockNondeterministic:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(x[1]):
+            with rung(x[1]):
                 out(light)
 
         result = _classify_dimensions(logic)
@@ -44,7 +44,7 @@ class TestInputBlockNondeterministic:
         y = OutputBlock("Y", TagType.BOOL, 1, 4)
 
         with Program(strict=False) as logic:
-            with Rung(x[1]):
+            with rung(x[1]):
                 out(y[1])
 
         result = _classify_dimensions(logic)
@@ -77,7 +77,7 @@ class TestInputBlockNondeterministic:
         light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung(button):
+            with rung(button):
                 out(light)
 
         TagMap({button: x[1]}, include_system=False)
@@ -98,7 +98,7 @@ class TestPointerDomainInference:
         dest = Int("Out")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
@@ -114,7 +114,7 @@ class TestPointerDomainInference:
         dest = Int("Out")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
@@ -130,7 +130,7 @@ class TestPointerDomainInference:
         dest = Int("Out")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
@@ -147,11 +147,11 @@ class TestPointerDomainInference:
         sel = Bool("Sel", external=True)
 
         with Program(strict=False) as logic:
-            with Rung(sel):
+            with rung(sel):
                 copy(1, idx)
-            with Rung(~sel):
+            with rung(~sel):
                 copy(3, idx)
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
@@ -167,7 +167,7 @@ class TestPointerDomainInference:
         dest = Int("Out")
 
         with Program(strict=False) as logic:
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
@@ -182,9 +182,9 @@ class TestPointerDomainInference:
         step = Bool("Step", external=True)
 
         with Program(strict=False) as logic:
-            with Rung(step):
+            with rung(step):
                 math(idx + 1, idx)
-            with Rung():
+            with rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
@@ -203,7 +203,7 @@ class TestPointerDomainInference:
         flag = Bool("Flag", external=True)
 
         with Program(strict=False) as logic:
-            with Rung(flag):
+            with rung(flag):
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)

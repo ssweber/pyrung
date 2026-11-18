@@ -111,7 +111,6 @@ import pytest
 from pyrung.conformance import Case, CaseResult, Group, assert_all_passed, case, run
 from pyrung.core import (
     Or,
-    Rung,
     branch,
     copy,
     count_up,
@@ -120,6 +119,7 @@ from pyrung.core import (
     out,
     pack_bits,
     reset,
+    rung,
 )
 from tests.conformance.memory import ClickCounter, c
 from tests.conformance.rungs import test_cont_box, test_row_solve, test_rung_semantics
@@ -168,7 +168,7 @@ def solve_case(
 
 
 def _fire(slot: Any) -> None:
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Fired)
 
 
@@ -177,7 +177,7 @@ def _fire(slot: Any) -> None:
 
 def prove_row_series_reads_rows_above(slot):
     # A = C501, B = C502.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[501])
         latch(c[502])
         with branch(c[501], c[502]):
@@ -194,12 +194,12 @@ def init_row_series_reads_rows_above(slot):
 
 def prove_row_reads_row_below(slot):
     # The lower branch latches C511; C519 is never written.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with branch(c[511]):
             copy(1, slot.Result1)
         with branch(~c[519]):
             latch(c[511])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[511]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[511]):
         copy(1, slot.Result2)
     _fire(slot)
 
@@ -211,7 +211,7 @@ def init_row_reads_row_below(slot):
 def prove_sibling_branch_reads_sibling_above(slot):
     # The parent branch (C529 off, never written) holds three inner branches;
     # the first latches C521.  C527 and C528 are never written.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with branch(~c[529]):
             copy(1, slot.Result3)
             with branch(~c[528]):
@@ -232,7 +232,7 @@ def init_sibling_branch_reads_sibling_above(slot):
 def prove_outer_row_reads_inner_branch_write(slot):
     # The outer branch's inner branch latches C531; the rung's next branches
     # read it.  C538 and C539 are never written.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         with branch(~c[539]):
             copy(1, slot.Result3)
             with branch(~c[538]):
@@ -253,7 +253,7 @@ def init_outer_row_reads_inner_branch_write(slot):
 
 def prove_input_or_legs_read_before_outputs(slot):
     # B = C541; C549 is never written.
-    with Rung(slot.Cmd != 0, slot.Fired == 0, Or(c[549], ~c[541])):
+    with rung(slot.Cmd != 0, slot.Fired == 0, Or(c[549], ~c[541])):
         latch(c[541])
         copy(1, slot.Result1)
     _fire(slot)
@@ -265,7 +265,7 @@ def init_input_or_legs_read_before_outputs(slot):
 
 def prove_branch_or_reads_row_above(slot):
     # A = C551; C558 and C559 are never written.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[551])
         with branch(Or(c[559], c[551])):
             copy(1, slot.Result1)
@@ -283,7 +283,7 @@ def init_branch_or_reads_row_above(slot):
 
 def prove_bus_operand_sees_coil(slot):
     # X = C561; C562..C564 are never written.
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         out(c[561])
         pack_bits(c.select(561, 564), slot.Result1)
     _fire(slot)
@@ -291,14 +291,14 @@ def prove_bus_operand_sees_coil(slot):
 
 def prove_bus_coils_last_write_wins(slot):
     # X1 = C571 (latched, then reset), X2 = C572 (reset, then latched).
-    with Rung(slot.Cmd != 0, slot.Fired == 0):
+    with rung(slot.Cmd != 0, slot.Fired == 0):
         latch(c[571])
         reset(c[571])
         reset(c[572])
         latch(c[572])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[571]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[571]):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[572]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[572]):
         copy(1, slot.Result2)
     _fire(slot)
 
@@ -312,11 +312,11 @@ def init_bus_coils_last_write_wins(slot):
 
 def prove_continued_reads_later_wire(slot):
     # The continued wire latches C581, which the wire above it needs on.
-    with Rung(c[581], slot.Cmd != 0, slot.Fired == 0):
+    with rung(c[581], slot.Cmd != 0, slot.Fired == 0):
         copy(1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Fired == 0).continued():
+    with rung(slot.Cmd != 0, slot.Fired == 0).continued():
         latch(c[581])
-    with Rung(slot.Cmd != 0, slot.Fired == 0, c[581]):
+    with rung(slot.Cmd != 0, slot.Fired == 0, c[581]):
         copy(1, slot.Result2)
     _fire(slot)
 
@@ -334,11 +334,11 @@ def prove_box_leg_reads_row_below(slot):
     # counts on scan 2.
     counter = ClickCounter(162)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch == 2):
+    with rung(slot.Cmd != 0, slot.Scratch == 2):
         count_up(counter, 100).reset(Or(slot.Cmd == 0, c[661]))
-    with Rung(slot.Scratch == 4, slot.Cmd != 0).continued():
+    with rung(slot.Scratch == 4, slot.Cmd != 0).continued():
         latch(c[661])
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         reset(c[661])
         copy(counter.Acc, slot.Result1)
     done(slot)
@@ -349,13 +349,13 @@ def prove_box_leg_reads_row_below(slot):
 
 def prove_for_body_rung_reads_body_rung_above(slot):
     # A = C681, latched by the first body rung.
-    with Rung():
+    with rung():
         with forloop(1):
-            with Rung(slot.Cmd != 0, slot.Fired == 0):
+            with rung(slot.Cmd != 0, slot.Fired == 0):
                 latch(c[681])
-            with Rung(c[681], slot.Cmd != 0, slot.Fired == 0):
+            with rung(c[681], slot.Cmd != 0, slot.Fired == 0):
                 copy(1, slot.Result1)
-            with Rung(~c[681], slot.Cmd != 0, slot.Fired == 0):
+            with rung(~c[681], slot.Cmd != 0, slot.Fired == 0):
                 copy(1, slot.Result2)
     _fire(slot)
 

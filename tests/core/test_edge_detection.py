@@ -6,7 +6,7 @@ These tests verify:
 3. Edge detection works correctly across scan cycles
 """
 
-from pyrung.core import Bool, Program, Rung, fall, latch, out, reset, rise
+from pyrung.core import Bool, Program, fall, latch, out, reset, rise, rung
 
 
 class TestRiseDSL:
@@ -31,7 +31,7 @@ class TestRiseDSL:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(rise(Button)):
+            with rung(rise(Button)):
                 out(Light)  # out() resets when rung false - shows one-shot behavior
 
         runner = runner_factory(logic)
@@ -62,7 +62,7 @@ class TestRiseDSL:
         Counter = Bool("Counter")  # Use bit as simple flag
 
         with Program() as logic:
-            with Rung(rise(Button)):
+            with rung(rise(Button)):
                 latch(Counter)
 
         runner = runner_factory(logic)
@@ -89,7 +89,7 @@ class TestRiseDSL:
         PulseCount = Bool("PulseCount")
 
         with Program() as logic:
-            with Rung(rise(Button)):
+            with rung(rise(Button)):
                 latch(PulseCount)
 
         runner = runner_factory(logic)
@@ -138,7 +138,7 @@ class TestFallDSL:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(fall(Button)):
+            with rung(fall(Button)):
                 out(Light)  # out() resets when rung false - shows one-shot behavior
 
         runner = runner_factory(logic)
@@ -170,7 +170,7 @@ class TestFallDSL:
         Counter = Bool("Counter")
 
         with Program() as logic:
-            with Rung(fall(Button)):
+            with rung(fall(Button)):
                 latch(Counter)
 
         runner = runner_factory(logic)
@@ -193,7 +193,7 @@ class TestFallDSL:
         PulseCount = Bool("PulseCount")
 
         with Program() as logic:
-            with Rung(fall(Button)):
+            with rung(fall(Button)):
                 latch(PulseCount)
 
         runner = runner_factory(logic)
@@ -231,7 +231,7 @@ class TestEdgeSiteMemory:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(rise(Button)):
+            with rung(rise(Button)):
                 out(Light)
 
         runner = runner_factory(logic)
@@ -253,7 +253,7 @@ class TestEdgeSiteMemory:
         Out = Bool("Out")
 
         with Program() as logic:
-            with Rung(rise(A), fall(B)):
+            with rung(rise(A), fall(B)):
                 out(Out)
 
         runner = runner_factory(logic)
@@ -277,7 +277,7 @@ class TestEdgeSiteMemory:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Gate, rise(Button)):
+            with rung(Gate, rise(Button)):
                 out(Light)
 
         runner = runner_factory(logic)
@@ -297,11 +297,11 @@ class TestEdgeSiteMemory:
         Below = Bool("Below")
 
         with Program() as logic:
-            with Rung(rise(Bit)):
+            with rung(rise(Bit)):
                 out(Above)
-            with Rung(Start):
+            with rung(Start):
                 out(Bit)
-            with Rung(rise(Bit)):
+            with rung(rise(Bit)):
                 out(Below)
 
         runner = runner_factory(logic)
@@ -328,7 +328,7 @@ class TestEdgeCombinations:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(rise(Button), Enable):  # Both must be true
+            with rung(rise(Button), Enable):  # Both must be true
                 latch(Light)
 
         runner = runner_factory(logic)
@@ -359,9 +359,9 @@ class TestEdgeCombinations:
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(rise(Button)):
+            with rung(rise(Button)):
                 latch(Light)
-            with Rung(fall(Button)):
+            with rung(fall(Button)):
                 reset(Light)
 
         runner = runner_factory(logic)
@@ -398,7 +398,7 @@ class TestEdgeOutsideProgram:
         button = Bool("Button", external=True)
         light = Bool("Light")
         with Program(strict=False) as logic:
-            with Rung(button):
+            with rung(button):
                 out(light)
         return PLC(logic, dt=0.010), light
 
@@ -479,7 +479,7 @@ class TestEdgeOutsideProgram:
         light = Bool("Light")
         edge = rise(button)
         with Program(strict=False) as logic:
-            with Rung(edge):
+            with rung(edge):
                 latch(light)
         plc = PLC(logic, dt=0.010)
         key = edge._memory_key
@@ -500,9 +500,9 @@ class TestEdgeOutsideProgram:
         go = Bool("Go", external=True)
         lamp = Bool("Lamp")
         with Program(strict=False) as logic:
-            with Rung(go):
+            with rung(go):
                 on_delay(tmr, 5000)
-            with Rung(tmr.Done):
+            with rung(tmr.Done):
                 out(lamp)
 
         def run(edge, jit):

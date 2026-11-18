@@ -17,7 +17,7 @@ from typing import cast
 import pytest
 
 from pyrung.circuitpy import P1AM, generate_circuitpy
-from pyrung.core import PLC, Block, Int, Program, Rung, TagType, copy, fill
+from pyrung.core import PLC, Block, Int, Program, TagType, copy, fill, rung
 from tests.circuitpy.test_codegen import _context_for_program, _run_single_scan_source
 from tests.core.test_fault_flags import _StubBase
 
@@ -59,7 +59,7 @@ def _program(shape: Shape, held: list[Block] | None = None) -> tuple[Program, we
     if held is not None:
         held.append(block)
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             shape(block)
     return program, weakref.ref(block)
 
@@ -121,7 +121,7 @@ def test_a_name_mapped_onto_a_block_only_the_map_held() -> None:
         name = Int("LifeName")
         name.map_to(slots[3])
         with Program(strict=False) as program:
-            with Rung():
+            with rung():
                 copy(7, name)
         return program, weakref.ref(slots)
 

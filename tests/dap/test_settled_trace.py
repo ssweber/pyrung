@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import PLC, Bool, Program, Rung, branch, call, forloop, out, subroutine
+from pyrung.core import PLC, Bool, Program, branch, call, forloop, out, rung, subroutine
 from pyrung.dap.adapter import _settled_rung_event
 
 
@@ -28,20 +28,20 @@ def test_branches_sharing_a_source_line_keep_their_own_state() -> None:
             out(coil)
 
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             leg(a, y1)
             leg(b, y2)
             with branch(c):
                 with branch(y1):
                     out(y3)
 
-    rung = prog.rungs[0]
-    first_leg, second_leg, outer = rung._branches
+    rung0 = prog.rungs[0]
+    first_leg, second_leg, outer = rung0._branches
     assert first_leg.source_line == second_leg.source_line
     plc = PLC(prog)
     plc.patch({"Go": True, "A": True, "B": False, "C": True})
     assert _settled_regions(plc) == [
-        ("rung", rung.source_line, "enabled"),
+        ("rung", rung0.source_line, "enabled"),
         ("branch", first_leg.source_line, "enabled"),
         ("branch", second_leg.source_line, "disabled_local"),
         ("branch", outer.source_line, "enabled"),
@@ -52,16 +52,16 @@ def test_branches_sharing_a_source_line_keep_their_own_state() -> None:
 def test_unpowered_rung_shows_its_branches_off() -> None:
     go, a, y = Bool("Go"), Bool("A"), Bool("Y")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             with branch(a):
                 out(y)
 
-    rung = prog.rungs[0]
-    row = rung._branches[0]
+    rung0 = prog.rungs[0]
+    row = rung0._branches[0]
     plc = PLC(prog)
     plc.patch({"Go": False, "A": True})
     assert _settled_regions(plc) == [
-        ("rung", rung.source_line, "disabled_local"),
+        ("rung", rung0.source_line, "disabled_local"),
         ("branch", row.source_line, "disabled_parent"),
     ]
 
@@ -69,21 +69,21 @@ def test_unpowered_rung_shows_its_branches_off() -> None:
 def test_a_called_subroutine_adds_no_regions_to_the_caller() -> None:
     go, a, y, z = Bool("Go"), Bool("A"), Bool("Y"), Bool("Z")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             call("Sub")
             with branch(a):
                 out(y)
         with subroutine("Sub"):
-            with Rung(a):
+            with rung(a):
                 with branch(go):
                     out(z)
 
-    rung = prog.rungs[0]
-    row = rung._branches[0]
+    rung0 = prog.rungs[0]
+    row = rung0._branches[0]
     plc = PLC(prog)
     plc.patch({"Go": True, "A": True})
     assert _settled_regions(plc) == [
-        ("rung", rung.source_line, "enabled"),
+        ("rung", rung0.source_line, "enabled"),
         ("branch", row.source_line, "enabled"),
     ]
 
@@ -95,22 +95,22 @@ def test_a_loop_body_adds_no_regions_and_the_branches_after_it_keep_their_state(
     go, a, b, c = Bool("Go"), Bool("A"), Bool("B"), Bool("C")
     x, y, z, w = Bool("X"), Bool("Y"), Bool("Z"), Bool("W")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             with forloop(2):
                 out(x)
-                with Rung(a):
+                with rung(a):
                     out(y)
             with branch(b):
                 out(z)
             with branch(c):
                 out(w)
 
-    rung = prog.rungs[0]
-    first, second = rung._branches
+    rung0 = prog.rungs[0]
+    first, second = rung0._branches
     plc = PLC(prog)
     plc.patch({"Go": True, "A": True, "B": False, "C": True})
     assert _settled_regions(plc) == [
-        ("rung", rung.source_line, "enabled"),
+        ("rung", rung0.source_line, "enabled"),
         ("branch", first.source_line, "disabled_local"),
         ("branch", second.source_line, "enabled"),
     ]
@@ -122,7 +122,7 @@ def test_branches_under_an_unpowered_branch_are_shown_off() -> None:
     go, a, b, c, d = Bool("Go"), Bool("A"), Bool("B"), Bool("C"), Bool("D")
     x, y, z = Bool("X"), Bool("Y"), Bool("Z")
     with Program(strict=False) as prog:
-        with Rung(go):
+        with rung(go):
             with branch(a):
                 out(x)
                 with branch(b):
@@ -132,13 +132,13 @@ def test_branches_under_an_unpowered_branch_are_shown_off() -> None:
             with branch(d):
                 out(x)
 
-    rung = prog.rungs[0]
-    off, on = rung._branches
+    rung0 = prog.rungs[0]
+    off, on = rung0._branches
     inner = off._branches[0]
     plc = PLC(prog)
     plc.patch({"Go": True, "A": False, "B": True, "C": True, "D": True})
     assert _settled_regions(plc) == [
-        ("rung", rung.source_line, "enabled"),
+        ("rung", rung0.source_line, "enabled"),
         ("branch", off.source_line, "disabled_local"),
         ("branch", inner.source_line, "disabled_parent"),
         ("branch", inner._branches[0].source_line, "disabled_parent"),

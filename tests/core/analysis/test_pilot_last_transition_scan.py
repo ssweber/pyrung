@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from pyrung import PLC, Bool, Int, Program, Real, Rung, Timer, copy, math, on_delay, out
+from pyrung import PLC, Bool, Int, Program, Real, Timer, copy, math, on_delay, out, rung
 from pyrung.core import coast_run, scan_trace
 from pyrung.core.analysis.pilot.correction_candidates import _last_transition_scan
 from pyrung.core.harness import Harness
@@ -40,17 +40,17 @@ TAGS = ("Go", "Flip", "Count", "Noisy", "Delay_Done", "Delay_Acc", "Ramp", "Neve
 
 def _program() -> Program:
     with Program(strict=False) as program:
-        with Rung(~Flip):
+        with rung(~Flip):
             out(Flip)
-        with Rung(Go):
+        with rung(Go):
             math(Count + 1, Count)
-        with Rung():
+        with rung():
             # It changes on every scan, so the records stop keeping its values after
             # 1,000 changes.
             math((Noisy * 75 + 74) % 30011, Noisy)
-        with Rung(Go):
+        with rung(Go):
             math(Ramp + 0.1, Ramp)
-        with Rung(Go):
+        with rung(Go):
             on_delay(Delay, preset=50)
     return program
 
@@ -152,7 +152,7 @@ NAN_TAGS = ("Source", "Copied", "Scaled", "Steps")
 
 def _nan_program() -> Program:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             # copy() keeps the NaN that it copies.  math() makes a new NaN each scan, and that
             # is not a change.
             copy(Source, Copied)
@@ -212,9 +212,9 @@ def _assert_agree_against_stepping(runs: dict[bool, PLC], edges: tuple[int, ...]
 
 def test_a_nan_computed_until_its_rung_stops_agrees() -> None:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(Steps + 1, Steps)
-        with Rung(Steps < 300):
+        with rung(Steps < 300):
             math(Source * 1.0, Scaled)
     runs = {}
     for coast in (False, True):
@@ -232,10 +232,10 @@ def test_a_nan_computed_until_its_rung_stops_agrees() -> None:
 
 def test_a_real_that_turns_nan_in_the_loop_agrees() -> None:
     with Program(strict=False) as program:
-        with Rung():
+        with rung():
             math(Steps + 1, Steps)
             math(Scaled + 0.5, Scaled)
-        with Rung(Scaled > 100.0):
+        with rung(Scaled > 100.0):
             math(Scaled + Source, Copied)
     runs = {}
     for coast in (False, True):
@@ -269,7 +269,7 @@ Stage = Int("Stage")
 
 def test_a_harness_installed_mid_run_agrees() -> None:
     with Program() as program:
-        with Rung(Enable, Feedback):
+        with rung(Enable, Feedback):
             copy(1, Stage)
     plc = PLC(program, dt=0.01)
     plc.patch({"Enable": True})

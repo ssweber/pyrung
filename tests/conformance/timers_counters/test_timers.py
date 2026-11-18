@@ -88,7 +88,7 @@ import pytest
 
 from pyrung.conformance import Group, assert_all_passed, case, run
 from pyrung.conformance import _runner as runner_module
-from pyrung.core import Or, Rung, copy, math, off_delay, on_delay, out
+from pyrung.core import Or, copy, math, off_delay, on_delay, out, rung
 from tests.conformance.memory import ClickTimer, c
 from tests.conformance.scans import WINDOW, count_scans, deadline, done, scans_for, trace
 
@@ -117,19 +117,19 @@ def prove_ton_auto_reset(slot):
     # T1's rung is true in step 0 only. The step ends once Acc reads 500, past the 200 ms
     # preset. Step 1 is the first scan on which the rung is false.
     ton = ClickTimer(1)
-    with Rung(*step(slot, 0)):
+    with rung(*step(slot, 0)):
         on_delay(ton, 200)
-    with Rung(*step(slot, 2)):
+    with rung(*step(slot, 2)):
         copy(1, slot.Fired)
-    with Rung(*step(slot, 1), ton.Acc != 0):
+    with rung(*step(slot, 1), ton.Acc != 0):
         copy(ton.Acc, slot.Result1)
-    with Rung(*step(slot, 1), ton.Done):
+    with rung(*step(slot, 1), ton.Done):
         copy(1, slot.Result2)
-    with Rung(*step(slot, 1)):
+    with rung(*step(slot, 1)):
         copy(2, slot.Scratch)
-    with Rung(*step(slot, 0), ton.Acc >= 500, ton.Done):
+    with rung(*step(slot, 0), ton.Acc >= 500, ton.Done):
         copy(1, slot.Result3)
-    with Rung(*step(slot, 0), ton.Acc >= 500):
+    with rung(*step(slot, 0), ton.Acc >= 500):
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(3), TON_AUTO_RESET_DEADLINE_MS)
 
@@ -138,7 +138,7 @@ def prove_ton_done_on_enabling_scan(slot):
     # The rung goes true on scan 3. The preset is 0 ms.
     ton = ClickTimer(11)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch >= 3):
+    with rung(slot.Cmd != 0, slot.Scratch >= 3):
         on_delay(ton, 0)
     trace(slot, ton.Done)
     done(slot)
@@ -148,19 +148,19 @@ def prove_rton_holds_across_rung_false(slot):
     # T21's rung is true in step 0 only, until its Acc reads 250. Step 1 runs T22, a 200 ms
     # TON, so the RTON would have counted on if it did not hold. Step 2 reads it.
     rton, wait = ClickTimer(21), ClickTimer(22)
-    with Rung(*step(slot, 0)):
+    with rung(*step(slot, 0)):
         on_delay(rton, 200).reset(slot.Cmd == 0)
-    with Rung(*step(slot, 1)):
+    with rung(*step(slot, 1)):
         on_delay(wait, 200)
-    with Rung(*step(slot, 2)):
+    with rung(*step(slot, 2)):
         copy(1, slot.Fired)
-    with Rung(*step(slot, 2), rton.Done):
+    with rung(*step(slot, 2), rton.Done):
         copy(1, slot.Result1)
-    with Rung(*step(slot, 2), rton.Acc >= 250, rton.Acc < 300):
+    with rung(*step(slot, 2), rton.Acc >= 250, rton.Acc < 300):
         copy(1, slot.Result2)
-    with Rung(*step(slot, 1), wait.Done):
+    with rung(*step(slot, 1), wait.Done):
         copy(2, slot.Scratch)
-    with Rung(*step(slot, 0), rton.Acc >= 250):
+    with rung(*step(slot, 0), rton.Acc >= 250):
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(23), RTON_HOLDS_DEADLINE_MS)
 
@@ -170,10 +170,10 @@ def prove_rton_reset_gap(slot):
     # scan 4 only.
     rton = ClickTimer(31)
     count_scans(slot)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(rton, 0).reset(Or(slot.Cmd == 0, slot.Scratch == 4))
     trace(slot, ~rton.Done)
-    with Rung(slot.Cmd != 0, slot.Scratch == 4, rton.Acc == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 4, rton.Acc == 0):
         copy(1, slot.Result4)
     done(slot)
 
@@ -188,15 +188,15 @@ def prove_tof_never_enabled(slot):
     # every scan where Cmd != 0, so T42's rung is never true.
     dropped, never = ClickTimer(41), ClickTimer(42)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch <= 2):
+    with rung(slot.Cmd != 0, slot.Scratch <= 2):
         off_delay(dropped, TOF_LONG_PRESET)
-    with Rung(slot.Cmd != 0, slot.Scratch == 0):
+    with rung(slot.Cmd != 0, slot.Scratch == 0):
         off_delay(never, TOF_LONG_PRESET)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Done):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Done):
         math(slot.Result1 + 1, slot.Result1)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, dropped.Done):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, dropped.Done):
         math(slot.Result2 + 1, slot.Result2)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Acc != 0):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, never.Acc != 0):
         math(slot.Result3 + 1, slot.Result3)
     done(slot)
 
@@ -210,28 +210,28 @@ def prove_tof_times_only_when_false(slot):
     # T51's rung is true in step 0, which T52, a 200 ms TON, ends. The rung is false from step 1,
     # which ends once the TOF's Acc reads 400. Step 2 reads it.
     tof, wait = ClickTimer(51), ClickTimer(52)
-    with Rung(*step(slot, 0)):
+    with rung(*step(slot, 0)):
         off_delay(tof, 200)
-    with Rung(*step(slot, 0)):
+    with rung(*step(slot, 0)):
         on_delay(wait, 200)
-    with Rung(*step(slot, 2)):
+    with rung(*step(slot, 2)):
         copy(1, slot.Fired)
-    with Rung(*step(slot, 2), ~tof.Done, tof.Acc >= 400):
+    with rung(*step(slot, 2), ~tof.Done, tof.Acc >= 400):
         copy(1, slot.Result4)
     # Rung false: count the scans Done disagrees with Acc < 200.
-    with Rung(*step(slot, 1), tof.Done, tof.Acc >= 200):
+    with rung(*step(slot, 1), tof.Done, tof.Acc >= 200):
         math(slot.Result2 + 1, slot.Result2)
-    with Rung(*step(slot, 1), ~tof.Done, tof.Acc < 200):
+    with rung(*step(slot, 1), ~tof.Done, tof.Acc < 200):
         math(slot.Result2 + 1, slot.Result2)
     # It timed with Done still on.
-    with Rung(*step(slot, 1), tof.Done, tof.Acc > 0, tof.Acc < 200):
+    with rung(*step(slot, 1), tof.Done, tof.Acc > 0, tof.Acc < 200):
         copy(1, slot.Result3)
-    with Rung(*step(slot, 1), tof.Acc >= 400):
+    with rung(*step(slot, 1), tof.Acc >= 400):
         copy(2, slot.Scratch)
     # Rung true: count the scans Done is off or Acc is not 0.
-    with Rung(*step(slot, 0), Or(~tof.Done, tof.Acc != 0)):
+    with rung(*step(slot, 0), Or(~tof.Done, tof.Acc != 0)):
         math(slot.Result1 + 1, slot.Result1)
-    with Rung(*step(slot, 0), wait.Done):
+    with rung(*step(slot, 0), wait.Done):
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(53), TOF_TIMES_DEADLINE_MS)
 
@@ -241,10 +241,10 @@ def prove_tof_enable_atomic(slot):
     # falls on scan 3.
     tof = ClickTimer(61)
     count_scans(slot)
-    with Rung(slot.Cmd != 0, slot.Scratch != 3, slot.Scratch != 4):
+    with rung(slot.Cmd != 0, slot.Scratch != 3, slot.Scratch != 4):
         off_delay(tof, 0)
     trace(slot, ~tof.Done)
-    with Rung(slot.Cmd != 0, slot.Scratch <= WINDOW, tof.Done, tof.Acc != 0):
+    with rung(slot.Cmd != 0, slot.Scratch <= WINDOW, tof.Done, tof.Acc != 0):
         math(slot.Result4 + 1, slot.Result4)
     done(slot)
 
@@ -253,23 +253,23 @@ def prove_preset_raised_resumes(slot):
     # The preset is Result4: 200 ms, raised to 500 ms on the scan T71 is done (step 0).
     # Step 1 is the first scan T71 runs with the raised preset. Step 2 ends on the TON's Done.
     ton = ClickTimer(71)
-    with Rung(slot.Cmd != 0, slot.Result4 == 0):
+    with rung(slot.Cmd != 0, slot.Result4 == 0):
         copy(200, slot.Result4)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ton, slot.Result4)
-    with Rung(*step(slot, 3)):
+    with rung(*step(slot, 3)):
         copy(1, slot.Fired)
-    with Rung(*step(slot, 2), ton.Done, ton.Acc < 600):
+    with rung(*step(slot, 2), ton.Done, ton.Acc < 600):
         copy(1, slot.Result3)
-    with Rung(*step(slot, 2), ton.Done):
+    with rung(*step(slot, 2), ton.Done):
         copy(3, slot.Scratch)
-    with Rung(*step(slot, 1), ~ton.Done):
+    with rung(*step(slot, 1), ~ton.Done):
         copy(1, slot.Result1)
-    with Rung(*step(slot, 1), ton.Acc >= 200):
+    with rung(*step(slot, 1), ton.Acc >= 200):
         copy(1, slot.Result2)
-    with Rung(*step(slot, 1)):
+    with rung(*step(slot, 1)):
         copy(2, slot.Scratch)
-    with Rung(*step(slot, 0), ton.Done):
+    with rung(*step(slot, 0), ton.Done):
         copy(500, slot.Result4)
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(72), PRESET_RAISED_DEADLINE_MS)
@@ -279,19 +279,19 @@ def prove_preset_lowered_fires_at_once(slot):
     # The preset is Result4: 1000 ms, lowered to 100 ms once Acc reads 300 (step 0).
     # Step 1 is the first scan T81 runs with the lowered preset.
     ton = ClickTimer(81)
-    with Rung(slot.Cmd != 0, slot.Result4 == 0):
+    with rung(slot.Cmd != 0, slot.Result4 == 0):
         copy(1000, slot.Result4)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ton, slot.Result4)
-    with Rung(*step(slot, 1), ton.Done):
+    with rung(*step(slot, 1), ton.Done):
         copy(1, slot.Result1)
-    with Rung(*step(slot, 2)):
+    with rung(*step(slot, 2)):
         copy(1, slot.Fired)
-    with Rung(*step(slot, 1), ton.Acc >= 300):
+    with rung(*step(slot, 1), ton.Acc >= 300):
         copy(1, slot.Result2)
-    with Rung(*step(slot, 1)):
+    with rung(*step(slot, 1)):
         copy(2, slot.Scratch)
-    with Rung(*step(slot, 0), ton.Acc >= 300):
+    with rung(*step(slot, 0), ton.Acc >= 300):
         copy(100, slot.Result4)
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(82), PRESET_LOWERED_DEADLINE_MS)
@@ -301,17 +301,17 @@ def prove_fractional_accumulation(slot):
     # T91 counts seconds and T92 counts milliseconds, both from the same scan. C1491 is
     # on for the scan on which T91 is first done.
     sec, clock = ClickTimer(91), ClickTimer(92)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(clock, 3000)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(sec, 1, unit="sec")
-    with Rung(slot.Cmd != 0, sec.Done):
+    with rung(slot.Cmd != 0, sec.Done):
         out(c[1491], oneshot=True)
-    with Rung(slot.Cmd != 0, c[1491], clock.Acc >= 990):
+    with rung(slot.Cmd != 0, c[1491], clock.Acc >= 990):
         copy(1, slot.Result2)
-    with Rung(slot.Cmd != 0, c[1491], clock.Acc < 1100):
+    with rung(slot.Cmd != 0, c[1491], clock.Acc < 1100):
         copy(1, slot.Result3)
-    with Rung(slot.Cmd != 0, clock.Acc >= 1500):
+    with rung(slot.Cmd != 0, clock.Acc >= 1500):
         copy(sec.Acc, slot.Result1, oneshot=True)
         copy(1, slot.Fired, oneshot=True)
 
@@ -322,22 +322,22 @@ def prove_acc_clamps_at_32767(slot):
     # already done so. Step 1 ends once Acc reads 32767. Step 2 runs T98, a 200 ms TON, so a TD
     # that wraps or falls back shows.
     ton, wait = ClickTimer(96), ClickTimer(98)
-    with Rung(slot.Cmd != 0):
+    with rung(slot.Cmd != 0):
         on_delay(ton, 100)
-    with Rung(*step(slot, 2)):
+    with rung(*step(slot, 2)):
         on_delay(wait, 200)
-    with Rung(*step(slot, 3)):
+    with rung(*step(slot, 3)):
         copy(1, slot.Fired)
-    with Rung(*step(slot, 2), wait.Done):
+    with rung(*step(slot, 2), wait.Done):
         copy(ton.Acc, slot.Result1)
         copy(3, slot.Scratch)
-    with Rung(*step(slot, 1), ton.Acc >= 32000):
+    with rung(*step(slot, 1), ton.Acc >= 32000):
         copy(1, slot.Result3)
-    with Rung(*step(slot, 1), ton.Acc == 32767, ton.Done):
+    with rung(*step(slot, 1), ton.Acc == 32767, ton.Done):
         copy(1, slot.Result2)
-    with Rung(*step(slot, 1), ton.Acc == 32767):
+    with rung(*step(slot, 1), ton.Acc == 32767):
         copy(2, slot.Scratch)
-    with Rung(*step(slot, 0), ton.Acc > 0):
+    with rung(*step(slot, 0), ton.Acc > 0):
         copy(32000, ton.Acc)
         copy(1, slot.Scratch)
     deadline(slot, ClickTimer(97), ACC_CLAMP_DEADLINE_MS)

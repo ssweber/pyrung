@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from pyclickplc.modbus import plc_to_modbus
 
-from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word, math
+from pyrung import Block, Bool, Char, Dint, Int, Program, Real, TagType, Word, math, rung
 from pyrung.circuitpy import (
     P1AM,
     CircuitPyOutput,
@@ -214,7 +214,7 @@ def test_a_send_of_any_nan_sends_all_ones(monkeypatch, bits):
     source = Real("Source")
     flags = {name: Bool(name) for name in ("Sending", "Success", "Error")}
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             for remote_start in ("DF1", ModbusAddress(0x300)):
                 send(
                     target="peer",
@@ -239,7 +239,7 @@ def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
     dest = Int("Dest")
     mapping = TagMap({src: ds[1], dest: ds[2]})
     with Program(strict=False) as prog:
-        with Rung():
+        with rung():
             math(src * 7, dest)
 
     result = _ctx_and_source(prog, mapping)
@@ -639,7 +639,7 @@ def test_modbus_client_send_codegen_builds_expected_request_and_states(monkeypat
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target="peer",
                 remote_start="DS1",
@@ -748,7 +748,7 @@ def test_modbus_client_connect_would_block_keeps_request_in_flight(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target="peer",
                 remote_start="DS1",
@@ -834,7 +834,7 @@ def test_modbus_client_receive_codegen_applies_response(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target="peer",
                 remote_start="DS1",
@@ -1339,7 +1339,7 @@ def test_codegen_client_receive_first_and_last_of_every_bank(monkeypatch):
         ex_code = Int("ExCode")
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 receive(
                     target="peer",
                     remote_start=remote_start,
@@ -1380,7 +1380,7 @@ def test_codegen_client_receive_zero_txt_byte_is_nul(monkeypatch, remote_start, 
     dest = Char("Dest", default="Q")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target="peer",
                 remote_start=remote_start,
@@ -1497,7 +1497,7 @@ def test_codegen_client_send_first_and_last_of_every_bank(monkeypatch):
         ex_code = Int("ExCode")
 
         with Program(strict=False) as prog:
-            with Rung(enable):
+            with rung(enable):
                 send(
                     target="peer",
                     remote_start=remote_start,
@@ -1617,7 +1617,7 @@ def test_raw_send_int_single_register(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x100),
@@ -1649,7 +1649,7 @@ def test_raw_send_with_status_bits_left_off(monkeypatch):
     success = Bool("Success")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x100),
@@ -1676,7 +1676,7 @@ def test_raw_send_dint_high_low(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x200),
@@ -1704,7 +1704,7 @@ def test_raw_send_dint_low_high(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x200),
@@ -1733,7 +1733,7 @@ def test_raw_send_real_high_low(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x300),
@@ -1761,7 +1761,7 @@ def test_raw_send_coil_single(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x10, RegisterType.COIL),
@@ -1788,7 +1788,7 @@ def test_raw_receive_int_holding(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
@@ -1822,7 +1822,7 @@ def test_raw_receive_dint_high_low(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
@@ -1858,7 +1858,7 @@ def test_raw_receive_dint_low_high(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
@@ -1893,7 +1893,7 @@ def test_raw_receive_real_high_low(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x300, RegisterType.HOLDING),
@@ -1928,7 +1928,7 @@ def test_raw_receive_input_register(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x50, RegisterType.INPUT),
@@ -1963,7 +1963,7 @@ def test_raw_receive_discrete_input(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x20, RegisterType.DISCRETE_INPUT),
@@ -1998,7 +1998,7 @@ def test_raw_receive_coil(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x30, RegisterType.COIL),
@@ -2037,7 +2037,7 @@ def test_raw_rtu_target_rejected():
     rtu_target = ModbusRtuTarget(name="meter", serial_port="/dev/ttyUSB0")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=rtu_target,
                 remote_start=ModbusAddress(0x100),
@@ -2069,7 +2069,7 @@ def test_a_missing_modbus_client_is_a_gap_the_runner_steps_past():
     from pyrung.core.runner import _looks_like_compiled_replay_gap
 
     with Program(strict=False) as prog:
-        with Rung(Bool("Enable", default=True)):
+        with rung(Bool("Enable", default=True)):
             send(
                 target=ModbusTcpTarget(name="meter", ip="192.168.1.99"),
                 remote_start=ModbusAddress(0x100),
@@ -2096,7 +2096,7 @@ def test_raw_send_signed_int_negative(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             send(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x100),
@@ -2124,7 +2124,7 @@ def test_raw_receive_signed_int_negative(monkeypatch):
     ex_code = Int("ExCode")
 
     with Program(strict=False) as prog:
-        with Rung(enable):
+        with rung(enable):
             receive(
                 target=_RAW_TARGET,
                 remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
@@ -2168,7 +2168,7 @@ def test_client_config_refuses_click_only_target_forms():
 def test_codegen_refuses_click_only_forms_on_the_instruction_target(target, error, match):
     """The generated code connects with ModbusClientConfig's target, so it can't honour these."""
     with Program(strict=False) as prog:
-        with Rung(Bool("Enable")):
+        with rung(Bool("Enable")):
             send(
                 target=target,
                 remote_start=ModbusAddress(0x100),

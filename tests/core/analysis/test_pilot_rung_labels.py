@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung import Bool, Program, Rung, call, latch, subroutine
+from pyrung import Bool, Program, call, latch, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.options import _producer_label
 from pyrung.core.analysis.pilot.trace_routes import enumerate_trace_choices
@@ -16,12 +16,12 @@ def _program():
     c = Bool("C", external=True)
     target = Bool("Target")
     with Program(strict=False) as program:
-        with Rung(c):
+        with rung(c):
             latch(target)
-        with Rung(a):
+        with rung(a):
             call("sub")
         with subroutine("sub"):
-            with Rung(b):
+            with rung(b):
                 latch(target)
     return program
 

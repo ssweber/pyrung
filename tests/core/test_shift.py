@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import Block, Bool, Int, Program, Rung, SystemState, TagType, latch, shift
+from pyrung.core import Block, Bool, Int, Program, SystemState, TagType, latch, rung, shift
 from tests.conftest import evaluate_program
 
 
@@ -17,7 +17,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -57,9 +57,9 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 latch(Clock)
-            with Rung(Data).continued():
+            with rung(Data).continued():
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -79,7 +79,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(2, 7)).clock(Clock).reset(Reset)
 
         state = SystemState().with_tags(
@@ -107,7 +107,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -131,7 +131,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(2, 7)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -151,7 +151,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(2, 7).reverse()).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -171,7 +171,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -192,7 +192,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = runner_factory(logic)
@@ -215,7 +215,7 @@ class TestShiftInstruction:
         DS = Block("DS", TagType.INT, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(DS.select(1, 3)).clock(Clock).reset(Reset)
 
         state = SystemState().with_tags({"Data": True, "Clock": True, "Reset": False})
@@ -232,7 +232,7 @@ class TestShiftInstruction:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(Start, End)).clock(Clock).reset(Reset)
 
         state = SystemState().with_tags(
@@ -251,7 +251,7 @@ class TestShiftInstruction:
         X = Block("X", TagType.BOOL, 1, 816, valid_ranges=((1, 16), (21, 36)))
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(X.select(Start, End)).clock(Clock).reset(Reset)
 
         state = SystemState().with_tags(
@@ -271,7 +271,7 @@ class TestShiftBuilder:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program() as logic:
-            with Rung(Data):
+            with rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         state = SystemState().with_tags({"Data": True, "Clock": True, "Reset": False, "C1": False})
@@ -285,7 +285,7 @@ class TestShiftBuilder:
 
         with pytest.raises(RuntimeError, match="clock"):
             with Program():
-                with Rung(Data):
+                with rung(Data):
                     shift(C.select(1, 3)).reset(Reset)
 
     def test_shift_builder_requires_clock_then_reset_chain_completion(self):
@@ -297,7 +297,7 @@ class TestShiftBuilder:
             RuntimeError, match="shift\\(\\.\\.\\.\\)\\.clock\\(\\.\\.\\.\\)\\.reset"
         ):
             with Program():
-                with Rung(Data):
+                with rung(Data):
                     shift(C.select(1, 3)).clock(Clock)
 
     def test_clock_rejects_int_tag_condition(self):
@@ -307,7 +307,7 @@ class TestShiftBuilder:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program():
-            with Rung(Data):
+            with rung(Data):
                 with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     shift(C.select(1, 3)).clock(ClockValue).reset(Reset)
 
@@ -318,6 +318,6 @@ class TestShiftBuilder:
         C = Block("C", TagType.BOOL, 1, 100)
 
         with Program():
-            with Rung(Data):
+            with rung(Data):
                 with pytest.raises(TypeError, match="so it cannot be a condition by itself"):
                     shift(C.select(1, 3)).clock(Clock).reset(ResetValue)

@@ -3107,7 +3107,7 @@ def _reads_scan_entry_value(tag_name: str, graph: ProgramGraph) -> bool:
 
     Such a read sees the value the tag ended the previous scan with, so the
     tag carries state across the scan boundary even when every writer is an
-    unconditional OTE: ``Rung(Y2): out(Y3)`` above ``Rung(Y1): out(Y2)``.
+    unconditional OTE: ``rung(Y2): out(Y3)`` above ``rung(Y1): out(Y2)``.
     """
     chain = graph.def_use_chains.get(tag_name)
     return bool(chain) and bool(chain[0].read_by)

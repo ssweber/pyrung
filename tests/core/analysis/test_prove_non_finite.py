@@ -12,13 +12,13 @@ from pyrung import (
     Int,
     Program,
     Real,
-    Rung,
     copy,
     math,
     out,
     pack_text,
     pack_words,
     receive,
+    rung,
 )
 from pyrung.core import PLC
 from pyrung.core.analysis.pdg import build_program_graph
@@ -38,7 +38,7 @@ def _non_finite(program: Any) -> set[str]:
 def _with(*rungs: Any) -> Any:
     with Program(strict=False) as prog:
         for condition, write in rungs:
-            with Rung(condition):
+            with rung(condition):
                 write()
     return prog
 
@@ -115,11 +115,11 @@ def test_text_just_past_the_real_range_parses_to_inf() -> None:
     text = Block("Text", TagType.CHAR, 1, 13)
     parsed = Real("Parsed")
     with Program(strict=False) as prog:
-        with Rung(GO):
+        with rung(GO):
             pack_text(text.select(1, 13), parsed)
-        with Rung(parsed > 1.0):
+        with rung(parsed > 1.0):
             out(Bool("ParsedHigh"))
-        with Rung(GO):
+        with rung(GO):
             copy(parsed, COPY)
     assert _non_finite(prog) == {"Parsed", "Copied"}
 
@@ -142,12 +142,12 @@ def test_an_element_a_pointer_write_lists_no_target_for_may_hold_one() -> None:
     big = Block("BigR", TagType.REAL, 1, 2000)
     pointer = Int("WritePointer", external=True)
     with Program(strict=False) as prog:
-        with Rung(GO):
+        with rung(GO):
             copy(3.0e38, BIG)
-        with Rung(Bool("Scale", external=True)):
+        with rung(Bool("Scale", external=True)):
             math(BIG * 10, OUT)
             copy(OUT, big[pointer])
-        with Rung(big[5] > 1.0):
+        with rung(big[5] > 1.0):
             out(Bool("Big5High"))
     assert "BigR5" in _non_finite(prog)
     ctx = passes._PassContext(program=prog, dt=0.01)
@@ -159,9 +159,9 @@ def test_an_element_a_pointer_write_lists_no_target_for_may_hold_one() -> None:
 def test_a_real_the_outside_and_a_rung_both_write_has_no_domain() -> None:
     hmi = Real("HmiSetpoint", external=True)
     with Program(strict=False) as prog:
-        with Rung(GO):
+        with rung(GO):
             copy(1.0, hmi)
-        with Rung(hmi > 2.0):
+        with rung(hmi > 2.0):
             out(Bool("SetpointHigh"))
     ctx = passes._PassContext(program=prog, dt=0.01)
     prior = passes._run_prior_pipeline(ctx)
@@ -197,14 +197,14 @@ def test_a_real_that_may_hold_nan_has_no_domain() -> None:
     nan = Real("MaybeNan")
     shown = Int("NanShown")
     with Program(strict=False) as prog:
-        with Rung(GO):
+        with rung(GO):
             copy(3.0e38, BIG)
-        with Rung(Bool("Scale", external=True)):
+        with rung(Bool("Scale", external=True)):
             math(BIG * 10, OUT)
             math(OUT - OUT, nan)
-        with Rung(nan >= 0):
+        with rung(nan >= 0):
             out(Bool("NotBelow"))
-        with Rung(Bool("Show", external=True)):
+        with rung(Bool("Show", external=True)):
             copy(nan, shown)
     ctx = passes._PassContext(program=prog, dt=0.01)
     prior = passes._run_prior_pipeline(ctx)
@@ -219,14 +219,14 @@ def test_check_makes_no_claim_on_a_nan_compared_with_itself() -> None:
     call ``x == x`` always true."""
     nan = Real("MaybeNan")
     with Program(strict=False) as prog:
-        with Rung(GO):
+        with rung(GO):
             copy(3.0e38, BIG)
-        with Rung(Bool("Scale", external=True)):
+        with rung(Bool("Scale", external=True)):
             math(BIG * 10, OUT)
             math(OUT - OUT, nan)
-        with Rung(nan == nan):
+        with rung(nan == nan):
             out(Bool("IsANumber"))
-        with Rung(nan != nan):
+        with rung(nan != nan):
             out(Bool("IsNan"))
     assert not prog.check(select={"CMP_ALWAYS_FALSE", "CMP_ALWAYS_TRUE"})
 
@@ -236,11 +236,11 @@ def test_an_input_real_copied_into_an_int_keeps_a_domain() -> None:
     temp = Real("DryerTemp", external=True)
     shown = Int("TempShown")
     with Program(strict=False) as prog:
-        with Rung(GO):
+        with rung(GO):
             copy(temp, shown)
-        with Rung(temp > 150.0):
+        with rung(temp > 150.0):
             out(Bool("TooHot"))
-        with Rung(shown >= Int("Setpoint", external=True)):
+        with rung(shown >= Int("Setpoint", external=True)):
             out(Bool("AtSetpoint"))
     ctx = passes._PassContext(program=prog, dt=0.01)
     prior = passes._run_prior_pipeline(ctx)

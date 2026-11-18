@@ -383,7 +383,7 @@ class TestTagComparison:
 
         Button = Bool("Button")
 
-        # When used in Rung(), a BOOL tag becomes a normally open contact.
+        # When used in rung(), a BOOL tag becomes a normally open contact.
         # Rung behavior is tested in test_rung.py.
         assert Button.type == TagType.BOOL
 
@@ -416,13 +416,13 @@ class TestTagDefaultSeeding:
 
     def test_bool_default_true_in_initial_state(self, runner_factory):
         """Bool(default=True) should appear in state at construction."""
-        from pyrung import Bool, Program, Rung, reset
+        from pyrung import Bool, Program, reset, rung
 
         StopBtn = Bool("StopBtn", default=True)
         Running = Bool("Running")
 
         with Program(strict=False) as logic:
-            with Rung(~StopBtn):
+            with rung(~StopBtn):
                 reset(Running)
 
         runner = runner_factory(logic)
@@ -430,13 +430,13 @@ class TestTagDefaultSeeding:
 
     def test_bool_default_true_condition_agrees_with_value(self, runner_factory):
         """~Bool(default=True) should evaluate False — condition must agree with .value."""
-        from pyrung import Bool, Program, Rung, out
+        from pyrung import Bool, Program, out, rung
 
         Flag = Bool("Flag", default=True)
         Result = Bool("Result")
 
         with Program(strict=False) as logic:
-            with Rung(~Flag):
+            with rung(~Flag):
                 out(Result)
 
         runner = runner_factory(logic)
@@ -446,13 +446,13 @@ class TestTagDefaultSeeding:
 
     def test_standard_defaults_also_seeded(self, runner_factory):
         """Even tags with standard defaults (Bool=False) should be in state."""
-        from pyrung import Bool, Int, Program, Rung, out
+        from pyrung import Bool, Int, Program, out, rung
 
         X = Bool("X")
         Y = Int("Y")
 
         with Program(strict=False) as logic:
-            with Rung(X):
+            with rung(X):
                 out(Y)
 
         runner = runner_factory(logic)
@@ -463,13 +463,13 @@ class TestTagDefaultSeeding:
 
     def test_initial_state_not_overwritten_by_defaults(self, runner_factory):
         """User-provided initial_state values take precedence over tag defaults."""
-        from pyrung import Bool, Program, Rung, out
+        from pyrung import Bool, Program, out, rung
         from pyrung.core.state import SystemState
 
         X = Bool("X")  # default=False
 
         with Program(strict=False) as logic:
-            with Rung(X):
+            with rung(X):
                 out(Bool("Out"))
 
         state = SystemState().with_tags({"X": True})

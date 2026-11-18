@@ -1,4 +1,4 @@
-"""Tests for Rung.continued() -- a continued rung reads its contacts live.
+"""Tests for rung.continued() -- a continued rung reads its contacts live.
 
 A continued rung is a row of the CLICK rung above it: its trunk is the rail and
 its contacts read when the solve reaches it, so they see every write above it
@@ -12,7 +12,6 @@ from pyrung.core import (
     Bool,
     Int,
     Program,
-    Rung,
     SystemState,
     Timer,
     branch,
@@ -20,6 +19,7 @@ from pyrung.core import (
     latch,
     on_delay,
     out,
+    rung,
 )
 from tests.conftest import evaluate_program
 
@@ -34,10 +34,10 @@ class TestContinueBasic:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 # This sets X = True during rung 1's execution
                 out(X)
-            with Rung(X).continued():
+            with rung(X).continued():
                 # X is True by the time the solve reaches this row
                 out(Y)
 
@@ -55,9 +55,9 @@ class TestContinueBasic:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
-            with Rung(B).continued():
+            with rung(B).continued():
                 out(Y)
 
         state = SystemState().with_tags({"A": True, "B": True, "X": False, "Y": False})
@@ -75,14 +75,14 @@ class TestContinueBasic:
         Counter = Int("Counter")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 copy(10, Counter)
-            with Rung(Counter == 10).continued():
+            with rung(Counter == 10).continued():
                 # Counter is 10 by the time the solve reaches this row
                 out(X)
-            with Rung(Counter == 0).continued():
+            with rung(Counter == 0).continued():
                 out(Y)
-            with Rung(A).continued():
+            with rung(A).continued():
                 out(Z)
 
         state = SystemState().with_tags(
@@ -103,11 +103,11 @@ class TestContinueBasic:
         Counter = Int("Counter")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 copy(10, Counter)
-            with Rung(Counter == 10).continued():
+            with rung(Counter == 10).continued():
                 out(X)  # True: reads Counter=10 live
-            with Rung(Counter == 10):
+            with rung(Counter == 10):
                 out(Y)  # True: reads Counter=10
 
         state = SystemState().with_tags({"A": True, "Counter": 0, "X": False, "Y": False})
@@ -128,9 +128,9 @@ class TestContinueWithBranch:
         Z = Bool("Z")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
-            with Rung(A).continued():
+            with rung(A).continued():
                 out(Y)
                 with branch(X):
                     # X is True by the time the solve reaches this branch
@@ -154,7 +154,7 @@ class TestContinueStaticValidation:
 
         with pytest.raises(RuntimeError, match="cannot be the first rung in a program"):
             with Program():
-                with Rung(A).continued():
+                with rung(A).continued():
                     out(X)
 
     def test_continue_as_first_rung_in_subroutine_raises(self):
@@ -167,10 +167,10 @@ class TestContinueStaticValidation:
 
         with pytest.raises(RuntimeError, match="cannot be the first rung in a subroutine"):
             with Program():
-                with Rung(A):
+                with rung(A):
                     out(X)
                 with subroutine("my_sub"):
-                    with Rung(A).continued():
+                    with rung(A).continued():
                         out(Y)
 
 
@@ -186,14 +186,14 @@ class TestContinueSubroutineBoundary:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 out(X)
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung(A):
+                with rung(A):
                     out(Y)
-                # Rung(A).continued() would be at index 1 in the subroutine,
+                # rung(A).continued() would be at index 1 in the subroutine,
                 # which is valid structurally. But the snapshot should come
                 # from the subroutine's own first rung, not the caller.
 
@@ -214,16 +214,16 @@ class TestContinueSubroutineBoundary:
         Counter = Int("Counter")
 
         with Program() as logic:
-            with Rung(A):
+            with rung(A):
                 call("my_sub")
 
             with subroutine("my_sub"):
-                with Rung():
+                with rung():
                     copy(10, Counter)
-                with Rung(Counter == 10).continued():
+                with rung(Counter == 10).continued():
                     # Counter is 10 by the time the solve reaches this row
                     out(X)
-                with Rung(Counter == 0).continued():
+                with rung(Counter == 0).continued():
                     out(Y)
 
         runner = runner_factory(logic)
@@ -243,9 +243,9 @@ class TestContinueInstructionConditions:
         ResetBtn = Bool("ResetBtn")
 
         with Program() as logic:
-            with Rung(Enable):
+            with rung(Enable):
                 latch(ResetBtn)
-            with Rung(Enable).continued():
+            with rung(Enable).continued():
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = runner_factory(logic, dt=0.010)
@@ -264,17 +264,17 @@ class TestContinueMethodChaining:
     def test_continue_returns_self(self):
         """continued() returns the Rung instance for chaining."""
         A = Bool("A")
-        rung = Rung(A)
-        result = rung.continued()
-        assert result is rung
+        ctx = rung(A)
+        result = ctx.continued()
+        assert result is ctx
 
     def test_continue_sets_flag_on_underlying_rung(self):
         """continued() sets _use_prior_snapshot on the inner RungLogic."""
         A = Bool("A")
-        rung = Rung(A)
-        assert rung._rung._use_prior_snapshot is False
-        rung.continued()
-        assert rung._rung._use_prior_snapshot is True
+        ctx = rung(A)
+        assert ctx._rung._use_prior_snapshot is False
+        ctx.continued()
+        assert ctx._rung._use_prior_snapshot is True
 
     def test_continued_rung_cannot_have_comment(self):
         """comment() before a continued() rung raises."""
@@ -285,11 +285,11 @@ class TestContinueMethodChaining:
         Light = Bool("Light")
 
         with Program():
-            with Rung(A):
+            with rung(A):
                 out(Light)
             comment("not allowed")
             with pytest.raises(
                 RuntimeError, match="continued\\(\\) rung cannot have its own comment"
             ):
-                with Rung(B).continued():
+                with rung(B).continued():
                     out(Light)

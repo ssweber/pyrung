@@ -35,7 +35,6 @@ from pyrung.core import (
     Or,
     Program,
     Real,
-    Rung,
     TagType,
     Timer,
     Word,
@@ -43,6 +42,7 @@ from pyrung.core import (
     immediate,
     randint,
     rise,
+    rung,
     to_text,
 )
 from pyrung.core.program import (
@@ -139,8 +139,7 @@ Timers = Timer.clone("Timers", count=10)
 _EXEC_NAMESPACE: dict[str, object] = {
     # Core types
     "Program": Program,
-    "Rung": Rung,
-    "rung": Rung,
+    "rung": rung,
     "Bool": Bool,
     "Int": Int,
     "Dint": Dint,
@@ -435,9 +434,9 @@ def rows_logic(rows) -> list[tuple]:
     from pyrung.click.codegen.shaping import _tree_key
 
     outputs = []
-    for rung in _analyze_rungs(_parse_rows(rows)):
-        for instr in rung.instructions:
-            parts = [p for p in (rung.condition_tree, instr.branch_tree) if p is not None]
+    for analyzed in _analyze_rungs(_parse_rows(rows)):
+        for instr in analyzed.instructions:
+            parts = [p for p in (analyzed.condition_tree, instr.branch_tree) if p is not None]
             tree = make_compound(parts, Series) if parts else None
             outputs.append(
                 (
@@ -480,8 +479,8 @@ def _join_scope(rows, rungs) -> tuple[tuple[str, ...], ...]:
         starts = starts[:-1]
     if len(starts) != len(rungs):
         raise AssertionError(f"{len(starts)} CLICK rungs for {len(rungs)} program rungs")
-    for start, rung in zip(starts, rungs, strict=True):
-        if rung._use_prior_snapshot:
+    for start, program_rung in zip(starts, rungs, strict=True):
+        if program_rung._use_prior_snapshot:
             rows[start] = ("", *rows[start][1:])
     return tuple(rows)
 
@@ -533,11 +532,17 @@ def rung_drawing(rungs, *, as_exported: bool = False) -> list[tuple]:
         return pieces
 
     drawing = []
-    for rung in rungs:
+    for program_rung in rungs:
         if as_exported:
-            drawing.extend(split(len(rung._conditions), items(rung)))
+            drawing.extend(split(len(program_rung._conditions), items(program_rung)))
         else:
-            drawing.append((rung._use_prior_snapshot, len(rung._conditions), items(rung)))
+            drawing.append(
+                (
+                    program_rung._use_prior_snapshot,
+                    len(program_rung._conditions),
+                    items(program_rung),
+                )
+            )
     return drawing
 
 
@@ -602,7 +607,7 @@ def strip_pyrung_boilerplate(code: str) -> str:
     dedents one level.  Also removes any leading ``comment()`` calls (which
     appear when the CSV has rung comments).
 
-    Returns only the rung-level statements (``with Rung(...)``, etc.),
+    Returns only the rung-level statements (``with rung(...)``, etc.),
     normalized.
 
     Raises ``ValueError`` if no ``with Program`` block is found.
