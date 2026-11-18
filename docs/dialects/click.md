@@ -537,31 +537,38 @@ A program saved before a syntax check can hold a CLICK rung with several wires. 
 Use CLICK Programming Software's **PLC > Read Data from PLC** to dump the live state of a CLICK PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.
 
 ```python
-from pyclickplc import read_plc_data
-from pyrung import PLC, SystemState
+from pyrung import PLC
 
-data = read_plc_data("data.csv", skip_default=True)
-tags = mapping.tags_from_plc_data(data)
-runner = PLC(logic, initial_state=SystemState().with_tags(tags))
+state = mapping.load_snapshot("data.csv")
+runner = PLC(logic, initial_state=state)
 ```
 
-`read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
+`load_snapshot()` reads the CSV and seeds each tag that the TagMap maps. It skips any address that isn't mapped.
 
-`skip_default=True` omits zero, false and empty values. A PLC dump lists every address, and most sit at their default. Omitting them keeps the result small.
+By default (`skip_default=True`) it also skips zero, false and empty values. A PLC dump lists every address, and most sit at their default. Skipping them keeps the state small.
 
 Some programs use CLICK bank slots directly, such as `x.slot(1, name="Button")` or a bare `ds[5]`. Generated projects do this for plain nicknames. These addresses have no TagMap entry. Pass the bank set as `blocks` to seed them too:
 
 ```python
-tags = mapping.tags_from_plc_data(data, blocks=blocks)
+state = mapping.load_snapshot("data.csv", blocks=blocks)
 ```
 
-You can also inject a PLC snapshot mid-run:
+CLICK writes a TXT comma without quotes, so a TXT row that holds a comma and an empty address can be read more than one way. `load_snapshot()` leaves those TXT addresses out, loads the rest of the file and warns with `SkippedAddressesWarning`. The warning's `addresses` attribute lists the skipped addresses.
+
+To inject a PLC snapshot mid-run, read the file with `pyclickplc` and translate the hardware addresses with `tags_from_plc_data()`:
 
 ```python
-data = read_plc_data("data.csv", skip_default=True)
-runner.patch(mapping.tags_from_plc_data(data))
+from pyclickplc import PlcDataReadError, read_plc_data
+
+try:
+    data = read_plc_data("data.csv", skip_default=True)
+except PlcDataReadError as exc:
+    data = exc.values
+runner.patch(mapping.tags_from_plc_data(data, blocks=blocks))
 runner.step()  # applied at the start of this scan
 ```
+
+`read_plc_data()` raises `PlcDataReadError` on a file with those TXT rows. The error's `values` attribute holds every other address, and its `addresses` attribute lists the TXT addresses it could not read.
 
 ## ClickDataProvider — soft PLC
 

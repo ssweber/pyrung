@@ -418,13 +418,19 @@ class TagMap:
         logical tag names in this mapping.  Unmapped addresses are
         silently skipped unless *blocks* covers them.
 
+        To load a whole file as a starting state, call :meth:`load_snapshot`.
+        To patch a running PLC, read the file and translate it here:
+
         .. code-block:: python
 
-            from pyclickplc import read_plc_data
+            from pyclickplc import PlcDataReadError, read_plc_data
 
-            data = read_plc_data("data.csv", skip_default=True)
-            tags = mapping.tags_from_plc_data(data)
-            runner = PLC(logic, initial_state=SystemState().with_tags(tags))
+            try:
+                data = read_plc_data("data.csv", skip_default=True)
+            except PlcDataReadError as exc:
+                # values holds every address except the TXT addresses it could not read.
+                data = exc.values
+            runner.patch(mapping.tags_from_plc_data(data))
 
         Args:
             data: ``{hardware_address: value}`` dict — keys are normalised
