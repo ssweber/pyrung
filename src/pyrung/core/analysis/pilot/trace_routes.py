@@ -17,6 +17,7 @@ import pyrung.core.analysis.pilot.trace_read as _trace_read
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.writer_selection import _can_produce, _rank_writers
+from pyrung.core.analysis.query import _rung_label
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 
@@ -225,7 +226,7 @@ def enumerate_trace_choices(
         writer_locks: tuple[tuple[str, Any, int], ...] = ()
         route_condition = draft.route_condition
         if writer_ri is not None:
-            route = (_writer_label(tag, value, writer_ri, pdg.rung_nodes[writer_ri]), *route)
+            route = (_writer_label(tag, value, pdg.rung_nodes[writer_ri]), *route)
             writer_locks = ((tag, value, writer_ri),)
             # Multi-writer: the discriminator is the writer's own guard; the
             # OR-arm condition (if any) only refines it.
@@ -553,6 +554,6 @@ def _writer_route_condition(
     return _expr_route_condition(expr)
 
 
-def _writer_label(tag: str, value: Any, rung_index: int, rung_node: Any) -> str:
-    scope = rung_node.subroutine or rung_node.scope
-    return f"{tag}={value!r} via {scope} rung {rung_index}"
+def _writer_label(tag: str, value: Any, rung_node: Any) -> str:
+    label = _rung_label(rung_node.subroutine, rung_node.rung_index)
+    return f"{tag}={value!r} via rung {label}"
