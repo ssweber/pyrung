@@ -419,8 +419,8 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
-- **The graph panel's slice ignores the call-site rule.** The planner ruled on 2026-11-18 that the panel should match
-  the console.
+- **The graph panel's slice ignores the call-site rule.** Sam's coordinating session ruled on 2026-11-18, under Sam's
+  rule that the views should not surprise a user, that the panel should match the console.
   - The panel computes its slice in JS (`computeSliceLocal`, graphPanel.js) over the graph of the active file. So it
     does not stop at a call rung's condition as the console does, and it can't see a call rung in another file.
   - The fix is for `performSlice` to ask the adapter for `pyrungSlice` through the extension host. That restores the
