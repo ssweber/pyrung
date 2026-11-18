@@ -222,10 +222,11 @@ def on_pyrung_slice(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     upstream_tags: frozenset[str] = frozenset()
     downstream_tags: frozenset[str] = frozenset()
+    # The call-site form matches DataView, so the panel, the query and the console agree.
     if direction in ("upstream", "both"):
-        upstream_tags = graph.upstream_slice(tag_name, follow_calls=False)
+        upstream_tags = graph.upstream_slice(tag_name, follow_calls="call_site")
     if direction in ("downstream", "both"):
-        downstream_tags = graph.downstream_slice(tag_name)
+        downstream_tags = graph.downstream_slice(tag_name, follow_calls="call_site")
 
     # Include the queried tag itself in the result set
     all_tags = upstream_tags | downstream_tags | {tag_name}

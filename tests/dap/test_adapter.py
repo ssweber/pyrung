@@ -4406,6 +4406,57 @@ def test_pyrung_slice_downstream(tmp_path: Path):
     assert "Light" in body["tags"]
 
 
+def test_pyrung_slice_of_a_subroutine_coil_shows_the_call_condition(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "logic.py",
+        "from pyrung import Bool, PLC, Program, Rung, call, out, subroutine\n"
+        "\n"
+        "permit = Bool('Permit')\n"
+        "enable = Bool('Enable')\n"
+        "start = Bool('Start')\n"
+        "motor = Bool('Motor')\n"
+        "\n"
+        "@subroutine('Drive')\n"
+        "def drive():\n"
+        "    with Rung(start):\n"
+        "        out(motor)\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(permit):\n"
+        "        out(enable)\n"
+        "    with Rung(enable):\n"
+        "        call(drive)\n"
+        "\n"
+        "runner = PLC(prog)\n",
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"tag": "Motor", "direction": "both"},
+    )
+    upstream = _single_response(messages)["body"]["upstream"]
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="pyrungSlice",
+        arguments={"tag": "Enable", "direction": "downstream"},
+    )
+    downstream = _single_response(messages)["body"]["tags"]
+
+    assert upstream == ["Enable", "Start"]
+    assert "Motor" in downstream
+
+
 def test_pyrung_slice_requires_tag(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)

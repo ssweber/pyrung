@@ -19,14 +19,19 @@ from pyrung.core import (
     Rung,
     TagType,
     auto,
+    branch,
     build_program_graph,
     call,
     copy,
+    forloop,
     latch,
+    math,
     named_array,
     out,
     return_early,
     subroutine,
+    system,
+    toggle,
     udt,
 )
 from pyrung.core.analysis import TagRole
@@ -402,6 +407,18 @@ class TestDownstreamReversesUpstream:
         horn = Bool("Horn")
         count = Int("Count")
         stop = Bool("Stop", external=True)
+        n1 = Int("N1", external=True)
+        n2 = Int("N2")
+        num = Int("Num", external=True)
+        den = Int("Den", external=True)
+        quot = Int("Quot")
+        alarm = Bool("Alarm")
+        beacon = Bool("Beacon")
+        siren = Bool("Siren")
+        pump_enable = Bool("PumpEnable", external=True)
+        pump_gate = Bool("PumpGate", external=True)
+        loop_enable = Bool("LoopEnable", external=True)
+        pump_run = Bool("PumpRun")
 
         @subroutine("Inner")
         def inner():
@@ -411,6 +428,13 @@ class TestDownstreamReversesUpstream:
                 out(motor)
             with Rung(motor):
                 copy(1, count)
+            with Rung():
+                copy(n1, n2)
+
+        @subroutine("Pump")
+        def pump():
+            with Rung():
+                out(pump_run)
 
         @subroutine("Outer")
         def outer():
@@ -420,6 +444,8 @@ class TestDownstreamReversesUpstream:
                 call(inner)
             with Rung(gate_a):
                 out(horn)
+            with Rung():
+                math(num / den, quot)
 
         with Program() as prog:
             with Rung(permit):
@@ -433,19 +459,50 @@ class TestDownstreamReversesUpstream:
                 call(outer)
             with Rung(motor):
                 out(lamp)
+            with Rung(system.fault.division_error):
+                out(alarm)
+            # The toggle reads Beacon as an exclusive read, so Beacon feeds Siren.
+            with Rung(lamp):
+                toggle(beacon)
+                out(siren)
+            with Rung(pump_enable):
+                with branch(pump_gate):
+                    call(pump)
+            with Rung(loop_enable):
+                with forloop(2):
+                    call(pump)
         return prog
 
     def test_a_call_condition_reaches_the_subroutine_writes(self, prog: Program) -> None:
         dv = prog.dataview()
 
-        assert set(dv.downstream("GateB")) == {"Motor", "Count", "Lamp"}
+        assert set(dv.downstream("GateB")) == {"Motor", "Count", "N2", "Lamp", "Beacon", "Siren"}
         assert set(dv.downstream("OuterGate")) == {
             "InnerGate",
             "Horn",
+            "Quot",
+            "fault.division_error",
+            "Alarm",
             "Motor",
             "Count",
+            "N2",
             "Lamp",
+            "Beacon",
+            "Siren",
         }
+
+    def test_calls_under_a_branch_or_a_forloop_count_as_call_sites(self, prog: Program) -> None:
+        dv = prog.dataview()
+
+        assert set(dv.upstream("PumpRun")) == {"PumpEnable", "PumpGate", "LoopEnable"}
+        assert set(dv.downstream("PumpGate")) == {"PumpRun"}
+
+    def test_slices_follow_data_exclusive_and_fault_flag_reads(self, prog: Program) -> None:
+        dv = prog.dataview()
+
+        assert "N1" in dv.upstream("N2")
+        assert "Beacon" in dv.upstream("Siren")
+        assert set(dv.downstream("Den")) == {"Quot", "fault.division_error", "Alarm"}
 
     def test_a_tag_reached_on_the_way_opens_no_subroutine(self, prog: Program) -> None:
         # Permit writes GateA and OuterGate, which both call subroutines.
@@ -459,6 +516,18 @@ class TestDownstreamReversesUpstream:
         for x in tags:
             for y in tags:
                 assert (x in dv.upstream(y)) == (y in dv.downstream(x)), (x, y)
+
+    def test_upstream_and_downstream_are_reverses_in_packml_bench(self) -> None:
+        from examples.packml_bench import logic
+
+        dv = logic.dataview()
+        tags = sorted(dv)
+        upstream = {y: dv.upstream(y) for y in tags}
+        downstream = {x: dv.downstream(x) for x in tags}
+
+        for x in tags:
+            for y in tags:
+                assert (x in upstream[y]) == (y in downstream[x]), (x, y)
 
 
 # ------------------------------------------------------------------
