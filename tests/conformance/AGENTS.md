@@ -134,7 +134,7 @@ One Out to a bit. A second Out rung writes the bit off whenever its own rung is 
 2. The case's `init(slot)`, if it has one: instructions that put the case's own state back.
 3. `copy(1, slot.Ready)`. A case with `ready=` raises `Ready` in a second rung instead, `Rung(slot.Cmd == 0, *ready(slot))`, so `Ready` is 1 at the end of a scan only once those conditions hold.
 
-The harness writes `Cmd = 1` only after it reads `Ready = 1` with `Cmd = 0` and `Fired = 0`. Modbus is served between scans, so that read means a whole scan ran with `Cmd = 0` and the reset was complete.
+After the zero write, the harness waits for SD9 to move on two scans. Only then does it trust `Ready = 1` with `Cmd = 0` and `Fired = 0`. A read just after a write can return a scan from before it.
 
 Reset with the instructions' own semantics, not by poking registers an instruction owns:
 
@@ -258,7 +258,7 @@ Over Modbus (`run_modbus(build, endpoint, groups=None)`), every step is a regist
 0. Read `DS1` until it is nonzero (timeout -> `ConformanceError`, "program is not running"). Read `SC11`; if the PLC is in STOP, raise `ConformanceError` ("put the PLC in RUN"). If `DS1` is not this build's layout hash, raise `BuildMismatchError` ("Export the project again and load it") before writing anything. Then read each selected group's hash register. A group whose hash does not match is **stale**: its cases come back with `stale=True` and the note `Conf_Math is stale. Copy this build's Conf_Math to CLICK and write it to the PLC. DS301 reads ..., and this build writes ....`, its registers are not written, and the other groups carry on.
 1. Write 0 to `DS2`. Zero the used slots of every live group (one block write per group, chunked at 100 registers). `Cmd` is the first register of each slot, so it is never left at 1 after its `Fired` is cleared.
 2. -- (no case stages inputs; each case's reset rung initializes it while `Cmd = 0`).
-3. Poll until every slot reads `Cmd = 0`, `Fired = 0` and `Ready = 1`, or until the timeout. A slot that never does is judged a failure with the note `reset did not complete within 10 s: {'Cmd': .., 'Fired': .., 'Ready': ..}` and is not fired; the other cases carry on. A dropped zeroing write shows up here too (`Cmd` still 1).
+3. Read SD9, then wait until it has moved on two scans. Then poll until every slot reads `Cmd = 0`, `Fired = 0` and `Ready = 1`, or until the timeout. A slot that never does is judged a failure with the note `reset did not complete within 10 s, SD9 moved 2 scans: {'Cmd': .., 'Fired': .., 'Ready': ..}` and is not fired; the other cases carry on. A dropped zeroing write shows up here too (`Cmd` still 1). The raw-Modbus probes (`test_modbus_raw.py`) wait the same way after their reset writes.
 4. Write `Cmd = 1` to every ready slot, one single-register write per slot. A block write would rewrite a slot's other registers after its case might already have fired (the sim applies each register as a patch on the next scan, so one request can span scans).
 5. Poll every 20 ms until every `Fired != 0`, or until the timeout (default 10 s; longer if a case's `fires_within` says so). A case that never fires is judged a failure, not raised. Then sleep the settle time, `max(case.scans)` scans of 10 ms, leaving out a case with `fires_within`, which has nothing left to settle.
 6. Read every slot (and every system bit a case's `expect_system` names), wait `max(100 ms, settle)`, read them again. Read `DS2`.

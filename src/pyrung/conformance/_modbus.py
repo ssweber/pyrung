@@ -537,6 +537,21 @@ async def _await_program_hash(client: Any, endpoint: Endpoint, timeout: float) -
     return found
 
 
+async def wait_scans_after_write(client: Any, deadline: float) -> int:
+    """Wait until SD9 has moved on two scans since this call began, or until *deadline*.
+
+    A write reaches the ladder at the start of a later scan, so a read just after a write can
+    still return a scan from before it. Call this right after the write. Return how many scans
+    SD9 moved, which is less than two only when *deadline* passed first.
+    """
+    start = int(await client.sd[_SCAN_COUNTER])
+    while True:
+        moved = (int(await client.sd[_SCAN_COUNTER]) - start) % _SCAN_COUNTER_WRAP
+        if moved >= _SCANS_AFTER_ZEROING or time.monotonic() >= deadline:
+            return moved
+        await asyncio.sleep(POLL_S)
+
+
 async def _drive(
     build: ConformanceProgram,
     wire: list[GroupBuild],
@@ -608,16 +623,15 @@ async def _drive(
             start, width = g.span
             await _write_ds(client, start, [0] * width)
         slots = [(g, i) for g in live for i, _ in g.cases]
-        # A write reaches the ladder at the start of a later scan, so a read just after it can
-        # still return the Ready of an earlier scan.  Two scans past this read of SD9, the
-        # scan that took the zeros has run every case's reset rung.
-        zeroed_at = int(await client.sd[_SCAN_COUNTER])
         deadline = time.monotonic() + timeout
+        moved = await wait_scans_after_write(client, deadline)
         while True:
-            now = int(await client.sd[_SCAN_COUNTER])
             regs = _by_register(live, await _read_spans(client, live))
-            scanned = (now - zeroed_at) % _SCAN_COUNTER_WRAP >= _SCANS_AFTER_ZEROING
-            unready = {(g.name, i) for g, i in slots if not (scanned and _reset_done(g, i, regs))}
+            unready = {
+                (g.name, i)
+                for g, i in slots
+                if not (moved >= _SCANS_AFTER_ZEROING and _reset_done(g, i, regs))
+            }
             if not unready or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(POLL_S)
@@ -670,7 +684,9 @@ async def _drive(
             notes: list[str] = []
             if (g.name, i) in unready:
                 state = {f: reset_regs[g.register(i, f)] for f in ("Cmd", "Fired", "Ready")}
-                notes.append(f"reset did not complete within {timeout:g} s: {state}")
+                notes.append(
+                    f"reset did not complete within {timeout:g} s, SD9 moved {moved} scans: {state}"
+                )
             elif met_first != met_second:
                 notes.append(f"unstable: first read {actual_first}, second read {actual}")
             passed, xfail, pending_note = judge(

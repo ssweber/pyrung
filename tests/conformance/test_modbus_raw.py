@@ -131,6 +131,7 @@ from typing import Any
 import pytest
 
 from pyrung.conformance import Endpoint, Group, assert_all_passed, case, read_program_hash, run
+from pyrung.conformance._modbus import wait_scans_after_write
 from pyrung.core import Or, Rung, copy, fill, math, reset, to_ascii, to_binary, unpack_to_words
 from tests.conformance.copy.test_past_bank_write import ADDRESS
 from tests.conformance.memory import c, dd, df, dh, ds, txt
@@ -708,11 +709,13 @@ async def _stage(s: _Session) -> bool:
     if not await s.write_ds(s.slot["Cmd"], [0] * 9, "the reset"):
         return False
 
+    moved = await wait_scans_after_write(s.w.click, time.monotonic() + 10.0)
+
     async def reset_done() -> bool:
         return (await s.reg("Ready"), await s.reg("Cmd"), await s.reg("Fired")) == (1, 0, 0)
 
-    if not await s.until(reset_done, timeout=10.0):
-        s.broken.append("the reset did not raise Ready within 10 s")
+    if moved < 2 or not await s.until(reset_done, timeout=10.0):
+        s.broken.append(f"the reset did not raise Ready within 10 s, SD9 moved {moved} scans")
         return False
     if not await s.write_ds(s.slot["Cmd"], 1, "the staging"):
         return False
@@ -1175,12 +1178,15 @@ async def _probe_all(s: _Session) -> None:
     finally:
         # The reset clears all of the part's memory.
         if await s.write_ds(s.slot["Cmd"], 0, "the closing reset"):
+            moved = await wait_scans_after_write(s.w.click, time.monotonic() + 10.0)
 
             async def ready() -> bool:
                 return await s.reg("Ready") == 1
 
-            if not await s.until(ready, timeout=10.0):
-                s.broken.append("the closing reset did not raise Ready within 10 s")
+            if moved < 2 or not await s.until(ready, timeout=10.0):
+                s.broken.append(
+                    f"the closing reset did not raise Ready within 10 s, SD9 moved {moved} scans"
+                )
     if os.environ.get(STOP_ENV) == "1":
         await _stop_probes(s)
 

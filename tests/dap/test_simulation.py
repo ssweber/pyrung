@@ -147,15 +147,6 @@ def _shutdown(adapter: DAPAdapter, out_stream: io.BytesIO) -> None:
     _flush(adapter, out_stream)
 
 
-@pytest.fixture
-def session_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    import pyrung.dap.live as live_mod
-
-    directory = tmp_path / "sessions"
-    monkeypatch.setattr(live_mod, "_SESSION_DIR", directory)
-    return directory
-
-
 # ---------------------------------------------------------------------------
 # Pacing
 # ---------------------------------------------------------------------------

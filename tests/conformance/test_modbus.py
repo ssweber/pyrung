@@ -511,9 +511,37 @@ def test_a_reset_that_never_completes_is_judged_not_fired() -> None:
         assert _slot_value(sim, build, "g", "Cmd") == 0
     assert [r.passed for r in results] == [False, True]
     assert not results[0].fired
-    assert (
-        "reset did not complete within 0.5 s: {'Cmd': 0, 'Fired': 0, 'Ready': 0}" in results[0].note
+    assert re.search(
+        r"reset did not complete within 0\.5 s, SD9 moved \d+ scans: "
+        r"\{'Cmd': 0, 'Fired': 0, 'Ready': 0\}",
+        results[0].note,
     )
+
+
+def _init_stages_five(slot):
+    copy(5, slot.Scratch)
+
+
+def _prove_copies_scratch(slot):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
+        copy(slot.Scratch, slot.Result1)
+        copy(1, slot.Fired)
+
+
+def test_cmd_is_written_only_after_the_reset_scan_that_follows_the_zero_write() -> None:
+    # The reset rung raises Ready on every scan while Cmd is 0, so the sim reports Ready before
+    # the harness zeroes the slot. A read just after the zero write can return that Ready, and
+    # Cmd = 1 then reaches the ladder before the reset rung has staged Scratch. With 200 ms
+    # scans, a harness that waits for no scan reads Result1 = 0 here.
+    staged = case(
+        "Reads what init staged",
+        ladder=_prove_copies_scratch,
+        init=_init_stages_five,
+        expect={"Result1": 5},
+    )
+    build = build_program(Group("g", [staged]))
+    with SimServer(build, scan_period=0.2) as sim:
+        assert_all_passed(run_modbus(build, sim.endpoint, local=True))
 
 
 def test_unreachable_endpoint_raises() -> None:
