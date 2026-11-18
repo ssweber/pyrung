@@ -316,13 +316,6 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     adapter._session.session_name = session_name
     _start_live_server(adapter, session_name)
     _try_auto_install_harness(adapter)
-    body: dict[str, Any] = {}
-    if snapshot is not None and snapshot.skipped:
-        from pyrung.click.tag_map._errors import skipped_addresses_text
-
-        text = skipped_addresses_text(snapshot.skipped, snapshot.file_name)
-        adapter._enqueue_internal_event("output", {"category": "console", "output": f"{text}\n"})
-        body["skippedAddresses"] = list(snapshot.skipped)
     if modbus_config is not None:
         if not adapter._has_tag_map:
             adapter._enqueue_internal_event(
@@ -344,6 +337,14 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
                 "output", {"category": "console", "output": f"{banner}\n"}
             )
 
+    # Queue this last, so that a launch that fails later never says the file loaded.
+    body: dict[str, Any] = {}
+    if snapshot is not None and snapshot.skipped:
+        from pyrung.click.tag_map._errors import skipped_addresses_text
+
+        text = skipped_addresses_text(snapshot.skipped, snapshot.file_name)
+        adapter._enqueue_internal_event("output", {"category": "console", "output": f"{text}\n"})
+        body["skippedAddresses"] = list(snapshot.skipped)
     return body, [("stopped", adapter._stopped_body("entry"))]
 
 
