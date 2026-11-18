@@ -57,8 +57,6 @@ The survey never edits the program. The same finding is the [`STEP_NO_ESCAPE`](l
 Individual test findings are mostly noise, because a single test only exercises a slice of the program. The signal emerges when you merge findings across a test suite.
 
 ```python
-from pyrung.core.analysis.query import CoverageReport
-
 def test_start_stop(plc):
     StartBtn.value = True
     plc.run(cycles=5)

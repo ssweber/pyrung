@@ -7,7 +7,6 @@ import textwrap
 import warnings
 from collections.abc import Callable
 from types import FrameType
-from typing import Any
 
 
 class ForbiddenControlFlowError(RuntimeError):
@@ -91,9 +90,6 @@ def _is_comment_call(node: ast.Expr) -> bool:
         and isinstance(node.value.func, ast.Name)
         and node.value.func.id == "comment"
     )
-
-
-DialectValidator = Callable[..., Any]
 
 
 _EXPR_STMT_HINT = "Only bare call expressions are allowed as statements"

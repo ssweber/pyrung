@@ -13,6 +13,8 @@ EXPECTED_REFERENCE_SOURCES = {
     PurePosixPath("reference/api/data-model.md"),
     PurePosixPath("reference/api/program-structure.md"),
     PurePosixPath("reference/api/instruction-set.md"),
+    PurePosixPath("reference/api/validation.md"),
+    PurePosixPath("reference/api/live.md"),
     PurePosixPath("reference/api/click-dialect.md"),
     PurePosixPath("reference/api/circuitpy-dialect.md"),
 }

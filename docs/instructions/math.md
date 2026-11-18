@@ -105,7 +105,7 @@ Python's built-in `abs` works on any expression. CLICK offers `ABS` in decimal m
 ## `randint()`
 
 ```python
-from pyrung.core import randint
+from pyrung import randint
 
 math(randint(1, 6), Die)                 # 1..6 inclusive, a new draw every scan
 math(randint(Lo, Hi) * 10, Setpoint)     # bounds may be tags, read as the scan starts

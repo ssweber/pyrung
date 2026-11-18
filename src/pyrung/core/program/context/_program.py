@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.instruction import SubroutineReturnSignal
 from pyrung.core.rung import Rung as RungLogic
@@ -18,8 +18,6 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.site_memory import SiteTable
     from pyrung.core.validation.report import ValidationReport
-
-    from ..validation import DialectValidator
 
 
 def _validate_subroutine_name(name: str) -> str:
@@ -40,7 +38,6 @@ class Program:
         runner = PLC(logic)
     """
 
-    _dialect_validators: ClassVar[dict[str, DialectValidator]] = {}
     # A runner's soft program (``PLC._soft_exec_program``) stores the user's program here.
     # Its plant and hold rungs run ahead of that program.
     _bare_program: Program | None = None
@@ -206,22 +203,6 @@ class Program:
         programs = _state._building.programs
         return programs[-1] if programs else None
 
-    @classmethod
-    def register_dialect(cls, name: str, validator: DialectValidator) -> None:
-        """Register a portability validator callback for a dialect name."""
-        existing = cls._dialect_validators.get(name)
-        if existing is None:
-            cls._dialect_validators[name] = validator
-            return
-        if existing is validator:
-            return
-        raise ValueError(f"Dialect {name!r} already registered to a different validator")
-
-    @classmethod
-    def registered_dialects(cls) -> tuple[str, ...]:
-        """Return registered dialect names in deterministic order."""
-        return tuple(sorted(cls._dialect_validators))
-
     def check(
         self,
         *,
@@ -238,36 +219,6 @@ class Program:
         from pyrung.core.validation.report import check as _check_core
 
         return _check_core(self, select=select, ignore=ignore, extend_select=extend_select, dt=dt)
-
-    def validate(
-        self,
-        dialect: str | None = None,
-        *,
-        mode: str = "warn",
-        select: set[str] | None = None,
-        ignore: set[str] | None = None,
-        extend_select: set[str] | None = None,
-        dt: float = 0.010,
-        **kwargs: Any,
-    ) -> Any:
-        """Run validation on this Program.
-
-        Without a dialect, this is a compatibility alias for :meth:`check`.
-
-        With a ``dialect`` string, runs dialect-specific portability
-        validation (e.g. ``logic.validate("click", mode="strict")``).
-        """
-        if dialect is not None:
-            validator = self._dialect_validators.get(dialect)
-            if validator is None:
-                available = ", ".join(self.registered_dialects()) or "<none>"
-                raise KeyError(
-                    f"Unknown validation dialect {dialect!r}. "
-                    f"Available dialects: {available}. "
-                    f"Import the dialect package first (example: import pyrung.{dialect})."
-                )
-            return validator(self, mode=mode, **kwargs)
-        return self.check(select=select, ignore=ignore, extend_select=extend_select, dt=dt)
 
     def dataview(self) -> DataView:
         """Return a chainable query over this program's tag dependency graph.

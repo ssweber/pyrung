@@ -127,7 +127,7 @@ source = generate_circuitpy(
 When the remote device isn't a CLICK PLC, use `ModbusAddress` instead of a CLICK address string. This gives direct control over the register address and register type.
 
 ```python
-from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
+from pyrung import ModbusAddress, RegisterType
 
 vfd = ModbusTcpTarget(name="vfd", ip="192.168.1.30")
 

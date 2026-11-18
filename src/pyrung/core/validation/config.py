@@ -59,7 +59,13 @@ class CheckConfig:
 
 
 def load_check_config(path: Path) -> CheckConfig | None:
-    """Read one pyproject; missing files or check sections have no project policy."""
+    """Read the ``[tool.pyrung.check]`` table of one pyproject.toml.
+
+    Return None if the file or the table is missing. Raise ``ValueError`` if the
+    table names a rule code or category that pyrung does not know. The message
+    names the file and the unknown name, so a config saved under an old rule name
+    fails on load and is never ignored.
+    """
     if not path.exists():
         return None
     data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -67,7 +73,12 @@ def load_check_config(path: Path) -> CheckConfig | None:
     pyrung = tool.get("pyrung", {}) if isinstance(tool, dict) else {}
     if not isinstance(pyrung, dict) or "check" not in pyrung:
         return None
-    return CheckConfig.from_mapping(pyrung["check"])
+    try:
+        config = CheckConfig.from_mapping(pyrung["check"])
+        config.resolve()
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+    return config
 
 
 def find_check_config(start: Path) -> tuple[CheckConfig, Path | None]:

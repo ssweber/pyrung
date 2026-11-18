@@ -2,7 +2,7 @@
 
 CLICK pastes and keeps a contact in front of a NOP, on a wire of its own or on a leg
 beside a coil.  Its Syntax Check reports C0003, "There is no Coil instruction in the
-rung", so the export writes the rung and ``validate("click")`` reports ``CLK_NOP_NO_COIL``.
+rung", so the export writes the rung and ``TagMap.validate()`` reports ``CLK_NOP_NO_COIL``.
 CLICK reports nothing for a NOP with no contact of its own, and drops its row.  The export
 draws an empty rung as a CLICK rung of its own, next to a ``.continued()`` rung too.  The
 import reads a NOP row beside another row.  A NOP behind a contact of its own comes back as

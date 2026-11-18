@@ -64,8 +64,8 @@ def test_math_has_the_signature_calc_had() -> None:
 @pytest.mark.parametrize(
     ("name", "hint"),
     [
-        ("sqrt", "from pyrung.core import sqrt"),
-        ("pi", "from pyrung.core import PI"),
+        ("sqrt", "from pyrung import sqrt"),
+        ("pi", "from pyrung import PI"),
         ("isclose", "import math as pymath"),
     ],
 )

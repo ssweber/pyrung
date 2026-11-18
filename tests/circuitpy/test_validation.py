@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
-from pyrung.circuitpy import P1AM, board, validate_circuitpy_program
+from pyrung.circuitpy import P1AM, board
 from pyrung.circuitpy.validation import (
     CPY_FUNCTION_CALL_VERIFY,
     CPY_IO_BLOCK_UNTRACKED,
     CPY_TIMER_RESOLUTION,
     CircuitPyValidationReport,
+    validate_circuitpy_program,
 )
 from pyrung.core import (
     Bool,
@@ -233,23 +232,7 @@ class TestNoHardware:
         assert CPY_TIMER_RESOLUTION not in codes
 
 
-class TestDialectRegistration:
-    def test_program_validate_dispatches_circuitpy(self):
-        hw = P1AM()
-
-        def fn():
-            return {}
-
-        def logic():
-            with Rung():
-                run_function(fn)
-
-        prog = _build_program(logic)
-        direct = validate_circuitpy_program(prog, hw=hw, mode="warn")
-        via_program = prog.validate("circuitpy", hw=hw, mode="warn")
-
-        assert _finding_codes(direct) == _finding_codes(via_program)
-
+class TestHardwareValidate:
     def test_hw_validate_convenience_matches_direct(self):
         hw = P1AM()
 
@@ -265,16 +248,6 @@ class TestDialectRegistration:
         via_hw = hw.validate(prog, mode="warn")
 
         assert _finding_codes(direct) == _finding_codes(via_hw)
-
-    def test_program_validate_rejects_bad_hw_type(self):
-        prog = Program(strict=False)
-        with pytest.raises(TypeError, match="hw=P1AM"):
-            prog.validate("circuitpy", hw=object())
-
-    def test_program_validate_rejects_bad_mode(self):
-        prog = Program(strict=False)
-        with pytest.raises(ValueError, match="mode"):
-            prog.validate("circuitpy", mode="nope")
 
 
 class TestReportSummary:

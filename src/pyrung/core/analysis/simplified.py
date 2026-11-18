@@ -1234,18 +1234,6 @@ def _render(expr: Expr, parent: type | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-# Nothing in pyrung calls this, but test files that `spec test` wrote import it.
-# Roadmap item 1c decides whether it stays.
-def expr_requires(expr: Expr, tag: str, *, negated: bool = False) -> bool:
-    """True if *tag* must be true (or false when *negated*) for *expr* to be true.
-
-    And: required if ANY conjunct requires it (all must hold).
-    Or:  required only if ALL disjuncts require it (any branch could fire).
-    """
-    form = "xio" if negated else "xic"
-    return tag in _required_tags(expr, form=form)
-
-
 def _required_tags(expr: Expr, *, form: str) -> frozenset[str]:
     """Return tags with *form* on every path that can make *expr* true."""
     if isinstance(expr, Atom):
@@ -1260,76 +1248,6 @@ def _required_tags(expr: Expr, *, form: str) -> frozenset[str]:
             return frozenset()
         return frozenset.intersection(*required)
     return frozenset()
-
-
-# Nothing in pyrung calls this, but test files that `spec test` wrote import it.
-# Roadmap item 1c decides whether it stays.
-def reset_dominance(
-    program: Program, latch_tag: str, guard_tag: str, *, negated: bool = False
-) -> bool:
-    """Prove ``latch_tag ⟹ guard_tag`` (or ``⟹ ¬guard_tag`` when *negated*).
-
-    Returns True when a reset rung for *latch_tag* fires whenever
-    *guard_tag* is False (non-negated) or True (negated), and no
-    later latch can re-set the tag under those conditions.
-    """
-    from pyrung.core.condition import BitCondition, NormallyClosedCondition
-    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
-    from pyrung.core.tag import ImmediateRef, Tag
-    from pyrung.core.validation._common import _collect_write_sites, _conjunction_satisfiable
-    from pyrung.core.validation.stuck_bits import _latch_reset_write_targets
-
-    sites = _collect_write_sites(program, target_extractor=_latch_reset_write_targets)
-    latch_sites = [
-        s
-        for s in sites
-        if s.target_name == latch_tag and s.instruction_type == LatchInstruction.__name__
-    ]
-    reset_sites = [
-        s
-        for s in sites
-        if s.target_name == latch_tag and s.instruction_type == ResetInstruction.__name__
-    ]
-
-    if not reset_sites:
-        return False
-
-    guard_tag_obj = build_program_graph(program).tags.get(guard_tag)
-    if guard_tag_obj is None:
-        return False
-
-    target_cond_type = BitCondition if negated else NormallyClosedCondition
-
-    def _cond_matches_guard(cond: Any) -> bool:
-        if not isinstance(cond, target_cond_type):
-            return False
-        tag_obj = cond.tag
-        if isinstance(tag_obj, ImmediateRef):
-            tag_obj = tag_obj.value
-        return isinstance(tag_obj, Tag) and tag_obj.name == guard_tag
-
-    # The condition representing "guard absent" for latch dominance checks:
-    # non-negated (proving A=>B): can latch fire when B is False? → NormallyClosedCondition(B)
-    # negated (proving A=>~B): can latch fire when B is True? → BitCondition(B)
-    contra_cond_cls = NormallyClosedCondition if not negated else BitCondition
-
-    for reset_site in reset_sites:
-        if not any(_cond_matches_guard(c) for c in reset_site.conditions):
-            continue
-
-        dominated = True
-        for latch_site in latch_sites:
-            if latch_site.rung_index <= reset_site.rung_index:
-                continue
-            synthetic = list(latch_site.conditions) + [contra_cond_cls(guard_tag_obj)]
-            if _conjunction_satisfiable(synthetic):
-                dominated = False
-                break
-
-        if dominated:
-            return True
-
-    return False
 
 
 def simplified_forms(program: Program) -> dict[str, TerminalForm]:

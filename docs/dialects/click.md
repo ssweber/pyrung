@@ -538,7 +538,7 @@ Use CLICK Programming Software's **PLC > Read Data from PLC** to dump the live s
 
 ```python
 from pyclickplc import read_plc_data
-from pyrung.core import PLC, SystemState
+from pyrung import PLC, SystemState
 
 data = read_plc_data("data.csv", skip_default=True)
 tags = mapping.tags_from_plc_data(data)

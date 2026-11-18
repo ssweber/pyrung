@@ -186,8 +186,6 @@ Plan item 3. `pyrung`, `pyrung.click` and `pyrung.circuitpy` are public. The few
 level, and validation gets one public module. ClickNick's test of its named imports is ClickNick's work.
 Sam decided on 2026-11-17 that 1c and then 1d are pyrung's next work, now that the recording branches are in main.
 The deletions release follows them, on Sam's tag.
-- Decide `expr_requires` and `reset_dominance` (analysis/simplified.py). Nothing in src calls them since the record
-  machinery went, but test files that `spec test` wrote import them.
 
 ### 1d. Then the `Rung` -> `rung` rename in tests
 
@@ -421,10 +419,40 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **A rung over CLICK's 32 rows can export.** pyrung's Click export counts one row for each CSV row. In CLICK many
+  boxes are taller than one row. On 2026-11-18 the export of `plc_stores` wrote a rung of 17 CSV rows, a Fill and
+  16 Copies. laddercodec counted 34 rows, and its `encode()` refused the rung. The bob/hw-split branch split that
+  rung in the case.
+  - `_LadderExporter._assert_rung_height` in `src/pyrung/click/ladder/_exporter.py` refuses a rung of more than 32
+    CSV rows. 17 Copies into DS pass that check and make a rung of 34 rows.
+  - laddercodec stores each box's height in its instruction's `cell_params()["visual_rows"]`:
+    - 2 rows for every Copy-family box (copy, block copy, fill, pack and unpack), whatever the destination. Search
+      and a timed coil are also 2 rows.
+    - 3 rows for Send, Receive, Email, Home, Position and Velocity, and for a debounce or flasher coil.
+    - One row for each pin, plus 1, for a Timer, Counter, Shift or Drum. A Timer with no reset pin is 2 rows, and
+      pyrung writes it as 1 CSV row.
+  - The height check should take each box's height from that list, or ask laddercodec for it.
+  - `estimate_steps` in `src/pyrung/click/ladder/steps.py` estimates program steps and counts no rows.
+  - Moving the export to laddercodec does not close this. At laddercodec 2eaf985, `encode()` refuses a rung of more
+    than 32 rows, and `lay_out()` refuses a circuit that needs more. `csv_rows()`, `write_csv()` and
+    `write_bundle()` check no row count. laddy is adding the check to every one of these (laddercodec branch
+    `fix/rung-height`, 2026-11-18). Until it merges, pyrung's own check is the only guard.
+- **The graph panel's slice ignores the call-site rule.** Sam's coordinating session ruled on 2026-11-18, under Sam's
+  rule that the views should not surprise a user, that the panel should match the console.
+  - The panel computes its slice in JS (`computeSliceLocal`, graphPanel.js) over the graph of the active file. So it
+    does not stop at a call rung's condition as the console does, and it can't see a call rung in another file.
+  - The fix is for `performSlice` to ask the adapter for `pyrungSlice` through the extension host. That restores the
+    `sliceResult` relay.
+  - `on_pyrung_slice`'s edge filter (graph_slice.py:247-254) needs a second fix. It drops the edge from a call
+    condition to its call rung, because the call rung writes nothing. The condition would show as a node with no
+    edge. Keep that edge, and add the rung to `slice_rungs`, when the rung has `calls`.
+
 - **Two subroutine names that differ only in case.** pyrung accepts "Pump" and "pump" in one program. The export
   writes `subroutines/Pump.csv` and then `subroutines/pump.csv`, and on Windows the second file overwrites the first.
   laddercodec's `write_bundle()` refuses the pair. pyrung should report the pair as a validation finding before the
-  export. Whether CLICK treats subroutine names without case is unread. [CLICK]
+  export. CLICK refuses the pair too. ClickNick's runner checked on its CLICK 4.00 on 2026-11-18, in two runs.
+  After "Pump" existed, adding "pump" brought up the same box as adding "Pump" again: "GUI-036 The Program Name
+  already exists. Please choose another name."
 
 - **`CompiledPLC` leaves out a block slot that no rung uses.** When the program text writes `DS[1]` and no rung
   reads or writes it, `PLC`'s state holds `DS1: 0` and `CompiledPLC`'s state has no `DS1`. The two engines must

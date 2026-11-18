@@ -618,6 +618,8 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
             if tt not in core:
                 core.append(tt)
 
+    core.extend(sorted(collection.used_expr_funcs))
+
     if core:
         lines.append(f"from pyrung import {', '.join(core)}")
 
@@ -633,11 +635,6 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
         lines.append(
             "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks"
         )
-
-    # Expression functions
-    if collection.used_expr_funcs:
-        expr = sorted(collection.used_expr_funcs)
-        lines.append(f"from pyrung.core.expression import {', '.join(expr)}")
 
 
 # ---------------------------------------------------------------------------
@@ -840,6 +837,11 @@ def _emit_logic_imports(
     for cc in sorted(refs.used_copy_converters):
         parts.append(cc)
 
+    # Expression functions (sqrt, lsh, ...) and system points
+    parts.extend(sorted(refs.used_expr_funcs))
+    if refs.has_system_import:
+        parts.append("system")
+
     lines.append(f"from pyrung import {', '.join(parts)}")
 
     # Click imports (only if needed — blocks come from tags.py, not pyrung.click)
@@ -862,14 +864,6 @@ def _emit_logic_imports(
         click_parts.append("raw")
     if click_parts:
         lines.append(f"from pyrung.click import {', '.join(click_parts)}")
-
-    # Expression functions
-    if refs.used_expr_funcs:
-        expr = sorted(refs.used_expr_funcs)
-        lines.append(f"from pyrung.core.expression import {', '.join(expr)}")
-
-    if refs.has_system_import:
-        lines.append("from pyrung.core.system_points import system")
 
 
 # ---------------------------------------------------------------------------

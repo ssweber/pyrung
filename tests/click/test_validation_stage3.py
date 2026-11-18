@@ -339,7 +339,7 @@ def test_profile_unavailable_still_reports_stage2_findings(monkeypatch):
     assert CLK_EXPR_ONLY_IN_MATH in _codes(report)
 
 
-def test_program_and_tagmap_validation_facades_match_direct():
+def test_tagmap_validation_matches_direct():
     target = Bool("Target")
 
     def logic():
@@ -350,10 +350,8 @@ def test_program_and_tagmap_validation_facades_match_direct():
     tag_map = TagMap([target.map_to(y[1])], include_system=False)
 
     direct = validate_click_program(prog, tag_map, mode="warn")
-    via_program = prog.validate("click", mode="warn", tag_map=tag_map)
     via_tag_map = tag_map.validate(prog, mode="warn")
 
-    assert _codes(direct) == _codes(via_program)
     assert _codes(direct) == _codes(via_tag_map)
 
 

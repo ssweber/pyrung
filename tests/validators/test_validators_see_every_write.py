@@ -21,10 +21,8 @@ from pyrung.core import (
     latch,
     math,
     out,
-    reset,
     unpack_to_bits,
 )
-from pyrung.core.analysis.simplified import reset_dominance
 from pyrung.core.validation import (
     CMP_STATIC_ON_LEFT,
     PHYS_LINK_UNKNOWN,
@@ -230,22 +228,8 @@ def test_missing_profile_reports_a_feedback_only_math_reads() -> None:
 
 
 # ---------------------------------------------------------------------------
-# reset_dominance() and CMP_STATIC_ON_LEFT
+# CMP_STATIC_ON_LEFT
 # ---------------------------------------------------------------------------
-
-
-def test_reset_dominance_finds_a_guard_in_a_forloop_body() -> None:
-    latched = Bool("Latched")
-
-    with Program(strict=False) as prog:
-        with Rung(Trigger):
-            latch(latched)
-        with Rung():
-            with forloop(1):
-                with Rung(~Guard):
-                    reset(latched)
-
-    assert reset_dominance(prog, "Latched", "Guard") is True
 
 
 def test_static_on_left_counts_a_write_through_a_pointer() -> None:

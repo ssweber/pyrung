@@ -139,10 +139,13 @@ def init_math_non_finite_into_ints(slot: Any) -> None:
 def prove_pack_text_past_range(slot: Any) -> None:
     over, blank, good, half = df[127], df[128], df[129], df[130]
     coils = (c[727], c[728], c[729])
+    # Each Copy and Fill takes two of a CLICK rung's 32 rows, so the 16 Copies and the Fill need two
+    # rungs.
     with Rung(*once(slot)):
-        fill(9.0, df.select(127, 129))
         for offset, char in enumerate(PAST_RANGE):
             copy(char, txt[411 + offset])
+    with Rung(*once(slot)):
+        fill(9.0, df.select(127, 129))
         for offset, char in enumerate("1.5"):
             copy(char, txt[441 + offset])
     for source, dest, coil in zip(

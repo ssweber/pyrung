@@ -654,6 +654,15 @@ def strip_pyrung_boilerplate(code: str) -> str:
     return normalize_pyrung("\n".join(result_lines))
 
 
+def pyrung_import_names(code: str) -> set[str]:
+    """Return the names that *code* imports with ``from pyrung import ...``."""
+    names: set[str] = set()
+    for line in code.splitlines():
+        if line.startswith("from pyrung import "):
+            names.update(name.strip() for name in line.split(" import ", 1)[1].split(","))
+    return names
+
+
 # ---------------------------------------------------------------------------
 # 5. load_fixtures
 # ---------------------------------------------------------------------------

@@ -54,6 +54,7 @@ from tests.click.helpers import (
     exec_with_source,
     join_continued,
     normalize_pyrung,
+    pyrung_import_names,
     strip_pyrung_boilerplate,
 )
 
@@ -2118,7 +2119,7 @@ class TestRoundTrip:
         rows = [row[-1] for row in bundle.main_rows]
         assert "math(RAND ( 1 , 6 ),DS2,mode=decimal)" in rows
         code = ladder_to_pyrung(bundle)
-        assert "from pyrung.core.expression import randint" in code
+        assert "randint" in pyrung_import_names(code)
         assert "math(randint(1, 6), DS2)" in code
         assert "math(randint(DS1, 6) + 1, DS3)" in code
         ns: dict = {}
