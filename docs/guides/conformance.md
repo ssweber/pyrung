@@ -29,14 +29,15 @@ A case that is not confirmed still runs against pyrung on every test run. Its ex
 
 ## Where the suite stands
 
-pyrung 0.16.0 has 412 cases. The CLICK is a C2-03CPU with CLICK V4.00.
+pyrung 0.17.0 has 419 cases. The CLICK is a C2-03CPU with CLICK V4.00.
 
 | State of a case | Cases |
 |---|---:|
-| Passed on the CLICK as it is written now | 401 |
+| Passed on the CLICK as it is written now | 395 |
 | Records what the CLICK reads | 7 |
+| Not yet run on the CLICK as it is written now | 13 |
 | Cannot run on a CLICK | 4 |
-| **Total** | **412** |
+| **Total** | **419** |
 
 A case in the second row asks the CLICK an open question, such as what survives a power cycle. Its expected range holds every answer, so a pass proves nothing. The suite records what the CLICK read instead.
 
@@ -47,8 +48,8 @@ The cases are spread over these areas.
 | How a rung solves | 32 |
 | Comparisons | 7 |
 | Coils and the timed Out coil types | 36 |
-| Timers and counters | 38 |
-| Copy, block copy, pack and text | 59 |
+| Timers and counters | 39 |
+| Copy, block copy, pack and text | 65 |
 | Math | 60 |
 | Drums, shift and search | 99 |
 | Subroutines and For loops | 30 |
@@ -57,7 +58,7 @@ The cases are spread over these areas.
 
 ## Where pyrung knowingly differs
 
-Seven cases record two known differences.
+Eight cases record two known differences.
 
 - pyrung keeps a `Real` at 64 bits. A CLICK REAL is a 32-bit float. See [Math](../instructions/math.md).
 - A copy through a pointer past the end of the DD bank writes to memory on a CLICK. pyrung has no memory there and drops the write.

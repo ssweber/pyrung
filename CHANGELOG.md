@@ -11,7 +11,9 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
-## Unreleased
+## v0.17.0 (2026-11-18)
+
+You can now record a debug session and replay it as a pytest test. Ladder export accepts more of the forms that CLICK's editor accepts, and `send()` and `receive()` reach CLICK v4's ports. Read Behaviour changes before you upgrade. A program that uses `Rung` needs an edit. Other imports from `pyrung.core` still work. Move them to `pyrung`, because `pyrung.core` is internal and can change in any release. The property checks and lock files are gone.
 
 ### What's new
 
@@ -30,12 +32,9 @@
   - `ModbusRtuTarget(com_port="cpu3")` talks over CPU port 3.
   - `device_id` takes a DS tag, which the instruction reads as each request starts.
 
-#### CLICK export and import
+#### Ladder export accepts more of what CLICK's editor accepts
 
-- Ladder export writes a rung whose contacts feed only a NOP, as a CLICK does. CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes back as `nop()` in a `branch()`.
-
-#### Ladder export accepts what CLICK's editor accepts
-
+- A rung with contacts and no instruction, written as a NOP.
 - `out()` on the SC bits CLICK's Out coil takes, such as SC162 and SC303.
 - `math()` into an SD that CLICK lets a program write, such as SD29, SD61 and SD147.
 - A hex `math()` into YD.
@@ -45,33 +44,47 @@
 - `SUM` over XD or YD in a hex `math()`, such as `xd.select(1, 4).sum()`.
 - A negative constant down to -32768 in a hex `math()`, written as its 16 bits (-1 is FFFFh).
 - `randint()` with DH bounds in a hex `math()`.
-- A `copy()` of an `Int`, `Dint` or `Word` into a TXT with no `convert`, which exports as `to_text()`.
 - A `copy()` of a constant with a fraction into DH or YD, such as `copy(1.5, DH1)`.
+
+#### Ladder import
+
+- CLICK import reads a NOP beside a coil. A NOP behind a contact of its own comes back as `nop()` in a `branch()`.
 
 #### Public imports
 
-- `pyrung.validation` exports `ValidationReport`, which `Program.check()` returns, the rule list, and the functions that read and write `[tool.pyrung.check]`. `ValidationReport.grouped()` returns the findings by rule code, and shows the stuck bits of one block reset as one entry.
+- `pyrung.validation` exports `ValidationReport`, which `Program.check()` returns. It also exports the rule list and the functions that read and write `[tool.pyrung.check]`.
+- `ValidationReport.grouped()` returns the findings by rule code. It lists the stuck bits from one block `reset()` as one entry.
 - `pyrung.live` exports `send_command()`, `list_sessions()` and `command_grammar()`, so Python code can drive a running debug session.
 - `pyrung` exports the math functions (`sqrt`, `log`, `lsh`, `randint` and the rest), `PI`, `SystemState`, `DataView`, `AvoidCheckError`, `UnrecordedScansError` and the names of the physical kinds.
 - `pyrung.click` exports the comment-format names (`TagMeta`, `parse_tag_meta`, `upgrade_comment` and the rest), `ClickValidationReport` and `ClickFinding`.
 
 ### Behaviour changes
 
-- `pyrung` no longer exports `Rung`. After `from pyrung import *`, a `with Rung(...):` raises `NameError: name 'Rung' is not defined`. A `from pyrung import Rung` raises `ImportError`.
+- `pyrung` and `pyrung.core` no longer export `Rung`. After `from pyrung import *`, a `with Rung(...):` raises `NameError: name 'Rung' is not defined`. `from pyrung import Rung` and `from pyrung.core import Rung` raise `ImportError`.
   Write `with rung(...):` instead. `rung` accepts the same conditions.
 - `pyrung.core` and `pyrung.dap` are internal. Docs, examples and generated code import from `pyrung` (they imported the math functions, `system` and `SystemState` from `pyrung.core`, and `send_command` from `pyrung.dap.live`).
   Import from `pyrung`, `pyrung.click`, `pyrung.circuitpy`, `pyrung.validation` or `pyrung.live`. The internal paths can change in any release.
-- `Program.validate()`, `Program.register_dialect()` and `Program.registered_dialects()` are gone, and so is `validate()` in `pyrung.core.validation`.
+- These validation entry points are gone: `Program.validate()`, `Program.register_dialect()`, `Program.registered_dialects()`, `validate()` in `pyrung.core.validation`, `validate_click_program` in `pyrung.click` and `validate_circuitpy_program` in `pyrung.circuitpy`.
   Call `logic.check()` for the ladder checks, `mapping.validate(logic)` for CLICK and `hw.validate(logic)` for CircuitPython.
-- `pyrung.click` no longer exports `validate_click_program`, and `pyrung.circuitpy` no longer has `validate_circuitpy_program`.
-  Call `mapping.validate(logic)` or `hw.validate(logic)`.
-- `program.dataview().upstream()` of a tag written in a subroutine includes the conditions of the rungs that call the subroutine, and stops there. `downstream()` of a tag in a call rung's condition includes the tags that the subroutine, or a subroutine it calls, writes (both used to stop at the call).
+- pyrung no longer checks properties over every reachable state. `always()`, `never()`, `reachable_states()`, `diff_states()`, `Proven`, `Counterexample`, lock files, `pyrung lock` and the console's `prove` command are gone.
+  Test each property in pytest with `force()` and `run_for()`, and use `how()` to find a path to a state. Delete `pyrung lock --check` from CI and your `pyrung.lock` files.
+- Tags, blocks, `.slot()`, `Field()`, `@udt`, `@named_array` and `TagMeta` no longer take `lock=`. A nickname file that still holds `[lock]` loads. pyrung drops the flag when it writes the file.
+  Delete `lock=True` from your tag declarations, or regenerate a `tags.py` that pyrung generated.
+- The console no longer has the `log`, `note`, `candidates`, `accept`, `deny`, `suppress` and `spec` commands. The tests that `spec` wrote call `expr_requires()` and `reset_dominance()`. Both are gone too.
+  Read past scans in the VS Code History panel or with `cause` and `effect`. Write tests in pytest, and check a property that `spec` checked with `force()` and `run_for()`.
+- `record stop` prints every command recorded (it printed a shortened transcript).
+  Cut the lines you don't want from the transcript before you replay it.
+- The console's `replay` reads a relative path from the program's folder (it read it from the debugger's working folder).
+  Give an absolute path to replay a file from somewhere else.
+- `program.dataview().upstream()` of a tag written in a subroutine includes the conditions of the rungs that call the subroutine, and stops there. `downstream()` of a tag in a call rung's condition includes the tags that the subroutine, or a subroutine it calls, writes. Both used to stop at the call.
   Update any test that expects the old slice.
 - `load_check_config()` raises `ValueError` if `[tool.pyrung.check]` names a rule that pyrung does not know. The message names the file and the rule (it loaded the name, and `pyrung check` raised later).
   Fix or remove the rule name.
-- `expr_requires()` and `reset_dominance()` are gone.
-  Delete the tests that use them, or check the property with `force()` and `run_for()`.
-- pyrung requires pyclickplc 0.9.1 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
+- Error messages, warnings and CLICK findings say what went wrong and what to do. So do the messages from `how()`, the debug console and `pyrung live`. They name the call you wrote, such as `count_up()` (they named pyrung's classes, such as `CountUpInstruction`). They spell the rung call `rung(...)` (some spelled it `Rung(...)`).
+  Update any test that matches the old text.
+- Rung numbers count from 1. A ladder export issue's `path` and a CLICK finding's `location` start at `main.rung[1]` (they started at `main.rung[0]`). `how()` numbers its route and producer text the way `cause()` does, and writes a subroutine rung as `MySub:3`, its place in the subroutine.
+  Add 1 to a rung index that you compare with a path.
+- pyrung requires pyclickplc 0.9.1 (it required 0.5.1), and pymodbus 3.12 or later, below 4. pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
   If your own code calls pyclickplc, read pyclickplc's 0.9.0 and 0.9.1 changelogs.
 - The soft PLC's Modbus server stores a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (it answered exception 2). A rung that reads the T or CT bit sees the write.
   If a client of yours relied on that refusal, check the address before it writes.
@@ -79,100 +92,88 @@
   If a client of yours relied on that refusal, check the address before it writes.
 - A NaN that a client writes to a `Real` keeps its own bits, as a CLICK keeps them. Modbus reads, `send()` and `unpack_to_words()` give those bits (they gave 0xFFFF:0xFFFF for any NaN). A NaN that a `math()` computes still reads 0xFFFF:0xFFFF. The P1AM still sends every NaN as 0xFFFF:0xFFFF, because its floats can't hold a NaN's bits.
   Test for NaN with `math.isnan()` on the decoded float, not by comparing the words with 0xFFFF:0xFFFF.
-- The console's `replay` reads a relative path from the program's folder (it read it from the debugger's working folder).
-  Give an absolute path to replay a file from somewhere else.
 - `ModbusRtuTarget` refuses a `device_id` above 247, the last Modbus RTU device address (it took up to 255).
   Use 0..247.
 - `receive()` from an RTU device refuses `device_id=0`, the broadcast address no device answers (it took 0).
   Use 1..247.
+- A `copy()` of an `Int`, `Dint` or `Word` into a `Char` with no `convert` writes its digits, as `to_text()` does and as a CLICK does (it stored the number). Ladder export writes it as a `to_text()` copy.
+  Pass `convert=to_binary` to store the number as one character.
+- A `copy()`, `fill()` or `blockcopy()` of a NaN `Real` into a `Dint` stores -2147483648, as a CLICK does (it stored 0).
+  Update any test that expects 0.
+- A `pack_text()` of text such as "1E39" or "-1E39" into a `Real` stores +Inf or -Inf with no fault flag, as a CLICK does (it left the `Real` as it was and turned on `system.fault.out_of_range`).
+  To catch such text, check the `Real` for +Inf or -Inf after the pack.
 - CLICK export refuses `to_text(exponential=True)` from an integer source (it exported it). Importing a ladder CSV refuses it too.
   Drop `exponential=True`. An integer source takes `suppress_zero` only.
-- `mapping.validate(logic)` reports `CLK_NOP_NO_COIL` for a rung whose contacts feed only a NOP (CLICK's Syntax Check error C0003).
-  Give the rung an output, or remove its contacts.
-- A `copy()` of an `Int`, `Dint` or `Word` into a `Char` with no `convert` writes its digits, as `to_text()` does and as a CLICK does (it stored the number).
-  Pass `convert=to_binary` to store the number as one character.
 - CLICK validation refuses a `randint()` bound in TD, CTD or SD, as CLICK's editor does (it accepted an `Int` or `Dint` tag mapped there).
   Copy the bound into a DS or DD tag first.
 - CLICK export refuses a hex `math()` constant past 16 bits even with `allow=` (it wrote the low 16 bits, so 70000 became 1170h).
   Write the 16-bit value you mean instead.
-- CLICK export refuses a constant outside -32768..65535 in a `copy()` or `fill()` into DH, XD or YD (it wrote the low 16 bits, so 70000 became 4464).
+- CLICK export refuses a constant outside -32768..65535 in a `copy()` or `fill()` into DH, XD or YD (it wrote the low 16 bits, so 70000 became 1170h).
   Write the 16-bit value you mean instead.
 - CLICK export refuses a `copy()` into TXT whose constant runs past TXT1000 as written, such as `copy("AB", txt[1000])` (it warned and wrote the copy).
   `allow=` does not lift it. Start the copy low enough to fit the constant.
 - Four system points have the names CLICK writes: SC19 is `_PLC Error`, SD19 is `_RTC_Year(4 digits)`, SD20 is `_RTC_Year(2 digits)` and SD23 is `_RTC_Day_of_The_Week` (they were `_PLC_Error`, `_RTC_Year (4 digits)`, `_RTC_Year (2 digits)` and `_RTC_Day_of_the_Week`).
   Look a point up by its new name, or by its tag such as `system.fault.plc_error`. A nickname file row with the old name loads and is ignored.
+- `mapping.validate(logic)` reports `CLK_NOP_NO_COIL` for a rung whose contacts feed only a NOP (it passed the rung). CLICK's Syntax Check reports error C0003 for such a rung.
+  Give the rung an output, or remove its contacts.
 - `TagMap.from_nickname_file()` raises `ValueError` naming the file and line for a row whose Address or Data Type CLICK wouldn't write, or that has more cells than the header (it skipped the row or used the bank's type).
   Fix the row, or leave its Data Type blank.
-- The console no longer has the `log`, `note`, `candidates`, `accept`, `deny`, `suppress` and `spec` commands.
-  Read past scans in the VS Code History panel or with `cause` and `effect`. Write tests in pytest.
-- `record stop` prints every command recorded (it printed a shortened transcript).
-  Cut the lines you don't want from the transcript before you replay it.
-- pyrung no longer checks properties over every reachable state. `always()`, `never()`, `reachable_states()`, `diff_states()`, `Proven`, `Counterexample`, lock files, `pyrung lock` and the console's `prove` command are gone.
-  Test each property in pytest with `force()` and `run_for()`, and use `how()` to find a path to a state. Delete `pyrung lock --check` from CI and your `pyrung.lock` files.
-- Tags, blocks, `.slot()`, `Field()`, `@udt`, `@named_array` and `TagMeta` no longer take `lock=`. A nickname file that still holds `[lock]` loads. pyrung drops the flag when it writes the file.
-  Delete `lock=True` from your tag declarations, or regenerate a `tags.py` that pyrung generated.
-- Error messages, warnings and CLICK findings say what went wrong and what to do. They name the call you wrote, such as `count_up()` (they named pyrung's classes, such as `CountUpInstruction`). They spell the rung call `rung(...)` (some spelled it `Rung(...)`).
-  Update any test that matches the old text.
-- A ladder export issue's `path` and a CLICK finding's `location` count rungs from 1, so the first rung is `main.rung[1]` (it was `main.rung[0]`).
-  Add 1 to a rung index that you compare with a path.
-- A `copy()`, `fill()` or `blockcopy()` of a NaN `Real` into a `Dint` stores -2147483648, as a CLICK does (it stored 0).
-  Update any test that expects 0.
-- A `pack_text()` of text such as "1E39" or "-1E39" into a `Real` stores +Inf or -Inf with no fault flag, as a CLICK does (it left the `Real` as it was and turned on `system.fault.out_of_range`).
-  To catch such text, check the `Real` for +Inf or -Inf after the pack.
+- `TagMap.from_nickname_file()` keeps a space at the start of a TXT initial value. A TXT holds one character, so `  a ` loads as `" "` (it loaded `"a"`). A CLICK trims a bare value and keeps a quoted one.
+  Remove the spaces before a bare value.
 
 ### Fixes
 
-- The soft PLC's Modbus server and the generated P1AM server read 0 from the register after XD8 and the one after YD8, as a CLICK does (they answered exception 2).
-- The messages from `how()`, the debug console and `pyrung live` now say what went wrong and what to do about it.
-- The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
+#### Debugger and console
+
+- The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`). A replay that stops on a failed line reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
+- When a scan raises partway through the console's `step` or `run`, the debugger stops at the last scan that ran (the editor kept showing the scan before the command).
 - The debugger shows a TXT character outside printable ASCII as CLICK's Data View does, such as `$C8` (it showed the character).
-- A `replay` that stops on a failed line now reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
-- CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
-- A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
-- A conformance run now starts each case only after the case's reset has run (it could start the case before its reset, and the case read stale values).
-- `TagMap.load_snapshot()` and the debugger read a CLICK data dump as CLICK writes it:
-  - A text register holding a space loads as `" "` (it loaded `"$20"`).
-  - A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
-  - A text register holding a comma loads as `","`. 0.16.0 read the comma as an empty address and moved the rest of the row one address on.
+- The VS Code debugger shows live tag values inside a `with rung(...)` block (it showed them only inside `with Rung(...)`).
+- The console's `link` command refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
+
+#### CLICK files and Modbus
+
+- `TagMap.load_snapshot()` and the debugger read a CLICK data file as CLICK writes it:
+  - A text register that holds a space loads as `" "`. 0.16.0 loaded `"$20"`.
+  - A float register that CLICK shows as `Err-Format` loads as NaN. 0.16.0 raised `ValueError`.
+  - A text register that holds a comma loads as `","`. 0.16.0 read the comma as an empty address and moved the rest of the row one address on.
   - If a row with a comma also has an empty address, pyrung cannot tell what some text registers hold. It skips them, loads the rest of the file and names the skipped addresses. `load_snapshot()` warns with `SkippedAddressesWarning`. The warning's `addresses` attribute lists them. A DAP client gets them in `skippedAddresses` in the launch response.
+- A nickname file's Retentive column accepts `True` and `1` as well as `Yes`.
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
-- `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
-- `program.check()` no longer calls a comparison always false when the `math()` that writes the tag wraps past the end of its type.
-- `program.check()` no longer calls a comparison always false when a copy clamps the value it stores, or when a `Real` input has whole-number `min`/`max`.
-- `program.check()`, `how()` and `program.dataview()` now see every TXT a `to_text()` copy can write (they saw only the first).
-- `program.check()` no longer reports a dead write for a `to_text()` copy whose first TXT a later copy overwrites.
-- `how()` no longer assumes that a `Real` holds a number when it may hold NaN or Inf, such as after a `math()` past the Real range or a `pack_words()` into it.
-- `how()` no longer assumes that a timer's or counter's Acc starts at 0 when a copy or a `math()` writes it, or that an up counter with a down input stays between 0 and its preset.
-- `how()` no longer misses the states where two tags a rung compares directly are equal, such as the Accs of two timers.
-- `how()` no longer misses values of a tag that a rung compares with a pointer element, with arithmetic or with an input that has no bounds.
-- `how()` no longer raises `TypeError` on a rung that compares a tag with arithmetic or a pointer element, such as `Fed.Acc == Cut.Acc + 2` or `Lvl == Tb[P]`.
-- `how(Lvl == Sp + 2)` and `how(Lvl == Tb[P])` now raise a `ValueError` that asks for a literal.
-- `how(avoid=Lvl == Tb[P])` no longer treats every state as avoided.
-- `how()` now keeps a drum step's preset or an off-delay's preset that a rung below the instruction sets (it took the preset for a value set before each read).
-- `how()` now keeps a continuous `search()`'s result, which the search reads to resume after it (it took the result for a value set before each read).
-- `why()` now follows a timer's Acc or a continuous `search()`'s result back to a later rung that writes it (it stopped at the tag).
-- `why()`, `cause()` and `effect()` now follow a write through a pointer with no declared bounds into a block of more than 1000 elements. `why()` reads the scan history, or steps the next scan on a copy of the PLC, to see where the write stores. It marks the rung `?` when neither can say.
-- `cause()` no longer names a write through a pointer as the writer of a tag in another block.
-- `cause()` no longer calls an element never written when a write through a pointer can store into it.
-- `how()` and `program.check()` no longer assume that a copy or fill through a pointer writes every element the pointer can reach.
-- `how()` and `program.check()` no longer treat an element of a block of more than 1000 elements as never written when a write through a pointer with no declared bounds can store into it.
-- `program.check()` no longer reports these findings on a field feedback (a tag with `link=`):
-  - It has no writer.
-  - A preset stays 0.
-  - A comparison is always false.
-  - A latch is never reset.
-- `program.check()` no longer reports these findings on a system tag that the PLC sets, such as `rtc.hour` or `sys.scan_counter`:
-  - It has no writer.
-  - A preset stays 0.
-- `program.check()` now reports a write by any instruction to a `readonly=True` tag, and a second writer of a `final=True` tag (it saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`).
-- `run_for()` and `run_until()` now raise when an instruction such as `math()` stores into a read-only system point, as stepping does (they stored the value and went on).
+- CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
+- The soft PLC's Modbus server and the generated P1AM server read 0 from the register after XD8 and the one after YD8, as a CLICK does (they answered exception 2).
+- A conformance run starts each case only after the case's reset has run (it could start the case before its reset, and the case read stale values).
+
+#### Long runs and generated code
+
+- `run_for()` and `run_until()` raise when an instruction such as `math()` stores into a read-only system point, as stepping does (they stored the value and went on).
 - In `run_for()` and `run_until()`, a `pack_text()` of a character above FFh, such as U+0661, turns on `system.fault.out_of_range` and writes nothing, as stepping does (it read the character as a digit).
 - Generated CircuitPython code runs a `pack_text()` into a `Word` (it stopped with an error).
-- A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
-- `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
-- `how()` numbers rungs from 1 in its route and producer text, the way `cause()` does, and writes a subroutine rung as `MySub:3`. It counted from 0, and a subroutine rung showed a number that was not its place in the subroutine.
-- The VS Code debugger now shows live tag values inside a `with rung(...)` block (it showed them only inside `with Rung(...)`).
+
+#### program.check()
+
+- `program.check()` sees writes by every instruction, writes through a pointer and writes in a `forloop()` body. In 0.16.0 its choices, stuck-bit, link and comparison checks missed some of them. Its `readonly=True` and `final=True` checks saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`.
+- `program.check()` no longer calls a comparison always false in these cases:
+  - The `math()` that writes the tag wraps past the end of its type.
+  - A copy clamps the value it stores.
+  - A `Real` input has whole-number `min`/`max`.
+- `program.check()` no longer reports a missing writer or a preset that stays 0 on a field feedback (a tag with `link=`), or on a system tag that the PLC sets, such as `rtc.hour`. On a field feedback it no longer reports an always-false comparison or a latch that is never reset.
+- `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
+- `program.check()`, `how()` and `program.dataview()` see every TXT that a `to_text()` copy can write (they saw only the first). `program.check()` no longer reports a dead write for such a copy when a later copy overwrites its first TXT.
+- `how()` and `program.check()` no longer assume that a copy or fill through a pointer writes every element the pointer can reach. They no longer treat an element of a block of more than 1000 elements as never written when a write through a pointer with no declared bounds can store into it.
+
+#### how(), why() and cause()
+
+- `how()` gives a correct plan for more programs:
+  - It no longer assumes that a `Real` holds a number, or that an up counter with a down input stays between 0 and its preset. It no longer assumes that a timer's or counter's Acc starts at 0 when a copy or a `math()` writes it.
+  - It reads a drum step's preset and an off-delay's preset as values that carry over from the last scan when a rung below the instruction sets them.
+  - It reads a continuous `search()`'s result as a value that carries over from the last scan, because the search resumes after it.
+  - It no longer misses the states where two compared tags are equal, such as the Accs of two timers. It no longer misses the values of a tag that a rung compares with a pointer element, with arithmetic or with an input that has no bounds.
+  - It no longer raises `TypeError` on a rung such as `Fed.Acc == Cut.Acc + 2` or `Lvl == Tb[P]`. A target such as `how(Lvl == Sp + 2)` raises a `ValueError` that asks for a literal. `how(avoid=Lvl == Tb[P])` no longer treats every state as avoided.
+- `why()` follows a timer's Acc or a continuous `search()`'s result back to a later rung that writes it (it stopped at the tag).
+- `why()`, `cause()` and `effect()` follow a write through a pointer with no declared bounds into a block of more than 1000 elements. `why()` reads the scan history, or steps the next scan on a copy of the PLC, to see where the write stores. It marks the rung `?` when neither can say.
+- `cause()` no longer names a write through a pointer as the writer of a tag in another block. It no longer calls an element never written when a write through a pointer can store into it.
 
 ## v0.16.0 (2026-11-14)
 
