@@ -59,7 +59,8 @@ class OldCommentFormError(ValueError):
 class SkippedAddressesWarning(UserWarning):
     """Issued when pyrung loads a PLC data file without some of its TXT addresses.
 
-    CLICK writes a TXT comma without quotes, so a TXT row can be read more than one way.
+    CLICK writes a TXT comma without quotes, so a TXT row that holds a comma and an empty
+    address can be read more than one way.
     ``addresses`` lists the TXT addresses that pyrung skipped, in file order.
     """
 

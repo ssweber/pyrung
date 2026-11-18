@@ -500,11 +500,12 @@ class TagMap:
 
         Warns:
             SkippedAddressesWarning: If some TXT addresses can be read more than
-                one way. CLICK writes a TXT comma without quotes, so a TXT row with a
-                comma and an empty address is ambiguous. The state skips those
-                addresses and holds every other value in the file. The warning's
-                ``addresses`` attribute lists the skipped addresses. To refuse such a
-                file, turn the warning into an error with :mod:`warnings`.
+                one way. CLICK writes a TXT comma without quotes, so a TXT row that
+                holds a comma and an empty address can be read more than one way.
+                ``load_snapshot`` leaves those addresses out of the state and loads
+                the rest of the file. The warning's ``addresses`` attribute lists the
+                skipped addresses. To refuse such a file, turn the warning into an
+                error with :mod:`warnings`.
 
         Raises:
             ValueError: If the file is not a readable PLC data dump. The message
