@@ -21,8 +21,8 @@ from pyrung import (
     on_delay,
     program,
     rise,
+    TagType,
 )
-from pyrung.core.tag import TagType
 
 # ---------------------------------------------------------------------------
 # Tags
