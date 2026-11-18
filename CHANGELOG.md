@@ -46,6 +46,7 @@
 - A negative constant down to -32768 in a hex `math()`, written as its 16 bits (-1 is FFFFh).
 - `randint()` with DH bounds in a hex `math()`.
 - A `copy()` of an `Int`, `Dint` or `Word` into a TXT with no `convert`, which exports as `to_text()`.
+- A `copy()` of a constant with a fraction into DH or YD, such as `copy(1.5, DH1)`.
 
 ### Behaviour changes
 
@@ -85,11 +86,16 @@
   Update any test that matches the old text.
 - A ladder export issue's `path` and a CLICK finding's `location` count rungs from 1, so the first rung is `main.rung[1]` (it was `main.rung[0]`).
   Add 1 to a rung index that you compare with a path.
+- A `copy()`, `fill()` or `blockcopy()` of a NaN `Real` into a `Dint` stores -2147483648, as a CLICK does (it stored 0).
+  Update any test that expects 0.
+- A `pack_text()` of text such as "1E39" or "-1E39" into a `Real` stores +Inf or -Inf with no fault flag, as a CLICK does (it left the `Real` as it was and turned on `system.fault.out_of_range`).
+  Compare the `Real` with the range you expect after the pack.
 
 ### Fixes
 
 - The messages from `how()`, the debug console and `pyrung live` now say what went wrong and what to do about it.
 - The console's `replay` runs the whole transcript (it stopped after the first `step`, `run` or `reload`).
+- The debugger shows a TXT character outside printable ASCII as CLICK's Data View does, such as `$C8` (it showed the character).
 - A `replay` that stops on a failed line now reports an error (it reported success). `pyrung live` exits 1, and a `;` chain stops there.
 - A Watch expression such as `State == HELD` reads the choice label as its value (it compared the label text and was always false).
 - CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
@@ -126,6 +132,8 @@
   - A preset stays 0.
 - `program.check()` now reports a write by any instruction to a `readonly=True` tag, and a second writer of a `final=True` tag (it saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`).
 - `run_for()` and `run_until()` now raise when an instruction such as `math()` stores into a read-only system point, as stepping does (they stored the value and went on).
+- In `run_for()` and `run_until()`, a `pack_text()` of a character above FFh, such as U+0661, turns on `system.fault.out_of_range` and writes nothing, as stepping does (it read the character as a digit).
+- Generated CircuitPython code runs a `pack_text()` into a `Word` (it called `re.fullmatch()`, which CircuitPython lacks).
 - A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
 - `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
 
