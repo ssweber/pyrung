@@ -6,6 +6,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONDITION_FILE = PROJECT_ROOT / "src" / "pyrung" / "core" / "condition.py"
+TESTS_DIR = PROJECT_ROOT / "tests"
 
 
 def _is_comparison_class(name: str) -> bool:
@@ -40,19 +41,56 @@ class CompareDefaultVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _calls_rung_class(expr: ast.expr) -> bool:
+    if not isinstance(expr, ast.Call):
+        return False
+    func = expr.func
+    return (isinstance(func, ast.Name) and func.id == "Rung") or (
+        isinstance(func, ast.Attribute) and func.attr == "Rung"
+    )
+
+
+def find_with_rung_class(paths: list[Path]) -> list[tuple[Path, int]]:
+    """Return the file and line of each `with Rung(...)` in *paths*.
+
+    The tests call the DSL as `rung`. This check catches a `with Rung(` that a new test or
+    an older branch brings back. It does not read code inside strings.
+    """
+    found = []
+    for path in paths:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.With, ast.AsyncWith)):
+                found.extend(
+                    (path, item.context_expr.lineno)
+                    for item in node.items
+                    if _calls_rung_class(item.context_expr)
+                )
+    return found
+
+
 def main() -> int:
     source = CONDITION_FILE.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(CONDITION_FILE))
     visitor = CompareDefaultVisitor()
     visitor.visit(tree)
+    with_rung = find_with_rung_class(sorted(TESTS_DIR.rglob("*.py")))
 
-    if not visitor.violations:
+    if not visitor.violations and not with_rung:
         print("semantic-lint: ok")
         return 0
 
-    print("semantic-lint: found comparison get_tag calls without defaults:")
-    for line, class_name, message in visitor.violations:
-        print(f"  - {CONDITION_FILE}:{line} ({class_name}): {message}")
+    if visitor.violations:
+        print("semantic-lint: found comparison get_tag calls without defaults:")
+        for line, class_name, message in visitor.violations:
+            print(f"  - {CONDITION_FILE}:{line} ({class_name}): {message}")
+    if with_rung:
+        print("semantic-lint: found `with Rung(` in tests. Use `with rung(` instead:")
+        for path, line in with_rung:
+            print(f"  - {path}:{line}")
     return 1
 
 
