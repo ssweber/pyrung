@@ -417,11 +417,6 @@ All [nothing] unless marked.
   laddercodec's `write_bundle()` refuses the pair. pyrung should report the pair as a validation finding before the
   export. Whether CLICK treats subroutine names without case is unread. [CLICK]
 
-- **Two how() labels print a rung number that does not count from 1.** `pilot/trace_routes.py:558`
-  (`_writer_label`) prints an index into `pdg.rung_nodes` as "rung N". `pilot/options.py:914` (`program_note`) prints
-  `producer.rung_index` with no +1. The rung labels from `query._rung_label` count from 1, as `restart.py` shows.
-  Whoever next works on the how() trace text resolves the node to its rung and prints it with `_rung_label`. The
-  label then reads `Sub:N` for a subroutine rung, not `{scope} rung N`.
 - **Two drum cases flake on the local soft PLC.** `drum/pins_read_before_step_fix` and its tee twin sometimes
   read Result4 = 3, depending on scan speed. `drum_idle` reads Result2 = 1022 when the soft PLC scans fast. Each
   fails the same way when run as a part and when run as a pick (bob/main-runner found them). A case must not depend on how fast
