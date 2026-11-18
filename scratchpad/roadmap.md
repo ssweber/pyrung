@@ -41,7 +41,7 @@ and the cleanups landed in #52. After them `train-jit` took 61 min (it took 78.9
 
 ## 1. The deletions release
 
-Plan items 3 (public surface) and 6 (search removal) ship in 0.17.0. All [nothing]. The record machinery (plan item
+Plan items 3 (public surface) and 6 (search removal) ship in 0.17.0, on Sam's tag. All [nothing]. The record machinery (plan item
 1.1) is gone. The public surface and the `Rung` -> `rung` rename landed in #94, #95 and #96, and `Rung` is no longer
 a public name. The static facts below are what is left of this step.
 ClickNick reads `command_grammar()`, so tell its session that `log`, `note`, `candidates`, `accept`, `deny`,
@@ -202,7 +202,7 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
     through pointer -1. It needs another way to raise and hold SC44. clicknick has nothing on file, and its runner
     cannot read a runtime flag (clicknick, 2026-11-18). So a pyrung session writes a new conformance case first
     [nothing]. The case's ladder keeps SC44 raised on every scan, for example with a pointer copy that faults on
-    each scan, and puts a TON or a CTU box alone after it. The case then runs on a CLICK in this round.
+    each scan, and puts a TON or a CTU box alone after it. The case then runs on a CLICK on Sam's go.
   - Re-run parts drum1, drum2, follow_timing, follow_extra and text_flasher to confirm their rewritten readings.
   - Re-paste and re-run the `to_text()` cases in parts copy, math, system and follow_extra. Their export now
     writes only the flag the source has, which changed their hashes.
