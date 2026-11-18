@@ -98,8 +98,11 @@ def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) ->
     """
     if not isinstance(value, str) or dest_type not in _NUMBER_TYPES:
         return
+    storage = copy_store_transform(dest_type, LITERAL)
+    if storage is None:
+        return
     try:
-        store_value(value, copy_store_transform(dest_type, LITERAL))
+        store_value(value, storage)
     except (TypeError, ValueError, OverflowError):
         raise ValueError(
             f"{what} of the text {value!r} into a number register ({dest_type.name}) cannot "
