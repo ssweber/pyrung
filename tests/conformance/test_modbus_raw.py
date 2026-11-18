@@ -80,6 +80,14 @@ The probes, each one entry (``modbus_raw/<probe>``):
   between the documented ones included.  ``yd_odd_write``: FC06 of 0x8000 to YD's register 3,
   then YD1 read back, only with ``PYRUNG_CONFORMANCE_OUTPUTS=1``.  If it lands on YD1 it turns
   Y116 on until the harness writes it back.
+- ``past_xd8``, ``past_yd8``: the register after XD8 (FC04) and after YD8 (FC03).  Each probe
+  reads it alone, together with XD8 or YD8, and as the last of 18 registers from XD0 or YD0.
+- ``fc05_x001``, ``fc15_x101_x132``, ``fc05_x_gap``, ``fc05_y_gap``, ``fc05_t1``, ``fc05_ct1``:
+  ON to X001, to X101..X132 over the gap coils of X slot 1, to the coil after X116 and the
+  coil after Y116, and to T1 and CT1.  Each probe reads the coils back with FC01 and FC02,
+  then writes back what they read before.  ``fc15_y_gap``: the same for Y115..Y202, over the
+  gap coils of Y slot 1, only with ``PYRUNG_CONFORMANCE_OUTPUTS=1``.  It turns Y115, Y116, Y201
+  and Y202 on until the harness writes them back.
 - ``sd29_write``: FC06 to SD29 of a year one past what it holds, then FC04 back, then the old
   value written back.  It is sent only while SC53 reads 0.
 - ``past_bank_alias``: whether DD1531, which a pointer reaches past the bank, is the memory at
@@ -351,6 +359,10 @@ XD0 = 57344
 YD0 = 57856
 #: Coil past Y116, before Y201: unit 17 of expansion slot 1.
 Y_GAP = 8192 + 32 + 16
+#: Coil past X116, before X201: unit 17 of expansion slot 1.
+X_GAP = 32 + 16
+#: The coils of X101, Y115, T1 and CT1.
+X101, Y115, T1, CT1 = 32, 8192 + 32 + 14, 45056, 49152
 
 
 def _hex(words: list[int]) -> list[str]:
@@ -916,6 +928,58 @@ async def _xd_yd(s: _Session) -> None:
         )
 
 
+async def _past_xd_yd(s: _Session) -> None:
+    """Read the register after XD8 and the one after YD8, alone and after the register before."""
+    w = s.w
+    for name, fc, first in (("past_xd8", 4, XD0), ("past_yd8", 3, YD0)):
+        r = s.entry(name)
+        r["after_8"] = await w.registers(fc, first + 17, 1)
+        r["8_and_after"] = await w.registers(fc, first + 16, 2)
+        r["x18"] = await w.registers(fc, first, 18)
+
+
+async def _bit_write(s: _Session, probe: str, coil: int, count: int, what: str) -> None:
+    """Write ON to *count* coils from *coil*, then read them back with FC01 and FC02.
+
+    One coil takes an FC05, more take an FC15.  The coils are written back to what they read
+    before, or to OFF if that read failed.  pyclickplc names no gap coil, so the reads are raw.
+    """
+    w = s.w
+    r = s.entry(probe)
+    r["request"] = f"{'FC05' if count == 1 else 'FC15'} ON to {what}"
+    r["before"] = await w.bits(1, coil, count)
+    try:
+        if count == 1:
+            r["answer"] = await w.write_coil(coil, True)
+        else:
+            r["answer"] = await w.write_coils(coil, [True] * count)
+        r["settled"] = int(await s.settle(probe))
+        r["fc01"] = await w.bits(1, coil, count)
+        r["fc02"] = await w.bits(2, coil, count)
+    finally:
+        before = r["before"]
+        old = [bool(b) for b in before] if isinstance(before, list) else [False] * count
+        if count == 1:
+            r["restored"] = await w.write_coil(coil, old[0])
+        else:
+            r["restored"] = await w.write_coils(coil, old)
+        await s.settle(probe)
+
+
+async def _bit_writes(s: _Session) -> None:
+    """Write X, T and CT bits and the coils between slots, each written back after."""
+    await _bit_write(s, "fc05_x001", 0, 1, "X001")
+    await _bit_write(s, "fc15_x101_x132", X101, 32, "X101..X132, over the gap of X slot 1")
+    await _bit_write(s, "fc05_x_gap", X_GAP, 1, "the coil after X116")
+    await _bit_write(s, "fc05_y_gap", Y_GAP, 1, "the coil after Y116")
+    await _bit_write(s, "fc05_t1", T1, 1, "T1")
+    await _bit_write(s, "fc05_ct1", CT1, 1, "CT1")
+    if os.environ.get(OUTPUTS_ENV) == "1":
+        await _bit_write(s, "fc15_y_gap", Y115, 20, "Y115..Y202, over the gap of Y slot 1")
+    else:
+        s.entry("fc15_y_gap")["skipped"] = f"not sent: set {OUTPUTS_ENV}=1 to send it"
+
+
 def _block(cl: Any, bank: str) -> Awaitable[Any]:
     return (cl.xd if bank == "XD" else cl.yd).read(0, 8)
 
@@ -1082,6 +1146,8 @@ _PROBES = (
     _past_banks,
     _function_codes,
     _xd_yd,
+    _past_xd_yd,
+    _bit_writes,
     _yd_odd_write,
     _sd29_write,
     _past_bank_alias,

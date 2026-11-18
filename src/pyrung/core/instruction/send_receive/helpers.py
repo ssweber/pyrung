@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from pyclickplc.banks import BANKS
 
-from pyrung.core.instruction.conversions import _float_to_int_bits
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag, TagType
 
@@ -162,7 +161,7 @@ def _pack_values_to_registers(
             else:
                 registers.extend([lo, hi])
         elif tag.type == TagType.REAL:
-            hi, lo = struct.unpack(">HH", struct.pack(">I", _float_to_int_bits(value)))
+            hi, lo = struct.unpack(">HH", struct.pack(">f", float(value)))
             if word_order == WordOrder.HIGH_LOW:
                 registers.extend([hi, lo])
             else:

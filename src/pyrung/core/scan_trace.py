@@ -20,10 +20,12 @@ Every value it reads is one of two things:
   which every recorded pair still holds, compared by type and value. Here and below,
   any NaN is the same value as any other. From any NaN the kernel takes the same
   decisions and stores a NaN in the same cells, though the sign may differ
-  (``math(-R, R)``). No pyrung reader tells two NaNs apart. History, the DAP and
-  ``cause()`` ask :func:`~pyrung.core.state.value_changed` whether a tag changed.
-  Text shows every NaN as ``nan``. An Unpack Copy and the Modbus servers give CLICK's
-  0xFFFF:0xFFFF for any NaN.
+  (``math(-R, R)``). No pyrung reader inside a scan tells two NaNs apart. History, the
+  DAP and ``cause()`` ask :func:`~pyrung.core.state.value_changed` whether a tag
+  changed. Text shows every NaN as ``nan``. An Unpack Copy gives 0xFFFF:0xFFFF for any
+  NaN. The Modbus servers send a NaN's own bits, so a Modbus client can tell two NaNs
+  apart. A run of this loop may leave a NaN whose sign or payload differs from what
+  stepping would leave.
 * A **moving** value is read from the loop's locals on every iteration. The moving
   values are the time-derived system tags (:data:`MOVING_SYSTEM_TAGS`) and every cell
   that the scan changes. The tracer finds those cells with a fixed point. It traces,

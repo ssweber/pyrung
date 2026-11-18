@@ -199,11 +199,12 @@ The generated server serves:
 - every register the TagMap maps, whether a rung uses it or not, so an HMI or SCADA system can write a value no ladder rung touches
 - every raw CLICK register a rung uses directly (`ds[3901]`, `c[1801]`), at its own address
 - the whole bank, when a rung reaches it by pointer or block instruction (`ds[ptr]`, `fill(0, c.select(1, 3))`)
-- XD and YD in CLICK's layout, built from the X and Y bits the TagMap maps. A write to YD sets those Y bits.
+- every X and Y coil, and the coils between X or Y slots. The server keeps a write to one that no tag holds, so a read returns it.
+- XD and YD in CLICK's layout, built from the X and Y bits. A write to YD sets those Y bits.
 
-A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there gets Modbus exception 2 (illegal data address), because the P1AM has nowhere to store the value. A CLICK would store it. To keep such a value on the P1AM, map it in the TagMap.
+A read of any other address in a CLICK bank returns 0, as on a CLICK. So does a read of the register after XD8 or after YD8. A write there gets Modbus exception 2 (illegal data address), because the P1AM has nowhere to store the value. A CLICK would store it. To keep such a value on the P1AM, map it in the TagMap.
 
-A write to an SC or SD that CLICK's Data View shows as Read Only gets exception 2. A coil write to X, T or CT gets exception 2 as well, because a client can only read those. If an FC 15 or FC 16 write reaches one rejected address, it stores nothing.
+A write to an SC or SD that CLICK's Data View shows as Read Only gets exception 2. If an FC 15 or FC 16 write reaches one rejected address, it stores nothing.
 
 ## Scan cycle with Modbus
 

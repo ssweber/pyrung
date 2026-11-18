@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import struct
+
 import pytest
-from pyclickplc.server import MemoryDataProvider
+from pyclickplc.server import MemoryDataProvider, _answer, _ClickDeviceContext
 
 from pyrung.click import ClickBlocks, ClickDataProvider, TagMap
 
@@ -289,7 +291,8 @@ def test_blocks_serve_bank_slots_without_tag_map_entries():
     assert provider.read("DS7") == 12
     assert provider.tag_name("x3") == "Start_PB"
     assert provider.tag_name("DS7") == "DS7"
-    assert provider.tag_name("TD1") is None  # timer banks need TagMap entries
+    assert provider.tag_name("T1") == "T1"
+    assert provider.tag_name("TD1") is None  # an accumulator needs a TagMap entry
     assert provider.tag_name("XD0") is None  # word image, not a tag
 
     provider.write("X003", False)
@@ -323,18 +326,88 @@ def test_a_real_holding_inf_reads_as_inf_and_a_nan_write_is_accepted():
     assert math.isnan(provider.read("DF1"))
 
 
+# -- Behind pyclickplc's Modbus server, as a CLICK answered ---------------------------------
+# A CLICK C2-03CPU with firmware 4.00 was observed to answer each request below this way.
+
+DF1 = 28672
+
+
+def _server(provider: ClickDataProvider):
+    """Return a function that sends a request PDU to pyclickplc's server and returns its answer."""
+    context = _ClickDeviceContext(provider)
+    return lambda pdu: _answer(context, pdu)
+
+
+def _registers(answer: bytes) -> list[int]:
+    return list(struct.unpack(f">{answer[1] // 2}H", answer[2:]))
+
+
+def _words(value: float) -> list[int]:
+    return list(struct.unpack("<HH", struct.pack("<f", value)))
+
+
 @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
-def test_a_real_holding_any_nan_serves_as_a_click_serves_it(bits):
-    import struct
-
-    from pyclickplc.banks import DataType
-    from pyclickplc.modbus import pack_value
-
+def test_a_real_holding_any_nan_serves_its_own_bits(bits):
     level = Tag("Level", TagType.REAL)
-    mapping = TagMap({level: df[1]})
     runner = PLC(logic=[])
-    provider = ClickDataProvider(runner, mapping)
-    runner.patch({"Level": struct.unpack("<f", struct.pack("<I", bits))[0]})
+    send = _server(ClickDataProvider(runner, TagMap({level: df[1]})))
+    nan = struct.unpack("<f", struct.pack("<I", bits))[0]
+    runner.patch({"Level": nan})
     runner.step()
 
-    assert pack_value(provider.read("DF1"), DataType.FLOAT) == [0xFFFF, 0xFFFF]
+    assert _registers(send(struct.pack(">BHH", 3, DF1, 2))) == _words(nan)
+
+
+def test_a_df_word_written_alone_keeps_the_other_word():
+    level = Tag("Level", TagType.REAL)
+    runner = PLC(logic=[])
+    send = _server(ClickDataProvider(runner, TagMap({level: df[1]})))
+    read = struct.pack(">BHH", 3, DF1, 2)
+    # The high word of a NaN, then 2.5 one word at a time, low word first.
+    for offset, word, after in (
+        (1, 0x7FC0, [0x0000, 0x7FC0]),
+        (0, 0x0000, [0x0000, 0x7FC0]),
+        (1, 0x4020, [0x0000, 0x4020]),
+    ):
+        request = struct.pack(">BHH", 6, DF1 + offset, word)
+        assert send(request) == request
+        runner.step()
+        assert _registers(send(read)) == after
+    assert runner.current_state.tags["Level"] == 2.5
+
+
+def test_a_write_to_an_x_t_or_ct_bit_is_stored_and_a_rung_reads_it():
+    with Program() as logic:
+        with Rung(t[1]):
+            out(c[1])
+        with Rung(ct[1]):
+            out(c[2])
+    runner = PLC(logic=logic)
+    provider = ClickDataProvider(runner, TagMap(), blocks=(x, c, t, ct))
+    send = _server(provider)
+    coils = {"X1": 0, "T1": 45056, "CT1": 49152}
+    for coil in coils.values():
+        request = struct.pack(">BHH", 5, coil, 0xFF00)
+        assert send(request) == request
+    runner.step()
+
+    for coil in coils.values():
+        assert send(struct.pack(">BHH", 2, coil, 1)) == bytes([2, 1, 1])
+    assert (provider.read("C1"), provider.read("C2")) == (True, True)
+
+
+def test_gap_coils_store_and_the_registers_past_xd8_and_yd8_read_0():
+    runner = PLC(logic=[])
+    send = _server(ClickDataProvider(runner, TagMap(), blocks=(x, y)))
+    # Y115 and Y116, the 16 gap coils after them, then Y201 and Y202.
+    request = struct.pack(">BHHB3B", 15, 8238, 20, 3, 0xFF, 0xFF, 0x0F)
+    assert send(request) == request[:5]
+    # Unit 17 of slot 1, after X116.
+    request = struct.pack(">BHH", 5, 48, 0xFF00)
+    assert send(request) == request
+    runner.step()
+
+    assert send(struct.pack(">BHH", 1, 8238, 20)) == bytes([1, 3, 0xFF, 0xFF, 0x0F])
+    assert send(struct.pack(">BHH", 2, 48, 1)) == bytes([2, 1, 1])
+    assert _registers(send(struct.pack(">BHH", 4, 57344, 18))) == [0] * 18
+    assert _registers(send(struct.pack(">BHH", 3, 57856 + 17, 1))) == [0]

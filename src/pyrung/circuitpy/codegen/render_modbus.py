@@ -24,17 +24,13 @@ _YD0 = MODBUS_MAPPINGS["YD"].base
 #: XD and YD each hold 17 registers.  XD0 and XD0u come first, then XD1..XD8, each followed
 #: by a spare word.
 _XY_WORDS = BANKS["XD"].max_addr - BANKS["XD"].min_addr + 1
+_X0 = MODBUS_MAPPINGS["X"].base
 _Y0 = MODBUS_MAPPINGS["Y"].base
+#: X and Y each take 32 coils for the CPU and for each of slots 1..8.  Units 17..32 of a slot
+#: are gap coils that no address names.
+_XY_COILS = plc_to_modbus("X", 801)[0] + 32 - _X0
 #: Banks of two-register cells (Dint, Real).  A write to half a cell reads the other half.
 _WIDE_BANKS = tuple(sorted(bank for bank, mapping in MODBUS_MAPPINGS.items() if mapping.width == 2))
-#: Coil banks that a client can only read (FC 2).  A coil write to them answers 02.
-_COIL_READ_ONLY = tuple(
-    sorted(
-        bank
-        for bank, mapping in MODBUS_MAPPINGS.items()
-        if mapping.is_coil and 5 not in mapping.function_codes and mapping.writable is None
-    )
-)
 
 
 def _modbus_spans(is_coil: bool) -> tuple[tuple[int, int], ...]:
@@ -105,12 +101,9 @@ def _cell_runs(ctx: CodegenContext, is_coil: bool) -> list[tuple[str, str, int, 
 def _df_words(value: str) -> str:
     """Return Python source for the two Modbus words of the float in *value*, low word first.
 
-    A CLICK serves every NaN as 0xFFFF:0xFFFF, so the generated code does too.
+    A NaN goes out as its own bits, because a CLICK keeps the bits that a client wrote.
     """
-    return (
-        f"((0xFFFF, 0xFFFF) if {value} != {value} "
-        f"else struct.unpack('<HH', struct.pack('<f', float({value}))))"
-    )
+    return f"struct.unpack('<HH', struct.pack('<f', float({value})))"
 
 
 _BANK_DESCRIPTIONS: dict[str, str] = {
@@ -472,13 +465,21 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         f"_MB_REG_MAP = {reg_map!r}",
         f"_MB_COIL_SPANS = {_modbus_spans(True)!r}",
         f"_MB_REG_SPANS = {_modbus_spans(False)!r}",
-        f"_MB_COIL_READ_ONLY = {_COIL_READ_ONLY!r}",
         f"_MB_SC_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SC'].writable or ()))!r}",
         f"_MB_SD_WRITABLE = {tuple(sorted(MODBUS_MAPPINGS['SD'].writable or ()))!r}",
         f"_MB_WIDE = {_WIDE_BANKS!r}",
-        # A YD register stores what a client wrote, for Y bits that no tag holds and for the
-        # spare words.
+        # The spare YD registers store what a client wrote.
         f"_mb_yd = [0] * {_XY_WORDS}",
+        # An X or Y coil that no tag holds stores what a client wrote.  The gap coils between
+        # slots do too.  A CLICK keeps a write to an X that no module drives.
+        f"_mb_xy_bits = bytearray({(2 * _XY_COILS + 7) // 8})",
+        "",
+        "def _mb_xy_bit(addr):",
+        f"    if {_X0} <= addr < {_X0 + _XY_COILS}:",
+        f"        return addr - {_X0}",
+        f"    if {_Y0} <= addr < {_Y0 + _XY_COILS}:",
+        f"        return addr - {_Y0 - _XY_COILS}",
+        "    return None",
         "",
         "def _mb_in(addr, spans):",
         "    for _lo, _hi in spans:",
@@ -506,7 +507,12 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "    if _mapped is not None:",
         "        return _mb_read_coil_plc(_mapped[0], _mapped[1])",
         "    _cell = _mb_coil_cell(addr)",
-        "    return None if _cell is None else bool(_cell[1][_cell[2]])",
+        "    if _cell is not None:",
+        "        return bool(_cell[1][_cell[2]])",
+        "    _bit = _mb_xy_bit(addr)",
+        "    if _bit is None:",
+        "        return None",
+        "    return bool((_mb_xy_bits[_bit >> 3] >> (_bit & 7)) & 1)",
         "",
         "def _mb_coil_set(addr, val):",
         "    _mapped = _MB_COIL_MAP.get(addr)",
@@ -516,6 +522,14 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "    _cell = _mb_coil_cell(addr)",
         "    if _cell is not None:",
         "        _cell[1][_cell[2]] = bool(val)",
+        "        return",
+        "    _bit = _mb_xy_bit(addr)",
+        "    if _bit is None:",
+        "        return",
+        "    if val:",
+        "        _mb_xy_bits[_bit >> 3] |= 1 << (_bit & 7)",
+        "    else:",
+        "        _mb_xy_bits[_bit >> 3] &= ~(1 << (_bit & 7)) & 0xFF",
         "",
         "def _mb_reg_get(addr):",
         "    _mapped = _MB_REG_MAP.get(addr)",
@@ -528,14 +542,11 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "    _start = _mb_xy_start(base, word)",
         "    if _start is None:",
         "        return held",
+        "    _word = 0",
         "    for _bit in range(16):",
-        "        _value = _mb_coil_get(_start + _bit)",
-        "        if _value is not None:",
-        "            if _value:",
-        "                held |= 1 << _bit",
-        "            else:",
-        "                held &= ~(1 << _bit)",
-        "    return held",
+        "        if _mb_coil_get(_start + _bit):",
+        "            _word |= 1 << _bit",
+        "    return _word",
         "",
         "def _mb_read_coil(addr):",
         "    _value = _mb_coil_get(addr)",
@@ -545,9 +556,11 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "    return _value",
         "",
         "def _mb_coil_ok(addr):",
+        # The server refuses a coil write to an SC bit that CLICK marks Read Only, and to a
+        # coil that the P1AM has nowhere to store.  A CLICK refuses only the SC bits.
         "    _mapped = _MB_COIL_MAP.get(addr) or _mb_coil_cell(addr)",
-        "    if _mapped is None or _mapped[0] in _MB_COIL_READ_ONLY:",
-        "        return False",
+        "    if _mapped is None:",
+        "        return _mb_xy_bit(addr) is not None",
         '    return _mapped[0] != "SC" or _mapped[1] in _MB_SC_WRITABLE',
         "",
         "def _mb_write_coils(start, values):",
@@ -564,6 +577,9 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         f"        return _mb_xy_word(0, addr - {_XD0}, 0)",
         f"    if {_YD0} <= addr < {yd_end}:",
         f"        return _mb_xy_word({_Y0}, addr - {_YD0}, _mb_yd[addr - {_YD0}])",
+        # A CLICK reads 0 from the register after XD8 and the one after YD8.
+        f"    if addr == {xd_end} or addr == {yd_end}:",
+        "        return 0",
         # A cell can hold what no register can (a Dint on a DS slot). The server refuses
         # that read, and the program keeps running.
         "    try:",
@@ -600,11 +616,11 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "        _addr = start + _offset",
         "        _word = int(values[_offset]) & 0xFFFF",
         f"        if {_YD0} <= _addr < {yd_end}:",
-        f"            _mb_yd[_addr - {_YD0}] = _word",
         f"            _start = _mb_xy_start({_Y0}, _addr - {_YD0})",
+        "            if _start is None:",
+        f"                _mb_yd[_addr - {_YD0}] = _word",
         "            for _bit in range(16 if _start is not None else 0):",
-        "                if _mb_coil_get(_start + _bit) is not None:",
-        "                    _mb_coil_set(_start + _bit, (_word >> _bit) & 1)",
+        "                _mb_coil_set(_start + _bit, (_word >> _bit) & 1)",
         "            continue",
         "        _mapped = _MB_REG_MAP.get(_addr)",
         # _mb_reg_ok already read each cell that a store reads, so no store raises here.
@@ -1156,7 +1172,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
                 "        elif _tt == 'REAL':",
                 "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
                 "            _bf = '>f' if word_order == 'high_low' else '<f'",
-                "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+                "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
                 "        elif _tt == 'INT':",
                 "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
                 "        else:",

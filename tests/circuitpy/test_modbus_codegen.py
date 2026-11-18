@@ -166,8 +166,13 @@ def _float_from_bits(bits: int) -> float:
     return struct.unpack("<f", struct.pack("<I", bits))[0]
 
 
+def _words(value: float) -> tuple[int, int]:
+    """Return the two words of *value* as a float32, low word first."""
+    return struct.unpack("<HH", struct.pack("<f", value))
+
+
 @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
-def test_a_df_holding_any_nan_serves_as_a_click_serves_it(monkeypatch, bits):
+def test_a_df_holding_any_nan_serves_its_own_bits(monkeypatch, bits):
     level = Real("Level")
     mapping = TagMap({level: df[1]})
     with Program(strict=False) as prog:
@@ -178,18 +183,20 @@ def test_a_df_holding_any_nan_serves_as_a_click_serves_it(monkeypatch, bits):
     )
     handle = ns["_mb_handle"]
     addr = plc_to_modbus("DF", 1)[0]
-    ns["_t_Level"] = _float_from_bits(bits)
+    nan = _float_from_bits(bits)
+    ns["_t_Level"] = nan
+    low, high = _words(nan)
 
     resp = handle(_mbap(1, struct.pack(">BHH", 3, addr, 2)), 12)
-    assert struct.unpack(">HH", resp[-4:]) == (0xFFFF, 0xFFFF)
-    # A write to the high word keeps the low word the client read.
+    assert struct.unpack(">HH", resp[-4:]) == (low, high)
+    # A write to the high word keeps the low word.
     req = _mbap(2, struct.pack(">BHH", 6, addr + 1, 0x4000))
     assert handle(req, len(req)) == req
-    assert struct.unpack("<I", struct.pack("<f", ns["_t_Level"]))[0] == 0x4000FFFF
+    assert _words(ns["_t_Level"]) == (low, 0x4000)
 
 
 @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
-def test_a_send_of_any_nan_sends_what_a_click_sends(monkeypatch, bits):
+def test_a_send_of_any_nan_sends_its_own_bits(monkeypatch, bits):
     source = Real("Source")
     flags = {name: Bool(name) for name in ("Sending", "Success", "Error")}
     with Program(strict=False) as prog:
@@ -205,10 +212,10 @@ def test_a_send_of_any_nan_sends_what_a_click_sends(monkeypatch, bits):
                 )
     ns, _sockets = _run_raw_client_job(monkeypatch, prog)
     nan = _float_from_bits(bits)
-    assert ns["_mb_client_pack_register_values"]("DF", [nan]) == [0xFFFF, 0xFFFF]
-    for order in ("high_low", "low_high"):
-        raw = ns["_mb_client_raw_pack_register_values"]([nan], ["REAL"], order)
-        assert raw == [0xFFFF, 0xFFFF]
+    low, high = _words(nan)
+    assert ns["_mb_client_pack_register_values"]("DF", [nan]) == [low, high]
+    assert ns["_mb_client_raw_pack_register_values"]([nan], ["REAL"], "low_high") == [low, high]
+    assert ns["_mb_client_raw_pack_register_values"]([nan], ["REAL"], "high_low") == [high, low]
 
 
 def test_calc_program_with_runtime_imports_and_scans(monkeypatch):
@@ -542,7 +549,17 @@ def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
     yd_word = 0x1234
     for idx in range(1, 17):
         outputs.slot(idx, default=bool((yd_word >> (idx - 1)) & 0x1))
-    mapping = TagMap({coil: c[1], reg: ds[1], outputs: y.select(1, 16)})
+    timer_bit, counter_bit, level = Bool("TimerBit"), Bool("CounterBit"), Real("Level")
+    mapping = TagMap(
+        {
+            coil: c[1],
+            reg: ds[1],
+            outputs: y.select(1, 16),
+            timer_bit: t[1],
+            counter_bit: ct[1],
+            level: df[1],
+        }
+    )
     with Program(strict=False) as prog:
         pass
 

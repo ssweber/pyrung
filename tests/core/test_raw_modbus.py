@@ -308,11 +308,12 @@ class TestPacking:
 
     @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
     @pytest.mark.parametrize("order", [WordOrder.HIGH_LOW, WordOrder.LOW_HIGH])
-    def test_pack_any_nan_as_a_click_sends_it(self, bits, order):
+    def test_pack_any_nan_as_its_own_bits(self, bits, order):
         tags = [Tag("a", TagType.REAL)]
         nan = struct.unpack(">f", struct.pack(">I", bits))[0]
         result = _pack_values_to_registers([nan], tags, order, RegisterType.HOLDING)
-        assert result == [0xFFFF, 0xFFFF]
+        hi, lo = struct.unpack(">HH", struct.pack(">f", nan))
+        assert result == ([hi, lo] if order == WordOrder.HIGH_LOW else [lo, hi])
 
     def test_pack_coils(self):
         tags = [Tag("a", TagType.BOOL), Tag("b", TagType.BOOL)]

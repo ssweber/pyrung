@@ -218,7 +218,7 @@ def _render_modbus_client_runtime_static() -> list[str]:
             "        elif _tt == 'REAL':",
             "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
             "            _bf = '>f' if word_order == 'high_low' else '<f'",
-            "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+            "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
             "        elif _tt == 'INT':",
             "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
             "        else:",

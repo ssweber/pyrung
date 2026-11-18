@@ -1,6 +1,6 @@
-"""``send()`` to a CLICK DF writes an Inf or a NaN in the form a CLICK stores it.
+"""``send()`` to a CLICK DF writes an Inf or a NaN as its own bits.
 
-A CLICK stores +Inf and -Inf as their own bits and every NaN as 0xFFFF:0xFFFF.
+A CLICK keeps the bits that a client writes to a DF, a NaN's included.
 A local soft PLC stands in for the peer.  Its provider keeps each value it is given, so the
 test reads the bits that reached it.
 """
@@ -64,14 +64,15 @@ def _float(bits: int) -> float:
 @pytest.mark.parametrize(
     ("bits", "sent"),
     [
-        (0x7FC00000, 0xFFFFFFFF),
-        (0xFFC00000, 0xFFFFFFFF),
-        (0x7F800001, 0xFFFFFFFF),
+        (0x7FC00000, 0x7FC00000),
+        (0xFFC00000, 0xFFC00000),
+        # Python sets the quiet bit of a signalling NaN on some versions when it reads one.
+        (0x7F800001, _bits(_float(0x7F800001))),
         (0x7F800000, 0x7F800000),
         (0xFF800000, 0xFF800000),
     ],
 )
-def test_an_inf_or_a_nan_reaches_the_peer_as_a_click_holds_it(peer, bits, sent):
+def test_an_inf_or_a_nan_reaches_the_peer_as_its_own_bits(peer, bits, sent):
     port, provider = peer
     values = (2.5, _float(bits), -7.25)
     result = _run_click_send_request("127.0.0.1", port, 1, "DF", (1, 2, 3), values)
