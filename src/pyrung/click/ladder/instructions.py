@@ -17,16 +17,15 @@ from pyrung.core.instruction.send_receive import is_modbus_status_tag
 from pyrung.core.tag import Tag, TagType
 
 from ._loop_items import is_own_rung, loop_item_rung
-from .translator import _operand_type, _quote
+from .translator import _quote
 
 
 def _exported_converter(instruction: Any) -> CopyConverter | None:
     """Return the converter that the export writes with a Copy.
 
-    CLICK saves every Copy between TXT and a number register or constant with a
-    conversion. So a plain Copy across text exports the converter that pyrung runs for
-    it. A TXT into a DF is the one exception. CLICK was observed to offer no conversion
-    there and to save a plain Copy, so the export writes it as written.
+    CLICK saves a conversion with every Copy between TXT and a number register or
+    constant, so the export writes the converter that pyrung runs. A Copy of a TXT into
+    a DF exports plain, because CLICK's dialog offers no conversion there.
     """
     authored = getattr(instruction, "authored_convert", instruction.convert)
     if authored is not None:
@@ -36,21 +35,6 @@ def _exported_converter(instruction: Any) -> CopyConverter | None:
         if copy_source_kind(instruction.dest) is TagType.REAL:
             return None
     return converter
-
-
-def _exported_block_converter(instruction: Any) -> CopyConverter | None:
-    """Return the converter that the export writes with a Block Copy.
-
-    CLICK saves a Block Copy of TXT into DS, DD or DH with a conversion. So a plain
-    ``blockcopy()`` there exports the ``to_value`` that it runs. A TXT range into a DF
-    range exports as written, as a Copy of a TXT into a DF does.
-    """
-    authored = getattr(instruction, "authored_convert", instruction.convert)
-    if authored is not None:
-        return authored
-    if _operand_type(instruction.dest) is TagType.REAL:
-        return None
-    return instruction.convert
 
 
 # ---- Instruction token mixin ----
@@ -393,10 +377,9 @@ class _InstructionMixin:
             block_source = self._render_operand(
                 instruction.source, path=f"{path}.source", source=instruction
             )
-            block_converter = _exported_block_converter(instruction)
-            if block_converter is not None:
+            if instruction.convert is not None:
                 convert_kw["convert"] = self._render_converter(
-                    block_converter, instruction, block_source, path=f"{path}.convert"
+                    instruction.convert, instruction, block_source, path=f"{path}.convert"
                 )
             return self._fn(
                 "blockcopy",

@@ -291,8 +291,8 @@ def test_a_plain_copy_of_an_integer_into_txt_exports_as_clicks_copy_value(source
 
 # --- A plain Copy across text exports the converter that pyrung runs -------------------
 # CLICK's Copy dialog has no plain Copy between TXT and a number register or constant.
-# CLICK saves each one with its conversion.  The one plain form that CLICK keeps is TXT
-# into DF.  The dialog greys out every conversion there (lc-diff-click N3).
+# CLICK's editor saves each one with its conversion, except a Copy of TXT into DF.  The
+# dialog greys out every conversion for that one, and the editor saves it plain.
 
 
 @pytest.mark.parametrize(
@@ -330,7 +330,6 @@ def test_a_plain_copy_of_an_integer_into_txt_exports_as_clicks_copy_value(source
             "blockcopy(TXT1..TXT3,DH1..DH3,convert=to_value)",
         ),
         (lambda: copy(txt[1], df[1]), "copy(TXT1,DF1)"),
-        (lambda: blockcopy(txt.select(1, 3), df.select(1, 3)), "blockcopy(TXT1..TXT3,DF1..DF3)"),
     ],
     ids=[
         "txt-ds",
@@ -347,7 +346,6 @@ def test_a_plain_copy_of_an_integer_into_txt_exports_as_clicks_copy_value(source
         "block-txt-dd",
         "block-txt-dh",
         "txt-df-stays-plain",
-        "block-txt-df-stays-plain",
     ],
 )
 def test_a_plain_copy_across_text_exports_its_converter(write, token):
@@ -407,8 +405,8 @@ def test_a_block_copy_into_one_address_exports_the_range_click_saves(write, toke
 
 
 def test_a_text_copy_into_a_range_exports_its_first_txt():
-    # A Copy has one destination field, and CLICK works out where the text ends
-    # (lc-diff-click RESULTS8: "AB" into TXT999 saves its end as TXT1000).
+    # A Copy has one destination field, and CLICK works out where the text ends.
+    # CLICK's editor saves a Copy of "AB" into TXT999 with its end at TXT1000.
     _exports_and_imports_as(lambda: copy("AB", txt.select(5, 6)), 'copy("AB",TXT5)')
 
 

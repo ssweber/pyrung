@@ -98,6 +98,9 @@ def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) ->
     """
     if not isinstance(value, str) or dest_type not in _NUMBER_TYPES:
         return
+    advice = "Write the number without quotes."
+    if what == "copy()":
+        advice += " To read the digits of a TXT, copy the TXT with convert=to_value."
     storage = copy_store_transform(dest_type, LITERAL)
     if storage is None:
         return
@@ -106,8 +109,7 @@ def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) ->
     except (TypeError, ValueError, OverflowError):
         raise ValueError(
             f"{what} of the text {value!r} into a number register ({dest_type.name}) cannot "
-            "store a number. Write the number without quotes, or copy a TXT with "
-            "convert=to_value."
+            f"store a number. {advice}"
         ) from None
 
 
@@ -127,7 +129,7 @@ def _copy_dest(dest: Any) -> Any:
     if isinstance(target, IndirectBlockRange):
         raise TypeError(
             "copy() writes one register, and its destination here is a range with a pointer. "
-            "Copy into one element with a pointer, as in DS[Ptr]."
+            f"Copy into one element with a pointer, as in {target.block.name}[Ptr]."
         )
     if isinstance(target, BlockRange):
         raise TypeError(
@@ -162,7 +164,13 @@ def _block_copy_dest(source: Any, dest: Any) -> Any:
             "the destination as a range from .select()."
         )
     block, addr = found
-    count = len(source.addresses)
+    count = len(source)
+    size = block.end - block.start + 1
+    if count > size:
+        raise ValueError(
+            f"blockcopy() into {target.name} copies {count} elements, and its block holds "
+            f"only {size}."
+        )
     end = addr + count - 1
     if end > block.end:
         raise ValueError(
@@ -516,8 +524,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         dest = _block_copy_dest(_unwrapped(source), dest)
         fixed_source, fixed_dest = _unwrapped(source), _unwrapped(dest)
         if isinstance(fixed_source, BlockRange) and isinstance(fixed_dest, BlockRange):
-            source_count = len(fixed_source.addresses)
-            dest_count = len(fixed_dest.addresses)
+            # len() counts what execute() copies: the fields of a named_array, not its gaps.
+            source_count, dest_count = len(fixed_source), len(fixed_dest)
             if source_count != dest_count:
                 raise ValueError(
                     "blockcopy() needs ranges of the same length. "

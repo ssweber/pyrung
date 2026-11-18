@@ -44,7 +44,7 @@ Source and destination ranges must have the same length.
 blockcopy(DS.select(1, 3), DS[11])               # Copy DS1..DS3 → DS11..DS13
 ```
 
-A single tag as the destination is the first address. The copy writes one element for each source element, as CLICK's Block Copy does. pyrung refuses the program when you build it if those elements run past the end of the block.
+A single tag as the destination gives the first address. The copy writes as many elements as the source has, as a CLICK does. If they would run past the end of the block, pyrung refuses the program when you build it.
 
 ## `fill` — write constant to range
 
@@ -68,7 +68,7 @@ copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCI
 
 A `copy()` or `blockcopy()` of a TXT into a number with no `convert` is `to_value`. A `copy()` of a number tag or a number constant into a TXT with no `convert` is `to_text()`. So `copy(-5, Txt[1])` writes "-" and "5".
 
-CLICK's Copy dialog has no plain Copy between TXT and a number, so the CLICK export writes the converter that pyrung runs. A TXT into a `DF` is the exception. CLICK offers no conversion there, and the export writes a plain Copy.
+The CLICK export writes the converter that pyrung runs, because CLICK has no plain Copy between TXT and a number. A `copy()` of a TXT into a `DF` exports plain, because CLICK offers no conversion there.
 
 ### Numeric → Text
 

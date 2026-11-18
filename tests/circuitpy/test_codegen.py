@@ -1993,7 +1993,7 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_copy_of_a_number_constant_into_a_txt_writes_its_digits_on_every_backend(
         self, monkeypatch
     ):
-        """CLICK stores the digits of a constant copied into a TXT (clicknick RESULTS6, row 5).
+        """A CLICK stores the digits of a number constant copied into a TXT.
 
         An int is written as ``to_text()`` writes it, and a real with seven decimals.
         """
@@ -2056,9 +2056,9 @@ class TestBoardPeripheralsAndRunStop:
     def test_a_text_copy_into_a_txt_range_writes_from_its_first_txt_on_every_backend(
         self, monkeypatch
     ):
-        """The range gives only the start, as the CLICK export's Copy into its first TXT does.
+        """A copy into a TXT range writes from its first TXT, as the exported Copy does.
 
-        A text longer than the range writes on through the block.
+        A text longer than the range writes on past its end.
         """
         chars = Block("Txt", TagType.CHAR, 1, 10)
         written = Bool("Written")
@@ -2070,6 +2070,57 @@ class TestBoardPeripheralsAndRunStop:
 
         results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
         assert results == {name: (True,) for name in results}
+
+    @staticmethod
+    def _sensor():
+        # Each instance holds two fields in a window of three addresses, so a gap follows them.
+        @named_array(Int, count=2, stride=3)
+        class Sensor:
+            raw = 11
+            scaled = 22
+
+        return Sensor
+
+    def test_a_block_copy_of_a_named_array_instance_copies_its_fields_on_every_backend(
+        self, monkeypatch
+    ):
+        """An instance copies its two fields and skips the gap after them."""
+        sensor = self._sensor()
+        working = Block("Working", TagType.INT, 1, 3)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                blockcopy(sensor.instance(2), working.select(1, 2))
+            with rung(working[1] == 11, working[2] == 22, working[3] == 0):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
+    def test_a_block_copy_of_a_named_array_instance_into_one_tag_on_every_backend(
+        self, monkeypatch
+    ):
+        """A single tag as the destination gets one element for each field, not for the gap."""
+        sensor = self._sensor()
+        nums = Block("Num", TagType.INT, 1, 20)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                blockcopy(sensor.instance(2), nums[10])
+            with rung(nums[10] == 11, nums[11] == 22, nums[12] == 0):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
+    def test_a_block_copy_of_a_named_array_instance_counts_its_fields_when_built(self):
+        """Three destinations for two fields is refused when the program is built."""
+        sensor = self._sensor()
+        working = Block("Working", TagType.INT, 1, 3)
+        with pytest.raises(ValueError, match="The source has 2 tags, and the destination has 3"):
+            with Program(strict=False):
+                with rung():
+                    blockcopy(sensor.instance(2), working.select(1, 3))
 
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):

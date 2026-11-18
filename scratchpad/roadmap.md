@@ -472,6 +472,8 @@ All [nothing] unless marked.
   logpoint conditions and data-breakpoint conditions (monitor_data_breakpoints.py:169). They should share the Watch's
   rule, with labels looked up at evaluation time because breakpoints outlive a reload. `to_conditions` (how() and
   causal) resolves labels but raises KeyError on a `Pump.State` alias.
+- **Fill a number into TXT.** `fill(5, txt.select(1, 3))` stores the int 5 in each TXT and exports
+  `fill(5,TXT1..TXT3)`. CLICK's editor saves that Fill. Nobody has read what a CLICK stores in each TXT. [PLC]
 - **Export a fraction constant into DH or YD.** CLICK accepts `copy(1.5, DH1)` (copy_single answers). What it stores
   there is unread. [PLC]
 - **Spell a Real of 1e7 and up as CLICK saves it.** CLICK saves 123456789.0 as `1.234568E+08`, 12345678.0 as

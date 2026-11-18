@@ -539,6 +539,7 @@ def test_a_char_mapping_alone_does_not_hold_its_bank():
 
 
 _LONE = Int("Lone")
+_SMALL = Block("Small", TagType.INT, 1, 3)
 
 
 @pytest.mark.parametrize(
@@ -546,7 +547,7 @@ _LONE = Int("Lone")
     [
         (lambda: copy(ds.select(1, 3), ds[5]), TypeError, r"Use blockcopy\(\) to copy a range"),
         (lambda: copy(5, ds.select(1, 3)), TypeError, r"Use fill\(\) to write one value"),
-        (lambda: copy("AB", txt.select(ds[1], ds[2])), TypeError, r"as in DS\[Ptr\]"),
+        (lambda: copy("AB", txt.select(ds[1], ds[2])), TypeError, r"as in TXT\[Ptr\]"),
         (lambda: copy(None, ds[1]), TypeError, r"copy\(\) needs a source"),
         (lambda: copy("A", ds[1]), ValueError, "Write the number without quotes"),
         (lambda: blockcopy(ds[1], ds.select(5, 7)), TypeError, r"reads a range from \.select"),
@@ -557,7 +558,12 @@ _LONE = Int("Lone")
         (lambda: fill(5, ds[1]), TypeError, r"fill\(\) writes a range"),
         (lambda: fill(ds.select(1, 2), ds.select(5, 7)), TypeError, r"fill\(\) writes one value"),
         (lambda: fill(txt[1], ds.select(1, 3)), TypeError, "cannot write a TXT into a number"),
-        (lambda: fill("A", ds.select(1, 3)), ValueError, "Write the number without quotes"),
+        (
+            lambda: fill("A", ds.select(1, 3)),
+            ValueError,
+            r"store a number\. Write the number without quotes\.$",
+        ),
+        (lambda: blockcopy(ds.select(1, 4), _SMALL[1]), ValueError, "its block holds only 3"),
     ],
     ids=[
         "copy-from-range",
@@ -574,11 +580,12 @@ _LONE = Int("Lone")
         "fill-from-range",
         "fill-txt-into-ds",
         "fill-letter-into-ds",
+        "blockcopy-longer-than-the-block",
     ],
 )
 def test_a_store_that_cannot_run_is_refused_when_built(build, error, message):
-    # Each of these raised on its first scan.  Building it raises instead, with the form
-    # to write.
+    # Each of these raised when its rung ran.  Building it raises instead, and the message
+    # names the form to write.
     with pytest.raises(error, match=message):
         with Program(strict=False):
             with rung():
