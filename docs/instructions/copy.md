@@ -40,6 +40,12 @@ blockcopy(RecipeProfile.instance(2), WorkingRecipe.select(1, 3))
 
 Source and destination ranges must have the same length.
 
+```python
+blockcopy(DS.select(1, 3), DS[11])               # Copy DS1..DS3 → DS11..DS13
+```
+
+A single tag as the destination gives the first address. The copy writes as many elements as the source has, as a CLICK does. If they would run past the end of the block, pyrung refuses the program when you build it.
+
 ## `fill` — write constant to range
 
 ```python
@@ -60,7 +66,9 @@ copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCI
 
 `to_value` of a letter or other non-digit sets the out-of-range fault and leaves the destination alone. A blank TXT reads as 0.
 
-A `copy()` of a TXT into a number with no `convert` is `to_value`. A `copy()` of a number tag into a TXT with no `convert` is `to_text()`.
+A `copy()` or `blockcopy()` of a TXT into a number with no `convert` is `to_value`. A `copy()` of a number tag or a number constant into a TXT with no `convert` is `to_text()`. So `copy(-5, Txt[1])` writes "-" and "5".
+
+The CLICK export writes the converter that pyrung runs, because CLICK has no plain Copy between TXT and a number. A `copy()` of a TXT into a `DF` exports plain, because CLICK offers no conversion there.
 
 ### Numeric → Text
 
@@ -86,6 +94,8 @@ In CLICK's programming software you can type `00026` directly into the source fi
 ```python
 copy("00026", Txt[1])          # Txt1..Txt5 = "0", "0", "0", "2", "6"
 ```
+
+A `copy()` into a TXT range such as `Txt.select(5, 6)` writes from the range's first TXT, the same as a copy into `Txt[5]`. A text longer than the range writes on past its end.
 
 ### blockcopy and fill
 

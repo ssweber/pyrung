@@ -14,6 +14,7 @@ from pyrung.core import (
     Program,
     TagType,
     Timer,
+    blockcopy,
     branch,
     call,
     copy,
@@ -393,7 +394,7 @@ def test_collect_program_tags_matches_graph_extraction() -> None:
             math(source + values[1], result)
             copy(values[pointer], result)
             with branch():
-                copy(values.select(6, 8), values.select(9, 11))
+                blockcopy(values.select(6, 8), values.select(9, 11))
             call("worker")
         with subroutine("worker"):
             with rung(result > 0):

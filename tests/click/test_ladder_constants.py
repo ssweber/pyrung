@@ -316,7 +316,7 @@ def test_blank_text_constants_export_as_ascii_code():
         "TXT2!=$00",
         "out(C2)",
         "search(TXT1..TXT4 == $00,result=DS1,found=C3)",
-        'copy("AB",TXT5..TXT6)',
+        'copy("AB",TXT5)',
     ]
     assert not any("\x00" in token for token in tokens)
 

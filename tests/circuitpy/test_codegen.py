@@ -1990,6 +1990,138 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (int_text, word_text), scans=1)
         assert results == {name: (True, True) for name in results}
 
+    def test_a_copy_of_a_number_constant_into_a_txt_writes_its_digits_on_every_backend(
+        self, monkeypatch
+    ):
+        """A CLICK stores the digits of a number constant copied into a TXT.
+
+        An int is written as ``to_text()`` writes it, and a real with seven decimals.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 20)
+        int_text = Bool("IntText")
+        real_text = Bool("RealText")
+        with Program(strict=False) as prog:
+            with rung():
+                copy(-5, chars[1])
+                copy(2.5, chars[5])
+            with rung(chars[1] == "-", chars[2] == "5", chars[3] == ""):
+                out(int_text)
+            with rung(*(chars[5 + i] == ch for i, ch in enumerate("2.5000000"))):
+                out(real_text)
+
+        results = _on_every_backend(prog, monkeypatch, (int_text, real_text), scans=1)
+        assert results == {name: (True, True) for name in results}
+
+    @pytest.mark.parametrize("dest_type", [TagType.INT, TagType.REAL], ids=["int", "real"])
+    def test_a_plain_block_copy_of_txt_into_numbers_reads_digits_on_every_backend(
+        self, monkeypatch, dest_type
+    ):
+        """A plain blockcopy() of TXT into numbers runs ``to_value``, as a plain copy() does.
+
+        A letter sets the out-of-range flag and leaves its own element alone. A blank TXT
+        reads as 0.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 3)
+        nums = Block("Num", dest_type, 1, 3)
+        digits = Bool("Digits")
+        with Program(strict=False) as prog:
+            with rung():
+                copy("1A", chars[1])
+                fill(99, nums.select(1, 3))
+                blockcopy(chars.select(1, 3), nums.select(1, 3))
+            with rung(nums[1] == 1, nums[2] == 99, nums[3] == 0):
+                out(digits)
+
+        watched = (digits, system.fault.out_of_range)
+        results = _on_every_backend(prog, monkeypatch, watched, scans=1)
+        assert results == {name: (True, True) for name in results}
+
+    def test_a_block_copy_into_one_tag_writes_one_element_per_source_on_every_backend(
+        self, monkeypatch
+    ):
+        """CLICK's Block Copy takes the first destination address and counts on from it."""
+        src = Block("Src", TagType.INT, 1, 3)
+        nums = Block("Num", TagType.INT, 1, 5)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                fill(7, src.select(1, 3))
+                blockcopy(src.select(1, 3), nums[2])
+            with rung(nums[1] == 0, nums[2] == 7, nums[3] == 7, nums[4] == 7, nums[5] == 0):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
+    def test_a_text_copy_into_a_txt_range_writes_from_its_first_txt_on_every_backend(
+        self, monkeypatch
+    ):
+        """A copy into a TXT range writes from its first TXT, as the exported Copy does.
+
+        A text longer than the range writes on past its end.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 10)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                copy("ABC", chars.select(5, 6))
+            with rung(chars[4] == "", chars[5] == "A", chars[6] == "B", chars[7] == "C"):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
+    @staticmethod
+    def _sensor():
+        # Each instance holds two fields in a window of three addresses, so a gap follows them.
+        @named_array(Int, count=2, stride=3)
+        class Sensor:
+            raw = 11
+            scaled = 22
+
+        return Sensor
+
+    def test_a_block_copy_of_a_named_array_instance_copies_its_fields_on_every_backend(
+        self, monkeypatch
+    ):
+        """An instance copies its two fields and skips the gap after them."""
+        sensor = self._sensor()
+        working = Block("Working", TagType.INT, 1, 3)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                blockcopy(sensor.instance(2), working.select(1, 2))
+            with rung(working[1] == 11, working[2] == 22, working[3] == 0):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
+    def test_a_block_copy_of_a_named_array_instance_into_one_tag_on_every_backend(
+        self, monkeypatch
+    ):
+        """A single tag as the destination gets one element for each field, not for the gap."""
+        sensor = self._sensor()
+        nums = Block("Num", TagType.INT, 1, 20)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                blockcopy(sensor.instance(2), nums[10])
+            with rung(nums[10] == 11, nums[11] == 22, nums[12] == 0):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
+    def test_a_block_copy_of_a_named_array_instance_counts_its_fields_when_built(self):
+        """Three destinations for two fields is refused when the program is built."""
+        sensor = self._sensor()
+        working = Block("Working", TagType.INT, 1, 3)
+        with pytest.raises(ValueError, match="The source has 2 tags, and the destination has 3"):
+            with Program(strict=False):
+                with rung():
+                    blockcopy(sensor.instance(2), working.select(1, 3))
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
         """A code needs an integer, so the TXT stays as it was and SC43 is set.

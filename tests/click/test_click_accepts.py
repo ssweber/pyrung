@@ -12,9 +12,11 @@ A form CLICK refuses next to an accepted one stays refused.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
-from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
+from pyrung.click import ClickBlocks, TagMap, ladder_to_pyrung, pyrung_to_ladder
 from pyrung.click.ladder import LadderExportError
 from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
@@ -24,11 +26,12 @@ from pyrung.click.validation import (
     CLK_MATH_RANGE_NOT_CONTIGUOUS,
     CLK_MATH_WIDE_CONSTANT,
     CLK_RAND_BOUND_TYPE,
+    CLK_TEXT_PAST_BANK,
     validate_click_program,
 )
 from pyrung.core import Word, randint, to_ascii, to_value
 from pyrung.core.program import Program, blockcopy, copy, fill, latch, math, out, reset, rung
-from tests.click.helpers import round_trip_logic
+from tests.click.helpers import exec_with_source, round_trip_logic
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -284,6 +287,127 @@ def test_a_plain_copy_of_an_integer_into_txt_exports_as_clicks_copy_value(source
         lambda: copy(source, txt[5]),
         f"copy({name},TXT5,convert=to_text(suppress_zero=1,termination_code=none))",
     )
+
+
+# --- A plain Copy across text exports the converter that pyrung runs -------------------
+# CLICK's Copy dialog has no plain Copy between TXT and a number register or constant.
+# CLICK's editor saves each one with its conversion, except a Copy of TXT into DF.  The
+# dialog greys out every conversion for that one, and the editor saves it plain.
+
+
+@pytest.mark.parametrize(
+    "write, token",
+    [
+        (lambda: copy(txt[1], ds[1]), "copy(TXT1,DS1,convert=to_value)"),
+        (lambda: copy(txt[1], dd[1]), "copy(TXT1,DD1,convert=to_value)"),
+        (lambda: copy(txt[1], dh[1]), "copy(TXT1,DH1,convert=to_value)"),
+        (lambda: copy(txt[1], td[1]), "copy(TXT1,TD1,convert=to_value)"),
+        (lambda: copy(txt[1], ctd[1]), "copy(TXT1,CTD1,convert=to_value)"),
+        (lambda: copy(txt[1], sd[29]), "copy(TXT1,SD29,convert=to_value)"),
+        (lambda: copy(txt[ds[5]], ds[1]), "copy(TXT[DS5],DS1,convert=to_value)"),
+        (
+            lambda: copy(df[1], txt[1]),
+            "copy(DF1,TXT1,convert=to_text(exponential=0,termination_code=none))",
+        ),
+        (
+            lambda: copy(-5, txt[1]),
+            "copy(-5,TXT1,convert=to_text(suppress_zero=1,termination_code=none))",
+        ),
+        (
+            lambda: copy(2.5, txt[1]),
+            "copy(2.5,TXT1,convert=to_text(exponential=0,termination_code=none))",
+        ),
+        (
+            lambda: blockcopy(txt.select(1, 3), ds.select(1, 3)),
+            "blockcopy(TXT1..TXT3,DS1..DS3,convert=to_value)",
+        ),
+        (
+            lambda: blockcopy(txt.select(1, 3), dd.select(1, 3)),
+            "blockcopy(TXT1..TXT3,DD1..DD3,convert=to_value)",
+        ),
+        (
+            lambda: blockcopy(txt.select(1, 3), dh.select(1, 3)),
+            "blockcopy(TXT1..TXT3,DH1..DH3,convert=to_value)",
+        ),
+        (lambda: copy(txt[1], df[1]), "copy(TXT1,DF1)"),
+    ],
+    ids=[
+        "txt-ds",
+        "txt-dd",
+        "txt-dh",
+        "txt-td",
+        "txt-ctd",
+        "txt-sd",
+        "txt-pointer-ds",
+        "df-txt",
+        "int-constant-txt",
+        "real-constant-txt",
+        "block-txt-ds",
+        "block-txt-dd",
+        "block-txt-dh",
+        "txt-df-stays-plain",
+    ],
+)
+def test_a_plain_copy_across_text_exports_its_converter(write, token):
+    _exports_and_imports_as(write, token)
+
+
+def test_a_plain_copy_of_txt_into_yd_exports_to_value():
+    # The importer refuses any Copy into YD1, so this test checks the export only.
+    _exports_as(lambda: copy(txt[1], yd[1]), "copy(TXT1,YD1,convert=to_value)")
+
+
+def test_an_imported_plain_copy_across_text_exports_its_converter():
+    # A CSV that holds a plain Copy across text still imports.  Its program runs the
+    # converter, so the export writes it.
+    bundle = pyrung_to_ladder(_program(lambda: copy(txt[1], ds[1])), TagMap())
+    rows = tuple(
+        tuple(cell.replace(",convert=to_value", "") for cell in row) for row in bundle.main_rows
+    )
+    code = ladder_to_pyrung(dataclasses.replace(bundle, main_rows=rows))
+    assert "copy(TXT1, DS1)" in code
+    ns: dict[str, object] = {}
+    exec_with_source(code, ns)
+    reexported = pyrung_to_ladder(ns["logic"], ns["mapping"])
+    assert "copy(TXT1,DS1,convert=to_value)" in reexported.main_rows[1]
+
+
+def test_a_number_constant_past_txt1000_is_refused():
+    # CLICK saves -5 as two characters, so its Copy into TXT1000 refuses it (OBJ-003).
+    assert CLK_TEXT_PAST_BANK in _codes(lambda: copy(-5, txt[1000]))
+    with pytest.raises(LadderExportError, match=r"2-character constant, which runs past TXT1000"):
+        pyrung_to_ladder(_program(lambda: copy(-5, txt[1000])), TagMap())
+
+
+def test_a_fill_of_one_txt_with_a_number_is_refused():
+    # The Fill exports as a Copy, and CLICK's Copy of a number into TXT stores its digits.
+    with pytest.raises(LadderExportError, match="A Copy between text and a number"):
+        pyrung_to_ladder(_program(lambda: fill(5, txt.select(1, 1))), TagMap())
+
+
+# --- Destination addresses that CLICK saves -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "write, token",
+    [
+        (
+            lambda: blockcopy(txt.select(1, 3), ds[10]),
+            "blockcopy(TXT1..TXT3,DS10..DS12,convert=to_value)",
+        ),
+        (lambda: blockcopy(ds.select(1, 3), ds[10]), "blockcopy(DS1..DS3,DS10..DS12)"),
+    ],
+    ids=["txt-into-ds", "ds-into-ds"],
+)
+def test_a_block_copy_into_one_address_exports_the_range_click_saves(write, token):
+    # CLICK's Block Copy dialog takes only the first destination address and saves the end.
+    _exports_and_imports_as(write, token)
+
+
+def test_a_text_copy_into_a_range_exports_its_first_txt():
+    # A Copy has one destination field, and CLICK works out where the text ends.
+    # CLICK's editor saves a Copy of "AB" into TXT999 with its end at TXT1000.
+    _exports_and_imports_as(lambda: copy("AB", txt.select(5, 6)), 'copy("AB",TXT5)')
 
 
 # --- A constant into a Word -------------------------------------------------------------

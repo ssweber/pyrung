@@ -2798,7 +2798,7 @@ def test_one_register_fill_refuses_text_that_a_copy_would_convert():
     allow = ("CLK_COPY_BANK_INCOMPATIBLE",)
     with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
         _single_fill_tokens(lambda: fill(df[1], txt.select(5, 5)), allow=allow)
-    with pytest.raises(LadderExportError, match="Copy between text and a number converts"):
+    with pytest.raises(TypeError, match=r"fill\(\) cannot write a TXT into a number register"):
         _single_fill_tokens(lambda: fill(txt[1], ds.select(5, 5)), allow=allow)
 
 

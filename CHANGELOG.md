@@ -11,6 +11,27 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
+## Unreleased
+
+### Behaviour changes
+
+- `copy()` of a number constant into a TXT now stores the number's digits, as a CLICK does. `copy(-5, txt[1])` writes "-" into TXT1 and "5" into TXT2 (it stored the number -5 in TXT1).
+  If a test expects the number in the TXT, expect the digits.
+- The CLICK export now writes the conversion that pyrung runs for each `copy()` and `blockcopy()` between TXT and a number. `copy(txt[1], ds[1])` exports as `copy(TXT1,DS1,convert=to_value)` (it exported a plain Copy, which CLICK cannot hold).
+  Export the program again before you paste it into CLICK.
+- `fill()` of a TXT into number registers is now refused when you build the program (it raised on a blank TXT and could not be exported).
+  Copy the TXT into a number register with `convert=to_value`, then fill from that register.
+- The CLICK export now refuses `fill()` of a number into one TXT, such as `fill(5, txt.select(1, 1))` (it exported `copy(5,TXT1)`, which a CLICK runs as a conversion to digits).
+  Write `copy(5, txt[1])`, which stores the digit "5".
+- `copy()`, `blockcopy()` and `fill()` forms that raised when their rung ran are now refused when you build the program.
+  Write the form that the message names.
+
+### Fixes
+
+- A plain `blockcopy()` of TXT into numbers now reads each TXT as a digit, as a CLICK does (it raised `ValueError` on a letter or a blank TXT).
+- `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.
+- `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).
+
 ## v0.17.0 (2026-11-18)
 
 You can now record a debug session and replay it as a pytest test. Ladder export accepts more of the forms that CLICK's editor accepts, and `send()` and `receive()` reach CLICK v4's ports. Read Behaviour changes before you upgrade. A program that uses `Rung` needs an edit. Other imports from `pyrung.core` still work. Move them to `pyrung`, because `pyrung.core` is internal and can change in any release. The property checks and lock files are gone.

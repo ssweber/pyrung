@@ -41,10 +41,10 @@ AT = Int("At", external=True)
 SOURCE = Int("Source", external=True, choices={0: "zero", 100: "hundred"})
 
 
-def _program(dest: Any, element: Any) -> Program:
+def _program(dest: Any, element: Any, store: Any = copy) -> Program:
     with Program(strict=False) as prog:
         with rung(WRITE):
-            copy(SOURCE, dest)
+            store(SOURCE, dest)
         with rung(element > 50):
             out(Bool("High"))
     return prog
@@ -67,8 +67,8 @@ def test_a_window_and_an_index_sum_list_no_target_either() -> None:
     big = Block("Big", TagType.INT, 1, 2000)
     offset = Int("Offset", external=True, min=0, max=3)
     bounded = Int("Bounded", external=True, min=1, max=10)
-    for dest in (big[bounded + offset], big.select(bounded, bounded + 1)):
-        _listed, unlisted = _writer_nodes(_program(dest, big[5]), "Big5")
+    for dest, store in ((big[bounded + offset], copy), (big.select(bounded, bounded + 1), fill)):
+        _listed, unlisted = _writer_nodes(_program(dest, big[5], store), "Big5")
         assert unlisted
 
 

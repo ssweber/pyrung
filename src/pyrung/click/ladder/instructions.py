@@ -19,23 +19,22 @@ from pyrung.core.tag import Tag, TagType
 from ._loop_items import is_own_rung, loop_item_rung
 from .translator import _quote
 
-_WHOLE_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
-
 
 def _exported_converter(instruction: Any) -> CopyConverter | None:
     """Return the converter that the export writes with a Copy.
 
-    CLICK saves a Copy of a number register into TXT with its conversion. The dialog
-    starts on Copy Value with Suppress zero. So a plain Copy of an Int, Dint or Word
-    into text exports the ``to_text()`` that it runs. Any other plain Copy exports as
-    written.
+    CLICK saves a conversion with every Copy between TXT and a number register or
+    constant, so the export writes the converter that pyrung runs. A Copy of a TXT into
+    a DF exports plain, because CLICK's dialog offers no conversion there.
     """
     authored = getattr(instruction, "authored_convert", instruction.convert)
     if authored is not None:
         return authored
-    if copy_source_kind(instruction.source) in _WHOLE_NUMBER_TYPES:
-        return instruction.convert
-    return None
+    converter = instruction.convert
+    if converter is not None and converter.mode == "value":
+        if copy_source_kind(instruction.dest) is TagType.REAL:
+            return None
+    return converter
 
 
 # ---- Instruction token mixin ----
