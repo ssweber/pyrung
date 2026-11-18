@@ -419,6 +419,16 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 All [nothing] unless marked.
 
+- **The graph panel's slice ignores the call-site rule.** The planner ruled on 2026-11-18 that the panel should match
+  the console.
+  - The panel computes its slice in JS (`computeSliceLocal`, graphPanel.js) over the graph of the active file. So it
+    does not stop at a call rung's condition as the console does, and it can't see a call rung in another file.
+  - The fix is for `performSlice` to ask the adapter for `pyrungSlice` through the extension host. That restores the
+    `sliceResult` relay.
+  - `on_pyrung_slice`'s edge filter (graph_slice.py:247-254) needs a second fix. It drops the edge from a call
+    condition to its call rung, because the call rung writes nothing. The condition would show as a node with no
+    edge. Keep that edge, and add the rung to `slice_rungs`, when the rung has `calls`.
+
 - **Two subroutine names that differ only in case.** pyrung accepts "Pump" and "pump" in one program. The export
   writes `subroutines/Pump.csv` and then `subroutines/pump.csv`, and on Windows the second file overwrites the first.
   laddercodec's `write_bundle()` refuses the pair. pyrung should report the pair as a validation finding before the
