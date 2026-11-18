@@ -184,6 +184,8 @@ gives one question one owner. All [nothing].
 
 Plan item 3. `pyrung`, `pyrung.click` and `pyrung.circuitpy` are public. The few names users need move to the top
 level, and validation gets one public module. ClickNick's test of its named imports is ClickNick's work.
+Sam decided on 2026-11-17 that 1c and then 1d are pyrung's next work, now that the recording branches are in main.
+The deletions release follows them, on Sam's tag.
 - Decide `expr_requires` and `reset_dominance` (analysis/simplified.py). Nothing in src calls them since the record
   machinery went, but test files that `spec test` wrote import them.
 
@@ -191,8 +193,8 @@ level, and validation gets one public module. ClickNick's test of its named impo
 
 - 9,536 lines in 399 test files, plus 70 lines in 19 src files. `rung` is already exported (_rung.py:204), and the
   docs use only `rung`.
-- It gets its own squash commit straight after the deletions, before new branches start, because it conflicts with
-  every open branch.
+- It gets its own squash commit straight after 1c, before new branches start, because it conflicts with every open
+  branch.
 - Add `.git-blame-ignore-revs` with that commit, and a check in `devtools/semantic_lint.py` that refuses a new
   `with Rung(` in tests.
 
@@ -236,11 +238,8 @@ and a copy past the end of the DD bank (`pending="PASTBANK"`, no fix planned).
 Plan item 1.2. The design is `session-recording/design.md`. Sam's rulings of 2026-11-15 are in the plan.
 All [nothing].
 
-- **Fix `replay`.** It stops after the first `step`, `run` or `reload`, because those return `"stopped"` and
-  capture.py:182-196 treats that as a breakpoint. The tests miss it because every replay transcript ends on the step.
-- **Add** `assert` (a tolerance on Reals, an error on an unknown tag) and `run until <condition> within N`. Today
-  `run` takes only a count or a duration. dap/expressions.py has a parser to reuse.
-- `record` saves the raw transcript, and a recording carries its scan time. The pytest plugin collects recordings.
+The fixed `replay`, `assert`, `run until <condition> within N`, and `record` with pytest collection are in main
+(#79, #84). These are left:
 - **The rename function.** It lives here, because it parses expressions. ClickNick supplies the old-to-new map at the
   build that first carries the new names. A name that still exists is left alone, so a swap rewrites nothing. A name
   that is gone becomes whatever now names its old address. Recordings hold names: the nickname, or the display
@@ -386,8 +385,17 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
 
 - **laddercodec as a dependency, in three steps.** They follow the plan's order (Sam, 2026-11-16). Before them, a
   dev-only diff on bob/lc-diff lists where pyrung's export and rules disagree with laddercodec's. [nothing]
-  1. Validation on laddercodec (plan item 2, step 2). It waits for laddercodec's release with `FieldError`. laddercodec
-     becomes a runtime dependency here.
+  1. Validation on laddercodec (plan item 2, step 2). laddercodec becomes a runtime dependency here. No laddercodec
+     release comes first. The work lives on one branch. It builds against laddercodec's `main` and stays open until
+     the joint release (plan, "The joint release", Sam 2026-11-17). It does not merge early. Meanwhile pyrung's
+     `main` stays releasable on its own.
+     - The joint release waits for two things. This branch must pass pyrung's existing validation tests against
+       laddercodec's `main`. Sam must also review, from a user's view, the kebab-case `.code` that laddercodec gives
+       each refusal. Nothing else is waited for.
+     - Open the branch after 1c and 1d. 1c moves modules and 1d renames `Rung`, and both conflict with every open
+       branch. The plan says 1c lands before this branch opens.
+     - The branch needs a git source for laddercodec in `pyproject.toml`. Check that `make install`, mergeq and CI
+       accept it.
      - Each case where pyrung becomes more permissive is logged in `pyrung-wt/buildbot/jobs/lc-diff/PERMISSIVE.md`.
        laddercodec's CLICK checks test each one against CLICK before the PR merges (Sam, 2026-11-17).
   2. Export through laddercodec (plan step 5). laddercodec's main has `csv_rows()`, a public `CSV_HEADER`, and
@@ -403,7 +411,8 @@ Plan item 2. The order follows laddercodec's and pyclickplc's releases.
     copy-pointer-text). laddercodec's `Copy._is_df` matches only a literal `DF<n>`.
 - **The undecoded marker.** laddercodec replaces an undecodable rung with a marker rung. Its one instruction,
   `undecoded("rung N, row R: ...")`, runs here as an unconditional End (Return in a subroutine) and reports a
-  finding. It waits on laddercodec's release. [nothing]
+  finding. laddercodec has the marker on its `main`, unreleased. pyrung runs it after the joint release (plan, "In
+  laddercodec"). [nothing]
 
 - **A TXT initial value with edge spaces.** pyclickplc 0.8.0 loads `  a ` as written, where pyrung's last
   release loaded `a`. Whether CLICK keeps the edge spaces is unconfirmed. [CLICK]
