@@ -41,6 +41,7 @@ dd, df, dh, ds, txt = _blocks.dd, _blocks.df, _blocks.dh, _blocks.ds, _blocks.tx
 
 SC43 = "fault.out_of_range"
 SC44 = "fault.address_error"
+SC46 = "fault.math_operation_error"
 
 
 def _one_scan(runner_factory, logic, patch=None):
@@ -101,6 +102,64 @@ def test_a_constant_into_a_word_keeps_its_low_16_bits(runner_factory, value, sto
             fill(value, filled.select(1, 2))
     tags = _one_scan(runner_factory, logic)
     assert (tags["Dest"], tags["W1"], tags["W2"]) == (stored, stored, stored)
+    assert not tags.get(SC43, False)
+
+
+@pytest.mark.parametrize(
+    ("value", "stored"), [(1.5, 1), (2.5, 2), (-1.5, 0xFFFF), (1.4, 1), (-2.5, 0xFFFE)]
+)
+def test_a_real_constant_into_a_word_truncates_toward_zero(runner_factory, value, stored):
+    """Read on a CLICK: copy(1.5, DH1) is 1, 2.5 is 2, -1.5 is FFFFh and 1.4 is 1, into a YD
+    too.  The CLICK drops the fraction toward zero and keeps the low 16 bits."""
+    with Program() as logic:
+        with Rung():
+            copy(value, dh[1])
+            copy(value, _blocks.yd[1])
+    tags = _one_scan(runner_factory, logic)
+    assert (tags["DH1"], tags["YD1"], tags.get(SC43, False)) == (stored, stored, False)
+
+
+#: What a CLICK stores for a DF holding NaN, +Inf or -Inf, and whether SC43 comes on.
+#: Read on a CLICK: every store writes its destination, and SC44 and SC46 stay off.
+_NON_FINITE_INTO_INTEGERS = [
+    ("copy", ds, pymath.nan, 0, False),
+    ("copy", ds, pymath.inf, 32767, True),
+    ("copy", ds, -pymath.inf, -32768, True),
+    ("copy", dd, pymath.nan, -2147483648, False),
+    ("copy", dd, pymath.inf, 2147483647, False),
+    ("copy", dd, -pymath.inf, -2147483648, False),
+    ("math", ds, pymath.nan, 0, False),
+    ("math", ds, pymath.inf, 0, True),
+    ("math", ds, -pymath.inf, 0, True),
+    ("math", dd, pymath.nan, 0, False),
+    ("math", dd, pymath.inf, 0, True),
+    ("math", dd, -pymath.inf, 0, True),
+]
+
+
+@pytest.mark.parametrize(
+    ("op", "bank", "value", "stored", "flag"),
+    _NON_FINITE_INTO_INTEGERS,
+    ids=[f"{op}-{bank.name}-{value}" for op, bank, value, _, _ in _NON_FINITE_INTO_INTEGERS],
+)
+def test_a_non_finite_real_into_an_int_or_a_dint(runner_factory, op, bank, value, stored, flag):
+    store = {"copy": copy, "math": math}[op]
+    with Program() as logic:
+        with Rung():
+            store(df[1], bank[1])
+    tags = _one_scan(runner_factory, logic, {"DF1": value, bank[1].name: 99})
+    faults = (tags.get(SC43, False), tags.get(SC44, False), tags.get(SC46, False))
+    assert (tags[bank[1].name], faults) == (stored, (flag, False, False))
+
+
+def test_a_nan_filled_or_block_copied_into_a_dint_is_its_least_value(runner_factory):
+    """A Fill and a Block copy store as a Copy does, so a DF NaN into a DD is -2147483648."""
+    with Program() as logic:
+        with Rung():
+            fill(df[1], dd.select(1, 2))
+            blockcopy(df.select(1, 2), dd.select(3, 4))
+    tags = _one_scan(runner_factory, logic, {"DF1": pymath.nan, "DF2": pymath.nan})
+    assert [tags[f"DD{n}"] for n in range(1, 5)] == [-2147483648] * 4
     assert not tags.get(SC43, False)
 
 

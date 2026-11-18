@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math as math_
+
 import pytest
 
 from pyrung.core import (
@@ -13,8 +15,10 @@ from pyrung.core import (
     TagType,
     copy,
     math,
+    out,
     pack_text,
     search,
+    system,
 )
 from pyrung.core.copy_converters import to_ascii, to_binary, to_value
 
@@ -54,6 +58,86 @@ def _pack(runner_factory, dest_type, text):
 )
 def test_pack_text_int_dint(runner_factory, dest_type, text, value, fault):
     assert _pack(runner_factory, dest_type, text) == (value, fault)
+
+
+@pytest.mark.parametrize(
+    ("text", "value", "fault"),
+    [
+        ("3.40282352E38", math_.inf, False),
+        ("3.5E38", math_.inf, False),
+        ("-3.5E38", -math_.inf, False),
+        ("1E400", math_.inf, False),
+        ("1.5", 1.5, False),
+        ("inf", 99.0, True),
+        ("\x00" * 13, 99.0, True),
+    ],
+    ids=["just-past", "past", "minus-past", "past-a-double", "in-range", "inf-word", "blank"],
+)
+def test_pack_text_real(runner_factory, text, value, fault):
+    """Read on a CLICK: "3.40282352E38" stores +Inf with no flag, and a blank text raises SC43
+    and writes nothing.  The other texts past the range follow the same rule."""
+    assert _pack(runner_factory, TagType.REAL, text) == (value, fault)
+
+
+@pytest.mark.parametrize(
+    ("dest_type", "text"),
+    [
+        (TagType.INT, "١"),
+        (TagType.DINT, "1٢"),
+        (TagType.WORD, "١"),
+        (TagType.REAL, "١.5"),
+    ],
+    ids=["int", "dint", "word", "real"],
+)
+def test_pack_text_refuses_a_character_above_ffh(runner_factory, dest_type, text):
+    """A TXT holds one byte.  Python's int() and float() read U+0661 as the digit 1."""
+    assert _pack(runner_factory, dest_type, text) == (99, True)
+
+
+def test_pack_text_refuses_a_character_above_ffh_that_strip_removes(runner_factory):
+    """Python's strip() removes U+3000, so the check comes before the strip."""
+    CH = Block("CH", TagType.CHAR, 1, 2)
+    dest = Int("Dest")
+    with Program() as logic:
+        with Rung():
+            pack_text(CH.select(1, 2), dest, allow_whitespace=True)
+    runner = runner_factory(logic)
+    runner.patch({"CH1": "　", "CH2": "7", "Dest": 99})
+    runner.step()
+    tags = runner.current_state.tags
+    assert (tags["Dest"], tags[FAULT]) == (99, True)
+
+
+def test_a_blank_pack_text_flag_lasts_until_a_good_pack_text(runner_factory):
+    """Read on a CLICK: SC43 from a blank text is still on as the next scan starts, and a
+    pack_text that parses its text turns it off."""
+    CH = Block("CH", TagType.CHAR, 1, 3)
+    Good = Block("G", TagType.CHAR, 1, 3)
+    Blank, Parse = Bool("Blank"), Bool("Parse")
+    AtStart, AfterGood = Bool("AtStart"), Bool("AfterGood")
+    dest = Block("D", TagType.REAL, 1, 2)
+    with Program() as logic:
+        with Rung(system.fault.out_of_range):
+            out(AtStart)
+        with Rung(Blank):
+            pack_text(CH.select(1, 3), dest[1])
+        with Rung(Parse):
+            pack_text(Good.select(1, 3), dest[2])
+        with Rung(system.fault.out_of_range):
+            out(AfterGood)
+    runner = runner_factory(logic)
+    runner.patch({"Blank": True, "G1": "1", "G2": ".", "G3": "5"})
+    runner.step()
+    runner.patch({"Blank": False})
+    runner.step()
+    tags = runner.current_state.tags
+    assert (tags["AtStart"], tags["AfterGood"]) == (True, True)
+    runner.patch({"Parse": True})
+    runner.step()
+    tags = runner.current_state.tags
+    assert (tags["AtStart"], tags["AfterGood"], tags["D2"]) == (True, False, 1.5)
+    runner.step()
+    assert runner.current_state.tags["AtStart"] is False
 
 
 def test_to_value_of_nul_writes_zero(runner_factory):

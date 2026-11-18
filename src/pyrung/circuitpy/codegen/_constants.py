@@ -37,6 +37,7 @@ _HELPER_ORDER = (
     "_store_copy_value_to_type",
     "_store_int",
     "_store_dint",
+    "_store_dint_from_real",
     "_store_word",
     "_store_word_clamped",
     "_store_real",
