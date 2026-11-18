@@ -162,7 +162,16 @@ def bind_click_project_locked(adapter: Any, namespace: dict[str, Any], project_d
     commit_click_project(adapter, stage_click_project(adapter, namespace, project_dir))
 
 
-def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
+@dataclass(frozen=True)
+class _Snapshot:
+    """The runner seeded from a PLC data file, and the TXT addresses the load skipped."""
+
+    runner: PLC
+    file_name: str
+    skipped: tuple[str, ...]
+
+
+def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> _Snapshot:
     """Reconstruct *runner* with initial state loaded from a Click CSV snapshot."""
     tags_mod = _find_project_tags_module(project_dir)
     if tags_mod is None:
@@ -184,21 +193,26 @@ def _apply_snapshot(runner: PLC, snapshot_path: str, project_dir: Path) -> PLC:
 
     # A real dump lists every address, so an empty parse means some other CSV
     # (a nickname export, say) that would otherwise seed nothing without a word.
-    from pyclickplc import read_plc_data
+    from pyclickplc import PlcDataReadError, read_plc_data
 
     try:
         plc_data = read_plc_data(resolved)
+    except PlcDataReadError:
+        # The reader found TXT rows, so the file is a dump.
+        plc_data = None
     except ValueError as exc:
         raise ValueError(f"Cannot load snapshot: {exc}") from exc
-    if not plc_data:
+    if plc_data is not None and not plc_data:
         raise ValueError(
             f"Cannot load snapshot: no PLC data found in {resolved.name}. "
             "Expected a CSV saved from PLC > Read Data from PLC in CLICK."
         )
 
-    state = mapping.load_snapshot(resolved, blocks=blocks)
+    # The private loader returns the skipped addresses instead of warning, so the launch
+    # can report them to the client.
+    state, skipped = mapping._load_snapshot(resolved, blocks=blocks)
     logic = runner._program if runner._program is not None else list(runner._logic)
-    return PLC(logic, initial_state=state)
+    return _Snapshot(PLC(logic, initial_state=state), resolved.name, skipped)
 
 
 def load_program(
@@ -209,11 +223,12 @@ def load_program(
     speed: float = 0.0,
     keep_forces_on_run: bool | None = None,
     start_mode: str | None = None,
-) -> None:
+) -> _Snapshot | None:
     """Run the program file and make its PLC the session's runner.
 
     A launch and a headless replay both load a program here, so a recording replays
-    on the PLC a launch would build.
+    on the PLC a launch would build. Return the runner seeded from *snapshot_path* and
+    the TXT addresses that the load skipped, or None without *snapshot_path*.
     """
     if not program_path.is_file():
         raise adapter.DAPAdapterError(
@@ -232,8 +247,10 @@ def load_program(
             os.environ["PYRUNG_DAP_ACTIVE"] = previous_dap_flag
     runner = adapter._discover_runner(namespace)
 
+    snapshot = None
     if snapshot_path:
-        runner = _apply_snapshot(runner, snapshot_path, program_path.parent)
+        snapshot = _apply_snapshot(runner, snapshot_path, program_path.parent)
+        runner = snapshot.runner
 
     with adapter._state_lock:
         if adapter._thread_running_locked():
@@ -263,6 +280,7 @@ def load_program(
             runner.stop()
         elif start_mode == "run":
             runner.start()
+    return snapshot
 
 
 def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
@@ -285,7 +303,7 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         raise adapter.DAPAdapterError("launch.program must be a Python file path")
 
     program_path = Path(program_arg).expanduser().resolve()
-    load_program(
+    snapshot = load_program(
         adapter,
         program_path,
         snapshot_path=parsed.snapshotPath,
@@ -298,6 +316,13 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     adapter._session.session_name = session_name
     _start_live_server(adapter, session_name)
     _try_auto_install_harness(adapter)
+    body: dict[str, Any] = {}
+    if snapshot is not None and snapshot.skipped:
+        from pyrung.click.tag_map._errors import skipped_addresses_text
+
+        text = skipped_addresses_text(snapshot.skipped, snapshot.file_name)
+        adapter._enqueue_internal_event("output", {"category": "console", "output": f"{text}\n"})
+        body["skippedAddresses"] = list(snapshot.skipped)
     if modbus_config is not None:
         if not adapter._has_tag_map:
             adapter._enqueue_internal_event(
@@ -319,7 +344,7 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
                 "output", {"category": "console", "output": f"{banner}\n"}
             )
 
-    return {}, [("stopped", adapter._stopped_body("entry"))]
+    return body, [("stopped", adapter._stopped_body("entry"))]
 
 
 def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:

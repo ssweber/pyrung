@@ -1,8 +1,11 @@
-"""Structured Click nickname import failures."""
+"""Structured failures and warnings from reading CLICK nickname files and PLC data files."""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+
+from pyclickplc.addresses import format_address_display, parse_address
 
 
 @dataclass(frozen=True)
@@ -51,3 +54,41 @@ class OldCommentFormError(ValueError):
             'Run "Upgrade Project" in clicknick to rewrite it, '
             "or pass the comment to pyrung.click.tag_map.upgrade_comment()."
         )
+
+
+class SkippedAddressesWarning(UserWarning):
+    """Issued when pyrung loads a PLC data file without some of its TXT addresses.
+
+    CLICK writes a TXT comma without quotes, so a TXT row can be read more than one way.
+    ``addresses`` lists the TXT addresses that pyrung skipped, in file order.
+    """
+
+    def __init__(self, message: str, addresses: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.addresses = addresses
+
+
+def address_runs(addresses: Iterable[str]) -> str:
+    """Return *addresses* as text, with each run of consecutive addresses as ``TXT13..TXT20``."""
+    runs: list[tuple[str, int, int]] = []
+    for address in addresses:
+        bank, index = parse_address(address)
+        if runs and runs[-1][0] == bank and runs[-1][2] + 1 == index:
+            runs[-1] = (bank, runs[-1][1], index)
+        else:
+            runs.append((bank, index, index))
+    return ", ".join(
+        format_address_display(bank, first)
+        if first == last
+        else f"{format_address_display(bank, first)}..{format_address_display(bank, last)}"
+        for bank, first, last in runs
+    )
+
+
+def skipped_addresses_text(addresses: Iterable[str], file_name: str) -> str:
+    """Return the message that names the TXT addresses skipped in the PLC data file *file_name*."""
+    return (
+        f"pyrung skipped {address_runs(addresses)} in {file_name} and left them at their "
+        "power-on values. CLICK writes a TXT comma without quotes, so their values in the "
+        "file are unclear. The rest of the file loaded. Check these addresses in CLICK."
+    )

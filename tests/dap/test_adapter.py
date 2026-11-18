@@ -973,6 +973,88 @@ def test_launch_with_snapshot_reports_a_malformed_row_as_a_launch_error(
     assert "Cannot load snapshot: row 7: expected 4 cells, found 5" in response["message"]
 
 
+def test_launch_with_snapshot_loads_the_rest_of_a_dump_with_unclear_txt(
+    tmp_path: Path, monkeypatch: Any
+):
+    """Start from the rest of the file and name the TXT addresses that pyclickplc cannot read."""
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "tags", raising=False)
+    _write_script(
+        tmp_path,
+        "tags.py",
+        "from pyrung.click import ClickBlocks, TagMap\n"
+        "from pyrung.core import Tag, TagType\n"
+        "blocks = ClickBlocks()\n"
+        "x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = blocks\n"
+        "Level = Tag('Level', TagType.INT)\n"
+        "First = Tag('First', TagType.CHAR)\n"
+        "mapping = TagMap({Level: ds[1], First: txt[1]})\n",
+    )
+    _write_script(
+        tmp_path,
+        "run.py",
+        "from pyrung.core import PLC, Program, rung, copy\n"
+        "from tags import Level, First, txt\n"
+        "with Program(strict=False) as prog:\n"
+        "    with rung():\n"
+        "        copy(txt[12], txt[30])\n"
+        "        copy(txt[13], txt[31])\n"
+        "runner = PLC(prog)\n",
+    )
+    # CLICK writes a TXT comma without quotes. These rows hold a comma and an empty
+    # address, so pyclickplc cannot tell what TXT13..TXT20 hold.
+    dump = tmp_path / "data.csv"
+    dump.write_text(
+        "<DS=START>\n"
+        "Address,1,2,3,4,5,6,7,8,9,10,\n"
+        "DS1,42,0,0,0,0,0,0,0,0,0,\n"
+        "</DS=END>\n"
+        "<TXT=START>\n"
+        "Address,1,2,3,4,5,6,7,8,9,10,\n"
+        "TXT1,A,B,C,,,,,,,,\n"
+        "TXT11,H,i,,,,,,,,,,\n"
+        "</TXT=END>\n",
+        encoding="utf-8",
+    )
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    try:
+        messages = _send_request(
+            adapter,
+            out_stream,
+            seq=1,
+            command="launch",
+            arguments={"program": str(tmp_path / "run.py"), "snapshotPath": str(dump)},
+        )
+    finally:
+        sys.modules.pop("tags", None)
+
+    response = _single_response(messages)
+    assert response["success"] is True, response.get("message")
+    skipped = [f"TXT{n}" for n in range(13, 21)]
+    assert response["body"] == {"skippedAddresses": skipped}
+    assert adapter._runner is not None
+    state = adapter._runner._state
+    assert state.tags["Level"] == 42
+    assert state.tags["First"] == "A"
+    assert state.tags["TXT12"] == "i"
+    # TXT13 keeps its power-on value.
+    assert state.tags["TXT13"] == "\x00"
+
+    adapter._drain_internal_events()
+    outputs = [event["body"] for event in _events(_drain_messages(out_stream), "output")]
+    assert outputs == [
+        {
+            "category": "console",
+            "output": "pyrung skipped TXT13..TXT20 in data.csv and left them at their "
+            "power-on values. CLICK writes a TXT comma without quotes, so their values in "
+            "the file are unclear. The rest of the file loaded. Check these addresses in "
+            "CLICK.\n",
+        }
+    ]
+
+
 def test_variables_non_object_arguments_keep_legacy_internal_error_shape(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
