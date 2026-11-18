@@ -19,8 +19,8 @@ float32).
   a zero low word (ErrorCode = 1 for the pair), and +Inf - +Inf is a NaN whose high
   word tells which NaN (Result3): 2 for 0xFFC0 (x86's default, what Python's
   subtraction leaves), 1 for 0x7FC0 (ARM's), 3 for 0xFFFF, 0 for any other; Result4 is
-  its low word, 1 for zero, 2 for 0xFFFF.  A CLICK's NaN reads 0xFFFF:0xFFFF, and so
-  does pyrung's, whichever NaN it holds.  The word is compared after an XOR with 0x0080, each
+  its low word, 1 for zero, 2 for 0xFFFF.  A CLICK's Math stores the NaN 0xFFFF:0xFFFF,
+  and so does pyrung's Math.  The word is compared after an XOR with 0x0080, each
   bit kept.  The checklist's "DF holding Inf or NaN over Modbus" reads these registers.  A
   client (ClickNick, the sim) shows what these bits decode to.
 - ``underflow``: 1.0E-20 * 1.0E-20 and 1.0E-30 * 1.0E-30 compared with 0.  A CLICK

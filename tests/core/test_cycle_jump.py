@@ -8,6 +8,7 @@ Each run that jumps is checked against a stepped twin, on its state and its reco
 from __future__ import annotations
 
 import random
+import struct
 import tracemalloc
 from collections.abc import Callable
 from datetime import datetime
@@ -38,6 +39,7 @@ from pyrung.core import (
 )
 from pyrung.core.coast_run import coast_until, memo_of
 from pyrung.core.cycle_jump import Lin, _bin, _Bound, _call, _cmp, _value_at
+from pyrung.core.state import nan_bits
 from tests import fold_check
 from tests.fold_check import compare_records
 
@@ -188,6 +190,25 @@ Clear = Bool("CycClear")
 C = Counter.clone("CycC")
 
 
+Quiet = Real("CycQuiet")
+Negative = Real("CycNegative")
+Swap = Real("CycSwap")
+
+
+def _nan_swap() -> None:
+    with Rung(~Toggle):
+        out(Toggle)
+    with Rung(Toggle):
+        math(Count + 1, Count)
+    with Rung():
+        on_delay(T, 30000)
+    # Two NaNs with other bits trade places on every scan, so each cycle ends as it began.
+    with Rung():
+        copy(Quiet, Swap)
+        copy(Negative, Quiet)
+        copy(Swap, Negative)
+
+
 def _clamp_flip() -> None:
     with Rung(~Toggle):
         out(Toggle)
@@ -261,6 +282,14 @@ def _coast_and_step(
     _assert_lands_alike(plc, twin)
     compare_records("cycles", plc, twin, start)
     return plc
+
+
+def _float_of(bits: int) -> float:
+    return struct.unpack("<d", struct.pack("<Q", bits))[0]
+
+
+def _exact_tags(state: Any) -> dict[str, Any]:
+    return {name: fold_check._exact(value) for name, value in state.tags.items()}
 
 
 def _assert_lands_alike(plc: PLC, twin: PLC) -> None:
@@ -350,6 +379,22 @@ class TestJump:
                 ours_fork.step()
                 theirs_fork.step()
             _assert_lands_alike(ours_fork, theirs_fork)
+
+    def test_two_nans_that_trade_places_jump_as_stepping(self) -> None:
+        # The guards on the Reals compare NaN bits, so a jump calls nan_bits.
+        quiet, negative = (_float_of(bits) for bits in (0x7FF8000000000000, 0xFFF8000000000000))
+        plc = _runner(_nan_swap, 0.01)
+        plc.patch({Quiet.name: quiet, Negative.name: negative})
+        plc.step()
+        twin = plc.fork()
+        coast_until(plc, lambda _state: False, budget=20_000, predicate_reads=frozenset())
+        while twin.current_state.scan_id < plc.current_state.scan_id:
+            twin.step()
+        assert memo_of(plc).counts["cycles jumped"] > 0
+        ours, theirs = plc.current_state, twin.current_state
+        assert ours.timestamp == theirs.timestamp
+        assert _exact_tags(ours) == _exact_tags(theirs)
+        assert nan_bits(ours.tags[Quiet.name]) != nan_bits(ours.tags[Negative.name])
 
     def test_a_path_keeps_few_compiled_iterations(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cycle_jump, "MAX_VARIANTS", 1)

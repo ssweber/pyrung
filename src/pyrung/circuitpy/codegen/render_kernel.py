@@ -330,7 +330,7 @@ def _render_kernel_source(ctx: CodegenContext, *, split_after: int | None = None
 
     head: list[str] = []
     head.extend(_render_imports(ctx))
-    head.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
+    head.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers), kernel=ctx.kernel_runtime))
     head.extend(_render_indirect_helpers(ctx))
     tail: list[str] = []
     tail.extend(_render_declarations(ctx))

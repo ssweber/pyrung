@@ -602,7 +602,7 @@ def _compile_calc_instruction(
     range_cond = _calc_range_condition("_calc_value", dest_type, instr.mode)
     if dest_type == "REAL" and instr.mode != "hex":
         # Past CLICK's REAL range, the result is +/-Inf with the out-of-range flag, as a
-        # float32 Math stores it. NaN is kept, with no flag.
+        # float32 Math stores it. A NaN sets no flag.
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in out_of_range_body if line != "pass")
         enabled_body += [
@@ -610,11 +610,15 @@ def _compile_calc_instruction(
             '        _calc_value = float("inf")',
             f"    elif _calc_value < {-REAL_MAX!r}:",
             '        _calc_value = float("-inf")',
-            # A CLICK's Math stores one NaN, whatever made it.
-            "elif _calc_value != _calc_value:",
-            "    _calc_value = _computed_real(_calc_value)",
         ]
-        ctx.mark_helper("_computed_real")
+        if ctx.kernel_runtime:
+            # A CLICK's Math stores one NaN, whatever made it.  The P1AM sends every NaN
+            # as that one, so only the desktop kernel needs this.
+            enabled_body += [
+                "elif _calc_value != _calc_value:",
+                "    _calc_value = _computed_real(_calc_value)",
+            ]
+            ctx.mark_helper("_computed_real")
         range_cond = None
     else:
         # An Inf or NaN result, from an Inf or NaN operand, stores 0. Into an integer

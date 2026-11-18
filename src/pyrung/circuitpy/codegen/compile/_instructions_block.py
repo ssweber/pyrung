@@ -165,7 +165,7 @@ def _compile_fill_instruction(
         instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
     value_expr = _compile_value(instr.value, ctx)
-    if isinstance(instr.value, Expression):
+    if ctx.kernel_runtime and dest_type == "REAL" and isinstance(instr.value, Expression):
         ctx.mark_helper("_computed_real")
         value_expr = f"_computed_real({value_expr})"
     source_type = "CHAR" if isinstance(instr.value, str) else _optional_value_type_name(instr.value)

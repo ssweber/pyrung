@@ -202,9 +202,15 @@ The generated server serves:
 - every X and Y coil, and the coils between X or Y slots. The server keeps a write to one that no tag holds, so a read returns it.
 - XD and YD in CLICK's layout, built from the X and Y bits. A write to YD sets those Y bits.
 
-A read of any other address in a CLICK bank returns 0, as on a CLICK. So does a read of the register after XD8 or after YD8. A write there gets Modbus exception 2 (illegal data address), because the P1AM has nowhere to store the value. A CLICK would store it. To keep such a value on the P1AM, map it in the TagMap.
+A read of any other address in a CLICK bank returns 0, as on a CLICK. A write there gets Modbus exception 2 (illegal data address), because the P1AM has nowhere to store the value. A CLICK would store it. To keep such a value on the P1AM, map it in the TagMap. A T or CT bit counts as such an address unless a rung uses it or the TagMap maps it.
+
+A read of the register after XD8 or after YD8 returns 0, as on a CLICK.
 
 A write to an SC or SD that CLICK's Data View shows as Read Only gets exception 2. If an FC 15 or FC 16 write reaches one rejected address, it stores nothing.
+
+The server sends every NaN in a `Real` as 0xFFFF:0xFFFF, the NaN that a CLICK's Math stores. An Unpack Copy and `send()` give the same words. A CLICK keeps the bits of a NaN that a client writes, so a NaN such as 0x0000:0x7FC0 reads back differently from the P1AM. CircuitPython's floats are 30 bits wide, so they can't hold a NaN's bits.
+
+So a write of one word of a `Real` that holds a NaN keeps 0xFFFF in the other word. Write both words of a `Real` in one FC 16 request.
 
 ## Scan cycle with Modbus
 

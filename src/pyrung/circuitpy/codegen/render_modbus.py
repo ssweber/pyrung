@@ -101,9 +101,13 @@ def _cell_runs(ctx: CodegenContext, is_coil: bool) -> list[tuple[str, str, int, 
 def _df_words(value: str) -> str:
     """Return Python source for the two Modbus words of the float in *value*, low word first.
 
-    A NaN goes out as its own bits, because a CLICK keeps the bits that a client wrote.
+    Every NaN goes out as 0xFFFF:0xFFFF.  CircuitPython's floats are 30 bits, so a float
+    on the P1AM can't hold a NaN's bits.  A CLICK keeps the bits that a client wrote.
     """
-    return f"struct.unpack('<HH', struct.pack('<f', float({value})))"
+    return (
+        f"((0xFFFF, 0xFFFF) if {value} != {value} "
+        f"else struct.unpack('<HH', struct.pack('<f', float({value}))))"
+    )
 
 
 _BANK_DESCRIPTIONS: dict[str, str] = {
@@ -1172,7 +1176,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
                 "        elif _tt == 'REAL':",
                 "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
                 "            _bf = '>f' if word_order == 'high_low' else '<f'",
-                "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+                "            _regs.extend((0xFFFF, 0xFFFF) if _v != _v else struct.unpack(_bo, struct.pack(_bf, float(_v))))",
                 "        elif _tt == 'INT':",
                 "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
                 "        else:",

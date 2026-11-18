@@ -49,11 +49,13 @@
 
 ### Behaviour changes
 
-- pyrung requires pyclickplc 0.9.0 (it took 0.8.0). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
+- pyrung requires pyclickplc 0.9.0 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
   If your own code calls pyclickplc, read pyclickplc's 0.9.0 changelog.
-- The soft PLC's Modbus server and the generated P1AM server store a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (they answered exception 2). A rung that reads the T or CT bit sees the write.
+- The soft PLC's Modbus server stores a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (it answered exception 2). A rung that reads the T or CT bit sees the write.
   If a client of yours relied on that refusal, check the address before it writes.
-- A NaN that a client writes to a `Real` keeps its own bits, as a CLICK keeps them. Modbus reads, `send()` and `unpack_to_words()` give those bits (they gave 0xFFFF:0xFFFF for any NaN). A NaN that a `math()` computes still reads 0xFFFF:0xFFFF.
+- The generated P1AM server stores a coil write to X, or to a coil between X or Y slots (it answered exception 2). It stores a write to a T or CT bit that a rung uses or the TagMap maps.
+  If a client of yours relied on that refusal, check the address before it writes.
+- A NaN that a client writes to a `Real` keeps its own bits, as a CLICK keeps them. Modbus reads, `send()` and `unpack_to_words()` give those bits (they gave 0xFFFF:0xFFFF for any NaN). A NaN that a `math()` computes still reads 0xFFFF:0xFFFF. The P1AM still sends every NaN as 0xFFFF:0xFFFF, because its floats can't hold a NaN's bits.
   Test for NaN with `math.isnan()` on the decoded float, not by comparing the words with 0xFFFF:0xFFFF.
 - The console's `replay` reads a relative path from the program's folder (it read it from the debugger's working folder).
   Give an absolute path to replay a file from somewhere else.

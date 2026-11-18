@@ -402,7 +402,7 @@ def _compile_copy_instruction(
     if convert is not None or fanout:
         return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent, convert)
     source_expr = _compile_copy_source(instr.source, ctx)
-    if isinstance(instr.source, Expression):
+    if ctx.kernel_runtime and target_type == "REAL" and isinstance(instr.source, Expression):
         ctx.mark_helper("_computed_real")
         source_expr = f"_computed_real({source_expr})"
     source_type = (

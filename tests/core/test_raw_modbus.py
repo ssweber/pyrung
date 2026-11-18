@@ -306,13 +306,15 @@ class TestPacking:
         hi, lo = struct.unpack(">HH", struct.pack(">f", val))
         assert result == [lo, hi]
 
-    @pytest.mark.parametrize("bits", [0x7FC00000, 0xFFC00000, 0x7F800001])
+    # No signalling NaN here.  Python before 3.14 quiets one when it packs a float32.
+    @pytest.mark.parametrize(
+        ("bits", "hi", "lo"), [(0x7FC00000, 0x7FC0, 0), (0xFFC00000, 0xFFC0, 0)]
+    )
     @pytest.mark.parametrize("order", [WordOrder.HIGH_LOW, WordOrder.LOW_HIGH])
-    def test_pack_any_nan_as_its_own_bits(self, bits, order):
+    def test_pack_any_nan_as_its_own_bits(self, bits, hi, lo, order):
         tags = [Tag("a", TagType.REAL)]
         nan = struct.unpack(">f", struct.pack(">I", bits))[0]
         result = _pack_values_to_registers([nan], tags, order, RegisterType.HOLDING)
-        hi, lo = struct.unpack(">HH", struct.pack(">f", nan))
         assert result == ([hi, lo] if order == WordOrder.HIGH_LOW else [lo, hi])
 
     def test_pack_coils(self):

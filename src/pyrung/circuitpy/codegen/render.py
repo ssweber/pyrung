@@ -1006,7 +1006,9 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         )
 
     if not helpers_in_runtime:
-        lines.extend(_render_helper_defs(_with_helper_deps(ctx.used_helpers)))
+        lines.extend(
+            _render_helper_defs(_with_helper_deps(ctx.used_helpers), kernel=ctx.kernel_runtime)
+        )
     return lines
 
 

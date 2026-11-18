@@ -192,7 +192,7 @@ class CopyInstruction(OneShotMixin, Instruction):
 
         if resolved_target is None:
             return
-        if isinstance(self.source, Expression):
+        if resolved_target.type.name == "REAL" and isinstance(self.source, Expression):
             value = computed_real(value)
 
         # String literal fan-out: "00026" → sequential CHAR tags, as many as the block holds
@@ -476,7 +476,7 @@ class FillInstruction(OneShotMixin, Instruction):
         except IndexError:
             _set_fault_address_error(ctx)
             return
-        if isinstance(self.value, Expression):
+        if dst_tags and dst_tags[0].type.name == "REAL" and isinstance(self.value, Expression):
             value = computed_real(value)
 
         source = copy_source_kind(self.value)

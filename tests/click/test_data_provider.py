@@ -440,6 +440,7 @@ def test_a_write_to_an_x_t_or_ct_bit_is_stored_and_a_rung_reads_it():
         assert send(request) == request
     runner.step()
 
+    # A CLICK read X001 as 0, because its input scan rewrites it.  pyrung has no input scan.
     for coil in coils.values():
         assert send(struct.pack(">BHH", 2, coil, 1)) == bytes([2, 1, 1])
     assert (provider.read("C1"), provider.read("C2")) == (True, True)

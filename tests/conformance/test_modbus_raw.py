@@ -13,6 +13,9 @@ memory matters.  These are the writes outside the part's memory:
 - C1..C1969, written with the values they read just before.
 - SC1 gets OFF, and SD5 gets one more than it holds.  A CLICK should refuse both.  If either
   changes, it is written back.
+- X001, X101..X132, the coil after X116, the coil after Y116, T1 and CT1 get ON.  Each is
+  written back to what it read before.  With ``PYRUNG_CONFORMANCE_OUTPUTS=1``, Y115..Y202 get
+  ON too, which turns Y115, Y116, Y201 and Y202 on until they are written back.
 - YD register 3, only with ``PYRUNG_CONFORMANCE_OUTPUTS=1``.  It may turn Y116 on until it is
   written back.
 - SC51 and SC50, only with ``PYRUNG_CONFORMANCE_STOP=1``.  The SC50 write asks whether a CLICK

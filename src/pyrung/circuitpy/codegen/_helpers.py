@@ -262,6 +262,7 @@ _HELPER_DEFS: dict[str, list[str]] = {
         "",
     ],
     # A CLICK's Math stores one NaN, whatever made it.  It reads 0xFFFF:0xFFFF over Modbus.
+    # Only the desktop kernel uses it (_BOARD_HELPER_DEFS).
     "_computed_real": [
         "_CLICK_NAN = struct.unpack('<f', struct.pack('<I', 0xFFFFFFFF))[0]",
         "",
@@ -620,11 +621,31 @@ def _render_index_helpers(
     return lines
 
 
-def _render_helper_defs(needed: Iterable[str]) -> list[str]:
-    """Return the definitions of the helpers in *needed*, in ``_HELPER_ORDER``."""
+#: The P1AM's own versions of some helpers.  CircuitPython's floats are 30 bits, so a
+#: float on the board can't hold a NaN's bits.  On the P1AM, every NaN unpacks to
+#: 0xFFFFFFFF, the NaN that a CLICK's Math stores.
+_BOARD_HELPER_DEFS: dict[str, list[str]] = {
+    "_float_to_int_bits": [
+        "def _float_to_int_bits(f):",
+        "    f = float(f)",
+        "    if f != f:",
+        "        return 0xFFFFFFFF",
+        '    return struct.unpack("<I", struct.pack("<f", f))[0]',
+        "",
+    ],
+    "_computed_real": [],
+}
+
+
+def _render_helper_defs(needed: Iterable[str], *, kernel: bool) -> list[str]:
+    """Return the definitions of the helpers in *needed*, in ``_HELPER_ORDER``.
+
+    *kernel* is True for the desktop kernel and False for the P1AM's code.
+    """
     needed = set(needed)
+    defs = _HELPER_DEFS if kernel else {**_HELPER_DEFS, **_BOARD_HELPER_DEFS}
     lines: list[str] = []
     for name in _HELPER_ORDER:
         if name in needed:
-            lines.extend(_HELPER_DEFS[name])
+            lines.extend(defs[name])
     return lines
