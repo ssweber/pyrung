@@ -60,7 +60,9 @@ copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCI
 
 `to_value` of a letter or other non-digit sets the out-of-range fault and leaves the destination alone. A blank TXT reads as 0.
 
-A `copy()` of a TXT into a number with no `convert` is `to_value`. A `copy()` of a number tag into a TXT with no `convert` is `to_text()`.
+A `copy()` of a TXT into a number with no `convert` is `to_value`. A `copy()` of a number tag or a number constant into a TXT with no `convert` is `to_text()`. So `copy(-5, Txt[1])` writes "-" and "5".
+
+CLICK's Copy dialog has no plain Copy between TXT and a number, so the CLICK export writes the converter that pyrung runs. A TXT into a `DF` is the exception. CLICK offers no conversion there, and the export writes a plain Copy.
 
 ### Numeric → Text
 

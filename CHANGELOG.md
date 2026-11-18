@@ -11,6 +11,15 @@
      instead of listing edge cases. Leave out fixes to anything no release shipped.
      Condense Unreleased into this shape before it gets a version heading. -->
 
+## Unreleased
+
+### Behaviour changes
+
+- `copy()` of a number constant into a TXT now stores the number's digits, as a CLICK does. `copy(-5, txt[1])` writes "-" into TXT1 and "5" into TXT2 (it stored the number -5 in TXT1).
+  If a test expects the number in the TXT, expect the digits.
+- The CLICK export now writes the conversion that pyrung runs for each `copy()` and `blockcopy()` between TXT and a number. `copy(txt[1], ds[1])` exports as `copy(TXT1,DS1,convert=to_value)` (it exported a plain Copy, which CLICK cannot hold). A TXT into a DF still exports as a plain Copy, because CLICK offers no conversion there.
+  Export the program again before you paste it into CLICK.
+
 ## v0.17.0 (2026-11-18)
 
 You can now record a debug session and replay it as a pytest test. Ladder export accepts more of the forms that CLICK's editor accepts, and `send()` and `receive()` reach CLICK v4's ports. Read Behaviour changes before you upgrade. A program that uses `Rung` needs an edit. Other imports from `pyrung.core` still work. Move them to `pyrung`, because `pyrung.core` is internal and can change in any release. The property checks and lock files are gone.

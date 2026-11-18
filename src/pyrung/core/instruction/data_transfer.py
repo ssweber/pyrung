@@ -52,9 +52,7 @@ def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
 
     source_type = copy_source_kind(source)
     dest_type = copy_source_kind(dest)
-    if dest_type is TagType.CHAR and (
-        source_type in _NUMBER_TYPES or _is_number_constant(source)
-    ):
+    if dest_type is TagType.CHAR and (source_type in _NUMBER_TYPES or _is_number_constant(source)):
         return to_text()
     if source_type is TagType.CHAR and dest_type in _NUMBER_TYPES:
         return to_value

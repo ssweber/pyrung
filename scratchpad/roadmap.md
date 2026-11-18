@@ -474,16 +474,6 @@ All [nothing] unless marked.
   causal) resolves labels but raises KeyError on a `Pump.State` alias.
 - **Export a fraction constant into DH or YD.** CLICK accepts `copy(1.5, DH1)` (copy_single answers). What it stores
   there is unread. [PLC]
-- **A plain number constant into TXT.** A `copy()` of a number constant into TXT still does not write digits or
-  export a converter, as a `copy()` of an Int, Dint or Word tag does since v0.17.0 (checked on main 2026-11-18).
-  `copy(-5, txt[1000])` with no `convert` skips the TXT1000 check, exports as `copy(-5,TXT1000)`, and
-  the runtime stores the raw number in the Char, where CLICK stores the digits (RESULTS6 row 5). laddercodec will
-  refuse a bare number->TXT Copy with no converter, so the export must always write the converter. A plain number
-  constant into TXT should:
-  - export with the converter written out, as CLICK saves it. An int gets `to_text(suppress_zero=True)` (2227=1), and
-    a real gets `to_text()`, since CLICK refuses suppress zero for a real.
-  - run as that converter, so the simulator stores the digits.
-  - take the TXT1000 check. [nothing]
 - **Spell a Real of 1e7 and up as CLICK saves it.** CLICK saves 123456789.0 as `1.234568E+08`, 12345678.0 as
   `1.234568E+07` and 1e10 as `1E+10` (clicknick `lc-diff-click/RESULTS9-10.md`). CLICK writes it in E form with up to
   7 significant digits (`%.7G`). `click_real_literal` writes `123456800.0`, `12345680.0` and `10000000000.0`, and

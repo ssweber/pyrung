@@ -30,8 +30,8 @@ def _exported_converter(instruction: Any) -> CopyConverter | None:
 
     CLICK saves every Copy between TXT and a number register or constant with a
     conversion. So a plain Copy across text exports the converter that pyrung runs for
-    it. A TXT into a DF is the one exception, and it exports as written. CLICK is
-    believed to save a plain Copy there, and that belief is not yet checked on a CLICK.
+    it. A TXT into a DF is the one exception. CLICK was observed to offer no conversion
+    there and to save a plain Copy, so the export writes it as written.
     """
     authored = getattr(instruction, "authored_convert", instruction.convert)
     if authored is not None:
@@ -46,8 +46,9 @@ def _exported_converter(instruction: Any) -> CopyConverter | None:
 def _exported_block_converter(instruction: Any) -> CopyConverter | None:
     """Return the converter that the export writes with a Block Copy.
 
-    CLICK saves a Block Copy of TXT into DS, DD or DH with a conversion. A plain
-    ``blockcopy()`` there stores each digit, so it exports as ``to_value``.
+    CLICK saves a Block Copy of TXT into DS, DD or DH with a conversion. pyrung runs a
+    plain ``blockcopy()`` there by storing the digit that each TXT holds, so the export
+    writes ``to_value``.
     """
     if instruction.convert is not None:
         return instruction.convert
