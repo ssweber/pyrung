@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -439,13 +440,13 @@ def _wide_constant_into_hex(
     """Report CLK_COPY_WIDE_CONSTANT, a constant too wide for a hex register.
 
     A CLICK hex constant is 0h..FFFFh. The export refuses a constant into DH, XD or YD
-    outside -32768..65535. It writes -32768..-1 as its 16 bits.
+    outside -32768..65535, with a fraction or without. It writes -32768..-1 as its 16 bits.
     """
     if isinstance(value, ImmediateRef):
         value = value.value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return []
-    if isinstance(value, float) and not value.is_integer():
+    if isinstance(value, float) and not math.isfinite(value):
         return []
     if -32768 <= value <= 65535:
         return []

@@ -69,7 +69,7 @@ class _InstructionMixin:
         def _render_sequence(self, values: Any, *, path: str, source: Any) -> str: ...
         def _render_shift_range(self, bit_range: Any, *, path: str, source: Any) -> str: ...
         def _hex_constants(
-            self, mode: Literal["word", "exact"] | None
+            self, mode: Literal["word", "copy", "exact"] | None
         ) -> AbstractContextManager[None]: ...
         @staticmethod
         def _is_hex_bank_operand(rendered: str) -> bool: ...
@@ -284,7 +284,7 @@ class _InstructionMixin:
                 source=instruction,
             )
         dest = self._render_operand(tag, path=f"{path}.dest", source=instruction)
-        with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
+        with self._hex_constants("copy" if self._is_hex_bank_operand(dest) else None):
             source = self._render_operand(value, path=f"{path}.value", source=instruction)
         return self._fn("copy", source, dest, **oneshot_kw)
 
@@ -364,7 +364,7 @@ class _InstructionMixin:
             converter = _exported_converter(instruction)
             dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
             self._refuse_constant_text_past_txt(instruction, dest, path=f"{path}.dest")
-            with self._hex_constants("word" if self._is_hex_bank_operand(dest) else None):
+            with self._hex_constants("copy" if self._is_hex_bank_operand(dest) else None):
                 copy_source = self._render_operand(
                     instruction.source, path=f"{path}.source", source=instruction
                 )

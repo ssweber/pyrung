@@ -165,11 +165,13 @@ class _TranslatorMixin:
     # - "word": hex, for a Copy, Fill or Math into a Word, with -32768..-1 written as its
     #   16 bits.  Any other value outside 0..FFFFh is an export error, since no CLICK hex
     #   constant holds it.
+    # - "copy": as "word", for a Copy into a Word.  A constant with a fraction is written
+    #   as a REAL constant.  CLICK's Copy accepts it, and copy(1.5,DH1) stores 1.
     # - "exact": hex.  A value outside 0..FFFFh is an export error.
-    _hex_constant_mode: Literal["word", "exact"] | None = None
+    _hex_constant_mode: Literal["word", "copy", "exact"] | None = None
 
     @contextmanager
-    def _hex_constants(self, mode: Literal["word", "exact"] | None) -> Iterator[None]:
+    def _hex_constants(self, mode: Literal["word", "copy", "exact"] | None) -> Iterator[None]:
         """Spell the integer constants rendered inside the block in CLICK hex.
 
         CLICK reads digits typed into a hex context as hex and appends ``h``.
@@ -196,6 +198,19 @@ class _TranslatorMixin:
     def _render_number(self, value: int | float, *, path: str, source: Any) -> str:
         """Spell an int or float constant the way CLICK writes it."""
         mode = self._hex_constant_mode
+        if mode == "copy" and isinstance(value, float) and not value.is_integer():
+            # A CLICK was read storing 1.5 as 1 and -1.5 as FFFFh in a Word.  No one has
+            # read a CLICK store a fraction outside 16 bits, so the export refuses one.
+            if not -0x8000 <= value <= 0xFFFF:
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"Constant {value!r} does not fit in 16 bits. Copy a value from "
+                        "-32768 to 65535 into a Word."
+                    ),
+                    source=source,
+                )
+            mode = None
         if mode is not None:
             if isinstance(value, float):
                 if not value.is_integer():
@@ -217,7 +232,7 @@ class _TranslatorMixin:
                     ),
                     source=source,
                 )
-            if mode == "word" and not -0x8000 <= value <= 0xFFFF:
+            if mode in ("word", "copy") and not -0x8000 <= value <= 0xFFFF:
                 self._raise_issue(
                     path=path,
                     message=(
