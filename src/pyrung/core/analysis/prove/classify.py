@@ -388,7 +388,7 @@ def _comparison_influencing_tags(
     atom_idx: dict[str, list[Any]],
     program: Program | None = None,
 ) -> frozenset[str]:
-    """Tags whose value can reach a comparison atom via invertible copy/calc.
+    """Tags whose value can reach a comparison atom via invertible copy/Math.
 
     A free input that only feeds arithmetic — ``math(100 - level, pv)`` — still
     influences a downstream comparison such as ``pv < band``.  The direct

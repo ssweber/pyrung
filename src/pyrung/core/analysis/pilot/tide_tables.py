@@ -362,7 +362,7 @@ def guard_verdict(
       ``SAT`` so the caller can flag a frontier gated by a genuinely-unreadable
       guard (the skiff's escalation signal).
 
-    ``fixed`` pins what the writer *forces* — its copy/math source and any
+    ``fixed`` pins what the writer *forces* — its copy/Math source and any
     context. Every free tag must pass :func:`_is_complete_domain` before
     enumeration: a Bool supplies ``(False, True)`` and ``domains`` carries
     prover-owned complete domains. Missing completeness returns

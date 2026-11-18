@@ -81,7 +81,7 @@ from pyrung.core.instruction.send_receive._core import (
 )
 from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
-# Classes with a projected reverse crossing (copy/fill/blockcopy/math data-flow,
+# Classes with a projected reverse crossing (copy/fill/blockcopy/Math data-flow,
 # the bool coil placeholder, and the five conservative pack/unpack fallthroughs).
 EXPECTED_WITH_CROSSINGS = frozenset(
     {

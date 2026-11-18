@@ -1643,7 +1643,7 @@ class TestRecoversWithAssume:
 
 
 # ---------------------------------------------------------------------------
-# Simulation primitive (_simulate_scan) and copy/math awareness
+# Simulation primitive (_simulate_scan) and copy/Math awareness
 # ---------------------------------------------------------------------------
 
 
@@ -1822,7 +1822,7 @@ class TestRungProducesValue:
 
 
 class TestProjectedCauseCopyCalc:
-    """projected_cause finds copy/math rungs as candidates."""
+    """projected_cause finds copy/Math rungs as candidates."""
 
     def test_copy_rung_candidate(self) -> None:
         """cause(to=) finds a copy rung that would produce the value."""
@@ -1914,7 +1914,7 @@ class TestProjectedCauseCopyCalc:
 
 
 class TestProjectedEffectCopyCalc:
-    """projected_effect detects copy/math downstream effects."""
+    """projected_effect detects copy/Math downstream effects."""
 
     def test_copy_downstream(self) -> None:
         """effect() detects a copy instruction as downstream effect."""

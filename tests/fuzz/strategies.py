@@ -263,7 +263,7 @@ def _block_range_args(draw: st.DrawFn, block: Any) -> dict[str, int]:
 def _pick_source(draw: st.DrawFn, choices: list[Any], recent_dests: list[Any] | None) -> Any:
     """Pick a numeric source tag, biased toward a recently written dest.
 
-    Reusing a recent dest as a source builds copy/math chains organically across
+    Reusing a recent dest as a source builds copy/Math chains organically across
     rungs — the feature adjacency the fuzzer most often finds bugs in.
     """
     # Identity membership: Tag.__eq__ is DSL-overloaded (builds an expression),

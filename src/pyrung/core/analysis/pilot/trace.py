@@ -2559,7 +2559,7 @@ def _preserve_children(
     """Preserve prerequisites: keep a retentive ``tag=value`` from being clobbered.
 
     The writer walk *establishes* the value (finds the writer that produces it).
-    For a **retentive** target — a latch/SET coil or a copy/math into a held
+    For a **retentive** target — a latch/SET coil or a copy/Math into a held
     register — the value also has to *persist*: any competing writer that
     provably drives the tag to a different value overwrites it on a later scan
     unless its guard is suppressed.  An engineer reading ``latch(Running)``

@@ -745,7 +745,7 @@ def copy_calc_chain_into_compare(pool: TagPool) -> list[RungSpec] | None:
 def chain_tail_preset(pool: TagPool) -> list[RungSpec] | None:
     """Adjacency: copy(lit, A) -> math(A + k, B), then on_delay(T, preset=B).
 
-    The tail of a copy/math chain is consumed as a timer preset.
+    The tail of a copy/Math chain is consumed as a timer preset.
     """
     writable_nums = pool.writable_numeric()
     presets = pool.writable_preset_tags()
