@@ -14,6 +14,9 @@ class StoreTransform:
     kind: str = "identity"
     lower: int | None = None
     upper: int | None = None
+    #: The value that a ``clamp``, ``wrap`` or ``word`` store writes for a NaN.  It is 0,
+    #: except for a Copy of a REAL into a DINT.  A CLICK stores -2147483648 there.
+    nan: int = 0
 
 
 IDENTITY_STORE = StoreTransform()
@@ -102,12 +105,16 @@ def store_value(value: Any, storage: StoreTransform) -> Any:
     if kind == "real":
         return store_real(value)
     if isinstance(value, float) and not math.isfinite(value):
-        # A clamp pins +/-Inf at its bound.  NaN, and anything that wraps, is 0.
-        if kind == "clamp" and value == value and storage.lower is not None:
+        # A clamp pins +/-Inf at its bound.  An infinity that wraps is 0.
+        if kind == "bool":
+            return False
+        if value != value:
+            return storage.nan
+        if kind == "clamp" and storage.lower is not None:
             return storage.upper if value > 0 else storage.lower
-        if kind == "word" and value == value and storage.upper is not None:
+        if kind == "word" and storage.upper is not None:
             return storage.upper if value > 0 else WORD_STORE_FLOOR & 0xFFFF
-        return False if kind == "bool" else 0
+        return 0
     if kind == "bool":
         return bool(value)
     if kind == "char":

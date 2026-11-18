@@ -135,46 +135,40 @@ def _compile_pack_text_instruction(
     if dest_type not in {"INT", "DINT", "WORD", "REAL"}:
         raise TypeError("pack_text destination must be INT, DINT, WORD, or REAL")
     ctx.mark_helper("_parse_pack_text_value")
+    ctx.mark_helper("_store_real")
     stem = ctx.next_name("packtext")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.source_range, ctx, stem=f"{stem}_src", include_addresses=False
     )
     fault_body = _compile_set_out_of_range_fault_body(ctx)
+    parse_body = [
+        "try:",
+        f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
+        f"    _packed_value = {_store_coerce_expr('_parsed', dest_type, ctx)}",
+        *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
+        *_clamp_fault(dest_type, fault_body, 4),
+        "except (TypeError, ValueError, OverflowError):",
+        *_indent_body(fault_body, 4),
+    ]
+    if instr.allow_whitespace:
+        parse_body = ["_text = _text.strip()", *parse_body]
+    else:
+        parse_body = [
+            "if _text != _text.strip():",
+            *_indent_body(fault_body, 4),
+            "else:",
+            *_indent_body(parse_body, 4),
+        ]
     enabled_body = [
         *src_setup,
         f"_text = ''.join(str({src_symbol}[_idx]) for _idx in {src_indices})",
+        # A TXT holds one byte.  A character above FFh is refused before Python's int()
+        # or float() can read it as a digit, such as U+0661.
+        "if any(ord(_ch) > 255 for _ch in _text):",
+        *_indent_body(fault_body, 4),
+        "else:",
+        *_indent_body(parse_body, 4),
     ]
-    if instr.allow_whitespace:
-        enabled_body.append("_text = _text.strip()")
-    else:
-        enabled_body.extend(
-            [
-                "if _text != _text.strip():",
-                *_indent_body(fault_body, 4),
-                "else:",
-                "    try:",
-                f'        _parsed = _parse_pack_text_value(_text, "{dest_type}")',
-                f"        _packed_value = {_store_coerce_expr('_parsed', dest_type, ctx)}",
-                *_indent_body(
-                    _compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 8
-                ),
-                *_clamp_fault(dest_type, fault_body, 8),
-                "    except (TypeError, ValueError, OverflowError):",
-                *_indent_body(fault_body, 8),
-            ]
-        )
-        return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
-    enabled_body.extend(
-        [
-            "try:",
-            f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
-            f"    _packed_value = {_store_coerce_expr('_parsed', dest_type, ctx)}",
-            *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
-            *_clamp_fault(dest_type, fault_body, 4),
-            "except (TypeError, ValueError, OverflowError):",
-            *_indent_body(fault_body, 4),
-        ]
-    )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 

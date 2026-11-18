@@ -63,8 +63,8 @@ def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: Codegen
     """Return *source_expr* as a Copy, Block copy or Fill stores it into *dest_type*.
 
     *source* is the store's ``copy_source_kind`` (``copy_store_transform``).  A Word
-    from a register clamps past 65535, and a Word into an Int keeps its bits.  Any other
-    store is :func:`_store_coerce_expr`'s.
+    from a register clamps past 65535, and a Word into an Int keeps its bits.  A NaN from
+    a REAL into a DINT stores -2147483648.  Any other store is :func:`_store_coerce_expr`'s.
     """
     store = copy_store_transform(TagType[dest_type], source)
     kind = None if store is None else store.kind
@@ -74,6 +74,10 @@ def _copy_store_expr(source_expr: str, dest_type: str, source: Any, ctx: Codegen
     if dest_type == "INT" and kind == "wrap":
         ctx.mark_helper("_wrap_int")
         return f"_wrap_int({source_expr}, 16, True)"
+    if dest_type == "DINT" and store is not None and store.nan != 0:
+        ctx.mark_helper("_store_dint")
+        ctx.mark_helper("_store_dint_from_real")
+        return f"_store_dint_from_real({source_expr})"
     return _store_coerce_expr(source_expr, dest_type, ctx)
 
 

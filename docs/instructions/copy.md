@@ -11,7 +11,7 @@ copy(DS[1], DS[DS[0]])              # Indirect addressing: DS[pointer]
 copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 ```
 
-`copy()`, `blockcopy()`, `fill()` and `pack_text()` **clamp** an out-of-range value to the destination type's min/max and set `system.fault.out_of_range`. A `Real` or Inf into a `Dint` clamps with no flag. This is different from `math()`, which wraps.
+`copy()`, `blockcopy()`, `fill()` and `pack_text()` **clamp** an out-of-range value to the destination type's min/max and set `system.fault.out_of_range`. A `Real` or Inf into a `Dint` clamps with no flag. A NaN stores 0 in an `Int` and -2147483648 in a `Dint`. This is different from `math()`, which wraps.
 
 `copy()` does not clamp in two cases:
 
@@ -129,7 +129,7 @@ pack_text(Txt.select(1, 3), DS[1], allow_whitespace=True) # " 12" -> 12
 - `unpack_to_words()` reverses that mapping. It requires exactly two `INT`/`WORD` destinations.
 - `pack_text()` parses a `TXT`/`CHAR` range into an `INT`, `WORD`, `DINT`, or `REAL`.
     - `INT`/`DINT` parse signed decimal and stop at a decimal point (`"12.5"` is 12). Any other character that is not a digit sets the out-of-range fault and leaves the destination alone.
-    - `WORD` parses hex, and `REAL` parses float text including exponential notation.
+    - `WORD` parses hex, and `REAL` parses float text including exponential notation. A number past the `Real` range stores +Inf or -Inf and sets no fault.
     - Whitespace around the text sets the same fault unless you pass `allow_whitespace=True`.
 - All pack/unpack instructions accept `oneshot=True`.
 - There is no `unpack_text()`. To write a text literal into `TXT`/`CHAR` memory, use plain `copy("HELLO", Txt[1])`. It fans out across sequential tags and is cut at the end of the block. For numeric → text, use `copy(..., convert=to_text())` or `copy(..., convert=to_binary)`.

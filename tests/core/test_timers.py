@@ -194,6 +194,30 @@ class TestOnDelayTON:
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 10  # First scan's dt
 
+    def test_ton_counts_on_from_a_td_written_mid_count(self, runner_factory):
+        """Read on a CLICK: a TON of 1000 ms whose TD is written 500 about 300 ms in counts on
+        from 500 at one a ms.  The ms it counted before the write are gone."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=1000)
+
+        runner = runner_factory(logic, dt=0.001)
+        runner.patch({"Enable": True})
+        for _ in range(307):
+            runner.step()
+        assert runner.current_state.tags["Timer_Acc"] == 307
+
+        runner.patch({"Timer_Acc": 500})
+        for count in range(501, 1000):
+            runner.step()
+            assert runner.current_state.tags["Timer_Acc"] == count
+        assert runner.current_state.tags["Timer_Done"] is False
+        runner.step()
+        tags = runner.current_state.tags
+        assert (tags["Timer_Acc"], tags["Timer_Done"]) == (1000, True)
+
 
 class TestOnDelayRTON:
     """Test Retentive On-Delay Timer (RTON) - on_delay with .reset()."""

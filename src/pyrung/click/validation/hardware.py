@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -435,19 +436,24 @@ def _wide_constant_into_hex(
     dest_memory_types: tuple[str, ...],
     dest_location: ProgramLocation,
     mode: ValidationMode,
+    *,
+    range_fill: bool = False,
 ) -> list[ClickFinding]:
-    """Report CLK_COPY_WIDE_CONSTANT, a constant too wide for a hex register.
+    """Report CLK_COPY_WIDE_CONSTANT, a constant that the export refuses for a hex register.
 
     A CLICK hex constant is 0h..FFFFh. The export refuses a constant into DH, XD or YD
-    outside -32768..65535. It writes -32768..-1 as its 16 bits.
+    outside -32768..65535, with a fraction or without. It writes -32768..-1 as its 16 bits.
+    A Copy writes a fraction as a Real constant, but a Fill of several registers
+    (*range_fill*) has only the hex constant, so the export refuses any fraction there.
     """
     if isinstance(value, ImmediateRef):
         value = value.value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return []
-    if isinstance(value, float) and not value.is_integer():
+    if isinstance(value, float) and not math.isfinite(value):
         return []
-    if -32768 <= value <= 65535:
+    fraction = range_fill and isinstance(value, float) and not value.is_integer()
+    if -32768 <= value <= 65535 and not fraction:
         return []
     hex_banks = [
         memory_type for memory_type in dest_memory_types if memory_type in HEX_CONSTANT_BANKS
@@ -456,17 +462,27 @@ def _wide_constant_into_hex(
         return []
     verb = "fill" if instruction_type == "FillInstruction" else "copy"
     location_text = _format_location(dest_location)
+    banks = ", ".join(hex_banks)
+    if fraction:
+        message = (
+            f"fill({value!r}, ...) into {banks} at {location_text} has a constant that is not "
+            "a whole number. A CLICK Fill into a hex register takes 0h..FFFFh, so the export "
+            "refuses it."
+        )
+        suggestion = "Fill a whole 16-bit value, 0..65535 (0h..FFFFh)."
+    else:
+        message = (
+            f"{verb}({value!r}, ...) into {banks} at {location_text} has a constant that does "
+            "not fit in 16 bits. A CLICK hex constant is 0h..FFFFh, so the export refuses it."
+        )
+        suggestion = "Write the constant as its 16-bit value, 0..65535 (0h..FFFFh)."
     return [
         ClickFinding(
             code=CLK_COPY_WIDE_CONSTANT,
             severity=_route_severity(CLK_COPY_WIDE_CONSTANT, mode),
-            message=(
-                f"{verb}({value!r}, ...) into {', '.join(hex_banks)} at {location_text} has a "
-                "constant that does not fit in 16 bits. A CLICK hex constant is 0h..FFFFh, so "
-                "the export refuses it."
-            ),
+            message=message,
             location=location_text,
-            suggestion="Write the constant as its 16-bit value, 0..65535 (0h..FFFFh).",
+            suggestion=suggestion,
         )
     ]
 
@@ -513,7 +529,12 @@ def _evaluate_copy_compatibility(
         )
         findings.extend(
             _wide_constant_into_hex(
-                instruction_type, source, dest_memory_types, dest_location, mode
+                instruction_type,
+                source,
+                dest_memory_types,
+                dest_location,
+                mode,
+                range_fill=operation == "fill",
             )
         )
     findings.extend(

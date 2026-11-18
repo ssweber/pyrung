@@ -73,6 +73,7 @@ from tests.conformance.copy import (
     test_pack_point,
     test_past_bank_write,
     test_past_clean,
+    test_plc_stores,
     test_real_bits,
     test_real_text,
     test_text,
@@ -138,6 +139,7 @@ from tests.conformance.timers_counters import (
     test_counters,
     test_fixed_scan,
     test_reset_pins,
+    test_td_count_on,
     test_timers,
     test_tof_rewrite,
     test_unit_minute,
@@ -353,6 +355,9 @@ APART_GROUPS = [
     test_reset_pins.group,
     # A debounce's off TD while its coil is off.
     test_deb_off.group,
+    # Stores and a TD write that a CLICK was read making in programs of their own.
+    test_plc_stores.group,
+    test_td_count_on.group,
     # Raw Modbus requests (test_modbus_raw.py drives it).
     test_modbus_raw.group,
 ]
@@ -401,6 +406,9 @@ APART_PARTS: dict[str, ApartPart] = {
     # A down counter's reset and an RTON's reset held on while the rung is on, and a debounce's
     # off TD while its coil is off.
     "follow3_reset": ApartPart(("reset_pins", "deb_off")),
+    # Stores of a fraction, NaN, Inf and text past the Real range, and a TON's TD written
+    # mid-count.  A CLICK was read making each in a program of its own.
+    "follow4_reads": ApartPart(("plc_stores", "td_count_on")),
     # Values staged for raw Modbus reads, and the echo of raw writes. test_raw_requests uses
     # them.
     "modbus_raw": ApartPart(("modbus_raw",)),

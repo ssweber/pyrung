@@ -396,9 +396,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         or "_store_word_clamped" in ctx.used_helpers
     )
     needs_struct = (
-        "_int_to_float_bits" in ctx.used_helpers
-        or "_float_to_int_bits" in ctx.used_helpers
-        or "_parse_pack_text_value" in ctx.used_helpers
+        "_int_to_float_bits" in ctx.used_helpers or "_float_to_int_bits" in ctx.used_helpers
     )
     needs_re = "_parse_pack_text_value" in ctx.used_helpers
     if needs_math:

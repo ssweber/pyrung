@@ -7,7 +7,7 @@ import re
 import struct
 from typing import Any
 
-from pyrung.core.storage import StoreTransform, real_in_range, store_char, store_value
+from pyrung.core.storage import StoreTransform, real_in_range, store_char, store_real, store_value
 from pyrung.core.tag import Tag, TagType
 
 _DINT_MIN = -2147483648
@@ -24,6 +24,9 @@ _INT_MAX = 32767
 
 #: A store's source that is a constant written in the instruction (``copy(70000, Word)``).
 LITERAL = "literal"
+
+#: The text a pack_text into a REAL reads as a number.
+_REAL_TEXT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 _NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL})
 
@@ -59,6 +62,7 @@ def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | 
     - Into a Word, a constant keeps its low 16 bits (70000 is 4464).  From a DINT or
       a REAL, past 65535 it clamps and below 0 keeps the low 16 bits (``"word"``).
     - Into an Int, a Word keeps its bits (0xFFFF is -1); anything else clamps.
+    - Into a DINT, a REAL clamps, and a NaN stores -2147483648.
 
     A bit is truthy from any source (CLICK's editor refuses a number into a bit).
     """
@@ -69,6 +73,8 @@ def copy_store_transform(tag_type: Any, source: Any = None) -> StoreTransform | 
             return StoreTransform("wrap", _INT_MIN, _INT_MAX)
         return StoreTransform("clamp", _INT_MIN, _INT_MAX)
     if tag_type is TagType.DINT:
+        if source is TagType.REAL:
+            return StoreTransform("clamp", _DINT_MIN, _DINT_MAX, nan=_DINT_MIN)
         return StoreTransform("clamp", _DINT_MIN, _DINT_MAX)
     if tag_type is TagType.WORD:
         if source in (TagType.DINT, TagType.REAL):
@@ -258,12 +264,11 @@ def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
         return parsed
 
     if dest_tag.type == TagType.REAL:
-        parsed = float(text)
-        if not math.isfinite(parsed):
-            raise ValueError("REAL parse produced non-finite value")
-        # Ensure value can round-trip to 32-bit float
-        struct.pack("<f", parsed)
-        return parsed
+        # CLICK stores a number past the REAL range as +/-Inf with no flag.  Python's float()
+        # also reads "inf" and "nan", which are not numbers to a CLICK.
+        if _REAL_TEXT.fullmatch(text) is None:
+            raise ValueError("REAL parse failed")
+        return store_real(float(text))
 
     raise TypeError(
         f"pack_text destination must be INT, DINT, WORD, or REAL; got {dest_tag.type.name}"
@@ -284,7 +289,7 @@ def _copy_clamps(value: Any, tag: Tag, source: Any = None) -> bool:
 
     Only an INT or DINT clamps with the flag.  A Word's clamp raises none.  Nor does a
     REAL register's clamp into a DINT (CLICK: DF 1.0E+10 into a DD,
-    ``flag_probe/bulk_ops_clear_flags``).  +/-Inf clamps.  NaN stores 0 and does not.
+    ``flag_probe/bulk_ops_clear_flags``).  +/-Inf clamps.  NaN does not.
     """
     storage = copy_store_transform(tag.type, source)
     if storage is None or storage.kind != "clamp" or not isinstance(value, (int, float)):

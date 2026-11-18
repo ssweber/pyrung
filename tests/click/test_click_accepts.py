@@ -310,6 +310,7 @@ def test_a_constant_that_fits_in_16_bits_exports_into_a_word(write, token):
         (lambda: copy(70000, dh[1]), 70000, ()),
         (lambda: copy(65536, yd[1]), 65536, ()),
         (lambda: copy(-32769, dh[1]), -32769, ()),
+        (lambda: copy(70000.5, dh[1]), 70000.5, ()),
         (lambda: fill(70000, dh.select(1, 1)), 70000, ()),
         # A Fill into several YD is refused for the bank too.
         (lambda: fill(70000, yd.select(1, 2)), 70000, (CLK_BANK_NOT_WRITABLE,)),
@@ -318,6 +319,7 @@ def test_a_constant_that_fits_in_16_bits_exports_into_a_word(write, token):
         "copy-70000-into-DH",
         "copy-65536-into-YD",
         "copy-minus-32769-into-DH",
+        "copy-70000.5-into-DH",
         "fill-one-DH",
         "fill-YD",
     ],
@@ -343,14 +345,24 @@ def test_a_constant_past_16_bits_into_a_word_mapped_to_dh_is_refused():
         pyrung_to_ladder(prog, tag_map, allow=(CLK_COPY_WIDE_CONSTANT,))
 
 
+@pytest.mark.parametrize("value", [1.5, -1.5])
 @pytest.mark.parametrize("bank", [dh, yd], ids=lambda bank: bank.name)
-def test_a_fraction_into_a_word_is_left_to_the_export(bank):
-    # copy_single.answers.json: CLICK accepts copy(1.5, DH1), but what it stores there is
-    # unread.  Validation reports nothing, and the export refuses it.
-    write = lambda: copy(1.5, bank[1])  # noqa: E731
-    assert _codes(write) == set()
-    with pytest.raises(LadderExportError, match="is not an integer"):
-        pyrung_to_ladder(_program(write), TagMap())
+def test_a_fraction_copied_into_a_word_exports_as_written(bank, value):
+    # A CLICK accepts copy(1.5, DH1) and copy(-1.5, YD1), and stores 1 and FFFFh, as pyrung
+    # does.  A single-register Fill exports as the same Copy.
+    write = lambda: copy(value, bank[1])  # noqa: E731
+    token = f"copy({value},{bank.name}1)"
+    # The importer does not read a YD operand, so only the DH Copy makes the round trip.
+    (_exports_and_imports_as if bank is dh else _exports_as)(write, token)
+    _exports_as(lambda: fill(value, bank.select(1, 1)), token)
+
+
+@pytest.mark.parametrize("value", [1.5, -1.5, 70000.5])
+def test_a_fraction_filled_into_a_range_of_words_is_refused_even_when_allowed(value):
+    write = lambda: fill(value, dh.select(1, 2))  # noqa: E731
+    assert CLK_COPY_WIDE_CONSTANT in _codes(write)
+    with pytest.raises(LadderExportError, match=f"Constant {value} is not an integer"):
+        pyrung_to_ladder(_program(write), TagMap(), allow=(CLK_COPY_WIDE_CONSTANT,))
 
 
 # --- CLICK's Copy answers ---------------------------------------------------------------
