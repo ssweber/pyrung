@@ -162,7 +162,7 @@ def _block_copy_dest(source: Any, dest: Any) -> Any:
             "the destination as a range from .select()."
         )
     block, addr = found
-    count = len(source.tags())
+    count = len(source.addresses)
     end = addr + count - 1
     if end > block.end:
         raise ValueError(
@@ -516,7 +516,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         dest = _block_copy_dest(_unwrapped(source), dest)
         fixed_source, fixed_dest = _unwrapped(source), _unwrapped(dest)
         if isinstance(fixed_source, BlockRange) and isinstance(fixed_dest, BlockRange):
-            source_count, dest_count = len(fixed_source.tags()), len(fixed_dest.tags())
+            source_count = len(fixed_source.addresses)
+            dest_count = len(fixed_dest.addresses)
             if source_count != dest_count:
                 raise ValueError(
                     "blockcopy() needs ranges of the same length. "
