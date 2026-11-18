@@ -266,6 +266,10 @@
 "paste_risk/jump_to_own_step_register" = { hash = "51104ba64de9", on = "2026-11-13" }
 "paste_risk/loop_body_split" = { hash = "504e5713ae0e", on = "2026-11-13" }
 "paste_risk/rand_real_bounds" = { hash = "8a2dc4d6b43b", on = "2026-11-13" }
+"plc_stores/copy_non_finite_into_dd" = { hash = "4f4382ba803d", on = "2026-11-18" }
+"plc_stores/fraction_into_word" = { hash = "d87e57632038", on = "2026-11-18" }
+"plc_stores/math_non_finite_into_ints" = { hash = "afc533ccc1b5", on = "2026-11-18" }
+"plc_stores/pack_text_past_range" = { hash = "9ecef9dc42a3", on = "2026-11-18" }
 "real_bits/float32_equality" = { hash = "04d531d71bd1", on = "2026-11-11" }
 "real_bits/minus_zero_math" = { hash = "e6ab766dff95", on = "2026-11-11" }
 "real_bits/minus_zero_shapes" = { hash = "b79b91580daa", on = "2026-11-11" }
@@ -355,6 +359,7 @@
 "system/scan_clock_follows_counter" = { hash = "b9e17b5dcd8f", on = "2026-11-13" }
 "system/scan_counter_steps_by_one" = { hash = "1af8fddb503d", on = "2026-11-13" }
 "system/scan_counter_wraps_to_zero" = { hash = "7be993d01b1f", on = "2026-11-13" }
+"td_count_on/ton_counts_on_from_written_td" = { hash = "3f52e6e1b557", on = "2026-11-18" }
 "td_write/debounce_on_td_write" = { hash = "e530a7f21327", on = "2026-11-12" }
 "td_write/flasher_off_td_write" = { hash = "9996b8bdf87e", on = "2026-11-12" }
 "td_write/flasher_on_td_write" = { hash = "07a4284c41de", on = "2026-11-12" }
