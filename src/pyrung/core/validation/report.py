@@ -96,7 +96,7 @@ class ValidationReport:
         return iter(self.findings)
 
     def grouped(self) -> dict[str, list[FindingDisplay]]:
-        """Return the findings' displays keyed by rule code, in the order they were found.
+        """Return the findings' displays keyed by rule code. The stuck-bit findings come last.
 
         A block reset or fill can leave many coils stuck. Their stuck-bit findings
         share one display, so a 140-coil block clear reads as one entry.

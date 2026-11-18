@@ -10,7 +10,7 @@ The client receive uses a raw Modbus address (``ModbusAddress``) instead of a Cl
 bank string, so it works with any Modbus TCP device — not only Click PLCs.
 """
 
-from pyrung import Bool, Char, Int, Or, Program, rung, Timer, copy, on_delay, out, reset, rise
+from pyrung import Bool, Char, Int, Or, Program, Timer, copy, on_delay, out, reset, rise, rung
 from pyrung.circuitpy import (
     P1AM,
     ModbusClientConfig,

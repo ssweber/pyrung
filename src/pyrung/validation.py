@@ -16,9 +16,9 @@
 rule code or category that pyrung does not know. The message names the file and
 the unknown name.
 
-This module does not import pyclickplc. The CLICK checks are in ``pyrung.click``
-(``TagMap.validate``), and the CircuitPython checks are in ``pyrung.circuitpy``
-(``P1AM.validate``).
+Importing this module loads no CLICK code beyond what ``import pyrung`` loads.
+The CLICK checks are in ``pyrung.click`` (``TagMap.validate``), and the
+CircuitPython checks are in ``pyrung.circuitpy`` (``P1AM.validate``).
 """
 
 from pyrung.core.validation.config import (

@@ -186,8 +186,6 @@ Plan item 3. `pyrung`, `pyrung.click` and `pyrung.circuitpy` are public. The few
 level, and validation gets one public module. ClickNick's test of its named imports is ClickNick's work.
 Sam decided on 2026-11-17 that 1c and then 1d are pyrung's next work, now that the recording branches are in main.
 The deletions release follows them, on Sam's tag.
-- Decide `expr_requires` and `reset_dominance` (analysis/simplified.py). Nothing in src calls them since the record
-  machinery went, but test files that `spec test` wrote import them.
 
 ### 1d. Then the `Rung` -> `rung` rename in tests
 

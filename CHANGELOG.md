@@ -50,7 +50,7 @@
 
 #### Public imports
 
-- `pyrung.validation` exports the report and rule types that `Program.check()` returns, and the functions that read and write `[tool.pyrung.check]`. `ValidationReport.grouped()` returns the findings by rule code, and shows the stuck bits of one block reset as one entry.
+- `pyrung.validation` exports `ValidationReport`, which `Program.check()` returns, the rule list, and the functions that read and write `[tool.pyrung.check]`. `ValidationReport.grouped()` returns the findings by rule code, and shows the stuck bits of one block reset as one entry.
 - `pyrung.live` exports `send_command()`, `list_sessions()` and `command_grammar()`, so Python code can drive a running debug session.
 - `pyrung` exports the math functions (`sqrt`, `log`, `lsh`, `randint` and the rest), `PI`, `SystemState`, `DataView`, `AvoidCheckError`, `UnrecordedScansError` and the names of the physical kinds.
 - `pyrung.click` exports the comment-format names (`TagMeta`, `parse_tag_meta`, `upgrade_comment` and the rest), `ClickValidationReport` and `ClickFinding`.
@@ -63,7 +63,7 @@
   Call `logic.check()` for the ladder checks, `mapping.validate(logic)` for CLICK and `hw.validate(logic)` for CircuitPython.
 - `pyrung.click` no longer exports `validate_click_program`, and `pyrung.circuitpy` no longer has `validate_circuitpy_program`.
   Call `mapping.validate(logic)` or `hw.validate(logic)`.
-- `program.dataview().upstream()` of a tag written in a subroutine includes the conditions of the rungs that call the subroutine, and stops there. `downstream()` of a tag in a call rung's condition includes the tags that the subroutine writes (both left out the call).
+- `program.dataview().upstream()` of a tag written in a subroutine includes the conditions of the rungs that call the subroutine, and stops there. `downstream()` of a tag in a call rung's condition includes the tags that the subroutine, or a subroutine it calls, writes (both used to stop at the call). The graph panel's slice and the console's `upstream` and `downstream` commands show the same tags.
   Update any test that expects the old slice.
 - `load_check_config()` raises `ValueError` if `[tool.pyrung.check]` names a rule that pyrung does not know. The message names the file and the rule (it loaded the name, and `pyrung check` raised later).
   Fix or remove the rule name.

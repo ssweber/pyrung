@@ -12,16 +12,16 @@ from pyrung import (
     Harness,
     Int,
     Physical,
-    rung,
+    TagType,
     Timer,
-    math,
     copy,
     fall,
     latch,
+    math,
     on_delay,
     program,
     rise,
-    TagType,
+    rung,
 )
 
 # ---------------------------------------------------------------------------

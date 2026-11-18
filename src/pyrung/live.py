@@ -1,8 +1,8 @@
 """Drive a running pyrung debug session from Python.
 
-When the pyrung debug adapter launches a program, it listens for console
-commands on a localhost port. These functions send it the same commands that
-the ``pyrung live`` CLI and the Debug Console accept::
+The pyrung debug adapter listens for console commands on a localhost port
+while it runs a program. These functions send the adapter the same commands
+that the ``pyrung live`` CLI and the Debug Console accept::
 
     from pyrung.live import list_sessions, send_command
 
