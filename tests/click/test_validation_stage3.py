@@ -24,7 +24,19 @@ from pyrung.click.validation import (
     validate_click_program,
 )
 from pyrung.click.validation import resolve as click_resolve
-from pyrung.core import Bool, Char, Dint, Int, Timer, to_ascii, to_binary, to_text, to_value
+from pyrung.core import (
+    Block,
+    Bool,
+    Char,
+    Dint,
+    Int,
+    TagType,
+    Timer,
+    to_ascii,
+    to_binary,
+    to_text,
+    to_value,
+)
 from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send
 from pyrung.core.program import (
     Program,
@@ -783,26 +795,26 @@ class TestConverterBankCompatibility:
         assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
 
     def test_blockcopy_to_value_valid(self):
-        dest = Int("Dest")
+        dest = Block("Dest", TagType.INT, 1, 3)
 
         def logic():
             with rung():
-                blockcopy(txt.select(1, 3), dest, convert=to_value)
+                blockcopy(txt.select(1, 3), dest.select(1, 3), convert=to_value)
 
         prog = _build_program(logic)
-        tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
+        tag_map = TagMap([dest.map_to(ds.select(1, 3))], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
         assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
 
     def test_blockcopy_to_value_rejects_numeric_source(self):
-        dest = Int("Dest")
+        dest = Block("Dest", TagType.INT, 1, 3)
 
         def logic():
             with rung():
-                blockcopy(ds.select(1, 3), dest, convert=to_value)
+                blockcopy(ds.select(1, 3), dest.select(1, 3), convert=to_value)
 
         prog = _build_program(logic)
-        tag_map = TagMap([dest.map_to(ds[10])], include_system=False)
+        tag_map = TagMap([dest.map_to(ds.select(10, 12))], include_system=False)
         report = validate_click_program(prog, tag_map, mode="warn")
         findings = [
             finding

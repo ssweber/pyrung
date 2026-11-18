@@ -406,11 +406,6 @@ def test_a_block_copy_into_one_address_exports_the_range_click_saves(write, toke
     _exports_and_imports_as(write, token)
 
 
-def test_a_block_copy_into_one_address_past_the_bank_is_refused():
-    with pytest.raises(LadderExportError, match=r"run past DS4500 at the end of the bank"):
-        pyrung_to_ladder(_program(lambda: blockcopy(ds.select(1, 3), ds[4499])), TagMap())
-
-
 def test_a_text_copy_into_a_range_exports_its_first_txt():
     # A Copy has one destination field, and CLICK works out where the text ends
     # (lc-diff-click RESULTS8: "AB" into TXT999 saves its end as TXT1000).

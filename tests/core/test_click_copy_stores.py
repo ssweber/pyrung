@@ -536,3 +536,59 @@ def test_a_char_mapping_alone_does_not_hold_its_bank():
     gc.collect()
     assert bank_ref() is None
     assert _window_shape(code == "AB") == ("as written", "Code")
+
+
+_LONE = Int("Lone")
+
+
+@pytest.mark.parametrize(
+    ("build", "error", "message"),
+    [
+        (lambda: copy(ds.select(1, 3), ds[5]), TypeError, r"Use blockcopy\(\) to copy a range"),
+        (lambda: copy(5, ds.select(1, 3)), TypeError, r"Use fill\(\) to write one value"),
+        (lambda: copy("AB", txt.select(ds[1], ds[2])), TypeError, r"as in DS\[Ptr\]"),
+        (lambda: copy(None, ds[1]), TypeError, r"copy\(\) needs a source"),
+        (lambda: copy("A", ds[1]), ValueError, "Write the number without quotes"),
+        (lambda: blockcopy(ds[1], ds.select(5, 7)), TypeError, r"reads a range from \.select"),
+        (lambda: blockcopy(ds.select(1, 3), ds.select(5, 6)), ValueError, "the same length"),
+        (lambda: blockcopy(ds.select(1, 3), _LONE), TypeError, "the block that holds Lone"),
+        (lambda: blockcopy(ds.select(ds[1], ds[2]), ds[10]), TypeError, "with a pointer"),
+        (lambda: blockcopy(ds.select(1, 3), ds[4499]), ValueError, "Start it at DS4498 or lower"),
+        (lambda: fill(5, ds[1]), TypeError, r"fill\(\) writes a range"),
+        (lambda: fill(ds.select(1, 2), ds.select(5, 7)), TypeError, r"fill\(\) writes one value"),
+        (lambda: fill(txt[1], ds.select(1, 3)), TypeError, "cannot write a TXT into a number"),
+        (lambda: fill("A", ds.select(1, 3)), ValueError, "Write the number without quotes"),
+    ],
+    ids=[
+        "copy-from-range",
+        "copy-into-number-range",
+        "copy-into-pointer-range",
+        "copy-from-nothing",
+        "copy-letter-into-ds",
+        "blockcopy-from-tag",
+        "blockcopy-lengths-differ",
+        "blockcopy-into-lone-tag",
+        "blockcopy-pointer-into-tag",
+        "blockcopy-past-the-block",
+        "fill-into-tag",
+        "fill-from-range",
+        "fill-txt-into-ds",
+        "fill-letter-into-ds",
+    ],
+)
+def test_a_store_that_cannot_run_is_refused_when_built(build, error, message):
+    # Each of these raised on its first scan.  Building it raises instead, with the form
+    # to write.
+    with pytest.raises(error, match=message):
+        with Program(strict=False):
+            with rung():
+                build()
+
+
+def test_a_text_constant_that_reads_as_a_number_still_copies(runner_factory):
+    with Program() as logic:
+        with rung():
+            copy("12", ds[1])
+            fill("7", ds.select(2, 3))
+    tags = _one_scan(runner_factory, logic)
+    assert (tags["DS1"], tags["DS2"], tags["DS3"]) == (12, 7, 7)

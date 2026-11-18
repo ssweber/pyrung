@@ -2012,6 +2012,65 @@ class TestBoardPeripheralsAndRunStop:
         results = _on_every_backend(prog, monkeypatch, (int_text, real_text), scans=1)
         assert results == {name: (True, True) for name in results}
 
+    @pytest.mark.parametrize("dest_type", [TagType.INT, TagType.REAL], ids=["int", "real"])
+    def test_a_plain_block_copy_of_txt_into_numbers_reads_digits_on_every_backend(
+        self, monkeypatch, dest_type
+    ):
+        """A plain blockcopy() of TXT into numbers runs ``to_value``, as a plain copy() does.
+
+        A letter sets the out-of-range flag and leaves its own element alone. A blank TXT
+        reads as 0.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 3)
+        nums = Block("Num", dest_type, 1, 3)
+        digits = Bool("Digits")
+        with Program(strict=False) as prog:
+            with rung():
+                copy("1A", chars[1])
+                fill(99, nums.select(1, 3))
+                blockcopy(chars.select(1, 3), nums.select(1, 3))
+            with rung(nums[1] == 1, nums[2] == 99, nums[3] == 0):
+                out(digits)
+
+        watched = (digits, system.fault.out_of_range)
+        results = _on_every_backend(prog, monkeypatch, watched, scans=1)
+        assert results == {name: (True, True) for name in results}
+
+    def test_a_block_copy_into_one_tag_writes_one_element_per_source_on_every_backend(
+        self, monkeypatch
+    ):
+        """CLICK's Block Copy takes the first destination address and counts on from it."""
+        src = Block("Src", TagType.INT, 1, 3)
+        nums = Block("Num", TagType.INT, 1, 5)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                fill(7, src.select(1, 3))
+                blockcopy(src.select(1, 3), nums[2])
+            with rung(nums[1] == 0, nums[2] == 7, nums[3] == 7, nums[4] == 7, nums[5] == 0):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
+    def test_a_text_copy_into_a_txt_range_writes_from_its_first_txt_on_every_backend(
+        self, monkeypatch
+    ):
+        """The range gives only the start, as the CLICK export's Copy into its first TXT does.
+
+        A text longer than the range writes on through the block.
+        """
+        chars = Block("Txt", TagType.CHAR, 1, 10)
+        written = Bool("Written")
+        with Program(strict=False) as prog:
+            with rung():
+                copy("ABC", chars.select(5, 6))
+            with rung(chars[4] == "", chars[5] == "A", chars[6] == "B", chars[7] == "C"):
+                out(written)
+
+        results = _on_every_backend(prog, monkeypatch, (written,), scans=1)
+        assert results == {name: (True,) for name in results}
+
     @pytest.mark.parametrize("operand", ["nan", "inf", "-inf"])
     def test_a_non_finite_real_to_binary_faults_on_every_backend(self, monkeypatch, operand):
         """A code needs an integer, so the TXT stays as it was and SC43 is set.

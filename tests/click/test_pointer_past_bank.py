@@ -13,7 +13,7 @@ import pytest
 from pyrung.click import ClickBlocks, TagMap, pyrung_to_ladder
 from pyrung.click.validation import CLK_PTR_PAST_BANK, validate_click_program
 from pyrung.core import Block, Int, Program, TagType, rung
-from pyrung.core.program import copy
+from pyrung.core.program import blockcopy, copy
 
 _blocks = ClickBlocks()
 ds, dd = _blocks.ds, _blocks.dd
@@ -111,7 +111,7 @@ def test_a_mapped_block_range_counts_in_hardware_addresses():
     def report(end):
         with Program(strict=False) as prog:
             with rung():
-                copy(table.select(1, end), out.select(1, 150))
+                blockcopy(table.select(1, end), out.select(1, 150))
         mapping = TagMap(
             [
                 table.map_to(ds.select(4401, 4500)),
@@ -152,13 +152,13 @@ def test_a_range_whose_end_passes_the_bank_warns_though_its_start_does_not():
     dest = Block("Dest", TagType.INT, 1, 2000)
     with Program(strict=False) as prog:
         with rung():
-            copy(dd.select(1, 5), dest.select(1, 5))
-            copy(dd.select(start, end), dest.select(1, 1000))
+            blockcopy(dd.select(1, 5), dest.select(1, 5))
+            blockcopy(dd.select(start, end), dest.select(1, 1000))
     mapping = TagMap({start: ds[1], end: ds[2], dest: ds.select(2001, 4000)}, include_system=False)
     found = _found(prog, mapping)
     assert [f.message for f in found if "indirect range" in f.message] == [
         "The indirect range on DD at "
-        "main.rung[1].instruction[1](CopyInstruction).instruction.source "
+        "main.rung[1].instruction[1](BlockCopyInstruction).instruction.source "
         "ends at DD1005. DD ends at DD1000. pyrung reads 0 there."
     ]
 
@@ -169,7 +169,7 @@ def test_a_range_that_stays_inside_the_bank_is_no_finding():
     dest = Block("Dest", TagType.INT, 1, 2000)
     with Program(strict=False) as prog:
         with rung():
-            copy(dd.select(start, end), dest.select(1, 1000))
+            blockcopy(dd.select(start, end), dest.select(1, 1000))
     mapping = TagMap({start: ds[1], end: ds[2], dest: ds.select(2001, 4000)}, include_system=False)
     assert _found(prog, mapping) == []
 
@@ -253,7 +253,7 @@ def test_a_range_wider_than_the_value_cap_still_reports_its_end():
     dest = Block("Dest", TagType.INT, 1, 2000)
     with Program(strict=False) as prog:
         with rung():
-            copy(dd.select(start, end), dest.select(1, 1000))
+            blockcopy(dd.select(start, end), dest.select(1, 1000))
     mapping = TagMap({start: ds[1], end: ds[2], dest: ds.select(2001, 4000)}, include_system=False)
     (finding,) = _found(prog, mapping)
     assert "ends at DD4200" in finding.message

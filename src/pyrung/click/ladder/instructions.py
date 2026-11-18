@@ -6,23 +6,18 @@ import re
 from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from pyclickplc.banks import BANKS
-
 from pyrung.click.capabilities import single_register_fill_dest
 from pyrung.click.validation.hardware import constant_text_past_txt
 from pyrung.core.condition import Condition
-from pyrung.core.copy_converters import CopyConverter, to_value
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.instruction.conversions import copy_source_kind
 from pyrung.core.instruction.data_transfer import _plain_text_converter
 from pyrung.core.instruction.send_receive import is_modbus_status_tag
-from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag, TagType
 
 from ._loop_items import is_own_rung, loop_item_rung
-from .translator import _operand_type, _parse_display_address, _quote
-
-_WHOLE_NUMBER_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
+from .translator import _operand_type, _quote
 
 
 def _exported_converter(instruction: Any) -> CopyConverter | None:
@@ -46,16 +41,16 @@ def _exported_converter(instruction: Any) -> CopyConverter | None:
 def _exported_block_converter(instruction: Any) -> CopyConverter | None:
     """Return the converter that the export writes with a Block Copy.
 
-    CLICK saves a Block Copy of TXT into DS, DD or DH with a conversion. pyrung runs a
-    plain ``blockcopy()`` there by storing the digit that each TXT holds, so the export
-    writes ``to_value``.
+    CLICK saves a Block Copy of TXT into DS, DD or DH with a conversion. So a plain
+    ``blockcopy()`` there exports the ``to_value`` that it runs. A TXT range into a DF
+    range exports as written, as a Copy of a TXT into a DF does.
     """
-    if instruction.convert is not None:
-        return instruction.convert
-    source = _operand_type(instruction.source)
-    if source is TagType.CHAR and _operand_type(instruction.dest) in _WHOLE_NUMBER_TYPES:
-        return to_value
-    return None
+    authored = getattr(instruction, "authored_convert", instruction.convert)
+    if authored is not None:
+        return authored
+    if _operand_type(instruction.dest) is TagType.REAL:
+        return None
+    return instruction.convert
 
 
 # ---- Instruction token mixin ----
@@ -308,32 +303,6 @@ class _InstructionMixin:
             source = self._render_operand(value, path=f"{path}.value", source=instruction)
         return self._fn("copy", source, dest, **oneshot_kw)
 
-    def _block_copy_dest_range(self, instruction: Any, dest: str, *, path: str) -> str:
-        """Return the destination range that CLICK saves for a Block Copy into *dest*.
-
-        CLICK's Block Copy dialog takes only the first destination address. CLICK saves
-        the end itself, one element for each source element. So the export writes a
-        single destination address as that range.
-        """
-        source = instruction.source
-        parsed = _parse_display_address(dest)
-        if not isinstance(source, BlockRange) or parsed is None:
-            return dest
-        bank, start = parsed
-        end = start + len(source.tags()) - 1
-        last = BANKS[bank.upper()].max_addr
-        if end > last:
-            self._raise_issue(
-                path=path,
-                message=(
-                    f"blockcopy() into {dest} copies {len(source.tags())} elements, which "
-                    f"run past {bank}{last} at the end of the bank. Start it at "
-                    f"{bank}{last - (end - start)} or lower."
-                ),
-                source=instruction,
-            )
-        return f"{dest}..{bank}{end}"
-
     def _refuse_constant_text_past_txt(self, instruction: Any, dest: str, *, path: str) -> None:
         # CLICK's Copy refuses a constant past TXT1000 (OBJ-003). So the export refuses it,
         # even when CLK_TEXT_PAST_BANK is allowed.
@@ -408,12 +377,7 @@ class _InstructionMixin:
         if instruction_type == "CopyInstruction":
             convert_kw = {}
             converter = _exported_converter(instruction)
-            copy_dest = instruction.dest
-            if isinstance(copy_dest, BlockRange) and copy_dest.block.type is TagType.CHAR:
-                # A CLICK Copy has one destination field. CLICK works out where the text
-                # ends, so the export writes only the first TXT.
-                copy_dest = copy_dest.tags()[0]
-            dest = self._render_operand(copy_dest, path=f"{path}.dest", source=instruction)
+            dest = self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction)
             self._refuse_constant_text_past_txt(instruction, dest, path=f"{path}.dest")
             with self._hex_constants("copy" if self._is_hex_bank_operand(dest) else None):
                 copy_source = self._render_operand(
@@ -434,13 +398,10 @@ class _InstructionMixin:
                 convert_kw["convert"] = self._render_converter(
                     block_converter, instruction, block_source, path=f"{path}.convert"
                 )
-            block_dest = self._render_operand(
-                instruction.dest, path=f"{path}.dest", source=instruction
-            )
             return self._fn(
                 "blockcopy",
                 block_source,
-                self._block_copy_dest_range(instruction, block_dest, path=f"{path}.dest"),
+                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 **convert_kw,
                 **oneshot_kw,
             )

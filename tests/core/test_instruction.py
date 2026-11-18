@@ -358,17 +358,14 @@ class TestBlockCopyInstruction:
         assert new_state.tags["DD2"] == 99
 
     def test_blockcopy_length_mismatch_raises(self):
-        """BLOCKCOPY raises ValueError when ranges have different lengths."""
+        """BLOCKCOPY raises ValueError when it is built with ranges of different lengths."""
         from pyrung.core.instruction import BlockCopyInstruction
 
         DS = Block("DS", TagType.INT, 1, 100)
         DD = Block("DD", TagType.DINT, 1, 100)
 
-        instr = BlockCopyInstruction(DS.select(1, 3), DD.select(1, 2))
-
-        state = SystemState().with_tags({"DS1": 1, "DS2": 2, "DS3": 3})
         with pytest.raises(ValueError, match="needs ranges of the same length"):
-            execute(instr, state)
+            BlockCopyInstruction(DS.select(1, 3), DD.select(1, 2))
 
     def test_blockcopy_single_element(self):
         """BLOCKCOPY works with single-element ranges."""

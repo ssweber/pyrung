@@ -19,6 +19,15 @@
   If a test expects the number in the TXT, expect the digits.
 - The CLICK export now writes the conversion that pyrung runs for each `copy()` and `blockcopy()` between TXT and a number. `copy(txt[1], ds[1])` exports as `copy(TXT1,DS1,convert=to_value)` (it exported a plain Copy, which CLICK cannot hold). A TXT into a DF still exports as a plain Copy, because CLICK offers no conversion there.
   Export the program again before you paste it into CLICK.
+- `fill()` of a TXT into number registers is now refused when you build the program (it raised on a blank TXT and could not be exported).
+  Copy the TXT into a number register with `convert=to_value`, then fill from that register.
+
+### Fixes
+
+- A plain `blockcopy()` of TXT into numbers now reads each TXT as a digit, as a CLICK does. A letter sets the out-of-range flag, and a blank TXT reads as 0 (it raised `ValueError`).
+- `blockcopy(ds.select(1, 3), ds[10])` now writes DS10..DS12 (it raised `TypeError`). It is refused when you build it if the copy runs past the end of the block.
+- `copy("AB", txt.select(5, 6))` now writes from TXT5, as the export does (it raised `AttributeError`).
+- Other `copy()`, `blockcopy()` and `fill()` forms that raised on the first scan are now refused when you build the program. The message says what to write.
 
 ## v0.17.0 (2026-11-18)
 

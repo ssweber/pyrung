@@ -6,13 +6,20 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import Expression
-from pyrung.core.memory_block import PastBankError
-from pyrung.core.storage import check_real_literal, computed_real
-from pyrung.core.tag import Tag
+from pyrung.core.memory_block import (
+    BlockRange,
+    IndirectBlockRange,
+    PastBankError,
+    _element_name,
+    _store_block,
+)
+from pyrung.core.storage import check_real_literal, computed_real, store_value
+from pyrung.core.tag import Tag, TagType
 
 from .base import Instruction, OneShotMixin
 from .conversions import (
     _NUMBER_TYPES,
+    LITERAL,
     _as_single_ascii_char,
     _ascii_char_from_code,
     _copy_clamps,
@@ -21,6 +28,7 @@ from .conversions import (
     _store_numeric_text_digits,
     _text_from_source_value,
     copy_source_kind,
+    copy_store_transform,
 )
 from .resolvers import (
     _sequential_tags,
@@ -62,6 +70,104 @@ def _plain_text_converter(source: Any, dest: Any) -> CopyConverter | None:
 def _is_number_constant(value: Any) -> bool:
     """Return True for an int or float constant.  A bool is not a number to a Copy."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _unwrapped(value: Any) -> Any:
+    from pyrung.core.tag import ImmediateRef
+
+    return value.value if isinstance(value, ImmediateRef) else value
+
+
+def _is_range(value: Any) -> bool:
+    return isinstance(_unwrapped(value), (BlockRange, IndirectBlockRange))
+
+
+def _range_type(block_range: Any) -> Any:
+    """Return the tag type of a range from ``.select()``, or ``None`` for anything else."""
+    block_range = _unwrapped(block_range)
+    if isinstance(block_range, (BlockRange, IndirectBlockRange)):
+        return block_range.block.type
+    return None
+
+
+def _refuse_text_that_stores_no_number(what: str, value: Any, dest_type: Any) -> None:
+    """Raise ``ValueError`` for a text constant that a store into *dest_type* cannot read.
+
+    A store of a text constant into a number register reads the text as a number, so
+    ``"12"`` stores 12.  Text that is not a number would raise on every scan.
+    """
+    if not isinstance(value, str) or dest_type not in _NUMBER_TYPES:
+        return
+    try:
+        store_value(value, copy_store_transform(dest_type, LITERAL))
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            f"{what} of the text {value!r} into a number register ({dest_type.name}) cannot "
+            "store a number. Write the number without quotes, or copy a TXT with "
+            "convert=to_value."
+        ) from None
+
+
+def _copy_dest(dest: Any) -> Any:
+    """Return the register that a Copy into *dest* writes first.
+
+    A Copy has one destination.  For a TXT range from ``.select()``, the Copy starts at
+    the range's first TXT and writes on through the block, as the CLICK export's Copy
+    into that TXT does.  Any other range is refused.
+    """
+    target = _unwrapped(dest)
+    if isinstance(target, BlockRange) and target.block.type is TagType.CHAR:
+        tags = target.tags()
+        if not tags:
+            raise ValueError("copy() into an empty range writes nothing. Copy into one TXT.")
+        return tags[0]
+    if isinstance(target, IndirectBlockRange):
+        raise TypeError(
+            "copy() writes one register, and its destination here is a range with a pointer. "
+            "Copy into one element with a pointer, as in DS[Ptr]."
+        )
+    if isinstance(target, BlockRange):
+        raise TypeError(
+            "copy() writes one register, and its destination here is a range. Use fill() to "
+            "write one value into a range, or blockcopy() to copy a range."
+        )
+    return dest
+
+
+def _block_copy_dest(source: Any, dest: Any) -> Any:
+    """Return the range that a Block Copy from *source* into *dest* writes.
+
+    CLICK's Block Copy takes only the first destination address and writes one element
+    for each source element.  So a single tag as *dest* becomes that range of its block.
+    """
+    if _is_range(dest):
+        return dest
+    target = _unwrapped(dest)
+    if not isinstance(target, Tag):
+        raise TypeError(
+            "blockcopy() writes a range. Pass the destination as a range from .select()."
+        )
+    if not isinstance(source, BlockRange):
+        raise TypeError(
+            f"blockcopy() into {target.name} reads a range with a pointer, so pyrung cannot "
+            "tell where the destination ends. Pass the destination as a range from .select()."
+        )
+    found = _store_block(target)
+    if found is None:
+        raise TypeError(
+            f"blockcopy() into {target.name} needs the block that holds {target.name}. Pass "
+            "the destination as a range from .select()."
+        )
+    block, addr = found
+    count = len(source.tags())
+    end = addr + count - 1
+    if end > block.end:
+        raise ValueError(
+            f"blockcopy() into {target.name} copies {count} elements, which run past "
+            f"{_element_name(block, block.end)} at the end of its block. Start it at "
+            f"{_element_name(block, block.end - count + 1)} or lower."
+        )
+    return block.select(addr, end)
 
 
 def _source_past_end_keeps(source: Any, ctx: ScanContext) -> bool:
@@ -141,7 +247,14 @@ class CopyInstruction(OneShotMixin, Instruction):
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
+        if source is None:
+            raise TypeError("copy() needs a source: a tag, a pointer or a constant.")
+        if _is_range(source):
+            raise TypeError("copy() reads one value. Use blockcopy() to copy a range.")
+        dest = _copy_dest(dest)
         check_real_literal(source, dest, "copy() source")
+        if convert is None:
+            _refuse_text_that_stores_no_number("copy()", source, copy_source_kind(dest))
         self.source = source
         self.dest = dest
         self.authored_convert = convert
@@ -363,7 +476,12 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
 
     Pass ``convert=to_value`` or ``convert=to_ascii`` for text→numeric block
     conversion (Click PLC Block Copy Option 4).  Only ``value`` and ``ascii``
-    modes are supported for block copy.
+    modes are supported for block copy.  With none, a TXT range into a number range
+    runs ``to_value``, as a plain ``copy()`` does.  ``convert`` holds the converter
+    that runs, and ``authored_convert`` holds the one that was written.
+
+    A single tag as *dest* is the first address of the destination.  The Block Copy
+    writes one element of its block for each source element, as CLICK's does.
     """
 
     _reads = ("source",)
@@ -387,8 +505,28 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                 f"got to_{convert.mode}."
             )
         OneShotMixin.__init__(self, oneshot)
+        if not _is_range(source):
+            raise TypeError(
+                "blockcopy() reads a range from .select(). Use copy() to copy one value, "
+                "or fill() to write one value into a range."
+            )
+        dest = _block_copy_dest(_unwrapped(source), dest)
+        fixed_source, fixed_dest = _unwrapped(source), _unwrapped(dest)
+        if isinstance(fixed_source, BlockRange) and isinstance(fixed_dest, BlockRange):
+            source_count, dest_count = len(fixed_source.tags()), len(fixed_dest.tags())
+            if source_count != dest_count:
+                raise ValueError(
+                    "blockcopy() needs ranges of the same length. "
+                    f"The source has {source_count} tags, and the destination has {dest_count}."
+                )
         self.source = source
         self.dest = dest
+        self.authored_convert = convert
+        if convert is None and _range_type(source) is TagType.CHAR:
+            if _range_type(dest) in _NUMBER_TYPES:
+                from pyrung.core.copy_converters import to_value
+
+                convert = to_value
         self.convert = convert
 
     @guard_oneshot_execution
@@ -469,6 +607,23 @@ class FillInstruction(OneShotMixin, Instruction):
 
     def __init__(self, value: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
+        if not _is_range(dest):
+            raise TypeError(
+                "fill() writes a range. Pass the destination as a range from .select(), "
+                "or use copy() to write one register."
+            )
+        if value is None:
+            raise TypeError("fill() needs a value: a tag, a pointer or a constant.")
+        if _is_range(value):
+            raise TypeError("fill() writes one value. Use blockcopy() to copy a range.")
+        dest_type = _range_type(dest)
+        if copy_source_kind(value) is TagType.CHAR and dest_type in _NUMBER_TYPES:
+            raise TypeError(
+                "fill() cannot write a TXT into a number register. Copy the TXT into a "
+                "number register with copy(..., convert=to_value), then fill() from that "
+                "register."
+            )
+        _refuse_text_that_stores_no_number("fill()", value, dest_type)
         check_real_literal(value, dest, "fill() value")
         self.value = value
         self.dest = dest
