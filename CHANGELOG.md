@@ -89,7 +89,7 @@
 - A `copy()`, `fill()` or `blockcopy()` of a NaN `Real` into a `Dint` stores -2147483648, as a CLICK does (it stored 0).
   Update any test that expects 0.
 - A `pack_text()` of text such as "1E39" or "-1E39" into a `Real` stores +Inf or -Inf with no fault flag, as a CLICK does (it left the `Real` as it was and turned on `system.fault.out_of_range`).
-  Compare the `Real` with the range you expect after the pack.
+  To catch such text, check the `Real` for +Inf or -Inf after the pack.
 
 ### Fixes
 
@@ -133,7 +133,7 @@
 - `program.check()` now reports a write by any instruction to a `readonly=True` tag, and a second writer of a `final=True` tag (it saw only `out()`, `latch()`, `reset()`, `toggle()`, `copy()` and the coil of `debounce()`, `flasher()` and `timed()`).
 - `run_for()` and `run_until()` now raise when an instruction such as `math()` stores into a read-only system point, as stepping does (they stored the value and went on).
 - In `run_for()` and `run_until()`, a `pack_text()` of a character above FFh, such as U+0661, turns on `system.fault.out_of_range` and writes nothing, as stepping does (it read the character as a digit).
-- Generated CircuitPython code runs a `pack_text()` into a `Word` (it called `re.fullmatch()`, which CircuitPython lacks).
+- Generated CircuitPython code runs a `pack_text()` into a `Word` (it stopped with an error).
 - A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
 - `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
 
