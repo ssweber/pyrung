@@ -67,6 +67,10 @@ class SkippedAddressesWarning(UserWarning):
         super().__init__(message)
         self.addresses = addresses
 
+    def __reduce__(self) -> tuple[type[SkippedAddressesWarning], tuple[str, tuple[str, ...]]]:
+        # The default reduce passes only the message to __init__, so pickle and copy would fail.
+        return (type(self), (str(self), self.addresses))
+
 
 def address_runs(addresses: Iterable[str]) -> str:
     """Return *addresses* as text, with each run of consecutive addresses as ``TXT13..TXT20``."""

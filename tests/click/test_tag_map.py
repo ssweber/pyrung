@@ -2585,6 +2585,20 @@ def test_address_runs_joins_consecutive_addresses(addresses, text):
     assert address_runs(addresses) == text
 
 
+def test_skipped_addresses_warning_pickles_and_copies():
+    import copy
+    import pickle
+
+    from pyrung.click import SkippedAddressesWarning
+
+    warning = SkippedAddressesWarning("message", ("TXT13", "TXT14"))
+
+    for clone in (pickle.loads(pickle.dumps(warning)), copy.copy(warning), copy.deepcopy(warning)):
+        assert type(clone) is SkippedAddressesWarning
+        assert str(clone) == "message"
+        assert clone.addresses == ("TXT13", "TXT14")
+
+
 # ===================================================================
 # Input-mapped tags stamped external
 # ===================================================================
