@@ -1316,14 +1316,26 @@ def test_precheck_and_issue_payload():
             "source_line": None,
         }
     ]
-    # The exception text indents the later lines of the finding under its issue.
+    # The exception text prints the finding once, without the path in front of it.
     lines = str(exc_info.value).splitlines()
-    assert lines[1] == (
-        "  main.rung[1].instruction[0](CopyInstruction).instruction.source: "
-        "[CLK_EXPR_ONLY_IN_MATH] error"
-    )
+    assert lines[1] == "  [CLK_EXPR_ONLY_IN_MATH] error"
+    assert lines[3] == "   --> main.rung[1].instruction[0](CopyInstruction).instruction.source"
     assert len(lines) == 5
-    assert all(line.startswith("     ") for line in lines[2:])
+    assert all(line.startswith("    ") for line in (lines[2], lines[4]))
+
+
+def test_export_error_puts_the_place_before_an_issue_that_is_no_finding():
+    error = LadderExportError(
+        [
+            {"path": "main.rung[1]", "message": "One line."},
+            {"path": "main.rung[2]", "message": "First line.\nSecond line."},
+        ]
+    )
+    assert str(error).splitlines()[1:] == [
+        "  main.rung[1]: One line.",
+        "  main.rung[2]: First line.",
+        "    Second line.",
+    ]
 
 
 def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():

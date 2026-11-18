@@ -25,8 +25,8 @@
   Write `copy(5, txt[1])`, which stores the digit "5".
 - `copy()`, `blockcopy()` and `fill()` forms that raised when their rung ran are now refused when you build the program.
   Write the form that the message names.
-- A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line).
-  If a test matches the text of an export error or warning, update the pattern.
+- A CLICK finding now prints the way `pyrung check` prints a finding: its code and severity, the problem, its location after `-->` and the fix after `= hint:`. The export's errors and warnings print each finding this way (they printed `CODE: message` on one line, and a warning added the suggestion).
+  If a test or a warnings filter matches the text of an export error or warning, update the pattern. A filter that started `CLK_STEP_LIMIT` must now start `\[CLK_STEP_LIMIT\]`.
 
 ### Fixes
 

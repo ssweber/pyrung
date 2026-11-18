@@ -90,7 +90,9 @@ class ClickFinding(_FindingTextMixin):
     """A CLICK portability finding. ``str()`` renders its ``display``.
 
     If the caller passes no ``display``, the constructor builds one with one frame at
-    ``location``, ``message`` as the problem and ``suggestion`` as the hint.
+    ``location``, ``message`` as the problem and ``suggestion`` as the hint. A display
+    that the caller passes must have the finding's code and severity. The constructor
+    does not compare its text with ``message`` or ``suggestion``.
     """
 
     code: str
@@ -116,6 +118,13 @@ class ClickFinding(_FindingTextMixin):
                 frames=(Frame(location=location),),
                 problem=message,
                 hint=suggestion or "",
+            )
+        elif display.code != code or display.severity != severity:
+            # dataclasses.replace() passes the old display on, so a changed code or
+            # severity would print the old one.
+            raise ValueError(
+                f"The display of finding {code} ({severity}) is for {display.code} "
+                f"({display.severity}). Pass a display with the same code and severity."
             )
         # A frozen dataclass refuses plain attribute assignment.
         object.__setattr__(self, "code", code)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from pyrung.click import ClickBlocks, TagMap
@@ -1282,6 +1284,24 @@ class TestFindingDisplay:
         )
         assert finding.display is display
         assert finding.message == "m"
+
+    @pytest.mark.parametrize(
+        ("code", "severity"),
+        [(CLK_MATH_NESTING_DEPTH, "hint"), (CLK_MATH_FLOOR_DIV, "error")],
+    )
+    def test_a_passed_display_for_another_code_or_severity_is_refused(self, code, severity):
+        display = FindingDisplay(code=CLK_MATH_FLOOR_DIV, severity="hint")
+        with pytest.raises(ValueError, match="same code and severity"):
+            ClickFinding(
+                code=code, severity=severity, message="m", location="main", display=display
+            )
+
+    def test_replace_with_another_severity_is_refused(self):
+        finding = ClickFinding(
+            code=CLK_MATH_FLOOR_DIV, severity="hint", message="m", location="main"
+        )
+        with pytest.raises(ValueError, match="same code and severity"):
+            dataclasses.replace(finding, severity="error")
 
     def test_validation_findings_carry_their_text_in_the_display(self):
         A = Tag("A", TagType.INT)

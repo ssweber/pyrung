@@ -29,7 +29,7 @@ from tests.click.helpers import (
     strip_pyrung_boilerplate,
 )
 
-pytestmark = pytest.mark.filterwarnings("ignore:CLK_NOP_NO_COIL")
+pytestmark = pytest.mark.filterwarnings(r"ignore:\[CLK_NOP_NO_COIL\]")
 
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
