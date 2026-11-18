@@ -42,8 +42,8 @@ class LadderExportError(RuntimeError):
 
         if self.issues:
             lines = [f"pyrung could not export the ladder. It found {len(self.issues)} problem(s)."]
-            # A finding's message spans several lines. Its later lines are indented so
-            # that they read as part of its issue.
+            # A message from a CLICK finding spans several lines. The later lines are
+            # indented so that they read as part of the issue.
             lines.extend(
                 f"  {_issue_place(issue)}: " + str(issue["message"]).replace("\n", "\n    ")
                 for issue in self.issues[:3]

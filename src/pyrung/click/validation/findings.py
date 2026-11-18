@@ -89,7 +89,7 @@ CLK_NOP_NO_COIL = "CLK_NOP_NO_COIL"
 class ClickFinding(_FindingTextMixin):
     """A CLICK portability finding. ``str()`` renders its ``display``.
 
-    If a site passes no ``display``, the finding builds one. It has one frame at
+    If the caller passes no ``display``, the constructor builds one with one frame at
     ``location``, ``message`` as the problem and ``suggestion`` as the hint.
     """
 

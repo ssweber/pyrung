@@ -78,7 +78,7 @@ class _ValidationMixin:
             CLK_NOP_NO_COIL,
         )
         # The step limit warns whatever *allow* holds.  The strict report ranks every
-        # finding as an error, so a finding that only warns shows as a warning.
+        # finding as an error.  The export only warns for these, so their text says warning.
         pending = [
             str(replace(finding.display, severity="warning"))
             for finding in findings

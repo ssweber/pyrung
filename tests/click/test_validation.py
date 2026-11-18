@@ -41,7 +41,6 @@ from pyrung.click.validation import (
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core.validation.display import FindingDisplay, Frame
 from pyrung.core import (
     Block,
     Bool,
@@ -69,6 +68,7 @@ from pyrung.core.program import (
     run_function,
     rung,
 )
+from pyrung.core.validation.display import FindingDisplay, Frame
 
 # ---------------------------------------------------------------------------
 # Helpers
