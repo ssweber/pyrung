@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
-PUBLIC_MODULES = ("pyrung", "pyrung.click", "pyrung.circuitpy")
+PUBLIC_MODULES = (
+    "pyrung",
+    "pyrung.click",
+    "pyrung.circuitpy",
+    "pyrung.validation",
+    "pyrung.live",
+)
 DOCS_DIR = Path(__file__).resolve().parent
 
 
@@ -81,7 +87,18 @@ PAGES: tuple[ReferencePage, ...] = (
         summary="Runner lifecycle, system points, timebase helpers, and feedback harness support.",
         symbols=(
             "pyrung.PLC",
+            "pyrung.SystemState",
+            "pyrung.AvoidCheckError",
+            "pyrung.UnrecordedScansError",
+            "pyrung.DataView",
             "pyrung.Physical",
+            "pyrung.PHYSICAL_KEYS",
+            "pyrung.PHYSICAL_KINDS",
+            "pyrung.FeedbackType",
+            "pyrung.PhysicalKey",
+            "pyrung.PhysicalKind",
+            "pyrung.kind_of_keys",
+            "pyrung.physical_kind",
             "pyrung.Harness",
             "pyrung.Coupling",
             "pyrung.system",
@@ -192,6 +209,52 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.to_ascii",
             "pyrung.to_text",
             "pyrung.to_binary",
+            "pyrung.PI",
+            "pyrung.sqrt",
+            "pyrung.sin",
+            "pyrung.cos",
+            "pyrung.tan",
+            "pyrung.asin",
+            "pyrung.acos",
+            "pyrung.atan",
+            "pyrung.radians",
+            "pyrung.degrees",
+            "pyrung.log",
+            "pyrung.log10",
+            "pyrung.lsh",
+            "pyrung.rsh",
+            "pyrung.lro",
+            "pyrung.rro",
+            "pyrung.randint",
+        ),
+    ),
+    ReferencePage(
+        slug="validation",
+        title="Validation API",
+        tier="Stable Core",
+        summary="Reports from Program.check(), rule metadata, and the project check settings.",
+        symbols=(
+            "pyrung.validation.ValidationReport",
+            "pyrung.validation.Finding",
+            "pyrung.validation.FindingDisplay",
+            "pyrung.validation.RuleSpec",
+            "pyrung.validation.ordered_rules",
+            "pyrung.validation.default_on_rules",
+            "pyrung.validation.CheckConfig",
+            "pyrung.validation.load_check_config",
+            "pyrung.validation.save_check_config",
+            "pyrung.validation.find_check_config",
+        ),
+    ),
+    ReferencePage(
+        slug="live",
+        title="Live Session API",
+        tier="Stable Core",
+        summary="Commands sent to a running debug session, as the pyrung live CLI sends them.",
+        symbols=(
+            "pyrung.live.send_command",
+            "pyrung.live.list_sessions",
+            "pyrung.live.command_grammar",
         ),
     ),
     ReferencePage(
