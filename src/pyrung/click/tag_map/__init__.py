@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from ._errors import OldCommentFormError, SystemNicknameRepair, SystemNicknameRepairRequired
+from ._errors import (
+    OldCommentFormError,
+    SkippedAddressesWarning,
+    SystemNicknameRepair,
+    SystemNicknameRepairRequired,
+)
 from ._map import TagMap
 from ._migrations import (
     MIGRATIONS,
@@ -18,6 +23,7 @@ from ._types import MappedSlot, OwnerInfo, StructuredImport
 __all__ = [
     "TagMap",
     "OldCommentFormError",
+    "SkippedAddressesWarning",
     "SystemNicknameRepair",
     "SystemNicknameRepairRequired",
     "MappedSlot",

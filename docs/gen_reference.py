@@ -45,6 +45,7 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.format_tag_meta",
     "pyrung.click.parse_tag_meta",
     "pyrung.click.OldCommentFormError",
+    "pyrung.click.SkippedAddressesWarning",
     "pyrung.click.MIGRATIONS",
     "pyrung.click.comment_needs_upgrade",
     "pyrung.click.old_form_tokens",
@@ -144,7 +145,6 @@ PAGES: tuple[ReferencePage, ...] = (
         summary="Program/rung builders and control-flow composition primitives.",
         symbols=(
             "pyrung.Program",
-            "pyrung.Rung",
             "pyrung.rung",
             "pyrung.program",
             "pyrung.PyrungNameError",

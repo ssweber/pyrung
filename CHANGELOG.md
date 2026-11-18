@@ -57,6 +57,8 @@
 
 ### Behaviour changes
 
+- `pyrung` no longer exports `Rung`. After `from pyrung import *`, a `with Rung(...):` raises `NameError: name 'Rung' is not defined`. A `from pyrung import Rung` raises `ImportError`.
+  Write `with rung(...):` instead. `rung` accepts the same conditions.
 - `pyrung.core` and `pyrung.dap` are internal. Docs, examples and generated code import from `pyrung` (they imported the math functions, `system` and `SystemState` from `pyrung.core`, and `send_command` from `pyrung.dap.live`).
   Import from `pyrung`, `pyrung.click`, `pyrung.circuitpy`, `pyrung.validation` or `pyrung.live`. The internal paths can change in any release.
 - `Program.validate()`, `Program.register_dialect()` and `Program.registered_dialects()` are gone, and so is `validate()` in `pyrung.core.validation`.
@@ -69,8 +71,8 @@
   Fix or remove the rule name.
 - `expr_requires()` and `reset_dominance()` are gone.
   Delete the tests that use them, or check the property with `force()` and `run_for()`.
-- pyrung requires pyclickplc 0.9.0 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
-  If your own code calls pyclickplc, read pyclickplc's 0.9.0 changelog.
+- pyrung requires pyclickplc 0.9.1 (it required 0.5.1). pyclickplc 0.9.0 answers an FC05 or FC06 write by echoing the request, and it writes T and CT bits.
+  If your own code calls pyclickplc, read pyclickplc's 0.9.0 and 0.9.1 changelogs.
 - The soft PLC's Modbus server stores a coil write to X, T or CT, or to a coil between X or Y slots, as a CLICK does (it answered exception 2). A rung that reads the T or CT bit sees the write.
   If a client of yours relied on that refusal, check the address before it writes.
 - The generated P1AM server stores a coil write to X, or to a coil between X or Y slots (it answered exception 2). It stores a write to a T or CT bit that a rung uses or the TagMap maps.
@@ -109,7 +111,7 @@
   Test each property in pytest with `force()` and `run_for()`, and use `how()` to find a path to a state. Delete `pyrung lock --check` from CI and your `pyrung.lock` files.
 - Tags, blocks, `.slot()`, `Field()`, `@udt`, `@named_array` and `TagMeta` no longer take `lock=`. A nickname file that still holds `[lock]` loads. pyrung drops the flag when it writes the file.
   Delete `lock=True` from your tag declarations, or regenerate a `tags.py` that pyrung generated.
-- Error messages, warnings and CLICK findings say what went wrong and what to do. They name the call you wrote, such as `count_up()` (they named pyrung's classes, such as `CountUpInstruction`). They spell the rung call `rung(...)`, as the docs do (some spelled it `Rung(...)`).
+- Error messages, warnings and CLICK findings say what went wrong and what to do. They name the call you wrote, such as `count_up()` (they named pyrung's classes, such as `CountUpInstruction`). They spell the rung call `rung(...)` (some spelled it `Rung(...)`).
   Update any test that matches the old text.
 - A ladder export issue's `path` and a CLICK finding's `location` count rungs from 1, so the first rung is `main.rung[1]` (it was `main.rung[0]`).
   Add 1 to a rung index that you compare with a path.
@@ -129,7 +131,11 @@
 - CLICK export of a `to_text()` copy writes only the option its source has, as a CLICK does (it wrote both).
 - A nickname file's Retentive column now accepts `True` and `1` as well as `Yes`.
 - A conformance run now starts each case only after the case's reset has run (it could start the case before its reset, and the case read stale values).
-- `TagMap.load_snapshot()` reads a CLICK data dump as CLICK writes it. A text register holding a space loads as `" "` (it loaded `"$20"`). A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
+- `TagMap.load_snapshot()` and the debugger read a CLICK data dump as CLICK writes it:
+  - A text register holding a space loads as `" "` (it loaded `"$20"`).
+  - A float register CLICK shows as `Err-Format` loads as NaN (it raised `ValueError`).
+  - A text register holding a comma loads as `","`. 0.16.0 read the comma as an empty address and moved the rest of the row one address on.
+  - If a row with a comma also has an empty address, pyrung cannot tell what some text registers hold. It skips them, loads the rest of the file and names the skipped addresses. `load_snapshot()` warns with `SkippedAddressesWarning`. The warning's `addresses` attribute lists them. A DAP client gets them in `skippedAddresses` in the launch response.
 - `TagMap.to_nickname_file()` writes a text default of one space so that CLICK keeps it (CLICK imported it as empty).
 - `program.check()` no longer runs out of memory on a `math()` whose result can span millions of values, such as `math(Flag * 100_000_000, DD1)`.
 - `program.check()` no longer calls a comparison always false when the `math()` that writes the tag wraps past the end of its type.
@@ -166,7 +172,7 @@
 - A bench link now refuses a feedback tag that a `math()` or any other instruction writes (it accepted the link).
 - `program.check()` now sees writes by every instruction, writes through a pointer and writes in a `forloop()` body in its choices, stuck-bit, link and comparison checks.
 - `how()` numbers rungs from 1 in its route and producer text, the way `cause()` does, and writes a subroutine rung as `MySub:3`. It counted from 0, and a subroutine rung showed a number that was not its place in the subroutine.
-- The VS Code debugger shows live tag values on the lines of a `with rung(...)` block, the spelling the docs use (it showed them only in `with Rung(...)` blocks).
+- The VS Code debugger now shows live tag values inside a `with rung(...)` block (it showed them only inside `with Rung(...)`).
 
 ## v0.16.0 (2026-11-14)
 
